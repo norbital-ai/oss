@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import type { PolicyDeclaration } from '../../authoring/workspace-schema.js';
 import { Database } from '../facilities/database.js';
+import { BUILT_IN_POLICY_NAMES } from '../schema/system-collections.js';
 import { Workspace } from '../workspace.js';
 import type { Identity } from '../identity/identity.js';
 
@@ -240,7 +241,15 @@ export type ImpersonationTeam = Readonly<{ readonly id: string; readonly name: s
  */
 const impersonationTeams = (
 	policies: ReadonlyArray<PolicyDeclaration>
-): ReadonlyArray<ImpersonationTeam> => policies.map(({ name }) => ({ id: name, name }));
+): ReadonlyArray<ImpersonationTeam> =>
+	// The runtime's own policies are filtered out, because a built-in is not a body of staff. The
+	// deleted `admin` policy was offered here as though it were one, and `colony system` would be
+	// worse: previewing it would put its role into `subject.roles` and hand an administrator the
+	// host's provisioning grants through the team picker. `subjectAsTeam` resolves against the same
+	// authored list, so the name is not merely hidden — it cannot be asked for.
+	policies
+		.filter(({ name }) => !BUILT_IN_POLICY_NAMES.has(name))
+		.map(({ name }) => ({ id: name, name }));
 
 /**
  * Whether this subject may view the workspace as somebody else. Always asked of the real actor.
@@ -356,8 +365,15 @@ export const layer = Layer.effect(
 				});
 			}
 			const wanted = teamId.trim().toLocaleLowerCase();
+			// The built-ins are excluded from the lookup, not merely from the picker that offers it. A
+			// name absent from this list is refused below as "no policy of that name", so asking for
+			// `colony system` by hand gets the same answer as asking for a policy nobody wrote — which
+			// is what stops the filter in `impersonationTeams` from being cosmetic. Previewing it would
+			// otherwise put `colony-system` into `subject.roles` and hand an administrator the host's
+			// provisioning grants.
 			const matched = workspace.definition.policies.find(
-				({ name }) => name.toLocaleLowerCase() === wanted
+				({ name }) =>
+					!BUILT_IN_POLICY_NAMES.has(name) && name.toLocaleLowerCase() === wanted
 			);
 			if (matched === undefined) {
 				return yield* new AccessDenied({

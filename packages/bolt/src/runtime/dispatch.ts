@@ -1,6 +1,7 @@
 import { Effect, Schema } from 'effect';
 import { EffectId, type DispatchResponse, type Invocation } from '@norbital-ai/bolt-protocol';
 import { AccessControl } from './access/access-control.js';
+import { SystemPrincipal } from './access/system-principal.js';
 import { Agents } from './agents/agents.js';
 import { AI, Files } from './facilities/services.js';
 import { Approvals, ApprovalState } from './approvals/approvals.js';
@@ -446,6 +447,39 @@ const authorizeSchemaCommand = Effect.fn('Bolt.authorizeSchemaCommand')(function
 });
 
 /**
+ * The commands that write membership, and the authority they require.
+ *
+ * `identity.admitFounder` had no check at all. It upserts a row by email with `status = 'admin'`, so
+ * any subject holding a session in the tenant could POST it their own address and become an
+ * administrator of the workspace — and `isAdministrator` short-circuits `decide`, `rowPredicate` and
+ * `visibleApps`, so that is the whole workspace. It was reachable from a browser: Colony proxies
+ * `/api/bolt/command/<name>` and bolt-server serves `/_bolt/command/<name>`, and neither restricts
+ * which name.
+ *
+ * Gated on `manage`/`identity` rather than on `isAdministrator` directly, so that provisioning has a
+ * way in that is not "be an administrator": `colony system` enumerates exactly this grant, which is
+ * how a host admits the first founder into a workspace that has none. An administrator passes by
+ * short-circuit, and everybody else is refused unless the workspace deliberately authored a policy
+ * over the `identity` resource — the same vocabulary, and the same author's choice, that `secrets`
+ * and `schema` already have.
+ *
+ * A map rather than a prefix test, because `identity.` is mostly sign-in and session traffic that
+ * must stay reachable. It is checked in one place before the switch, so a second membership-writing
+ * command is gated by adding a line here rather than by remembering to write a check inside a case.
+ */
+const IDENTITY_RESOURCE = 'identity';
+const MEMBERSHIP_COMMANDS: ReadonlyMap<string, string> = new Map([
+	['identity.admitFounder', 'manage']
+]);
+const authorizeMembershipCommand = Effect.fn('Bolt.authorizeMembershipCommand')(function* (
+	action: string,
+	commandInput: unknown
+) {
+	const input = yield* decode(Schema.Struct({ subject: Subject }), commandInput);
+	yield* (yield* AccessControl.Service).authorize(input.subject, action, IDENTITY_RESOURCE);
+});
+
+/**
  * The commands the runtime enqueues for itself, which is the whole of what a `Task` may run.
  *
  * A durable task is a message the runtime posted to itself and the host handed back; nothing about
@@ -761,6 +795,69 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 			}
 			return { input: { ...fields, tenantId: invocation.scope.tenantId }, subject: undefined };
 		}
+		/**
+		 * The host, provisioning a workspace nobody belongs to yet.
+		 *
+		 * Checked before the credential is demanded, for the same structural reason a sign-in is: there
+		 * is nobody to hold a credential. A freshly created database has no tables, so it has no
+		 * `bolt_auth_user` to be an administrator in and no `bolt_auth_session` to authenticate
+		 * against — and `schema.migrate` is the command that would create both. The authority to break
+		 * that deadlock cannot come from the workspace's own membership.
+		 *
+		 * What it comes from instead is possession of `COLONY_GATEWAY_SECRET`, proved per invocation
+		 * over the timestamp, the command, the tenant and the arguments. The subject that produces is
+		 * an ordinary one carrying one role, and `COLONY_SYSTEM_POLICY` — merged into every workspace
+		 * definition by `withSystemCollections` — is what that role matches. So this is not a branch
+		 * that skips access control; it is the only constructor for one particular subject, which then
+		 * goes through `decide` like everybody else and is refused everything the policy does not
+		 * enumerate.
+		 *
+		 * The previous arrangement is what this replaces, rather than joins: the host used to write a
+		 * `bolt_auth_user` row and a `bolt_auth_session` row straight into the tenant database over
+		 * `pg`, then hand bolt the token. That made provisioning authority a *row* — created before it
+		 * was needed, deleted afterwards if nothing crashed, and indistinguishable at the point of
+		 * decision from a person's. Nothing is written here and nothing needs revoking; the authority
+		 * exists for the length of one invocation and the signature that carries it is stale in five
+		 * minutes.
+		 *
+		 * Logged rather than audited, and deliberately: `bolt_audit` is a table that does not exist yet
+		 * during the migration this authorises, so a row would fail exactly when it mattered most. The
+		 * line names `colony system` so an operator reading "who migrated this schema" sees the host and
+		 * not a person; anything downstream that records a subject id records `colony-system` too.
+		 */
+		if (
+			yield* SystemPrincipal.verifySystemSignature({
+				headers: invocation.headers,
+				command: invocation.command,
+				tenantId: invocation.scope.tenantId,
+				input: invocation.input,
+				now: Date.now()
+			})
+		) {
+			// Annotated rather than inferred, so the absence of `admin` is checked here rather than
+			// discovered downstream: a system principal that ever gained that key would short-circuit
+			// `decide`, `rowPredicate` and `visibleApps` and stop being the enumerated thing it is.
+			const subject: Subject = SystemPrincipal.systemSubject(invocation.scope.tenantId);
+			yield* Effect.log(
+				`bolt.dispatch: ${invocation.command} authorized as colony system for ${invocation.scope.tenantId}`
+			);
+			// The same minting the credential path does, so no payload field survives to be read as
+			// identity. `actor` is the system principal itself: nobody is impersonating anybody, and a
+			// preview header is dropped rather than honoured — `subjectAsTeam` refuses a non-administrator
+			// anyway, and a system principal must never be narrowed into a workspace role.
+			return {
+				input: {
+					...fields,
+					subject,
+					actor: subject,
+					userId: subject.userId,
+					tenantId: invocation.scope.tenantId,
+					invitedBy: subject.userId,
+					impersonatedTeam: null
+				},
+				subject
+			};
+		}
 		const credential = credentialFromHeaders(invocation.headers);
 		if (credential === undefined || credential === '')
 			return yield* new DispatchError({
@@ -859,6 +956,8 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 	// Gated before the switch, not case by case: the five schema commands were each written without a
 	// check, and one gate on the prefix is the only form a sixth cannot be added past.
 	if (command.startsWith('schema.')) yield* authorizeSchemaCommand(command, commandInput);
+	const membership = MEMBERSHIP_COMMANDS.get(command);
+	if (membership !== undefined) yield* authorizeMembershipCommand(membership, commandInput);
 	switch (command) {
 		case 'health':
 			return json({ status: 'ok' });

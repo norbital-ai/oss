@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
 import { Communication, IdentityHooks } from '../facilities/services.js';
 import { Database } from '../facilities/database.js';
+import { SYSTEM_PRINCIPAL_ROLE } from '../access/system-principal.js';
 import { AUTH_MODELS, makeAuth } from './auth.js';
 
 export const Subject = Schema.Struct({
@@ -59,6 +60,14 @@ export type SubjectStatus = typeof ADMIN_STATUS | typeof NORMAL_STATUS;
  * Roles and teams are filtered rather than trusted whole: a non-string entry in either jsonb array
  * can only ever drop a role, so this narrows access and never grants it.
  *
+ * `colony-system` is dropped from `roles` here, and this is the line that makes the built-in
+ * `colony system` policy safe to ship. That policy is selected by role, and `roles` is a jsonb column
+ * — so a founder admitted with it, a seed fixture that spells it, or a host writing it onto a row
+ * would otherwise be a subject holding the host's provisioning grants, obtained by signing in. Every
+ * subject that comes from a database row loses it, whatever the column says, so the only constructor
+ * left is `dispatchInvocation` minting one after `verifySystemSignature` returns true. Removing a
+ * role can only ever narrow, so this cannot itself become a way in.
+ *
  * A row missing `userId` or `tenantId` still fails to decode — those stay `NonEmptyString`, so a
  * genuinely malformed row is still refused rather than admitted as an anonymous subject.
  */
@@ -68,7 +77,9 @@ const subjectFromRow = (row: unknown): Record<string, unknown> => {
 	return {
 		userId: IdentityRows.text(row, 'userId'),
 		tenantId: IdentityRows.text(row, 'tenantId'),
-		roles: IdentityRows.strings(row, 'roles'),
+		roles: IdentityRows.strings(row, 'roles').filter(
+			(role) => role.toLocaleLowerCase() !== SYSTEM_PRINCIPAL_ROLE
+		),
 		teams: IdentityRows.strings(row, 'teams'),
 		// Exactly one spelling counts. A column that is null, absent, misspelled or holding anything
 		// else at all is an ordinary user, so a projection that forgets to select `status` cannot

@@ -5,6 +5,7 @@ import {
 	type FieldDefinition,
 	type PolicyDeclaration
 } from '../../authoring/workspace-schema.js';
+import { COLONY_SYSTEM_POLICY } from '../access/system-principal.js';
 
 /**
  * Collections the runtime owns and authored workspace code reads.
@@ -249,7 +250,36 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 	]
 });
 
-/** Merges runtime-owned collections into an authored definition without letting either shadow the other. */
+/**
+ * The policies the runtime owns, present in every workspace whether or not it authored any.
+ *
+ * They are merged here, at the same seam the runtime's own collections are merged, and for the same
+ * reason: they are part of what a bolt *is*, not part of what a workspace declares. That matters
+ * more than it looks. The synthetic policies this replaces were written into the artifact by the
+ * compiler, so what authority a deployed workspace had was decided when it was last built — and
+ * removing a bad one meant rebuilding every workspace to be rid of it. Merged at definition load,
+ * a change to this list takes effect the moment the runtime does.
+ *
+ * Neither is a bypass. Both are ordinary declarations evaluated by `decide` with the authored ones,
+ * both name a role, and an authored `deny` still wins over either.
+ */
+export const BUILT_IN_POLICIES: ReadonlyArray<PolicyDeclaration> = Object.freeze([
+	SYSTEM_READ_POLICY,
+	COLONY_SYSTEM_POLICY
+]);
+
+/**
+ * The names above, for the surfaces that list policies *as teams*.
+ *
+ * `impersonationTeams` renders one entry per policy into the administrator's team picker, and a
+ * built-in is not a body of staff — the deleted `admin` policy showed up there as though it were
+ * one. Anything that offers policies to a person filters on this.
+ */
+export const BUILT_IN_POLICY_NAMES: ReadonlySet<string> = new Set(
+	BUILT_IN_POLICIES.map(({ name }) => name)
+);
+
+/** Merges runtime-owned collections and policies into an authored definition without letting either shadow the other. */
 export const withSystemCollections = <
 	T extends {
 		readonly collections: ReadonlyArray<
@@ -262,16 +292,12 @@ export const withSystemCollections = <
 ): T => {
 	const authored = new Set(definition.collections.map(({ name }) => name));
 	const missing = SYSTEM_COLLECTIONS.filter(({ name }) => !authored.has(name));
-	if (
-		missing.length === 0 &&
-		definition.policies.some(({ name }) => name === SYSTEM_READ_POLICY.name)
-	)
-		return definition;
+	const declared = new Set(definition.policies.map(({ name }) => name));
+	const absent = BUILT_IN_POLICIES.filter(({ name }) => !declared.has(name));
+	if (missing.length === 0 && absent.length === 0) return definition;
 	return {
 		...definition,
 		collections: [...definition.collections, ...missing],
-		policies: definition.policies.some(({ name }) => name === SYSTEM_READ_POLICY.name)
-			? definition.policies
-			: [...definition.policies, SYSTEM_READ_POLICY]
+		policies: [...definition.policies, ...absent]
 	};
 };
