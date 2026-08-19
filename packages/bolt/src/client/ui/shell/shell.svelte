@@ -769,12 +769,12 @@
 			<Sheet.Header class="shrink-0 bg-card px-4 pt-3 pr-12 pb-1 text-left sm:px-5 sm:pr-12">
 				<Inline gap="sm" align="center" class="min-w-0">
 					<div
-						class="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-foreground"
+						class="grid size-4 shrink-0 place-items-center text-foreground"
 						data-testid="workspace-agent-orb"
 					>
 						<NorbitalThinkingOrb
 							state={fabAgentState}
-							size={28}
+							size={16}
 							label={t(agentOrbStatusKey(fabAgentState))}
 						/>
 					</div>

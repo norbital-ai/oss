@@ -893,12 +893,12 @@
 	>
 		{#if headerOrb}
 			<div
-				class="grid size-8 shrink-0 place-items-center text-foreground"
+				class="grid size-4 shrink-0 place-items-center text-foreground"
 				data-testid="agent-activity-orb"
 			>
 				<NorbitalThinkingOrb
 					state={activityState}
-					size={22}
+					size={16}
 					label={activityState === 'ready'
 						? t('bolt.shell.workspaceAgentTitle')
 						: t(agentOrbStatusKey(activityState))}
@@ -1010,7 +1010,7 @@
 							{#if session.waitedTooLong}
 								<NorbitalThinkingOrb
 									state="error"
-									size={20}
+									size={16}
 									label={t('bolt.agent.failed')}
 									class="text-destructive"
 								/>
