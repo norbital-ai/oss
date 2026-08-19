@@ -14,7 +14,7 @@
 	import { AppMediaHeader } from '@norbital-ai/ui/media-banner';
 	import { Bound, Center, Cover, Frame, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import AgentChatPanel from '../agent/agent-chat-panel.svelte';
-	import NorbitalThinkingOrb from '../agent/norbital-thinking-orb.svelte';
+	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
 	import AgentTrigger from './agent-trigger.svelte';
 	import { requestAgentComposerFocus, type AgentComposerSeed } from '../agent/composer-chrome.js';
 	import { getAgentSurface } from '../agent/agent-activity-state.svelte.js';

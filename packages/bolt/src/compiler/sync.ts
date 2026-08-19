@@ -7,6 +7,7 @@ import { build } from 'vite';
 import { Effect, Schema } from 'effect';
 import type { RelationDefinition, WorkspaceMigrationEntry } from '../authoring/workspace-schema.js';
 import { workspaceAgentNameFromPackage } from './agent-name.js';
+import { WORKSPACE_ENTRY_FILE_NAME } from './client-entry.js';
 import { extractAppMetadata, extractGroupMetadata } from './app-metadata.js';
 import {
 	extractCollectionCatalog,
@@ -463,6 +464,32 @@ class WorkspaceCompiler {
 			if (built.length === 0) {
 				throw new Error(
 					`No compiled client under ${dist}. \`bolt sync\` builds it; an empty directory means that build produced no output.`
+				);
+			}
+			/**
+			 * The one file a host fetches by name has to be there, not merely *some* output.
+			 *
+			 * The emptiness check above cannot see the failure this catches. A workspace whose resolved
+			 * `@norbital-ai/bolt/vite` predates the fixed entry name builds happily and fills this
+			 * directory with an `index.html` and a content-hashed entry — non-empty, so nothing
+			 * complained — and the host then asked for `/_static/workspace.js`, got a 404, and rendered a
+			 * workspace with no apps. That is a stale plugin, and a stale plugin is invisible at the only
+			 * place it can be named cheaply: here, where the build has just run and the file list is
+			 * already in hand.
+			 *
+			 * It is checked against `bolt sync`'s own constant rather than the resolved plugin's, on
+			 * purpose. The name is the contract between the artifact and every host that serves it; if
+			 * the plugin that just ran disagrees with the compiler that is about to embed its output,
+			 * the disagreement is the defect.
+			 */
+			if (!built.some((path) => relative(dist, path) === WORKSPACE_ENTRY_FILE_NAME)) {
+				throw new Error(
+					[
+						`The client build under ${dist} emitted no ${WORKSPACE_ENTRY_FILE_NAME}.`,
+						`It emitted: ${built.map((path) => WorkspaceCompiler.posix(relative(dist, path))).join(', ')}.`,
+						`A host fetches this artifact's client at \`/_static/${WORKSPACE_ENTRY_FILE_NAME}\`, so an artifact without it serves a workspace with no apps.`,
+						`This is what a stale \`@norbital-ai/bolt\` looks like: check that the workspace resolves the same build as the \`bolt\` that ran this sync (\`node -e "console.log(require.resolve('@norbital-ai/bolt/package.json'))"\` in the workspace root), and re-link or re-install if it does not.`
+					].join(' ')
 				);
 			}
 			// Authored media travels in the artifact under the URL the workspace already writes into its

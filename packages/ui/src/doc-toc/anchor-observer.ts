@@ -28,6 +28,10 @@ export class DocTocAnchorObserver {
 
 	private observer: IntersectionObserver | null = null;
 	private readonly listeners = new Set<DocTocChangeListener>();
+	/** The scrollport the headings move through — the document unless a `root` was given. */
+	private scrollRoot: Element | null = null;
+	private atEnd = false;
+	private readonly onScroll = () => this.syncEnd();
 
 	listen(listener: DocTocChangeListener): void {
 		this.listeners.add(listener);
@@ -61,6 +65,10 @@ export class DocTocAnchorObserver {
 
 		this.update(next);
 		this.observeItems();
+		// Headings syncing means the article has laid out. The measurement taken in `watch()` ran
+		// before that, when `scrollHeight` was still viewport-sized and *every* page reported
+		// itself at its end.
+		if (this.observer) this.syncEnd();
 	}
 
 	watch(options?: IntersectionObserverInit): void {
@@ -68,11 +76,46 @@ export class DocTocAnchorObserver {
 
 		this.observer = new IntersectionObserver(this.callback.bind(this), options);
 		this.observeItems();
+
+		// A heading only counts as active inside the observer's band — roughly the top 45% of the
+		// viewport. The *last* heading on a page can never get there when the content beneath it is
+		// shorter than the rest of the screen: you scroll to the very bottom and the entry stays
+		// grey, with nothing left to scroll that would fix it. Pages worked around it with bottom
+		// padding, which has to be re-tuned per page and still fails whenever a final section is
+		// short.
+		//
+		// Scroll position answers it exactly. At the foot of the scrollport the last heading is what
+		// the reader is looking at, whatever the band says, so that is what the rail shows.
+		if (typeof window === 'undefined') return;
+		this.scrollRoot = options?.root instanceof Element ? options.root : null;
+		const target: EventTarget = this.scrollRoot ?? window;
+		target.addEventListener('scroll', this.onScroll, { passive: true });
+		window.addEventListener('resize', this.onScroll, { passive: true });
+		this.syncEnd();
 	}
 
 	unwatch(): void {
 		this.observer?.disconnect();
 		this.observer = null;
+
+		if (typeof window === 'undefined') return;
+		const target: EventTarget = this.scrollRoot ?? window;
+		target.removeEventListener('scroll', this.onScroll);
+		window.removeEventListener('resize', this.onScroll);
+		this.scrollRoot = null;
+		this.atEnd = false;
+	}
+
+	/** Recompute "is the scrollport at its end", and re-emit only when the answer changed. */
+	private syncEnd(): void {
+		const root = this.scrollRoot ?? document.documentElement;
+		const viewport = this.scrollRoot ? root.clientHeight : window.innerHeight;
+		const offset = this.scrollRoot ? root.scrollTop : window.scrollY;
+		// A fractional layout leaves a sub-pixel remainder at a true end, so the check has slack.
+		const atEnd = offset + viewport >= root.scrollHeight - 2;
+		if (atEnd === this.atEnd) return;
+		this.atEnd = atEnd;
+		this.update(this.items);
 	}
 
 	private callback(entries: IntersectionObserverEntry[]): void {
@@ -135,8 +178,33 @@ export class DocTocAnchorObserver {
 	}
 
 	private update(next: DocTocItemInfo[]): void {
+		// `items` keeps what the intersections say, so scrolling back up restores it untouched; the
+		// end-of-scroll override is applied only on the way out to listeners.
 		this.items = next;
-		for (const listener of this.listeners) listener(next);
+		const projected = this.project(next);
+		for (const listener of this.listeners) listener(projected);
+	}
+
+	/**
+	 * Always a fresh array, even when nothing is overridden.
+	 *
+	 * The consumer assigns this straight into `$state`, and assigning the identical reference is a
+	 * no-op there — so returning `items` unchanged when the override switched *off* left the last
+	 * entry highlighted after the reader scrolled back up. Turning a highlight on is only half the
+	 * behaviour; turning it off has to re-render too.
+	 */
+	private project(items: DocTocItemInfo[]): DocTocItemInfo[] {
+		const lastIndex = items.length - 1;
+		if (!this.atEnd || lastIndex < 0 || items[lastIndex].active) return [...items];
+
+		const now = Date.now();
+		return items.map((item, index) =>
+			index === lastIndex
+				? { ...item, active: true, fallback: true, t: now }
+				: item.active
+					? { ...item, active: false, fallback: false, t: now }
+					: item
+		);
 	}
 }
 

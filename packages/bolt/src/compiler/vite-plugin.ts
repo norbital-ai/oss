@@ -6,20 +6,14 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { Effect } from 'effect';
 import { auditAuthoredSystemColumns } from '../quality/audit.js';
+import { WORKSPACE_ENTRY_FILE_NAME } from './client-entry.js';
+
+export { WORKSPACE_ENTRY_FILE_NAME } from './client-entry.js';
 
 export type BoltPluginOptions = Readonly<{
 	readonly workspace?: string;
 	readonly serverAssets?: ReadonlyArray<{ readonly source: string; readonly target: string }>;
 }>;
-
-/**
- * The filename the compiled workspace client is always emitted under.
- *
- * Stable on purpose: a host fetches this module by URL from the artifact it is serving, so a
- * content-hashed name would mean the host had to be told the hash — a second channel carrying a fact
- * the artifact already knows. The chunks it pulls in are hashed as usual; only the door is fixed.
- */
-export const WORKSPACE_ENTRY_FILE_NAME = 'workspace.js';
 
 /**
  * What the organization is called, from the workspace's own manifest.

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { AgentOrbState } from './agent-orb-state.js';
+	import type { ThinkingOrbState } from './types.js';
 
 	type OrbPoint = {
 		x: number;
@@ -16,20 +16,20 @@
 		label,
 		class: className = ''
 	}: {
-		state?: AgentOrbState;
+		state?: ThinkingOrbState;
 		size?: number;
 		label?: string;
 		class?: string;
 	} = $props();
 
-	const ORB_STATES: readonly AgentOrbState[] = ['ready', 'working', 'error'];
+	const ORB_STATES: readonly ThinkingOrbState[] = ['ready', 'working', 'error'];
 
 	/** Read the live attribute Svelte keeps in sync — the attach closure must not snapshot `state`. */
-	function liveOrbState(root: Element): AgentOrbState {
+	function liveOrbState(root: Element): ThinkingOrbState {
 		// stupidity:allow Q4 -- named helper
 		const value = root.getAttribute('data-state');
-		return value !== null && ORB_STATES.includes(value as AgentOrbState)
-			? (value as AgentOrbState)
+		return value !== null && ORB_STATES.includes(value as ThinkingOrbState)
+			? (value as ThinkingOrbState)
 			: 'ready';
 	}
 
@@ -116,7 +116,7 @@
 
 	/** Computes the 2D state glyph layout point for a sphere particle index. */
 	function stateShapePoint( // stupidity:allow Q3 -- named helper
-		mode: AgentOrbState,
+		mode: ThinkingOrbState,
 		index: number,
 		count: number,
 		time: number
@@ -181,7 +181,7 @@
 	}
 
 	/** Returns the 0–1 blend factor between sphere and state-shape modes over time. */
-	function stateShapeMix(mode: AgentOrbState, time: number): number {
+	function stateShapeMix(mode: ThinkingOrbState, time: number): number {
 		// stupidity:allow Q3 -- named helper
 		if (mode !== 'working') return 0;
 		const cycle = time % 5.2;
@@ -197,7 +197,7 @@
 
 	/** Positions and styles a sphere particle for the given agent orb state. */
 	function spherePoint( // stupidity:allow Q3 -- named helper
-		mode: AgentOrbState,
+		mode: ThinkingOrbState,
 		index: number,
 		layout: SphereSeed[],
 		time: number,
@@ -263,7 +263,7 @@
 
 	/** Blends sphere and state-shape positions for one particle at the current phase. */
 	function pointForState(
-		mode: AgentOrbState,
+		mode: ThinkingOrbState,
 		index: number,
 		layout: SphereSeed[],
 		time: number,
@@ -314,8 +314,8 @@
 		let reducedMotion = motionQuery.matches;
 		let visible = true;
 		let frame = 0;
-		let targetState: AgentOrbState = 'ready';
-		let previousState: AgentOrbState = 'ready';
+		let targetState: ThinkingOrbState = 'ready';
+		let previousState: ThinkingOrbState = 'ready';
 		let transitionStarted = performance.now();
 		let initialized = false;
 		let inkColor = getComputedStyle(canvasElement).color;
@@ -324,7 +324,7 @@
 		let lastCanvasSize = 0;
 		let lastDpr = 0;
 		let sphereLayout: SphereSeed[] = [];
-		let lastDrawnState: AgentOrbState | null = null;
+		let lastDrawnState: ThinkingOrbState | null = null;
 		let lastDrawnSize = 0;
 
 		/** Resizes the canvas and rebuilds sphere layout when size or DPR changes. */

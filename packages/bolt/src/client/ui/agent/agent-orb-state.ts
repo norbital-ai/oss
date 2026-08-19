@@ -1,3 +1,4 @@
+import type { ThinkingOrbState } from '@norbital-ai/ui/thinking-orb';
 import { toPanelMessages } from './transcript.js';
 
 /**
@@ -8,8 +9,11 @@ import { toPanelMessages } from './transcript.js';
  * report which of them was true. Neither held up: the shapes read the same at that size, and the
  * runtime only ever knows whether a turn is running. Three states each mean something different to
  * the person watching: nothing is happening, something is, or something broke.
+ *
+ * The union now travels with the component in `@norbital-ai/ui/thinking-orb`; this alias keeps the
+ * runtime's own name for it so the projection below still reads in the runtime's vocabulary.
  */
-export type AgentOrbState = 'ready' | 'working' | 'error';
+export type AgentOrbState = ThinkingOrbState;
 
 export type AgentOrbStatusKey =
 	'bolt.shell.workspaceAgentDescription' | 'bolt.agent.working' | 'bolt.agent.failed';

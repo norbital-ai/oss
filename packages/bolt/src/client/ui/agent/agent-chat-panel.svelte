@@ -27,7 +27,7 @@
 	import { getAgentModelState, loadAgentModelCatalog } from './agent-model-state.svelte.js';
 	import AgentMentionMenu from './agent-mention-menu.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
-	import NorbitalThinkingOrb from './norbital-thinking-orb.svelte';
+	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
 	import {
 		WEB_CHANNEL_ID,
 		buildConversationSelector,

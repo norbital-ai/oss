@@ -13,7 +13,7 @@
 	import * as Sidebar from '@norbital-ai/ui/sidebar';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
-	import NorbitalThinkingOrb from '../agent/norbital-thinking-orb.svelte';
+	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
 	import type { AgentOrbState } from '../agent/agent-orb-state.js';
 
 	let {
