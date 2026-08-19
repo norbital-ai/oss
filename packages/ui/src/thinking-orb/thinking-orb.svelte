@@ -24,6 +24,9 @@
 
 	const ORB_STATES: readonly ThinkingOrbState[] = ['ready', 'working', 'error'];
 
+	/** The sphere's radius as a fraction of the box. See the note at its use for why it is not 0.405. */
+	const ORB_OPTICAL_RADIUS = 0.355;
+
 	/** Read the live attribute Svelte keeps in sync — the attach closure must not snapshot `state`. */
 	function liveOrbState(root: Element): ThinkingOrbState {
 		// stupidity:allow Q4 -- named helper
@@ -368,7 +371,22 @@
 			const mix = 1 - (1 - transitionProgress) ** 4;
 			const elapsed = staticFrame ? 2.25 : now / 1000;
 			const stateElapsed = staticFrame ? 2.25 : Math.max(0, (now - transitionStarted) / 1000);
-			const radius = size * 0.405;
+			/**
+			 * The sphere sits inside its box the way a stroke icon does, not filling it.
+			 *
+			 * At `0.405` the dots reached about 88% of the box once their own radius is counted, while a
+			 * Lucide glyph draws roughly 20 of its 24 units — so beside one, at the identical 16px box
+			 * every caller passes, the orb read as the larger mark and sat visibly proud of the row.
+			 *
+			 * The correction is more than the arithmetic difference, on purpose. A filled disc of dots
+			 * carries far more visual mass than an outline of the same diameter, so matching the drawn
+			 * extent alone would still look bigger; this lands the sphere near 78% of the box, which is
+			 * where it reads as the same size as the icons above and below it.
+			 *
+			 * Applied here rather than by shrinking `size` at the call sites: the box is the layout
+			 * contract every caller shares with `size-4`, and it is the drawing inside it that was wrong.
+			 */
+			const radius = size * ORB_OPTICAL_RADIUS;
 			const dotScale = Math.pow(size / 64, 0.68) * (compact ? 1.06 : 1);
 			const points: Array<OrbPoint & { index: number }> = [];
 
