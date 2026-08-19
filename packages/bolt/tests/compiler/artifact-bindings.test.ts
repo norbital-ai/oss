@@ -19,26 +19,26 @@ const root = '/workspace';
 
 /** An artifact with one of everything the renderer knows how to emit. */
 const artifactWithEverything = (): string =>
-	renderArtifact(
-		{ name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
-		[], // collections
-		[], // relations
-		[], // apps
-		[`${root}/src/policies/+admin.policy.ts`],
-		[`${root}/src/remotes/+summary.ts`],
-		[`${root}/src/tools/+summarize.tool.ts`],
-		[], // channelFiles
-		['nightly'], // automation names
-		[`${root}/src/automations/+nightly.ts`],
-		[`${root}/src/collections/invoices/+pipelines.ts`],
-		[], // skills
-		'fixture-agent',
+	renderArtifact({
+		metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
+		collections: [],
+		relations: [],
+		apps: [],
+		policies: [`${root}/src/policies/+admin.policy.ts`],
+		remotes: [`${root}/src/remotes/+summary.ts`],
+		toolFiles: [`${root}/src/tools/+summarize.tool.ts`],
+		channelFiles: [],
+		automations: ['nightly'],
+		automationFiles: [`${root}/src/automations/+nightly.ts`],
+		pipelineFiles: [`${root}/src/collections/invoices/+pipelines.ts`],
+		skills: [],
+		agentName: 'fixture-agent',
 		root,
-		[], // assets
-		[], // customTypeDefinitions
-		undefined,
-		[]
-	);
+		assets: [],
+		customTypeDefinitions: [],
+		environmentFile: undefined,
+		migrations: []
+	});
 
 describe('emitted artifact bindings', () => {
 	it('declares every name it references', () => {

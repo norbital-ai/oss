@@ -21,7 +21,7 @@ same primitive under a different name.
 
 | Capability                                                                                                         | Where it lives                   | Precedent                                                            |
 | ------------------------------------------------------------------------------------------------------------------ | -------------------------------- | -------------------------------------------------------------------- |
-| Before/after hooks on create, update, delete; batch create; same-transaction validation; `refuse()`                | `+hooks.ts`                      | all templates (status transition maps, credit checks, caps)          |
+| Before/after hooks on create, update, delete; batch create; pre-write validation in `before`; `refuse()`            | `+hooks.ts`                      | all templates (status transition maps, credit checks, caps)          |
 | Import/export shaping with typed attachments (XLSX, PDF, CSV, JSON, HTML, text)                                    | `+pipelines.ts`                  | crm master sync, hr-payroll XLSX payroll export                      |
 | Scheduled and event-triggered work, durable, idempotent, replayable                                                | `src/automation/+<name>.ts`      | crm quote_expiry_watch, hr-payroll runs                              |
 | Custom query and command endpoints with validated schemas                                                          | `src/remotes/+<name>.ts`         | crm pipeline/procurement/settlement_summary dashboards               |

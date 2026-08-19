@@ -62,6 +62,63 @@ type EmbeddedAsset = Readonly<{
 	readonly base64: string;
 }>;
 
+/**
+ * Everything one artifact is rendered from, named.
+ *
+ * Exported because the call sites that most need the names are the tests: each one builds a
+ * workspace shaped for the one thing it asserts about, and every role it does not care about used
+ * to be a bare `[]` in a run of twelve indistinguishable ones.
+ *
+ * The four optional fields are the four discovered files a workspace may simply not have. They are
+ * optional rather than defaulted-positional so that omitting one still reads as "this workspace has
+ * no agent" at the call site, instead of as a gap somebody has to count.
+ */
+export type RenderArtifactInput = Readonly<{
+	readonly metadata: PackageMetadata;
+	readonly collections: ReadonlyArray<{
+		readonly name: string;
+		readonly path: string;
+		readonly sourcePath: string;
+		readonly hooksPath?: string;
+		readonly fields: Readonly<
+			Record<
+				string,
+				{ readonly type: string; readonly required: boolean; readonly indexed: boolean }
+			>
+		>;
+	}>;
+	readonly relations: ReadonlyArray<RelationDefinition>;
+	readonly apps: ReadonlyArray<{
+		readonly name: string;
+		readonly label: string;
+		readonly icon?: string;
+		readonly description?: string;
+		readonly banner?: string;
+		readonly thumbnail?: string;
+	}>;
+	readonly policies: ReadonlyArray<string>;
+	readonly remotes: ReadonlyArray<string>;
+	readonly toolFiles: ReadonlyArray<string>;
+	readonly channelFiles: ReadonlyArray<string>;
+	readonly automations: ReadonlyArray<string>;
+	readonly automationFiles: ReadonlyArray<string>;
+	readonly pipelineFiles: ReadonlyArray<string>;
+	readonly skills: ReadonlyArray<string>;
+	readonly agentName: string;
+	readonly root: string;
+	readonly assets: ReadonlyArray<EmbeddedAsset>;
+	readonly customTypeDefinitions: ReadonlyArray<string>;
+	readonly migrations: ReadonlyArray<WorkspaceMigrationEntry>;
+	/** The workspace's `+integrations.ts` files, one per collection directory that declares one. */
+	readonly integrationFiles?: ReadonlyArray<string>;
+	/** `+env.ts` at the workspace root, when the workspace declares an environment. */
+	readonly environmentFile: string | undefined;
+	/** `src/+ratelimits.ts`, when the workspace states its own rate policy. */
+	readonly rateLimitFile?: string | undefined;
+	/** `src/+agent.ts`, when the workspace configures its agent rather than taking the defaults. */
+	readonly agentFile?: string | undefined;
+}>;
+
 /** Owns compiler discovery, rendering, and artifact emission as one cohesive stateless namespace. */
 class WorkspaceCompiler {
 	/** Owns read package metadata behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
@@ -512,54 +569,47 @@ class WorkspaceCompiler {
 		});
 	};
 
-	/** Owns render artifact behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
-	static readonly renderArtifact = (
-		metadata: PackageMetadata,
-		collections: ReadonlyArray<{
-			readonly name: string;
-			readonly path: string;
-			readonly sourcePath: string;
-			readonly hooksPath?: string;
-			readonly fields: Readonly<
-				Record<
-					string,
-					{ readonly type: string; readonly required: boolean; readonly indexed: boolean }
-				>
-			>;
-		}>,
-		relations: ReadonlyArray<RelationDefinition>,
-		apps: ReadonlyArray<{
-			readonly name: string;
-			readonly label: string;
-			readonly icon?: string;
-			readonly description?: string;
-			readonly banner?: string;
-			readonly thumbnail?: string;
-		}>,
-		policies: ReadonlyArray<string>,
-		remotes: ReadonlyArray<string>,
-		toolFiles: ReadonlyArray<string>,
-		channelFiles: ReadonlyArray<string>,
-		automations: ReadonlyArray<string>,
-		automationFiles: ReadonlyArray<string>,
-		pipelineFiles: ReadonlyArray<string>,
-		skills: ReadonlyArray<string>,
-		agentName: string,
-		root: string,
-		assets: ReadonlyArray<EmbeddedAsset>,
-		customTypeDefinitions: ReadonlyArray<string>,
-		environmentFile: string | undefined,
-		migrations: ReadonlyArray<WorkspaceMigrationEntry>,
-		/**
-		 * The workspace's `+integrations.ts` files, one per collection directory that declares one.
-		 *
-		 * Last and defaulted because every other role was already positional here and appending was the
-		 * change that did not touch five test call sites — not because it matters least.
-		 */
-		integrationFiles: ReadonlyArray<string> = [],
-		/** `src/+agent.ts`, appended for the same reason `integrationFiles` was. */
-		agentFile: string | undefined = undefined
-	): string => {
+	/**
+	 * Owns render artifact behavior at the compiler boundary so validation and typed semantics stay
+	 * consistent for every caller.
+	 *
+	 * **One options object, not a positional run.** This took twenty-one positional parameters,
+	 * twelve of which were consecutive `ReadonlyArray`s, and it has now silently mis-wired twice:
+	 * once when `+agent.ts` reached a compiler that discovered it by no glob at all, and again
+	 * when a `rateLimitFile` inserted ahead of `agentFile` shifted every later argument by one and
+	 * the agent file was read into the rate-limit slot. Both times the artifact still rendered,
+	 * still typechecked and still ran — a synthesized placeholder agent is a valid artifact — so
+	 * the only signal was a test asserting on content.
+	 *
+	 * Twice makes it the signature's defect rather than either call site's. Named fields mean a
+	 * misplaced argument is a type error, a missing one is a type error, and adding a parameter
+	 * stops being an ordering decision. It also makes the call sites readable: nothing
+	 * distinguished the empty relations list from the empty apps list when both were spelled `[]`.
+	 */
+	static readonly renderArtifact = (input: RenderArtifactInput): string => {
+		const {
+			metadata,
+			collections,
+			relations,
+			apps,
+			policies,
+			remotes,
+			toolFiles,
+			channelFiles,
+			automations,
+			automationFiles,
+			pipelineFiles,
+			skills,
+			agentName,
+			root,
+			assets,
+			customTypeDefinitions,
+			environmentFile,
+			migrations,
+			integrationFiles = [],
+			rateLimitFile,
+			agentFile
+		} = input;
 		const remoteNames = remotes.map((path) => basename(path).slice(1, -3));
 		const policyNames = policies.map((path) => basename(path).slice(1, -'.policy.ts'.length));
 		const tools = toolFiles.map((path) => basename(path).slice(1, -'.tool.ts'.length));
@@ -748,6 +798,12 @@ class WorkspaceCompiler {
 			.join(', ');
 		// Imported into the artifact — which only ever runs on a host — and never into the client entry.
 		// This is the declaration, not the values; the values are rows the vault reads at request time.
+		const rateLimitImport =
+			rateLimitFile === undefined
+				? ''
+				: `import declaredRateLimits from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, rateLimitFile))};`;
+		const rateLimitEntry =
+			rateLimitFile === undefined ? '' : ', rateLimits: declaredRateLimits';
 		const environmentImport =
 			environmentFile === undefined
 				? ''
@@ -780,7 +836,7 @@ class WorkspaceCompiler {
 					`${JSON.stringify(basename(path).slice(1, -'.tool.ts'.length))}: async (input, api) => {\n\t\tconst result = await tool${index}.input['~standard'].validate(input);\n\t\tif (result.issues !== undefined) throw new Error(result.issues.map((issue) => issue.message).join('; '));\n\t\treturn runAuthoredHandler(tool${index}.run(api, result.value));\n\t}`
 			)
 			.join(',\n\t');
-		return `import { makeBundle, runAuthoredHandler } from '@norbital-ai/bolt/runtime';\nimport { describeAgent, describeHooks, describeIntegrations, describeModel, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';\n${modelImports}\n${hookImports}\n${policyImports}\n${remoteImports}\n${toolImports}\n${automationImports}\n${pipelineImports}\n${channelImports}\n${customTypeImports}\n${integrationImports}\n${environmentImport}\n${agentImport}\nconst authoredPolicies = [${policyEntries}];\n// Only what the workspace declares. Two synthetic policies used to be appended here and both were\n// mistakes of the same kind — authority modelled as a group.\n//\n// \`admin\` (roles: ['admin'], apps: ['*']) existed so a founder could see everything. Administration\n// is a status on the person now (\`bolt_auth_user.status\`), and \`AccessControl.decide\` short-circuits\n// on it before it reads a policy — so the synthetic policy grants nothing that is not already\n// granted, while \`impersonationTeams()\` lists every policy by name and therefore offered "admin" in\n// the team picker as though it were a body of staff.\n//\n// \`local-authoring\` (roles: []) was worse: \`subjectHasPolicy\` returns true for an empty role list, so\n// a workspace that authored no policies granted every action on every app to every authenticated\n// subject, and offered that as a team too. A workspace with no policies is now closed to ordinary\n// users and open to its administrators, which is the same answer the empty-policy case wants and the\n// only one that does not depend on nobody noticing.\nconst policies = authoredPolicies.map((policy) => ({ ...policy, effect: 'allow', roles: policy.roles ?? [policy.name], actions: [...new Set((policy.grants ?? []).map(({ action }) => action))] }));\nconst declaredModels = {${modelEntries}};\nconst declaredHooks = {${hookEntriesByCollection}};\nconst collectionSourcePaths = {${sourcePaths}};\nconst declaredCustomTypes = {${customTypeEntries}};\nconst declaredChannels = {${channelEntries}};\nconst declaredPipelines = {${pipelineEntriesByCollection}};\nconst declaredIntegrationModules = {${integrationEntries}};\n// Split here, at artifact boot, because the two halves go to two different places: the declarations\n// join the workspace definition a host can read, and the live schemas and closures ride in the\n// authored runtime beside hooks and pipelines.\nconst describedIntegrations = describeIntegrations(declaredIntegrationModules);\nconst declaredAutomations = Object.fromEntries([${automationEntries}].map((automation) => [automation.name, automation]));\nconst declaredWorkspace = ${JSON.stringify(workspace, null, 2)};\n// The declaration is the authority: it carries generated expressions and enum members that\n// reading the source text cannot recover.\nconst collections = declaredWorkspace.collections.map((collection) => {\n\tconst described = describeModel(declaredModels[collection.name]);\n\tconst hooks = describeHooks(declaredHooks[collection.name]);\n\tconst sourcePath = collectionSourcePaths[collection.name];\n\t// Read straight off the declaration's metadata: an EXCLUDE constraint is not a column, so there is\n\t// nothing for \`describeModel\` to have recovered it from, and the schema plan is the only renderer.\n\tconst exclusions = declaredModels[collection.name]?.metadata?.exclusions ?? [];\n\t// The same lift, for the four that had nowhere to land. \`approvalLock\` already has a working\n\t// runtime — \`Collections\` intercepts a write on \`definition.approvalLock\` — so declaring it on\n\t// \`defineModel\` did nothing at all until it was carried here; \`description\` and \`icon\` are what a\n\t// host surface names the collection with. \`history\` gates the \`bolt_collection_history\` writes in\n\t// \`Collections\`, and the descriptor above hardcodes it true, so \`history: false\` was accepted and\n\t// dropped: the collection kept a full revision trail the author had opted out of.\n\tconst metadata = declaredModels[collection.name]?.metadata;\n\treturn {\n\t\t...collection,\n\t\t...(Object.keys(described).length === 0 ? {} : { fields: described }),\n\t\t...(hooks.length === 0 ? {} : { hooks }),\n\t\t...(exclusions.length === 0 ? {} : { exclusions }),\n\t\t...(metadata?.approvalLock === undefined ? {} : { approvalLock: metadata.approvalLock }),\n\t\t...(metadata?.history === undefined ? {} : { history: metadata.history }),\n\t\t...(metadata?.description === undefined ? {} : { description: metadata.description }),\n\t\t...(metadata?.icon === undefined ? {} : { icon: metadata.icon }),\n\t\t...(sourcePath === undefined ? {} : { sourcePath })\n\t};\n});\n// The authored module is the authority on every field but two. The descriptor above supplies the\n// name (which comes from the file) and the agent (which comes from the workspace), and is spread\n// last so neither can be overwritten by a module that declares them.\nconst channels = declaredWorkspace.channels.map((channel) => ({ ...declaredChannels[channel.name], ...channel }));\n// The descriptor above supplies the agent's name, tools and skills — the three facts the authored\n// module cannot state about itself — and \`+agent.ts\` supplies everything else.\nconst agents = declaredWorkspace.agents.map((agent) => describeAgent(agent, ${agentFile === undefined ? 'undefined' : 'declaredAgentSpec'}));\nconst workspace = { ...declaredWorkspace, collections, channels, agents, policies, customTypes: declaredCustomTypes, integrations: describedIntegrations.declarations${environmentEntry} };\nconst encodedAssets = ${JSON.stringify(assets)};\nconst staticAssets = encodedAssets.map(({ base64, ...asset }) => ({ ...asset, bytes: Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)) }));\n// Integrations are projected here rather than baked into the literal above, for the same reason\n// they are spliced into the workspace here: they only exist once the live modules have been\n// imported and split. The manifest literal is written at compile time and cannot hold them, which\n// is why \`buildManifest\` publishing them reached every test and no artifact.\nconst manifestValue = { ...${JSON.stringify(manifest, null, 2)}, staticAssets, integrations: manifestIntegrations(describedIntegrations.declarations) };\nconst remoteHandlers = {\n\t${remoteEntries}\n};\nconst toolHandlers = {\n\t${toolEntries}\n};\nconst authoredRuntime = { hooks: declaredHooks, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };
+		return `import { makeBundle, runAuthoredHandler } from '@norbital-ai/bolt/runtime';\nimport { describeAgent, describeHooks, describeIntegrations, describeModel, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';\n${modelImports}\n${hookImports}\n${policyImports}\n${remoteImports}\n${toolImports}\n${automationImports}\n${pipelineImports}\n${channelImports}\n${customTypeImports}\n${integrationImports}\n${environmentImport}\n${rateLimitImport}\n${agentImport}\nconst authoredPolicies = [${policyEntries}];\n// Only what the workspace declares. Two synthetic policies used to be appended here and both were\n// mistakes of the same kind — authority modelled as a group.\n//\n// \`admin\` (roles: ['admin'], apps: ['*']) existed so a founder could see everything. Administration\n// is a status on the person now (\`bolt_auth_user.status\`), and \`AccessControl.decide\` short-circuits\n// on it before it reads a policy — so the synthetic policy grants nothing that is not already\n// granted, while \`impersonationTeams()\` lists every policy by name and therefore offered "admin" in\n// the team picker as though it were a body of staff.\n//\n// \`local-authoring\` (roles: []) was worse: \`subjectHasPolicy\` returns true for an empty role list, so\n// a workspace that authored no policies granted every action on every app to every authenticated\n// subject, and offered that as a team too. A workspace with no policies is now closed to ordinary\n// users and open to its administrators, which is the same answer the empty-policy case wants and the\n// only one that does not depend on nobody noticing.\nconst policies = authoredPolicies.map((policy) => ({ ...policy, effect: 'allow', roles: policy.roles ?? [policy.name], actions: [...new Set((policy.grants ?? []).map(({ action }) => action))] }));\nconst declaredModels = {${modelEntries}};\nconst declaredHooks = {${hookEntriesByCollection}};\nconst collectionSourcePaths = {${sourcePaths}};\nconst declaredCustomTypes = {${customTypeEntries}};\nconst declaredChannels = {${channelEntries}};\nconst declaredPipelines = {${pipelineEntriesByCollection}};\nconst declaredIntegrationModules = {${integrationEntries}};\n// Split here, at artifact boot, because the two halves go to two different places: the declarations\n// join the workspace definition a host can read, and the live schemas and closures ride in the\n// authored runtime beside hooks and pipelines.\nconst describedIntegrations = describeIntegrations(declaredIntegrationModules);\nconst declaredAutomations = Object.fromEntries([${automationEntries}].map((automation) => [automation.name, automation]));\nconst declaredWorkspace = ${JSON.stringify(workspace, null, 2)};\n// The declaration is the authority: it carries generated expressions and enum members that\n// reading the source text cannot recover.\nconst collections = declaredWorkspace.collections.map((collection) => {\n\tconst described = describeModel(declaredModels[collection.name]);\n\tconst hooks = describeHooks(declaredHooks[collection.name]);\n\tconst sourcePath = collectionSourcePaths[collection.name];\n\t// Read straight off the declaration's metadata: an EXCLUDE constraint is not a column, so there is\n\t// nothing for \`describeModel\` to have recovered it from, and the schema plan is the only renderer.\n\tconst exclusions = declaredModels[collection.name]?.metadata?.exclusions ?? [];\n\t// The same lift, for the four that had nowhere to land. \`approvalLock\` already has a working\n\t// runtime — \`Collections\` intercepts a write on \`definition.approvalLock\` — so declaring it on\n\t// \`defineModel\` did nothing at all until it was carried here; \`description\` and \`icon\` are what a\n\t// host surface names the collection with. \`history\` gates the \`bolt_collection_history\` writes in\n\t// \`Collections\`, and the descriptor above hardcodes it true, so \`history: false\` was accepted and\n\t// dropped: the collection kept a full revision trail the author had opted out of.\n\tconst metadata = declaredModels[collection.name]?.metadata;\n\treturn {\n\t\t...collection,\n\t\t...(Object.keys(described).length === 0 ? {} : { fields: described }),\n\t\t...(hooks.length === 0 ? {} : { hooks }),\n\t\t...(exclusions.length === 0 ? {} : { exclusions }),\n\t\t...(metadata?.approvalLock === undefined ? {} : { approvalLock: metadata.approvalLock }),\n\t\t...(metadata?.history === undefined ? {} : { history: metadata.history }),\n\t\t...(metadata?.description === undefined ? {} : { description: metadata.description }),\n\t\t...(metadata?.icon === undefined ? {} : { icon: metadata.icon }),\n\t\t...(sourcePath === undefined ? {} : { sourcePath })\n\t};\n});\n// The authored module is the authority on every field but two. The descriptor above supplies the\n// name (which comes from the file) and the agent (which comes from the workspace), and is spread\n// last so neither can be overwritten by a module that declares them.\nconst channels = declaredWorkspace.channels.map((channel) => ({ ...declaredChannels[channel.name], ...channel }));\n// The descriptor above supplies the agent's name, tools and skills — the three facts the authored\n// module cannot state about itself — and \`+agent.ts\` supplies everything else.\nconst agents = declaredWorkspace.agents.map((agent) => describeAgent(agent, ${agentFile === undefined ? 'undefined' : 'declaredAgentSpec'}));\nconst workspace = { ...declaredWorkspace, collections, channels, agents, policies, customTypes: declaredCustomTypes, integrations: describedIntegrations.declarations${environmentEntry}${rateLimitEntry} };\nconst encodedAssets = ${JSON.stringify(assets)};\nconst staticAssets = encodedAssets.map(({ base64, ...asset }) => ({ ...asset, bytes: Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)) }));\n// Integrations are projected here rather than baked into the literal above, for the same reason\n// they are spliced into the workspace here: they only exist once the live modules have been\n// imported and split. The manifest literal is written at compile time and cannot hold them, which\n// is why \`buildManifest\` publishing them reached every test and no artifact.\nconst manifestValue = { ...${JSON.stringify(manifest, null, 2)}, staticAssets, integrations: manifestIntegrations(describedIntegrations.declarations) };\nconst remoteHandlers = {\n\t${remoteEntries}\n};\nconst toolHandlers = {\n\t${toolEntries}\n};\nconst authoredRuntime = { hooks: declaredHooks, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };
 const bundle = makeBundle(workspace, manifestValue, remoteHandlers, toolHandlers, authoredRuntime);\nexport const protocolVersion = bundle.protocolVersion;\nexport const manifest = bundle.manifest;\nexport const dispatch = bundle.dispatch;\nexport const activate = bundle.activate;\nexport default bundle;\n`;
 	};
 
@@ -865,6 +921,8 @@ export type AuthoredSource = Readonly<{
 	readonly representationFiles: ReadonlyArray<string>;
 	readonly customRendererFiles: ReadonlyArray<string>;
 	readonly environmentFile: string | undefined;
+	/** `src/+ratelimits.ts` when the workspace states its own rate policy, absent when it states none. */
+	readonly rateLimitFile: string | undefined;
 	readonly toolFiles: ReadonlyArray<string>;
 	readonly toolNames: ReadonlyArray<string>;
 	/** `src/+agent.ts` when the workspace configures its agent, absent when it takes the defaults. */
@@ -975,6 +1033,16 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 		const agentFile = files.find(
 			(path) => basename(path) === '+agent.ts' && dirname(path) === sourceRoot
 		);
+		/**
+		 * `src/+ratelimits.ts`, the workspace's own rate policy.
+		 *
+		 * Under `src/` rather than at the root, unlike `+env.ts`, because it is about this workspace's
+		 * own commands — the collections and agents declared beside it — rather than about the
+		 * environment it is deployed into. It is declared where the things it protects are declared.
+		 */
+		const rateLimitFile = files.find(
+			(path) => basename(path) === '+ratelimits.ts' && dirname(path) === sourceRoot
+		);
 		const hookFiles = files.filter((path) => basename(path) === '+hooks.ts').sort();
 		const pipelineFiles = files.filter((path) => basename(path) === '+pipelines.ts').sort();
 		/**
@@ -1034,6 +1102,7 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 			representationFiles,
 			customRendererFiles,
 			environmentFile,
+			rateLimitFile,
 			toolFiles,
 			toolNames,
 			agentFile,
@@ -1071,6 +1140,7 @@ const WorkspaceSynchronization = {
 				representationFiles,
 				customRendererFiles,
 				environmentFile,
+				rateLimitFile,
 				toolFiles,
 				toolNames,
 				agentFile,
@@ -1327,28 +1397,29 @@ const WorkspaceSynchronization = {
 			);
 			yield* compiler.write(
 				artifactEntry,
-				compiler.renderArtifact(
+				compiler.renderArtifact({
 					metadata,
-					collectionDescriptors,
+					collections: collectionDescriptors,
 					relations,
-					appDescriptors,
-					policyFiles,
-					remoteFiles,
+					apps: appDescriptors,
+					policies: policyFiles,
+					remotes: remoteFiles,
 					toolFiles,
 					channelFiles,
-					automationNames,
+					automations: automationNames,
 					automationFiles,
 					pipelineFiles,
-					skillNames,
+					skills: skillNames,
 					agentName,
 					root,
 					assets,
-					definitions,
+					customTypeDefinitions: definitions,
 					environmentFile,
-					yield* readWorkspaceMigrations(root),
+					migrations: yield* readWorkspaceMigrations(root),
 					integrationFiles,
+					rateLimitFile,
 					agentFile
-				)
+				})
 			);
 			yield* Effect.promise(() =>
 				build({

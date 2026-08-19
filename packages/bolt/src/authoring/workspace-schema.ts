@@ -839,6 +839,16 @@ export interface WorkspaceDefinition {
 	readonly customTypes?: Readonly<Record<string, unknown>>;
 	/** The `+env.ts` declaration: which environment variables this workspace expects, never values. */
 	readonly environment?: import('./environment-schema.js').EnvironmentSpec;
+	/**
+	 * The `src/+ratelimits.ts` declaration: how often this workspace will admit each class of
+	 * command.
+	 *
+	 * On the workspace rather than in a host's configuration because the facts a real limit is
+	 * written in terms of — which command, whose subject, which tenant — are facts only the workspace
+	 * and the runtime have. A host at the edge sees an IP, and behind a reverse proxy it does not
+	 * reliably see even that.
+	 */
+	readonly rateLimits?: import('./rate-limits-schema.js').RateLimitSpec;
 	readonly apps: ReadonlyArray<AppDeclaration>;
 	readonly policies: ReadonlyArray<PolicyDeclaration>;
 	readonly agents: ReadonlyArray<AgentDeclaration>;

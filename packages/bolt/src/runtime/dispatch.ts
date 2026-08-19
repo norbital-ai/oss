@@ -28,6 +28,7 @@ import {
 	runAuthoredHandler
 } from './collections/authored.js';
 import { DispatchError, Workspace } from './workspace.js';
+import { RateLimits } from './rate-limits.js';
 
 export { DispatchError } from './workspace.js';
 
@@ -919,11 +920,54 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 	 * reaches here with `subject: undefined` and provides nothing, leaving `currentSubject` `None`
 	 * rather than a fabricated stand-in a facility would have to learn to distrust.
 	 */
+	/**
+	 * The workspace's own rate policy, applied after identity is settled and before the command runs.
+	 *
+	 * Here rather than at the edge because this is the first point at which the three facts a real
+	 * limit is written in terms of all exist: which command was called, which tenant it belongs to,
+	 * and who is behind it. A reverse proxy sees none of them — behind Traefik it does not reliably
+	 * see even the client IP, which is how one Colony bucket keyed on `getClientAddress()` came to be
+	 * shared by every visitor to the host.
+	 *
+	 * After authentication, so a signed-in person is counted as themselves rather than pooled with
+	 * every other anonymous caller; before the command body, so a refusal costs a map lookup rather
+	 * than the work it was protecting.
+	 */
+	yield* (yield* RateLimits.Service).admit(invocation.command, {
+		tenantId: String(invocation.scope.tenantId),
+		...(authenticated.subject === undefined ? {} : { userId: authenticated.subject.userId }),
+		...(rateLimitAddress(invocation.input) === undefined
+			? {}
+			: { address: rateLimitAddress(invocation.input) as string })
+	});
 	const invoked = runCommand(invocation.command, effectId, authenticated.input);
 	return yield* authenticated.subject === undefined
 		? invoked
 		: Effect.provideService(invoked, Identity.CurrentSubject, authenticated.subject);
 });
+
+/**
+ * The address a payload names, for a limit keyed on one.
+ *
+ * Read off the raw payload rather than a decoded one because it is needed before the command's own
+ * schema has run — the point of an `address` limit is to bound anonymous traffic, and anonymous
+ * traffic is exactly what has no subject to key on. Read defensively for the same reason: this is
+ * untrusted input, and a payload that carries something other than a string simply keys on nothing
+ * and shares the fallback bucket.
+ *
+ * It is a *key*, never an authorisation. Naming an address here says nothing about who the caller
+ * is; it only decides which counter they spend from, and a caller who varies it is spending from a
+ * fresh counter each time — which is why an address limit exists to protect what sending to that
+ * address costs, and never to establish identity.
+ */
+const rateLimitAddress = (payload: unknown): string | undefined => {
+	if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+	for (const field of ['address', 'email']) {
+		const value = Reflect.get(payload, field);
+		if (typeof value === 'string' && value.trim() !== '') return value;
+	}
+	return undefined;
+};
 
 /**
  * Everything a command does once its identity is settled, which is why it is a function.
@@ -1763,7 +1807,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					const files = yield* Files.Service;
 					const ops = makeBoundAuthoringOps(effectId, input.bolt_run_as, collections, ai, files);
 					const api = makeAuthoringApi(ops);
-					const output = yield* runAuthoredHandler(
+					const output = yield* runAuthoredHandler(() =>
 						automation.handler(api, { args: input.args, scope: input.scope ?? {} })
 					);
 					return json(output as Schema.Json);

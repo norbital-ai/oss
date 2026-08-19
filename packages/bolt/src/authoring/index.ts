@@ -95,6 +95,9 @@ export {
 	timestamp,
 	vector
 } from './models-schema.js';
+export { AuthoredRefusal } from './refusal.js';
+export { defineRateLimits } from './rate-limits-schema.js';
+export type { RateLimitKey, RateLimitRule, RateLimitSpec } from './rate-limits-schema.js';
 export type {
 	BoltGroupDefinition,
 	CustomTypeDefinition,

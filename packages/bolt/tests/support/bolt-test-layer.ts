@@ -160,6 +160,8 @@ import {
 } from '../../src/runtime/facilities/services.js';
 import { Identity } from '../../src/runtime/identity/identity.js';
 import { remoteRegistryLayer } from '../../src/runtime/remotes.js';
+import { InvocationBudget } from '../../src/runtime/budget.js';
+import { RateLimits } from '../../src/runtime/rate-limits.js';
 import { Secrets } from '../../src/runtime/secrets/secrets.js';
 import { PersonalSecrets } from '../../src/runtime/secrets/personal-secrets.js';
 import { SECRET_KEY_VARIABLE, SecretCipher } from '@norbital-ai/std/secret';
@@ -477,7 +479,12 @@ export const makeBoltTestRuntime = async (
 	const remotes = Layer.provideMerge(remoteRegistryLayer({}), collections);
 	// Dispatch routes agent commands too, so the service has to be present for the command surface to
 	// typecheck — its AI facility is bound unavailable, so calling one fails rather than pretending.
-	const agents = Layer.provideMerge(Agents.layer, remotes);
+	// The budget an invocation carries. Zero depth, because a test drives the runtime directly rather
+	// than through a task the runtime itself enqueued — which is the only thing that produces a
+	// non-zero one. Provided rather than defaulted so a service that starts consulting it fails here
+	// instead of silently reading a stand-in.
+	const budget = InvocationBudget.layer(0);
+	const agents = Layer.provideMerge(Agents.layer, Layer.merge(remotes, budget));
 	// The rest of the command surface dispatch routes. Their facilities are bound unavailable, so a
 	// test that reaches one fails loudly instead of succeeding against a stub.
 	// Secrets sits under the rest rather than beside it: `Integrations` resolves a connection's
@@ -507,9 +514,16 @@ export const makeBoltTestRuntime = async (
 			Notifications.layer,
 			WorkspaceSchema.layer
 		),
-		Layer.merge(vault, authoredLayer)
+		Layer.mergeAll(vault, authoredLayer, budget)
 	);
-	const complete = Layer.provideMerge(Sync.layer, Layer.merge(surfaces, authoredLayer));
+	// The workspace's own declared rate policy, or none. A test workspace declares none, so every
+	// command is admitted uncounted — which is what a suite about anything else needs, and what a
+	// suite about the limiter overrides by building its own.
+	const rateLimits = RateLimits.layer(definition.rateLimits);
+	const complete = Layer.provideMerge(
+		Sync.layer,
+		Layer.mergeAll(surfaces, authoredLayer, budget, rateLimits)
+	);
 
 	const runtime = ManagedRuntime.make(complete);
 	return {

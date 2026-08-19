@@ -17,9 +17,9 @@ import { renderArtifact } from '../../src/compiler/sync.js';
 const root = '/workspace';
 
 const artifactFor = (agentFile: string | undefined): string =>
-	renderArtifact(
-		{ name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
-		[
+	renderArtifact({
+		metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
+		collections: [
 			{
 				name: 'orders',
 				path: `${root}/src/collections/orders/+model.ts`,
@@ -27,25 +27,25 @@ const artifactFor = (agentFile: string | undefined): string =>
 				fields: { title: { type: 'string', required: true, indexed: false } }
 			}
 		],
-		[],
-		[],
-		[],
-		[],
-		[],
-		[],
-		[],
-		[],
-		[],
-		[],
-		'fixture-agent',
+		relations: [],
+		apps: [],
+		policies: [],
+		remotes: [],
+		toolFiles: [],
+		channelFiles: [],
+		automations: [],
+		automationFiles: [],
+		pipelineFiles: [],
+		skills: [],
+		agentName: 'fixture-agent',
 		root,
-		[],
-		[],
-		undefined,
-		[],
-		[],
+		assets: [],
+		customTypeDefinitions: [],
+		environmentFile: undefined,
+		migrations: [],
+		integrationFiles: [],
 		agentFile
-	);
+	});
 
 /** The one statement in the artifact that folds `+agent.ts` into the declared agents. */
 const agentDescriptors = (

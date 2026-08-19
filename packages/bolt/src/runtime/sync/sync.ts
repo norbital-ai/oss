@@ -7,6 +7,8 @@ import { ApprovalConflict } from '../approvals/approvals.js';
 import { Database } from '../facilities/database.js';
 import type { Identity } from '../identity/identity.js';
 import { Workspace } from '../workspace.js';
+import { AuthoredRefusal } from '../../authoring/refusal.js';
+import { InvocationBudget } from '../budget.js';
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 
@@ -124,6 +126,13 @@ export type Interface = Readonly<{
 		| Workspace.WorkspaceLookupError
 		| ApprovalConflict
 		| PendingApproval
+		// A client mutation is an ordinary collection write, so it can be refused by an authored
+		// rule or stopped by the hook-recursion bound exactly as any other write can. Declared
+		// rather than inferred so a caller that handles this union exhaustively has to decide what
+		// a refused sync change means for the replica that sent it — which is a real decision, and
+		// a different one from "the write failed".
+		| AuthoredRefusal
+		| InvocationBudget.NestingLimitExceeded
 	>;
 	readonly wakeHint: (cursor: SyncCursor) => {
 		readonly topic: string;

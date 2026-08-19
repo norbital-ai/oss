@@ -56,26 +56,26 @@ const toolHandlers = (
 };
 
 const artifactWithOneTool = (): string =>
-	renderArtifact(
-		{ name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
-		[], // collections
-		[], // relations
-		[], // apps
-		[], // policies
-		[], // remotes
-		[`${root}/src/tools/+summarize.tool.ts`], // toolFiles
-		[], // channelFiles
-		[], // automation names
-		[], // automationFiles
-		[], // pipelineFiles
-		[], // skills
-		'fixture-agent',
+	renderArtifact({
+		metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
+		collections: [],
+		relations: [],
+		apps: [],
+		policies: [],
+		remotes: [],
+		toolFiles: [`${root}/src/tools/+summarize.tool.ts`],
+		channelFiles: [],
+		automations: [],
+		automationFiles: [],
+		pipelineFiles: [],
+		skills: [],
+		agentName: 'fixture-agent',
 		root,
-		[], // assets
-		[], // customTypeDefinitions
-		undefined, // environmentFile
-		[] // migrations
-	);
+		assets: [],
+		customTypeDefinitions: [],
+		environmentFile: undefined,
+		migrations: []
+	});
 
 describe('artifact tool input validation', () => {
 	it('validates a tool input declared with Effect Schema, and refuses what it rejects', async () => {

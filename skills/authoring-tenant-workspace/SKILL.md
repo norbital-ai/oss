@@ -318,10 +318,16 @@ sentence; "runs before create" restates the key and is worse than nothing.
   and delete (create also takes a `batchHandler` for bulk writes), import/export pipelines run the
   canonical import and export flows, and change-triggered automations receive
   `{ args, scope }` with the triggering row as `scope.incoming_record`.
-- Hooks validate and return the exact input/patch, then make only same-transaction database or asset
+- Hooks validate and return the exact input/patch, then make only immediate database or asset
   reads. Hooks MAY call bounded `api.infer` for judgement (photos etc.); heavy/durable infer still
   belongs in automations. They never queue work, send email, or spawn agent sessions. Reject a write
-  with `refuse(message)` from `@norbital-ai/bolt/authoring`.
+  with `refuse(message)` from `@norbital-ai/bolt/authoring` — it reaches the caller as a typed
+  refusal (422 with your sentence), not as a runtime fault.
+- **Validation goes in `before`, always.** There are no transactions around a hook: the database
+  facility autocommits every statement, so by the time `after` runs the row is a fact and nothing can
+  undo it. A check in `after` that refuses leaves the record behind — hr-payroll's orphaned DRAFT
+  runs with no payslips came from exactly that. `after` is for work that follows the record
+  existing, and its failures are reported rather than swallowed.
 - Automations run after commit, are durable and idempotent, and receive stable event IDs. They are
   always deterministic handlers; when one needs model judgement, call `api.infer` with an Effect
   `Schema.Schema` for `schema` (never zod), optional `images`, and optional named workspace tools.

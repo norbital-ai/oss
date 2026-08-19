@@ -1,4 +1,4 @@
-import { Effect, Layer } from 'effect';
+import { Cause, Effect, Layer, Result } from 'effect';
 import {
 	EffectId,
 	LeaseId,
@@ -55,6 +55,9 @@ import { SecretCipher } from '@norbital-ai/std/secret';
 import { Sync } from './sync/sync.js';
 import { SyncWake } from './sync/wake.js';
 import { Workspace } from './workspace.js';
+import { InvocationBudget } from './budget.js';
+import { RateLimits } from './rate-limits.js';
+import { AuthoredRefusal, refusalOf } from '../authoring/refusal.js';
 
 /** Owns invocation layer behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
 const InvocationLayers = {
@@ -63,8 +66,30 @@ const InvocationLayers = {
 		facilities: FacilityBindings,
 		context: CallContext,
 		handlers: Readonly<Record<string, RuntimeRemoteHandler>>,
-		authored: AuthoredRuntime = emptyAuthoredRuntime
+		authored: AuthoredRuntime = emptyAuthoredRuntime,
+		/**
+		 * How deep the chain that produced this invocation already is, read off the payload the
+		 * runtime itself stamped when it enqueued the work. Zero for anything a person, a schedule or
+		 * a webhook started.
+		 */
+		depth = 0
 	) => {
+		/**
+		 * The runtime's one handle on the host's own environment, built once and used twice.
+		 *
+		 * A host that binds a `config` facility supplies values through it — the sandboxed path, where
+		 * there is no `process` behind the isolate boundary; a host that does not gets Effect's own
+		 * configuration provider, which is the plain-process path. Either way the host is the source, and
+		 * a missing value is an absence the runtime fails closed on rather than a default it invents.
+		 */
+		const hostConfigShape =
+			facilities.config === undefined
+				? hostConfigFromProcessEnv()
+				: hostConfigFromFacility(facilities.config);
+		const budget = InvocationBudget.layer(depth);
+		// Built from the workspace's own `src/+ratelimits.ts`, so the policy travels with the bundle
+		// and applies identically under Colony, under bolt-server, and in a test.
+		const rateLimits = RateLimits.layer(workspace.rateLimits);
 		const database = Database.layer(facilities.database, context);
 		const files = Files.layer(facilities.files, context);
 		const ai = AI.layer(facilities.ai, context);
@@ -129,7 +154,8 @@ const InvocationLayers = {
 					files,
 					connector,
 					hostTools,
-					remotes
+					remotes,
+					budget
 				)
 			)
 		);
@@ -137,9 +163,16 @@ const InvocationLayers = {
 			Layer.provide(Layer.mergeAll(workspaceLayer, database))
 		);
 		// Both vaults seal through the same cipher, so there is one key, one envelope format and one
-		// fail-closed refusal rather than two of each. It takes no facility: the key comes from the host's
-		// configuration, deliberately not from the tenant database it is protecting.
-		const secretCipher = SecretCipher.layer;
+		// fail-closed refusal rather than two of each. The key comes from the host's configuration,
+		// deliberately not from the tenant database it is protecting — and it comes through the same
+		// `HostConfig` seam every other host-provided value does.
+		//
+		// It used to read `ConfigProvider` directly, which is unreachable from where this actually
+		// runs. A tenant runtime executes in a `vm` context with no `process` global, so inside an
+		// isolate that read returned nothing, silently, and every write to either vault refused with
+		// "BOLT_SECRETS_KEY is not set" on a host that had set it. `hostConfigFromProcessEnv` keeps the
+		// plain-process route identical for bolt-server and for tests.
+		const secretCipher = SecretCipher.layerFrom(hostConfigShape);
 		const secrets = Secrets.layer.pipe(
 			Layer.provide(Layer.mergeAll(workspaceLayer, database, secretCipher))
 		);
@@ -159,7 +192,8 @@ const InvocationLayers = {
 					connector,
 					files,
 					hostTools,
-					authoredLayer
+					authoredLayer,
+					budget
 				)
 			)
 		);
@@ -187,16 +221,7 @@ const InvocationLayers = {
 		const notifications = Notifications.layer.pipe(
 			Layer.provide(Layer.mergeAll(workspaceLayer, identity, database, communication, tasks))
 		);
-		// The runtime's one handle on the host's own environment. A host that binds a `config` facility
-		// supplies values through it (the sandboxed path — there is no `process` behind an isolate
-		// boundary); a host that does not gets `process.env`, which is the plain-process path. Either
-		// way the host is the source, and a missing value is an absence the runtime fails closed on.
-		const hostConfig = Layer.succeed(
-			HostConfig,
-			facilities.config === undefined
-				? hostConfigFromProcessEnv()
-				: hostConfigFromFacility(facilities.config)
-		);
+		const hostConfig = Layer.succeed(HostConfig, hostConfigShape);
 		return Layer.mergeAll(
 			workspaceLayer,
 			access,
@@ -223,7 +248,9 @@ const InvocationLayers = {
 			transport,
 			remotes,
 			authoredLayer,
-			hostConfig
+			hostConfig,
+			budget,
+			rateLimits
 		);
 	}
 };
@@ -381,10 +408,40 @@ const BundleActivation = {
 							);
 						})
 					);
-		return Effect.runPromise(effect, { signal });
+		// Activation is bounded by its own deadline for the same reason dispatch is: registering a
+		// release's durable callbacks talks to the host's task facility, and a host that never answers
+		// would otherwise leave a deploy hanging with no report of why.
+		return Effect.runPromise(
+			effect.pipe(
+				Effect.timeout(remainingMillis(activation.deadlineEpochMs)),
+				Effect.catch(() =>
+					Effect.succeed({
+						_tag: 'Failure' as const,
+						error: makeWireError(
+							'deadline_exceeded',
+							'Activation did not finish inside its deadline',
+							{ retryable: true }
+						)
+					})
+				)
+			),
+			{ signal }
+		);
 	}
 };
 const activate = BundleActivation.activate;
+
+/**
+ * How long an invocation has left, as a duration rather than an instant.
+ *
+ * Floored at one millisecond rather than zero. A deadline that has already passed is a real state —
+ * a queued task the host held longer than it budgeted for — and the answer to it is the same
+ * `deadline_exceeded` every other overrun gets, reached by timing out immediately. Passing a
+ * non-positive duration instead would be read as "no limit" by some combinators, which is precisely
+ * backwards.
+ */
+const remainingMillis = (deadlineEpochMs: number): number =>
+	Math.max(1, deadlineEpochMs - Date.now());
 
 /** Owns run behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
 const BundleDispatch = {
@@ -402,7 +459,33 @@ const BundleDispatch = {
 			environment: String(invocation.scope.environment)
 		};
 		const effect = dispatchInvocation(invocation).pipe(
-			Effect.provide(invocationLayer(workspace, facilities, context, remoteHandlers, authored)),
+			Effect.provide(
+				invocationLayer(
+					workspace,
+					facilities,
+					context,
+					remoteHandlers,
+					authored,
+					// Only a `Task` carries a depth, because only enqueued work has a parent. A command a
+					// person sent, a request, a webhook and a realtime frame all start their own chain.
+					invocation._tag === 'Task' ? InvocationBudget.depthOf(invocation.input) : 0
+				)
+			),
+			// The invocation deadline, enforced where every host gets it rather than only where one
+			// host remembered to. `deadlineEpochMs` has ridden on every invocation since the protocol
+			// was written and was read by nothing but the facility metadata: bolt-server wrapped its
+			// own `Effect.timeout` around dispatch, and Colony wrapped nothing at all, so on the
+			// hosting platform an invocation that never settled held its slot until the process died.
+			//
+			// This bounds *the tree*, which is a different job from the isolate's CPU-span budget and
+			// from a facility's own statement or request timeout. It can only interrupt work that
+			// yields — a tenant loop that never awaits is unreachable from inside the runtime, and
+			// bounding that is the host's, because only the host can terminate the thread.
+			//
+			// Every nested piece of work under this invocation shares this one deadline by
+			// construction: a hook chain, an import pipeline and an agent's tool calls are all the
+			// same fiber tree, so none of them can be given a fresh budget by running deeper.
+			Effect.timeout(remainingMillis(invocation.deadlineEpochMs)),
 			Effect.match({
 				onFailure: (error): BundleResult => {
 					if (error instanceof DispatchError && error.code === 'unauthorized')
@@ -466,6 +549,60 @@ const BundleDispatch = {
 							error: makeWireError('forbidden', message, { httpStatus: 403 })
 						};
 					}
+					// A business rule said no. 422 rather than 500 because nothing is broken: the request was
+					// well formed and the caller was entitled to make it, and the answer is the sentence the
+					// author wrote. It arrives here as a typed failure only because `runAuthoredHandler`
+					// lifts it out of the defect channel — before that it bypassed this whole match and
+					// reported as an infrastructure fault, which is what made "you may not" and "we broke"
+					// indistinguishable to every consumer.
+					//
+					// `details` carries the site rather than folding it into the message, because the message
+					// is the part a person reads and it should stay exactly as authored.
+					// The tree ran out of time. 504 rather than 500: nothing is known to be broken, the work
+					// simply did not finish inside the budget the host granted it, and a caller reading
+					// this should decide whether to retry rather than go looking for a fault.
+					// Work that tried to nest past the host's limit. Reported as the caller's problem rather
+					// than a fault, because it is: something in the workspace is enqueueing work that
+					// enqueues itself, and the sentence names the chain rather than the symptom.
+					// Over the workspace's own declared limit. 429 with `Retry-After`, because the caller is
+					// not wrong and nothing is broken — they are early, and the honest answer says how
+					// early. Reported distinctly from a bot check or a blocked domain, which the surface
+					// this replaces collapsed into one `too-many-attempts` reason for every guard it ran.
+					if (error instanceof RateLimits.RateLimited)
+						return {
+							_tag: 'Failure',
+							error: makeWireError('rate_limited', error.message, {
+								httpStatus: 429,
+								retryable: true,
+								details: { retryAfterSeconds: error.retryAfterSeconds, command: error.command }
+							})
+						};
+					if (error instanceof InvocationBudget.NestingLimitExceeded)
+						return {
+							_tag: 'Failure',
+							error: makeWireError('nesting_limit_exceeded', error.message, { httpStatus: 422 })
+						};
+					if (Cause.isTimeoutError(error))
+						return {
+							_tag: 'Failure',
+							error: makeWireError(
+								'deadline_exceeded',
+								'The invocation did not finish inside its deadline',
+								{ httpStatus: 504, retryable: true }
+							)
+						};
+					if (error instanceof AuthoredRefusal) {
+						return {
+							_tag: 'Failure',
+							error: makeWireError('refused', error.message, {
+								httpStatus: 422,
+								details: {
+									...(error.collection === undefined ? {} : { collection: error.collection }),
+									...(error.action === undefined ? {} : { action: error.action })
+								}
+							})
+						};
+					}
 					if (error instanceof Collections.PendingApproval) {
 						return {
 							_tag: 'Success',
@@ -509,7 +646,23 @@ const run = BundleDispatch.run;
  */
 export const runAuthoredHandler = (result: unknown): Promise<unknown> =>
 	Effect.isEffect(result)
-		? Effect.runPromise(result as Effect.Effect<unknown, unknown, never>)
+		? Effect.runPromise(
+				(result as Effect.Effect<unknown, unknown, never>).pipe(
+					// A refusal is lifted out of the defect channel here so that the promise this returns
+					// rejects with the tagged refusal itself. The seam that awaits it —
+					// `runtime/collections/authored.ts` — recognises a refusal structurally, by its `_tag`,
+					// and a defect wrapped in whatever the runtime puts around one is not recognisable. This
+					// is the compiled artifact's own entry point for remotes and tools, so without it a
+					// remote that refuses would still report as a 500 while a hook that refuses reported 422.
+					Effect.catchDefect((defect) => {
+						const refusal = refusalOf(defect);
+						return refusal === undefined ? Effect.die(defect) : Effect.fail(refusal);
+					}),
+					Effect.result
+				)
+			).then((outcome) =>
+				Result.isSuccess(outcome) ? outcome.success : Promise.reject(outcome.failure)
+			)
 		: Promise.resolve(result);
 
 /** Owns make bundle behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */

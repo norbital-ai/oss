@@ -25,6 +25,8 @@ import {
 } from './platform-tools.js';
 import { agentMessageForModel, parseAgentMessage } from './agent-message.js';
 import { executeSandboxTool, isSandboxTool, sandboxToolSpecs } from './sandbox-tools.js';
+import { InvocationBudget } from '../budget.js';
+import { AuthoredRefusal } from '../../authoring/refusal.js';
 
 export { SkillError, ToolNotAllowed } from './agent-errors.js';
 
@@ -270,6 +272,12 @@ export type Interface = Readonly<{
 		| ApprovalConflict
 		| PendingApproval
 		| WhereCompileError
+		// A turn runs authored code — its tools reach collections and remotes — so a business rule
+		// can refuse it, and a delegated turn can be stopped by the nesting bound. Both were
+		// reaching this boundary already; only the declaration did not say so, which is how a
+		// refusal here left as something a caller could not name.
+		| AuthoredRefusal
+		| InvocationBudget.NestingLimitExceeded
 	>;
 	readonly resume: (
 		effectId: EffectIdType,
@@ -336,6 +344,7 @@ export const layer = Layer.effect(
 		const hostTools = yield* HostTools.Service;
 		const files = yield* Files.Service;
 		const connector = yield* Connector.Service;
+		const budget = yield* InvocationBudget.Service;
 		const remotes = yield* RemoteRegistry;
 
 		/**
@@ -420,7 +429,8 @@ export const layer = Layer.effect(
 					agentName: agent.name,
 					conversationId,
 					database,
-					tasks
+					tasks,
+					budget
 				});
 			}
 			if (mcp !== undefined) {

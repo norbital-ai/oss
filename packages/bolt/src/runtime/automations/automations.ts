@@ -4,6 +4,7 @@ import { Database } from '../facilities/database.js';
 import { Tasks } from '../facilities/services.js';
 import type { Subject } from '../identity/identity.js';
 import { Workspace } from '../workspace.js';
+import { InvocationBudget } from '../budget.js';
 
 export type Interface = Readonly<{
 	readonly register: (name: string) => Effect.Effect<void, Workspace.WorkspaceLookupError>;
@@ -12,7 +13,12 @@ export type Interface = Readonly<{
 		subject: Subject,
 		name: string,
 		input: Schema.Json
-	) => Effect.Effect<string, Database.FacilityError | Workspace.WorkspaceLookupError>;
+	) => Effect.Effect<
+		string,
+		| Database.FacilityError
+		| Workspace.WorkspaceLookupError
+		| InvocationBudget.NestingLimitExceeded
+	>;
 	readonly runStep: Interface['start'];
 	readonly resume: (
 		effectId: EffectIdType,
@@ -36,6 +42,7 @@ export const layer = Layer.effect(
 		const tasks = yield* Tasks.Service;
 		const workspace = yield* Workspace.Service;
 		const database = yield* Database.Service;
+		const budget = yield* InvocationBudget.Service;
 		const start = Effect.fn('Automations.start')(function* (
 			effectId: EffectIdType,
 			subject: Subject,
@@ -43,6 +50,15 @@ export const layer = Layer.effect(
 			input: Schema.Json
 		) {
 			yield* workspace.automation(name);
+			// Checked before the run row is written, so a chain that has gone too deep leaves no
+			// `queued` automation behind that nothing will ever move off `queued`.
+			//
+			// This is the bound on automation recursion, and it has to be a counter rather than a
+			// deadline: an automation is durable, so the host runs it on a fresh invocation with a
+			// fresh deadline, and "inherit the parent's remaining time" has no meaning for work that
+			// starts after the parent has already returned. The other half of the cycle break is that
+			// an automation does not re-trigger on its own writes.
+			const depth = yield* budget.nest(`automation ${name}`);
 			yield* database.execute(effectId, {
 				_tag: 'Query',
 				sql: 'insert into bolt_automation_runs (effect_id, automation_name, state, input) values ($1, $2, $3, $4) on conflict (effect_id) do nothing',
@@ -51,10 +67,12 @@ export const layer = Layer.effect(
 			// `bolt_run_as` is written here, at the runtime's own enqueue point, so the task the handler
 			// later sees was stamped by this service — a caller's own `bolt_run_as` claim is overwritten,
 			// never forwarded.
-			const enqueued: Schema.Json =
+			const enqueued: Schema.Json = InvocationBudget.stampDepth(
 				typeof input === 'object' && input !== null && !Array.isArray(input)
 					? { ...(input as Readonly<Record<string, Schema.Json>>), bolt_run_as: subject }
-					: { args: {}, bolt_run_as: subject };
+					: { args: {}, bolt_run_as: subject },
+				depth
+			);
 			const response = yield* tasks.execute(EffectId.make(`${effectId}:start`), {
 				_tag: 'Enqueue',
 				command: `automations.${name}`,

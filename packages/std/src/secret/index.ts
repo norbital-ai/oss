@@ -250,62 +250,100 @@ const open = (key: Uint8Array, binding: string, stored: string): Opened => {
 	}
 };
 
-export const layer = Layer.effect(
-	Service,
-	Effect.gen(function* () {
-		/**
-		 * Read once, at layer construction, and never from `process.env` directly — Bolt describes a
-		 * workspace and a host runs it, so ambient environment access is an architecture violation the
-		 * dependency audit fails on, and Colony bans `process.env` outside its one env loader for the
-		 * same reason. `ConfigProvider` is the same value by a route a host and a test can both control.
-		 *
-		 * A configuration *source* failure collapses to the same `Unavailable` an absent key produces.
-		 * That is the fail-closed direction: not being able to tell whether a key exists means there is
-		 * no key to encrypt with, and every write refuses.
-		 */
-		const material = yield* Config.option(Config.redacted(SECRET_KEY_VARIABLE)).pipe(
-			Effect.match({
-				onFailure: (): KeyMaterial => ({
-					_tag: 'Unavailable',
-					reason: `${SECRET_KEY_VARIABLE} could not be read from configuration`
-				}),
-				onSuccess: resolveKey
-			})
-		);
+/**
+ * How this cipher obtains its key, as a seam rather than an assumption.
+ *
+ * `ConfigProvider` is one answer and it is the wrong one in the place that matters most. A tenant
+ * runtime executes inside a `vm` context with no `process` global, deliberately — so a bundle that
+ * reads configuration through the ambient provider inside an isolate reads nothing, silently, and
+ * every `encrypt` refuses with "the key is not set" on a host where the key is very much set. That
+ * is the same fault that made the gateway secret unreachable and every `schema.migrate` answer
+ * "Missing command credential" while the bootstrap reported six of six up.
+ *
+ * A host behind an isolate boundary answers through its config facility instead, which is a round
+ * trip it can actually serve. Both routes produce the same `Option`, and the failure channel carries
+ * the reason a route could not answer, so "the host has no key" and "the host could not be asked"
+ * stay distinguishable — they mean different things to an operator, and both are fatal to a write.
+ */
+export type KeySource = Readonly<{
+	readonly read: (key: string) => Effect.Effect<Option.Option<Redacted.Redacted<string>>, string>;
+}>;
 
-		const encrypt: Interface['encrypt'] = Effect.fn('SecretCipher.encrypt')(function* (
-			operation: string,
-			binding: string,
-			value: string
-		) {
-			if (material._tag === 'Unavailable')
-				return yield* new SecretKeyUnavailable({ operation, reason: material.reason });
-			return seal(Redacted.value(material.key), binding, value);
-		});
+/** The key source a bundle running in a plain process has: Effect's own configuration provider. */
+export const configProviderKeySource: KeySource = {
+	read: (key) =>
+		Config.option(Config.redacted(key)).pipe(
+			Effect.mapError(() => `${key} could not be read from configuration`)
+		)
+};
 
-		const decrypt: Interface['decrypt'] = Effect.fn('SecretCipher.decrypt')(function* (
-			name: string,
-			binding: string,
-			stored: string
-		) {
-			if (material._tag === 'Unavailable')
-				return yield* new SecretKeyUnavailable({
-					operation: `reading ${name}`,
-					reason: material.reason
-				});
-			const opened = open(Redacted.value(material.key), binding, stored);
-			if (opened._tag === 'Rejected')
-				return yield* new SecretUnreadable({ name, reason: opened.reason });
-			return opened.value;
-		});
+/**
+ * The cipher over one key source.
+ *
+ * The key is read once, at layer construction, and never from `process.env` directly — Bolt
+ * describes a workspace and a host runs it, so ambient environment access is an architecture
+ * violation the dependency audit fails on, and Colony bans `process.env` outside its one env loader
+ * for the same reason.
+ *
+ * A source *failure* collapses to the same `Unavailable` an absent key produces. That is the
+ * fail-closed direction: not being able to tell whether a key exists means there is no key to
+ * encrypt with, and every write refuses. The reason is carried through, so the two cases read
+ * differently in the message an operator sees.
+ */
+export const layerFrom = (source: KeySource) =>
+	Layer.effect(
+		Service,
+		Effect.gen(function* () {
+			const material = yield* source.read(SECRET_KEY_VARIABLE).pipe(
+				Effect.match({
+					onFailure: (reason): KeyMaterial => ({ _tag: 'Unavailable', reason }),
+					onSuccess: resolveKey
+				})
+			);
 
-		return { encrypt, decrypt };
-	})
-);
+			const encrypt: Interface['encrypt'] = Effect.fn('SecretCipher.encrypt')(function* (
+				operation: string,
+				binding: string,
+				value: string
+			) {
+				if (material._tag === 'Unavailable')
+					return yield* new SecretKeyUnavailable({ operation, reason: material.reason });
+				return seal(Redacted.value(material.key), binding, value);
+			});
+
+			const decrypt: Interface['decrypt'] = Effect.fn('SecretCipher.decrypt')(function* (
+				name: string,
+				binding: string,
+				stored: string
+			) {
+				if (material._tag === 'Unavailable')
+					return yield* new SecretKeyUnavailable({
+						operation: `reading ${name}`,
+						reason: material.reason
+					});
+				const opened = open(Redacted.value(material.key), binding, stored);
+				if (opened._tag === 'Rejected')
+					return yield* new SecretUnreadable({ name, reason: opened.reason });
+				return opened.value;
+			});
+
+			return { encrypt, decrypt };
+		})
+	);
+
+/**
+ * The cipher for a host that is a plain process, which is Colony's own control-plane store.
+ *
+ * Kept as the default because that is what it is: the browser-session vault lives host-side, in
+ * Colony's own database, in a process that has an environment. Only the *tenant* runtime lacks one.
+ */
+export const layer = layerFrom(configProviderKeySource);
 
 export const SecretCipher = {
 	Service,
 	layer,
+	layerFrom,
+	configProviderKeySource,
 	SecretKeyUnavailable,
 	SecretUnreadable,
 	SECRET_KEY_VARIABLE,

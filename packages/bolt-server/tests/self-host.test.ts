@@ -69,8 +69,33 @@ it.effect('runs one exact artifact through static, health and request paths', ()
 				const ready = yield* Effect.tryPromise(() => fetch(`${base}/readyz`));
 				assert.strictEqual(ready.status, 200);
 
-				const asset = yield* Effect.tryPromise(() => fetch(`${base}/`));
+				/**
+				 * A static asset answers at the path it was built under, and `/` is not one of them.
+				 *
+				 * This asserted `/` served the asset, which is the premise `server.ts` abandoned when it
+				 * stopped rewriting `/` to `/index.html`. The page that rewrite existed for stamped its own
+				 * tenant, environment and credential onto itself and let the client read them back; a host
+				 * states those, so the page is gone and the rewrite with it.
+				 */
+				const asset = yield* Effect.tryPromise(() => fetch(`${base}/index.html`));
 				assert.strictEqual(yield* Effect.tryPromise(() => asset.text()), 'bolt fixture');
+				/**
+				 * And the half that was never asserted: `/` falls through to the artifact's own request
+				 * dispatch, which is where an authored root route lives.
+				 *
+				 * This is the behaviour the comment in `server.ts` argues for, and nothing proved it — so
+				 * restoring the rewrite would have turned this suite green again while undoing the change.
+				 * The echoed body is proof the request reached the bundle rather than the asset table: an
+				 * asset response would carry the fixture's HTML and no `tenantId`.
+				 */
+				const root = yield* Effect.tryPromise(() => fetch(`${base}/`));
+				assert.deepStrictEqual(yield* Effect.tryPromise(() => root.json()), {
+					method: 'GET',
+					url: '/',
+					authorization: null,
+					body: null,
+					tenantId: 'test-tenant'
+				});
 
 				const response = yield* Effect.tryPromise(() =>
 					fetch(`${base}/api/echo`, {

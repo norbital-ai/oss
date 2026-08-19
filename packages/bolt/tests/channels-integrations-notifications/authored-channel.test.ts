@@ -59,26 +59,26 @@ const authoredModule = {
  * passes only if a declaration actually comes out of the compiler carrying what the author wrote.
  */
 const compileChannelDeclaration = (): ChannelDeclaration => {
-	const artifact = renderArtifact(
-		{ name: 'crm', version: '1.0.0', description: 'Bolt workspace' },
-		[],
-		[],
-		[],
-		[],
-		[],
-		[],
-		[`${root}/src/channels/+sales_desk.channel.ts`],
-		[],
-		[],
-		[],
-		[],
-		'crm',
+	const artifact = renderArtifact({
+		metadata: { name: 'crm', version: '1.0.0', description: 'Bolt workspace' },
+		collections: [],
+		relations: [],
+		apps: [],
+		policies: [],
+		remotes: [],
+		toolFiles: [],
+		channelFiles: [`${root}/src/channels/+sales_desk.channel.ts`],
+		automations: [],
+		automationFiles: [],
+		pipelineFiles: [],
+		skills: [],
+		agentName: 'crm',
 		root,
-		[],
-		[],
-		undefined,
-		[]
-	);
+		assets: [],
+		customTypeDefinitions: [],
+		environmentFile: undefined,
+		migrations: []
+	});
 
 	const declarationStart = artifact.indexOf('const declaredWorkspace = ');
 	const mergeStart = artifact.indexOf('const channels = declaredWorkspace.channels.map(');
@@ -223,29 +223,29 @@ describe('an authored channel declaration', () => {
 	 * whether the separator between table entries is emitted at all.
 	 */
 	it('emits a parseable artifact that imports every channel module', () => {
-		const artifact = renderArtifact(
-			{ name: 'crm', version: '1.0.0', description: 'Bolt workspace' },
-			[],
-			[],
-			[],
-			[],
-			[],
-			[],
-			[
+		const artifact = renderArtifact({
+			metadata: { name: 'crm', version: '1.0.0', description: 'Bolt workspace' },
+			collections: [],
+			relations: [],
+			apps: [],
+			policies: [],
+			remotes: [],
+			toolFiles: [],
+			channelFiles: [
 				`${root}/src/channels/+sales_desk.channel.ts`,
 				`${root}/src/channels/+member_desk.channel.ts`
 			],
-			[],
-			[],
-			[],
-			[],
-			'crm',
+			automations: [],
+			automationFiles: [],
+			pipelineFiles: [],
+			skills: [],
+			agentName: 'crm',
 			root,
-			[],
-			[],
-			undefined,
-			[]
-		);
+			assets: [],
+			customTypeDefinitions: [],
+			environmentFile: undefined,
+			migrations: []
+		});
 		expect(artifact).toContain('import channel0 from "../../src/channels/+sales_desk.channel.js";');
 		expect(artifact).toContain(
 			'import channel1 from "../../src/channels/+member_desk.channel.js";'

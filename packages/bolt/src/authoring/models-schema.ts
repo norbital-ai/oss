@@ -387,10 +387,12 @@ export interface BoltGroupDefinition {
 }
 /** Owns small declarative control-flow helpers that do not alter their inferred consumer types. */
 const DeclarationControls = {
-	group: <const T extends BoltGroupDefinition>(definition: T): T => definition,
-	refuse: (message: string): never => {
-		throw new Error(message);
-	}
+	group: <const T extends BoltGroupDefinition>(definition: T): T => definition
 };
 export const group = DeclarationControls.group;
-export const refuse = DeclarationControls.refuse;
+/**
+ * Re-exported rather than declared here, because a refusal is now a typed error with a runtime
+ * counterpart and this module is the shape of a table. It lives in `./refusal.js` beside the class
+ * the runtime catches, so the throw and the catch are one file apart instead of one package apart.
+ */
+export { refuse } from './refusal.js';

@@ -348,9 +348,7 @@ export const layer = Layer.effect(
 				const api = makeAuthoringApi(
 					makeBoundAuthoringOps(effectId, subject, collections, ai, files)
 				);
-				return Effect.suspend(() =>
-					runAuthoredHandler(declared.handler({ input: [record], api }, api))
-				).pipe(
+				return runAuthoredHandler(() => declared.handler({ input: [record], api }, api)).pipe(
 					Effect.flatMap((rows) =>
 						Array.isArray(rows)
 							? Effect.succeed(
@@ -373,11 +371,12 @@ export const layer = Layer.effect(
 				const api = makeAuthoringApi(
 					makeBoundAuthoringOps(effectId, subject, collections, ai, files)
 				);
-				// `catchCause` rather than `catch`: an authored `resolve` may throw synchronously, and a
-				// rejected promise arrives here as a defect because `runAuthoredHandler` dies on one. Either
-				// would otherwise escape as an unhandled defect and take down a run that should have failed
-				// with a sentence naming the integration.
-				return Effect.suspend(() => runAuthoredHandler(run(api))).pipe(
+				// `catchCause` rather than `catch`: a rejected promise or a genuine throw arrives here as a
+				// defect because `runAuthoredHandler` dies on one, and either would otherwise escape as an
+				// unhandled defect and take down a run that should have failed with a sentence naming the
+				// integration. A synchronous throw no longer needs the `suspend` it used to — the handler is
+				// invoked inside `runAuthoredHandler` now, not in its argument position.
+				return runAuthoredHandler(() => run(api)).pipe(
 					Effect.catchCause((cause) =>
 						Effect.fail({
 							message: `${integrationName} failed to resolve a batch: ${describeCause(cause)}`

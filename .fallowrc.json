@@ -38,6 +38,7 @@
 		"packages/std/src/i18n/index.ts",
 		"packages/std/src/index.ts",
 		"packages/std/src/json/index.ts",
+		"packages/std/src/rate-limit/index.ts",
 		"packages/std/src/reckon/index.ts",
 		"packages/std/src/secret/index.ts",
 		"packages/std/src/string/index.ts",

@@ -1,5 +1,6 @@
 import { Context, Effect, Schema } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
+import { AuthoredRefusal, refusalOf } from '../../authoring/refusal.js';
 import type { AuthoredIntegrationModule } from '../../authoring/integration-introspection.js';
 import type { Identity, Subject } from '../identity/identity.js';
 import type { Collections } from './collections.js';
@@ -96,28 +97,66 @@ export const AuthoredRuntimeService = Context.Service<AuthoredRuntime>(
 );
 
 /**
- * Resolves one authored handler result to an Effect.
+ * Either the refusal a cause carries, in the error channel, or the cause itself as a defect.
+ *
+ * This is the whole of the policy change in item 5, in one branch: a business rule becomes a typed
+ * failure that `runtime/app.ts` can map to a 422 carrying the author's sentence, and everything
+ * else keeps the contract it already had — an authored handler that genuinely broke is a defect,
+ * because it is one.
+ */
+const raise = <A>(cause: unknown): Effect.Effect<A, AuthoredRefusal> => {
+	const refusal = refusalOf(cause);
+	return refusal === undefined ? Effect.die(cause) : Effect.fail(refusal);
+};
+
+/**
+ * Resolves one authored handler to an Effect, with a refusal it threw in the error channel.
  *
  * The authoring surface admits `Effect | Promise | value` so an author eases in from either world;
  * everything lands in Effect here, before any hook, pipeline, or automation is composed.
+ *
+ * **It takes a thunk, not a result.** That is what makes the synchronous case reachable at all.
+ * `refuse` throws, and the majority of authored handlers are plain functions — no `async`, no
+ * `Effect.gen` — so the throw happens while the *argument* is being evaluated at the call site.
+ * Passing `handler(context, api)` meant the throw escaped before this function was entered, past
+ * every recovery written here, and out through whichever generator happened to be running. Passing
+ * `() => handler(context, api)` moves the call inside `Effect.suspend`, where it can be caught.
+ *
+ * Three arrival paths, because a refusal can be raised from any of the three worlds the surface
+ * admits, and each delivers it differently:
+ *
+ * - a plain handler throws **synchronously**, caught by the `try` below;
+ * - an `async` handler **rejects**, caught off the promise;
+ * - an `Effect.gen` handler throws inside the generator, which Effect converts to a **defect**
+ *   before anyone else sees it, caught by `catchDefect`.
+ *
+ * A non-refusal keeps its existing treatment on every path, including the `catch` on the promise
+ * branch: the bare one-argument `tryPromise` wraps a rejection in `UnknownError`, whose message is
+ * the literal "An error occurred in Effect.tryPromise", and what the handler actually threw is the
+ * only useful part of the failure.
  */
 export const runAuthoredHandler = <A>(
-	result: A | Promise<A> | Effect.Effect<A>
-): Effect.Effect<A> =>
-	Effect.isEffect(result)
-		? result
-		: result instanceof Promise
-			? // `catch` matters: the bare one-argument form wraps a rejection in `UnknownError`, whose
-				// message is the literal "An error occurred in Effect.tryPromise". Whatever the authored
-				// handler actually threw is the only useful part of the failure, so it is what survives.
-				// `orDie` keeps the original contract — a rejected authored handler is a defect, not a
-				// typed failure — while `catch` ensures the defect carries what the handler actually
-				// threw rather than Effect's generic wrapper.
-				Effect.tryPromise({
-					try: () => result,
-					catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause)))
-				}).pipe(Effect.orDie)
-			: Effect.succeed(result);
+	handler: () => A | Promise<A> | Effect.Effect<A>
+): Effect.Effect<A, AuthoredRefusal> =>
+	Effect.suspend((): Effect.Effect<A, AuthoredRefusal> => {
+		let produced: A | Promise<A> | Effect.Effect<A>;
+		try {
+			produced = handler();
+		} catch (cause) {
+			return raise<A>(cause);
+		}
+		if (Effect.isEffect(produced))
+			return produced.pipe(Effect.catchDefect((defect) => raise<A>(defect))) as Effect.Effect<
+				A,
+				AuthoredRefusal
+			>;
+		if (produced instanceof Promise)
+			return Effect.tryPromise({
+				try: () => produced as Promise<A>,
+				catch: (cause) => cause
+			}).pipe(Effect.catch((cause: unknown) => raise<A>(cause)));
+		return Effect.succeed(produced);
+	});
 
 /** The collection operations an authored api can reach, bound by the runtime to the current invocation. */
 export type AuthoredCollectionOps = Readonly<{

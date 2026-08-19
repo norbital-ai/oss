@@ -23,6 +23,9 @@ export {
 } from './tree/index.js';
 export type { TreeMapRecordAsyncConfig } from './tree/index.js';
 
+export { bucketKey, countAttempt, retryAfterSeconds } from './rate-limit/index.js';
+export type { FixedWindow, WindowState } from './rate-limit/index.js';
+
 export { lru } from './cache/index.js';
 export type { LruCache, LruCacheOptions } from './cache/index.js';
 

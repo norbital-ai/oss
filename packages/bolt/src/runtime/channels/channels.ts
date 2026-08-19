@@ -9,6 +9,8 @@ import { Communication } from '../facilities/services.js';
 import { Database } from '../facilities/database.js';
 import type { Identity } from '../identity/identity.js';
 import { Workspace } from '../workspace.js';
+import { AuthoredRefusal } from '../../authoring/refusal.js';
+import { InvocationBudget } from '../budget.js';
 
 /** Carries channel error through the typed channels failure channel without losing diagnostic context. */
 export class ChannelError extends Schema.TaggedError<ChannelError>()('Bolt.Channels.Error', {
@@ -48,6 +50,13 @@ export type Interface = Readonly<{
 		| ApprovalConflict
 		| PendingApproval
 		| WhereCompileError
+		// Inherited from `agents.turn`, which this yields directly: a channel message *is* a turn,
+		// so anything that turn's tools can raise arrives here unchanged. Both are reachable — a
+		// tool reaching a collection whose hook refuses, and a turn that delegates hitting the
+		// nesting bound — and the delivery below is what makes the first one matter: a refusal has
+		// to reach the person who sent the message, not be reported to them as a broken channel.
+		| AuthoredRefusal
+		| InvocationBudget.NestingLimitExceeded
 	>;
 	readonly reply: (
 		effectId: EffectId,

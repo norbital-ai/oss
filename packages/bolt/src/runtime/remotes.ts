@@ -4,6 +4,7 @@ import { Collections } from './collections/collections.js';
 import { AI, Files } from './facilities/services.js';
 import type { Identity } from './identity/identity.js';
 import { DispatchError } from './workspace.js';
+import { AuthoredRefusal } from '../authoring/refusal.js';
 import {
 	makeAuthoringApi,
 	makeBoundAuthoringOps,
@@ -42,7 +43,7 @@ type RuntimeRemoteRegistry = Readonly<{
 		input: unknown,
 		subject: Identity.Subject,
 		effectId: EffectId
-	) => Effect.Effect<Schema.Json, DispatchError>;
+	) => Effect.Effect<Schema.Json, DispatchError | AuthoredRefusal>;
 }>;
 
 /** Resolves authored remote handlers through the same collection, AI, and file capabilities used by native runtime operations. */
@@ -111,8 +112,16 @@ const RemoteRegistries = {
 						// `runAuthoredHandler` already answers an Effect and settles a value, a promise or an
 						// Effect alike, so it is yielded rather than wrapped in `tryPromise` — wrapping it
 						// would hand the fiber the Effect object instead of running it.
-						const output = yield* runAuthoredHandler(handler(input, api)).pipe(
-							Effect.mapError((cause) => DispatchError.from('remote_failed', cause))
+						// The refusal a remote raised is passed through untouched rather than folded into
+						// `remote_failed`. A remote is authored code like any other, so `refuse` means the same
+						// thing here as it does in a hook — the caller may not do this — and mapping it to a
+						// dispatch failure would put it back in the 500 class this change took it out of.
+						const output = yield* runAuthoredHandler(() => handler(input, api)).pipe(
+							Effect.mapError((cause) =>
+								cause instanceof AuthoredRefusal
+									? cause
+									: DispatchError.from('remote_failed', cause)
+							)
 						);
 						return yield* Schema.decodeUnknownEffect(Schema.Json)(output).pipe(
 							Effect.mapError(

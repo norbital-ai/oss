@@ -117,12 +117,43 @@ create" repeats the key and says nothing.
 Handlers are **Effect-native**: `handler` receives `{ input, api }` (create/update) or
 `{ existing, api }` (delete), and every `api.db.*`, `api.infer`, and `api.readFileAsset` call
 returns an `Effect.Effect` composed with `yield*`. The runtime executes hooks around create, update,
-and delete — `before` returns the accepted payload or patch; `after` makes same-transaction database
-or asset changes through the elevated `api.db.<collection>.mutate([...])` /
+and delete — `before` returns the accepted payload or patch; `after` makes follow-on database or
+asset changes through the elevated `api.db.<collection>.mutate([...])` /
 `api.db.<collection>.delete([...])`. A collection is always reached as a property, never as a first
 argument. Neither may send traffic,
 queue work, email, invoke AI (bounded `api.infer` for judgement on the write path excepted), or
 notify. Reject a write with `refuse(message)`.
+
+## Where validation goes, and why it is not a preference
+
+**`before` refuses. `after` cannot undo.**
+
+```
+create ─► before hook ─► write ─► after hook
+          │                       │
+          │                       └─ cannot roll back, and should not:
+          │                          the write is a fact. Failures here are
+          │                          reported, never silently swallowed.
+          └─ refuses here. Nothing written, nothing to undo.
+```
+
+There is no transaction around a hook and there is not going to be one. The database facility has no
+transaction primitive — every statement is its own autocommitted call — so by the time `after` runs,
+the row exists and nothing an `after` hook does can take it back.
+
+That makes the placement of a check load-bearing rather than stylistic. hr-payroll ran its whole
+engine, validation included, in `payroll_runs` `create.after`: the run row committed, the build then
+refused because someone had an unclosed time entry, and what was left behind was a DRAFT payroll run
+with no payslips under it — a record asserting a period had been calculated, blocking the next
+period, describing a calculation that never happened.
+
+So: **anything that can refuse the write belongs in `before`**, where refusing costs nothing.
+`after` is for work that follows the record existing — building the thing the record describes,
+writing derived rows, announcing it. A failure there is reported to the caller rather than swallowed,
+and leaves a record an operator can see and act on.
+
+A refusal raised with `refuse(message)` reaches the caller as a typed refusal — HTTP 422 carrying
+your sentence — not as a runtime fault. Write the sentence for the person who has to fix it.
 
 A `create.before` hook may validate the payload schema through its own Effect `Schema` by declaring
 `create.input`; the compiler validates incoming writes through it before the handler runs.

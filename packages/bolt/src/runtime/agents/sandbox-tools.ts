@@ -6,6 +6,7 @@ import { Tasks } from '../facilities/services.js';
 import type { Identity } from '../identity/identity.js';
 import { ToolNotAllowed } from './agent-errors.js';
 import { encodeAgentMessage } from './agent-message.js';
+import { InvocationBudget } from '../budget.js';
 
 export const sandboxToolNames = [
 	'spawn_subagent',
@@ -56,6 +57,16 @@ export type SandboxContext = Readonly<{
 	readonly conversationId: string;
 	readonly database: Database.Interface;
 	readonly tasks: Tasks.Interface;
+	/**
+	 * How deep the chain that reached this turn already is, so a delegated turn can be refused before
+	 * it is enqueued rather than after the tenth one has run.
+	 *
+	 * `spawn_subagent` already refuses to spawn from inside a subagent, which bounds delegation to one
+	 * level *by that route*. This bounds the route that check cannot see: a subagent whose work fires
+	 * an automation whose write fires a hook that starts another agent is a cycle in which no single
+	 * step is delegation, and every step is satisfied by its own local rule.
+	 */
+	readonly budget: InvocationBudget.Interface;
 }>;
 
 const TaskInput = Schema.Struct({ task: Schema.NonEmptyString });
@@ -136,6 +147,7 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 				return yield* new ToolNotAllowed({ agent: context.agentName, tool: 'spawn_subagent' });
 			}
 			const parsed = yield* decode(TaskInput, input);
+			const depth = yield* context.budget.nest(`subagent of ${context.agentName}`);
 			const conversationId = `subagent:${context.effectId}`;
 			// `parent_id` is what makes the delegated session findable from the one that spawned it:
 			// the reader's transcript walks down it to nest this agent's work under the call, and the
@@ -155,12 +167,15 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 			yield* context.tasks.execute(EffectId.make(`${context.effectId}:enqueue`), {
 				_tag: 'Enqueue',
 				command: 'agents.turn',
-				input: {
-					subject: context.subject,
-					agent: context.agentName,
-					conversationId,
-					message: parsed.task
-				}
+				input: InvocationBudget.stampDepth(
+					{
+						subject: context.subject,
+						agent: context.agentName,
+						conversationId,
+						message: parsed.task
+					},
+					depth
+				)
 			});
 			return { waiting: true, conversationId };
 		}

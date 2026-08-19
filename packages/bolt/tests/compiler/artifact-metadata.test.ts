@@ -46,31 +46,31 @@ const collectionDescriptors = (
 };
 
 const artifactFor = (collections: ReadonlyArray<string>): string =>
-	renderArtifact(
-		{ name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
-		collections.map((name) => ({
+	renderArtifact({
+		metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
+		collections: collections.map((name) => ({
 			name,
 			path: `${root}/src/collections/${name}/+model.ts`,
 			sourcePath: `src/collections/${name}/+model.ts`,
 			fields: { title: { type: 'string', required: true, indexed: false } }
 		})),
-		[],
-		[],
-		[],
-		[],
-		[],
-		[],
-		[],
-		[],
-		[],
-		[],
-		'fixture-agent',
+		relations: [],
+		apps: [],
+		policies: [],
+		remotes: [],
+		toolFiles: [],
+		channelFiles: [],
+		automations: [],
+		automationFiles: [],
+		pipelineFiles: [],
+		skills: [],
+		agentName: 'fixture-agent',
 		root,
-		[],
-		[],
-		undefined,
-		[]
-	);
+		assets: [],
+		customTypeDefinitions: [],
+		environmentFile: undefined,
+		migrations: []
+	});
 
 describe('artifact collection metadata', () => {
 	it('carries every declared metadata option onto the collection descriptor', () => {

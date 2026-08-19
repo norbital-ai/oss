@@ -195,26 +195,26 @@ describe('a host can read an integration out of the manifest', () => {
 	 * if the artifact stops composing its manifest from the integrations it described at boot.
 	 */
 	it('is composed into the manifest the emitted artifact actually builds', () => {
-		const artifact = renderArtifact(
-			{ name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
-			[],
-			[],
-			[],
-			[],
-			[],
-			[],
-			[],
-			[],
-			[],
-			[],
-			[],
-			'fixture-agent',
-			'/workspace',
-			[],
-			[],
-			undefined,
-			[]
-		);
+		const artifact = renderArtifact({
+			metadata: { name: 'fixture', version: '1.0.0', description: 'Bolt workspace' },
+			collections: [],
+			relations: [],
+			apps: [],
+			policies: [],
+			remotes: [],
+			toolFiles: [],
+			channelFiles: [],
+			automations: [],
+			automationFiles: [],
+			pipelineFiles: [],
+			skills: [],
+			agentName: 'fixture-agent',
+			root: '/workspace',
+			assets: [],
+			customTypeDefinitions: [],
+			environmentFile: undefined,
+			migrations: []
+		});
 		const start = artifact.indexOf('const manifestValue = ');
 		const end = artifact.indexOf('\nconst remoteHandlers', start);
 		if (start < 0 || end < 0) throw new Error('the artifact no longer assembles a manifestValue');
