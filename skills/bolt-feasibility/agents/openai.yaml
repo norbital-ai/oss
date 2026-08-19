@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Bolt Feasibility'
+  short_description: 'Decide whether a business function can be built on Norbital'
+  default_prompt: 'Use $bolt-feasibility to check whether this business function can be built on Norbital.'

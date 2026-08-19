@@ -416,6 +416,23 @@ export type FacilityBinding<Input, Output> = Readonly<{
 	) => Promise<FacilityResult<Output>>;
 }>;
 
+/**
+ * What the runtime may ask the host for: one configuration key.
+ *
+ * The runtime describes the key it needs and the host supplies the value or says it has none —
+ * nothing here assumes an environment, because the bundle can run inside a sandbox that has no
+ * `process` at all. The host decides which keys exist and what a read of an unknown one means;
+ * the runtime asks by name and treats "no value" as the absence it already knows how to fail
+ * closed on.
+ */
+export const ConfigRequest = Schema.Struct({ key: Schema.NonEmptyString });
+export type ConfigRequest = typeof ConfigRequest.Type;
+export const ConfigResponse = Schema.Struct({
+	/** Absent means the host has no value for this key — not an error, but a refusal to authorize. */
+	value: Schema.optionalKey(Schema.String)
+});
+export interface ConfigResponse extends Schema.Schema.Type<typeof ConfigResponse> {}
+
 export type FacilityBindings = Readonly<{
 	readonly scope: InvocationScope;
 	readonly database?: FacilityBinding<DatabaseRequest, DatabaseResponse>;
@@ -427,6 +444,7 @@ export type FacilityBindings = Readonly<{
 	readonly hostTools?: FacilityBinding<HostToolRequest, HostToolResponse>;
 	readonly identityHooks?: FacilityBinding<IdentityHookRequest, IdentityHookResponse>;
 	readonly transport?: FacilityBinding<TransportRequest, TransportResponse>;
+	readonly config?: FacilityBinding<ConfigRequest, ConfigResponse>;
 }>;
 
 /** Owns immutable facility-call correlation metadata assembly. */

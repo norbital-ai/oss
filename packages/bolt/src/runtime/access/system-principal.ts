@@ -1,6 +1,7 @@
-import { Buffer } from 'node:buffer';
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import { Config, Effect, Option, Redacted } from 'effect';
+import { createHmac } from 'node:crypto';
+import { Config, Context, Effect, Option, Redacted } from 'effect';
+import { EffectId, FacilityCall, InvocationId } from '@norbital-ai/bolt-protocol';
+import type { ConfigResponse, FacilityBindings } from '@norbital-ai/bolt-protocol';
 import type { PolicyDeclaration } from '../../authoring/workspace-schema.js';
 
 /**
@@ -177,6 +178,84 @@ const headerValue = (
 };
 
 /**
+ * What the runtime needs from the host's own environment, by key.
+ *
+ * The runtime describes the key and the host supplies the value — or says it has none. This is the
+ * same contract the `config` facility carries across an isolate boundary, with one extra shape here:
+ * a bundle running in a plain process (bolt-server) has no facility and answers from `process.env`
+ * directly. Both render a missing or unreadable value as `None`, so a caller that fails closed on
+ * absence does not have to know which world it is in.
+ *
+ * Only the runtime consumes this service. It is provided inside the invocation layer, where authored
+ * workspace code cannot reach it — unlike `process.env` in a plain process, which is why the sandbox
+ * deliberately does not hand the context one.
+ */
+export type HostConfigShape = Readonly<{
+	/** The value of one key, `None` when the host has no value for it. `string` is the reason. */
+	readonly read: (key: string) => Effect.Effect<Option.Option<Redacted.Redacted<string>>, string>;
+}>;
+
+export const HostConfig = Context.Service<HostConfigShape>('@bolt/HostConfig');
+
+/**
+ * The `HostConfig` implementation for a bundle running in a plain process.
+ *
+ * Reads through Effect's `ConfigProvider` rather than `process.env`, for the same reason
+ * `BOLT_SECRETS_KEY` does: Bolt describes a workspace and a host runs it, so ambient environment
+ * access is an architecture violation the dependency audit fails on. The provider is the default in
+ * a plain process, so this is the same value by a route a host or a test can control — and an
+ * unreadable source collapses to `None`, the same fail-closed absence a host answering "no"
+ * produces.
+ */
+export const hostConfigFromProcessEnv = (): HostConfigShape => ({
+	read: (key) =>
+		Config.option(Config.redacted(key)).pipe(
+			Effect.match({
+				onFailure: (): Option.Option<Redacted.Redacted<string>> => Option.none(),
+				onSuccess: (value) => value
+			})
+		)
+});
+
+/**
+ * The `HostConfig` implementation for a bundle running behind an isolate boundary.
+ *
+ * One round trip to the host per key, and a host that answers nothing — or fails — is the same
+ * absence as one that has no value. The value never enters the sandbox as a global; it is carried
+ * only inside the runtime's own environment for the invocation that asked.
+ */
+export const hostConfigFromFacility = (
+	bindings: NonNullable<FacilityBindings['config']>
+): HostConfigShape => ({
+	read: (key) =>
+		Effect.tryPromise(() =>
+			bindings.call(
+				FacilityCall.make({
+					invocationId: InvocationId.make(`config:${key}`),
+					effectId: EffectId.make(`config:${key}`),
+					deadlineEpochMs: Date.now() + 30_000,
+					idempotencyKey: `config:${key}`
+				}),
+				{ key },
+				new AbortController().signal
+			)
+		).pipe(
+			Effect.mapError((cause) => `config facility failed: ${String(cause)}`),
+			Effect.flatMap((result) => {
+				if (result._tag !== 'Success') {
+					return Effect.fail(`config facility refused ${key}: ${result.error.message}`);
+				}
+				const response = result.value as ConfigResponse;
+				return Effect.succeed(
+					response.value === undefined || response.value.length === 0
+						? Option.none()
+						: Option.some(Redacted.make(response.value))
+				);
+			})
+		)
+});
+
+/**
  * Whether this invocation was signed by the host that owns this bolt.
  *
  * Fail-closed at every step, and every step is a refusal rather than a downgrade: no header, no
@@ -184,9 +263,12 @@ const headerValue = (
  * `false`, and the caller then goes on to demand an ordinary credential. Nothing here can *widen*
  * what an unsigned request may do.
  *
- * The comparison is `timingSafeEqual` for the same reason the host's own verifier is: a
- * byte-dependent shortcut leaks the expected digest one measurement at a time, which is precisely
- * what an HMAC exists to prevent.
+ * The digest is computed with WebCrypto (`crypto.subtle`) rather than `node:crypto`. The runtime
+ * ships inside the same bundle a browser executes, where `node:buffer` and `node:crypto` are
+ * externalized stubs that throw on access — and the sandbox context hands the runtime WebCrypto for
+ * exactly this reason. The comparison is a constant-time string scan for the same reason the host's
+ * own verifier uses `timingSafeEqual`: a byte-dependent shortcut leaks the expected digest one
+ * measurement at a time, which is precisely what an HMAC exists to prevent.
  */
 export const verifySystemSignature = Effect.fn('Bolt.verifySystemSignature')(function* (parameters: {
 	readonly headers: Readonly<Record<string, ReadonlyArray<string>>>;
@@ -204,28 +286,65 @@ export const verifySystemSignature = Effect.fn('Bolt.verifySystemSignature')(fun
 	// A configuration *source* failure collapses to "no secret", which is the fail-closed direction:
 	// not being able to tell whether a secret exists means there is nothing to verify against, and an
 	// unverified request is an unsigned one.
-	const configured = yield* Config.option(Config.redacted(GATEWAY_SECRET_VARIABLE)).pipe(
-		Effect.match({
-			onFailure: (): Option.Option<Redacted.Redacted<string>> => Option.none(),
-			onSuccess: (value) => value
-		})
+	//
+	// The secret is read through the invocation's `HostConfig` — the value the host supplied for this
+	// invocation, which is the only way a sandboxed runtime with no `process` can hold one. A bundle
+	// running in a plain process gets the process-env implementation; a caller that provided neither
+	// falls back to the ambient environment for the same reason.
+	const hostConfig = Option.getOrElse(
+		yield* Effect.serviceOption(HostConfig),
+		() => hostConfigFromProcessEnv()
 	);
-	if (Option.isNone(configured)) return false;
-	const expected = Buffer.from(
-		systemSignature(
-			Redacted.value(configured.value),
-			systemSignaturePayload({
-				timestamp,
-				command: parameters.command,
-				tenantId: parameters.tenantId,
-				input: parameters.input
-			})
-		),
-		'utf8'
+	const secret = yield* hostConfig.read(GATEWAY_SECRET_VARIABLE).pipe(
+		Effect.catch(() => Effect.succeed(Option.none<Redacted.Redacted<string>>()))
 	);
-	const actual = Buffer.from(provided.replace(/^sha256=/, ''), 'utf8');
-	return expected.length === actual.length && timingSafeEqual(expected, actual);
+	if (Option.isNone(secret)) return false;
+	const expected = yield* Effect.promise(() =>
+		hmacHex(Redacted.value(secret.value), systemSignaturePayload({
+			timestamp,
+			command: parameters.command,
+			tenantId: parameters.tenantId,
+			input: parameters.input
+		}))
+	);
+	const actual = provided.replace(/^sha256=/, '');
+	return constantTimeEqual(expected, actual);
 });
+
+/**
+ * An HMAC-SHA256 digest as lowercase hex, through WebCrypto.
+ *
+ * The host computes the same digest with `node:crypto`; WebCrypto is the API both sides of this
+ * boundary can actually reach — the runtime's bundle cannot touch `node:crypto`, and the sandbox
+ * context deliberately hands it WebCrypto rather than Node's modules.
+ */
+const hmacHex = async (secret: string, payload: string): Promise<string> => {
+	const material = await crypto.subtle.importKey(
+		'raw',
+		new TextEncoder().encode(secret),
+		{ name: 'HMAC', hash: 'SHA-256' },
+		false,
+		['sign']
+	);
+	const digest = await crypto.subtle.sign('HMAC', material, new TextEncoder().encode(payload));
+	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+};
+
+/**
+ * Whether two equal-length strings are equal, without a byte-dependent early exit.
+ *
+ * The scan always walks the whole digest. Different lengths are refused up front — a length leak is
+ * unobservable here because the digest length is a public property of SHA-256, and both sides of
+ * this check already know it.
+ */
+const constantTimeEqual = (expected: string, actual: string): boolean => {
+	if (expected.length !== actual.length) return false;
+	let difference = 0;
+	for (let index = 0; index < expected.length; index += 1) {
+		difference |= expected.charCodeAt(index) ^ actual.charCodeAt(index);
+	}
+	return difference === 0;
+};
 
 /** The shape `Identity.Subject` decodes to, restated structurally so this module imports no identity. */
 export type SystemSubject = Readonly<{

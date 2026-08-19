@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Bolt Requirements'
+  short_description: 'Turn a vague business requirement into a concrete build plan'
+  default_prompt: 'Use $bolt-requirements to turn this business requirement into a concrete plan.'

@@ -32,7 +32,8 @@ export const FacilityName = Schema.Literals([
 	'tasks',
 	'hostTools',
 	'transport',
-	'identityHooks'
+	'identityHooks',
+	'config'
 ]);
 export type FacilityName = typeof FacilityName.Type;
 

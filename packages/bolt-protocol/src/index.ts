@@ -42,7 +42,9 @@ export {
 	TransportFrameKind,
 	TransportProtocol,
 	TransportRequest,
-	TransportResponse
+	TransportResponse,
+	ConfigRequest,
+	ConfigResponse
 } from './facilities.js';
 export type { FacilityBinding, FacilityBindings } from './facilities.js';
 

@@ -25,6 +25,11 @@ import {
 	type AuthoredRuntime
 } from './collections/authored.js';
 import { DispatchError, dispatchInvocation } from './dispatch.js';
+import {
+	HostConfig,
+	hostConfigFromFacility,
+	hostConfigFromProcessEnv
+} from './access/system-principal.js';
 import { AI } from './facilities/services.js';
 import { Communication } from './facilities/services.js';
 import { Connector } from './facilities/services.js';
@@ -182,6 +187,16 @@ const InvocationLayers = {
 		const notifications = Notifications.layer.pipe(
 			Layer.provide(Layer.mergeAll(workspaceLayer, identity, database, communication, tasks))
 		);
+		// The runtime's one handle on the host's own environment. A host that binds a `config` facility
+		// supplies values through it (the sandboxed path — there is no `process` behind an isolate
+		// boundary); a host that does not gets `process.env`, which is the plain-process path. Either
+		// way the host is the source, and a missing value is an absence the runtime fails closed on.
+		const hostConfig = Layer.succeed(
+			HostConfig,
+			facilities.config === undefined
+				? hostConfigFromProcessEnv()
+				: hostConfigFromFacility(facilities.config)
+		);
 		return Layer.mergeAll(
 			workspaceLayer,
 			access,
@@ -207,7 +222,8 @@ const InvocationLayers = {
 			hostTools,
 			transport,
 			remotes,
-			authoredLayer
+			authoredLayer,
+			hostConfig
 		);
 	}
 };
