@@ -1,6 +1,6 @@
 # Template Repository Metadata and READMEs
 
-Templates live in their own repositories, one directory per key at the repository root:
+Templates live in their own repositories, one directory per template at the repository root:
 `norbital-ai/templates` (public) and `norbital-ai/templates-private`. The split decides one thing
 only — **whether a template is advertised**. The website generates its gallery from the templates
 the public repository publishes, so a template in the private one is structurally invisible to it.
@@ -47,12 +47,27 @@ same art inside the product. App and record media normally live under `assets/ap
 Legacy manifests may still carry `"banner": "…"`. Hosts and the website map that onto `thumbnail`
 during parse; new templates should not use `banner`.
 
+## Two names: the directory and the handle
+
+A template has a **directory** and a **handle**, and they are not the same string.
+
+| Name          | Where it comes from              | What it decides                                                                                                                                                          |
+| ------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **directory** | the path at the repository root  | the `git subtree split` prefix, the published `refs/heads/templates/<directory>`, the website URL `norbital.ai/templates/<directory>`, the standalone build package name |
+| **handle**    | `norbital.template.json`'s `key` | the organization a host provisions this template as — its tenant id, and the string a person types to sign in                                                            |
+
+`hr-payroll/` carries the handle `norbital_hr`; `field-operations/` carries `norbital_bca`. Renaming
+a directory moves published refs and public URLs; renaming a handle does not touch either. Do not
+assume one from the other, and do not rename one to make them match.
+
+The `<key>` written in paths below always means the **directory**.
+
 ## The manifest (`norbital.template.json`)
 
 ```json
 {
 	"schemaVersion": 1,
-	"key": "crm",
+	"key": "norbital_crm",
 	"name": "CRM",
 	"industry": "Sales",
 	"description": "B2B trade workspace integrating sales quotes and purchase orders with the company's system of record.",
@@ -66,6 +81,7 @@ during parse; new templates should not use `banner`.
 
 | Field                        | Required | Used by                                                               |
 | ---------------------------- | -------- | --------------------------------------------------------------------- |
+| `key`                        | yes      | The organization handle a host provisions this template as            |
 | `name`                       | yes      | Picker + website card/detail title                                    |
 | `description`                | yes      | Picker + website card/detail summary                                  |
 | `industry`                   | yes      | Picker filtering                                                      |
