@@ -112,7 +112,7 @@
 
 	<div class="grid grid-cols-7 text-center mb-1">
 		{#each weekDays as day}
-			<span class="text-tiny font-medium text-muted-foreground uppercase tracking-wider py-0.5">
+			<span class="text-overline py-0.5">
 				{day}
 			</span>
 		{/each}

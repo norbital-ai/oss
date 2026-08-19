@@ -473,9 +473,18 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 	}
 
 	const bundle = yield* loader.load();
-	const assetPath = url.pathname === '/' ? '/index.html' : url.pathname;
+	/**
+	 * Static assets answer at the path they were built under, and `/` is not one of them.
+	 *
+	 * This used to rewrite `/` to `/index.html`, which the client build emitted: a document that
+	 * stamped `data-bolt-tenant="local"`, `data-bolt-environment="development"` and no credential
+	 * onto itself, and left the client to read them back. That page is gone. An artifact's client is
+	 * mounted by a host that states who is signed in and which organization is routed; a page that
+	 * answers those questions by asserting them is the defect, not a convenience. `/` now falls
+	 * through to the artifact's own request dispatch, which is where an authored root route lives.
+	 */
 	const asset = bundle.manifest.staticAssets.find(
-		(candidate) => `/${candidate.path.replace(/^\/+/, '')}` === assetPath
+		(candidate) => `/${candidate.path.replace(/^\/+/, '')}` === url.pathname
 	);
 	if (asset !== undefined && (request.method === 'GET' || request.method === 'HEAD')) {
 		response.statusCode = 200;

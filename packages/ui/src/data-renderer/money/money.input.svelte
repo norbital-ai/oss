@@ -157,7 +157,7 @@
 		<Stack gap="sm" align="center" class="rounded-md border border-dashed p-5 text-center">
 			<Icon icon="lucide:banknote" class="size-8 text-muted-foreground" />
 			<p class="text-sm font-medium">{t('dataRenderer.noAmountsConfigured')}</p>
-			<p class="text-xs text-muted-foreground">{t('dataRenderer.addMonetaryValue')}</p>
+			<p class="text-meta">{t('dataRenderer.addMonetaryValue')}</p>
 		</Stack>
 	{/if}
 

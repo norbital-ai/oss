@@ -69,7 +69,7 @@
 				<Stack gap="xs">
 					<Icon icon="lucide:alert-circle" class="mx-auto size-5 text-destructive" />
 					<p class="text-sm font-medium text-destructive">{t('table.unableToLoadRecords')}</p>
-					<p class="text-xs text-muted-foreground">{error}</p>
+					<p class="text-meta">{error}</p>
 				</Stack>
 			</Inline>
 		{:else if rows.length === 0}
@@ -80,7 +80,7 @@
 					<Stack gap="xs" class="text-center">
 						<Icon icon="lucide:inbox" class="mx-auto size-6" />
 						<p class="text-sm font-medium">{t('common.noResultsFound')}</p>
-						<p class="text-xs text-muted-foreground">{t('table.emptyStateHint')}</p>
+						<p class="text-meta">{t('table.emptyStateHint')}</p>
 					</Stack>
 				{/if}
 			</Inline>

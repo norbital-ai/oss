@@ -247,7 +247,7 @@
 	<Scroll axis="y" name={t('misc.mentionTree')} bind:ref={scrollContainerRef}>
 		<!-- Tree Content with scrolling -->
 		{#if visibleItems.length === 0}
-			<div class="p-4 text-center text-xs text-muted-foreground">{t('misc.noItemsFound')}</div>
+			<div class="p-4 text-center text-meta">{t('misc.noItemsFound')}</div>
 		{:else}
 			{#each visibleItems as { item, depth }, index (item.id)}
 				{@const isConsidered = index === consideredIndex}

@@ -8,6 +8,7 @@ export { default as Frame, type FrameProps, type FrameRatio } from './frame.svel
 export { default as Grid, type GridMinimum, type GridProps } from './grid.svelte';
 export { default as Inline, type InlineProps } from './inline.svelte';
 export { default as Scroll, type ScrollAxis, type ScrollProps } from './scroll.svelte';
+export { scrollAffordance } from './scroll-affordance.svelte.js';
 export {
 	default as Split,
 	type SplitCollapse,

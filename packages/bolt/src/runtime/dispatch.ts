@@ -9,7 +9,7 @@ import { Channels } from './channels/channels.js';
 import { Collections } from './collections/collections.js';
 import { compileOrderTerms, makeWhereContext } from './collections/where.js';
 import { Integrations } from './integrations/integrations.js';
-import { Identity, Subject } from './identity/identity.js';
+import { ADMIN_STATUS, Identity, Subject } from './identity/identity.js';
 import { Notification, Notifications } from './notifications/notifications.js';
 import { RemoteRegistry } from './remotes.js';
 import { WorkspaceSchema } from './schema/workspace-schema.js';
@@ -1022,24 +1022,28 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		case 'identity.admitFounder': {
 			const input = yield* decode(IdentityAdmitFounderInput, commandInput);
 			const definition = (yield* Workspace.Service).definition;
-			// Every role the workspace declares, and every team it names as an approver.
-			//
-			// Derived rather than configured because only the workspace knows them. A founder given
-			// `['admin']` matches no policy at all — there is no admin bypass in `decide`, and a policy
-			// is matched by its own name — so the first administrator of the HR workspace could see no
-			// app and read no collection. The approver teams matter for the same reason one step later:
-			// a record whose create is approval-gated is written, locked, and then waits forever if
-			// nobody in the workspace is eligible to decide.
-			const roles = new Set<string>();
+			/**
+			 * The founder is an administrator, not a person holding every role at once.
+			 *
+			 * This used to derive `roles` from every policy the workspace declares, plus a synthetic
+			 * `impersonator`. That made the first administrator simultaneously an employee, a
+			 * supervisor, a manager and an HR controller — which is not a description of anybody, and
+			 * which made their authority a function of the ladder: adding a policy changed what an
+			 * administrator was, and anything that stopped supplying roles removed the workspace from
+			 * them entirely. Authority is now the `admin` status on their own row, and
+			 * `AccessControl.decide` short-circuits on it before it consults a policy at all.
+			 *
+			 * `roles` is therefore empty. There is nothing for it to hold: `admin` is not a role, and
+			 * assigning the six real ones would be a lie about what this person does in the workspace.
+			 *
+			 * The approver teams are still derived, and for a reason the status flag does not cover.
+			 * Approvals do not go through `decide` — `approvals.process` matches a step's `approvers`
+			 * against `subject.teams` — so a record whose create is approval-gated is written, locked,
+			 * and then waits forever if nobody in the workspace is eligible to decide it. Only the
+			 * workspace knows which teams those are, so only the workspace can name them.
+			 */
 			const teams = new Set<string>();
-			// Plus the one role no policy can declare. `mayImpersonate` requires it, and viewing the
-			// workspace as another team is not an authority a policy grants to a group — it is a property
-			// of being the administrator who owns the workspace. Derived from the policies alone, the
-			// founder of every workspace would hold every role *except* the one the sidebar's picker
-			// needs, and the impersonation menu would never render for anybody.
-			roles.add(AccessControl.IMPERSONATOR_ROLE);
 			for (const policy of definition.policies) {
-				for (const role of policy.roles ?? [policy.name]) roles.add(role);
 				for (const grant of policy.grants ?? []) {
 					const approval = grant.approval;
 					if (approval === null || typeof approval !== 'object') continue;
@@ -1061,10 +1065,11 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				effectId,
 				input.tenantId,
 				input.email,
-				[...roles],
-				[...teams]
+				[],
+				[...teams],
+				ADMIN_STATUS
 			);
-			return json({ admitted: true, userId: founderId, roles: [...roles], teams: [...teams] });
+			return json({ admitted: true, userId: founderId, roles: [], teams: [...teams], admin: true });
 		}
 		case 'identity.invite': {
 			const input = yield* decode(IdentityInviteInput, commandInput);

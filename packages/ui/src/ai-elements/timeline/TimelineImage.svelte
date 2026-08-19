@@ -29,6 +29,6 @@
 		{@render children()}
 	</div>
 	{#if caption}
-		<p class="text-xs text-muted-foreground">{caption}</p>
+		<p class="text-meta">{caption}</p>
 	{/if}
 </Stack>

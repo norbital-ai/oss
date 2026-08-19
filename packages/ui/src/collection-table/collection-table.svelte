@@ -1191,7 +1191,7 @@
 									aria-hidden="true"
 								/>
 								<span class="text-sm font-medium">{t('table.systemFields')}</span>
-								<span class="text-xs text-muted-foreground">{rawSystemFields.length}</span>
+								<span class="text-meta">{rawSystemFields.length}</span>
 							</Inline>
 							<Icon
 								icon="lucide:chevron-down"

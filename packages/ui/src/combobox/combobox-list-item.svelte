@@ -32,10 +32,7 @@
 {#if item._type === 'group'}
 	<div
 		role="presentation"
-		class={cn(
-			'flex items-center bg-muted px-3 font-semibold tracking-wide text-muted-foreground uppercase',
-			compactTextClass
-		)}
+		class={cn('text-overline flex items-center bg-muted px-3', compactTextClass)}
 		style="height: {groupHeaderHeight}px;"
 	>
 		{item._groupName}

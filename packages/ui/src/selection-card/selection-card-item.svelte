@@ -59,7 +59,7 @@
 			<span class="text-sm font-medium">
 				{@render header()}
 			</span>
-			<span class="mt-1 text-xs text-muted-foreground">
+			<span class="mt-1 text-meta">
 				{@render body()}
 			</span>
 		</div>

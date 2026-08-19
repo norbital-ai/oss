@@ -41,6 +41,7 @@ then edit its SQL before deploying through Colony.
 | Composition, scrolling, scroll traps                                    | [layout-and-scrolling.md](references/layout-and-scrolling.md)         |
 | Controller UI: inline, `$derived`, no UUIDs                             | [controller-surfaces.md](references/controller-surfaces.md)           |
 | Padding, gaps, the app inset                                            | [padding-and-spacing.md](references/padding-and-spacing.md)           |
+| Headings, labels, captions: which type class                            | [typography.md](references/typography.md)                             |
 | Generated files and build lifecycle                                     | [generated-and-build.md](references/generated-and-build.md)           |
 | Mandatory bilingual copy, catalogs, the raw-text rule                   | [internationalization.md](references/internationalization.md)         |
 | Template manifest, README, marketing thumbnail (`assets/thumbnail.svg`) | [template-repository.md](references/template-repository.md)           |

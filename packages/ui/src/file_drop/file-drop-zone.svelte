@@ -180,7 +180,7 @@
 					</div>
 					<div class="min-w-0 flex-1">
 						<div class="truncate text-xs font-medium text-foreground">{file.name}</div>
-						<div class="text-xs text-muted-foreground">{formatFileSize(file.size)}</div>
+						<div class="text-meta">{formatFileSize(file.size)}</div>
 					</div>
 					{#if file.metadata}
 						<FileMetadataTooltip
@@ -220,7 +220,7 @@
 							{canUpload ? t('misc.dropFilesHere') : t('misc.maximumFilesReached')}
 						</div>
 						{#if canUpload}
-							<div class="mt-1 text-xs text-muted-foreground">
+							<div class="mt-1 text-meta">
 								{#if maxFiles}
 									{t('misc.upToFiles', { count: maxFiles })}
 								{/if}
@@ -282,7 +282,7 @@
 										<div class="truncate text-start text-sm font-medium text-foreground">
 											{fileName}
 										</div>
-										<Inline gap="sm" class="text-xs text-muted-foreground">
+										<Inline gap="sm" class="text-meta">
 											<span>{formatFileSize(fileSize)}</span>
 											{#if isActiveUploadStage(item.stage)}
 												<Inline as="span" gap="xs" class="text-brand">

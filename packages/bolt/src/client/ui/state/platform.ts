@@ -7,6 +7,15 @@ export type PlatformUser = Readonly<{
 	readonly email?: string;
 	readonly name?: string;
 	readonly roles?: ReadonlyArray<string>;
+	/**
+	 * Whether this person administers the workspace: `bolt_auth_user.status`, as the host reports it.
+	 *
+	 * Separate from `roles` because it is not one. The surfaces that ask "is this an administrator"
+	 * used to look for the string `admin` in `roles`, which no workspace declares and nothing writes,
+	 * so the answer was always no. Absent means no, so a host that does not supply it gets the
+	 * narrower view rather than the wider one.
+	 */
+	readonly admin?: boolean;
 }>;
 /**
  * A channel as `workspace.manifest` publishes it — the authored declaration minus what only the

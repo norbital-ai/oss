@@ -265,7 +265,7 @@
 				>
 					{#each validProgress as progress, index (index)}
 						<Inline gap="sm">
-							<span class="w-8 text-xs text-muted-foreground">#{index + 1}</span>
+							<span class="w-8 text-meta">#{index + 1}</span>
 							<Progress value={progress} class="h-2 flex-1" />
 							<span class="w-10 text-xs">{progress}%</span>
 						</Inline>

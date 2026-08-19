@@ -371,7 +371,10 @@
 	});
 	/** The live query row is the conversation. Do not copy or rekey it into a second client model. */
 	const sessions = $derived(sessionQuery?.current ?? []);
-	const isAdmin = $derived(readPlatformState?.().user.roles?.includes('admin') ?? false);
+	// The status the host reports, not a role. `roles.includes('admin')` was the old spelling and it
+	// never matched anything: `admin` is not a role any workspace declares, so the agent's cross-user
+	// scope picker was invisible to the administrators it exists for.
+	const isAdmin = $derived(readPlatformState?.().user.admin === true);
 	const currentUserId = $derived(readPlatformState?.().user.norbital_id ?? null);
 	let scopeUserId = $state<string | null>(null);
 	let selectedChannel = $state<string | null>(null);

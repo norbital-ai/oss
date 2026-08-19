@@ -83,10 +83,10 @@
 		offline?: boolean;
 		tenantMessages?: TenantMessageCatalogs;
 		organization?: { id: string; name: string; logoUrl?: string | null };
-		organizations?: Array<{
-			organizationId: string;
-			organizationName: string;
-			logoUrl: string | null;
+		organizations?: ReadonlyArray<{
+			readonly organizationId: string;
+			readonly organizationName: string;
+			readonly logoUrl: string | null;
 		}>;
 		user?: {
 			name: string;
@@ -126,7 +126,7 @@
 		 * not reactive — without the host passing it, the detail surface never saw a record open.
 		 */
 		search?: string;
-		plugins?: HostPlugin[];
+		plugins?: ReadonlyArray<HostPlugin>;
 		isAdmin?: boolean;
 		/**
 		 * The admin team-preview state the sidebar's account menu renders, or `null` for no menu.
@@ -178,7 +178,26 @@
 			norbital_id: user?.name ?? 'unknown',
 			...(user?.email === undefined ? {} : { email: user.email }),
 			...(user?.name === undefined ? {} : { name: user.name }),
-			roles: user?.role === undefined ? [] : [user.role]
+			roles: user?.role === undefined ? [] : [user.role],
+			/**
+			 * Administration, taken from the runtime rather than from the host's `user` summary.
+			 *
+			 * `impersonation` is the answer to `access.impersonation`, whose `isAdmin` is
+			 * `AccessControl.mayImpersonate` — which is now exactly the `admin` status on the caller's
+			 * own `bolt_auth_user` row. So this is the same proven fact the sidebar's team picker is
+			 * offered on, read once and shared, rather than a second boolean a host would have to
+			 * remember to pass and could get wrong.
+			 *
+			 * It is deliberately not derived from `user.role`: a workspace may name a role anything at
+			 * all, and one of them being spelled "Admin" must not confer authority.
+			 *
+			 * A preview narrows it, and correctly: `subjectAsTeam` clears the flag, so mid-preview the
+			 * runtime reports the previewed subject's authority and administrator-only surfaces fold
+			 * away with the rest — which is what a preview is for. `isAdmin` on this payload is
+			 * answered from the real actor so the picker itself survives; `isActive` is what says a
+			 * preview is running.
+			 */
+			admin: impersonation?.isAdmin === true && !(impersonation?.isActive ?? false)
 		},
 		organization: organization?.name ?? 'workspace',
 		apps: visibleApps.map(({ name }) => name),
@@ -591,13 +610,11 @@
 					<Stack gap="xl" class="py-2 sm:py-4 lg:py-6">
 						<Stack as="header" gap="xs">
 							<h1 class="text-base font-semibold text-foreground">{activeOrganization.name}</h1>
-							<p class="text-xs text-muted-foreground">Pick an application</p>
+							<p class="text-meta">Pick an application</p>
 						</Stack>
 
 						<Stack as="section" gap="sm">
-							<h2 class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
-								Applications
-							</h2>
+							<h2 class="text-overline">Applications</h2>
 							{#if navigationModel.applications.length === 0}
 								<Stack
 									align="center"
@@ -609,7 +626,7 @@
 										name="lucide:layout-dashboard"
 										class="size-8 text-muted-foreground"
 									/>
-									<span class="text-xs text-muted-foreground">No applications yet</span>
+									<span class="text-meta">No applications yet</span>
 									<span class="max-w-72 pt-1 text-center text-micro text-muted-foreground">
 										Add an application to this workspace to see it here.
 									</span>

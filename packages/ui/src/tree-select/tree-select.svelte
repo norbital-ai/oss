@@ -578,7 +578,7 @@
 				{#if treeState.visibleNodes.length > 0}
 					{@render renderNodeList(treeState.visibleNodes)}
 				{:else}
-					<p class="p-2 text-xs text-muted-foreground italic dark:text-muted-foreground">
+					<p class="text-meta p-2 italic">
 						{t('misc.noItemsToDisplay')}
 					</p>
 				{/if}

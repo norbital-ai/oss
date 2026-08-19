@@ -101,7 +101,7 @@
 				<h3 class="text-sm font-semibold tracking-tight text-foreground">{spec.title}</h3>
 			{/if}
 			{#if spec.description}
-				<p class="mt-1 text-xs text-muted-foreground">{spec.description}</p>
+				<p class="mt-1 text-meta">{spec.description}</p>
 			{/if}
 		</div>
 	{/if}
@@ -153,13 +153,7 @@
 					/>
 				</ChartContainer>
 			</div>
-			<Cluster
-				gap="sm"
-				align="center"
-				justify="center"
-				shrink={false}
-				class="text-xs text-muted-foreground"
-			>
+			<Cluster gap="sm" align="center" justify="center" shrink={false} class="text-meta">
 				{#each data as entry (entry.key)}
 					<Inline gap="sm">
 						<span

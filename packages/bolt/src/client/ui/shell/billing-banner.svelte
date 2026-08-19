@@ -42,7 +42,7 @@
 				<strong class="text-sm text-foreground">
 					{level === 'critical' ? 'Billing action required' : 'Billing notice'}
 				</strong>
-				<p class="mt-1 text-xs text-muted-foreground">{message}</p>
+				<p class="mt-1 text-meta">{message}</p>
 			</div>
 			<Cluster gap="xs">
 				{#if actionLabel && onaction}

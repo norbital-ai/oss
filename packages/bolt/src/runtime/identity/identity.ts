@@ -10,6 +10,15 @@ export const Subject = Schema.Struct({
 	roles: Schema.Array(Schema.NonEmptyString),
 	teams: Schema.Array(Schema.NonEmptyString),
 	email: Schema.optionalKey(Schema.NonEmptyString),
+	/**
+	 * Whether this subject administers the workspace, from `bolt_auth_user.status`.
+	 *
+	 * Optional, and absent means `normal`. That polarity is the whole point: every construction of a
+	 * subject that predates this field — an external subject, a test fixture, a machine invocation —
+	 * reads as an ordinary user rather than as an administrator, so the failure mode of forgetting to
+	 * set it is a refusal rather than a grant.
+	 */
+	admin: Schema.optionalKey(Schema.Boolean),
 	impersonatedBy: Schema.optionalKey(Schema.NonEmptyString)
 });
 export interface Subject extends Schema.Schema.Type<typeof Subject> {}
@@ -27,6 +36,16 @@ const IdentityRows = {
 			: [];
 	}
 };
+
+/**
+ * The two values `bolt_auth_user.status` may hold, named once so no call site spells them.
+ *
+ * `admit` writes one of them, `subjectFromRow` compares against one of them, and the collection
+ * declares the default; three string literals in three files is how the third one drifts.
+ */
+export const ADMIN_STATUS = 'admin';
+export const NORMAL_STATUS = 'normal';
+export type SubjectStatus = typeof ADMIN_STATUS | typeof NORMAL_STATUS;
 
 /**
  * Projects a subject row into the shape `Subject` describes.
@@ -51,6 +70,10 @@ const subjectFromRow = (row: unknown): Record<string, unknown> => {
 		tenantId: IdentityRows.text(row, 'tenantId'),
 		roles: IdentityRows.strings(row, 'roles'),
 		teams: IdentityRows.strings(row, 'teams'),
+		// Exactly one spelling counts. A column that is null, absent, misspelled or holding anything
+		// else at all is an ordinary user, so a projection that forgets to select `status` cannot
+		// promote everybody it returns.
+		admin: IdentityRows.text(row, 'status') === ADMIN_STATUS,
 		...(email === undefined ? {} : { email }),
 		...(impersonatedBy === undefined ? {} : { impersonatedBy })
 	};
@@ -81,7 +104,8 @@ export type Interface = Readonly<{
 		tenantId: string,
 		email: string,
 		roles: ReadonlyArray<string>,
-		teams: ReadonlyArray<string>
+		teams: ReadonlyArray<string>,
+		status: SubjectStatus
 	) => Effect.Effect<string, Database.FacilityError>;
 	readonly invite: (
 		effectId: EffectId,
@@ -285,7 +309,7 @@ export const layerWith = (canDeliver: boolean) =>
 				authenticate: Effect.fn('Identity.authenticate')((effectId, credential) =>
 					readSubject(
 						effectId,
-						`select u."norbital_id" as "userId", u."tenantId" as "tenantId", u."roles" as "roles", u."teams" as "teams", u."email" as "email" from ${AUTH_MODELS.session} s join ${AUTH_MODELS.user} u on u."norbital_id" = s."userId" where s."token" = $1 and s."expiresAt" > now()`,
+						`select u."norbital_id" as "userId", u."tenantId" as "tenantId", u."roles" as "roles", u."teams" as "teams", u."email" as "email", u."status" as "status" from ${AUTH_MODELS.session} s join ${AUTH_MODELS.user} u on u."norbital_id" = s."userId" where s."token" = $1 and s."expiresAt" > now()`,
 						[credential]
 					)
 				),
@@ -390,34 +414,43 @@ export const layerWith = (canDeliver: boolean) =>
 				 * first sign-in, and an upsert on the address means the row it finds already carries the
 				 * membership rather than the two racing.
 				 */
-				admit: Effect.fn('Identity.admit')(function* (effectId, tenantId, email, roles, teams) {
-					const admitted = yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: `insert into ${AUTH_MODELS.user} ("norbital_id", "name", "email", "emailVerified", "kind", "tenantId", "roles", "teams")
-					      values (gen_random_uuid(), $1, $1, true, 'person', $2, $3::jsonb, $4::jsonb)
+				admit: Effect.fn('Identity.admit')(
+					function* (effectId, tenantId, email, roles, teams, status) {
+						const admitted = yield* database.execute(effectId, {
+							_tag: 'Query',
+							sql: `insert into ${AUTH_MODELS.user} ("norbital_id", "name", "email", "emailVerified", "kind", "status", "tenantId", "roles", "teams")
+					      values (gen_random_uuid(), $1, $1, true, 'person', $5, $2, $3::jsonb, $4::jsonb)
 					      on conflict ("email") do update set
 					        "tenantId" = excluded."tenantId",
 					        "roles" = excluded."roles",
 					        "teams" = excluded."teams",
+					        "status" = excluded."status",
 					        "norbital_updated_at" = now()
 					      returning "norbital_id" as "id"`,
-						parameters: [email, tenantId, JSON.stringify([...roles]), JSON.stringify([...teams])]
-					});
-					const admittedId = IdentityRows.text(admitted.rows[0], 'id') ?? '';
-					// The address rides along because it is the only stable name this person has across
-					// organizations: identity is per-tenant, so the same human is a different `norbital_id`
-					// in every workspace they belong to, and a host filing memberships by user id records
-					// six strangers rather than one person in six places.
-					yield* identityHooks.emit(effectId, {
-						_tag: 'UserChanged',
-						userId: admittedId,
-						email,
-						organizationId: tenantId,
-						roles: [...roles],
-						teams: [...teams]
-					});
-					return admittedId;
-				}),
+							parameters: [
+								email,
+								tenantId,
+								JSON.stringify([...roles]),
+								JSON.stringify([...teams]),
+								status
+							]
+						});
+						const admittedId = IdentityRows.text(admitted.rows[0], 'id') ?? '';
+						// The address rides along because it is the only stable name this person has across
+						// organizations: identity is per-tenant, so the same human is a different `norbital_id`
+						// in every workspace they belong to, and a host filing memberships by user id records
+						// six strangers rather than one person in six places.
+						yield* identityHooks.emit(effectId, {
+							_tag: 'UserChanged',
+							userId: admittedId,
+							email,
+							organizationId: tenantId,
+							roles: [...roles],
+							teams: [...teams]
+						});
+						return admittedId;
+					}
+				),
 				verifyCode: Effect.fn('Identity.verifyCode')(function* (effectId, email, code, tenantId) {
 					const auth = yield* authFor(effectId);
 					const signedIn = yield* Effect.tryPromise({
@@ -505,14 +538,24 @@ export const layerWith = (canDeliver: boolean) =>
 				) {
 					const memberRows = yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: `select user_id as "id", max(email) as "email", jsonb_agg(distinct role) filter (where role is not null) as "roles", jsonb_agg(distinct team) filter (where team is not null) as "teams"
+						sql: `select user_id as "id", max(email) as "email", jsonb_agg(distinct role) filter (where role is not null) as "roles", jsonb_agg(distinct team) filter (where team is not null) as "teams",
+						  -- Selected, because the projection below reports an administrator off this column and
+						  -- a column the query never asked for reads as absent — which is exactly \`normal\`, so
+						  -- omitting it listed every administrator in the workspace as an ordinary member and
+						  -- did it silently. Aggregated as \`bool_or\` rather than \`max\` because the union has
+						  -- two sources and \`'normal'\` sorts after \`'admin'\`: a plain \`max\` would let an
+						  -- external row demote the person's own status row.
+						  case when bool_or(subjects.status = '${ADMIN_STATUS}') then '${ADMIN_STATUS}' else '${NORMAL_STATUS}' end as "status"
 						  from (
 							-- Cast to text so the union matches: identity is keyed by \`norbital_id uuid\`, while an
 							-- external subject's id is whatever its provider calls it, and both are only ever
 							-- read back out of this projection as a string.
-							select "norbital_id"::text as user_id, "email", "roles", "teams" from ${AUTH_MODELS.user} where "tenantId" = $1 and "kind" = 'person'
+							select "norbital_id"::text as user_id, "email", "roles", "teams", "status" from ${AUTH_MODELS.user} where "tenantId" = $1 and "kind" = 'person'
 							union all
-							select user_id, email, roles, teams from bolt_external_subjects where tenant_id = $1
+							-- An external subject is authenticated somewhere else and \`bolt_external_subjects\`
+							-- carries no status column, so it can only ever be an ordinary member — the same
+							-- answer \`resolveSubject\` gives it.
+							select user_id, email, roles, teams, '${NORMAL_STATUS}' from bolt_external_subjects where tenant_id = $1
 						  ) subjects
 						  left join lateral jsonb_array_elements_text(coalesce(subjects.roles, '[]'::jsonb)) as role on true
 						  left join lateral jsonb_array_elements_text(coalesce(subjects.teams, '[]'::jsonb)) as team on true
@@ -539,11 +582,16 @@ export const layerWith = (canDeliver: boolean) =>
 								IdentityRows.text(row, 'email')?.split('@')[0] ??
 								IdentityRows.text(row, 'id') ??
 								'',
-							role: roles.includes('admin')
-								? 'admin'
-								: roles.includes('manager')
-									? 'manager'
-									: 'basic',
+							// The status column, not the role array. `admin` was never a role a workspace
+							// declares and is now explicitly not one, so the old test could only ever have
+							// matched a row somebody had hand-written the string into; every real
+							// administrator was listed here as `basic`.
+							role:
+								IdentityRows.text(row, 'status') === ADMIN_STATUS
+									? 'admin'
+									: roles.includes('manager')
+										? 'manager'
+										: 'basic',
 							status: 'active',
 							teams: IdentityRows.strings(row, 'teams')
 						};

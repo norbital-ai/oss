@@ -20,7 +20,7 @@
 
 <Stack as="section" gap="md" aria-busy={busy}>
 	<Stack as="header" gap="xs">
-		<h2 class="text-lg font-semibold">Teams</h2>
+		<h2 class="text-heading">Teams</h2>
 		<p class="text-sm text-muted-foreground">How the teams in this workspace nest.</p>
 	</Stack>
 	{#if chart.positions.length === 0}

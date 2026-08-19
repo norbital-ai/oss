@@ -80,7 +80,7 @@
 	justify="between"
 	align="center"
 	shrink={false}
-	class={cn('collection-pagination p-1 text-xs text-muted-foreground', className)}
+	class={cn('collection-pagination p-1 text-meta', className)}
 	data-collection-pagination
 >
 	<Cluster gap="sm">
@@ -112,7 +112,7 @@
 						oninput={updatePageSize}
 						{disabled}
 					/>
-					<span class="text-xs text-muted-foreground">{t('table.perPage')}</span>
+					<span class="text-meta">{t('table.perPage')}</span>
 				</Inline>
 			{/snippet}
 		</Tooltip>

@@ -38,7 +38,7 @@
 			class="size-5 text-muted-foreground"
 		/>
 		<p class="text-sm font-medium">{t('table.noPipelinesConfigured', { kind })}</p>
-		<p class="max-w-xs text-xs text-muted-foreground">
+		<p class="max-w-xs text-meta">
 			{t('table.noPipelinesDeclared', { kind })}
 		</p>
 	</Stack>

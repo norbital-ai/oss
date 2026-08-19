@@ -151,10 +151,8 @@
 		{#snippet top()}
 			<Stack gap="lg" shrink={false} class="bg-background px-4 pt-4 sm:px-6 sm:pt-6">
 				<Stack as="header" gap="xs">
-					<h2 id="workspace-settings-title" class="text-lg font-semibold text-foreground">
-						People
-					</h2>
-					<p class="max-w-2xl text-xs text-muted-foreground">
+					<h2 id="workspace-settings-title" class="text-heading">People</h2>
+					<p class="max-w-2xl text-meta">
 						Members, teams, invitations, and activity — each read as its own surface.
 					</p>
 				</Stack>

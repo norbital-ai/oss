@@ -7,48 +7,6 @@
 	import type { TenantMessageCatalogs } from '../agent/i18n.js';
 	import type { HostPlugin } from './workspace-navigation.js';
 
-	const DEFAULT_PLUGINS: HostPlugin[] = [
-		{
-			key: 'workspace-studio',
-			label: 'Workspace Studio',
-			icon: 'product:studio',
-			entry: '/__host/workspace-studio',
-			placement: 'sidebar',
-			adminOnly: true
-		},
-		{
-			key: 'organization',
-			label: 'Organization',
-			icon: 'lucide:building-2',
-			entry: '/__host/organization',
-			placement: 'settings',
-			adminOnly: true
-		},
-		{
-			// The surface configures the channels an agent is reachable on, so it is named for the
-			// agent rather than for the plumbing underneath it.
-			key: 'agent',
-			label: 'Agents',
-			icon: 'lucide:bot',
-			entry: '/__host/agent',
-			placement: 'settings',
-			adminOnly: true
-		},
-		{
-			// Split from the agent channels: a channel is a transport a workspace talks over, a secret
-			// is a value it needs to talk at all. Putting both behind one label meant neither had a
-			// form — one page cannot be driven by declared channels and declared environment at once.
-			// "Environment secrets" is the name the vault has: it is backed by the workspace's own
-			// reserved root `+env.ts`.
-			key: 'environment_secrets',
-			label: 'Environment secrets',
-			icon: 'lucide:key-round',
-			entry: '/__host/environment_secrets',
-			placement: 'settings',
-			adminOnly: true
-		}
-	];
-
 	let {
 		title = 'Bolt',
 		apps = [],
@@ -61,7 +19,7 @@
 		organization,
 		organizations = [],
 		user,
-		plugins = DEFAULT_PLUGINS,
+		plugins,
 		isAdmin = true,
 		impersonation = null,
 		onImpersonate,
@@ -105,10 +63,10 @@
 		loading?: boolean;
 		error?: string;
 		organization?: { id: string; name: string; logoUrl?: string | null };
-		organizations?: Array<{
-			organizationId: string;
-			organizationName: string;
-			logoUrl: string | null;
+		organizations?: ReadonlyArray<{
+			readonly organizationId: string;
+			readonly organizationName: string;
+			readonly logoUrl: string | null;
 		}>;
 		user?: {
 			name: string;
@@ -117,7 +75,14 @@
 			avatarUrl?: string | null;
 			teamLabels: string[];
 		};
-		plugins?: HostPlugin[];
+		/**
+		 * The surfaces this workspace offers beside its own apps.
+		 *
+		 * Required, and no default. There used to be a `DEFAULT_PLUGINS` list here that no caller ever
+		 * took, because the only caller passed its own identical copy — a default that reads as the
+		 * authority and is not one.
+		 */
+		plugins: ReadonlyArray<HostPlugin>;
 		isAdmin?: boolean;
 		/**
 		 * Admin team preview, forwarded verbatim to the shell.

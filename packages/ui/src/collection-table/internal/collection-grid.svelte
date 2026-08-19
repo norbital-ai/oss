@@ -738,7 +738,7 @@
 			<Stack gap="xs" class="text-center text-muted-foreground">
 				<Icon icon="lucide:inbox" class="mx-auto h-6 w-6 text-muted-foreground" />
 				<p class="text-sm font-medium">{t('common.noResultsFound')}</p>
-				<p class="text-xs text-muted-foreground">{t('table.emptyStateHint')}</p>
+				<p class="text-meta">{t('table.emptyStateHint')}</p>
 			</Stack>
 		{/if}
 	</Inline>

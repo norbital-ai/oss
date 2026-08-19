@@ -56,7 +56,7 @@
 				{/each}
 			{/snippet}
 		</StarRating>
-		<span class="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
+		<span class="whitespace-nowrap text-meta tabular-nums">
 			{normalized(ratingValue)}/{max}
 		</span>
 	</Inline>

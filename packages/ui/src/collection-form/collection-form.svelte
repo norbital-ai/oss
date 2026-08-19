@@ -320,7 +320,7 @@
 				onclick={clear}>{t('common.clear')}</Button
 			>
 			{#if form.isDirty}
-				<span class="text-xs text-muted-foreground" role="status">
+				<span class="text-meta" role="status">
 					{dirtyFieldCount === 1
 						? t('form.unsavedField', { count: dirtyFieldCount })
 						: t('form.unsavedFields', { count: dirtyFieldCount })}

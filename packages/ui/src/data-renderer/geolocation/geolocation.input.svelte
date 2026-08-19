@@ -250,7 +250,7 @@
 			/>
 			<div class="min-w-0 flex-1">
 				<p class="text-xs font-semibold text-foreground">{location.formatted_address}</p>
-				<p class="truncate text-xs text-muted-foreground">
+				<p class="truncate text-meta">
 					{location.geometry
 						? formatCoordinates(location.geometry)
 						: t('dataRenderer.noCoordinatesAvailable')}
@@ -388,7 +388,7 @@
 />
 
 {#snippet emptyPlaceholder()}
-	<Inline gap="sm" class="text-xs text-muted-foreground">
+	<Inline gap="sm" class="text-meta">
 		<Icon icon="lucide:map-pin-off" class="h-6 w-6" />
 		<p>{t('dataRenderer.noLocations')}</p>
 	</Inline>

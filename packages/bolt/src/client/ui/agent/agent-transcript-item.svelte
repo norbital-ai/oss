@@ -170,7 +170,7 @@
 		<details class="group/tool w-full">
 			<!-- stupidity:allow UI6 -- details disclosure summary is a clickable control row. -->
 			<summary
-				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs whitespace-nowrap text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta whitespace-nowrap transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
 				<Icon
 					icon={message.icon}
@@ -211,7 +211,7 @@
 			<Stack gap="sm" class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3">
 				{#if message.state === 'needs_input' || (Array.isArray(message.elicitation) && message.elicitation.length > 0)}
 					<Stack gap="xs" class="min-w-0">
-						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
+						<span class="text-overline">
 							{t('bolt.agent.needsInput')}
 						</span>
 						{#if message.elicitation?.length}
@@ -230,7 +230,7 @@
 				{/if}
 				{#if message.input}
 					<Stack gap="xs" class="min-w-0">
-						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
+						<span class="text-overline">
 							{t('bolt.agent.input')}
 						</span>
 						<Scroll
@@ -245,7 +245,7 @@
 				{#if message.children.length > 0}
 					<!-- The delegated agent's own transcript, rendered by this same component. -->
 					<Stack gap="xs" class="min-w-0">
-						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
+						<span class="text-overline">
 							{t('bolt.agent.delegatedTranscript')}
 						</span>
 						<Stack
@@ -262,9 +262,7 @@
 				{/if}
 				{#if message.error}
 					<Stack gap="xs" class="min-w-0">
-						<span class="text-tiny font-medium tracking-wide text-destructive uppercase"
-							>{t('bolt.agent.error')}</span
-						>
+						<span class="text-overline text-destructive">{t('bolt.agent.error')}</span>
 						<Scroll
 							name={t('bolt.agent.error')}
 							class="m-0 max-h-56 rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-micro leading-snug break-words whitespace-pre-wrap text-destructive"
@@ -274,7 +272,7 @@
 					</Stack>
 				{:else if message.output}
 					<Stack gap="xs" class="min-w-0">
-						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
+						<span class="text-overline">
 							{t('bolt.agent.result')}
 						</span>
 						<Scroll
@@ -338,7 +336,7 @@
 		<details class="group/reasoning w-full">
 			<!-- stupidity:allow UI6 -- reasoning is supplementary detail behind a disclosure. -->
 			<summary
-				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
 				<Icon icon="lucide:brain" class="size-3.5 shrink-0" />
 				<span class="font-medium text-foreground/80">{t('bolt.agent.reasoning')}</span>
@@ -359,7 +357,7 @@
 		<details class="group/verifier w-full" open>
 			<!-- stupidity:allow UI6 -- verifier disclosure is a clickable control row. -->
 			<summary
-				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
 				<Icon icon="lucide:shield-check" class="size-3.5 shrink-0" />
 				<span class="font-medium text-foreground/80">{t('bolt.agent.verifierTriggered')}</span>
@@ -389,7 +387,7 @@
 		<details class="group/goal w-full">
 			<!-- stupidity:allow UI6 -- goal verification is supplementary detail behind a disclosure. -->
 			<summary
-				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
 				<Icon
 					icon={message.achieved ? 'lucide:target' : 'lucide:circle-dashed'}
@@ -410,7 +408,7 @@
 				<ReadonlyMarkdown scale="reading" content={message.summary} class="content" />
 				{#if message.gaps.length > 0}
 					<Stack gap="xs">
-						<span class="text-tiny font-medium tracking-wide text-muted-foreground uppercase">
+						<span class="text-overline">
 							{t('bolt.agent.goalGaps')}
 						</span>
 						<ul class="m-0 list-disc pl-4 text-micro text-foreground/80">

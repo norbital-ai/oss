@@ -21,22 +21,43 @@ const access = (harness: BoltTestRuntime) =>
 		})
 	);
 
+/**
+ * Seeds one member and a live session for them, the way provisioning writes them.
+ *
+ * `status` is a parameter, defaulted to `normal`, because administration is a status on the person
+ * — `admit` writes `bolt_auth_user.status` and the projection reads that column and no other. The
+ * fixture used to hand-write the string `admin` into `roles`, which named a role in the ladder that
+ * nothing declares and nothing in production ever writes, so the suite pinned a mapping the source
+ * does not perform.
+ */
 const addSession = (
 	harness: BoltTestRuntime,
 	userId: string,
 	roles: ReadonlyArray<string>,
 	teams: ReadonlyArray<string>,
-	email: string
+	email: string,
+	status: 'normal' | 'admin' = 'normal'
 ) =>
 	harness.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, 'test-tenant', $3::jsonb, $4::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[`token-${userId}`, userId, JSON.stringify([...roles]), JSON.stringify([...teams]), email]
+		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams", "status") values (md5($2::text)::uuid, $2, $5, 'test-tenant', $3::jsonb, $4::jsonb, $6) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId", "status" = excluded."status" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
+		[
+			`token-${userId}`,
+			userId,
+			JSON.stringify([...roles]),
+			JSON.stringify([...teams]),
+			email,
+			status
+		]
 	);
 
 describe('workspace access projection', () => {
 	it('reports one member per user, with their highest role and their teams', async () => {
 		harness = await makeBoltTestRuntime();
-		await addSession(harness, 'u1', ['admin', 'basic'], ['Platform'], 'ada@example.test');
+		// `u1` administers this workspace by status and holds an ordinary role ladder, so the reported
+		// `admin` can only have come from the column the projection selects. `u2` is the negative case
+		// without which the same assertion would pass against a projection that answered `admin` for
+		// everybody.
+		await addSession(harness, 'u1', ['basic'], ['Platform'], 'ada@example.test', 'admin');
 		await addSession(harness, 'u2', ['basic'], ['Platform', 'People'], 'grace@example.test');
 
 		const result = await access(harness);

@@ -19,6 +19,7 @@
 		mainClass,
 		articleClass = 'doc-content prose prose-lg max-w-none dark:prose-invert',
 		asideWidthClass,
+		asideClass,
 		popoverClass,
 		onSync
 	}: {
@@ -31,6 +32,7 @@
 		mainClass?: string;
 		articleClass?: string;
 		asideWidthClass?: string;
+		asideClass?: string;
 		popoverClass?: string;
 		onSync?: () => void | Promise<void>;
 	} = $props();
@@ -91,5 +93,5 @@
 		{/if}
 	</div>
 
-	<DocTocPanel {title} widthClass={asideWidthClass} />
+	<DocTocPanel {title} widthClass={asideWidthClass} class={asideClass} />
 </div>

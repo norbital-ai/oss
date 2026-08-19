@@ -203,7 +203,7 @@
 	<Inline align="start" justify="between" gap="md" class="border-b px-4 py-3">
 		<div class="min-w-0">
 			<p class="text-sm font-semibold">{t('table.collectionActions')}</p>
-			<p class="mt-0.5 text-xs text-muted-foreground">{t('table.collectionActionsDescription')}</p>
+			<p class="mt-0.5 text-meta">{t('table.collectionActionsDescription')}</p>
 		</div>
 	</Inline>
 	<Accordion.Root type="multiple" bind:value={expandedSections} class="p-2">
@@ -213,7 +213,7 @@
 					<Inline gap="md">
 						<Icon icon="lucide:upload" class="size-4 shrink-0" />
 						<span>{t('table.import')}</span>
-						<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+						<span class="rounded-full bg-muted px-2 py-0.5 text-meta">
 							{importPipelines.length}
 						</span>
 					</Inline>
@@ -227,7 +227,7 @@
 					<Inline gap="md">
 						<Icon icon="lucide:download" class="size-4 shrink-0" />
 						<span>{t('table.export')}</span>
-						<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+						<span class="rounded-full bg-muted px-2 py-0.5 text-meta">
 							{exportPipelines.length}
 						</span>
 					</Inline>
@@ -241,7 +241,7 @@
 					<Inline gap="md">
 						<Icon icon="lucide:plug-zap" class="size-4 shrink-0" />
 						<span>{t('table.integrations')}</span>
-						<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+						<span class="rounded-full bg-muted px-2 py-0.5 text-meta">
 							{integrations.length}
 						</span>
 					</Inline>
@@ -257,7 +257,7 @@
 					<Inline gap="md">
 						<Icon icon="lucide:list-restart" class="size-4 shrink-0" />
 						<span>{t('table.bulkUpdate')}</span>
-						<span class="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+						<span class="rounded-full bg-muted px-2 py-0.5 text-meta">
 							{selectedRows.length}
 						</span>
 					</Inline>
@@ -295,7 +295,7 @@
 							</Stack>
 						{/if}
 						<Inline justify="between" gap="md" class="border-t pt-3">
-							<p class="text-xs text-muted-foreground">{selectionLabel}</p>
+							<p class="text-meta">{selectionLabel}</p>
 							<Button
 								type="button"
 								size="sm"
@@ -326,7 +326,7 @@
 						gap="md"
 						class="rounded-md border border-destructive/30 bg-destructive/5 p-3"
 					>
-						<p class="text-xs text-muted-foreground">
+						<p class="text-meta">
 							{t('table.deleteSelectedLabel', { label: selectionLabel })}
 						</p>
 						<Button
@@ -403,7 +403,7 @@
 		</Popover.Content>
 	</Popover.Root>
 	{#if selectionControls}
-		<span class="text-xs tabular-nums text-muted-foreground">
+		<span class="text-meta tabular-nums">
 			{t('common.selected', { count: selectedRows.length })}
 		</span>
 		<Button

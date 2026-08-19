@@ -30,6 +30,75 @@ const NavigationText = {
 export const hostPluginSurfaceHref = (pluginKey: string): string =>
 	`${HOST_PLUGIN_SURFACE_PREFIX}/${encodeURIComponent(pluginKey)}`;
 
+/**
+ * The surface a `/__host/…` path names, or `null` if the path names none.
+ *
+ * The inverse of `hostPluginSurfaceHref`, declared beside it so the two cannot drift. The host used
+ * to carry its own copy of this — a private `resolveHostPluginKey` that re-derived the prefix and
+ * the decoding rules, and would have kept working while silently disagreeing about an encoded key.
+ */
+export const hostPluginKeyFromPath = (pathname: string): string | null => {
+	const prefix = `${HOST_PLUGIN_SURFACE_PREFIX}/`;
+	if (!pathname.startsWith(prefix)) return null;
+	const raw = pathname.slice(prefix.length).split('/')[0] ?? '';
+	if (raw.length === 0) return null;
+	try {
+		return decodeURIComponent(raw);
+	} catch {
+		return raw;
+	}
+};
+
+/**
+ * The surfaces a compiled workspace offers beside its own apps, declared once.
+ *
+ * This list existed twice — as `DEFAULT_PLUGINS` inside the shell component and again as
+ * `HOST_PLUGINS` inside the host's own shell, which passed its copy in as a prop. Two lists of the
+ * same four surfaces, and only the host's decided what the sidebar showed, so editing the one that
+ * reads like the default changed nothing at all.
+ */
+export const WORKSPACE_HOST_PLUGINS: ReadonlyArray<HostPlugin> = [
+	{
+		key: 'workspace-studio',
+		label: 'Workspace Studio',
+		icon: 'product:studio',
+		entry: hostPluginSurfaceHref('workspace-studio'),
+		placement: 'sidebar',
+		adminOnly: true
+	},
+	{
+		key: 'organization',
+		label: 'Organization',
+		icon: 'lucide:building-2',
+		entry: hostPluginSurfaceHref('organization'),
+		placement: 'settings',
+		adminOnly: true
+	},
+	{
+		// The surface configures the channels an agent is reachable on, so it is named for the agent
+		// rather than for the plumbing underneath it.
+		key: 'agent',
+		label: 'Agents',
+		icon: 'lucide:bot',
+		entry: hostPluginSurfaceHref('agent'),
+		placement: 'settings',
+		adminOnly: true
+	},
+	{
+		// Split from the agent channels: a channel is a transport a workspace talks over, a secret is a
+		// value it needs to talk at all. Putting both behind one label meant neither had a form — one
+		// page cannot be driven by declared channels and declared environment at once. "Environment
+		// secrets" is the name the vault has: it is backed by the workspace's own reserved root
+		// `+env.ts`.
+		key: 'environment_secrets',
+		label: 'Environment secrets',
+		icon: 'lucide:key-round',
+		entry: hostPluginSurfaceHref('environment_secrets'),
+		placement: 'settings',
+		adminOnly: true
+	}
+];
+
 const navigationTitleKeys = (id: string): ReadonlyArray<string> => {
 	const leaf = id.includes('/') ? (id.slice(id.lastIndexOf('/') + 1) ?? id) : id;
 	return [`app.${id}.title`, `app.${id.replaceAll('/', '.')}.title`, `app.${leaf}.title`];

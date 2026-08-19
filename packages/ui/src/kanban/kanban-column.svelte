@@ -246,9 +246,9 @@
 			<h2 class="text-sm font-semibold">{column.title}</h2>
 		{/if}
 		{#if column.totalCount !== undefined}
-			<span class="text-xs text-muted-foreground tabular-nums">{column.totalCount}</span>
+			<span class="text-meta tabular-nums">{column.totalCount}</span>
 		{:else if column.items.length > 0}
-			<span class="text-xs text-muted-foreground tabular-nums">{column.items.length}</span>
+			<span class="text-meta tabular-nums">{column.items.length}</span>
 		{/if}
 		{#if columnHeaderActionSnippet}
 			<div class="ml-auto">
@@ -288,7 +288,7 @@
 {/snippet}
 
 {#snippet loadMoreIndicator({ loading }: { loading: boolean })}
-	<div class="flex items-center justify-center py-2 text-xs text-muted-foreground">
+	<div class="flex items-center justify-center py-2 text-meta">
 		{#if loading}
 			<span class="animate-pulse">{t('common.loading')}</span>
 		{:else}

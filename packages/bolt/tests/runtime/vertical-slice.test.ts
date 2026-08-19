@@ -152,10 +152,25 @@ const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
 };
 const facilities: FacilityBindings = { scope, database, ai, tasks };
 
+/**
+ * The `bolt_auth_user` row the session query above hands back, so it has to be a row the real query
+ * could produce.
+ *
+ * Administration is `bolt_auth_user.status` and nothing else — `subjectFromRow` reads
+ * `text(row, 'status') === ADMIN_STATUS` and consults no other column. This fixture used to carry
+ * `admin: true` and `roles: ['admin', 'impersonator']`, neither of which that projection looks at,
+ * so every case below named for an administrator authenticated as an ordinary user with no matching
+ * policy and was refused.
+ *
+ * The role ladder is left empty on purpose. `admin` and `impersonator` were compiler-injected and
+ * are gone, and an empty array keeps the authority under test the status alone: nothing here can be
+ * mistaken for a role match.
+ */
 const subject = {
 	userId: 'admin-1',
 	tenantId: 'tenant-1',
-	roles: ['admin', 'impersonator'],
+	status: 'admin',
+	roles: [],
 	teams: []
 };
 const employee = { userId: 'employee-1', tenantId: 'tenant-1', roles: ['employee'], teams: [] };
@@ -210,8 +225,16 @@ describe('runnable Bolt vertical slice', () => {
 	});
 
 	it('derives command identity from credentials and ignores forged browser roles', async () => {
+		// The payload names `employee`, whose one app is `hr`; the credential names the administrator,
+		// and `visibleApps` short-circuits on the status to the whole registry. So the two answers are
+		// still different, which is the whole of what this case checks — the subject a command runs as
+		// comes from the credential, never from the body. (`dispatchInvocation` overwrites `subject`
+		// among the minted identity fields before `apps.visible` decodes it.)
 		const forged = await invoke('apps.visible', { subject: employee });
-		expect(forged).toMatchObject({ _tag: 'Success', response: { value: { apps: [] } } });
+		expect(forged).toMatchObject({
+			_tag: 'Success',
+			response: { value: { apps: ['hr', 'finance'] } }
+		});
 		const unauthenticated: Invocation = {
 			_tag: 'Command',
 			protocolVersion: PROTOCOL_VERSION,

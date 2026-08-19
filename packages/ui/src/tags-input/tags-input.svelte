@@ -339,7 +339,7 @@
 
 		{#if hiddenTagCount > 0}
 			<span
-				class="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+				class="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-meta"
 				title={t('misc.moreTags', { count: hiddenTagCount })}
 			>
 				+{hiddenTagCount}
@@ -367,7 +367,7 @@
 		{/if}
 
 		{#if isMaxTagsReached && !readonly}
-			<span class="shrink-0 text-xs text-muted-foreground">
+			<span class="shrink-0 text-meta">
 				{maxTags}/{maxTags}
 			</span>
 		{/if}

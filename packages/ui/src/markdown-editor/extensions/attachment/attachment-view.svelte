@@ -289,7 +289,7 @@
 		<Icon icon={previewIcon} width="16" height="16" class="text-muted-foreground" />
 		<div class="min-w-0 flex-1 text-start">
 			<div class="font-medium wrap-break-word">{fileName}</div>
-			<div class="text-xs text-muted-foreground">{formatFileSize(fileSize)}</div>
+			<div class="text-meta">{formatFileSize(fileSize)}</div>
 		</div>
 		<Button
 			variant="ghost"
@@ -319,7 +319,7 @@
 							<div class="text-xs font-medium text-foreground">{metadata.structure_hint}</div>
 						{/if}
 						{#if metadata?.summary}
-							<div class="text-xs text-muted-foreground">{metadata.summary}</div>
+							<div class="text-meta">{metadata.summary}</div>
 						{/if}
 					</Stack>
 				{/snippet}

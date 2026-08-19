@@ -25,7 +25,7 @@
 {#if integrations.length === 0}
 	<Stack gap="sm" align="center" justify="center" class="min-h-32 px-5 py-8 text-center">
 		<p class="text-sm font-medium">{t('table.noIntegrationsConfigured')}</p>
-		<p class="max-w-xs text-xs text-muted-foreground">
+		<p class="max-w-xs text-meta">
 			{t('table.noIntegrationsDescription')}
 		</p>
 	</Stack>

@@ -19,6 +19,7 @@ import type { SyncChange, SyncCursor } from '../runtime/sync/sync.js';
 import { EnvironmentName, InvocationScope, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import { createBoltClient, type BoltClient, type BoltTransport } from '../client.js';
 import { createRemoteQuery } from './remote-query.svelte.js';
+import { workspaceSession } from './session.js';
 import { openLocalDatabase, type BootstrapTransport } from './replica/bootstrap.js';
 import { createLocalReader, type LocalReader } from './replica/local-reads.js';
 import { subscribeToChanges, type Subscription } from './replica/subscribe.js';
@@ -365,28 +366,16 @@ const WorkspaceApis = {
 
 export const createWorkspaceApiProxy = WorkspaceApis.create;
 
-const browserAuthorization = (): string | undefined => {
-	if (typeof document === 'undefined') return undefined;
-	const authorization = document.documentElement.dataset['boltAuthorization'];
-	return authorization === undefined || authorization.length === 0 ? undefined : authorization;
-};
-
+/**
+ * The transport the host declared, resolved per call.
+ *
+ * It used to be a second HTTP client written out here — its own `fetch`, its own endpoint literal,
+ * and a credential sniffed from `document.documentElement.dataset`. That made two implementations of
+ * "post a Bolt command" that could disagree about where commands go and who is making them, and the
+ * one that read the document was wrong on every page that was not itself a served document.
+ */
 const browserTransport: BoltTransport = {
-	command: async (command, input, signal) => {
-		const authorization = browserAuthorization();
-		const response = await fetch(`/api/bolt/command/${encodeURIComponent(command)}`, {
-			method: 'POST',
-			credentials: 'same-origin',
-			headers: {
-				'content-type': 'application/json',
-				...(authorization === undefined ? {} : { authorization })
-			},
-			body: JSON.stringify(input),
-			signal
-		});
-		if (!response.ok) throw new Error(`Bolt command failed (${response.status})`);
-		return response.json();
-	}
+	command: (command, input, signal) => workspaceSession().transport.command(command, input, signal)
 };
 
 /**
@@ -863,17 +852,22 @@ export type LocalReplica = Readonly<{
 	readonly stop: () => void;
 }>;
 
-/** Creates the browser runtime from declarative document metadata; it has no mutable module singleton. */
+/**
+ * Creates the browser runtime for the session the host declared.
+ *
+ * The scope was read from `data-bolt-*` attributes with `local`/`development` defaults behind it.
+ * Those defaults are what let a page that carried no routing decision still render — as somebody
+ * else's workspace, against a query cache namespaced to a tenant it was not showing. The session is
+ * required instead, and stating a scope explicitly is still allowed for a caller that has one.
+ */
 export const createBrowserWorkspaceRuntime = (
 	options: BrowserWorkspaceRuntimeOptions = {}
 ): WorkspaceClientRuntime => {
-	const root = typeof document === 'undefined' ? undefined : document.documentElement;
+	const session = workspaceSession();
 	const scope = InvocationScope.make({
-		tenantId: TenantId.make(options.tenantId ?? root?.dataset['boltTenant'] ?? 'local'),
-		environment: EnvironmentName.make(
-			options.environment ?? root?.dataset['boltEnvironment'] ?? 'development'
-		),
-		releaseId: ReleaseId.make(options.releaseId ?? root?.dataset['boltRelease'] ?? 'local')
+		tenantId: TenantId.make(options.tenantId ?? session.tenantId),
+		environment: EnvironmentName.make(options.environment ?? session.environment),
+		releaseId: ReleaseId.make(options.releaseId ?? session.releaseId)
 	});
 	const bolt = createBoltClient(scope, options.transport ?? browserTransport);
 	// Namespaced by tenant and environment: browser storage is shared across every workspace this

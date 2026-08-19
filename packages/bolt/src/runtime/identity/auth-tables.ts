@@ -31,6 +31,13 @@ export const boltAuthUser = pgTable('bolt_auth_user', {
 	image: text('image'),
 	/** A host provisioner is not a person; `service` with a null email says so rather than pretending. */
 	kind: text('kind').notNull(),
+	/**
+	 * Whether this person administers the workspace — `normal` or `admin`. Bolt's concept, which
+	 * Better Auth never reads, and mapped here for the same reason `kind`, `tenantId`, `roles` and
+	 * `teams` are: this is Better Auth's view of the whole table, and a column the collection declares
+	 * but the view omits is drift no type check can see.
+	 */
+	status: text('status').notNull(),
 	/** The workspace this subject belongs to — Bolt's concept, which Better Auth never reads. */
 	tenantId: text('tenantId'),
 	roles: jsonb('roles').notNull(),

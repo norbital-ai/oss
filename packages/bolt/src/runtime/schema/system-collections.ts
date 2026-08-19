@@ -97,6 +97,29 @@ const authUser = collection({
 		 * replaced gave it one: a row called `admin-1` carrying a real employee's address.
 		 */
 		kind: field.string({ required: true, sqlDefault: "'person'" }),
+		/**
+		 * Whether this person administers the workspace. `normal` or `admin`, and nothing else.
+		 *
+		 * Deliberately *not* a role and deliberately not folded into `kind`. `kind` answers "is this a
+		 * person or a service", which stays true independently of authority — a service row is not an
+		 * administrator and an administrator is still a person, so one column cannot carry both without
+		 * losing one of the two answers.
+		 *
+		 * It is not a role because `subjectHasPolicy` matches a subject to a policy by role, and there
+		 * is no policy called `admin` in any workspace — a founder handed `roles: ['admin']` matches
+		 * nothing, sees no app and reads no collection. The previous arrangement worked around that by
+		 * granting the founder every policy's roles at once, which made "administers the workspace"
+		 * indistinguishable from "is simultaneously an employee, a supervisor, a manager and an HR
+		 * controller"; any change to the ladder silently changed what an administrator was, and a
+		 * routing change that stopped supplying roles removed their authority entirely.
+		 *
+		 * Administration is a property of the person, so it lives on the person. `AccessControl`
+		 * short-circuits on it before it consults a single policy.
+		 *
+		 * `sqlDefault` is what makes seeding safe: a row written by the seed loader or created by
+		 * Better Auth on first sign-in is `normal` without anybody having to remember to say so.
+		 */
+		status: field.string({ required: true, sqlDefault: "'normal'" }),
 		/** The workspace this subject belongs to — Bolt's concept, not Better Auth's. */
 		tenantId: field.string({ indexed: true }),
 		roles: field.json({ required: true, sqlDefault: "'[]'::jsonb" }),

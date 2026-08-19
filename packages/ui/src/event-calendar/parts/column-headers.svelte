@@ -55,7 +55,7 @@
 			)}
 		>
 			{#if view === 'month'}
-				<span class="text-micro font-semibold text-muted-foreground uppercase tracking-wider">
+				<span class="text-overline">
 					{dayLabels![i]}
 				</span>
 			{:else}

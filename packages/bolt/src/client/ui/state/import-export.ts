@@ -1,4 +1,5 @@
 import { Schema } from 'effect';
+import { workspaceSession } from '../../session.js';
 
 export type CollectionExportInput = Readonly<
 	(
@@ -56,43 +57,27 @@ const decodeExportManifest = Schema.decodeUnknownSync(
  */
 const decodeImportResult = Schema.decodeUnknownSync(Schema.Struct({ imported: Schema.Number }));
 
-const commandHeaders = (): Readonly<Record<string, string>> => {
-	const authorization =
-		typeof document === 'undefined'
-			? undefined
-			: document.documentElement.dataset['boltAuthorization'];
-	return {
-		'content-type': 'application/json',
-		...(authorization === undefined || authorization.length === 0 ? {} : { authorization })
-	};
-};
-
-/** Owns download collection export behavior at the state boundary so validation and typed semantics stay consistent for every caller. */
+/**
+ * Export and import over the session's transport, not over a third `fetch`.
+ *
+ * These two posted to a literal `/api/bolt/command/...` with a credential read off the document,
+ * which was a third implementation of the one thing `BoltTransport` already is — one that could
+ * disagree with the other two about where a command goes and who is issuing it.
+ */
 const CollectionTransfer = {
 	download: async (
 		input: CollectionExportInput,
 		options: CollectionExportOptions = {}
 	): Promise<ExportManifest> => {
-		const response = await fetch('/api/bolt/command/collections.export', {
-			method: 'POST',
-			credentials: 'same-origin',
-			headers: commandHeaders(),
-			body: JSON.stringify(input)
-		});
-		if (!response.ok) throw new Error(`Collection export failed (${response.status})`);
-		const manifest = decodeExportManifest(await response.json());
+		const manifest = decodeExportManifest(
+			await workspaceSession().transport.command('collections.export', input as unknown as Schema.Json)
+		);
 		return options.includeAction === undefined ? manifest : manifest.filter(options.includeAction);
 	},
-	importRecords: async (input: CollectionImportInput): Promise<number> => {
-		const response = await fetch('/api/bolt/command/collections.import', {
-			method: 'POST',
-			credentials: 'same-origin',
-			headers: commandHeaders(),
-			body: JSON.stringify(input)
-		});
-		if (!response.ok) throw new Error(`Collection import failed (${response.status})`);
-		return decodeImportResult(await response.json()).imported;
-	}
+	importRecords: async (input: CollectionImportInput): Promise<number> =>
+		decodeImportResult(
+			await workspaceSession().transport.command('collections.import', input as Schema.Json)
+		).imported
 };
 export const downloadCollectionExport = CollectionTransfer.download;
 

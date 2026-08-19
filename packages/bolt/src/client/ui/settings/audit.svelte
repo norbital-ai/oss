@@ -25,7 +25,7 @@
 
 <Stack as="section" gap="md" aria-busy={busy}>
 	<Stack as="header" gap="xs">
-		<h2 class="text-lg font-semibold">Audit log</h2>
+		<h2 class="text-heading">Audit log</h2>
 		<p class="text-sm text-muted-foreground">
 			Every change to who can reach this workspace, most recent first.
 		</p>
@@ -53,10 +53,9 @@
 							{event.action}{#if event.subject}
 								· {event.subject}{/if}
 						</span>
-						<span class="text-xs text-muted-foreground">{event.actor}</span>
+						<span class="text-meta">{event.actor}</span>
 					</Stack>
-					<time class="text-xs text-muted-foreground" datetime={event.at}>{formatAt(event.at)}</time
-					>
+					<time class="text-meta" datetime={event.at}>{formatAt(event.at)}</time>
 				</Cluster>
 			{/each}
 		</Stack>

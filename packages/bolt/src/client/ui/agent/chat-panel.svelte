@@ -48,9 +48,7 @@
 					data-role={message.role}
 					class="rounded-lg border border-border bg-background p-3 text-sm"
 				>
-					<strong class="text-xs tracking-wide text-muted-foreground uppercase"
-						>{message.role}</strong
-					>
+					<strong class="text-overline">{message.role}</strong>
 					<p class="mt-1 mb-0 whitespace-pre-wrap text-foreground">{message.content}</p>
 				</article>
 			{/each}

@@ -294,7 +294,7 @@
 					</label>
 				{/each}
 				{#if builderEnabled && filters.length === 0}
-					<p class="py-2 text-center text-xs text-muted-foreground">
+					<p class="py-2 text-center text-meta">
 						{t('table.noFiltersApplied')}
 					</p>
 				{/if}
@@ -326,7 +326,7 @@
 								onValueChange={(operator) => operator && setOperator(filter.id, operator)}
 							/>
 						{:else}
-							<span class="col-start-1 min-w-0 px-2 text-xs text-muted-foreground sm:col-auto"
+							<span class="col-start-1 min-w-0 px-2 text-meta sm:col-auto"
 								>{t('table.chooseField')}</span
 							>
 						{/if}
@@ -352,7 +352,7 @@
 								{/if}
 							{/key}
 						{:else}
-							<span class="col-start-1 min-w-0 px-2 text-xs text-muted-foreground sm:col-auto">
+							<span class="col-start-1 min-w-0 px-2 text-meta sm:col-auto">
 								{field && filter.operator ? t('table.noValueNeeded') : t('table.chooseOperator')}
 							</span>
 						{/if}

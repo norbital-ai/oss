@@ -65,20 +65,14 @@ export type {
 	WorkspaceAuthoringTypes
 } from './authoring/index.js';
 export {
-	AgentChatPanel,
-	AppHeaderActions,
-	BoltApp,
 	collectionClient,
-	CollectionTable,
 	createBoltClient,
-	DetailSurfaceService,
+	createHttpBoltTransport,
 	downloadCollectionExport,
 	getPlatformStateContext,
 	importCollectionRecords,
 	Replica,
-	setPlatformStateContext,
-	uploadFile,
-	WorkspaceFileUploadClient
+	setPlatformStateContext
 } from './client.js';
 export type { BoltClient, BoltTransport } from './client.js';
 export { Compiler } from './compiler/compiler.js';

@@ -50,52 +50,49 @@ export const collectionClient = ClientFactories.collection;
 export const remote = ClientFactories.remote;
 export const syncClient = ClientFactories.sync;
 
+/**
+ * What a host may reach for, and nothing besides.
+ *
+ * This barrel used to re-export the whole workspace UI — the shell, the settings surfaces, the agent
+ * panel, every collection component — because the host rendered those itself. It does not any more:
+ * a compiled tenant bundle owns the workspace UI end to end, and a host that imported a component
+ * from here would be importing it from its *own* copy of Svelte, which cannot share a tree or a
+ * context key with the bundle's. That is precisely the defect the consolidation removes, so the
+ * exports that made it expressible are gone.
+ *
+ * What is left is the seam: mount a workspace, build the transport and file store it will run on,
+ * and the two constants a host needs to route to it.
+ */
 export { Replica } from './client/replica/replica.js';
-export { default as BoltApp } from './client/ui/shell/app.svelte';
-export { default as BoltShell } from './client/ui/shell/shell.svelte';
-export {
-	AGENT_PATH,
-	WORKSPACE_SETTINGS_PATH,
-	appAccessAllowed,
-	buildApplicationNavigation,
-	buildSystemNavigation,
-	hostPluginSurfaceHref,
-	resolveHostPluginSurface,
-	resolveAppHeaderDescription,
-	resolveAppHeaderTitle,
-	resolveNavigationLabel,
-	resolveWorkspaceOrganizationOptions
-} from './client/ui/shell/workspace-navigation.js';
-export { default as BoltFinder } from './client/ui/shell/omni-finder.svelte';
-export { default as BoltNotifications } from './client/ui/shell/notifications.svelte';
-export { default as BoltSettings } from './client/ui/settings/workspace.svelte';
-export { default as BillingBanner } from './client/ui/shell/billing-banner.svelte';
-export { default as AgentChatPanel } from './client/ui/agent/agent-chat-panel.svelte';
-export { default as AgentComposer } from './client/ui/agent/composer.svelte';
-export { configureAgentRuntime, getAgentRuntime } from './client/ui/agent/client.js';
-export { resolveWorkspaceAgentName } from './client/ui/agent/agent-name.js';
+/**
+ * The mount seam itself is `@norbital-ai/bolt/client/workspace`, not this barrel.
+ *
+ * Deliberate: `mountWorkspace` reaches the whole workspace component tree, and anything re-exporting
+ * it drags that tree into the importer's module graph. A host importing this barrel for a transport
+ * would then compile the entire workspace UI into its own bundle — which is the arrangement this
+ * change exists to end. The *types* below are erased, so they cost nothing and keep both ends of the
+ * dynamic import in agreement.
+ */
+export type {
+	AppGroup,
+	AppMeta,
+	CompiledWorkspace,
+	HostMountOptions,
+	MountWorkspaceOptions,
+	WorkspaceEntry,
+	WorkspaceHandle,
+	WorkspaceHostActions,
+	WorkspaceView
+} from './client/ui/shell/workspace-contract.js';
+export type {
+	WorkspaceFilesHost,
+	WorkspaceOperationsHost,
+	WorkspaceSession
+} from './client/session.js';
 export { createHttpBoltTransport } from './client/ui/agent/browser-transport.js';
-export { requestAgentComposerFocus } from './client/ui/agent/composer-chrome.js';
-export { mergeBoltAgentMessages, boltAgentMessages } from './client/ui/agent/i18n.js';
+export type { HttpBoltTransportOptions } from './client/ui/agent/browser-transport.js';
+export { AGENT_PATH, WORKSPACE_SETTINGS_PATH } from './client/ui/shell/workspace-navigation.js';
 export type { TenantMessageCatalogs } from './client/ui/agent/i18n.js';
-export { setWorkspaceRemoteTransport } from './client/ui/agent/remote-transport.js';
-export { default as AgentTranscript } from './client/ui/agent/transcript.svelte';
-export { default as AgentMentionPicker } from './client/ui/agent/mention-picker.svelte';
-export { default as AgentConversationPicker } from './client/ui/agent/conversation-picker.svelte';
-export { default as AgentModelPicker } from './client/ui/agent/model-picker.svelte';
-export { default as AgentActivity } from './client/ui/agent/activity.svelte';
-export { default as CollectionTable } from './client/ui/collection/table.svelte';
-export { default as CollectionRecordDetail } from './client/ui/collection/record-detail.svelte';
-export { default as CollectionDetailStack } from './client/ui/collection/detail-stack.svelte';
-export {
-	default as WorkspaceMembers,
-	default as WorkspaceInvitations,
-	default as WorkspaceTeams,
-	default as WorkspaceAudit
-} from './client/ui/settings/workspace.svelte';
-export { EMPTY_WORKSPACE_ACCESS } from './client/ui/settings/access.js';
-export type { WorkspaceAccess } from './client/ui/settings/access.js';
-export { default as AppHeaderActions } from './client/ui/shell/header-actions.svelte';
 export { getPlatformStateContext, setPlatformStateContext } from './client/ui/state/platform.js';
 export {
 	downloadCollectionExport,
@@ -108,11 +105,3 @@ export type {
 	ExportAttachment,
 	ExportManifest
 } from './client/ui/state/import-export.js';
-export { DetailSurfaceService } from './client/ui/collection/detail-surface.js';
-export type {
-	DetailRegistration,
-	DetailSurfaceServiceOptions,
-	NavStackItem
-} from './client/ui/collection/detail-surface.js';
-export { uploadFile, WorkspaceFileUploadClient } from './client/ui/state/files.js';
-export type { UploadEntry, UploadProgress, UploadResult } from './client/ui/state/files.js';

@@ -1,3 +1,4 @@
+import { workspaceSession } from '../session.js';
 /**
  * Listening for changes instead of asking for them.
  *
@@ -36,8 +37,6 @@ export type EventSourceLike = {
 
 export type Subscription = Readonly<{ readonly stop: () => void }>;
 
-export const SYNC_STREAM_PATH = '/api/bolt/sync/stream';
-
 const parseCollections = (data: string | undefined): ReadonlyArray<string> => {
 	if (data === undefined || data.length === 0) return [];
 	try {
@@ -71,7 +70,7 @@ export const subscribeToChanges = (options: SubscribeOptions): Subscription => {
 
 	let source: EventSourceLike | undefined;
 	try {
-		source = create(SYNC_STREAM_PATH);
+		source = create(workspaceSession().syncStreamUrl);
 	} catch (cause) {
 		// No `EventSource` at all — a non-browser runtime, or a policy that blocks it. The replica
 		// still works; it just only learns about changes when something else asks it to drain.

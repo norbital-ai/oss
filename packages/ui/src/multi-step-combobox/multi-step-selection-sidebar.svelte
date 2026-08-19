@@ -73,7 +73,7 @@
 		<ul role="listbox" aria-label={ariaLabel} class="flex-1 overflow-auto px-2 py-2">
 			{#if selections.length === 0}
 				<li
-					class="rounded-md border border-dashed border-muted-foreground/30 bg-background px-4 py-6 text-center text-xs text-muted-foreground"
+					class="rounded-md border border-dashed border-muted-foreground/30 bg-background px-4 py-6 text-center text-meta"
 				>
 					{t('common.noSelectionsYet')}
 					{#if multiple}{t('common.clickNewToStart')}{/if}

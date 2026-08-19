@@ -31,7 +31,7 @@
 {#snippet heading()}
 	<Stack gap="xs">
 		{#if eyebrow}
-			<p class="text-micro font-medium tracking-wide text-muted-foreground uppercase sm:text-tiny">
+			<p class="text-overline">
 				{eyebrow}
 			</p>
 		{/if}

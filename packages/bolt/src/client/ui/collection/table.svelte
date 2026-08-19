@@ -145,10 +145,7 @@
 					<thead>
 						<tr class="border-b border-border bg-muted/40">
 							{#each columns as column (column)}
-								<th
-									scope="col"
-									class="px-3 py-2 text-left text-xs font-medium tracking-wide text-muted-foreground uppercase"
-								>
+								<th scope="col" class="text-overline px-3 py-2 text-left">
 									{column}
 								</th>
 							{/each}
@@ -174,7 +171,7 @@
 				</table>
 			</div>
 			{#if loading}
-				<p role="status" class="text-xs text-muted-foreground">Refreshing records…</p>
+				<p role="status" class="text-meta">Refreshing records…</p>
 			{/if}
 			<CollectionRecordDetail
 				record={selected}

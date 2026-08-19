@@ -91,7 +91,7 @@
 			{:else if displayLabel}
 				<span class="truncate text-xs">{displayLabel}</span>
 			{:else}
-				<span class="text-xs text-muted-foreground">{placeholder}</span>
+				<span class="text-meta">{placeholder}</span>
 			{/if}
 		</Popover.Trigger>
 		{#if !readonly && !disabled}

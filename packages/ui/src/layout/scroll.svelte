@@ -9,6 +9,13 @@
 		axis?: ScrollAxis;
 		name: string;
 		inset?: boolean;
+		/**
+		 * Fade the edges that have content beyond them. On by default: it is what tells a
+		 * reader there is more below now that the scroll bar hides at rest. Turn it off for a
+		 * region whose own content must stay at full opacity to its edge — a media surface, a
+		 * chart, anything where a soft edge would read as a rendering fault.
+		 */
+		fade?: boolean;
 		/** Arrange direct children without introducing a second wrapper or scroll owner. */
 		layout?: ScrollLayout;
 		gap?: LayoutGap;
@@ -26,12 +33,14 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { GAP_CLASSES, INSET_CLASS } from './layout.shared.js';
+	import { scrollAffordance } from './scroll-affordance.svelte.js';
 
 	let {
 		as = 'div',
 		axis = 'y',
 		name,
 		inset = false,
+		fade = true,
 		layout = 'block',
 		gap = 'none',
 		align,
@@ -97,6 +106,7 @@
 	data-scroll-axis={axis}
 	data-scroll-inset={inset || undefined}
 	{...restProps}
+	{@attach scrollAffordance({ fade })}
 >
 	{@render children()}
 </svelte:element>

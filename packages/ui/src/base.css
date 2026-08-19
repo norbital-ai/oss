@@ -394,6 +394,97 @@
 }
 
 /* ================================================================ */
+/* 2b ▸ Type roles (DESIGN.md §3)                                    */
+/* ================================================================ */
+/*
+	The `--text-*` tokens above are a scale: they answer "how big", and each one carries
+	its own weight, leading and tracking so the size utility is the whole recipe. What
+	they cannot carry is colour or `text-transform`, and that is the seam every label in
+	the app fell through. One uppercase group label was `text-micro font-semibold
+	tracking-[0.08em] uppercase`, the sidebar's was `text-tiny font-normal tracking-wide
+	uppercase text-sidebar-foreground/70`, the calendar's `text-micro font-semibold
+	uppercase tracking-wider` — the same element, three sizes, three weights, three
+	trackings, because nothing existed to name the role and each author reassembled it.
+
+	These classes name the role. They live in `components` so any utility still overrides
+	them (`text-overline text-foreground` re-colours a label without reopening the size),
+	and they are defined in terms of the tokens so the scale stays the one source of
+	truth. Compose a role class with layout and state utilities; never restate the
+	`font-*`, `leading-*`, `tracking-*` or colour it already sets.
+*/
+@layer components {
+	/* Small uppercase heading over a group of things: sidebar sections, menu groups,
+		 the table-of-contents title, column-header bands, filter groups. The single
+		 sanctioned use of positive tracking. */
+	.text-overline {
+		@apply text-micro;
+		font-weight: 600;
+		line-height: 1.4;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--color-muted-foreground);
+	}
+
+	/* The name of a control: form fields, switches, filter inputs. `line-height: 1` is
+		 load-bearing — it lets a label sit on the same optical baseline as the input beside
+		 it without the parent compensating. */
+	.text-label {
+		@apply text-sm;
+		font-weight: 500;
+		line-height: 1;
+		color: var(--color-foreground);
+	}
+
+	/* Secondary metadata beside primary content: timestamps, counts, record ids, helper
+		 text under a field. Leading comes from `text-xs` rather than a value of its own: this
+		 role names what ~200 call sites were already writing as `text-xs
+		 text-muted-foreground`, and a role that silently restyles the thing it replaces is a
+		 migration, not a rename. */
+	.text-meta {
+		@apply text-xs;
+		font-weight: 400;
+		color: var(--color-muted-foreground);
+	}
+
+	/* `--text-lede` is a size token and so cannot carry colour, yet a lede is muted in
+		 every place one appears — which is why the website kept a `site-lede` alias whose
+		 only job was to add that colour. This completes the token instead: the utility
+		 still sets size, weight and leading, and this adds the one property it could not.
+		 `text-lede text-foreground` still un-mutes a lede that needs full contrast. */
+	.text-lede {
+		color: var(--color-muted-foreground);
+	}
+
+	/* The line above a marketing heading that says what section this is. */
+	.text-eyebrow {
+		@apply text-sm;
+		font-weight: 500;
+		line-height: 1.25;
+		color: var(--color-muted-foreground);
+	}
+
+	/* Long-form reading text outside `.prose`: marketing paragraphs, explanatory copy.
+		 The softened foreground is this role's own value and the reason the class exists —
+		 it is the one place the mix is written, instead of an opacity picked per page. */
+	.text-body {
+		@apply text-base;
+		font-weight: 400;
+		line-height: 1.75;
+		color: color-mix(in oklab, var(--color-foreground) 82%, transparent);
+	}
+
+	/* A note attached to something else: figure captions, footnotes, footer copy. Leading
+		 comes from `text-sm`, for the same reason as `text-meta` above. Plain de-emphasised UI
+		 text is *not* this role — `text-sm text-muted-foreground` is a size and a colour, which
+		 is exactly what rule 5 asks for, and does not need a name. */
+	.text-caption {
+		@apply text-sm;
+		font-weight: 400;
+		color: var(--color-muted-foreground);
+	}
+}
+
+/* ================================================================ */
 /* 3 ▸ Base resets & Tiptap typography (GitHub-inspired)             */
 /* ================================================================ */
 @layer base {
@@ -685,7 +776,17 @@
 	}
 }
 
-/* ---- scrollbars ---- */
+/* ---- scrollbars ----
+	A scroll bar is an affordance, not chrome. Painting the thumb unconditionally put a
+	permanent hairline down the inside edge of every pane in a dense layout — read as a
+	second border beside the real one, and doubly wrong on a rail whose content only just
+	overflows. The thumb is therefore transparent at rest and resolves to `--color-border`
+	while the pointer is inside the scroll container, or while `data-scrolling` is stamped
+	on it by the `scrollAffordance` attachment (keyboard, anchor jumps, programmatic
+	scrolls — every case where the pointer is somewhere else).
+
+	What replaces the resting thumb as the "there is more below" signal is the edge fade
+	below, which — unlike a thumb — only appears on the edges that actually have more. */
 ::-webkit-scrollbar {
 	width: 10px;
 	height: 10px;
@@ -695,22 +796,103 @@
 	padding: 1px;
 }
 ::-webkit-scrollbar-thumb {
-	background-color: var(--color-border);
+	background-color: transparent;
 	border-radius: 9999px;
 	border: 2px solid transparent;
 	background-clip: content-box;
 	min-height: 40px;
 	transition: background-color 0.2s ease;
 }
-::-webkit-scrollbar-thumb:hover {
+:hover::-webkit-scrollbar-thumb,
+[data-scrolling]::-webkit-scrollbar-thumb {
+	background-color: var(--color-border);
+}
+:hover::-webkit-scrollbar-thumb:hover,
+[data-scrolling]::-webkit-scrollbar-thumb:hover {
 	background-color: color-mix(in oklab, var(--color-border) 75%, var(--foreground));
 }
 ::-webkit-scrollbar-corner {
 	background: transparent;
 }
+/* Firefox has no thumb pseudo-element; `scrollbar-color` is the whole control. It
+	inherits, so the resting value has to be restated on `*` rather than set once on the
+	root — otherwise a hovered ancestor would light up every scroll bar beneath it. */
 * {
 	scrollbar-width: thin;
+	scrollbar-color: transparent transparent;
+}
+*:hover,
+[data-scrolling] {
 	scrollbar-color: var(--color-border) transparent;
+}
+
+/* ---- overflow affordance ----
+	`scrollAffordance` stamps `data-overflow` with the edges that have content beyond
+	them, so a pane fades only where there is genuinely more to reach: nothing on a region
+	that fits, one edge at the ends of a list, both in the middle. Authors never write the
+	gradient — `<Scroll>` carries it, and any other scrollport opts in with `data-overflow`
+	plus the attachment.
+
+	The mask is declared on the *edge* selectors, not on `[data-overflow]` itself, so a
+	region whose content fits carries no mask at all. A mask is not free — it clips
+	non-portaled descendants to the padding box and forces the pane onto its own
+	composited layer — and paying that on every scrollport in the app to draw a gradient
+	from 0px to 0px would be a cost for nothing. */
+[data-overflow] {
+	--overflow-fade: 1.5rem;
+	--overflow-fade-block-start: 0px;
+	--overflow-fade-block-end: 0px;
+	--overflow-fade-inline-start: 0px;
+	--overflow-fade-inline-end: 0px;
+}
+[data-overflow~='block-start'],
+[data-overflow~='block-end'],
+[data-overflow~='inline-start'],
+[data-overflow~='inline-end'] {
+	-webkit-mask-image:
+		linear-gradient(
+			to bottom,
+			transparent 0,
+			#000 var(--overflow-fade-block-start),
+			#000 calc(100% - var(--overflow-fade-block-end)),
+			transparent 100%
+		),
+		linear-gradient(
+			to right,
+			transparent 0,
+			#000 var(--overflow-fade-inline-start),
+			#000 calc(100% - var(--overflow-fade-inline-end)),
+			transparent 100%
+		);
+	mask-image:
+		linear-gradient(
+			to bottom,
+			transparent 0,
+			#000 var(--overflow-fade-block-start),
+			#000 calc(100% - var(--overflow-fade-block-end)),
+			transparent 100%
+		),
+		linear-gradient(
+			to right,
+			transparent 0,
+			#000 var(--overflow-fade-inline-start),
+			#000 calc(100% - var(--overflow-fade-inline-end)),
+			transparent 100%
+		);
+	-webkit-mask-composite: source-in;
+	mask-composite: intersect;
+}
+[data-overflow~='block-start'] {
+	--overflow-fade-block-start: var(--overflow-fade);
+}
+[data-overflow~='block-end'] {
+	--overflow-fade-block-end: var(--overflow-fade);
+}
+[data-overflow~='inline-start'] {
+	--overflow-fade-inline-start: var(--overflow-fade);
+}
+[data-overflow~='inline-end'] {
+	--overflow-fade-inline-end: var(--overflow-fade);
 }
 
 /* Side sheets become reachable, thumb-friendly bottom sheets on narrow viewports.

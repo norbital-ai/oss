@@ -44,6 +44,19 @@ export class AccessDenied extends Schema.TaggedError<AccessDenied>()(
 	readonly category = 'access-denied' as const;
 }
 
+/**
+ * Whether this subject administers the workspace.
+ *
+ * Read off `bolt_auth_user.status` by `Identity.authenticate` and off nothing else — not a header,
+ * not a cookie, not a role array a caller can assert. Every short-circuit below is guarded by this
+ * one predicate so there is a single place to read to know what an administrator is.
+ *
+ * `=== true` rather than a truthiness test, because the key is optional on `Subject`: a subject
+ * built before this field existed, or projected from a table that has no `status` column, is an
+ * ordinary user. Absence must never widen.
+ */
+export const isAdministrator = (subject: Identity.Subject): boolean => subject.admin === true;
+
 /** Owns authored policy membership, action/resource matching, and requestor-token binding. */
 const PolicyEvaluation = {
 	subjectHasPolicy: (policy: PolicyDeclaration, subject: Identity.Subject): boolean => {
@@ -84,6 +97,14 @@ export const decide = (
 	action: string,
 	app: string
 ): Decision => {
+	// Before a single policy is consulted, and deliberately so. An administrator matches no policy —
+	// `subjectHasPolicy` matches by role and no workspace declares an `admin` role — so evaluating
+	// the ladder for them can only ever answer "no matching allow policy". The alternative that was
+	// tried, granting the founder every policy's roles, made the administrator's authority a
+	// derivative of the ladder: it changed whenever a template changed, and it vanished entirely the
+	// moment something stopped supplying roles. Authority that is a property of the person is read
+	// off the person.
+	if (isAdministrator(subject)) return { allowed: true, reason: 'administrator' };
 	const applicable = policies.filter((policy) =>
 		PolicyEvaluation.matches(policy, subject, action, app)
 	);
@@ -135,6 +156,11 @@ const rowPredicate = (
 	action: string,
 	resource: string
 ): RowPredicate => {
+	// The same short-circuit as `decide`, and it has to be here too rather than only there: hiding an
+	// app is not authority, so an administrator who was allowed the app and then filtered out of its
+	// rows would see nine apps and nine empty tables. `unrestricted` carries no field mask, so `mask`
+	// returns the whole row.
+	if (isAdministrator(subject)) return unrestricted;
 	const applicable = policies.filter((policy) =>
 		PolicyEvaluation.matches(policy, subject, action, resource)
 	);
@@ -191,18 +217,6 @@ const rowPredicate = (
 	};
 };
 
-/**
- * The role that may view this workspace as somebody else.
- *
- * Named once because two places have to agree on it and neither can derive it: `mayImpersonate`
- * checks it, and `identity.admitFounder` grants it. No policy declares it and none should — a policy
- * says what a group of people may do with the workspace's data, and "see the workspace as another
- * group" is not that. It is a property of being the administrator who owns the workspace, so the
- * founder is given it explicitly rather than it being derived from an authored policy that would
- * have to exist in every workspace for the feature to work in any of them.
- */
-export const IMPERSONATOR_ROLE = 'impersonator';
-
 /** A team an administrator may view this workspace as. */
 export type ImpersonationTeam = Readonly<{ readonly id: string; readonly name: string }>;
 
@@ -228,9 +242,16 @@ const impersonationTeams = (
 	policies: ReadonlyArray<PolicyDeclaration>
 ): ReadonlyArray<ImpersonationTeam> => policies.map(({ name }) => ({ id: name, name }));
 
-/** Whether this subject may view the workspace as somebody else. Always asked of the real actor. */
-const mayImpersonate = (actor: Identity.Subject): boolean =>
-	actor.roles.includes(IMPERSONATOR_ROLE);
+/**
+ * Whether this subject may view the workspace as somebody else. Always asked of the real actor.
+ *
+ * This used to be a synthetic `impersonator` role that `identity.admitFounder` bolted onto the
+ * founder's role array, because no policy declares such a role and none should. That was the admin
+ * status flag in disguise — a property of the person, smuggled through the namespace that says what
+ * a *group* may do — and it is now simply the flag. Nothing has to agree on a magic string any more,
+ * and the role ladder holds only roles a workspace actually declares.
+ */
+const mayImpersonate = (actor: Identity.Subject): boolean => isAdministrator(actor);
 
 export type Interface = Readonly<{
 	readonly authorize: (
@@ -349,6 +370,13 @@ export const layer = Layer.effect(
 				...actor,
 				roles: matched.roles ?? [matched.name],
 				teams: [],
+				// Dropped explicitly, and this is the line that makes the preview mean anything. The
+				// spread carries the actor's own `admin: true`, and every short-circuit above is guarded
+				// on it — so a preview that kept the flag would answer "administrator" to `decide`,
+				// `predicate` and `visibleApps` alike and show the administrator their own view under
+				// another team's name. Only an administrator can reach this code at all, so setting it
+				// false can only ever narrow.
+				admin: false,
 				impersonatedBy: actor.userId
 			} satisfies Identity.Subject;
 		});
@@ -368,18 +396,23 @@ export const layer = Layer.effect(
 			explain: (subject, action, resource) =>
 				decide(workspace.definition.policies, subject, action, resource),
 			visibleApps: (subject) =>
-				workspace.definition.apps
-					.filter(({ name }) =>
-						workspace.definition.policies.some((policy) =>
-							policy.grants === undefined
-								? PolicyEvaluation.matches(policy, subject, 'view', name)
-								: PolicyEvaluation.subjectHasPolicy(policy, subject) &&
-									(policy.apps ?? []).some(
-										(app) => app === '*' || app === name || name.startsWith(`${app}/`)
-									)
-						)
-					)
-					.map(({ name }) => name),
+				// An administrator is shown the registry whole rather than the union of what the policies
+				// happen to name. Filtering them through the ladder is what produced an empty sidebar for
+				// the only person who could fix it.
+				isAdministrator(subject)
+					? workspace.definition.apps.map(({ name }) => name)
+					: workspace.definition.apps
+							.filter(({ name }) =>
+								workspace.definition.policies.some((policy) =>
+									policy.grants === undefined
+										? PolicyEvaluation.matches(policy, subject, 'view', name)
+										: PolicyEvaluation.subjectHasPolicy(policy, subject) &&
+											(policy.apps ?? []).some(
+												(app) => app === '*' || app === name || name.startsWith(`${app}/`)
+											)
+								)
+							)
+							.map(({ name }) => name),
 			impersonationTeams: () => impersonationTeams(workspace.definition.policies),
 			mayImpersonate,
 			subjectAsTeam,

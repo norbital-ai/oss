@@ -14,6 +14,7 @@
 	import { Tooltip } from '#lib/tooltip';
 	import { cn } from '#lib/utils';
 	import {
+		WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS,
 		type WorkspaceImpersonation,
 		type WorkspaceNavigationModel,
 		type WorkspaceOrganizationOption
@@ -317,7 +318,7 @@
 <Sidebar.Footer class="border-t border-border bg-muted/30 px-2 py-2 text-xs">
 	<Sidebar.Menu class="gap-2">
 		{#if displayExpanded}
-			<div class="px-1 text-tiny font-medium tracking-wide text-muted-foreground uppercase">
+			<div class="px-1 {WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}">
 				{t('misc.account')}
 			</div>
 		{/if}
@@ -401,10 +402,18 @@
 					</Button>
 					{#if impersonationAvailable}
 						<DropdownMenu.Separator />
-						<DropdownMenu.Label
-							class="px-2 pt-2 pb-1 text-tiny font-medium tracking-wide text-muted-foreground uppercase"
-							>{t('misc.impersonate')}</DropdownMenu.Label
-						>
+						<!--
+							The same element and the same class as ACCOUNT above, rather than `DropdownMenu.Label`
+							with an override. The override did not take: the label's base class is `text-sm`, the
+							override asks for `text-tiny`, and `text-tiny` is a project font size that
+							tailwind-merge does not know belongs to the font-size group — so it cancelled nothing,
+							both survived, and this one heading rendered a step larger than every sibling.
+							Sharing the constant makes the three section headings the same by construction instead
+							of by three spellings that happened to agree.
+						-->
+						<div class="px-2 pt-2 pb-1 {WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS}">
+							{t('misc.impersonate')}
+						</div>
 						<div class="px-1 pb-1">
 							<Combobox
 								value={impersonationActiveTeamId}

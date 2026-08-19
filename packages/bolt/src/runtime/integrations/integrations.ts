@@ -115,17 +115,22 @@ export const Service = Context.Service<Interface>('@norbital-ai/bolt/Integration
  * `integration:<name>`, so every row the mirror writes is attributable in `bolt_collection_history`
  * to the integration that wrote it rather than to whoever last touched the workspace.
  *
- * It holds `admin` because a mirror writes rows nobody asked for and no row-scoped grant describes
- * that — the authority is the workspace's own declaration, the same authority that installed the
- * integration. That is a real grant and it is deliberately narrow in the one dimension that can be
- * narrowed: the collection is fixed by the declaration, so this subject can only ever reach the
- * table its own `+integrations.ts` named.
+ * It is an administrator because a mirror writes rows nobody asked for and no row-scoped grant
+ * describes that — the authority is the workspace's own declaration, the same authority that
+ * installed the integration. That is a real grant and it is deliberately narrow in the one dimension
+ * that can be narrowed: the collection is fixed by the declaration, so this subject can only ever
+ * reach the table its own `+integrations.ts` named.
+ *
+ * Stated as the `admin` status rather than as `roles: ['admin']`, which is what it used to be and
+ * what never worked: no workspace declares a policy called `admin`, so `subjectHasPolicy` matched
+ * nothing and the mirror's authority came from nowhere. The status is the fact being asserted.
  */
 const integrationSubject = (name: string): Identity.Subject => ({
 	userId: `integration:${name}`,
 	tenantId: 'system',
-	roles: ['admin'],
-	teams: []
+	roles: [],
+	teams: [],
+	admin: true
 });
 
 /**

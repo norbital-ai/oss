@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"description": "Portable Effect v4 tenant application framework, compiler, runtime, and client.",
 	"type": "module",
 	"sideEffects": [
@@ -25,6 +25,11 @@
 			"svelte": "./build/client.js",
 			"default": "./build/client.js"
 		},
+		"./client/workspace": {
+			"types": "./build/client/ui/shell/mount.svelte.d.ts",
+			"svelte": "./build/client/ui/shell/mount.svelte.js",
+			"default": "./build/client/ui/shell/mount.svelte.js"
+		},
 		"./client-runtime": {
 			"types": "./build/client/runtime.d.ts",
 			"default": "./build/client/runtime.js"
@@ -40,10 +45,6 @@
 		"./client/import-export": {
 			"types": "./build/client/ui/state/import-export.d.ts",
 			"default": "./build/client/ui/state/import-export.js"
-		},
-		"./client/files": {
-			"types": "./build/client/ui/state/files.d.ts",
-			"default": "./build/client/ui/state/files.js"
 		},
 		"./client/identity": {
 			"types": "./build/client/identity.d.ts",
@@ -96,6 +97,8 @@
 		"@norbital-ai/std": "workspace:*",
 		"@norbital-ai/ui": "workspace:*",
 		"@sveltejs/vite-plugin-svelte": "^7.2.0",
+		"@tailwindcss/vite": "4.3.3",
+		"tailwindcss": "4.3.3",
 		"@xyflow/svelte": "catalog:",
 		"better-auth": "^1.6.29",
 		"drizzle-kit": "catalog:",

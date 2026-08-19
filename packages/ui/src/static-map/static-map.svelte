@@ -174,7 +174,7 @@
 				<p class="text-sm font-medium">
 					{errorMessage ? 'Map unavailable' : !ready ? 'Loading map' : 'No mapped locations'}
 				</p>
-				<p class="text-xs text-muted-foreground">
+				<p class="text-meta">
 					{errorMessage ?? emptyDescription}
 				</p>
 			</div>

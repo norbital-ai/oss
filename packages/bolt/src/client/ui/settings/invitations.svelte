@@ -42,7 +42,7 @@
 	-->
 	<Cluster gap="md" align="end" justify="between">
 		<Stack as="header" gap="xs">
-			<h2 class="text-lg font-semibold">Pending invitations</h2>
+			<h2 class="text-heading">Pending invitations</h2>
 			<p class="text-sm text-muted-foreground">
 				Seats that have been offered and not yet taken up.
 			</p>
@@ -69,16 +69,15 @@
 				>
 					<Stack gap="xs">
 						<h3 class="font-medium">{invitation.email}</h3>
-						<p class="text-xs text-muted-foreground">
+						<p class="text-meta">
 							{invitation.role}{#if invitation.invitedBy}
 								· invited by {invitation.invitedBy}{/if}{#if expiry}
 								· expires {expiry}{/if}
 						</p>
 					</Stack>
 					<Inline gap="sm" shrink={false}>
-						<span
-							class="rounded-full border px-2 py-0.5 text-xs text-muted-foreground"
-							data-testid="invitation-status">{status}</span
+						<span class="rounded-full border px-2 py-0.5 text-meta" data-testid="invitation-status"
+							>{status}</span
 						>
 						{#if isActionableInvitation(invitation, now)}
 							{#if onresend}

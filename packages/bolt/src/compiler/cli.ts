@@ -46,9 +46,7 @@ if (command === 'help') {
 			'bolt <command> [options]',
 			'',
 			'Commands:',
-			'  sync     regenerate workspace types and emit a portable artifact',
-			'  build    perform the same deterministic production artifact build',
-			'  check    validate discovery by completing an isolated deterministic build',
+			'  sync     regenerate workspace types, build the client, and emit a portable artifact',
 			'  migrate  diff the authored models against the migration lineage and write the next entry',
 			'',
 			'Options:',
@@ -89,11 +87,19 @@ if (command === 'help') {
 		}
 	});
 	await Effect.runPromise(program).catch((error) => fail('migrate', error));
-} else if (command === 'sync' || command === 'build' || command === 'check') {
+	/**
+	 * One command, because there was only ever one thing to run.
+	 *
+	 * `build` and `check` were spellings of `sync` — the same call, the same output, three names for
+	 * it. `build` in particular read as the thing that produced the browser client and did not; the
+	 * template `package.json` script called `build` was a *different* build again, `vite build`, that
+	 * nothing in any pipeline ran. `sync` does all of it and answers to one name.
+	 */
+} else if (command === 'sync') {
 	const program = Effect.gen(function* () {
 		const result = yield* syncWorkspace(workspaceRoot);
 		report(command, result);
-		if (!(watch && command === 'sync')) return;
+		if (!watch) return;
 		const { watch: watchDirectory } = yield* Effect.promise(() => import('node:fs'));
 		const watcher = watchDirectory(resolve(workspaceRoot, 'src'), { recursive: true }, () => {
 			Effect.runPromise(syncWorkspace(workspaceRoot))

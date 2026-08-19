@@ -72,7 +72,7 @@
 					{getFileIcon(category)}
 				</div>
 				<span class="text-sm font-medium wrap-break-word text-foreground">{file_value.name}</span>
-				<span class="text-xs text-muted-foreground">{formatFileSize(file_value.size)}</span>
+				<span class="text-meta">{formatFileSize(file_value.size)}</span>
 			</Stack>
 		{/if}
 	</AspectRatio>

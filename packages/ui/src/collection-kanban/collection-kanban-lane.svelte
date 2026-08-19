@@ -275,7 +275,7 @@
 							<p class="text-sm font-medium">
 								{t('kanban.noLaneJobs', { lane: humanize(lane).toLowerCase() })}
 							</p>
-							<p class="text-xs text-muted-foreground">{t('kanban.laneClear')}</p>
+							<p class="text-meta">{t('kanban.laneClear')}</p>
 						</Stack>
 					{/each}
 				</Stack>

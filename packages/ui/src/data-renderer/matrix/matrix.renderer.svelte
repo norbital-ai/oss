@@ -455,7 +455,7 @@
 					>
 						{#each columns as column (column.key)}
 							<Stack gap="xs">
-								<p class="text-tiny font-medium uppercase tracking-wide text-muted-foreground">
+								<p class="text-overline">
 									{column.label}
 								</p>
 								{@render matrixCellEditor(tableRow, column, false)}

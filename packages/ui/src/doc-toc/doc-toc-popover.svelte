@@ -47,7 +47,7 @@
 {#if toc.items.length > 0}
 	<div
 		bind:this={popoverElement}
-		class={cn('pointer-events-none absolute inset-0 z-40 xl:hidden', className)}
+		class={cn('pointer-events-none absolute inset-0 z-40 lg:hidden', className)}
 	>
 		<div
 			class="sticky top-0 flex h-dvh items-end justify-end p-4 pb-[max(1rem,env(safe-area-inset-bottom))] pe-[max(1rem,env(safe-area-inset-right))]"
@@ -80,10 +80,10 @@
 						class="w-full overflow-hidden rounded-xl border border-border bg-background/95 shadow-lg backdrop-blur-sm"
 					>
 						<Inline justify="between" gap="sm" class="border-b border-border/60 px-3 py-2.5">
-							<p class="text-micro font-semibold tracking-[0.08em] text-muted-foreground uppercase">
+							<p class="text-overline">
 								{title}
 							</p>
-							<span class="truncate text-xs text-muted-foreground">{activeLabel}</span>
+							<span class="truncate text-meta">{activeLabel}</span>
 						</Inline>
 						<!-- stupidity:allow UI5 -- popover content boundary -->
 						<div class="max-h-[min(50dvh,20rem)] overflow-hidden">

@@ -24,7 +24,7 @@
 
 <Stack as="section" gap="md" aria-busy={busy}>
 	<Stack as="header" gap="xs">
-		<h2 class="text-lg font-semibold">Members</h2>
+		<h2 class="text-heading">Members</h2>
 		<p class="text-sm text-muted-foreground">
 			Everyone who holds a seat in this workspace, and the role each one carries.
 		</p>
@@ -52,13 +52,12 @@
 				>
 					<Stack gap="xs">
 						<h3 class="font-medium" data-testid="member-name">{memberLabel(member)}</h3>
-						<p class="text-xs text-muted-foreground">{member.email}</p>
+						<p class="text-meta">{member.email}</p>
 					</Stack>
 					<Inline gap="sm" shrink={false}>
 						{#if member.status !== 'active'}
-							<span
-								class="rounded-full border px-2 py-0.5 text-xs text-muted-foreground"
-								data-testid="member-status">{member.status}</span
+							<span class="rounded-full border px-2 py-0.5 text-meta" data-testid="member-status"
+								>{member.status}</span
 							>
 						{/if}
 						<!-- A Combobox, not a native select: every other enum in the product uses one, and a

@@ -628,7 +628,7 @@
 					type="button"
 					class={cn(
 						buttonVariants({ variant: 'outline' }),
-						'pointer-events-auto h-4 w-min flex-none px-1 py-0 text-xs text-muted-foreground opacity-0 transition-opacity',
+						'pointer-events-auto h-4 w-min flex-none px-1 py-0 text-meta opacity-0 transition-opacity',
 						'group-hover:opacity-100 group-focus-within:opacity-100'
 					)}
 					onclick={(e) => {
@@ -800,7 +800,7 @@
 					</Command.Root>
 				</Bound>
 			{:else}
-				<Inline justify="center" gap="none" grow class="p-4 text-xs text-muted-foreground">
+				<Inline justify="center" gap="none" grow class="p-4 text-meta">
 					{multiple ? t('common.selectOrCreateToStart') : t('common.createToStart')}
 				</Inline>
 			{/if}

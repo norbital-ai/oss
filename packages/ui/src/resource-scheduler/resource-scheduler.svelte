@@ -378,7 +378,7 @@
 									{@render resourceContent(resource)}
 								{:else}
 									<p class="truncate text-sm font-medium">{resource.label}</p>
-									{#if resource.description}<p class="truncate text-xs text-muted-foreground">
+									{#if resource.description}<p class="truncate text-meta">
 											{resource.description}
 										</p>{/if}
 								{/if}

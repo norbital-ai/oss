@@ -1,7 +1,12 @@
 import type { FeatureColorKey } from '../feature-colors/index.js';
 
-export const WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS =
-	'text-micro font-normal uppercase tracking-wide sm:text-tiny';
+/**
+ * A sidebar section heading is the `text-overline` role and nothing more, so the constant
+ * is now the role class rather than a fourth private assembly of size, weight, transform
+ * and tracking. It stays a named export because the workspace sidebar applies it in three
+ * places that are not `Sidebar.GroupLabel`.
+ */
+export const WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS = 'text-overline';
 export const WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS = 'text-xs font-normal sm:text-micro';
 /** Shared right-edge slot for expand chevrons and host-plugin badges. */
 export const WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS =

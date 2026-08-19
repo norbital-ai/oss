@@ -548,12 +548,12 @@
 							<div class="min-w-0 text-left">
 								<div class="truncate text-sm text-foreground">{cmdItem.title}</div>
 								{#if cmdItem.description}
-									<div class="truncate text-xs text-muted-foreground">{cmdItem.description}</div>
+									<div class="truncate text-meta">{cmdItem.description}</div>
 								{/if}
 							</div>
 						</Inline>
 						{#if cmdItem.shortcut}
-							<span class="text-xs text-muted-foreground">{cmdItem.shortcut}</span>
+							<span class="text-meta">{cmdItem.shortcut}</span>
 						{/if}
 					</Inline>
 				{/if}

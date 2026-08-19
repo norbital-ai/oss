@@ -44,7 +44,7 @@
 					<div class="text-xs font-medium text-foreground">{metadata.structure_hint}</div>
 				{/if}
 				{#if metadata.summary}
-					<div class="text-xs text-muted-foreground">{metadata.summary}</div>
+					<div class="text-meta">{metadata.summary}</div>
 				{/if}
 			</Stack>
 		{/snippet}

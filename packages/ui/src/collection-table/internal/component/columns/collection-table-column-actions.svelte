@@ -45,7 +45,7 @@
 
 		<Popover.Content align="start" class="flex flex-col gap-2 p-2 py-4">
 			<Stack gap="xs">
-				<div class="px-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+				<div class="text-overline px-2">
 					{t('table.display')}
 				</div>
 
@@ -72,7 +72,7 @@
 
 				{#if displayOptions.length > 0 && onDisplayChange}
 					<Separator />
-					<div class="px-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+					<div class="text-overline px-2">
 						{t('table.format')}
 					</div>
 					{#each displayOptions as option (option.value)}
@@ -93,7 +93,7 @@
 			{#if inst.enableResizing}
 				<div class="mt-1">
 					<Separator />
-					<div class="px-2 pt-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+					<div class="text-overline px-2 pt-2">
 						{t('table.sizing')}
 					</div>
 					<Stack gap="none">

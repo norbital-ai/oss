@@ -58,11 +58,7 @@
 		: 'overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg'}
 >
 	{#if scope}
-		<Inline
-			justify="between"
-			gap="sm"
-			class="border-b border-border/60 px-3 py-1.5 text-xs text-muted-foreground"
-		>
+		<Inline justify="between" gap="sm" class="border-b border-border/60 px-3 py-1.5 text-meta">
 			<Inline gap="sm" class="min-w-0">
 				<Icon icon="lucide:filter" class="size-3 shrink-0" />
 				<span class="truncate">{t('bolt.agent.searchingScope', { scope })}</span>
@@ -124,9 +120,7 @@
 					gap={row.kind === 'group' ? 'xs' : 'sm'}
 					justify={row.kind === 'empty' ? 'center' : 'start'}
 					class={`${
-						row.kind === 'group'
-							? 'px-3 text-micro font-normal uppercase tracking-wide text-muted-foreground sm:text-tiny'
-							: 'px-3'
+						row.kind === 'group' ? 'text-overline px-3' : 'px-3'
 					} ${highlighted ? 'bg-accent text-accent-foreground' : ''} ${
 						row.kind === 'app' && row.depth === 1 ? 'pl-7' : ''
 					}`}
@@ -138,12 +132,9 @@
 							icon="lucide:loader-circle"
 							class="size-3 shrink-0 animate-spin text-muted-foreground"
 						/>
-						<span class="text-xs text-muted-foreground">{t('bolt.shell.omniSearchingRecords')}</span
-						>
+						<span class="text-meta">{t('bolt.shell.omniSearchingRecords')}</span>
 					{:else if row.kind === 'empty'}
-						<span data-testid="agent-mention-empty" class="truncate text-xs text-muted-foreground"
-							>{row.label}</span
-						>
+						<span data-testid="agent-mention-empty" class="truncate text-meta">{row.label}</span>
 					{:else}
 						{#if row.thumbnail}
 							<span class="size-4 shrink-0 overflow-hidden rounded-sm">

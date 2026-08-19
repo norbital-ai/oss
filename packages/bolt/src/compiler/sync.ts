@@ -282,7 +282,7 @@ class WorkspaceCompiler {
 					`\treadonly ${JSON.stringify(basename(path).slice(1, -3))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
 			)
 			.join('\n');
-		return `import type { CollectionRegistryFor, InvokeClientApi, PlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceSchema } from './types.js';\ntype CollectionHooks = {\n${hookEntries}\n};\ntype TenantCollections = CollectionRegistryFor<WorkspaceSchema, CollectionHooks>;\ntype Collections = TenantCollections & CollectionRegistryFor<PlatformSchema>;\ntype Invoke = {\n${invokeEntries}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceCreate<N extends keyof TenantCollections> = TenantCollections[N]['create'];\nexport type WorkspaceUpdate<N extends keyof TenantCollections> = TenantCollections[N]['update'];\nexport interface Client { readonly db: { findMany(collection: string, limit?: number): Promise<unknown> }; readonly invoke: InvokeClientApi<Invoke>; }\nexport declare const client: Client;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string }>>;\nexport declare const policyNames: ReadonlyArray<string>;\nexport declare const agentNames: ReadonlyArray<string>;\n`;
+		return `import type { CollectionRegistryFor, InvokeClientApi, PlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceSchema } from './types.js';\ntype CollectionHooks = {\n${hookEntries}\n};\ntype TenantCollections = CollectionRegistryFor<WorkspaceSchema, CollectionHooks>;\ntype Collections = TenantCollections & CollectionRegistryFor<PlatformSchema>;\ntype Invoke = {\n${invokeEntries}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceCreate<N extends keyof TenantCollections> = TenantCollections[N]['create'];\nexport type WorkspaceUpdate<N extends keyof TenantCollections> = TenantCollections[N]['update'];\nexport interface Client { readonly db: { findMany(collection: string, limit?: number): Promise<unknown> }; readonly invoke: InvokeClientApi<Invoke>; }\nexport declare const client: Client;\nexport declare const runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime;\nexport declare const startLocalReplica: (runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime) => Promise<{ readonly stop: () => void }>;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string }>>;\nexport declare const policyNames: ReadonlyArray<string>;\nexport declare const agentNames: ReadonlyArray<string>;\n`;
 	};
 
 	/** Owns render client runtime behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
@@ -348,8 +348,44 @@ class WorkspaceCompiler {
 					})}`
 			)
 			.join(',\n');
-		return `import { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startLocalReplica } from 'virtual:bolt/client-runtime';\nimport { collectionCatalog } from './collections.js';\nconst runtime = createBrowserWorkspaceRuntime();\nexport const client = createWorkspaceApiProxy(runtime, collectionCatalog);\n// The replica is started by whoever owns its lifetime, never by importing this module.\n//\n// It used to start here, at module scope. But this module is also what a host imports to read\n// \`appLoaders\` — so merely reaching for the app registry opened a database, and it opened one\n// before anybody had signed in: \`sync.provisioning\` answered 401 and the replica gave up on a\n// workspace it would have been allowed to read a moment later. A host that then started its own\n// replica after sign-in got a second engine for the same scope, because starting one is not\n// idempotent.\n//\n// \`startLocalReplica\` is re-exported instead, so the owner starts it once it has a session and can\n// stop it on teardown. PGlite is several megabytes of WebAssembly, so bringing it up after the page\n// is interactive — rather than before first paint — remains the point.\nexport { startLocalReplica };\nexport const appLoaders = {\n${loaders}\n};\nexport const representationLoaders = {\n${representationLoaders}\n};\nexport const customTypeRendererLoaders = {\n${customRendererLoaders}\n};\nexport const appGroups = {\n${groupEntries}\n};\nexport const appMeta = ${JSON.stringify(appMeta)};\nexport const policyNames = ${JSON.stringify(policies)};\nexport const agentNames = ${JSON.stringify(agentNames)};\n`;
+		return `import './app.css';\n// The workspace stylesheet rides this module, not the entry.\n//\n// Vite links an entry's CSS from the HTML document it generates, and this build generates no\n// document — so a sheet imported by the entry is emitted beside it and never loaded. A sheet\n// imported by a *dynamically* imported chunk is different: Vite's own preload helper inserts the\n// link before the chunk executes. This module is only ever reached through \`import('$bolt/client')\`\n// inside \`mountWorkspace\`, so the supported mechanism applies and nothing has to rewrite chunk\n// text to make the workspace render styled.\nimport { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startLocalReplica } from 'virtual:bolt/client-runtime';\nimport { collectionCatalog } from './collections.js';\nconst runtime = createBrowserWorkspaceRuntime();\nexport const client = createWorkspaceApiProxy(runtime, collectionCatalog);\n// The replica is started by whoever owns its lifetime, never by importing this module.\n//\n// It used to start here, at module scope. But this module is also what a host imports to read\n// \`appLoaders\` — so merely reaching for the app registry opened a database, and it opened one\n// before anybody had signed in: \`sync.provisioning\` answered 401 and the replica gave up on a\n// workspace it would have been allowed to read a moment later. A host that then started its own\n// replica after sign-in got a second engine for the same scope, because starting one is not\n// idempotent.\n//\n// \`startLocalReplica\` is re-exported instead, so the owner starts it once it has a session and can\n// stop it on teardown. PGlite is several megabytes of WebAssembly, so bringing it up after the page\n// is interactive — rather than before first paint — remains the point.\nexport { runtime, startLocalReplica };\nexport const appLoaders = {\n${loaders}\n};\nexport const representationLoaders = {\n${representationLoaders}\n};\nexport const customTypeRendererLoaders = {\n${customRendererLoaders}\n};\nexport const appGroups = {\n${groupEntries}\n};\nexport const appMeta = ${JSON.stringify(appMeta)};\nexport const policyNames = ${JSON.stringify(policies)};\nexport const agentNames = ${JSON.stringify(agentNames)};\n`;
 	};
+
+	/**
+	 * The workspace's stylesheet, generated where the workspace's other generated modules live.
+	 *
+	 * There is exactly one now. The design system's base sheet was imported by the *host*, which then
+	 * had to be taught — through a Vite plugin of its own — to also scan every mounted workspace's
+	 * source, because a class only a template used was otherwise never generated and its heatmap
+	 * rendered transparent. That only ever worked while the host compiled the templates. The tenant
+	 * bundle owns its UI now, so it owns the sheet that styles it, and the host scans nothing.
+	 *
+	 * The `@source` paths are relative to this file, which always sits at
+	 * `<workspace>/.norbital/generated/app.css` — so `../../` is the workspace root and its own
+	 * `node_modules`. Every scanned tree is a build output rather than source: `tv()` variant tables
+	 * compile to `.js`, and the only `.ts` left in a build is a declaration file, which holds no class.
+	 */
+	static readonly renderWorkspaceStylesheet = (): string =>
+		[
+			"@import '@norbital-ai/ui/base.css';",
+			'',
+			"@source '../../src/**/*.{js,ts,svelte}';",
+			"@source '../../node_modules/@norbital-ai/ui/build/**/*.{js,svelte}';",
+			"@source '../../node_modules/@norbital-ai/bolt/build/client/ui/**/*.{js,svelte}';",
+			'',
+			'.bolt-app {',
+			'\tmin-height: 100%;',
+			'\tdisplay: grid;',
+			'\tgrid-template-rows: auto 1fr;',
+			'}',
+			'',
+			'.bolt-header-actions {',
+			'\tdisplay: flex;',
+			'\talign-items: center;',
+			'\tgap: 0.5rem;',
+			'}',
+			''
+		].join('\n');
 
 	/** Owns render tsconfig behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderTsconfig = (): string =>
@@ -415,6 +451,20 @@ class WorkspaceCompiler {
 		return Effect.gen(function* () {
 			const dist = join(root, '.norbital', 'dist');
 			const built = (yield* WorkspaceCompiler.filesUnder(dist)).toSorted();
+			/**
+			 * A workspace with no compiled client is a build failure, not a quiet artifact.
+			 *
+			 * This read used to happen before anything in the sync had run, so it embedded whatever the
+			 * previous build had left behind — and a checkout whose `dist` was a day older than its
+			 * `generated` shipped that older client inside a new release, silently. It now runs after
+			 * the client build in the same sync, and an empty directory means that build emitted
+			 * nothing, which nothing downstream can report better than here.
+			 */
+			if (built.length === 0) {
+				throw new Error(
+					`No compiled client under ${dist}. \`bolt sync\` builds it; an empty directory means that build produced no output.`
+				);
+			}
 			// Authored media travels in the artifact under the URL the workspace already writes into its
 			// `<meta bolt:banner>` tags. Serving it from a host route instead would make an app header
 			// depend on which host loaded the bundle, and the artifact is supposed to run unchanged on both.
@@ -703,7 +753,7 @@ class WorkspaceCompiler {
 					`${JSON.stringify(basename(path).slice(1, -'.tool.ts'.length))}: async (input, api) => {\n\t\tconst result = await tool${index}.input['~standard'].validate(input);\n\t\tif (result.issues !== undefined) throw new Error(result.issues.map((issue) => issue.message).join('; '));\n\t\treturn runAuthoredHandler(tool${index}.run(api, result.value));\n\t}`
 			)
 			.join(',\n\t');
-		return `import { makeBundle, runAuthoredHandler } from '@norbital-ai/bolt/runtime';\nimport { describeAgent, describeHooks, describeIntegrations, describeModel, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';\n${modelImports}\n${hookImports}\n${policyImports}\n${remoteImports}\n${toolImports}\n${automationImports}\n${pipelineImports}\n${channelImports}\n${customTypeImports}\n${integrationImports}\n${environmentImport}\n${agentImport}\nconst authoredPolicies = [${policyEntries}];\nconst adminPolicy = { name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] };\nconst policies = authoredPolicies.length === 0\n\t? [{ name: 'local-authoring', effect: 'allow', actions: ['*'], roles: [], apps: ['*'] }, adminPolicy]\n\t: [...authoredPolicies.map((policy) => ({ ...policy, effect: 'allow', roles: policy.roles ?? [policy.name], actions: [...new Set((policy.grants ?? []).map(({ action }) => action))] })), adminPolicy];\nconst declaredModels = {${modelEntries}};\nconst declaredHooks = {${hookEntriesByCollection}};\nconst collectionSourcePaths = {${sourcePaths}};\nconst declaredCustomTypes = {${customTypeEntries}};\nconst declaredChannels = {${channelEntries}};\nconst declaredPipelines = {${pipelineEntriesByCollection}};\nconst declaredIntegrationModules = {${integrationEntries}};\n// Split here, at artifact boot, because the two halves go to two different places: the declarations\n// join the workspace definition a host can read, and the live schemas and closures ride in the\n// authored runtime beside hooks and pipelines.\nconst describedIntegrations = describeIntegrations(declaredIntegrationModules);\nconst declaredAutomations = Object.fromEntries([${automationEntries}].map((automation) => [automation.name, automation]));\nconst declaredWorkspace = ${JSON.stringify(workspace, null, 2)};\n// The declaration is the authority: it carries generated expressions and enum members that\n// reading the source text cannot recover.\nconst collections = declaredWorkspace.collections.map((collection) => {\n\tconst described = describeModel(declaredModels[collection.name]);\n\tconst hooks = describeHooks(declaredHooks[collection.name]);\n\tconst sourcePath = collectionSourcePaths[collection.name];\n\t// Read straight off the declaration's metadata: an EXCLUDE constraint is not a column, so there is\n\t// nothing for \`describeModel\` to have recovered it from, and the schema plan is the only renderer.\n\tconst exclusions = declaredModels[collection.name]?.metadata?.exclusions ?? [];\n\t// The same lift, for the four that had nowhere to land. \`approvalLock\` already has a working\n\t// runtime — \`Collections\` intercepts a write on \`definition.approvalLock\` — so declaring it on\n\t// \`defineModel\` did nothing at all until it was carried here; \`description\` and \`icon\` are what a\n\t// host surface names the collection with. \`history\` gates the \`bolt_collection_history\` writes in\n\t// \`Collections\`, and the descriptor above hardcodes it true, so \`history: false\` was accepted and\n\t// dropped: the collection kept a full revision trail the author had opted out of.\n\tconst metadata = declaredModels[collection.name]?.metadata;\n\treturn {\n\t\t...collection,\n\t\t...(Object.keys(described).length === 0 ? {} : { fields: described }),\n\t\t...(hooks.length === 0 ? {} : { hooks }),\n\t\t...(exclusions.length === 0 ? {} : { exclusions }),\n\t\t...(metadata?.approvalLock === undefined ? {} : { approvalLock: metadata.approvalLock }),\n\t\t...(metadata?.history === undefined ? {} : { history: metadata.history }),\n\t\t...(metadata?.description === undefined ? {} : { description: metadata.description }),\n\t\t...(metadata?.icon === undefined ? {} : { icon: metadata.icon }),\n\t\t...(sourcePath === undefined ? {} : { sourcePath })\n\t};\n});\n// The authored module is the authority on every field but two. The descriptor above supplies the\n// name (which comes from the file) and the agent (which comes from the workspace), and is spread\n// last so neither can be overwritten by a module that declares them.\nconst channels = declaredWorkspace.channels.map((channel) => ({ ...declaredChannels[channel.name], ...channel }));\n// The descriptor above supplies the agent's name, tools and skills — the three facts the authored\n// module cannot state about itself — and \`+agent.ts\` supplies everything else.\nconst agents = declaredWorkspace.agents.map((agent) => describeAgent(agent, ${agentFile === undefined ? 'undefined' : 'declaredAgentSpec'}));\nconst workspace = { ...declaredWorkspace, collections, channels, agents, policies, customTypes: declaredCustomTypes, integrations: describedIntegrations.declarations${environmentEntry} };\nconst encodedAssets = ${JSON.stringify(assets)};\nconst staticAssets = encodedAssets.map(({ base64, ...asset }) => ({ ...asset, bytes: Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)) }));\n// Integrations are projected here rather than baked into the literal above, for the same reason\n// they are spliced into the workspace here: they only exist once the live modules have been\n// imported and split. The manifest literal is written at compile time and cannot hold them, which\n// is why \\\`buildManifest\\\` publishing them reached every test and no artifact.\nconst manifestValue = { ...${JSON.stringify(manifest, null, 2)}, staticAssets, integrations: manifestIntegrations(describedIntegrations.declarations) };\nconst remoteHandlers = {\n\t${remoteEntries}\n};\nconst toolHandlers = {\n\t${toolEntries}\n};\nconst authoredRuntime = { hooks: declaredHooks, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };
+		return `import { makeBundle, runAuthoredHandler } from '@norbital-ai/bolt/runtime';\nimport { describeAgent, describeHooks, describeIntegrations, describeModel, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';\n${modelImports}\n${hookImports}\n${policyImports}\n${remoteImports}\n${toolImports}\n${automationImports}\n${pipelineImports}\n${channelImports}\n${customTypeImports}\n${integrationImports}\n${environmentImport}\n${agentImport}\nconst authoredPolicies = [${policyEntries}];\n// Only what the workspace declares. Two synthetic policies used to be appended here and both were\n// mistakes of the same kind — authority modelled as a group.\n//\n// \`admin\` (roles: ['admin'], apps: ['*']) existed so a founder could see everything. Administration\n// is a status on the person now (\`bolt_auth_user.status\`), and \`AccessControl.decide\` short-circuits\n// on it before it reads a policy — so the synthetic policy grants nothing that is not already\n// granted, while \`impersonationTeams()\` lists every policy by name and therefore offered "admin" in\n// the team picker as though it were a body of staff.\n//\n// \`local-authoring\` (roles: []) was worse: \`subjectHasPolicy\` returns true for an empty role list, so\n// a workspace that authored no policies granted every action on every app to every authenticated\n// subject, and offered that as a team too. A workspace with no policies is now closed to ordinary\n// users and open to its administrators, which is the same answer the empty-policy case wants and the\n// only one that does not depend on nobody noticing.\nconst policies = authoredPolicies.map((policy) => ({ ...policy, effect: 'allow', roles: policy.roles ?? [policy.name], actions: [...new Set((policy.grants ?? []).map(({ action }) => action))] }));\nconst declaredModels = {${modelEntries}};\nconst declaredHooks = {${hookEntriesByCollection}};\nconst collectionSourcePaths = {${sourcePaths}};\nconst declaredCustomTypes = {${customTypeEntries}};\nconst declaredChannels = {${channelEntries}};\nconst declaredPipelines = {${pipelineEntriesByCollection}};\nconst declaredIntegrationModules = {${integrationEntries}};\n// Split here, at artifact boot, because the two halves go to two different places: the declarations\n// join the workspace definition a host can read, and the live schemas and closures ride in the\n// authored runtime beside hooks and pipelines.\nconst describedIntegrations = describeIntegrations(declaredIntegrationModules);\nconst declaredAutomations = Object.fromEntries([${automationEntries}].map((automation) => [automation.name, automation]));\nconst declaredWorkspace = ${JSON.stringify(workspace, null, 2)};\n// The declaration is the authority: it carries generated expressions and enum members that\n// reading the source text cannot recover.\nconst collections = declaredWorkspace.collections.map((collection) => {\n\tconst described = describeModel(declaredModels[collection.name]);\n\tconst hooks = describeHooks(declaredHooks[collection.name]);\n\tconst sourcePath = collectionSourcePaths[collection.name];\n\t// Read straight off the declaration's metadata: an EXCLUDE constraint is not a column, so there is\n\t// nothing for \`describeModel\` to have recovered it from, and the schema plan is the only renderer.\n\tconst exclusions = declaredModels[collection.name]?.metadata?.exclusions ?? [];\n\t// The same lift, for the four that had nowhere to land. \`approvalLock\` already has a working\n\t// runtime — \`Collections\` intercepts a write on \`definition.approvalLock\` — so declaring it on\n\t// \`defineModel\` did nothing at all until it was carried here; \`description\` and \`icon\` are what a\n\t// host surface names the collection with. \`history\` gates the \`bolt_collection_history\` writes in\n\t// \`Collections\`, and the descriptor above hardcodes it true, so \`history: false\` was accepted and\n\t// dropped: the collection kept a full revision trail the author had opted out of.\n\tconst metadata = declaredModels[collection.name]?.metadata;\n\treturn {\n\t\t...collection,\n\t\t...(Object.keys(described).length === 0 ? {} : { fields: described }),\n\t\t...(hooks.length === 0 ? {} : { hooks }),\n\t\t...(exclusions.length === 0 ? {} : { exclusions }),\n\t\t...(metadata?.approvalLock === undefined ? {} : { approvalLock: metadata.approvalLock }),\n\t\t...(metadata?.history === undefined ? {} : { history: metadata.history }),\n\t\t...(metadata?.description === undefined ? {} : { description: metadata.description }),\n\t\t...(metadata?.icon === undefined ? {} : { icon: metadata.icon }),\n\t\t...(sourcePath === undefined ? {} : { sourcePath })\n\t};\n});\n// The authored module is the authority on every field but two. The descriptor above supplies the\n// name (which comes from the file) and the agent (which comes from the workspace), and is spread\n// last so neither can be overwritten by a module that declares them.\nconst channels = declaredWorkspace.channels.map((channel) => ({ ...declaredChannels[channel.name], ...channel }));\n// The descriptor above supplies the agent's name, tools and skills — the three facts the authored\n// module cannot state about itself — and \`+agent.ts\` supplies everything else.\nconst agents = declaredWorkspace.agents.map((agent) => describeAgent(agent, ${agentFile === undefined ? 'undefined' : 'declaredAgentSpec'}));\nconst workspace = { ...declaredWorkspace, collections, channels, agents, policies, customTypes: declaredCustomTypes, integrations: describedIntegrations.declarations${environmentEntry} };\nconst encodedAssets = ${JSON.stringify(assets)};\nconst staticAssets = encodedAssets.map(({ base64, ...asset }) => ({ ...asset, bytes: Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)) }));\n// Integrations are projected here rather than baked into the literal above, for the same reason\n// they are spliced into the workspace here: they only exist once the live modules have been\n// imported and split. The manifest literal is written at compile time and cannot hold them, which\n// is why \`buildManifest\` publishing them reached every test and no artifact.\nconst manifestValue = { ...${JSON.stringify(manifest, null, 2)}, staticAssets, integrations: manifestIntegrations(describedIntegrations.declarations) };\nconst remoteHandlers = {\n\t${remoteEntries}\n};\nconst toolHandlers = {\n\t${toolEntries}\n};\nconst authoredRuntime = { hooks: declaredHooks, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };
 const bundle = makeBundle(workspace, manifestValue, remoteHandlers, toolHandlers, authoredRuntime);\nexport const protocolVersion = bundle.protocolVersion;\nexport const manifest = bundle.manifest;\nexport const dispatch = bundle.dispatch;\nexport const activate = bundle.activate;\nexport default bundle;\n`;
 	};
 
@@ -1010,12 +1060,6 @@ const WorkspaceSynchronization = {
 			const agentName = workspaceAgentNameFromPackage(metadata.name);
 			const agentNames = [agentName];
 			const i18nMessages = yield* compiler.readI18nMessages(root);
-			// The authored URL keys assets by template name, not by npm scope: `@template/hr-payroll`
-			// is served under `hr-payroll`.
-			const assets = yield* compiler.embeddedAssets(
-				root,
-				metadata.name.split('/').at(-1) ?? metadata.name
-			);
 			const generated = join(root, '.norbital', 'generated');
 			const types = join(root, '.norbital', 'types');
 			const relationshipSource = yield* Effect.tryPromise(() =>
@@ -1116,6 +1160,7 @@ const WorkspaceSynchronization = {
 						join(generated, 'collections.d.ts'),
 						compiler.renderCollectionCatalogDeclaration()
 					),
+					compiler.write(join(generated, 'app.css'), compiler.renderWorkspaceStylesheet()),
 					compiler.write(join(generated, 'types.ts'), compiler.renderTypes()),
 					compiler.write(
 						join(generated, 'client.d.ts'),
@@ -1169,6 +1214,47 @@ const WorkspaceSynchronization = {
 					)
 				],
 				{ concurrency: 'unbounded' }
+			);
+			/**
+			 * The browser client, built by the command that builds the artifact it rides in.
+			 *
+			 * Nothing used to run this. `bolt sync` compiled the server artifact, `bolt build` was an
+			 * alias for `bolt sync`, and every provisioning path — the reset script, the checkout
+			 * compiler, the materialising compiler — ran `bolt sync` and nothing else. So a deployed
+			 * artifact carried no client at all, and a local one carried whatever a developer had last
+			 * built by hand. Adding the step to the provisioning scripts would have left the checkout
+			 * compiler out, which is the path local development actually takes; putting it here means
+			 * there is one command, and an artifact cannot exist without the client it serves.
+			 *
+			 * It runs after the generated modules are written, because it imports them, and before the
+			 * assets are read, because those are its output. `configFile` is left alone so the
+			 * workspace's own `vite.config.ts` is loaded — that file is where a workspace states extra
+			 * build inputs, and one template ships a WebAssembly runtime through it.
+			 *
+			 * The cost is real and worth naming: every `bolt sync` is now a full Vite production build
+			 * of the workspace's client, and every provisioning pays it.
+			 */
+			/**
+			 * The workspace's own Vite config is required, and its absence is said out loud.
+			 *
+			 * `build` is called without `configFile`, so Vite loads `<root>/vite.config.ts` — which is
+			 * where a workspace states its build, including the extra inputs one template needs to ship a
+			 * WebAssembly runtime. A tree without one does not fail: Vite builds with no Bolt plugin at
+			 * all, so there is no `$bolt` alias, no entry and no `outDir`, and the first thing anyone
+			 * hears about it is an artifact whose client is missing. That is precisely the failure this
+			 * whole change exists to stop being silent, so it is checked where it can still be named.
+			 */
+			if (!existsSync(join(root, 'vite.config.ts'))) {
+				throw new Error(
+					`No vite.config.ts in ${root}. \`bolt sync\` builds the workspace client through it, so a materialized tree must carry it alongside package.json.`
+				);
+			}
+			yield* Effect.tryPromise(() => build({ root, mode: 'production', logLevel: 'warn' }));
+			// The authored URL keys assets by template name, not by npm scope: `@template/hr-payroll`
+			// is served under `hr-payroll`.
+			const assets = yield* compiler.embeddedAssets(
+				root,
+				metadata.name.split('/').at(-1) ?? metadata.name
 			);
 			const artifactDirectory = join(root, '.norbital', 'artifact');
 			const artifactEntry = join(artifactDirectory, 'bundle-entry.mjs');

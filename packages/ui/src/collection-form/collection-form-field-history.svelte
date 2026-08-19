@@ -122,7 +122,7 @@
 					class="px-2.5 pt-0.5 pb-2 text-left"
 				>
 					{#if loading}
-						<Inline gap="xs" class="py-1 text-xs text-muted-foreground" role="status">
+						<Inline gap="xs" class="py-1 text-meta" role="status">
 							<Icon icon="lucide:loader-circle" class="size-3 animate-spin" />
 							{t('common.loading')}
 						</Inline>
@@ -131,7 +131,7 @@
 							{t('form.historyLoadFailed')}
 						</p>
 					{:else if fieldHistory.length === 0}
-						<p class="py-1 text-xs text-muted-foreground">{t('form.noSavedChanges')}</p>
+						<p class="py-1 text-meta">{t('form.noSavedChanges')}</p>
 					{:else}
 						<ol aria-label={t('form.savedHistoryLabel', { label })}>
 							{#each fieldHistory as entry, index (`${entry.version}:${entry.validFrom}`)}

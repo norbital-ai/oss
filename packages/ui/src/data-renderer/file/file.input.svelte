@@ -318,7 +318,7 @@
 								</div>
 								<div class="min-w-0 flex-1">
 									<p class="truncate text-xs font-semibold text-foreground">{file.name}</p>
-									<p class="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
+									<p class="text-meta">{formatFileSize(file.size)}</p>
 								</div>
 								{#if file.metadata}
 									<FileMetadataTooltip
@@ -395,7 +395,7 @@
 							<div class="h-8 w-8 overflow-hidden rounded bg-muted"></div>
 							<div class="min-w-0 flex-1">
 								<p class="truncate text-sm font-medium">{pending.file.name}</p>
-								<p class="text-xs text-muted-foreground">
+								<p class="text-meta">
 									{formatFileSize(pending.file.size)} • {UPLOAD_STAGE_MESSAGES[pending.stage]}
 								</p>
 								{#if pending.stage === 'error' && pending.error}
@@ -439,7 +439,7 @@
 						</div>
 						<div class="min-w-0 flex-1">
 							<p class="truncate text-sm font-medium">{file.name}</p>
-							<p class="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
+							<p class="text-meta">{formatFileSize(file.size)}</p>
 						</div>
 					</Inline>
 
@@ -480,7 +480,7 @@
 			{/if}
 
 			<!-- File constraints info -->
-			<Stack gap="xs" class="border-t pt-2 text-xs text-muted-foreground">
+			<Stack gap="xs" class="border-t pt-2 text-meta">
 				<div>
 					{t(maxFiles !== 1 ? 'dataRenderer.maxFilePlural' : 'dataRenderer.maxFileSingular', {
 						count: maxFiles,
