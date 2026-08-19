@@ -1,9 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import {
-	subscribeToChanges,
-	SYNC_STREAM_PATH,
-	type EventSourceLike
-} from '../../src/client/replica/subscribe.js';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { subscribeToChanges, type EventSourceLike } from '../../src/client/replica/subscribe.js';
+import { setWorkspaceSession } from '../../src/client/session.js';
 
 /**
  * The listener that replaced the poll.
@@ -11,6 +8,39 @@ import {
  * The behaviour worth pinning is what happens when things go wrong: a stream that errors must not
  * stop delivering, and a frame that cannot be read must not be silently ignored.
  */
+
+/** Where this test's host says its stream lives. Not a path the framework knows — see below. */
+const STREAM_URL = 'https://host.invalid/tenant/abc/_bolt/sync/stream';
+
+/**
+ * The session the host declares before any workspace surface reads.
+ *
+ * Required now, and that is the substantive change these tests had to absorb. The stream address
+ * used to be a `SYNC_STREAM_PATH` constant exported from the replica — one host's route compiled
+ * into the framework, so the replica only ever heard about changes while it happened to be running
+ * inside that host. It is now `WorkspaceSession.syncStreamUrl`, stated by whoever mounts the
+ * workspace, and `workspaceSession()` refuses rather than defaulting when nobody has stated it.
+ *
+ * So a test that declares nothing no longer exercises the subscription at all: the refusal is
+ * caught as "no EventSource here", every listener goes unregistered, and the assertions below fail
+ * for a reason that has nothing to do with what they are about.
+ */
+const declareSession = (): void => {
+	setWorkspaceSession({
+		tenantId: 'test-tenant',
+		environment: 'development',
+		releaseId: 'local',
+		credential: 'test-credential',
+		transport: { command: async () => null },
+		syncStreamUrl: STREAM_URL,
+		files: {
+			store: async () => '',
+			remove: async () => undefined,
+			urlFor: (key: string) => key
+		},
+		operations: { read: async () => null, run: async () => null }
+	});
+};
 
 const stubSource = () => {
 	const listeners = new Map<string, (event: { data?: string }) => void>();
@@ -33,6 +63,8 @@ const stubSource = () => {
 };
 
 describe('subscribing to change announcements', () => {
+	beforeEach(declareSession);
+
 	it('reports the collections a frame names', () => {
 		const stub = stubSource();
 		const seen: Array<ReadonlyArray<string>> = [];
@@ -55,7 +87,9 @@ describe('subscribing to change announcements', () => {
 				return stub.source;
 			}
 		});
-		expect(urls).toEqual([SYNC_STREAM_PATH]);
+		// The host's own address, verbatim. A framework constant here would pass this assertion just
+		// as well while opening the wrong stream everywhere except the one host it was written for.
+		expect(urls).toEqual([STREAM_URL]);
 	});
 
 	it('treats an unreadable frame as "something changed" rather than as nothing', () => {

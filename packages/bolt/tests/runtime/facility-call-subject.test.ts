@@ -13,6 +13,11 @@ import {
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { Approvals } from '../../src/runtime/approvals/approvals.js';
 import { Collections, PendingApproval } from '../../src/runtime/collections/collections.js';
+import {
+	ADMIN_STATUS,
+	NORMAL_STATUS,
+	type SubjectStatus
+} from '../../src/runtime/identity/identity.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	adminSubject,
@@ -82,10 +87,31 @@ const dataBrowserQuery = (credential: string, trustedContext: unknown) =>
 		trustedContext: trustedContext as never
 	});
 
-const session = async (runtime: BoltTestRuntime, token: string, roles: ReadonlyArray<string>) => {
+/**
+ * A person in this tenant, and a live session naming them.
+ *
+ * `status` is what makes an administrator, and it is a column rather than a role. `impersonate`
+ * asks `mayImpersonate`, which is now `isAdministrator` — `Subject.admin`, projected from
+ * `bolt_auth_user.status` — so the synthetic `impersonator` role this file used to seed no longer
+ * grants anything at all. It defaults to `'normal'`, matching the column's own default, so a caller
+ * who says nothing gets an ordinary member.
+ */
+const session = async (
+	runtime: BoltTestRuntime,
+	token: string,
+	roles: ReadonlyArray<string>,
+	status: SubjectStatus = NORMAL_STATUS
+) => {
 	await runtime.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[token, `user-${token}`, 'test-tenant', JSON.stringify([...roles]), `${token}@example.test`]
+		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams", "status") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb, $6) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId", "status" = excluded."status" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
+		[
+			token,
+			`user-${token}`,
+			'test-tenant',
+			JSON.stringify([...roles]),
+			`${token}@example.test`,
+			status
+		]
 	);
 };
 
@@ -294,7 +320,10 @@ describe('the subject a facility call carries', () => {
 			recordId('person-1'),
 			'Ada'
 		]);
-		await session(harness, 'operator-token', ['impersonator']);
+		// An administrator by status, holding no roles. `impersonator` was a role here until it was
+		// recognised as the admin flag in disguise; seeding it now grants nothing and the operator
+		// would be refused before reaching a single facility call.
+		await session(harness, 'operator-token', [], ADMIN_STATUS);
 		await externalSubject(harness, 'member-external', 'user-member', ['admin']);
 		harness.database.forget();
 

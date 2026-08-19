@@ -42,12 +42,31 @@ describe('Bolt architecture boundaries', () => {
  * export is emittable, which is the half that a stale build cannot fake.
  */
 describe('published surface', () => {
-	const sourceOf = (target: string): string => {
+	/**
+	 * The source files a build target could legitimately have come from.
+	 *
+	 * More than one, because `.svelte` is two things in the same namespace. `Thing.svelte` is a
+	 * component and `svelte-package` copies it across as-is, emitting `Thing.svelte.d.ts` beside it.
+	 * `thing.svelte.ts` is a *rune module* — ordinary TypeScript that may hold `$state` — which is
+	 * transpiled to `thing.svelte.js` and declared as `thing.svelte.d.ts`. The two produce the
+	 * identical declaration name from different sources, so a single mapping has to guess, and
+	 * guessing "component" reported `./client/workspace` as unemittable while its real source,
+	 * `src/client/ui/shell/mount.svelte.ts`, sat next to seven other rune modules that would each
+	 * have tripped the same false positive on export.
+	 *
+	 * Answering with the set rather than one string keeps the assertion exactly as strong: a subpath
+	 * still has to name a file that exists in `src`, and no target has more than one candidate
+	 * actually present.
+	 */
+	const sourcesOf = (target: string): ReadonlyArray<string> => {
 		const relative = target.replace(/^\.\/build\//, '');
-		if (relative.endsWith('.svelte')) return relative;
-		if (relative.endsWith('.svelte.d.ts')) return relative.slice(0, -'.d.ts'.length);
-		if (relative.endsWith('.d.ts')) return `${relative.slice(0, -'.d.ts'.length)}.ts`;
-		return `${relative.replace(/\.js$/, '')}.ts`;
+		if (relative.endsWith('.svelte')) return [relative];
+		if (relative.endsWith('.svelte.d.ts')) {
+			const withoutDeclaration = relative.slice(0, -'.d.ts'.length);
+			return [withoutDeclaration, `${withoutDeclaration}.ts`];
+		}
+		if (relative.endsWith('.d.ts')) return [`${relative.slice(0, -'.d.ts'.length)}.ts`];
+		return [`${relative.replace(/\.js$/, '')}.ts`];
 	};
 
 	it('emits a source file for every exported subpath', async () => {
@@ -63,11 +82,14 @@ describe('published surface', () => {
 		for (const [subpath, conditions] of subpaths) {
 			for (const target of new Set(Object.values(conditions))) {
 				if (!target.startsWith('./build/')) continue;
-				const source = new URL(`../../src/${sourceOf(target)}`, import.meta.url);
-				const exists = await readFile(source)
-					.then(() => true)
-					.catch(() => false);
-				if (!exists) missing.push(`${subpath} -> ${target}`);
+				const candidates = await Promise.all(
+					sourcesOf(target).map((candidate) =>
+						readFile(new URL(`../../src/${candidate}`, import.meta.url))
+							.then(() => true)
+							.catch(() => false)
+					)
+				);
+				if (!candidates.includes(true)) missing.push(`${subpath} -> ${target}`);
 			}
 		}
 		expect(missing).toEqual([]);

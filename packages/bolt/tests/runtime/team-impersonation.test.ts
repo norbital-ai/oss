@@ -10,6 +10,11 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { AccessControl } from '../../src/runtime/access/access-control.js';
+import {
+	ADMIN_STATUS,
+	NORMAL_STATUS,
+	type SubjectStatus
+} from '../../src/runtime/identity/identity.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 
@@ -60,12 +65,45 @@ const command = (name: string, credential: string, input: unknown = null, team?:
 		}
 	});
 
-const session = async (runtime: BoltTestRuntime, token: string, roles: ReadonlyArray<string>) => {
+/**
+ * A person in this tenant, and a live session naming them.
+ *
+ * `status` is a parameter and it is the whole of who may impersonate. It used to be a role: the
+ * administrator was seeded with `roles: ['admin', 'impersonator']` and `mayImpersonate` looked for
+ * the second string. Both are gone — `admin` is `bolt_auth_user.status`, which `subjectFromRow`
+ * projects onto `Subject.admin`, and `mayImpersonate` is `isAdministrator`. The column carries a
+ * `'normal'` default, so a caller that says nothing here gets an ordinary member; naming it is the
+ * only way to make an administrator, which is the polarity the whole model rests on.
+ */
+const session = async (
+	runtime: BoltTestRuntime,
+	token: string,
+	roles: ReadonlyArray<string>,
+	status: SubjectStatus = NORMAL_STATUS
+) => {
 	await runtime.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[token, `user-${token}`, 'test-tenant', JSON.stringify([...roles]), `${token}@example.test`]
+		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams", "status") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb, $6) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId", "status" = excluded."status" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
+		[
+			token,
+			`user-${token}`,
+			'test-tenant',
+			JSON.stringify([...roles]),
+			`${token}@example.test`,
+			status
+		]
 	);
 };
+
+/**
+ * The administrator these tests preview from, carrying *no* roles at all.
+ *
+ * Deliberately empty rather than `['admin']`. The fixture below declares a policy named `admin`
+ * granting `*`, so seeding that role would let every assertion here pass through the policy ladder
+ * and say nothing about the status flag — which is the thing that actually admits them now.
+ * With an empty role array the only reason any of this works is `bolt_auth_user.status`.
+ */
+const administrator = (runtime: BoltTestRuntime, token = 'admin-token') =>
+	session(runtime, token, [], ADMIN_STATUS);
 
 const failureOf = async (runtime: BoltTestRuntime, invocation: Invocation) => {
 	const outcome = await runtime.runtime.runPromise(
@@ -90,8 +128,10 @@ const visibleApps = async (runtime: BoltTestRuntime, credential: string, team?: 
 /**
  * `Employee` sees one app and its own notices; `HR` sees the controller group and payslips.
  *
- * `admin` is the founder's policy and is the only one carrying `impersonator` — the role
- * `identity.admitFounder` adds on top of what the policies declare, because no policy declares it.
+ * The `admin` policy is kept, and kept unused. It is an ordinary authored policy — no workspace has
+ * to declare one and nothing in the runtime looks for the name — so it stands here for exactly what
+ * a real workspace's is: a team the picker offers alongside the others, held by nobody these tests
+ * sign in as. Administration itself is `bolt_auth_user.status` and reaches none of this.
  */
 const hrWorkspace = workspace({
 	name: 'test-workspace',
@@ -143,7 +183,7 @@ describe('team impersonation', () => {
 	 */
 	it('drops hr_controller from a previewed employee view and refuses the read behind it', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
-		await session(harness, 'admin-token', ['admin', AccessControl.IMPERSONATOR_ROLE]);
+		await administrator(harness);
 
 		expect(await visibleApps(harness, 'admin-token')).toEqual(
 			expect.arrayContaining(['hr_employee', 'hr_controller', 'hr_controller/payroll'])
@@ -173,7 +213,7 @@ describe('team impersonation', () => {
 	 */
 	it('still serves what the previewed team is granted', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
-		await session(harness, 'admin-token', ['admin', AccessControl.IMPERSONATOR_ROLE]);
+		await administrator(harness);
 
 		const response = await harness.runtime.runPromise(
 			dispatchInvocation(
@@ -186,7 +226,7 @@ describe('team impersonation', () => {
 	/** Nothing lingers: with the header gone the very next command is the real subject again. */
 	it('restores the real subject when the preview stops', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
-		await session(harness, 'admin-token', ['admin', AccessControl.IMPERSONATOR_ROLE]);
+		await administrator(harness);
 
 		expect(await visibleApps(harness, 'admin-token', 'Employee')).toEqual(['hr_employee']);
 		expect(await visibleApps(harness, 'admin-token')).toEqual(
@@ -234,7 +274,7 @@ describe('team impersonation', () => {
 	/** A team the workspace never declared is refused too, rather than silently ignored. */
 	it('refuses a team no policy declares', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
-		await session(harness, 'admin-token', ['admin', AccessControl.IMPERSONATOR_ROLE]);
+		await administrator(harness);
 
 		const refused = await failureOf(
 			harness,
@@ -251,7 +291,7 @@ describe('team impersonation', () => {
 	 */
 	it('reports the picker state from the real actor, mid-preview', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
-		await session(harness, 'admin-token', ['admin', AccessControl.IMPERSONATOR_ROLE]);
+		await administrator(harness);
 		await session(harness, 'employee-token', ['employee']);
 
 		const idle = await harness.runtime.runPromise(
@@ -291,7 +331,7 @@ describe('team impersonation', () => {
 	 */
 	it('records the start of a preview and nothing per request', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
-		await session(harness, 'admin-token', ['admin', AccessControl.IMPERSONATOR_ROLE]);
+		await administrator(harness);
 
 		const started = await harness.runtime.runPromise(
 			dispatchInvocation(command('access.impersonateTeam', 'admin-token', { teamId: 'Employee' }))
@@ -310,25 +350,27 @@ describe('team impersonation', () => {
 	});
 
 	/**
-	 * The founder holds the role the picker requires.
+	 * The founder is admitted as an administrator, not as a holder of every role at once.
 	 *
-	 * `identity.admitFounder` derives roles from the workspace's policies, and no policy declares
-	 * `impersonator` — so before this the first administrator of every workspace held every role
-	 * except the one impersonation needs, and the menu could never render for anybody.
+	 * This used to assert the opposite half of the same problem: `admitFounder` derived roles from
+	 * every policy the workspace declares and bolted a synthetic `impersonator` onto the array,
+	 * because no policy declares one and none should. That made the first administrator
+	 * simultaneously an employee and an HR controller, made their authority a function of the policy
+	 * ladder, and put a magic string in the role namespace that `mayImpersonate` had to agree on.
+	 *
+	 * Authority is the `admin` status on their own row now, so `roles` is empty and it is `admin`
+	 * that has to come back true. The empty array is asserted rather than ignored: filling it again
+	 * would restore exactly the conflation this replaced, and nothing else would fail.
 	 */
-	it('admits a founder holding the impersonator role', async () => {
+	it('admits a founder as an administrator rather than as a holder of every role', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
-		await session(harness, 'admin-token', ['admin', AccessControl.IMPERSONATOR_ROLE]);
+		await administrator(harness);
 
 		const admitted = await harness.runtime.runPromise(
 			dispatchInvocation(
 				command('identity.admitFounder', 'admin-token', { email: 'founder@example.test' })
 			)
 		);
-		const roles =
-			admitted.value === null || typeof admitted.value !== 'object'
-				? undefined
-				: Reflect.get(admitted.value, 'roles');
-		expect(roles).toContain(AccessControl.IMPERSONATOR_ROLE);
+		expect(admitted.value).toMatchObject({ admitted: true, admin: true, roles: [] });
 	});
 });
