@@ -1,5 +1,3 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { Buffer } from 'node:buffer';
 import { Config, Context, Effect, Layer, Option, Redacted, Schema } from 'effect';
 
 /**
@@ -16,11 +14,12 @@ import { Config, Context, Effect, Layer, Option, Redacted, Schema } from 'effect
  * when it cannot encrypt is worse than one that never claimed to encrypt, because the call site
  * cannot tell the difference.
  *
- * This module depends on `node:crypto`, `node:buffer` and `effect`, and on nothing else — that is
- * what makes it shareable. Nothing here knows which table a row lives in; a caller says so through
+ * This module depends on WebCrypto and `effect`, and on nothing else — that is what makes it
+ * shareable, and WebCrypto rather than `node:crypto` is what makes it shareable with the *tenant
+ * runtime*, where `node:` builtins are externalized stubs whose every member is `undefined`. Nothing here knows which table a row lives in; a caller says so through
  * its binding.
  *
- * **AES-256-GCM, through `node:crypto`.** GCM authenticates as well as conceals. A tampered
+ * **AES-256-GCM, through WebCrypto.** GCM authenticates as well as conceals. A tampered
  * ciphertext must fail loudly rather than decrypt to plausible garbage that a caller then sends to
  * LinkedIn as a cookie — with an unauthenticated mode a flipped byte in the database produces a
  * different string and nothing anywhere notices.
@@ -171,6 +170,78 @@ type KeyMaterial =
  * decode to *some* buffer — the shape is checked before the length so a mangled value is reported as
  * mangled rather than as the wrong size.
  */
+/**
+ * base64url, both directions, without `Buffer`.
+ *
+ * `node:buffer` and `node:crypto` are externalized stubs in the bundle a tenant isolate evaluates,
+ * so every one of their members is `undefined` there — and `Buffer.from(...)` is therefore
+ * `undefined.from(...)`, which is a `TypeError` at the first use and not a missing-module error at
+ * import. That is exactly how this failed: `resolveKey` runs at layer construction, so once the host
+ * began answering the vault key through the config facility the *whole runtime* stopped building,
+ * and every workspace on a reset came up unmigrated with `Cannot read properties of undefined`.
+ *
+ * Written out rather than reached for, because there is no `Buffer` to reach for and `atob`/`btoa`
+ * are base64 rather than base64url — different alphabet, and padded.
+ */
+const BASE64URL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+const toBase64Url = (bytes: Uint8Array): string => {
+	let out = '';
+	for (let index = 0; index < bytes.length; index += 3) {
+		const a = bytes[index] as number;
+		const b = bytes[index + 1];
+		const c = bytes[index + 2];
+		out += BASE64URL_ALPHABET[a >> 2];
+		out += BASE64URL_ALPHABET[((a & 3) << 4) | ((b ?? 0) >> 4)];
+		if (b === undefined) break;
+		out += BASE64URL_ALPHABET[((b & 15) << 2) | ((c ?? 0) >> 6)];
+		if (c === undefined) break;
+		out += BASE64URL_ALPHABET[c & 63];
+	}
+	return out;
+};
+
+/**
+ * Decodes base64url, or `undefined` for anything that is not.
+ *
+ * Strict where `Buffer.from` was lenient, which the comment on `BASE64_KEY` already wanted:
+ * `Buffer.from` silently drops characters it does not recognise, so a typo'd key decoded to *some*
+ * buffer of the wrong length and was reported as the wrong size rather than as mangled.
+ */
+const fromBase64Url = (text: string): Uint8Array<ArrayBuffer> | undefined => {
+	const trimmed = text.replace(/=+$/, '');
+	const out: Array<number> = [];
+	let accumulator = 0;
+	let bits = 0;
+	for (const character of trimmed) {
+		const value = BASE64URL_ALPHABET.indexOf(character);
+		if (value < 0) return undefined;
+		accumulator = (accumulator << 6) | value;
+		bits += 6;
+		if (bits >= 8) {
+			bits -= 8;
+			out.push((accumulator >> bits) & 0xff);
+		}
+	}
+	return Uint8Array.from(out);
+};
+
+const utf8 = (text: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode(text);
+
+/**
+ * A view TypeScript will accept as a `BufferSource`.
+ *
+ * `Uint8Array` defaults to `Uint8Array<ArrayBufferLike>`, and WebCrypto's signatures want an
+ * `ArrayBuffer` behind it — a distinction that is only a type, since a copy of the bytes satisfies
+ * both. Copying is free at these sizes: a 32-byte key, a nonce, a tag, and a secret nobody stores
+ * megabytes of.
+ */
+const sourced = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => Uint8Array.from(bytes);
+
+/** The AES-GCM key handle. WebCrypto, never `node:crypto`, for the reason `toBase64Url` gives. */
+const importKey = (key: Uint8Array, usage: 'encrypt' | 'decrypt'): Promise<CryptoKey> =>
+	crypto.subtle.importKey('raw', sourced(key), { name: 'AES-GCM' }, false, [usage]);
+
 const BASE64_KEY = /^[A-Za-z0-9+/_-]{43}=?$/;
 
 const resolveKey = (configured: Option.Option<Redacted.Redacted<string>>): KeyMaterial => {
@@ -179,34 +250,47 @@ const resolveKey = (configured: Option.Option<Redacted.Redacted<string>>): KeyMa
 	const text = Redacted.value(configured.value).trim();
 	if (!BASE64_KEY.test(text))
 		return { _tag: 'Unavailable', reason: `${SECRET_KEY_VARIABLE} is not 32 bytes of base64` };
-	const bytes = Buffer.from(text, 'base64url');
+	const bytes = fromBase64Url(text);
+	if (bytes === undefined)
+		return { _tag: 'Unavailable', reason: `${SECRET_KEY_VARIABLE} is not decodable base64url` };
 	if (bytes.length !== KEY_BYTES)
 		return {
 			_tag: 'Unavailable',
 			reason: `${SECRET_KEY_VARIABLE} decodes to ${bytes.length} bytes, and AES-256 needs ${KEY_BYTES}`
 		};
-	return { _tag: 'Key', key: Redacted.make(Uint8Array.from(bytes)) };
+	return { _tag: 'Key', key: Redacted.make(bytes) };
 };
 
-/** The sealed form. Every branch that could return the input unsealed is a failure instead. */
-const seal = (key: Uint8Array, binding: string, value: string): string => {
-	const nonce = randomBytes(NONCE_BYTES);
-	const cipher = createCipheriv('aes-256-gcm', key, nonce);
-	cipher.setAAD(Buffer.from(binding, 'utf8'));
-	const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
-	return [
-		VERSION,
-		nonce.toString('base64url'),
-		ciphertext.toString('base64url'),
-		cipher.getAuthTag().toString('base64url')
-	].join('.');
+/**
+ * The sealed form. Every branch that could return the input unsealed is a failure instead.
+ *
+ * Async because WebCrypto is. The stored encoding is byte-identical to what `node:crypto` produced,
+ * which is the property that matters: every value already in a vault was sealed by that
+ * implementation and has to keep opening.
+ *
+ * WebCrypto returns the authentication tag appended to the ciphertext rather than beside it, so the
+ * split back into the envelope's third and fourth parts is done here, against `TAG_BYTES`, rather
+ * than read off an API that hands them over separately.
+ */
+const seal = async (key: Uint8Array, binding: string, value: string): Promise<string> => {
+	const nonce = crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
+	const sealed = new Uint8Array(
+		await crypto.subtle.encrypt(
+			{ name: 'AES-GCM', iv: nonce, additionalData: utf8(binding), tagLength: TAG_BYTES * 8 },
+			await importKey(key, 'encrypt'),
+			utf8(value)
+		)
+	);
+	const ciphertext = sealed.subarray(0, sealed.length - TAG_BYTES);
+	const tag = sealed.subarray(sealed.length - TAG_BYTES);
+	return [VERSION, toBase64Url(nonce), toBase64Url(ciphertext), toBase64Url(tag)].join('.');
 };
 
 type Opened =
 	| { readonly _tag: 'Value'; readonly value: string }
 	| { readonly _tag: 'Rejected'; readonly reason: string };
 
-const open = (key: Uint8Array, binding: string, stored: string): Opened => {
+const open = async (key: Uint8Array, binding: string, stored: string): Promise<Opened> => {
 	const parts = stored.split('.');
 	const [version, nonce, ciphertext, tag] = parts;
 	if (
@@ -222,25 +306,36 @@ const open = (key: Uint8Array, binding: string, stored: string): Opened => {
 			_tag: 'Rejected',
 			reason: `it is not a ${VERSION} envelope, so it was stored before this vault encrypted anything and predates the key`
 		};
-	const nonceBytes = Buffer.from(nonce, 'base64url');
-	const tagBytes = Buffer.from(tag, 'base64url');
-	if (nonceBytes.length !== NONCE_BYTES || tagBytes.length !== TAG_BYTES)
+	const nonceBytes = fromBase64Url(nonce);
+	const tagBytes = fromBase64Url(tag);
+	const ciphertextBytes = fromBase64Url(ciphertext);
+	if (
+		nonceBytes === undefined ||
+		tagBytes === undefined ||
+		ciphertextBytes === undefined ||
+		nonceBytes.length !== NONCE_BYTES ||
+		tagBytes.length !== TAG_BYTES
+	)
 		return {
 			_tag: 'Rejected',
 			reason:
 				'its nonce or authentication tag is the wrong size, so the stored value has been altered'
 		};
 	try {
-		const decipher = createDecipheriv('aes-256-gcm', key, nonceBytes);
-		decipher.setAAD(Buffer.from(binding, 'utf8'));
-		decipher.setAuthTag(tagBytes);
-		const plaintext = Buffer.concat([
-			decipher.update(Buffer.from(ciphertext, 'base64url')),
-			// Throws when the tag does not verify. That is the branch that makes a tampered value fail
-			// rather than decrypt to garbage a caller would go on to use.
-			decipher.final()
-		]);
-		return { _tag: 'Value', value: plaintext.toString('utf8') };
+		// Ciphertext and tag are handed back joined, which is how WebCrypto takes them — the envelope
+		// keeps them apart so a malformed value is rejected while parsing rather than sliced into
+		// pieces that then fail an authentication check for a misleading reason.
+		const joined = new Uint8Array(new ArrayBuffer(ciphertextBytes.length + tagBytes.length));
+		joined.set(ciphertextBytes);
+		joined.set(tagBytes, ciphertextBytes.length);
+		// Rejects when the tag does not verify. That is the branch that makes a tampered value fail
+		// rather than decrypt to garbage a caller would go on to use.
+		const plaintext = await crypto.subtle.decrypt(
+			{ name: 'AES-GCM', iv: sourced(nonceBytes), additionalData: utf8(binding), tagLength: TAG_BYTES * 8 },
+			await importKey(key, 'decrypt'),
+			joined
+		);
+		return { _tag: 'Value', value: new TextDecoder().decode(plaintext) };
 	} catch {
 		return {
 			_tag: 'Rejected',
@@ -308,7 +403,7 @@ export const layerFrom = (source: KeySource) =>
 			) {
 				if (material._tag === 'Unavailable')
 					return yield* new SecretKeyUnavailable({ operation, reason: material.reason });
-				return seal(Redacted.value(material.key), binding, value);
+				return yield* Effect.promise(() => seal(Redacted.value(material.key), binding, value));
 			});
 
 			const decrypt: Interface['decrypt'] = Effect.fn('SecretCipher.decrypt')(function* (
@@ -321,7 +416,9 @@ export const layerFrom = (source: KeySource) =>
 						operation: `reading ${name}`,
 						reason: material.reason
 					});
-				const opened = open(Redacted.value(material.key), binding, stored);
+				const opened = yield* Effect.promise(() =>
+					open(Redacted.value(material.key), binding, stored)
+				);
 				if (opened._tag === 'Rejected')
 					return yield* new SecretUnreadable({ name, reason: opened.reason });
 				return opened.value;
