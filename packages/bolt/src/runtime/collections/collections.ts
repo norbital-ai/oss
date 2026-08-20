@@ -1021,9 +1021,14 @@ export const layer = Layer.effect(
 			effectId: EffectId,
 			subject: Identity.Subject,
 			collection: string,
+			/**
+			 * One entry per record that exists. A row that was never written is not passed in at all —
+			 * a change event announces a record, and there is no record — so `row` is not optional:
+			 * the caller has to have decided before it gets here.
+			 */
 			records: ReadonlyArray<{
 				readonly taskScope: string;
-				readonly row: Readonly<Record<string, unknown>> | undefined;
+				readonly row: Readonly<Record<string, unknown>>;
 			}>,
 			event: 'created' | 'updated' | 'deleted'
 		) {
@@ -1039,9 +1044,7 @@ export const layer = Layer.effect(
 				records.map((record) => {
 					const taskId = `${record.taskScope}:event:${automation.name}`;
 					const scope: Schema.Json =
-						event === 'deleted' || record.row === undefined
-							? {}
-							: { incoming_record: record.row as Schema.Json };
+						event === 'deleted' ? {} : { incoming_record: record.row as Schema.Json };
 					return {
 						command: `automations.${automation.name}`,
 						input: { args: {}, scope, bolt_run_as: subject } as Schema.Json,
@@ -1976,13 +1979,26 @@ export const layer = Layer.effect(
 			const committed = nodes.map((node) => node.id);
 			return yield* Effect.gen(function* () {
 				const rows = yield* readBack(effectId, collection, built);
+				/**
+				 * The rows that are actually there, still carrying the index they were submitted under.
+				 *
+				 * A row the visibility predicate refused inserted nothing, so there is no record for a
+				 * hook to receive and nothing for a trigger to fire on. It is dropped here, once, and
+				 * everything below reads from what is left: the `after` hooks, the change events, and
+				 * the answer this batch returns. The index travels with it because `rowId(index)` is the
+				 * identity every statement and every enqueued task is filed under, and it must not shift
+				 * when a row ahead of it was refused.
+				 */
+				const settled = rows.flatMap((record, index) =>
+					record === undefined ? [] : [{ index, record }]
+				);
 				if (module?.create?.perRecord?.after !== undefined) {
 					const after = module.create.perRecord.after;
 					yield* Effect.all(
-						built.map((row, index) =>
+						settled.map(({ index, record }) =>
 							Effect.gen(function* () {
 								const api = buildApi(rowId(index), subject, true, depth + 1);
-								yield* runHook<unknown>(after, { record: rows[index], api }, api, {
+								yield* runHook<unknown>(after, { record, api }, api, {
 									collection,
 									action: 'create.after'
 								});
@@ -1995,10 +2011,10 @@ export const layer = Layer.effect(
 					effectId,
 					subject,
 					collection,
-					built.map((row, index) => ({ taskScope: rowId(index), row: rows[index] })),
+					settled.map(({ index, record }) => ({ taskScope: rowId(index), row: record })),
 					'created'
 				);
-				return rows;
+				return settled.map(({ record }) => record);
 			}).pipe(
 				Effect.catch((cause) =>
 					Effect.fail(mutationPhaseFailure('settle', collection, committed, cause))
@@ -2057,11 +2073,16 @@ export const layer = Layer.effect(
 			}
 			if (updates.length > 0)
 				updated.push(
+					// An update whose row the predicate would not write matched nothing, exactly as a
+					// refused insert does, and there is no stored row to answer with. It is left out
+					// rather than answered with the patch that was submitted; every payload here names
+					// its own `norbital_id`, so a caller comparing what it sent against what came back
+					// can still say which ones did not land.
 					...(yield* readBack(
 						EffectId.make(`${effectId}:update:readback`),
 						collection,
 						updates.map((payload) => ({ id: String(payload['norbital_id']), values: payload }))
-					))
+					)).filter((row) => row !== undefined)
 				);
 			const identified = inserts.map((payload) => ({
 				id: globalThis.crypto.randomUUID(),
@@ -2082,7 +2103,12 @@ export const layer = Layer.effect(
 							depth
 						);
 				}
-				return [...updated, ...(yield* readBack(effectId, collection, identified))];
+				return [
+					...updated,
+					...(yield* readBack(effectId, collection, identified)).filter(
+						(row) => row !== undefined
+					)
+				];
 			}
 			const size = options?.batchSize ?? identified.length;
 			if (size > MAX_BATCH_ROWS)
@@ -2117,6 +2143,22 @@ export const layer = Layer.effect(
 			}
 			return [...updated, ...written];
 		});
+		/**
+		 * What the database holds for these ids, one slot per submitted row, in the order submitted.
+		 *
+		 * `undefined` in a slot means the row is not there, and that is a real outcome rather than an
+		 * anomaly: a create's visibility predicate is a `where` on the insert, so a row the subject may
+		 * not write matches nothing and inserts nothing while the rest of the batch proceeds. The read
+		 * is deliberately unfiltered — it asks what exists, not what this subject may see — so an
+		 * absent slot is never "stored but hidden from the reader".
+		 *
+		 * It used to fill an absent slot in from the caller's own submission. That handed back the
+		 * payload dressed as a stored record: the write was refused, and the answer said it was a row.
+		 * Everything downstream then treated the fiction as a fact — an `after` hook ran for a record
+		 * that does not exist, and a change trigger was enqueued carrying it as `incoming_record`. The
+		 * slot is left empty instead, and each consumer decides what an empty slot means to it; none of
+		 * them may invent one.
+		 */
 		const readBack = Effect.fn('Collections.readBack')(function* (
 			effectId: EffectId,
 			collection: string,
@@ -2125,7 +2167,8 @@ export const layer = Layer.effect(
 				readonly values: Readonly<Record<string, Schema.Json>>;
 			}>
 		) {
-			if (rows.length === 0) return [] as ReadonlyArray<Readonly<Record<string, unknown>>>;
+			if (rows.length === 0)
+				return [] as ReadonlyArray<Readonly<Record<string, unknown>> | undefined>;
 			const result = yield* database.execute(effectId, {
 				_tag: 'Query',
 				sql: `select * from ${quoteIdentifier(collection)} where norbital_id = any($1)`,
@@ -2137,11 +2180,9 @@ export const layer = Layer.effect(
 				const id = Reflect.get(row, 'norbital_id');
 				if (typeof id === 'string') stored.set(id, row as Readonly<Record<string, unknown>>);
 			}
-			return rows.map(
-				(row) =>
-					stored.get(row.id) ??
-					({ norbital_id: row.id, ...row.values } as Readonly<Record<string, unknown>>)
-			) as ReadonlyArray<Readonly<Record<string, unknown>>>;
+			return rows.map((row) => stored.get(row.id)) as ReadonlyArray<
+				Readonly<Record<string, unknown>> | undefined
+			>;
 		});
 		const count = Effect.fn('Collections.count')(function* (effectId, subject, input) {
 			const definition = yield* workspace.collection(input.collection);
