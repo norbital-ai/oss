@@ -101,6 +101,35 @@ describe('bolt-owned identity over a host facility', () => {
 		await expect(auth.api.signInEmailOTP({ body: { email, otp: code } })).rejects.toBeDefined();
 	});
 
+	/**
+	 * The token a sign-in returns is the token `authenticate` has to find.
+	 *
+	 * `AUTHENTICATE_SQL` looks a credential up as `bolt_auth_session.token`. Better Auth mints that
+	 * row itself, so nothing in this repository guarantees the value it hands back is the value it
+	 * stored — and no test joined the two halves: every other identity fixture mints its session
+	 * through `startSession`, which inserts the row directly, so the whole suite could be green while
+	 * the only path a person actually uses was broken.
+	 */
+	it('returns a token that names a live session row, which is what authenticate looks up', async () => {
+		const auth = makeAuth({
+			execute,
+			deliver,
+			secret: 'test-secret-not-a-real-one',
+			baseURL: 'http://bolt.test',
+			production: true
+		});
+		const email = 'round.trip@example.test';
+		await auth.api.sendVerificationOTP({ body: { email, type: 'sign-in' } });
+		const code = delivered.at(-1)?.code ?? DEVELOPMENT_SIGN_IN_CODE;
+		const signedIn = await auth.api.signInEmailOTP({ body: { email, otp: code } });
+		expect(signedIn.token).toBeTruthy();
+		const found = await database.query<{ count: string }>(
+			`select count(*)::text as count from ${AUTH_MODELS.session} where "token" = $1 and "expiresAt" > now()`,
+			[signedIn.token]
+		);
+		expect(found.rows[0]?.count).toBe('1');
+	});
+
 	it('is deterministic and silent in development', async () => {
 		const auth = makeAuth({
 			execute,
