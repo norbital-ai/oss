@@ -12,6 +12,7 @@
 	} from '@norbital-ai/ui/data-renderer';
 	import type { WorkspaceImpersonation } from '@norbital-ai/ui/workspace-shell';
 	import BoltApp from './app.svelte';
+	import { Scroll, Stack } from '@norbital-ai/ui/layout';
 	import {
 		WORKSPACE_HOST_PLUGINS,
 		WORKSPACE_SETTINGS_PATH,
@@ -622,12 +623,12 @@
 	{:else if hostPlugin === 'environment_secrets'}
 		<SecretsSettings />
 	{:else if hostPlugin !== null}
-		<section class="min-h-screen bg-background px-4 py-4 sm:px-6 sm:py-6" aria-label={hostPlugin}>
-			<h1 class="text-heading">{hostPlugin}</h1>
-			<p class="mt-2 max-w-2xl text-meta">
-				This workspace declares no surface at {hostPlugin}.
-			</p>
-		</section>
+		<Scroll as="section" name={hostPlugin} inset class="bg-background" aria-label={hostPlugin}>
+			<Stack gap="sm">
+				<h1 class="text-heading">{hostPlugin}</h1>
+				<p class="max-w-2xl text-meta">This workspace declares no surface at {hostPlugin}.</p>
+			</Stack>
+		</Scroll>
 	{:else if App}
 		<App />
 	{:else if appLoading}

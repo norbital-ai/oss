@@ -610,7 +610,7 @@
 			}}
 		/>
 	{/snippet}
-	<Bound size="full" clip grow class="min-h-full">
+	<Bound size="full" clip>
 		{#if currentPath === '/' || onAgentPath}
 			<Scroll name="Workspace overview" inset>
 				<Center measure="wide">
@@ -701,12 +701,9 @@
 			</Scroll>
 		{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`) || activeHostPlugin}
 			{#key activeHostPlugin?.key ?? WORKSPACE_SETTINGS_PATH}
-				<div
-					data-testid="host-plugin-surface"
-					class="h-full min-h-0 min-w-0 overflow-auto bg-background"
-				>
+				<Bound size="full" clip data-testid="host-plugin-surface" class="bg-background">
 					{@render children?.()}
-				</div>
+				</Bound>
 			{/key}
 		{:else}
 			<!--
@@ -715,14 +712,11 @@
 				needs the same separation any other section gets.
 			-->
 			<Cover gap="md" top={resolvedHeaderTitle ? activeAppBanner : undefined}>
-				<div
-					data-workspace-app-surface
-					class="h-full max-h-full min-h-0 min-w-0 overflow-clip [container-name:bolt-app] [container-type:inline-size]"
-				>
+				<Bound size="full" clip data-workspace-app-surface class="[container-name:bolt-app]">
 					<CollectionTableNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
 						{@render children?.()}
 					</CollectionTableNavigationSurface>
-				</div>
+				</Bound>
 			</Cover>
 		{/if}
 	</Bound>

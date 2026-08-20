@@ -10,6 +10,8 @@
 		collapse?: SplitCollapse;
 		collapseAt?: 'compact' | 'narrow';
 		gap?: LayoutGap;
+		/** Fill a definite-height parent so both panes can hand that height to their contents. */
+		fill?: boolean;
 		start: Snippet;
 		end: Snippet;
 		switchLabels?: readonly [string, string];
@@ -26,6 +28,7 @@
 		collapse = 'stack',
 		collapseAt = 'narrow',
 		gap = 'md',
+		fill = false,
 		start,
 		end,
 		switchLabels,
@@ -45,7 +48,13 @@
 
 <svelte:element
 	this={as}
-	class={cn(className, 'split min-w-0', GAP_CLASSES[gap], ratioClasses[ratio])}
+	class={cn(
+		className,
+		'split min-h-0 min-w-0',
+		GAP_CLASSES[gap],
+		ratioClasses[ratio],
+		fill && 'h-full'
+	)}
 	data-layout="split"
 	data-collapse={collapse}
 	data-collapse-at={collapseAt}
@@ -123,14 +132,36 @@
 		color: var(--foreground);
 		box-shadow: var(--shadow-xs);
 	}
-	@media (max-width: 47.999rem) {
-		.split[data-collapse-at]:not([data-collapse='none']) {
+	/*
+		A Split responds to the space its caller actually grants, not to the browser window. The app
+		shell, Bound, and other pane primitives establish inline-size containers, so this continues to
+		work inside a sidebar, sheet, or nested dashboard pane.
+	*/
+	@container (max-width: 39.999rem) {
+		.split[data-collapse-at='narrow']:not([data-collapse='none']) {
 			grid-template-columns: minmax(0, 1fr);
 		}
-		.split[data-collapse-at][data-collapse='switch'] .split__switch {
+		.split[data-collapse-at='narrow'][data-collapse='switch'] {
+			grid-template-rows: auto minmax(0, 1fr);
+		}
+		.split[data-collapse-at='narrow'][data-collapse='switch'] .split__switch {
 			display: flex;
 		}
-		.split[data-collapse-at][data-collapse='switch'] .split__pane_inactive {
+		.split[data-collapse-at='narrow'][data-collapse='switch'] .split__pane_inactive {
+			display: none;
+		}
+	}
+	@container (max-width: 29.999rem) {
+		.split[data-collapse-at='compact']:not([data-collapse='none']) {
+			grid-template-columns: minmax(0, 1fr);
+		}
+		.split[data-collapse-at='compact'][data-collapse='switch'] {
+			grid-template-rows: auto minmax(0, 1fr);
+		}
+		.split[data-collapse-at='compact'][data-collapse='switch'] .split__switch {
+			display: flex;
+		}
+		.split[data-collapse-at='compact'][data-collapse='switch'] .split__pane_inactive {
 			display: none;
 		}
 	}

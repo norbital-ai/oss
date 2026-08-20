@@ -25,7 +25,7 @@
 <script lang="ts">
 	import * as Sidebar from '#lib/sidebar';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Inline } from '#lib/layout';
+	import { Bound, Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { PersistedState } from 'runed';
 
@@ -96,13 +96,13 @@
 				<Inline gap="xs" shrink={false}>{@render mobileActions()}</Inline>
 			{/if}
 		</Inline>
-		<div
-			class={cn(
-				contentClass,
-				'min-h-0 min-w-0 flex-1 overflow-clip pb-[env(safe-area-inset-bottom)] md:pb-0'
-			)}
+		<Bound
+			size="full"
+			clip
+			grow
+			class={cn(contentClass, 'pb-[env(safe-area-inset-bottom)] md:pb-0')}
 		>
 			{@render children()}
-		</div>
+		</Bound>
 	</Sidebar.Inset>
 </Sidebar.Provider>

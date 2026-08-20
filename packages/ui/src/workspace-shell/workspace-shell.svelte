@@ -2,7 +2,7 @@
 	import WorkspaceShellFrame from './workspace-shell-frame.svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { Snippet } from 'svelte';
-	import { Inline } from '#lib/layout';
+	import { Cover, Inline } from '#lib/layout';
 	import { Spinner } from '#lib/spinner';
 	import type {
 		WorkspaceImpersonation,
@@ -85,18 +85,19 @@
 </script>
 
 {#if switchingOrganization}
-	<main
-		class="grid min-h-dvh w-full place-items-center bg-background"
+	<Cover
+		as="main"
+		class="min-h-dvh bg-background"
 		role="status"
 		aria-live="polite"
 		aria-label={t('misc.switchingTo', { organization: switchingOrganization.name })}
 		data-testid="organization-switch-loader"
 	>
-		<Inline gap="md" class="text-sm font-medium">
+		<Inline fill justify="center" gap="md" class="text-sm font-medium">
 			<Spinner class="size-4" />
 			<span>{t('misc.switchingTo', { organization: switchingOrganization.name })}</span>
 		</Inline>
-	</main>
+	</Cover>
 {:else}
 	<WorkspaceShellFrame
 		persistenceKey="workspace-shell.sidebar-expanded"
