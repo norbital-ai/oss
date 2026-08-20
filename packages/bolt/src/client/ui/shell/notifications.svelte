@@ -5,6 +5,7 @@
 	import * as Popover from '@norbital-ai/ui/popover';
 	import * as Sidebar from '@norbital-ai/ui/sidebar';
 	import { cn } from '@norbital-ai/ui/utils';
+	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
 
 	interface NotificationItem {
 		readonly id: string;
@@ -46,7 +47,9 @@
 			>
 				<IconWrapper name="lucide:bell" class="size-4 shrink-0" />
 				{#if expanded}
-					<span class="min-w-0 flex-1 truncate text-left">Notifications</span>
+					<span class="min-w-0 flex-1 truncate text-left {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"
+						>Notifications</span
+					>
 				{/if}
 				{#if unread.length > 0}
 					<span

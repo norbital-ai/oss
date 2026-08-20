@@ -10,6 +10,10 @@
 		visibility: number;
 	};
 	type SphereSeed = { latitude: number; longitude: number };
+	/** Where a shape sits in the unit box and what it takes to seat it there. */
+	type ShapeFit = { centreX: number; centreY: number; scale: number };
+	/** One fit per state, since the burst an `error` throws reaches further than a turning sphere. */
+	type ShapeFits = Record<ThinkingOrbState, ShapeFit>;
 	let {
 		state = 'ready',
 		size = 20,
@@ -24,8 +28,18 @@
 
 	const ORB_STATES: readonly ThinkingOrbState[] = ['ready', 'working', 'error'];
 
-	/** The sphere's radius as a fraction of the box. See the note at its use for why it is not 0.405. */
-	const ORB_OPTICAL_RADIUS = 0.355;
+	/** The drawn mark's radius as a fraction of the box. See the note at its use. */
+	const ORB_OPTICAL_RADIUS = 0.33;
+
+	/**
+	 * How long, and how finely, a shape is sampled to find its own extent.
+	 *
+	 * Long enough to cover the slowest motion the sphere has — its 0.42 rad/s tilt and the error
+	 * burst's own loop both close well inside it. The step is coarse because the extremes move
+	 * smoothly: a finer one shifts the measured reach by well under a tenth of a device pixel.
+	 */
+	const FIT_SAMPLE_SECONDS = 12;
+	const FIT_SAMPLE_STEP = 0.25;
 
 	/** Read the live attribute Svelte keeps in sync — the attach closure must not snapshot `state`. */
 	function liveOrbState(root: Element): ThinkingOrbState {
@@ -94,117 +108,12 @@
 		return layout;
 	}
 
-	/** Rotates a state-shape point and attaches accent, boost, and visibility. */
-	function orientStateShape( // stupidity:allow Q3 -- named helper
-		x: number,
-		y: number,
-		z: number,
-		accent: number,
-		boost: number,
-		visibility: number,
-		time: number
-	): OrbPoint {
-		const point = rotatePoint(
-			x,
-			y,
-			z,
-			-0.3 + Math.sin(time * 0.36) * 0.055,
-			0.2 + Math.sin(time * 0.28) * 0.04
-		);
-		point.accent = accent;
-		point.boost = boost;
-		point.visibility = visibility;
-		return point;
-	}
-
-	/** Computes the 2D state glyph layout point for a sphere particle index. */
-	function stateShapePoint( // stupidity:allow Q3 -- named helper
-		mode: ThinkingOrbState,
-		index: number,
-		count: number,
-		time: number
-	): OrbPoint {
-		const dotCount = Math.min(
-			count,
-			mode === 'working'
-				? Math.max(48, Math.round(Math.sqrt(count) * 7.2))
-				: Math.max(18, Math.round(Math.sqrt(count) * 3.4))
-		);
-		const dotRank = Math.round((index * (dotCount - 1)) / Math.max(1, count - 1));
-		const activeIndex = Math.round((dotRank * (count - 1)) / Math.max(1, dotCount - 1));
-		const visibility = index === activeIndex ? 1 : 0;
-		const depthPhase = dotRank * 2.399963;
-		if (mode === 'working') {
-			const railCount = Math.round(dotCount * 0.44);
-			const isRail = dotRank < railCount;
-			let u: number;
-			let v: number;
-			if (isRail) {
-				const rail = dotRank % 2;
-				const railPoints = Math.ceil(railCount / 2);
-				u = (Math.floor(dotRank / 2) / railPoints) * Math.PI * 2;
-				v = rail === 0 ? -0.5 : 0.5;
-			} else {
-				const ribRank = dotRank - railCount;
-				const ribSteps = 6;
-				const ribCount = Math.ceil((dotCount - railCount) / ribSteps);
-				const rib = Math.floor(ribRank / ribSteps);
-				v = (ribRank % ribSteps) / (ribSteps - 1) - 0.5;
-				u = ((rib + 0.35) / ribCount) * Math.PI * 2 + v * 0.16;
-			}
-			const bandWidth = 0.8;
-			const stripRadius = 0.5 + v * bandWidth * Math.cos(u / 2);
-			const x = stripRadius * Math.cos(u);
-			const y = stripRadius * Math.sin(u);
-			const z = v * bandWidth * Math.sin(u / 2);
-			const flowDistance = Math.abs(angleDistance(u, time * 1.18));
-			const flow = Math.exp(-(flowDistance * flowDistance) / 0.46);
-			const point = rotatePoint(x, y, z, time * 0.2, 0.66 + Math.sin(time * 0.24) * 0.05);
-			point.x *= 1.14;
-			point.y *= 0.98;
-			point.accent = 0.1 + (isRail ? 0.08 : 0.03) + flow * 0.64;
-			point.boost = 0.018 + (isRail ? 0.025 : 0) + flow * 0.08;
-			point.visibility = visibility;
-			return point;
-		}
-
-		const progress = dotRank / Math.max(1, dotCount - 1);
-		const angle = progress * Math.PI * 2 + time * 0.18;
-		const tooth = clamp((Math.cos(angle * 8) - 0.08) / 0.92) ** 2;
-		const radius = 0.53 + tooth * 0.25 + Math.cos(depthPhase) * 0.04;
-		return orientStateShape(
-			Math.cos(angle) * radius,
-			Math.sin(angle) * radius,
-			Math.sin(depthPhase) * 0.115,
-			0.52 + tooth * 0.34,
-			0.05,
-			visibility,
-			time
-		);
-	}
-
-	/** Returns the 0–1 blend factor between sphere and state-shape modes over time. */
-	function stateShapeMix(mode: ThinkingOrbState, time: number): number {
-		// stupidity:allow Q3 -- named helper
-		if (mode !== 'working') return 0;
-		const cycle = time % 5.2;
-		if (cycle < 0.8 || cycle > 4.8) return 0;
-		if (cycle < 1.25) {
-			const progress = (cycle - 0.8) / 0.45;
-			return 1 - (1 - progress) ** 4;
-		}
-		if (cycle <= 4.3) return 1;
-		const progress = (cycle - 4.3) / 0.5;
-		return (1 - progress) ** 3;
-	}
-
 	/** Positions and styles a sphere particle for the given agent orb state. */
 	function spherePoint( // stupidity:allow Q3 -- named helper
 		mode: ThinkingOrbState,
 		index: number,
 		layout: SphereSeed[],
-		time: number,
-		compact: boolean
+		time: number
 	): OrbPoint {
 		const seed = layout[index];
 		const baseLatitude = seed.latitude;
@@ -264,21 +173,69 @@
 		return point;
 	}
 
-	/** Blends sphere and state-shape positions for one particle at the current phase. */
+	/**
+	 * Measures one shape over a whole cycle of its own motion: where it sits, and how far it reaches.
+	 *
+	 * Sampled once per size rather than per frame on purpose. A per-frame fit would rescale the mark
+	 * as it turned, and the orb would breathe against the icons beside it.
+	 */
+	function measureFit(project: (time: number, index: number) => OrbPoint, count: number): ShapeFit {
+		let minX = Infinity;
+		let maxX = -Infinity;
+		let minY = Infinity;
+		let maxY = -Infinity;
+		for (let time = 0; time < FIT_SAMPLE_SECONDS; time += FIT_SAMPLE_STEP) {
+			for (let index = 0; index < count; index += 1) {
+				const point = project(time, index);
+				// A particle the shape hides says nothing about where the shape reaches.
+				if (point.visibility <= 0) continue;
+				minX = Math.min(minX, point.x);
+				maxX = Math.max(maxX, point.x);
+				minY = Math.min(minY, point.y);
+				maxY = Math.max(maxY, point.y);
+			}
+		}
+		// One scale for both axes: fitting each separately would squash the sphere into an ellipse.
+		const reach = Math.max((maxX - minX) / 2, (maxY - minY) / 2);
+		return {
+			centreX: (minX + maxX) / 2,
+			centreY: (minY + maxY) / 2,
+			scale: reach > 0 && Number.isFinite(reach) ? 1 / reach : 1
+		};
+	}
+
+	/** Measures the sphere in each state it can be drawn in, for one layout. */
+	function buildShapeFits(layout: SphereSeed[]): ShapeFits {
+		const count = layout.length;
+		const fit = (mode: ThinkingOrbState): ShapeFit =>
+			measureFit((time, index) => spherePoint(mode, index, layout, time), count);
+		return { ready: fit('ready'), working: fit('working'), error: fit('error') };
+	}
+
+	/** Seats a shape's point in the unit box: centred, and reaching exactly to the edge. */
+	function fitPoint(point: OrbPoint, fit: ShapeFit): OrbPoint {
+		// `z` is depth shading, not position, so it is left as the shape drew it.
+		point.x = (point.x - fit.centreX) * fit.scale;
+		point.y = (point.y - fit.centreY) * fit.scale;
+		return point;
+	}
+
+	/**
+	 * Places one particle for a state, seated in the box.
+	 *
+	 * Seating is what keeps the mark still. Each state's sphere carries a different extent of its own
+	 * — `error` throws its dots to 1.7x, which reached past the box, where `contain: paint` cut them
+	 * off — so drawn raw the mark changed size and place as the agent's state changed. Seated, every
+	 * state draws one mark, in one position, at one size.
+	 */
 	function pointForState(
 		mode: ThinkingOrbState,
 		index: number,
 		layout: SphereSeed[],
 		time: number,
-		compact: boolean,
-		phaseTime = time
+		fits: ShapeFits
 	): OrbPoint {
-		const orb = spherePoint(mode, index, layout, time, compact);
-		const shapeMix = stateShapeMix(mode, phaseTime);
-		if (shapeMix === 0) return orb;
-		// Only `working` mixes to a shape, so this is always the strip.
-		const shape = stateShapePoint(mode, index, layout.length, time);
-		return interpolatePoint(orb, shape, shapeMix);
+		return fitPoint(spherePoint(mode, index, layout, time), fits[mode]);
 	}
 
 	/** Linearly interpolates every field between two orb particle snapshots. */
@@ -327,6 +284,7 @@
 		let lastCanvasSize = 0;
 		let lastDpr = 0;
 		let sphereLayout: SphereSeed[] = [];
+		let shapeFits: ShapeFits | undefined;
 		let lastDrawnState: ThinkingOrbState | null = null;
 		let lastDrawnSize = 0;
 
@@ -335,7 +293,10 @@
 			// stupidity:allow Q3 -- named helper
 			const dpr = Math.min(2, window.devicePixelRatio || 1);
 			if (lastCanvasSize !== size || lastDpr !== dpr) {
-				if (lastCanvasSize !== size) sphereLayout = buildSphereLayout(size);
+				if (lastCanvasSize !== size || shapeFits === undefined) {
+					sphereLayout = buildSphereLayout(size);
+					shapeFits = buildShapeFits(sphereLayout);
+				}
 				canvasElement.width = Math.max(1, Math.round(size * dpr));
 				canvasElement.height = Math.max(1, Math.round(size * dpr));
 				context.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -363,6 +324,8 @@
 
 			const compact = size <= 36;
 			const layout = sphereLayout;
+			const fits = shapeFits;
+			if (fits === undefined) return;
 			const count = layout.length;
 			const transitionDuration = compact ? 145 : 190;
 			const transitionProgress = staticFrame
@@ -370,18 +333,17 @@
 				: clamp((now - transitionStarted) / transitionDuration);
 			const mix = 1 - (1 - transitionProgress) ** 4;
 			const elapsed = staticFrame ? 2.25 : now / 1000;
-			const stateElapsed = staticFrame ? 2.25 : Math.max(0, (now - transitionStarted) / 1000);
 			/**
-			 * The sphere sits inside its box the way a stroke icon does, not filling it.
+			 * The mark sits inside its box the way a stroke icon does, not filling it.
 			 *
-			 * At `0.405` the dots reached about 88% of the box once their own radius is counted, while a
-			 * Lucide glyph draws roughly 20 of its 24 units — so beside one, at the identical 16px box
-			 * every caller passes, the orb read as the larger mark and sat visibly proud of the row.
+			 * Every shape is seated in the unit box before it gets here, so this radius is the whole of
+			 * the mark's size in every state: the dots reach `radius` plus their own, and no further.
 			 *
-			 * The correction is more than the arithmetic difference, on purpose. A filled disc of dots
-			 * carries far more visual mass than an outline of the same diameter, so matching the drawn
-			 * extent alone would still look bigger; this lands the sphere near 78% of the box, which is
-			 * where it reads as the same size as the icons above and below it.
+			 * A Lucide glyph draws roughly 20 of its 24 units, so at the identical 16px box every caller
+			 * passes, matching that arithmetic would leave the orb reading as the larger mark: a disc of
+			 * dots carries far more visual mass than an outline of the same diameter. At `0.33` the mark
+			 * draws to about 73% of the box, which is where it reads as the same size as the icons above
+			 * and below it.
 			 *
 			 * Applied here rather than by shrinking `size` at the call sites: the box is the layout
 			 * contract every caller shares with `size-4`, and it is the drawing inside it that was wrong.
@@ -391,8 +353,8 @@
 			const points: Array<OrbPoint & { index: number }> = [];
 
 			for (let index = 0; index < count; index += 1) {
-				const from = pointForState(previousState, index, layout, elapsed, compact);
-				const to = pointForState(targetState, index, layout, elapsed, compact, stateElapsed);
+				const from = pointForState(previousState, index, layout, elapsed, fits);
+				const to = pointForState(targetState, index, layout, elapsed, fits);
 				points.push({ ...interpolatePoint(from, to, mix), index });
 			}
 			points.sort((a, b) => a.z - b.z || a.index - b.index);

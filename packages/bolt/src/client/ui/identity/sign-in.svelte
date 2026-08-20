@@ -121,6 +121,7 @@
 		<form
 			onsubmit={(event) => {
 				event.preventDefault();
+				void verify();
 			}}
 		>
 			<Stack gap="md">
@@ -131,12 +132,7 @@
 				{#if errorMessage}
 					<p class="text-sm text-destructive" role="alert">{errorMessage}</p>
 				{/if}
-				<Button
-					type="button"
-					class="w-full"
-					disabled={submitting || code.length !== 6}
-					onclick={() => void verify()}
-				>
+				<Button type="submit" class="w-full" disabled={submitting || code.length !== 6}>
 					{#if submitting}
 						<Spinner class="mr-2 h-4 w-4" />
 					{/if}
