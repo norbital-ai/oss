@@ -9,14 +9,14 @@
 		class: className,
 		children,
 		...restProps
-	}: CalendarPrimitive.PrevButtonProps = $props();
+	}: CalendarPrimitive.NextButtonProps = $props();
 </script>
 
 {#snippet Fallback()}
 	<Icon icon="lucide:chevron-right" class="size-4" />
 {/snippet}
 
-<CalendarPrimitive.PrevButton
+<CalendarPrimitive.NextButton
 	bind:ref
 	class={cn(
 		buttonVariants({ variant: 'outline' }),
