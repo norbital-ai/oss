@@ -39,7 +39,7 @@ describe('agent session refresh', () => {
 		});
 		configureAgentRuntime({
 			transport: { command },
-			subject: { userId: 'admin-1', tenantId: 'tenant', roles: ['admin'], teams: [] },
+			subject: { userId: 'admin-1', tenantId: 'tenant', teamPath: ['admin'] },
 			agentName: 'helper',
 			userId: 'admin-1'
 		});
@@ -114,7 +114,7 @@ describe('agent turn lifecycle', () => {
 		});
 		configureAgentRuntime({
 			transport: { command },
-			subject: { userId: 'admin-1', tenantId: 'tenant', roles: ['admin'], teams: [] },
+			subject: { userId: 'admin-1', tenantId: 'tenant', teamPath: ['admin'] },
 			agentName: 'helper',
 			userId: 'admin-1'
 		});
@@ -184,7 +184,7 @@ describe('agent turn lifecycle', () => {
 		});
 		configureAgentRuntime({
 			transport: { command },
-			subject: { userId: 'admin-1', tenantId: 'tenant', roles: ['admin'], teams: [] },
+			subject: { userId: 'admin-1', tenantId: 'tenant', teamPath: ['admin'] },
 			agentName: 'helper',
 			userId: 'admin-1'
 		});

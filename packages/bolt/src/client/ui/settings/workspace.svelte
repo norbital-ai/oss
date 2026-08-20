@@ -64,7 +64,10 @@
 					nullable: false,
 					values: ['active', 'suspended', 'invited']
 				},
-				{ name: 'teams', kind: 'text', nullable: true, array: true }
+				// One team, nullable. It was declared as a string array, which made the filter builder
+				// offer a set operation over a field that carries one name — and nullable because
+				// somebody nobody has placed is an ordinary member, not a data fault.
+				{ name: 'team', kind: 'text', nullable: true }
 			]
 		},
 		[INVITATIONS_COLLECTION]: {
@@ -229,11 +232,9 @@
 				<Column name="role" label="Role" card="badge" />
 				<Column name="status" label="Status" />
 				<Column
-					name="teams"
-					label="Teams"
-					sortable={false}
-					render={({ value }) =>
-						Array.isArray(value) && value.length > 0 ? value.join(', ') : '—'}
+					name="team"
+					label="Team"
+					render={({ value }) => (typeof value === 'string' && value !== '' ? value : '—')}
 				/>
 			{/snippet}
 		</CollectionTable>

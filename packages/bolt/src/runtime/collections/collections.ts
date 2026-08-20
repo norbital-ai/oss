@@ -5,7 +5,9 @@ import { AccessControl } from '../access/access-control.js';
 import { ApprovalConflict, Approvals } from '../approvals/approvals.js';
 import { Database } from '../facilities/database.js';
 import { SyncWake } from '../sync/wake.js';
-import { AI, Files, Tasks } from '../facilities/services.js';
+import { AI, Files } from '../facilities/services.js';
+import { TaskQueue } from '../tasks/tasks.js';
+import { Automations } from '../automations/automations.js';
 import { Identity, Subject } from '../identity/identity.js';
 import { Workspace } from '../workspace.js';
 import { searchableColumns } from '../../authoring/model-introspection.js';
@@ -28,6 +30,7 @@ import {
 } from './where.js';
 import { attachRelations } from './prefetch.js';
 import {
+	afterMillisOf,
 	AuthoredRuntimeService,
 	makeAuthoringApi,
 	runAuthoredHandler,
@@ -88,6 +91,82 @@ export class PendingApproval extends Schema.TaggedError<PendingApproval>()(
 	readonly category = 'pending-approval' as const;
 	readonly retryable = false;
 }
+
+/** Which of a batch's three phases a failure came out of. */
+export const MutationPhase = Schema.Literals(['prepare', 'commit', 'settle']);
+export type MutationPhase = typeof MutationPhase.Type;
+
+/**
+ * Which phase of a batched write failed, wrapped around the failure that says why.
+ *
+ * The three phases mean three different things to whoever is handling the failure, and until this
+ * existed they were indistinguishable — every one of them arrived as whatever error happened to be
+ * raised, with no way to tell how much of the write had happened by then.
+ *
+ * - `prepare` — decode, `prepare`, and the `before` hooks, all outside the transaction. **Nothing
+ *   was written.** A caller may retry the whole batch, or show the refusal and stop.
+ * - `commit` — the one transaction. It is atomic, so **nothing was written** here either, and a
+ *   caller may retry. This is separated from `prepare` because the causes are unalike: a `prepare`
+ *   failure is almost always a business rule and a `commit` failure is almost always the database.
+ * - `settle` — the read-back, the `after` hooks and the enqueue. **The write already happened.** A
+ *   caller must not retry the batch: it would write it a second time. `committed` names the rows
+ *   that are now facts so the caller can report or reconcile them.
+ *
+ * `cause` is kept rather than replaced, and this is the part that matters more than the tag. An
+ * `AuthoredRefusal` mapped to a 422 and a `PendingApproval` answered as a 202 are decisions made
+ * far downstream by `instanceof`, so a wrapper that swallowed the original would silently turn every
+ * business rule in the workspace back into a 500 — the exact regression `AuthoredRefusal` was built
+ * to end. `runtime/app.ts` unwraps this before its own mapping runs, so the phase is additive: it
+ * adds a fact nobody had, and takes nothing away.
+ */
+export class MutationPhaseFailure extends Schema.TaggedError<MutationPhaseFailure>()(
+	'Bolt.Collections.MutationPhaseFailure',
+	{
+		phase: MutationPhase,
+		collection: Schema.NonEmptyString,
+		/**
+		 * The ids the transaction carried, and only on `settle`.
+		 *
+		 * Empty on `prepare` and `commit`, because on those nothing is a fact — an empty list there is
+		 * the truth rather than a missing value. On `settle` it is every node of every graph the
+		 * transaction carried, children included, in the order they were applied.
+		 */
+		committed: Schema.Array(Schema.NonEmptyString),
+		cause: Schema.Unknown
+	}
+) {
+	readonly retryable = false;
+	/** The failure this wrapped, for a caller that would rather test than unwrap by hand. */
+	get underlying(): unknown {
+		return this.cause;
+	}
+}
+
+/**
+ * The failure a phase raised, or the phase failure it already is.
+ *
+ * A batch's phases are entered from `mutate`, which is itself reachable from a hook running inside
+ * another batch's `prepare`. Wrapping a wrapper would report the inner batch's phase as the outer
+ * one's, so the innermost — the one that actually knows what was written — wins.
+ */
+export const mutationPhaseFailure = (
+	phase: MutationPhase,
+	collection: string,
+	committed: ReadonlyArray<string>,
+	cause: unknown
+): MutationPhaseFailure =>
+	cause instanceof MutationPhaseFailure
+		? cause
+		: new MutationPhaseFailure({ phase, collection, committed, cause });
+
+/**
+ * The failure underneath a phase wrapper, or the value itself when it is not one.
+ *
+ * Used by anything that maps a failure by its type — the host boundary above all — so that adding
+ * the phase did not require every one of those tests to learn about it.
+ */
+export const unwrapMutationPhase = (cause: unknown): unknown =>
+	cause instanceof MutationPhaseFailure ? cause.cause : cause;
 
 /** Owns identifier safety, predicate compilation, and parameter rebasing. */
 const CollectionSql = {
@@ -212,6 +291,16 @@ type MutationError =
 	| PendingApproval
 	| AuthoredRefusal
 	| InvocationBudget.NestingLimitExceeded;
+/**
+ * What the *batched* path adds, and why it is not a member of `MutationError`.
+ *
+ * Only `mutate` runs in phases, so only `mutate` can say which one failed. Widening `MutationError`
+ * would have put the phase on `create`, `update`, `delete`, `import` and `resume` as well, and on
+ * every service that declares an error union containing theirs — `sync.mutate` and `agents.turn`
+ * both do — none of which can ever raise it. That is a type that says something false about five
+ * paths in order to say something true about one.
+ */
+type BatchMutationError = MutationError | MutationPhaseFailure;
 type ResumeError =
 	| Workspace.WorkspaceLookupError
 	| AccessControl.AccessDenied
@@ -259,6 +348,22 @@ export type Interface = Readonly<{
 		subject: Identity.Subject,
 		inputs: ReadonlyArray<MutationInput>
 	) => Effect.Effect<void, MutationError>;
+	/**
+	 * The batched write, and the one every batch goes through.
+	 *
+	 * On the interface rather than only behind the authoring api because it is not an authoring
+	 * convenience: it is the write path, and a command surface that wants a batch should reach the
+	 * same one a hook does rather than loop a single create.
+	 */
+	readonly mutate: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		collection: string,
+		payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
+		elevated?: boolean,
+		depth?: number,
+		options?: { readonly batchSize?: number }
+	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, BatchMutationError>;
 	readonly update: (
 		effectId: EffectId,
 		subject: Identity.Subject,
@@ -532,7 +637,8 @@ export const layer = Layer.effect(
 		const approvals = yield* Approvals.Service;
 		const ai = yield* AI.Service;
 		const files = yield* Files.Service;
-		const tasks = yield* Tasks.Service;
+		const queue = yield* TaskQueue.Service;
+		const automations = yield* Automations.Service;
 		const authored = yield* AuthoredRuntimeService;
 		// Announced from here rather than from the command boundary, because this is the only place
 		// every write actually passes through: a command, an agent tool, an import, an automation and a
@@ -566,6 +672,7 @@ export const layer = Layer.effect(
 		 * operator can find.
 		 */
 		const outboxStatements = (
+			effectId: EffectId,
 			subject: Identity.Subject,
 			collection: string,
 			id: string,
@@ -581,7 +688,7 @@ export const layer = Layer.effect(
 				record: eventRecord(operation, id, values, previous),
 				...(previous === undefined ? {} : { previous })
 			});
-			return entries.map((entry) => ({
+			const deliveries = entries.map((entry) => ({
 				sql: 'insert into bolt_integration_outbox (integration_name, binding_name, collection_name, record_id, operation, path, payload, status, last_error) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
 				parameters: [
 					entry.integration,
@@ -593,9 +700,55 @@ export const layer = Layer.effect(
 					entry.payload,
 					entry.refusal === null ? 'pending' : 'failed',
 					entry.refusal
-				]
+				] as ReadonlyArray<Schema.Json>
 			}));
+			/**
+			 * And the job that drains them, in this same transaction.
+			 *
+			 * This is what replaced a fixed `* * * * *` drain per sending integration — 1440 wakes a day
+			 * against every sending tenant's database whether or not anything was ever queued, which was
+			 * the single largest standing cost in the runtime. The delivery is now told about by the write
+			 * that caused it: the row and the job commit together, so the job cannot exist without the
+			 * delivery and the delivery cannot exist without the record change, and there is no window
+			 * where one is true and the other is not.
+			 *
+			 * One task per *integration*, not per delivery and not per record. Per integration is what the
+			 * drain already claims at — `distinct on (collection_name, record_id)` gives per-record
+			 * ordering inside one drain — and it keeps the property the minute cron had for the right
+			 * reason: a partner that is down backs off its own queue and nobody else's.
+			 */
+			const drains = [...new Set(entries.map((entry) => entry.integration))]
+				.toSorted()
+				.map((integration) => ({ integration, taskId: `${effectId}:flush:${integration}` }))
+				.flatMap(({ integration, taskId }) =>
+					queue.statements([
+						{ command: 'integrations.flush', input: { name: integration }, effectId: taskId }
+					])
+				)
+				.map((statement) => ({
+					sql: statement.sql,
+					parameters: statement.parameters as ReadonlyArray<Schema.Json>
+				}));
+			return [...deliveries, ...drains];
 		};
+
+		/**
+		 * Tells the host to come back now, because this write is about to queue a delivery.
+		 *
+		 * Sent *before* the commit, never after. A crash between the message and the commit costs a
+		 * false alarm — the host wakes, finds nothing due, re-arms — while a crash the other way round
+		 * costs a committed delivery nobody ever comes back for. That asymmetry is the whole reason the
+		 * order is fixed rather than convenient.
+		 */
+		const announceFlush = Effect.fn('Collections.announceFlush')(function* (
+			effectId: EffectId,
+			collection: string,
+			operation: 'create' | 'update' | 'delete'
+		) {
+			const subscriptions = subscriptionsFor(collection);
+			if (subscriptions.length === 0 || !watchesOperation(subscriptions, operation)) return;
+			yield* queue.wake(EffectId.make(`${effectId}:wake`), Date.now());
+		});
 		/** Whether this collection has an outbound binding that needs the row as it was before the write. */
 		const needsPreviousRow = (collection: string, operation: 'update' | 'delete'): boolean =>
 			watchesOperation(subscriptionsFor(collection), operation);
@@ -747,6 +900,16 @@ export const layer = Layer.effect(
 				findNearest(effectId, subject, { collection, ...input } as NearestInput).pipe(
 					Effect.map((rows) => rows as ReadonlyArray<Readonly<Record<string, unknown>>>)
 				),
+			runAutomation: (name, input, options) =>
+				Effect.gen(function* () {
+					const after = options?.after;
+					const taskId = yield* automations.start(effectId, subject, name, input, {
+						// The same duration vocabulary as everything else here — `'1 hour'`, `'30 seconds'`,
+						// or milliseconds — rather than a second one invented for this field.
+						...(after === undefined ? {} : { afterMillis: afterMillisOf(after) })
+					});
+					return { taskId };
+				}),
 			create: (collection, id, values) =>
 				Effect.gen(function* () {
 					yield* create(effectId, subject, { collection, id, values }, depth);
@@ -760,8 +923,8 @@ export const layer = Layer.effect(
 					return row ?? ({ norbital_id: id, ...values } as Readonly<Record<string, unknown>>);
 				}),
 			delete: (collection, id) => deleteRecord(effectId, subject, collection, id, depth),
-			mutate: (collection, payloads) =>
-				mutateMany(effectId, subject, collection, payloads, elevated, depth),
+			mutate: (collection, payloads, options) =>
+				mutate(effectId, subject, collection, payloads, elevated, depth, options),
 			approvalFindMany: (input) =>
 				findMany(effectId, subject, { collection: 'approval_request', ...input }).pipe(
 					Effect.map((rows) => rows as ReadonlyArray<Readonly<Record<string, unknown>>>)
@@ -816,52 +979,161 @@ export const layer = Layer.effect(
 			const row =
 				event === 'deleted' ? undefined : yield* readRowElevated(effectId, collection, id);
 			for (const automation of triggers) {
-				yield* tasks
-					.execute(EffectId.make(`${effectId}:event:${automation.name}`), {
-						_tag: 'Enqueue',
-						command: `automations.${automation.name}`,
-						input: {
-							args: {},
-							scope:
-								event === 'deleted' || row === undefined
-									? {}
-									: { incoming_record: row as Schema.Json },
-							bolt_run_as: subject
+				const taskId = `${effectId}:event:${automation.name}`;
+				// Ignored rather than propagated, as it always was: a change trigger must not fail the
+				// write that caused it. What changes is what an ignored failure now costs — the enqueue is
+				// a row, so an automation that throws when it runs backs off and retries instead of
+				// vanishing, and one that exhausts its attempts is a `failed` row somebody can find.
+				yield* queue
+					.enqueue(EffectId.make(taskId), [
+						{
+							command: `automations.${automation.name}`,
+							input: {
+								args: {},
+								scope:
+									event === 'deleted' || row === undefined
+										? {}
+										: { incoming_record: row as Schema.Json },
+								bolt_run_as: subject
+							},
+							effectId: taskId
 						}
-					})
+					])
 					.pipe(Effect.ignore);
 			}
+		});
+		/**
+		 * The same enqueues, for a whole batch, in one facility call.
+		 *
+		 * `emitChangeEvents` is per record and costs two round trips out of the isolate when a trigger
+		 * is declared — a read to build `incoming_record`, then an enqueue — and a batch ran it in a
+		 * sequential loop. On 89 payslips that is 178 round trips *after* the write had already
+		 * committed in one; on a 4 000-row import it is 8 000. It never showed up because the function
+		 * returns immediately when no automation watches the collection, so the cost appears the day a
+		 * workspace declares its first change trigger and looks like the trigger being slow.
+		 *
+		 * Both halves collapse. The rows were already read back for the caller, so they are passed in
+		 * rather than re-read, and `queue.enqueue` has always taken an array. Every task keeps the
+		 * effect id it had — `<batch>:mutate:<index>:event:<name>` — so an enqueue that already
+		 * happened is still recognised as the same one on a replay.
+		 */
+		const emitChangeEventsMany = Effect.fn('Collections.emitChangeEventsMany')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			collection: string,
+			records: ReadonlyArray<{
+				readonly taskScope: string;
+				readonly row: Readonly<Record<string, unknown>> | undefined;
+			}>,
+			event: 'created' | 'updated' | 'deleted'
+		) {
+			if (records.length === 0) return;
+			const triggers = Object.values(authored.automations).filter(
+				(automation) =>
+					automation.trigger._tag === 'Change' &&
+					automation.trigger.collection === collection &&
+					automation.trigger.event === event
+			);
+			if (triggers.length === 0) return;
+			const enqueues = triggers.flatMap((automation) =>
+				records.map((record) => {
+					const taskId = `${record.taskScope}:event:${automation.name}`;
+					const scope: Schema.Json =
+						event === 'deleted' || record.row === undefined
+							? {}
+							: { incoming_record: record.row as Schema.Json };
+					return {
+						command: `automations.${automation.name}`,
+						input: { args: {}, scope, bolt_run_as: subject } as Schema.Json,
+						effectId: taskId
+					};
+				})
+			);
+			// Ignored rather than propagated, as the per-row form always did: a change trigger must not
+			// fail the write that caused it.
+			yield* queue.enqueue(effectId, enqueues).pipe(Effect.ignore);
+		});
+		/**
+		 * Decodes one payload through the collection's declared input, if it has one.
+		 *
+		 * Lifted out of `runCreateHooks` because `load` sees the batch's inputs and must see them in
+		 * the same shape the handler will: a collection that declares two fields where the table has
+		 * twenty would otherwise hand its batch read the raw payload and its handler the decoded one.
+		 */
+		const decodeCreateInput = Effect.fn('Collections.decodeCreateInput')(function* (
+			collection: string,
+			values: Readonly<Record<string, Schema.Json>>,
+			module: AuthoredCollectionHookModule | undefined
+		) {
+			if (module?.create?.input === undefined) return values;
+			const decoded = yield* Schema.decodeUnknownEffect(module.create.input)(values).pipe(
+				Effect.mapError(
+					() =>
+						new AccessControl.AccessDenied({
+							action: 'create',
+							resource: collection,
+							reason: 'hook input validation failed'
+						})
+				)
+			);
+			return decoded as Readonly<Record<string, Schema.Json>>;
+		});
+		/**
+		 * The reads a batch needs, done once, handed to every record's hook in it.
+		 *
+		 * A hook is authored for one record, and one that reads is an N+1 by construction — the
+		 * attendance rules ask two questions per row, so a four-thousand-row import asks eight
+		 * thousand times. `load` is where the query a person would actually write goes: one read over
+		 * the window the batch spans, instead of two per day.
+		 *
+		 * It is not a second place to write the rule. That was `batchHandler`, which was declared,
+		 * never called, and had already drifted — one collection carried the same assertion in both of
+		 * its hooks. `load` cannot drift from `handler` because it does not restate anything: it
+		 * returns data, and the handler is still the only thing that decides.
+		 *
+		 * Undeclared, this is `undefined` and costs nothing.
+		 */
+		const runCreatePrepare = Effect.fn('Collections.runCreatePrepare')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			collection: string,
+			inputs: ReadonlyArray<Readonly<Record<string, Schema.Json>>>,
+			module: AuthoredCollectionHookModule | undefined,
+			depth: number
+		) {
+			const prepare = module?.create?.prepare;
+			if (prepare === undefined) return undefined;
+			const api = buildApi(effectId, subject, false, depth + 1);
+			return yield* runAuthoredHandler(() => prepare({ inputs, api }, api)).pipe(
+				Effect.mapError((cause) => refusalAt(cause, { collection, action: 'create.prepare' }))
+			);
 		});
 		const runCreateHooks = Effect.fn('Collections.runCreateHooks')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
 			input: MutationInput,
 			module: AuthoredCollectionHookModule | undefined,
-			depth = 0
+			depth = 0,
+			prepared: unknown = undefined
 		) {
 			const api = buildApi(effectId, subject, false, depth + 1);
-			let values = input.values;
-			if (module?.create?.input !== undefined) {
-				const decoded = yield* Schema.decodeUnknownEffect(module.create.input)(values).pipe(
-					Effect.mapError(
-						(cause) =>
-							new AccessControl.AccessDenied({
-								action: 'create',
-								resource: input.collection,
-								reason: 'hook input validation failed'
-							})
-					)
-				);
-				values = decoded as Readonly<Record<string, Schema.Json>>;
-			}
-			const before = yield* runHook<unknown>(module?.create?.before, { input: values, api }, api, {
-				collection: input.collection,
-				action: 'create.before'
-			});
-			if (before !== null && before !== undefined && typeof before === 'object') {
-				values = before as Readonly<Record<string, Schema.Json>>;
-			}
-			return values;
+			// Already decoded by the caller. `load` sees the batch's inputs and the handler sees one of
+			// them, and they must be the same shape — a collection declaring two fields where the table
+			// has twenty would otherwise hand its batch read the raw payload and its handler the
+			// decoded one.
+			const values = input.values;
+			const before = yield* runHook<unknown>(
+				module?.create?.perRecord?.before,
+				{ input: values, prepared, api },
+				api,
+				{
+					collection: input.collection,
+					action: 'create.before'
+				}
+			);
+			return before !== null && before !== undefined && typeof before === 'object'
+				? (before as Readonly<Record<string, Schema.Json>>)
+				: values;
 		});
 		const findMany: Interface['findMany'] = Effect.fn('Collections.findMany')(function* (
 			effectId: EffectId,
@@ -1055,6 +1327,7 @@ export const layer = Layer.effect(
 		 * worth into that one transaction instead of opening one per row.
 		 */
 		const createStatements = (
+			effectId: EffectId,
 			subject: Identity.Subject,
 			input: MutationInput,
 			definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
@@ -1092,25 +1365,17 @@ export const layer = Layer.effect(
 					sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation, record) values ($1, $2, $3, $4)',
 					parameters: [input.collection, input.id, 'create', input.values]
 				},
-				...outboxStatements(subject, input.collection, input.id, 'create', input.values, undefined)
+				...outboxStatements(
+					effectId,
+					subject,
+					input.collection,
+					input.id,
+					'create',
+					input.values,
+					undefined
+				)
 			];
 		};
-		const applyCreate = Effect.fn('Collections.applyCreate')(function* (
-			effectId: EffectId,
-			subject: Identity.Subject,
-			input: MutationInput,
-			definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
-			elevated = false
-		) {
-			const visibility = elevated
-				? AccessControl.unrestricted
-				: access.predicate(subject, 'create', input.collection);
-			yield* database.execute(effectId, {
-				_tag: 'Transaction',
-				statements: [...createStatements(subject, input, definition, visibility)]
-			});
-			yield* wake.announce(effectId, [input.collection]);
-		});
 		/**
 		 * Many creates, as one transaction and one announcement.
 		 *
@@ -1122,33 +1387,54 @@ export const layer = Layer.effect(
 		 * One `wake.announce` at the end rather than one per row: the announcement says a collection
 		 * changed, and saying it two hundred times says nothing more than saying it once.
 		 */
-		const applyCreateMany = Effect.fn('Collections.applyCreateMany')(function* (
+		/**
+		 * One transaction for rows that may span several collections.
+		 *
+		 * This is the only thing that writes a created row — a single `create`, a batch, and a nested
+		 * graph all arrive here. A flattened graph is a payroll run, its payslips, their lines and
+		 * their source claims, and all of them have to land together or the run is a fact its payslips
+		 * are not. So the statements are collected in the order
+		 * `flattenGraph` produced them — parent before child, because a foreign key must already name
+		 * a row — and issued once.
+		 *
+		 * The collection definition and the visibility predicate are resolved per node rather than
+		 * per call, because the nodes are not all the same collection any more. Elevation is honoured
+		 * the same way it always was: it relaxes the row predicate for a hook's own follow-ups, never
+		 * the question of whether this subject may write here at all, which `mutate` has already
+		 * asked.
+		 */
+		const applyGraph = Effect.fn('Collections.applyGraph')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			collection: string,
-			rows: ReadonlyArray<{
+			nodes: ReadonlyArray<{
+				readonly collection: string;
 				readonly id: string;
 				readonly values: Readonly<Record<string, Schema.Json>>;
 			}>,
-			definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
-			elevated = false
+			elevated: boolean
 		) {
-			if (rows.length === 0) return;
-			const visibility = elevated
-				? AccessControl.unrestricted
-				: access.predicate(subject, 'create', collection);
-			yield* database.execute(effectId, {
-				_tag: 'Transaction',
-				statements: rows.flatMap((row) => [
+			if (nodes.length === 0) return;
+			const statements: Array<ReturnType<typeof createStatements>[number]> = [];
+			const touched = new Set<string>();
+			for (const node of nodes) {
+				const definition = yield* workspace.collection(node.collection);
+				const visibility = elevated
+					? AccessControl.unrestricted
+					: access.predicate(subject, 'create', node.collection);
+				statements.push(
 					...createStatements(
+						effectId,
 						subject,
-						{ collection, id: row.id, values: row.values },
+						{ collection: node.collection, id: node.id, values: node.values },
 						definition,
 						visibility
 					)
-				])
-			});
-			yield* wake.announce(effectId, [collection]);
+				);
+				touched.add(node.collection);
+			}
+			for (const collection of touched) yield* announceFlush(effectId, collection, 'create');
+			yield* database.execute(effectId, { _tag: 'Transaction', statements });
+			yield* wake.announce(effectId, [...touched]);
 		});
 		const applyUpdate = Effect.fn('Collections.applyUpdate')(function* (
 			effectId: EffectId,
@@ -1183,6 +1469,7 @@ export const layer = Layer.effect(
 						}
 					]
 				: [];
+			yield* announceFlush(effectId, input.collection, 'update');
 			yield* database.execute(effectId, {
 				_tag: 'Transaction',
 				statements: [
@@ -1199,7 +1486,15 @@ export const layer = Layer.effect(
 						sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation, record) values ($1, $2, $3, $4)',
 						parameters: [input.collection, input.id, 'update', input.values]
 					},
-					...outboxStatements(subject, input.collection, input.id, 'update', input.values, previous)
+					...outboxStatements(
+						effectId,
+						subject,
+						input.collection,
+						input.id,
+						'update',
+						input.values,
+						previous
+					)
 				]
 			});
 			yield* wake.announce(effectId, [input.collection]);
@@ -1225,6 +1520,7 @@ export const layer = Layer.effect(
 						}
 					]
 				: [];
+			yield* announceFlush(effectId, collection, 'delete');
 			yield* database.execute(effectId, {
 				_tag: 'Transaction',
 				statements: [
@@ -1237,7 +1533,7 @@ export const layer = Layer.effect(
 						sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation) values ($1, $2, $3)',
 						parameters: [collection, id, 'delete']
 					},
-					...outboxStatements(subject, collection, id, 'delete', {}, previous)
+					...outboxStatements(effectId, subject, collection, id, 'delete', {}, previous)
 				]
 			});
 			yield* wake.announce(effectId, [collection]);
@@ -1373,15 +1669,43 @@ export const layer = Layer.effect(
 			 * `holdForApproval` stamps is what every later mutation checks, so the record can still be
 			 * moved, but only through the approval it is held by.
 			 */
-			const values = yield* runCreateHooks(effectId, subject, input, module, depth);
-			yield* applyCreate(effectId, subject, { ...input, values }, definition);
+			// A create is a batch of one, and takes the batch's path rather than a shorter one of its
+			// own: decode, load, hook. `load` over a single input costs one call and, where a
+			// collection declares none, nothing at all.
+			const decoded = yield* decodeCreateInput(input.collection, input.values, module);
+			const prepared = yield* runCreatePrepare(
+				effectId,
+				subject,
+				input.collection,
+				[decoded],
+				module,
+				depth
+			);
+			const values = yield* runCreateHooks(
+				effectId,
+				subject,
+				{ ...input, values: decoded },
+				module,
+				depth,
+				prepared
+			);
+			// The same path a batch takes, because a create *is* a batch of one — and because a
+			// `create.before` that returns the records belonging to this one has to commit them with
+			// it. `payroll_runs` is created one at a time through this function, and its run row was
+			// a fact three transactions before its payslips were.
+			yield* applyGraph(
+				effectId,
+				subject,
+				yield* flattenGraph(input.collection, values, input.id, 0),
+				false
+			);
 			if (requiresApproval(definition, visibility)) {
 				return yield* holdForApproval(effectId, subject, { ...input, values }, 'create');
 			}
-			if (module?.create?.after !== undefined) {
+			if (module?.create?.perRecord?.after !== undefined) {
 				const api = buildApi(effectId, subject, true, depth + 1);
 				const record = yield* readRowElevated(effectId, input.collection, input.id);
-				yield* runHook<unknown>(module.create.after, { record, api }, api, {
+				yield* runHook<unknown>(module.create.perRecord.after, { record, api }, api, {
 					collection: input.collection,
 					action: 'create.after'
 				});
@@ -1400,52 +1724,347 @@ export const layer = Layer.effect(
 			}
 		});
 		/**
-		 * The authored `db.<collection>.mutate([...])` batch, with the same rules a single create has.
+		 * Every batched write, and the only path a batch takes.
 		 *
-		 * It did not have them. The previous implementation mapped the payloads to N concurrent
-		 * `applyCreate` calls with the elevated flag hardcoded on, and that skipped three things at
-		 * once: the action check, the row predicate, and **every hook**. A workspace whose
-		 * `create.before` derives six not-null columns, refuses a duplicate, or normalises a date got
-		 * none of that for a batched write — so the same payload written one way was validated and
-		 * derived, and written the other way went in raw. Nothing reported the difference; the rows
-		 * were simply wrong, and only in the batch path.
+		 * Two things were wrong with what this replaces, and they pulled in opposite directions.
 		 *
-		 * The shape now:
+		 * **It cost O(N) round trips to do an O(1) job.** The write is one transaction — that part was
+		 * right — and then the batch read every row back one at a time, ran every `after` hook off its
+		 * own second read of the same row, and emitted every change event in a sequential loop of its
+		 * own. Measured on a real payroll run: 89 rows, 18.1 seconds, of which the transaction was
+		 * milliseconds. Every one of those reads is an RPC out of the guest isolate before it is a
+		 * query. A batch now costs one transaction, one read-back, and one enqueue, whatever N is, and
+		 * `mutation-facility-budget.test.ts` fails if that stops being true.
+		 *
+		 * **It wrote updates as inserts.** `ElevatedMutationPayload` has always declared
+		 * `{ norbital_id } & update` as an alternative to an insert, and every payload went through
+		 * `runCreateHooks` and `createStatements` regardless — so an update ran the create hooks and
+		 * then collided with its own primary key. Payloads are routed by `norbital_id` now.
+		 *
+		 * The shape:
 		 *
 		 * ```
-		 * ─► before ─┐
-		 * ─► before ─┼─ concurrent ─► ONE transaction ─► after ─┐
-		 * ─► before ─┘                                   after ─┼─ concurrent
-		 *                                                after ─┘
+		 * ┌─ PREPARE ── before hooks, outside the transaction ─┐
+		 * ├─ COMMIT ─── one Transaction ──────────────────────┤
+		 * └─ SETTLE ─── one read-back · after hooks · one enqueue
 		 * ```
 		 *
-		 * `before` hooks run concurrently and any refusal fails the whole batch *before* the write, so
-		 * a batch is refused with nothing written rather than half applied. The write is one round
-		 * trip. `after` hooks run concurrently once the rows exist, which is the earliest moment they
-		 * are allowed to — an `after` hook's whole premise is that its record is a fact.
+		 * Each of the three names itself in the failure it raises, through `MutationPhaseFailure`.
+		 * The distinction a caller needs is not which error but which side of the transaction it
+		 * happened on: `prepare` and `commit` wrote nothing and may be retried, `settle` did write
+		 * and must not be, and only the phase can say which.
 		 *
-		 * `elevated` is honoured rather than assumed. It is what the after-hook surface needs and what
-		 * the previous code hardcoded; passing the api's own elevation through means the same function
-		 * is correct the day `mutate` is offered to a hook running as an ordinary subject.
+		 *
+		 * `batchSize` cuts the payloads into batches that each get all three phases and their own
+		 * transaction. Batches run in sequence: two concurrent batches into one table contend on the
+		 * same rows, and stopping at a failure needs a defined frontier to stop at. A batch is also
+		 * the unit the host's CPU-span budget sees, because the transaction at its end is a facility
+		 * call and a facility call is what ends a span.
+		 *
+		 * `elevated` is honoured rather than assumed, so the same function is correct for a hook
+		 * running as an ordinary subject.
 		 */
-		const mutateMany = Effect.fn('Collections.mutate')(function* (
+		/**
+		 * How deep one nested write may go.
+		 *
+		 * The compile-time twin of this bound is the `Depth` countdown in `contracts-schema.ts`; the
+		 * two are the same number for the same reason. `relations` is a graph with cycles in it —
+		 * `payroll_runs → payslips → payroll_runs` — so without a bound a returned graph that closed a
+		 * loop would be walked until the isolate died. Refused during preparation, with nothing
+		 * written, which is the whole advantage of doing this before the transaction rather than
+		 * inside it.
+		 */
+		const GRAPH_DEPTH_LIMIT = 5;
+		/** One node of a flattened graph: which collection it belongs to, its id, and its columns. */
+		type FlatRow = {
+			readonly collection: string;
+			readonly id: string;
+			readonly values: Readonly<Record<string, Schema.Json>>;
+		};
+		/**
+		 * Splits one authored graph into the rows it names, parent first.
+		 *
+		 * A `create.before` may return its own columns and, keyed by the relation names declared in
+		 * `+relationship.ts`, the records that belong to it. This is where that becomes rows: each
+		 * node is given its id here rather than by whoever wrote it, because a child cannot carry a
+		 * foreign key to a parent whose id does not exist yet — which is the reason the client may no
+		 * longer mint one either.
+		 *
+		 * **An unrecognised key is refused, never dropped.** TypeScript catches a misspelled relation
+		 * name when the handler returns an object literal, and cannot when the handler builds its
+		 * result in a variable — which the payroll engine must, computing for a second and a half
+		 * before it has one. So the guarantee is completed here: a key that is neither a column of the
+		 * collection nor one of its declared relations fails the write and says which key it was. The
+		 * alternative is the failure this whole design exists to end — a value that was computed,
+		 * returned, and silently never stored.
+		 */
+		const flattenGraph: (
+			collection: string,
+			values: Readonly<Record<string, unknown>>,
+			id: string,
+			depth: number
+		) => Effect.Effect<
+			ReadonlyArray<FlatRow>,
+			Workspace.WorkspaceLookupError | AuthoredRefusal
+		> = Effect.fn('Collections.flattenGraph')(function* (
+			collection: string,
+			values: Readonly<Record<string, unknown>>,
+			id: string,
+			depth: number
+		) {
+			if (depth > GRAPH_DEPTH_LIMIT)
+				return yield* Effect.fail(
+					new AuthoredRefusal({
+						message: `A nested write on ${collection} is more than ${GRAPH_DEPTH_LIMIT} levels deep. A record that owns records that own records that far is usually a cycle in +relationship.ts rather than a shape anybody meant to write.`,
+						collection,
+						action: 'create'
+					})
+				);
+			const definition = yield* workspace.collection(collection);
+			const relations = workspace.definition.relations ?? [];
+			const own: Record<string, Schema.Json> = {};
+			const nested: Array<{
+				readonly collection: string;
+				readonly column: string;
+				readonly rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
+			}> = [];
+			for (const [key, value] of Object.entries(values)) {
+				if (key in definition.fields || key.startsWith('norbital_')) {
+					own[key] = value as Schema.Json;
+					continue;
+				}
+				// Read against the relation's *declared* name, and only where this collection is the
+				// source and the edge is a `many` with an endpoint. A `one` relation points at a record
+				// that has to exist already, so expanding it inline would mean inventing its target.
+				const relation = relations.find(
+					(candidate) =>
+						candidate.name === key &&
+						candidate.source === collection &&
+						candidate.cardinality === 'many' &&
+						candidate.from?.column !== undefined
+				);
+				if (relation === undefined)
+					return yield* Effect.fail(
+						new AuthoredRefusal({
+							message: `${collection} has no column or declared relation named "${key}". A create hook returned it, so it would otherwise have been dropped on the way to the database.`,
+							collection,
+							action: 'create'
+						})
+					);
+				if (!Array.isArray(value))
+					return yield* Effect.fail(
+						new AuthoredRefusal({
+							message: `"${key}" is a many relation on ${collection}, so it is written as a list of records.`,
+							collection,
+							action: 'create'
+						})
+					);
+				nested.push({
+					collection: relation.target,
+					column: relation.from?.column ?? '',
+					rows: value as ReadonlyArray<Readonly<Record<string, unknown>>>
+				});
+			}
+			// Parent first, and the order is load-bearing rather than tidy: the statements are applied
+			// in the order they are collected, so a child's foreign key must already name a row.
+			const rows: Array<FlatRow> = [{ collection, id, values: own }];
+			for (const child of nested)
+				for (const row of child.rows)
+					rows.push(
+						...(yield* flattenGraph(
+							child.collection,
+							// The link the author did not write and could not have: it is this parent's id,
+							// minted a moment ago. A value they *did* write for it is overwritten rather
+							// than honoured — the type omits the column for exactly this reason.
+							{ ...row, [child.column]: id },
+							globalThis.crypto.randomUUID(),
+							depth + 1
+						))
+					);
+			return rows;
+		});
+		const mutateBatch = Effect.fn('Collections.mutateBatch')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			collection: string,
+			identified: ReadonlyArray<{
+				readonly id: string;
+				readonly values: Readonly<Record<string, Schema.Json>>;
+			}>,
+			definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
+			elevated: boolean,
+			depth: number
+		) {
+			const module = authored.hooks[collection];
+			/**
+			 * One effect id per row, never the batch's.
+			 *
+			 * The database facility is idempotent on `(scope, effectId)` — that is what makes a
+			 * retried invocation safe — so N statements issued under one id are one statement and
+			 * N cached copies of its result. An earlier implementation ran every row's `applyCreate`
+			 * under the batch id, which is that fault directly.
+			 */
+			const rowId = (index: number): EffectId => EffectId.make(`${effectId}:mutate:${index}`);
+			/**
+			 * PREPARE, and the FLATTEN that finishes it. Outside the transaction, so any refusal fails
+			 * the batch with nothing written rather than half applied.
+			 *
+			 * Decoded, then prepared, then the per-record hooks. `prepare` is the one place a batch is
+			 * visible to authored code, and it exists so the *reads* can be batched while every rule
+			 * stays written once, for one record — four thousand rows asking "is this day owned by
+			 * leave" become one query over the window they span.
+			 *
+			 * FLATTEN turns every prepared graph into rows, parent first. Where a hook returned only
+			 * its own columns this is one row and costs nothing; where it returned the records that
+			 * belong to it — a payroll run and its payslips, an agreement and its instalments — every
+			 * one of them joins the same transaction below. That is the whole point of doing it here:
+			 * the parent is not a fact until its children are. It sits inside this phase rather than
+			 * beside it because it writes nothing, which is the only thing the phase tag promises.
+			 */
+			const preparation = yield* Effect.gen(function* () {
+				const decoded = yield* Effect.all(
+					identified.map((row) => decodeCreateInput(collection, row.values, module)),
+					{ concurrency: 'unbounded' }
+				);
+				const prepared = yield* runCreatePrepare(
+					effectId,
+					subject,
+					collection,
+					decoded,
+					module,
+					depth
+				);
+				const built = yield* Effect.all(
+					identified.map((row, index) =>
+						runCreateHooks(
+							rowId(index),
+							subject,
+							{ collection, id: row.id, values: decoded[index] ?? row.values },
+							module,
+							depth,
+							prepared
+						).pipe(Effect.map((values) => ({ id: row.id, values })))
+					),
+					{ concurrency: 'unbounded' }
+				);
+				const flattened = yield* Effect.all(
+					built.map((row) => flattenGraph(collection, row.values, row.id, 0)),
+					{ concurrency: 'unbounded' }
+				);
+				return { built, nodes: flattened.flat() };
+			}).pipe(
+				Effect.catch((cause) =>
+					Effect.fail(mutationPhaseFailure('prepare', collection, [], cause))
+				)
+			);
+			const { built, nodes } = preparation;
+			// COMMIT. One transaction for the batch, whatever it grew into — and atomic, so a failure
+			// here wrote nothing either. It is a phase of its own because the cause is a different
+			// kind of thing: `prepare` fails on a business rule, `commit` fails on the database.
+			yield* applyGraph(effectId, subject, nodes, elevated).pipe(
+				Effect.catch((cause) => Effect.fail(mutationPhaseFailure('commit', collection, [], cause)))
+			);
+			/**
+			 * SETTLE. One read, and everything downstream reads from it: an `after` hook's record and
+			 * a change trigger's `incoming_record` are the same row this already holds.
+			 *
+			 * The transaction is behind us, so a failure from here is not a failed write — it is a
+			 * completed write whose aftermath went wrong, and a caller that retries it writes the
+			 * batch twice. That is why the ids the transaction carried are attached to the failure:
+			 * they are the only way to find out what is now true.
+			 */
+			const committed = nodes.map((node) => node.id);
+			return yield* Effect.gen(function* () {
+				const rows = yield* readBack(effectId, collection, built);
+				if (module?.create?.perRecord?.after !== undefined) {
+					const after = module.create.perRecord.after;
+					yield* Effect.all(
+						built.map((row, index) =>
+							Effect.gen(function* () {
+								const api = buildApi(rowId(index), subject, true, depth + 1);
+								yield* runHook<unknown>(after, { record: rows[index], api }, api, {
+									collection,
+									action: 'create.after'
+								});
+							})
+						),
+						{ concurrency: 'unbounded' }
+					);
+				}
+				yield* emitChangeEventsMany(
+					effectId,
+					subject,
+					collection,
+					built.map((row, index) => ({ taskScope: rowId(index), row: rows[index] })),
+					'created'
+				);
+				return rows;
+			}).pipe(
+				Effect.catch((cause) =>
+					Effect.fail(mutationPhaseFailure('settle', collection, committed, cause))
+				)
+			);
+		});
+		/**
+		 * How many rows one call may write before it has to say how it wants them cut up.
+		 *
+		 * A transaction is serialised into a single `postMessage` out of the isolate, and that encode
+		 * is the one stretch of a batch that cannot be broken up without breaking the transaction —
+		 * so it is the one place batch size is load-bearing for the host's 2s span budget rather than
+		 * merely for how much a failure loses. Exceeding it is refused rather than split silently:
+		 * splitting would break the only promise this surface makes, and it would break it at exactly
+		 * the size where nobody is still watching.
+		 */
+		const MAX_BATCH_ROWS = 5_000;
+		const mutate = Effect.fn('Collections.mutate')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
 			collection: string,
 			payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
 			elevated: boolean,
-			depth: number
+			depth: number,
+			options?: { readonly batchSize?: number }
 		) {
+			yield* refuseRunawayHooks('create', collection, depth);
 			const definition = yield* workspace.collection(collection);
 			// The same gate a single create passes, and it is not skipped by elevation: elevation
 			// relaxes the *row* predicate for a hook's own follow-ups, never the question of whether
 			// this subject may create in this collection at all.
 			yield* access.authorize(subject, 'create', collection);
-			const identified = payloads.map((payload) => ({
-				id:
-					typeof payload['norbital_id'] === 'string'
-						? payload['norbital_id']
-						: globalThis.crypto.randomUUID(),
+			/**
+			 * Updates are not inserts, and this is where they stop being treated as one.
+			 *
+			 * They go through `update` a row at a time rather than joining the batch transaction.
+			 * That is correct and it is not yet cheap; making an update batch co-transactional with an
+			 * insert batch needs `applyUpdate`'s statement building lifted out of its own transaction,
+			 * which is the next piece of this work rather than part of it.
+			 */
+			const updates = payloads.filter(
+				(payload) => typeof payload['norbital_id'] === 'string'
+			) as ReadonlyArray<Readonly<Record<string, Schema.Json>>>;
+			const inserts = payloads.filter((payload) => typeof payload['norbital_id'] !== 'string');
+			const updated: Array<Readonly<Record<string, unknown>>> = [];
+			for (let index = 0; index < updates.length; index += 1) {
+				const payload = updates[index];
+				if (payload === undefined) continue;
+				const { norbital_id: id, ...values } = payload;
+				yield* update(
+					EffectId.make(`${effectId}:update:${index}`),
+					subject,
+					{ collection, id: String(id), values },
+					depth
+				);
+			}
+			if (updates.length > 0)
+				updated.push(
+					...(yield* readBack(
+						EffectId.make(`${effectId}:update:readback`),
+						collection,
+						updates.map((payload) => ({ id: String(payload['norbital_id']), values: payload }))
+					))
+				);
+			const identified = inserts.map((payload) => ({
+				id: globalThis.crypto.randomUUID(),
 				values: payload as Readonly<Record<string, Schema.Json>>
 			}));
 			// An approval-gated collection is written one row at a time, through `create`, because what
@@ -1463,58 +2082,41 @@ export const layer = Layer.effect(
 							depth
 						);
 				}
-				return yield* readBack(effectId, collection, identified);
+				return [...updated, ...(yield* readBack(effectId, collection, identified))];
 			}
-			const module = authored.hooks[collection];
-			/**
-			 * One effect id per row, never the batch's.
-			 *
-			 * The database facility is idempotent on `(scope, effectId)` — that is what makes a
-			 * retried invocation safe — so N statements issued under one id are one statement and
-			 * N cached copies of its result. The previous implementation ran every row's
-			 * `applyCreate` under the batch id, which is that fault directly; the hooks would
-			 * inherit it here if their reads shared one.
-			 */
-			const rowId = (index: number): EffectId => EffectId.make(`${effectId}:mutate:${index}`);
-			const prepared = yield* Effect.all(
-				identified.map((row, index) =>
-					runCreateHooks(
-						rowId(index),
+			const size = options?.batchSize ?? identified.length;
+			if (size > MAX_BATCH_ROWS)
+				return yield* Effect.fail(
+					new AuthoredRefusal({
+						message: `A single transaction may carry ${MAX_BATCH_ROWS.toLocaleString('en')} rows; this one asks for ${size.toLocaleString('en')}. Pass a batchSize rather than relying on one transaction for all of them.`,
+						collection,
+						action: 'create'
+					})
+				);
+			const written: Array<Readonly<Record<string, unknown>>> = [];
+			// Sequential, deliberately. See the note above `mutateBatch`.
+			for (let offset = 0; offset < identified.length; offset += Math.max(size, 1)) {
+				const slice = identified.slice(offset, offset + Math.max(size, 1));
+				// A single batch keeps the call's own effect id, so the ids every statement and every
+				// enqueued task is filed under do not move when nobody asked for batching.
+				const batchId =
+					slice.length === identified.length
+						? effectId
+						: EffectId.make(`${effectId}:b${offset / Math.max(size, 1)}`);
+				written.push(
+					...(yield* mutateBatch(
+						batchId,
 						subject,
-						{ collection, id: row.id, values: row.values },
-						module,
+						collection,
+						slice,
+						definition,
+						elevated,
 						depth
-					).pipe(Effect.map((values) => ({ id: row.id, values })))
-				),
-				{ concurrency: 'unbounded' }
-			);
-			yield* applyCreateMany(effectId, subject, collection, prepared, definition, elevated);
-			if (module?.create?.after !== undefined) {
-				const after = module.create.after;
-				yield* Effect.all(
-					prepared.map((row, index) =>
-						Effect.gen(function* () {
-							const api = buildApi(rowId(index), subject, true, depth + 1);
-							const record = yield* readRowElevated(rowId(index), collection, row.id);
-							yield* runHook<unknown>(after, { record, api }, api, {
-								collection,
-								action: 'create.after'
-							});
-						})
-					),
-					{ concurrency: 'unbounded' }
+					))
 				);
 			}
-			// Announced per row, because a change event names a record: a subscriber watching one row
-			// has no way to read "the collection changed" as news about theirs.
-			for (let index = 0; index < prepared.length; index += 1) {
-				const row = prepared[index];
-				if (row !== undefined)
-					yield* emitChangeEvents(rowId(index), subject, collection, row.id, 'created');
-			}
-			return yield* readBack(effectId, collection, prepared);
+			return [...updated, ...written];
 		});
-		/** The written rows as they now stand, falling back to what was submitted when one is invisible. */
 		const readBack = Effect.fn('Collections.readBack')(function* (
 			effectId: EffectId,
 			collection: string,
@@ -1523,21 +2125,23 @@ export const layer = Layer.effect(
 				readonly values: Readonly<Record<string, Schema.Json>>;
 			}>
 		) {
-			const read: Array<Readonly<Record<string, unknown>>> = [];
-			for (const [index, row] of rows.entries()) {
-				// Each read under its own id, for the reason the writes are: the facility answers a
-				// repeated `(scope, effectId)` out of its idempotency cache, so N reads sharing one id
-				// would be one read and N copies of the first row.
-				const stored = yield* readRowElevated(
-					EffectId.make(`${effectId}:read:${index}`),
-					collection,
-					row.id
-				);
-				read.push(
-					stored ?? ({ norbital_id: row.id, ...row.values } as Readonly<Record<string, unknown>>)
-				);
+			if (rows.length === 0) return [] as ReadonlyArray<Readonly<Record<string, unknown>>>;
+			const result = yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: `select * from ${quoteIdentifier(collection)} where norbital_id = any($1)`,
+				parameters: [rows.map((row) => row.id)]
+			});
+			const stored = new Map<string, Readonly<Record<string, unknown>>>();
+			for (const row of result.rows) {
+				if (typeof row !== 'object' || row === null) continue;
+				const id = Reflect.get(row, 'norbital_id');
+				if (typeof id === 'string') stored.set(id, row as Readonly<Record<string, unknown>>);
 			}
-			return read as ReadonlyArray<Readonly<Record<string, unknown>>>;
+			return rows.map(
+				(row) =>
+					stored.get(row.id) ??
+					({ norbital_id: row.id, ...row.values } as Readonly<Record<string, unknown>>)
+			) as ReadonlyArray<Readonly<Record<string, unknown>>>;
 		});
 		const count = Effect.fn('Collections.count')(function* (effectId, subject, input) {
 			const definition = yield* workspace.collection(input.collection);
@@ -1588,13 +2192,13 @@ export const layer = Layer.effect(
 			// the hook needs it because it always has. The read is skipped entirely when neither does,
 			// so a collection with no `update` hook and no outbound binding costs nothing for it.
 			const wantsPrevious =
-				module?.update?.before !== undefined || needsPreviousRow(input.collection, 'update');
+				module?.update?.perRecord?.before !== undefined || needsPreviousRow(input.collection, 'update');
 			const existing = wantsPrevious
 				? yield* readRowElevated(effectId, input.collection, input.id)
 				: undefined;
-			if (module?.update?.before !== undefined) {
+			if (module?.update?.perRecord?.before !== undefined) {
 				const before = yield* runHook<unknown>(
-					module.update.before,
+					module.update.perRecord.before,
 					{ input: values, existing, api },
 					api,
 					{ collection: input.collection, action: 'update.before' }
@@ -1612,10 +2216,10 @@ export const layer = Layer.effect(
 				false,
 				existing
 			);
-			if (module?.update?.after !== undefined) {
+			if (module?.update?.perRecord?.after !== undefined) {
 				const afterApi = buildApi(effectId, subject, true, depth + 1);
 				const record = yield* readRowElevated(effectId, input.collection, input.id);
-				yield* runHook<unknown>(module.update.after, { record, api: afterApi }, afterApi, {
+				yield* runHook<unknown>(module.update.perRecord.after, { record, api: afterApi }, afterApi, {
 					collection: input.collection,
 					action: 'update.after'
 				});
@@ -1639,26 +2243,26 @@ export const layer = Layer.effect(
 				const module = authored.hooks[collection];
 				const api = buildApi(effectId, subject, false, depth + 1);
 				let existing: Readonly<Record<string, unknown>> | undefined;
-				if (module?.delete?.before !== undefined || needsPreviousRow(collection, 'delete')) {
+				if (module?.delete?.perRecord?.before !== undefined || needsPreviousRow(collection, 'delete')) {
 					// An outbound delete binding needs this read for a reason no hook has: after the statement
 					// runs there is no row left to describe, so a delivery that did not capture it first can
 					// only say that *something* with this id is gone.
 					existing = yield* readRowElevated(effectId, collection, id);
 				}
-				if (module?.delete?.before !== undefined) {
-					yield* runHook<unknown>(module.delete.before, { existing, api }, api, {
+				if (module?.delete?.perRecord?.before !== undefined) {
+					yield* runHook<unknown>(module.delete.perRecord.before, { existing, api }, api, {
 						collection,
 						action: 'delete.before'
 					});
 				}
 				const record =
-					module?.delete?.after !== undefined
+					module?.delete?.perRecord?.after !== undefined
 						? (existing ?? (yield* readRowElevated(effectId, collection, id)))
 						: undefined;
 				yield* applyDelete(effectId, subject, collection, id, definition, false, existing);
-				if (module?.delete?.after !== undefined) {
+				if (module?.delete?.perRecord?.after !== undefined) {
 					const afterApi = buildApi(effectId, subject, true, depth + 1);
-					yield* runHook<unknown>(module.delete.after, { record, api: afterApi }, afterApi, {
+					yield* runHook<unknown>(module.delete.perRecord.after, { record, api: afterApi }, afterApi, {
 						collection,
 						action: 'delete.after'
 					});
@@ -1752,10 +2356,10 @@ export const layer = Layer.effect(
 					// waiting on a decision.
 					yield* releaseLock(effectId, operation.collection, operation.id);
 					const createdModule = authored.hooks[operation.collection];
-					if (createdModule?.create?.after !== undefined) {
+					if (createdModule?.create?.perRecord?.after !== undefined) {
 						const api = buildApi(effectId, operation.subject, true);
 						const record = yield* readRowElevated(effectId, operation.collection, operation.id);
-						yield* runHook<unknown>(createdModule.create.after, { record, api }, api, {
+						yield* runHook<unknown>(createdModule.create.perRecord.after, { record, api }, api, {
 							collection: operation.collection,
 							action: 'create.after'
 						});
@@ -1792,6 +2396,8 @@ export const layer = Layer.effect(
 			count,
 			create,
 			createMany,
+			mutate: (effectId, subject, collection, payloads, elevated = false, depth = 0, options) =>
+				mutate(effectId, subject, collection, payloads, elevated, depth, options),
 			update,
 			delete: deleteRecord,
 			resume,

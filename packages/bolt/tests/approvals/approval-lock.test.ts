@@ -5,6 +5,7 @@ import { EffectId, type DatabaseRequest, type DatabaseResponse } from '@norbital
 import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
 import { AccessControl } from '../../src/runtime/access/access-control.js';
 import { ApprovalConflict, Approvals } from '../../src/runtime/approvals/approvals.js';
+import { Automations } from '../../src/runtime/automations/automations.js';
 import { Collections, PendingApproval } from '../../src/runtime/collections/collections.js';
 import { SyncWake } from '../../src/runtime/sync/wake.js';
 import {
@@ -13,7 +14,9 @@ import {
 } from '../../src/runtime/collections/authored.js';
 import { Database } from '../../src/runtime/facilities/database.js';
 import { AI, Files, Tasks, Transport } from '../../src/runtime/facilities/services.js';
+import { InvocationBudget } from '../../src/runtime/budget.js';
 import { Subject } from '../../src/runtime/identity/identity.js';
+import { TaskQueue } from '../../src/runtime/tasks/tasks.js';
 import { Workspace } from '../../src/runtime/workspace.js';
 import { testCallContext } from '../support/bolt-test-layer.js';
 
@@ -54,7 +57,6 @@ const definition = workspace({
 		policy({
 			name: 'admin-data',
 			effect: 'allow',
-			roles: ['admin'],
 			grants: [
 				{ collection: 'orders', action: 'create' },
 				{ collection: 'orders', action: 'update' },
@@ -74,10 +76,14 @@ const definition = workspace({
 			name: 'admin-approval',
 			effect: 'allow',
 			actions: ['approve'],
-			roles: ['admin'],
 			apps: ['approvals']
 		})
 	],
+	teams: {
+		'admin-data': ['admin-data'],
+		'admin-approval': ['admin-approval'],
+		admin: ['admin-data', 'admin-approval']
+	},
 	agents: [],
 	automations: [],
 	channels: [],
@@ -88,8 +94,8 @@ const definition = workspace({
 const subject = Subject.make({
 	userId: 'admin-1',
 	tenantId: 'tenant-1',
-	roles: ['admin'],
-	teams: ['approvers']
+	teamPath: ['admin'],
+	team: 'approvers'
 });
 
 type Row = Record<string, Schema.Json>;
@@ -105,7 +111,7 @@ const quotedName = (sql: string, keyword: 'into' | 'from' | 'update'): string | 
 	return match?.[1]?.replaceAll('""', '"');
 };
 
-const memoryDatabaseLayer = () =>
+const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 	Layer.effect(
 		Database.Service,
 		Effect.gen(function* () {
@@ -116,6 +122,13 @@ const memoryDatabaseLayer = () =>
 				sql: string,
 				parameters: ReadonlyArray<Schema.Json>
 			) {
+				if (sql.includes('bolt_task')) {
+					// The follow-up work a decision schedules is a row now, not a facility call, so the
+					// tests observe it the way a host would: as `bolt_task` inserts, with the command
+					// first among the parameters.
+					taskInserts.push(JSON.stringify(parameters));
+					return { rows: [], affectedRows: 1 } satisfies DatabaseResponse;
+				}
 				if (sql.includes('insert into bolt_approvals')) {
 					const requestId = String(parameters[0]);
 					const current = yield* Ref.get(approvals);
@@ -317,32 +330,32 @@ const memoryDatabaseLayer = () =>
 const context = testCallContext('approval-lock');
 
 /**
- * A tasks facility that remembers what it was asked to enqueue.
+ * A tasks facility that accepts the runtime's only message, `Wake`.
  *
  * The follow-up work a decision schedules is the part that is easy to leave out — `resume` was
  * enqueued on approval and nothing at all was enqueued on rejection, so the lock a refused request
- * had taken was never released by anybody. Recording the calls is what lets a test say that the
- * refusal path schedules its cleanup, rather than only that the cleanup works when called by hand.
+ * had taken was never released by anybody. The enqueue is now a `bolt_task` row in the caller's own
+ * database (observed through `taskInserts`), and the wake is the host's cue that a row is waiting.
  */
-const recordingTasks = (recorded: Array<string>) =>
+const recordingTasks = () =>
 	Tasks.layer(
 		{
-			// The binding is called as `(metadata, request)`; the command is in the second argument.
-			call: (_metadata: unknown, request: unknown) => {
-				recorded.push(JSON.stringify(request));
-				return Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } });
-			}
+			call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } })
 		},
 		context
 	);
 
 const workspaceLayer = Workspace.layer(definition);
 const testLayer = (recorded: Array<string> = []) => {
-	const tasks = recordingTasks(recorded);
-	const database = memoryDatabaseLayer();
+	const tasks = recordingTasks();
+	const database = memoryDatabaseLayer(recorded);
+	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(database, tasks)));
+	const automations = Automations.layer.pipe(
+		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, InvocationBudget.layer(0)))
+	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
 	const approvalsLayer = Approvals.layer.pipe(
-		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, tasks))
+		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue))
 	);
 	const authoredLayer = Layer.succeed(AuthoredRuntimeService, emptyAuthoredRuntime);
 	const collectionsLayer = Collections.layer.pipe(
@@ -354,7 +367,8 @@ const testLayer = (recorded: Array<string> = []) => {
 				database,
 				AI.layer(undefined, context),
 				Files.layer(undefined, context),
-				tasks,
+				taskQueue,
+				automations,
 				authoredLayer,
 				// No transport is bound, so the announcement is ignored — which is exactly the behaviour
 				// under test here: a write path must not depend on anywhere to publish.

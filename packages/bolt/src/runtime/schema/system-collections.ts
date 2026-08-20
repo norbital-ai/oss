@@ -107,12 +107,11 @@ const authUser = collection({
 		 * losing one of the two answers.
 		 *
 		 * It is not a role because `subjectHasPolicy` matches a subject to a policy by role, and there
-		 * is no policy called `admin` in any workspace — a founder handed `roles: ['admin']` matches
-		 * nothing, sees no app and reads no collection. The previous arrangement worked around that by
-		 * granting the founder every policy's roles at once, which made "administers the workspace"
-		 * indistinguishable from "is simultaneously an employee, a supervisor, a manager and an HR
-		 * controller"; any change to the ladder silently changed what an administrator was, and a
-		 * routing change that stopped supplying roles removed their authority entirely.
+		 * is no policy called `admin` in any workspace, and a team that named one would confer
+		 * nothing. The arrangement this replaces put the founder in every team the workspace
+		 * mentioned, which made "administers the workspace" indistinguishable from "is simultaneously
+		 * an employee, a supervisor, a manager and an HR controller"; any change to the ladder
+		 * silently changed what an administrator was.
 		 *
 		 * Administration is a property of the person, so it lives on the person. `AccessControl`
 		 * short-circuits on it before it consults a single policy.
@@ -123,8 +122,20 @@ const authUser = collection({
 		status: field.string({ required: true, sqlDefault: "'normal'" }),
 		/** The workspace this subject belongs to — Bolt's concept, not Better Auth's. */
 		tenantId: field.string({ indexed: true }),
-		roles: field.json({ required: true, sqlDefault: "'[]'::jsonb" }),
-		teams: field.json({ required: true, sqlDefault: "'[]'::jsonb" })
+		/**
+		 * The one team this person belongs to, or null.
+		 *
+		 * One, not many, and that is the simplification the rest of this design rests on: there is no
+		 * union across memberships to resolve, no join table, and every combination of authority
+		 * anybody actually holds has a name in `+teams.ts` that appears in a diff. Two people who
+		 * need different authority belong to two teams; one person who needs a combination belongs to
+		 * a team that is that combination.
+		 *
+		 * Nullable, because a person can exist before anybody has placed them — a founder admitted
+		 * into an empty workspace, an address that has just verified a code. Such a subject holds no
+		 * policies at all, which is the correct answer and a visible one.
+		 */
+		team_id: field.uuid({ indexed: true })
 	},
 	history: false
 });
@@ -192,6 +203,52 @@ const authConfig = collection({
  * policy and from replication because they carry a person's address, roles and teams; an uploaded
  * file is ordinary workspace data that the surfaces showing it must be able to read.
  */
+/**
+ * A team: who a person belongs to, and nothing about what that entitles them to.
+ *
+ * The split is the point, and it is the whole reason this collection can be a runtime row at all.
+ * **Membership** changes constantly and belongs to an operator — somebody joins, somebody moves,
+ * somebody leaves — so it is a row, edited from a dashboard, with no deploy. **Authority** is which
+ * policies a team holds, and that is declared in the workspace's own `+teams.ts` and compiled into
+ * the release. A row that granted a policy would be a privilege escalation performed with an
+ * `update` statement, in a place no diff, no review and no type check can see.
+ *
+ * So a team row carries a name and a position, and the name is what binds it to the authored map.
+ * A team whose name the release does not declare is inert rather than broken: it holds no policies,
+ * it still works as an approval target, and a deploy that removes a team therefore takes its
+ * authority away without orphaning anybody.
+ *
+ * `parent_id` is the hierarchy. It is nullable, self-referential, and `set null` on delete — a team
+ * disappearing must not take its children's rows with it.
+ */
+const team = collection({
+	name: 'bolt_team',
+	fields: {
+		/**
+		 * The binding to the authored map, and to every `approvers` entry that names this team.
+		 *
+		 * Unique, and compared folded wherever it is compared. Today `roles` matched policies
+		 * case-insensitively while `teams` matched approvers case-sensitively — two string arrays
+		 * with two different rules, and the second one silently produced approvals nobody could
+		 * decide. One rule, enforced by the index.
+		 */
+		name: field.string({ required: true, indexed: true, unique: true }),
+		description: field.string(),
+		/** The parent in the hierarchy, or null at the root. See `resolveTeamPolicies`. */
+		parent_id: field.uuid(),
+		/**
+		 * Whether this team also holds the policies of the teams beneath it.
+		 *
+		 * Off by default, deliberately. `rowPredicate` **unions** the `where` of every matching
+		 * grant, so composition can only ever widen — a single unconditional grant anywhere in the
+		 * inherited set collapses a narrowing declared above it, with no diff to look at. Inheritance
+		 * is therefore something a team opts into, not something the tree does on its behalf.
+		 */
+		inherits: field.boolean({ required: true, sqlDefault: 'false' })
+	},
+	history: false
+});
+
 const documentAsset = collection({
 	name: 'document_asset',
 	fields: {
@@ -204,9 +261,14 @@ const documentAsset = collection({
 	history: false
 });
 
+/**
+ * The collections authentication itself reads, and therefore the ones a host must create before it
+ * can migrate anything else. `bolt_team` is among them because resolving a subject now joins it: a
+ * host that created the auth tables and not this one would authenticate nobody.
+ */
 export const IDENTITY_COLLECTIONS: ReadonlyArray<
 	CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
-> = Object.freeze([authUser, authSession, authAccount, authVerification, authConfig]);
+> = Object.freeze([authUser, authSession, authAccount, authVerification, authConfig, team]);
 
 export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	CollectionDefinition<Readonly<Record<string, FieldDefinition>>>

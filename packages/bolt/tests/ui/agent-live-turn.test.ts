@@ -38,7 +38,7 @@ describe.skipIf(server === undefined || server.length === 0)('live agent convers
 					return response.json();
 				}
 			},
-			subject: { userId: 'admin-1', tenantId, roles: ['admin'], teams: [] },
+			subject: { userId: 'admin-1', tenantId, teamPath: ['admin'] },
 			agentName,
 			userId: 'admin-1'
 		});

@@ -88,9 +88,9 @@ describe('refuse, as a typed refusal rather than a defect', () => {
 
 	it('passes a value and a resolved promise through untouched', async () => {
 		await expect(Effect.runPromise(runAuthoredHandler(() => 41 + 1))).resolves.toBe(42);
-		await expect(
-			Effect.runPromise(runAuthoredHandler(async () => 'settled'))
-		).resolves.toBe('settled');
+		await expect(Effect.runPromise(runAuthoredHandler(async () => 'settled'))).resolves.toBe(
+			'settled'
+		);
 	});
 
 	it('substitutes a sentence rather than losing the refusal when one is empty', async () => {
@@ -113,27 +113,32 @@ describe('a refusal raised from a real hook', () => {
 				hooks: {
 					people: {
 						create: {
-							before: {
-								description: 'Refuses a person with no team.',
-								/**
-								 * Typed as the *runtime* carrier declares it, not as an author would write it.
-								 *
-								 * These two shapes are deliberately different and it matters which one a test is
-								 * standing in. `AuthoredHookPoint.handler` is `(context: unknown, api: unknown) =>
-								 * unknown`, because by the time the runtime holds a handler the authoring types have
-								 * already done their work at compile time. An author gets the narrow one —
-								 * `CreateBefore` in `authoring/contracts-schema.ts` types the context properly, and
-								 * `satisfies Hooks` from the generated `$types.js` is what applies it.
-								 *
-								 * This suite hand-builds an `AuthoredRuntime`, which is the runtime side, so it
-								 * conforms to the runtime shape and narrows inside. Widening the declared type to
-								 * make this line compile would be the fix in the wrong direction: it would loosen the
-								 * contract every real workspace is written against in order to suit a double.
-								 */
-								handler: (context: unknown) => {
-									const input = (context as { readonly input: Record<string, unknown> }).input;
-									if (input['team'] == null) refuse('A person must belong to a team.');
-									return input;
+							// Nested under `perRecord` because that is where a rule authored for one record now
+							// lives: `prepare` runs once for the batch and decides nothing, and `before` runs once
+							// per record, which is the only place a refusal can come from.
+							perRecord: {
+								before: {
+									description: 'Refuses a person with no team.',
+									/**
+									 * Typed as the *runtime* carrier declares it, not as an author would write it.
+									 *
+									 * These two shapes are deliberately different and it matters which one a test is
+									 * standing in. `AuthoredHookPoint.handler` is `(context: unknown, api: unknown) =>
+									 * unknown`, because by the time the runtime holds a handler the authoring types have
+									 * already done their work at compile time. An author gets the narrow one —
+									 * `CreateBefore` in `authoring/contracts-schema.ts` types the context properly, and
+									 * `satisfies Hooks` from the generated `$types.js` is what applies it.
+									 *
+									 * This suite hand-builds an `AuthoredRuntime`, which is the runtime side, so it
+									 * conforms to the runtime shape and narrows inside. Widening the declared type to
+									 * make this line compile would be the fix in the wrong direction: it would loosen the
+									 * contract every real workspace is written against in order to suit a double.
+									 */
+									handler: (context: unknown) => {
+										const input = (context as { readonly input: Record<string, unknown> }).input;
+										if (input['team'] == null) refuse('A person must belong to a team.');
+										return input;
+									}
 								}
 							}
 						}

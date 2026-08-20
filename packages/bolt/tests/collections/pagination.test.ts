@@ -16,6 +16,7 @@ import {
 	makeBoltTestRuntime,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { seedSession } from '../support/fixture-identity.js';
 
 /**
  * Keyset pagination over real SQL.
@@ -46,8 +47,11 @@ const people = workspace({
 	],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
 	],
+	teams: {
+		admin: ['admin']
+	},
 	agents: [],
 	automations: [],
 	channels: [],
@@ -94,17 +98,21 @@ const seed = (harness: BoltTestRuntime) =>
 		})
 	);
 
+/**
+ * The credential every paged request below carries.
+ *
+ * Placed in `admin`, the one team this workspace declares — it holds the policy granting `*`, and a
+ * caller in no team holds nothing, so the row predicate would narrow every page to empty and the
+ * cursor walk would prove nothing.
+ */
 const session = (harness: BoltTestRuntime) =>
-	harness.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[
-			'admin-token',
-			adminSubject.userId,
-			adminSubject.tenantId,
-			JSON.stringify(['admin']),
-			'admin@example.test'
-		]
-	);
+	seedSession(harness, {
+		token: 'admin-token',
+		user: adminSubject.userId,
+		team: 'admin',
+		tenantId: adminSubject.tenantId,
+		email: 'admin@example.test'
+	});
 
 const findMany = (input: Record<string, unknown>) =>
 	Invocation.cases.Command.make({

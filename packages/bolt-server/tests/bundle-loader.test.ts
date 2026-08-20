@@ -1,12 +1,17 @@
 import { assert, it } from '@effect/vitest';
-import { EnvironmentName, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
+import {
+	EnvironmentName,
+	PROTOCOL_VERSION,
+	ReleaseId,
+	TenantId
+} from '@norbital-ai/bolt-protocol';
 import { Effect } from 'effect';
 import { BundleLoadError, BundleLoader, makeLayer } from '../src/bundle-loader.js';
 
 const validModule = {
-	protocolVersion: 1,
+	protocolVersion: PROTOCOL_VERSION,
 	manifest: {
-		protocolVersion: 1,
+		protocolVersion: PROTOCOL_VERSION,
 		artifactId: 'loader-fixture',
 		artifactVersion: 'one',
 		schemaFingerprint: 'schema-one',
@@ -22,7 +27,7 @@ const validModule = {
 		integrations: []
 	},
 	dispatch: async () => ({ _tag: 'Success', response: { status: 204, headers: {} } }),
-	activate: async () => ({ _tag: 'Activated', registrations: [] })
+	activate: async () => ({ _tag: 'Activated', registrations: [], nextDueAtEpochMs: null })
 };
 
 it.effect('loads one immutable bundle and refuses access after disposal', () =>

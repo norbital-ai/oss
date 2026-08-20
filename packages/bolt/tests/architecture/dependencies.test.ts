@@ -28,6 +28,43 @@ describe('Bolt architecture boundaries', () => {
 		);
 		expect(auditImports(Object.fromEntries(entries))).toEqual([]);
 	});
+
+	/**
+	 * The bot check belongs to the host, and no trace of it may exist in here.
+	 *
+	 * Not "bolt implements no check" — the stronger claim, that a tenant runtime does not carry the
+	 * vocabulary either. Bolt's sign-in takes a snippet to render above its button and a boolean
+	 * saying the host is not ready; it is told the answer and never the question. A prop, a comment
+	 * or a copy key naming somebody's challenge vendor would make this component look like the place
+	 * a bot check belongs, which is how one eventually gets written here — needing the host's secret
+	 * in a guest environment that has no business holding one.
+	 *
+	 * Whoever gates a code request, and how, is answered in Colony, in front of the forward.
+	 */
+	it('carries no trace of a bot check, in any form', async () => {
+		const traces = [
+			// The vendors. Named outright rather than by mechanism, so a comment cannot reintroduce the
+			// expectation that this is where such a thing lives.
+			/turnstile/i,
+			/captcha/i,
+			/challenges\.cloudflare\.com/i,
+			// The mechanism, for a vendor nobody has thought of yet: a server-side verification call,
+			// the field a solved token is posted in, and the option that mounts a widget.
+			/siteverify/i,
+			/sitekey/i
+		];
+		const files = await sourceFiles(new URL('../../src', import.meta.url).pathname);
+		const offenders = (
+			await Promise.all(
+				files.map(async (file) => {
+					const source = await readFile(file, 'utf8');
+					const matched = traces.filter((pattern) => pattern.test(source));
+					return matched.length === 0 ? [] : [`${file}: ${matched.map(String).join(', ')}`];
+				})
+			)
+		).flat();
+		expect(offenders).toEqual([]);
+	});
 });
 
 /**

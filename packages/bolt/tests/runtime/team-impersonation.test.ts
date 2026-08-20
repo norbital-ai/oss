@@ -10,13 +10,10 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { AccessControl } from '../../src/runtime/access/access-control.js';
-import {
-	ADMIN_STATUS,
-	NORMAL_STATUS,
-	type SubjectStatus
-} from '../../src/runtime/identity/identity.js';
+import { ADMIN_STATUS } from '../../src/runtime/identity/identity.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
+import { seedSession, seedTeam } from '../support/fixture-identity.js';
 
 /**
  * Viewing the workspace as one of its teams, through the boundary a browser actually reaches.
@@ -66,44 +63,30 @@ const command = (name: string, credential: string, input: unknown = null, team?:
 	});
 
 /**
- * A person in this tenant, and a live session naming them.
+ * The teams the picker offers and a preview resolves against.
  *
- * `status` is a parameter and it is the whole of who may impersonate. It used to be a role: the
- * administrator was seeded with `roles: ['admin', 'impersonator']` and `mayImpersonate` looked for
- * the second string. Both are gone — `admin` is `bolt_auth_user.status`, which `subjectFromRow`
- * projects onto `Subject.admin`, and `mayImpersonate` is `isAdministrator`. The column carries a
- * `'normal'` default, so a caller that says nothing here gets an ordinary member; naming it is the
- * only way to make an administrator, which is the polarity the whole model rests on.
+ * They are rows now, not policy names — `impersonationTeams` reads `bolt_team` and `subjectAsTeam`
+ * looks a name up in it — so a workspace that declares `Employee` in `+teams.ts` and has no row for
+ * it offers nothing and can preview nothing. Seeded flat and non-inheriting, because what these
+ * tests are about is which policies one named team holds, not how a hierarchy composes them; the
+ * names match `hrWorkspace.teams` exactly, which is what makes a preview mean the policies below.
  */
-const session = async (
-	runtime: BoltTestRuntime,
-	token: string,
-	roles: ReadonlyArray<string>,
-	status: SubjectStatus = NORMAL_STATUS
-) => {
-	await runtime.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams", "status") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb, $6) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId", "status" = excluded."status" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[
-			token,
-			`user-${token}`,
-			'test-tenant',
-			JSON.stringify([...roles]),
-			`${token}@example.test`,
-			status
-		]
-	);
+const hrTeams = async (runtime: BoltTestRuntime) => {
+	for (const name of ['admin', 'Employee', 'HR']) await seedTeam(runtime, name);
 };
 
 /**
- * The administrator these tests preview from, carrying *no* roles at all.
+ * The administrator these tests preview from, belonging to *no* team at all.
  *
- * Deliberately empty rather than `['admin']`. The fixture below declares a policy named `admin`
- * granting `*`, so seeding that role would let every assertion here pass through the policy ladder
- * and say nothing about the status flag — which is the thing that actually admits them now.
- * With an empty role array the only reason any of this works is `bolt_auth_user.status`.
+ * Deliberately placeless rather than in `admin`. The fixture below declares a policy named `admin`
+ * granting `*` and a team holding it, so placing them there would let every assertion here pass
+ * through the policy ladder and say nothing about the status flag — which is the thing that actually
+ * admits them now. With no team the only reason any of this works is `bolt_auth_user.status`.
  */
-const administrator = (runtime: BoltTestRuntime, token = 'admin-token') =>
-	session(runtime, token, [], ADMIN_STATUS);
+const administrator = async (runtime: BoltTestRuntime, token = 'admin-token') => {
+	await hrTeams(runtime);
+	await seedSession(runtime, { token, user: `user-${token}`, status: ADMIN_STATUS });
+};
 
 const failureOf = async (runtime: BoltTestRuntime, invocation: Invocation) => {
 	const outcome = await runtime.runtime.runPromise(
@@ -146,18 +129,16 @@ const hrWorkspace = workspace({
 		app({ name: 'hr_controller/payroll', label: 'Payroll' })
 	],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] }),
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] }),
 		policy({
 			name: 'Employee',
 			effect: 'allow',
-			roles: ['employee'],
 			apps: ['hr_employee'],
 			grants: [{ collection: 'notices', action: 'read' }]
 		}),
 		policy({
 			name: 'HR',
 			effect: 'allow',
-			roles: ['hr'],
 			apps: ['hr_controller'],
 			grants: [
 				{ collection: 'notices', action: 'read' },
@@ -165,6 +146,11 @@ const hrWorkspace = workspace({
 			]
 		})
 	],
+	teams: {
+		admin: ['admin', 'Employee', 'HR'],
+		Employee: ['Employee'],
+		HR: ['HR']
+	},
 	agents: [],
 	automations: [],
 	channels: [],
@@ -209,7 +195,7 @@ describe('team impersonation', () => {
 	 * which refuses everything, including what an employee is plainly entitled to, and would make
 	 * "an employee cannot see the HR app" true for the wrong reason. It is also why the picker lists
 	 * the workspace's policies rather than the approver teams its grants name: a subject carrying
-	 * `roles: ['L1 Manager']` matches no policy, so this read would fail too.
+	 * `teamPath: ['L1 Manager']` matches no policy, so this read would fail too.
 	 */
 	it('still serves what the previewed team is granted', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
@@ -249,7 +235,12 @@ describe('team impersonation', () => {
 	 */
 	it('refuses a non-admin the preview entirely', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
-		await session(harness, 'employee-token', ['employee']);
+		await hrTeams(harness);
+		await seedSession(harness, {
+			token: 'employee-token',
+			user: 'user-employee-token',
+			team: 'Employee'
+		});
 
 		const claimed = await failureOf(harness, command('apps.visible', 'employee-token', null, 'HR'));
 		expect(claimed).toBeInstanceOf(AccessControl.AccessDenied);
@@ -280,7 +271,9 @@ describe('team impersonation', () => {
 			harness,
 			command('apps.visible', 'admin-token', null, 'L1 Manager')
 		);
-		expect(refused).toMatchObject({ action: 'impersonate', reason: 'no policy of that name' });
+		// "No team", not "no policy": a preview names a `bolt_team` row now, so an undeclared name is
+		// refused by the lookup rather than by the policy ladder.
+		expect(refused).toMatchObject({ action: 'impersonate', reason: 'no team of that name' });
 	});
 
 	/**
@@ -292,7 +285,12 @@ describe('team impersonation', () => {
 	it('reports the picker state from the real actor, mid-preview', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
 		await administrator(harness);
-		await session(harness, 'employee-token', ['employee']);
+		await hrTeams(harness);
+		await seedSession(harness, {
+			token: 'employee-token',
+			user: 'user-employee-token',
+			team: 'Employee'
+		});
 
 		const idle = await harness.runtime.runPromise(
 			dispatchInvocation(command('access.impersonation', 'admin-token'))
@@ -346,7 +344,9 @@ describe('team impersonation', () => {
 			[]
 		);
 		expect(audit).toHaveLength(1);
-		expect(audit[0]).toMatchObject({ payload: { team: 'Employee', roles: ['employee'] } });
+		// The path is the team row's own name, not a policy's — `Employee` seeded above does not
+		// inherit, so it resolves to itself and the recorded path is exactly one name long.
+		expect(audit[0]).toMatchObject({ payload: { team: 'Employee', teamPath: ['Employee'] } });
 	});
 
 	/**
@@ -358,9 +358,11 @@ describe('team impersonation', () => {
 	 * simultaneously an employee and an HR controller, made their authority a function of the policy
 	 * ladder, and put a magic string in the role namespace that `mayImpersonate` had to agree on.
 	 *
-	 * Authority is the `admin` status on their own row now, so `roles` is empty and it is `admin`
-	 * that has to come back true. The empty array is asserted rather than ignored: filling it again
-	 * would restore exactly the conflation this replaced, and nothing else would fail.
+	 * Authority is the `admin` status on their own row now, so it is `admin` that has to come back
+	 * true — and the founder has to be placed in no team at all. The response carries no array to
+	 * assert on any more, so the placement is read off the row itself: `team_id` null is the same
+	 * claim the empty array used to make, and filling it again would restore exactly the conflation
+	 * this replaced with nothing else failing.
 	 */
 	it('admits a founder as an administrator rather than as a holder of every role', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
@@ -371,6 +373,13 @@ describe('team impersonation', () => {
 				command('identity.admitFounder', 'admin-token', { email: 'founder@example.test' })
 			)
 		);
-		expect(admitted.value).toMatchObject({ admitted: true, admin: true, roles: [] });
+		expect(admitted.value).toMatchObject({ admitted: true, admin: true });
+		expect(
+			await harness.database.query(
+				`select "team_id" from bolt_auth_user where "email" = 'founder@example.test'`,
+				[]
+			),
+			'the founder was placed in a team rather than left for an operator to place'
+		).toEqual([{ team_id: null }]);
 	});
 });

@@ -15,6 +15,7 @@ import {
 	testWorkspace,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { seedSession } from '../support/fixture-identity.js';
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -37,12 +38,15 @@ const manifestInvocation = (credential: string) =>
 		headers: { authorization: [`Bearer ${credential}`] }
 	});
 
-const session = async (harness: BoltTestRuntime, token: string, roles: ReadonlyArray<string>) => {
-	await harness.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[token, `user-${token}`, 'test-tenant', JSON.stringify([...roles]), `${token}@example.test`]
-	);
-};
+/**
+ * The reader every one of these tests signs in as.
+ *
+ * `admin` is the team each fixture below declares holding the policy that grants `*`, and the
+ * manifest is filtered by what the caller may read — so a caller in no team would come back with an
+ * empty manifest and every assertion here would fail for a reason that is not about projection.
+ */
+const seedAdmin = (harness: BoltTestRuntime, token = 'admin-token') =>
+	seedSession(harness, { token, user: `user-${token}`, team: 'admin' });
 
 const value = (response: { readonly value?: unknown }): Record<string, unknown> =>
 	(response.value ?? {}) as Record<string, unknown>;
@@ -60,7 +64,7 @@ describe('workspace.manifest command', () => {
 				]
 			})
 		);
-		await session(harness, 'admin-token', ['admin']);
+		await seedAdmin(harness);
 
 		const response = await harness.runtime.runPromise(
 			dispatchInvocation(manifestInvocation('admin-token'))
@@ -100,8 +104,11 @@ describe('workspace.manifest command', () => {
 				collections: [],
 				apps: [],
 				policies: [
-					policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+					policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
 				],
+				teams: {
+					admin: ['admin']
+				},
 				agents: [],
 				automations: [],
 				channels: [
@@ -120,7 +127,7 @@ describe('workspace.manifest command', () => {
 				requiredFacilities: []
 			})
 		);
-		await session(harness, 'admin-token', ['admin']);
+		await seedAdmin(harness);
 		const response = await harness.runtime.runPromise(
 			dispatchInvocation(manifestInvocation('admin-token'))
 		);
@@ -157,7 +164,7 @@ describe('workspace.manifest command', () => {
 				]
 			})
 		);
-		await session(harness, 'admin-token', ['admin']);
+		await seedAdmin(harness);
 		const response = await harness.runtime.runPromise(
 			dispatchInvocation(manifestInvocation('admin-token'))
 		);
@@ -205,7 +212,7 @@ describe('workspace.manifest command', () => {
 				]
 			})
 		);
-		await session(harness, 'admin-token', ['admin']);
+		await seedAdmin(harness);
 		const response = await harness.runtime.runPromise(
 			dispatchInvocation(manifestInvocation('admin-token'))
 		);
@@ -259,7 +266,7 @@ describe('workspace.manifest command', () => {
 				]
 			})
 		);
-		await session(harness, 'admin-token', ['admin']);
+		await seedAdmin(harness);
 		const response = await harness.runtime.runPromise(
 			dispatchInvocation(manifestInvocation('admin-token'))
 		);
@@ -291,18 +298,27 @@ describe('workspace.manifest command', () => {
 					{ name: 'salaries', fields: { amount: field.number() } }
 				],
 				policies: [
-					policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] }),
+					policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] }),
 					policy({
 						name: 'viewer',
 						effect: 'allow',
-						roles: ['viewer'],
 						grants: [{ collection: 'people', action: 'read' }]
 					})
-				]
+				],
+				teams: {
+					admin: ['admin', 'viewer'],
+					viewer: ['viewer']
+				}
 			})
 		);
-		await session(harness, 'admin-token', ['admin']);
-		await session(harness, 'viewer-token', ['viewer']);
+		await seedAdmin(harness);
+		// `viewer` reads `people` and not `salaries`, which is the narrowing the two manifests below
+		// are compared for.
+		await seedSession(harness, {
+			token: 'viewer-token',
+			user: 'user-viewer-token',
+			team: 'viewer'
+		});
 
 		const asAdmin = value(
 			await harness.runtime.runPromise(dispatchInvocation(manifestInvocation('admin-token')))
@@ -332,7 +348,7 @@ describe('workspace.manifest command', () => {
 		harness = await makeBoltTestRuntime(
 			testWorkspace({ collections: [{ name: 'people', fields: { name: field.string() } }] })
 		);
-		await session(harness, 'admin-token', ['admin']);
+		await seedAdmin(harness);
 		const manifest = value(
 			await harness.runtime.runPromise(dispatchInvocation(manifestInvocation('admin-token')))
 		);
@@ -353,16 +369,18 @@ describe('workspace.manifest command', () => {
 					policy({
 						name: 'admin',
 						effect: 'allow',
-						roles: ['admin'],
 						grants: [
 							{ collection: 'people', action: 'read' },
 							{ collection: 'people', action: 'update' }
 						]
 					})
-				]
+				],
+				teams: {
+					admin: ['admin']
+				}
 			})
 		);
-		await session(harness, 'admin-token', ['admin']);
+		await seedAdmin(harness);
 		const manifest = value(
 			await harness.runtime.runPromise(dispatchInvocation(manifestInvocation('admin-token')))
 		);

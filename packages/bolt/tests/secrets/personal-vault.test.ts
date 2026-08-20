@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { fixtureUserId } from '../support/fixture-identity.js';
+import { fixtureUserId, seedSession } from '../support/fixture-identity.js';
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -63,31 +63,22 @@ const task = (name: string, input: unknown = {}) =>
 		attempt: 0
 	});
 
-/** A live session for a named user, so a command's credential resolves to that person and not to a token name. */
-const session = async (
-	runtime: BoltTestRuntime,
-	token: string,
-	userId: string,
-	roles: ReadonlyArray<string>
-) => {
-	await runtime.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $4, 'test-tenant', $3::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[token, userId, JSON.stringify([...roles]), `${userId}@example.test`]
-	);
-};
-
 // The readable name is hashed the same way the fixture's SQL hashes it, because identity is keyed
 // by `norbital_id uuid` and a subject has to name the row the session actually points at.
-const subjectFor = (userId: string, roles: ReadonlyArray<string>): Identity.Subject => ({
+//
+// `teamPath` is the team plus whatever it inherits, and these fixtures inherit nothing — so a single
+// team name is the whole path. It names a team the workspace below declares, because a name the
+// release does not declare holds no policies at all.
+const subjectFor = (userId: string, team: string): Identity.Subject => ({
 	userId: fixtureUserId(userId),
 	tenantId: 'test-tenant',
-	roles,
-	teams: []
+	team,
+	teamPath: [team]
 });
 
-const userA = subjectFor('user-a', ['employee']);
-const userB = subjectFor('user-b', ['employee']);
-const admin = subjectFor('user-admin', ['admin']);
+const userA = subjectFor('user-a', 'employee');
+const userB = subjectFor('user-b', 'employee');
+const admin = subjectFor('user-admin', 'admin');
 
 /** The server-side read, run as a specific person — the only way `PersonalSecrets` can be told who is asking. */
 const readAs = (harnessed: BoltTestRuntime, subject: Identity.Subject, name: string) =>
@@ -141,14 +132,17 @@ const vaultWorkspace = workspace({
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] }),
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] }),
 		policy({
 			name: 'employee',
 			effect: 'allow',
-			roles: ['employee'],
 			grants: [{ collection: 'people', action: 'read' }]
 		})
 	],
+	teams: {
+		admin: ['admin', 'employee'],
+		employee: ['employee']
+	},
 	agents: [],
 	automations: [],
 	channels: [],
@@ -160,7 +154,7 @@ const vaultWorkspace = workspace({
 describe('personal secrets', () => {
 	it('round-trips a value for the person who stored it, through the command surface', async () => {
 		harness = await makeBoltTestRuntime(vaultWorkspace);
-		await session(harness, 'a-token', 'user-a', ['employee']);
+		await seedSession(harness, { token: 'a-token', user: 'user-a', team: 'employee' });
 
 		const written = await harness.runtime.runPromise(
 			dispatchInvocation(
@@ -264,7 +258,7 @@ describe('personal secrets', () => {
 	 */
 	it('honours no user id a command names, only the credential holder', async () => {
 		harness = await makeBoltTestRuntime(vaultWorkspace);
-		await session(harness, 'a-token', 'user-a', ['employee']);
+		await seedSession(harness, { token: 'a-token', user: 'user-a', team: 'employee' });
 		await writeAs(harness, userB, SESSION_NAME, 'li_at=BBB');
 
 		const written = await harness.runtime.runPromise(
@@ -276,7 +270,7 @@ describe('personal secrets', () => {
 					// owner field the boundary does not mint and so never overwrites.
 					userId: 'user-b',
 					owner: 'user-b',
-					subject: { userId: 'user-b', tenantId: 'test-tenant', roles: ['admin'], teams: [] }
+					subject: { userId: 'user-b', tenantId: 'test-tenant', teamPath: ['admin'] }
 				})
 			)
 		);

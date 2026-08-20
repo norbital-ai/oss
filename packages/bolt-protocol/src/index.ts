@@ -1,4 +1,12 @@
 export {
+	CollectionCreateRequest,
+	CollectionWriteResult,
+	CollectionWriteValues,
+	StoredRecord,
+	storedRecordsOf
+} from './collections.js';
+
+export {
 	ActivationResult,
 	BundleManifest,
 	BundleModuleError,

@@ -26,8 +26,11 @@ const withEnvironment = workspace({
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
 	],
+	teams: {
+		admin: ['admin']
+	},
 	agents: [],
 	automations: [],
 	channels: [],

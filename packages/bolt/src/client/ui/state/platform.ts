@@ -6,12 +6,12 @@ export type PlatformUser = Readonly<{
 	readonly norbital_id: string;
 	readonly email?: string;
 	readonly name?: string;
-	readonly roles?: ReadonlyArray<string>;
+	readonly team?: string;
 	/**
 	 * Whether this person administers the workspace: `bolt_auth_user.status`, as the host reports it.
 	 *
-	 * Separate from `roles` because it is not one. The surfaces that ask "is this an administrator"
-	 * used to look for the string `admin` in `roles`, which no workspace declares and nothing writes,
+	 * Separate from `team` because it is not one. The surfaces that ask "is this an administrator"
+	 * used to look for the string `admin` in a roles array, which no workspace declares and nothing writes,
 	 * so the answer was always no. Absent means no, so a host that does not supply it gets the
 	 * narrower view rather than the wider one.
 	 */

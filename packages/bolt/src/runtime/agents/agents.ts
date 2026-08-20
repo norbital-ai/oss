@@ -9,7 +9,8 @@ import {
 import { AccessControl } from '../access/access-control.js';
 import { ApprovalConflict } from '../approvals/approvals.js';
 import { Collections, PendingApproval } from '../collections/collections.js';
-import { AI, Connector, Files, HostTools, Tasks } from '../facilities/services.js';
+import { AI, Connector, Files, HostTools } from '../facilities/services.js';
+import { TaskQueue } from '../tasks/tasks.js';
 import { Database } from '../facilities/database.js';
 import type { Identity } from '../identity/identity.js';
 import { RemoteRegistry } from '../remotes.js';
@@ -339,7 +340,7 @@ export const layer = Layer.effect(
 		const access = yield* AccessControl.Service;
 		const ai = yield* AI.Service;
 		const database = yield* Database.Service;
-		const tasks = yield* Tasks.Service;
+		const queue = yield* TaskQueue.Service;
 		const collections = yield* Collections.Service;
 		const hostTools = yield* HostTools.Service;
 		const files = yield* Files.Service;
@@ -429,7 +430,7 @@ export const layer = Layer.effect(
 					agentName: agent.name,
 					conversationId,
 					database,
-					tasks,
+					tasks: queue,
 					budget
 				});
 			}
@@ -515,7 +516,15 @@ export const layer = Layer.effect(
 					});
 					const tools = allowedTools(agent).map(({ name, description, command }) => ({
 						name,
-						description,
+						description:
+							(name === 'read_collection' || name === 'write_collection') &&
+							agent.collections !== undefined
+								? // The ceiling declared in `src/+agent.ts`, stated where the model can see it
+									// before it guesses. Without this the model is offered `read_collection` with
+									// no way to know the agent is scoped, and the first call to a collection
+									// outside the scope is a refusal it could have avoided.
+									`${description} Allowed collections: ${agent.collections.join(', ')}.`
+								: description,
 						command
 					}));
 					const messages: Array<Schema.Json> = [
@@ -688,6 +697,19 @@ export const layer = Layer.effect(
 							messages.push({ role: 'assistant', content: response.output });
 							let parked = false;
 							for (const call of calls) {
+								/**
+								 * A refusal is a tool result, not a dead turn.
+								 *
+								 * The model chooses tools from the offer it was shown; a collection-scoped agent
+								 * (`collections: ['companies']`) is offered `read_collection` with no way to know
+								 * the ceiling applies, so it is going to name the wrong collection sometimes. When
+								 * it does, `requireCollection` answers `ToolNotAllowed` — and an agent-domain
+								 * refusal like that is exactly the event the loop should hand back to the model
+								 * ("that tool is not allowed, here is why"), so it can adapt its next move. Every
+								 * other failure still aborts: a facility that broke is not something a second
+								 * question can fix, and telling the model it happened would start a retry loop
+								 * the tenant is paying for.
+								 */
 								const result = yield* executeTool(
 									agent,
 									call.name,
@@ -695,6 +717,12 @@ export const layer = Layer.effect(
 									EffectId.make(call.id),
 									subject,
 									conversationId
+								).pipe(
+									Effect.catch((failure) =>
+										failure instanceof ToolNotAllowed || failure instanceof SkillError
+											? Effect.succeed({ error: failure.message })
+											: Effect.fail(failure)
+									)
 								);
 								const encoded = yield* Schema.decodeUnknownEffect(
 									Schema.fromJsonString(Schema.Json)
@@ -734,24 +762,41 @@ export const layer = Layer.effect(
 					// reached an answer settles here.
 					if (settled.status === 'completed') yield* commit('completed');
 					yield* Effect.ignore(recordTurnUsage());
-					yield* tasks.execute(EffectId.make(`${effectId}:continue`), {
-						_tag: 'Enqueue',
-						command: 'agents.resume',
-						input: { conversationId }
-					});
+					// There is deliberately no continuation enqueued here.
+					//
+					// Every turn used to end by enqueueing `agents.resume { conversationId }`, into a facility
+					// nothing executed. Made real, it would fire on two paths rather than one: a turn that
+					// parked on a subagent, and a turn that exhausted `maxToolRounds` without an answer — and
+					// the second continues, exhausts, continues, with nothing bounding it. That is a runaway
+					// agent bill wearing a scheduler's clothes.
+					//
+					// It was also a duplicate carrying less information. `sandbox-tools.ts`'s
+					// `await_sandbox_agent` already enqueues a resume for the parent, with the
+					// `targetSessionId` that makes it actionable; this one named only the conversation. One
+					// resume enqueue, one meaning.
 					return { conversationId, output: settled.output, status: settled.status };
 				}
 			),
-			resume: Effect.fn('Agents.resume')(function* (effectId, taskId, conversationId) {
-				yield* tasks.execute(effectId, {
-					_tag: 'Signal',
-					taskId,
-					signal: 'resume',
-					input: { conversationId }
-				});
+			/**
+			 * Continuing a conversation that is waiting on a delegated subagent — the gap, stated.
+			 *
+			 * This did one thing and that thing no longer exists: it delivered a `Signal` to a parked task
+			 * through a facility that never executed one. So a delegated turn parked and never woke, and
+			 * the code read as though something was arranging otherwise.
+			 *
+			 * Making it real needs two things that are agent-domain changes rather than queue ones, and
+			 * guessing at either would be worse than the gap. `turn` requires a `message`, and a
+			 * continuation has none — passing an empty one appends an empty user message to the transcript
+			 * that is the checkpoint for every future replay, which is a corruption and not a shortcut. And
+			 * continuation has to be bounded, or a turn that ran out of tool rounds continues forever.
+			 *
+			 * Until both are answered this is honestly nothing, rather than dishonestly something.
+			 */
+			resume: Effect.fn('Agents.resume')(function* (_effectId, _taskId, _conversationId) {
+				yield* Effect.void;
 			}),
 			cancel: Effect.fn('Agents.cancel')(function* (effectId, taskId) {
-				yield* tasks.execute(effectId, { _tag: 'Cancel', taskId });
+				yield* queue.cancel(effectId, taskId);
 			}),
 			updateVerifier: Effect.fn('Agents.updateVerifier')(
 				function* (effectId, conversationId, verifier) {

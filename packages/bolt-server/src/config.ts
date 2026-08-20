@@ -7,7 +7,6 @@ export const ServerConfiguration = Schema.Struct({
 	bundlePath: Schema.NonEmptyString,
 	scope: InvocationScope,
 	mode: Schema.Literals(['development', 'production']),
-	durableEngine: Schema.Literals(['memory', 'external']),
 	drainTimeoutMillis: Schema.Int,
 	invocationTimeoutMillis: Schema.Int,
 	requestBodyLimitBytes: Schema.Int
@@ -92,9 +91,6 @@ export const loadConfiguration = Effect.fn('BoltServer.Configuration.load')(
 			mode: Config.literals(['development', 'production'], 'BOLT_SERVER_MODE').pipe(
 				Config.withDefault('development')
 			),
-			durableEngine: Config.literals(['memory', 'external'], 'BOLT_SERVER_DURABLE_ENGINE').pipe(
-				Config.withDefault('memory')
-			),
 			drainTimeoutMillis: Config.int('BOLT_SERVER_DRAIN_TIMEOUT_MS').pipe(
 				Config.withDefault(10_000)
 			),
@@ -120,13 +116,6 @@ export const loadConfiguration = Effect.fn('BoltServer.Configuration.load')(
 			)
 		});
 
-		if (values.mode === 'production' && values.durableEngine === 'memory') {
-			return yield* new ConfigurationError({
-				operation: 'BoltServer.Configuration.validateDurability',
-				cause: new Error('production mode requires BOLT_SERVER_DURABLE_ENGINE=external')
-			});
-		}
-
 		if (
 			values.drainTimeoutMillis < 1 ||
 			values.invocationTimeoutMillis < 1 ||
@@ -148,7 +137,6 @@ export const loadConfiguration = Effect.fn('BoltServer.Configuration.load')(
 				releaseId: values.releaseId
 			}),
 			mode: values.mode,
-			durableEngine: values.durableEngine,
 			drainTimeoutMillis: values.drainTimeoutMillis,
 			invocationTimeoutMillis: values.invocationTimeoutMillis,
 			requestBodyLimitBytes: values.requestBodyLimitBytes

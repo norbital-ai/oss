@@ -15,7 +15,6 @@ const configuration = ServerConfiguration.make({
 		releaseId: ReleaseId.make('server-test')
 	},
 	mode: 'development',
-	durableEngine: 'memory',
 	drainTimeoutMillis: 1_000,
 	invocationTimeoutMillis: 1_000,
 	requestBodyLimitBytes: 1_024

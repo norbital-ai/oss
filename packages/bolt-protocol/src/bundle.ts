@@ -152,27 +152,36 @@ export type BundleResult = typeof BundleResult.Type;
 /**
  * One durable callback the artifact asks the host to hold on its behalf.
  *
- * It was a bare command name, which is everything a host needs to *route* work to an artifact and
- * nothing it needs to *originate* work. `schedule` is the difference: a registration carrying one is
- * a standing instruction to invoke `command` with `input` on that recurrence, which is the only way
- * an artifact can express recurring work — sandboxed tenant code has no timer that outlives an
- * invocation, so the recurrence has to be declared to the host rather than run inside the artifact.
+ * A command name, and nothing else. It carried `schedule` and `input` as well, so that a host could
+ * *originate* work rather than only route it — and that was the wrong side of the seam. A cron is
+ * declared by a release, a release is read by the guest, and a host holding one had to learn cron
+ * grammar to act on it. Schedules now live in the tenant's own `bolt_schedule`, where the party that
+ * can read the declaration is also the party that acts on it, and the host is told one number
+ * instead: the next instant anything is due.
  *
- * Both fields are total rather than optional. `schedule: null` says "route to this command, do not
- * originate", which is a different statement from a field that might not have been written, and the
- * whole reason this shape replaced a string is that a string could not distinguish the two.
+ * So this is back to what a host genuinely needs — where to send work addressed to this release.
  */
 export const Registration = Schema.Struct({
-	command: Schema.NonEmptyString,
-	/** Cron in the host's scheduler, or `null` for a command the host only routes enqueued work to. */
-	schedule: Schema.Union([Schema.NonEmptyString, Schema.Null]),
-	/** The input to send each time the schedule fires. `null` when there is no schedule. */
-	input: Schema.Json
+	command: Schema.NonEmptyString
 }).annotate({ identifier: 'BoltRegistration' });
 export interface Registration extends Schema.Schema.Type<typeof Registration> {}
 
 export const ActivationResult = Schema.TaggedUnion({
-	Activated: { registrations: Schema.Array(Registration) },
+	Activated: {
+		registrations: Schema.Array(Registration),
+		/**
+		 * When this workspace next has something to do, as the guest computed it while activating.
+		 *
+		 * `null` for a release that declares no schedule and has nothing queued — which is a real and
+		 * common state, and the one where a host must arm no timer at all. That is the whole of what
+		 * makes idle cost nothing: no heartbeat, no minimum interval, no liveness probe, and no query
+		 * until this instant arrives or a request arrives first.
+		 *
+		 * It rides the activation answer rather than a message of its own because activation has just
+		 * written the schedules and is already holding the connection that knows.
+		 */
+		nextDueAtEpochMs: Schema.Union([Schema.Number, Schema.Null])
+	},
 	Failure: { error: WireError }
 });
 export type ActivationResult = typeof ActivationResult.Type;

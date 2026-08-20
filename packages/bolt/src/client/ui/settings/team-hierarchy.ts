@@ -10,6 +10,8 @@ export type TeamNode = Readonly<{
 	readonly id: string;
 	readonly name: string;
 	readonly parentId?: string | null;
+	/** What the team is for, as an operator wrote it. Carried for the chart; the layout ignores it. */
+	readonly description?: string;
 }>;
 
 export type HierarchyPosition = Readonly<{

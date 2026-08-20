@@ -1,101 +1,129 @@
-# Generated Files and Build
+# Generated Files, Builds, and Refresh
 
-## Contents
+## Source-to-runtime map
 
-- [Generated files and diagnostics](#generated-files-and-diagnostics)
-- [Build lifecycle](#build-lifecycle)
-- [Forbidden legacy authoring](#forbidden-legacy-authoring)
-- [Verification](#verification)
+```text
+oss/packages/* ──build──► yalc (local) or registry release (deployed)
+       │                              │
+       ├────────► Colony + Website node_modules
+       └────────► Template node_modules ──bolt sync──► immutable tenant artifact
+                                                        │
+templates/* ─────────────────────────────────────────────┘
+                                                        ▼
+                                               Colony publishes + routes
+```
 
-## Generated files and diagnostics
+| Tree                    | Owns                                                             |
+| ----------------------- | ---------------------------------------------------------------- |
+| `oss/packages/*`        | Bolt compiler/runtime/protocol, UI, std, config package source   |
+| `templates*/*`          | Tenant source, assets, migrations, seed, template metadata       |
+| `norbital/apps/colony`  | Hosting, compilation orchestration, releases, routes, tenant DBs |
+| `norbital/apps/website` | Marketing/docs UI; public template pages fetched at build time   |
 
-`bolt sync` discovers source and atomically writes `.norbital/` only when the structure is valid. Structural
-failure updates diagnostics while preserving the previous generated modules:
+Saving source changes only its owner. A tenant changes only after `bolt sync` emits a new artifact
+and Colony publishes and routes it.
+
+## Generated files
+
+`bolt sync` validates the filesystem, preserves the last valid generated modules on structural
+failure, and owns:
 
 ```text
 .norbital/
 ├── diagnosis/                  # ignored
-│   ├── structure.json
-│   └── diagnostics.json
-├── dist/                       # ignored build output
-├── generated/
-│   ├── models.ts
-│   ├── registry.ts
-│   ├── apps.ts
-│   ├── workspace.ts
-│   └── client.ts
-├── migrations/                 # committed migration history
+├── dist/                       # ignored client/runtime output
+├── artifact/bundle.mjs        # ignored portable server artifact
+├── generated/                 # ignored registry, apps, workspace, client
+├── migrations/                # committed migration history
 ├── types/**/$types.d.ts        # ignored
 └── tsconfig.json               # ignored
 ```
 
-Ignore generated paths explicitly; never ignore `.norbital/` as a whole:
+Never edit generated output. Ignore generated paths individually; never ignore `.norbital/` as a
+whole because migrations are committed. The authored `tsconfig.json` extends
+`.norbital/tsconfig.json`.
 
-```gitignore
-.norbital/diagnosis/
-.norbital/dist/
-.norbital/generated/
-.norbital/types/
-.norbital/tsconfig.json
+## Local package propagation
+
+Local OSS changes cross five boundaries:
+
+1. Build `oss/packages/<name>/build`.
+2. Publish that build into the yalc store.
+3. Copy it into each consumer's `.yalc/`.
+4. Run `pnpm install` so pnpm re-materializes its virtual-store copy in `node_modules`.
+5. Run `bolt sync`, then restart Colony so its bootstrap publishes and routes the new artifact.
+
+`yalc push` stops at step 3. Equal `.yalc` and `node_modules` package signatures prove step 4.
+
+The realm command performs all five for Colony and templates and also links OSS packages into the
+website:
+
+```bash
+# Colony must be stopped; --ui refuses to run over an existing :5173 process.
+pnpm --dir norbital dev --ui
+pnpm --dir norbital dev --ui --template=<directory-or-handle>
 ```
 
-The authored `tsconfig.json` extends `.norbital/tsconfig.json`. The generated config owns paths relative to
-itself and must not declare `baseUrl`.
+For an OSS change used only by Colony/Website, `pnpm --dir norbital yalc:link` establishes or updates
+the pure links. Restart the website after linking; Vite dependency optimization is not package HMR.
+Run `pnpm --dir norbital yalc:retreat` and each template repository's `pnpm yalc:retreat` before a
+release build or commit so exact registry pins and lockfiles are restored.
 
-## Build lifecycle
+## Local refresh matrix
 
-`vite build` performs one fail-safe path through `bolt()`:
+| Changed                                      | Automatic while dev server runs | Required action                                     |
+| -------------------------------------------- | ------------------------------- | --------------------------------------------------- |
+| Colony route/component/server module         | Usually Vite HMR                | Reload; restart for `.env`, bootstrap, dependencies |
+| Website route/component/server module        | Usually Vite HMR                | Reload                                              |
+| Any OSS package consumed by a template       | No                              | realm `dev --ui`; hard-refresh tenant               |
+| OSS `config`, `std`, or `ui` used by website | No                              | `norbital yalc:link`; restart website               |
+| Template source, asset, migration, or i18n   | No                              | `pnpm sync`; restart Colony through realm command   |
+| Template manifest / catalogue membership     | No                              | restart Colony                                      |
+| Template README/thumbnail on local website   | No local source path            | publish public template refs; rebuild website       |
 
-1. Compile and validate the filesystem.
-2. Preserve last-valid generated modules and stop on structural diagnostics.
-3. Run native TypeScript and Svelte checks.
-4. Build the generated server workspace, then the client and app loaders.
-5. Generate Drizzle migrations from the registry and Bolt system tables.
-6. Write runtime, static, SQL, and migration artifacts under `.norbital/dist/` while preserving committed
-   history under `.norbital/migrations/`.
+Colony's Vite graph does not import template source. A generated bundle appearing on disk does not
+change the artifact already routed to a tenant.
 
-The Vite plugin owns Svelte, Tailwind, environment builders, runtime shims, and output paths.
+`env:reset` is not a refresh. A normal Colony restart recompiles and reroutes while preserving tenant
+data, but Studio's persisted source snapshot remains unchanged. Use reset only when intentionally
+replacing that snapshot and accepting recreation of the seeded database.
 
-## Forbidden legacy authoring
+## Staging and production
 
-Never author `schema.ts`, `workspace.ts`, collection `*.schema.ts`, `defineTable`, `defineSchema`, `QueryRow`,
-global `NorbitalAuthoring` augmentation, `$tenant`, collection/app barrels, `collections/**/*.schema.ts` globs,
-or `apps/*/App.svelte`.
+Yalc never crosses an environment boundary.
 
-Also forbid `$lib`, `$app/*`, `@sveltejs/kit`, routes, `+page` files, `svelte.config.*`, duplicate base CSS, and
-custom build scripts inside tenant workspaces. Internal Colony system-database `.schema.ts` modules are separate
-infrastructure.
+| Change                   | Staging/production path                                                                                                                             |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OSS package              | publish one coherent six-package version → update exact pins/locks in Norbital and affected templates → publish template refs → deploy              |
+| Template                 | merge to the template repository `main` → projection workflow validates, publishes the immutable build package, then moves `refs/heads/templates/*` |
+| Colony                   | deploy committed Norbital build to staging (`master`) → verify → promote the same tree to production (`production`)                                 |
+| Website                  | deploy committed website build through the same staging/production branch policy                                                                    |
+| Template website content | publish the public template projection, then rebuild/redeploy the prerendered website                                                               |
+
+Remote template refresh affects catalogue reads and new provisioning. Existing tenants retain their
+source snapshot and routed artifact until the host performs a tenant rebuild. The current Norbital
+host exposes no non-destructive `tenant:update` command; do not invent one and do not substitute a
+factory reset. Report that deployment gap when an existing staging/production tenant must advance.
 
 ## Verification
 
+In the selected template:
+
 ```bash
-# In the selected template workspace, call quality_audit first.
-pnpm sync        # template script wrapping `bolt sync`
+pnpm sync
 pnpm lint
-pnpm build       # `vite build` through the `bolt()` plugin
 ```
 
-`quality_audit` scans authored source only. Its implementation and policy remain host-owned outside
-the tenant repository; only structured reports are written to `.norbital/diagnosis/quality-audit/`.
-Do not change generated `.norbital/**` to silence an audit finding.
+`pnpm sync` is the build: it regenerates types, builds the browser client, emits migrations, and
+writes the portable artifact. The template packages currently have no separate `build` script.
 
-## Live org checkpoint (local Colony)
+For repository gates, run the relevant template repository check and focused OSS tests. A green
+template build does not prove the running tenant changed; verify the routed tenant after Colony
+bootstrap or deployment.
 
-Template `pnpm build` validates source; it does **not** replace the release artifact attached to a seeded
-local organization. Publish the OSS package/template release, link it into Colony, then restart the dev
-bootstrap:
+## Forbidden legacy authoring
 
-```bash
-# In the norbital repository
-pnpm yalc:link
-pnpm --filter colony dev   # converges on start: seeds from COLONY_WORKSPACE_ROOTS,
-                           # compiles with bolt sync, builds and publishes the artifact,
-                           # routes it, and provisions and migrates the tenant database
-```
-
-Then hard-refresh the tenant app. There is no separate `tenant:update` or `env:reset` step — the dev
-bootstrap converges on every start rather than running once. Details: the norbital repository
-`README.md` and `.agents/context/AGENTS.md`.
-
-Do not add template-specific deployment, data patch, or customer import scripts. Author repeatable seed
-behavior in the workspace/Colony seed plan and let the dev bootstrap deploy every seeded tenant.
+Never author `schema.ts`, `workspace.ts`, collection `*.schema.ts`, `defineTable`, `defineSchema`,
+`QueryRow`, global `NorbitalAuthoring` augmentation, `$tenant`, collection/app barrels,
+`collections/**/*.schema.ts` globs, `apps/*/App.svelte`, `$lib`, `$app/*`, `@sveltejs/kit`, routes,
+`+page` files, `svelte.config.*`, duplicate base CSS, or custom tenant build scripts.

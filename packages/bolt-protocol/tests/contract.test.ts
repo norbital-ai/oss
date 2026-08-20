@@ -3,6 +3,7 @@ import { Effect } from 'effect';
 import {
 	decodeBoltBundleModule,
 	missingFacilities,
+	PROTOCOL_VERSION,
 	type BundleManifest,
 	type FacilityBindings
 } from '../src/index.js';
@@ -10,7 +11,7 @@ import {
 describe('facility contract', () => {
 	it('reports required facility bindings deterministically', () => {
 		const manifest: BundleManifest = {
-			protocolVersion: 1,
+			protocolVersion: PROTOCOL_VERSION,
 			artifactId: 'fixture',
 			artifactVersion: '1',
 			schemaFingerprint: 'sha256:test',
@@ -26,7 +27,7 @@ describe('facility contract', () => {
 
 	it('treats transport as a host facility distinct from communication', () => {
 		const manifest: BundleManifest = {
-			protocolVersion: 1,
+			protocolVersion: PROTOCOL_VERSION,
 			artifactId: 'fixture',
 			artifactVersion: '1',
 			schemaFingerprint: 'sha256:test',
@@ -45,7 +46,7 @@ describe('facility contract', () => {
 
 	it('validates an unknown dynamic bundle module', async () => {
 		const manifest: BundleManifest = {
-			protocolVersion: 1,
+			protocolVersion: PROTOCOL_VERSION,
 			artifactId: 'fixture',
 			artifactVersion: '1',
 			schemaFingerprint: 'sha256:test',
@@ -55,11 +56,12 @@ describe('facility contract', () => {
 		};
 		const decoded = await Effect.runPromise(
 			decodeBoltBundleModule({
-				protocolVersion: 1,
+				protocolVersion: PROTOCOL_VERSION,
 				manifest,
 				dispatch: () =>
 					Promise.resolve({ _tag: 'Success', response: { status: 200, headers: {} } }),
-				activate: () => Promise.resolve({ _tag: 'Activated', registrations: [] })
+				activate: () =>
+					Promise.resolve({ _tag: 'Activated', registrations: [], nextDueAtEpochMs: null })
 			})
 		);
 		expect(decoded.manifest.artifactId).toBe('fixture');

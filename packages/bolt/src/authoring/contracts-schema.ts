@@ -93,6 +93,43 @@ export type DefaultWorkspaceSchema = WorkspaceAuthoringTypes extends {
 }
 	? S
 	: AnySchema;
+
+/**
+ * A policy, named the way every other authored thing in a workspace is named: by its file.
+ *
+ * `PolicyName` is generated from the `src/policies/+*.policy.ts` filenames, so this union is
+ * `'employee' | 'supervisor' | …` — the file keys, folded nowhere and spelled exactly once. A
+ * workspace that has not been synced has no augmentation and falls back to `string`, which is also
+ * what Bolt's own sources see.
+ *
+ * Everything that binds to a policy uses this one type: the policy's own `name`, a team's holdings
+ * in `+teams.ts`, and a channel's ceiling. That is the whole of the fix for a defect that survived
+ * five workspaces — the runtime resolves a policy by its declared `name`
+ * (`policiesHeldByTeam`, `Workspace.policy`), the compiler generates `PolicyName` from the filename,
+ * and nothing made the two agree. A file that declared `name: 'Sales representative'` compiled, and
+ * every team and channel that named it silently held nothing.
+ */
+type DeclaredPolicyName = WorkspaceAuthoringTypes extends {
+	readonly policyName: infer P extends string;
+}
+	? P
+	: string;
+
+/**
+ * The shape of `src/+teams.ts`: which policies each named team holds.
+ *
+ * Keys are team names, matched case-insensitively against `bolt_team.name`, and free strings on
+ * purpose — a team is a row an operator creates from a dashboard, so no compiled union can enumerate
+ * them. Values are narrowed to *this* workspace's declared policy names through the same
+ * augmentation `PolicyDefinition` uses, so renaming or deleting a policy breaks the build here, in
+ * the map that hands it to people, instead of quietly emptying somebody's authority at run time.
+ *
+ * The runtime is deliberately more forgiving than this type: a team naming a policy the release does
+ * not declare has that name dropped and warned about, never refused, because a row and a release
+ * move independently and a workspace must not fall over on a stale string. This check is what makes
+ * that tolerance a safety net rather than the only line of defence.
+ */
+export type Teams = Readonly<Record<string, ReadonlyArray<DeclaredPolicyName>>>;
 export type TableName<S extends AnySchema> = keyof S['tables'] & string;
 export type SchemaRow<S extends AnySchema, N extends TableName<S>> = S['tables'][N]['$inferSelect'];
 type QueryScalar = string | number | boolean | bigint | Date | null;
@@ -275,6 +312,29 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 			) => Effect.Effect<SchemaRow<S, N>>;
 		};
 	};
+	/**
+	 * The third door: run a declared automation from code, in the background, with retry.
+	 *
+	 * The other two are `defineAutomation({ schedule })` — run this on a clock — and
+	 * `defineAutomation({ trigger })` — run this when a record changes. This is the one an author
+	 * previously had no way to say, and the alternatives were both bad: a hook must either fail the
+	 * user's write or swallow the error, and a change trigger is lost if it throws.
+	 *
+	 * There is deliberately no `api.tasks`. A task is not a thing an author has — it is how the
+	 * runtime carries out something the workspace already declared — and a second way to start
+	 * background work would compete with the automations that declaration produces. Two ways to say
+	 * one thing is one too many.
+	 *
+	 * `after` takes any duration this codebase takes: `'1 hour'`, `'30 seconds'`, or milliseconds.
+	 * Omitted, the automation runs as soon as the queue can take it.
+	 */
+	readonly automations: {
+		readonly run: (
+			name: string,
+			input?: Schema.Json,
+			options?: { readonly after?: string | number }
+		) => Effect.Effect<{ readonly taskId: string }>;
+	};
 	readonly infer: <Output>(input: StructuredInferenceInput<Output>) => Effect.Effect<Output>;
 	readonly readFileAsset: (assetId: string) => Effect.Effect<{
 		readonly id: string;
@@ -287,6 +347,19 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 export type HookApi<S extends AnySchema = DefaultWorkspaceSchema> = BeforeApi<S>;
 export type ElevatedMutationPayload<S extends AnySchema, N extends TableName<S>> =
 	MutationInsertFor<S, N> | ({ readonly norbital_id: string } & MutationUpdateFor<S, N>);
+/**
+ * How a batched write wants to be cut up.
+ *
+ * `batchSize` is an atomicity frontier and a progress boundary: each batch is one transaction, so a
+ * failure loses at most one batch and never a row that a later batch would have written. Absent, the
+ * whole call is one transaction — which is the right default and the reason there is a ceiling on it
+ * rather than a silent split.
+ *
+ * There is deliberately no concurrency knob. There is one thread in the isolate, so a number there
+ * would only ever describe how many facility calls may be outstanding at once, which is the
+ * runtime's business and not a decision an author has the information to make.
+ */
+export type MutateOptions = { readonly batchSize?: number };
 /**
  * The elevated writes, on the collection — one shape for reaching a collection, not two.
  *
@@ -309,84 +382,247 @@ export type AfterHookApi<S extends AnySchema = DefaultWorkspaceSchema> = Omit<
 				input: MutationUpdateFor<S, N>
 			) => Effect.Effect<SchemaRow<S, N>>;
 			readonly mutate: (
-				payloads: ReadonlyArray<ElevatedMutationPayload<S, N>>
+				payloads: ReadonlyArray<ElevatedMutationPayload<S, N>>,
+				options?: MutateOptions
 			) => Effect.Effect<Array<SchemaRow<S, N> & Readonly<Record<string, unknown>>>>;
 			readonly delete: (identifiers: ReadonlyArray<string>) => Effect.Effect<void>;
 		};
 	};
 };
 
+/**
+ * A hook, and the only shape a hook has.
+ *
+ * There used to be a second one beside it — `batchHandler`, taking every row of a batch at once —
+ * declared here, re-typed in `runtime/collections/authored.ts`, and called from nowhere in the
+ * runtime. An author could write batch validation there, ship it, and have it silently never run.
+ *
+ * It is gone rather than wired, because a hook is authored for one record and that is the claim the
+ * write surface makes. Its two real uses live elsewhere now: a read that all N rows need is served
+ * by one query without the hook knowing a batch exists, and "these N rows contain a duplicate" is a
+ * unique index — which is stricter, because it also catches a collision with a row already stored.
+ */
 type DescribedHook<Handler> = { readonly description: string; readonly handler: Handler };
-type DescribedBatchHook<Handler, BatchHandler> = DescribedHook<Handler> & {
-	readonly batchHandler?: BatchHandler;
-};
 type CreateInput<S extends AnySchema, N extends TableName<S>> = MutationInsertFor<S, N>;
-type CreateMutationPayload<S extends AnySchema, N extends TableName<S>> = MutationInsertFor<S, N> &
-	Readonly<Record<string, unknown>>;
-type CreateBefore<S extends AnySchema, N extends TableName<S>> = (context: {
+
+/** The relations `+relationship.ts` declared for one collection, as the compiler emits them. */
+type RelationsOf<S extends AnySchema, N extends TableName<S>> = S extends {
+	readonly relations: infer R;
+}
+	? N extends keyof R
+		? R[N]
+		: Readonly<Record<never, never>>
+	: Readonly<Record<never, never>>;
+
+/**
+ * The relations a nested write may expand: `many`, and with a foreign key to fill.
+ *
+ * A `one` relation is the child pointing at a parent that must already exist, so writing it inline
+ * would mean inventing the parent. A `many` with no declared endpoint carries `never` as its column
+ * and is excluded here rather than guessed at — an edge the author declared loosely is one a nested
+ * write refuses, not one it improvises a foreign key for.
+ */
+type ChildRelation<S extends AnySchema, N extends TableName<S>> = {
+	[K in keyof RelationsOf<S, N>]: RelationsOf<S, N>[K] extends {
+		readonly cardinality: 'many';
+		readonly column: string;
+	}
+		? K
+		: never;
+}[keyof RelationsOf<S, N>];
+
+type ChildTable<
+	S extends AnySchema,
+	N extends TableName<S>,
+	K extends ChildRelation<S, N>
+> = RelationsOf<S, N>[K] extends { readonly target: infer T }
+	? T extends TableName<S>
+		? T
+		: never
+	: never;
+
+type ChildColumn<
+	S extends AnySchema,
+	N extends TableName<S>,
+	K extends ChildRelation<S, N>
+> = RelationsOf<S, N>[K] extends { readonly column: infer C } ? C : never;
+
+/**
+ * How deep a nested write may go, as a countdown.
+ *
+ * Not decoration. `relations` is a graph with cycles in it — `payroll_runs → payslips →
+ * payroll_runs` — and a naively recursive type over it never terminates. This also gives the
+ * runtime's own graph bound a compile-time twin, so the two agree by construction rather than by
+ * comment.
+ */
+type Depth = 0 | 1 | 2 | 3 | 4 | 5;
+type Prev = [never, 0, 1, 2, 3, 4];
+
+/**
+ * A record and, optionally, the records that belong to it.
+ *
+ * Every child key is optional, which is what makes depth the author's choice: returning columns
+ * alone is valid, one level is valid, three is valid, and each level is checked against the
+ * collection it names. The child's foreign key is `Omit`ted rather than made optional — the runtime
+ * fills it from the parent's assigned id, so writing it is not a redundant statement of the truth,
+ * it is a claim that could disagree with one.
+ */
+type ChildrenOf<S extends AnySchema, N extends TableName<S>, D extends Depth> = {
+	readonly [K in ChildRelation<S, N>]?: ReadonlyArray<
+		CreateGraph<S, ChildTable<S, N, K>, Prev[D]> extends infer G
+			? Omit<G, ChildColumn<S, N, K> & keyof G>
+			: never
+	>;
+};
+
+export type CreateGraph<S extends AnySchema, N extends TableName<S>, D extends Depth = 5> = [
+	D
+] extends [never]
+	? MutationInsertFor<S, N>
+	: MutationInsertFor<S, N> & ChildrenOf<S, N, D>;
+
+/**
+ * What a `create.before` may return: this record, and optionally the records that belong to it.
+ *
+ * It used to return `MutationInsertFor<S, N> | (MutationInsertFor<S, N> & Record<string, unknown>)`,
+ * and that second arm is why any key at all was legal — the seam for a nested return already
+ * existed, typed as "anything goes" and backed by nothing.
+ *
+ * **Where the check lands.** A handler that returns an object literal directly is checked for excess
+ * properties, so a misspelled relation name is a compile error there. A handler that builds its
+ * result in a variable — which the payroll engine must, since it computes for a second and a half
+ * before it has one — gets no such check from TypeScript, in any formulation: making the return type
+ * generic in what was returned cannot work, because the type parameter appears only in return
+ * position and there is nothing to infer it from. So the second half of this guarantee is the
+ * runtime's: FLATTEN refuses a key that is neither a column of the collection nor one of its
+ * declared relations, rather than dropping it on the way to the database. Between them nothing is
+ * silently lost, which is the property that actually matters.
+ */
+type CreateBefore<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
 	readonly input: CreateInput<S, N>;
+	/**
+	 * What this batch's `load` returned, or `undefined` if the collection declares none.
+	 *
+	 * Its type is `load`'s return type, so the two cannot drift apart: a `load` that stops returning
+	 * what `handler` reads is a compile error at the `satisfies`, not a runtime surprise on a
+	 * four-thousand-row import.
+	 */
+	readonly prepared: Prepared;
 	readonly api: HookApi<S>;
 }) =>
-	| Effect.Effect<CreateInput<S, N> | CreateMutationPayload<S, N>, unknown, never>
-	| Promise<CreateInput<S, N> | CreateMutationPayload<S, N>>
-	| CreateInput<S, N>
-	| CreateMutationPayload<S, N>;
-type CreateBeforeBatch<S extends AnySchema, N extends TableName<S>> = (context: {
-	readonly inputs: ReadonlyArray<CreateInput<S, N>>;
-	readonly api: HookApi<S>;
-}) =>
-	| Effect.Effect<ReadonlyArray<CreateInput<S, N> | CreateMutationPayload<S, N>>, unknown, never>
-	| Promise<ReadonlyArray<CreateInput<S, N> | CreateMutationPayload<S, N>>>
-	| ReadonlyArray<CreateInput<S, N> | CreateMutationPayload<S, N>>;
-type CreateAfter<S extends AnySchema, N extends TableName<S>> = (context: {
+	Effect.Effect<CreateGraph<S, N>, unknown, never> | Promise<CreateGraph<S, N>> | CreateGraph<S, N>;
+type CreateAfter<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
 	readonly record: SchemaRow<S, N>;
-	readonly api: AfterHookApi<S>;
-}) => Effect.Effect<void, unknown, never> | Promise<void> | void;
-type CreateAfterBatch<S extends AnySchema, N extends TableName<S>> = (context: {
-	readonly records: ReadonlyArray<SchemaRow<S, N>>;
+	/**
+	 * The same value `prepare` returned for this batch.
+	 *
+	 * Read *before* the write, which is the one thing to know about it here: it is reference data
+	 * this batch needed, not a view of the world after the commit. An `after` hook that needs the
+	 * post-commit truth reads for it.
+	 */
+	readonly prepared: Prepared;
 	readonly api: AfterHookApi<S>;
 }) => Effect.Effect<void, unknown, never> | Promise<void> | void;
 
-export type CollectionHooks<S extends AnySchema, N extends TableName<S>> = {
+/**
+ * The reads a whole batch needs, done once.
+ *
+ * A hook is authored for one record, and a hook that *reads* per record is an N+1 by construction:
+ * `time_entries` asks two questions per row, so a four-thousand-row import asks eight thousand
+ * times. The rule and the reads are separable, and only the reads want to be batched.
+ *
+ * This is deliberately **not** a second place to write the rule. `batchHandler` was that, and the
+ * drift it invites is not hypothetical — one collection had the same assertion written into both of
+ * its hooks and five carried batch validation the runtime never called. `load` is not an alternative
+ * branch: it runs before `handler`, every time, for a batch of four thousand and for a single
+ * `create` alike. Nothing has to decide which one applies.
+ *
+ * What it is *for* is the query a person would write and a resolver cannot derive: four thousand
+ * questions of the form "is this employment's day covered by leave" become one query over the window
+ * the batch spans. Merging identical queries with different keys is something the runtime can do on
+ * its own; reformulating them into a different query is judgement about the domain.
+ *
+ * Scoped to the batch, not the call: with `batchSize: 250` over 4 000 rows it runs sixteen times,
+ * each seeing its own 250. A batch is the unit of atomicity and of the isolate's span, so it is the
+ * unit a read belongs to as well.
+ */
+type CreatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
+	readonly inputs: ReadonlyArray<CreateInput<S, N>>;
+	readonly api: HookApi<S>;
+}) => Effect.Effect<Prepared, unknown, never> | Promise<Prepared> | Prepared;
+
+/**
+ * Everything a collection may say about a write, arranged by how often it runs.
+ *
+ * ```
+ * create: {
+ *   input,                 // the shape a caller may send
+ *   prepare,               // ONCE for the batch  ─┐
+ *   perRecord: {           //                      │  what prepare returns
+ *     before,              // ONCE per record  ◄───┤  arrives here as `prepared`
+ *     after                // ONCE per record  ◄───┘
+ *   }
+ * }
+ * ```
+ *
+ * The nesting is the documentation. An earlier shape put a batch-wide function beside a per-record
+ * one at the same level — `batchHandler` next to `handler` — and nothing about the declaration said
+ * which ran when, or that one was a rule and the other was a second copy of it. Five collections
+ * shipped batch validation that the runtime never called, and one had the same assertion written
+ * into both halves.
+ *
+ * `prepare` is not a place to put rules. It returns data and nothing else decides anything there.
+ * `perRecord` is where every decision lives, once, for one record — whether the write was one row or
+ * four thousand.
+ */
+export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepared = void> = {
 	readonly create?: {
 		readonly input?: Schema.Codec<unknown, unknown>;
-		readonly before?: DescribedBatchHook<CreateBefore<S, N>, CreateBeforeBatch<S, N>>;
-		readonly after?: DescribedBatchHook<CreateAfter<S, N>, CreateAfterBatch<S, N>>;
+		readonly prepare?: CreatePrepare<S, N, Prepared>;
+		readonly perRecord?: {
+			readonly before?: DescribedHook<CreateBefore<S, N, Prepared>>;
+			readonly after?: DescribedHook<CreateAfter<S, N, Prepared>>;
+		};
 	};
 	readonly update?: {
 		readonly input?: Schema.Codec<unknown, unknown>;
-		readonly before?: DescribedHook<
-			(context: {
-				readonly input: MutationUpdateFor<S, N>;
-				readonly existing: SchemaRow<S, N>;
-				readonly api: HookApi<S>;
-			}) =>
-				| Effect.Effect<MutationUpdateFor<S, N>, unknown, never>
-				| Promise<MutationUpdateFor<S, N>>
-				| MutationUpdateFor<S, N>
-		>;
-		readonly after?: DescribedHook<
-			(context: {
-				readonly record: SchemaRow<S, N>;
-				readonly api: AfterHookApi<S>;
-			}) => Effect.Effect<void, unknown, never> | Promise<void> | void
-		>;
+		readonly perRecord?: {
+			readonly before?: DescribedHook<
+				(context: {
+					readonly input: MutationUpdateFor<S, N>;
+					readonly existing: SchemaRow<S, N>;
+					readonly api: HookApi<S>;
+				}) =>
+					| Effect.Effect<MutationUpdateFor<S, N>, unknown, never>
+					| Promise<MutationUpdateFor<S, N>>
+					| MutationUpdateFor<S, N>
+			>;
+			readonly after?: DescribedHook<
+				(context: {
+					readonly record: SchemaRow<S, N>;
+					readonly api: AfterHookApi<S>;
+				}) => Effect.Effect<void, unknown, never> | Promise<void> | void
+			>;
+		};
 	};
 	readonly delete?: {
-		readonly before?: DescribedHook<
-			(context: {
-				readonly existing: SchemaRow<S, N>;
-				readonly api: HookApi<S>;
-			}) => Effect.Effect<void, unknown, never> | Promise<void> | void
-		>;
-		readonly after?: DescribedHook<
-			(context: {
-				readonly record: SchemaRow<S, N>;
-				readonly api: AfterHookApi<S>;
-			}) => Effect.Effect<void, unknown, never> | Promise<void> | void
-		>;
+		readonly perRecord?: {
+			readonly before?: DescribedHook<
+				(context: {
+					readonly existing: SchemaRow<S, N>;
+					readonly api: HookApi<S>;
+				}) => Effect.Effect<void, unknown, never> | Promise<void> | void
+			>;
+			readonly after?: DescribedHook<
+				(context: {
+					readonly record: SchemaRow<S, N>;
+					readonly api: AfterHookApi<S>;
+				}) => Effect.Effect<void, unknown, never> | Promise<void> | void
+			>;
+		};
 	};
 };
+
 export type CollectionPipelines<S extends AnySchema, N extends TableName<S>> = {
 	readonly export?: {
 		readonly description: string;
@@ -734,7 +970,16 @@ export type CollectionIntegrations<S extends AnySchema, N extends TableName<S>> 
 
 export interface ChannelDefinition {
 	readonly transport: string;
-	readonly policy: string;
+	/**
+	 * The capability ceiling every run on this channel is evaluated against.
+	 *
+	 * Resolved by `Workspace.policy`, which matches a policy's declared `name` — so this is the
+	 * policy's file key, and typing it as the generated union is the only thing that says so at
+	 * authoring time. It was `string` while the runtime matched a display-cased name, which is how
+	 * field-operations shipped a WhatsApp channel pointed at `field_ops_contractor`, a policy that
+	 * existed, under a name nothing answered to.
+	 */
+	readonly policy: DeclaredPolicyName;
 	readonly description: string;
 	readonly audience: 'public' | 'authenticated';
 	readonly groupMessages?: 'disabled' | 'mention_or_reply' | 'all';
@@ -762,7 +1007,21 @@ type PolicyGrant<S extends AnySchema> = {
 	};
 }[TableName<S>];
 export interface PolicyDefinition<S extends AnySchema = DefaultWorkspaceSchema> {
-	readonly name: string;
+	/**
+	 * The policy's own file key, and the only name anything binds to.
+	 *
+	 * `+sales_rep.policy.ts` declares `name: 'sales_rep'`. This looks like a redundant restatement of
+	 * the filename and is not: the runtime resolves a policy by this field —
+	 * `policiesHeldByTeam` folds it to match a team's holdings, `Workspace.policy` looks a channel's
+	 * ceiling up by it — while the compiler generates `PolicyName` from the filename. Typing it as
+	 * the generated union is what makes the two the same string. A display-cased `name` used to
+	 * compile here and match nothing at run time, in five of six workspaces.
+	 *
+	 * A policy has no separate label, deliberately. The prose that describes it to a person is
+	 * `description`, which is what the studio renders beside the name; adding a second human-facing
+	 * spelling is how the drift started.
+	 */
+	readonly name: DeclaredPolicyName;
 	readonly description: string;
 	readonly apps?: ReadonlyArray<string>;
 	readonly grants: ReadonlyArray<PolicyGrant<S>>;

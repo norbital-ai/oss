@@ -43,17 +43,20 @@ const definition = workspace({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			roles: ['admin'],
 			apps: ['helper']
 		}),
 		policy({
 			name: 'admin-data',
 			effect: 'allow',
 			actions: ['read', 'create', 'update', 'delete'],
-			roles: ['admin'],
 			apps: ['employees']
 		})
 	],
+	teams: {
+		'admin-agent': ['admin-agent'],
+		'admin-data': ['admin-data'],
+		admin: ['admin-agent', 'admin-data']
+	},
 	agents: [
 		agent({
 			name: 'helper',
@@ -80,7 +83,7 @@ const definition = workspace({
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-tools' });
 const bundle = makeBundle(definition, manifest, {});
-const subject = { userId: 'admin-1', tenantId: 'tenant-1', roles: ['admin'], teams: [] };
+const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'] };
 const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 	call: (_metadata, request) => {
 		// Authentication reads Better Auth's session joined to its user table. Matching on
@@ -430,12 +433,22 @@ describe('Bolt agent tool loop', () => {
 					}
 				})
 		};
-		const database = sessionDatabase;
+		// The spawn is a `bolt_task` row now, written through the database facility, and the host is
+		// told about it with a `Wake` through the tasks facility — so both are observed where they
+		// land rather than on one facility.
 		const enqueued: Array<string> = [];
 		const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
 			call: (_metadata, request) => {
-				if (request._tag === 'Enqueue') enqueued.push(request.command);
+				if (request._tag === 'Wake') enqueued.push('wake');
 				return Promise.resolve({ _tag: 'Success', value: { taskId: 'task-spawn' } });
+			}
+		};
+		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
+			call: (metadata, request, signal) => {
+				if (request._tag === 'Query' && request.sql.includes('bolt_task')) {
+					enqueued.push(String(request.parameters[0]));
+				}
+				return sessionDatabase.call(metadata, request, signal);
 			}
 		};
 		const facilities: FacilityBindings = { scope, database, ai, tasks };
@@ -460,6 +473,8 @@ describe('Bolt agent tool loop', () => {
 			response: { value: { status: 'waiting', output: { waiting: true } } }
 		});
 		expect(enqueued).toContain('agents.turn');
+		// And the host is told to come back — the row is durable, and something has to pick it up.
+		expect(enqueued).toContain('wake');
 	});
 
 	it('executes compiled workspace tool handlers', async () => {

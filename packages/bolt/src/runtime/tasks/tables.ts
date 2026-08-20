@@ -75,7 +75,7 @@ export const boltTask = pgTable(
 		status: text('status').notNull().default('pending'),
 		runAt: timestamp('run_at', { withTimezone: true }).notNull().defaultNow(),
 		attempts: integer('attempts').notNull().default(0),
-		maxAttempts: integer('max_attempts').notNull().default(8),
+		maxAttempts: integer('max_attempts').notNull().default(12),
 		effectId: text('effect_id').notNull().unique('bolt_task_effect_id'),
 		result: jsonb('result'),
 		/**

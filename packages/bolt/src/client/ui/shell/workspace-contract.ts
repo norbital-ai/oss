@@ -32,13 +32,14 @@ export type WorkspaceView = {
 		/**
 		 * The roles the credential actually carries.
 		 *
-		 * Never defaulted. An absent role list used to read as `['admin']`, so a session whose roles
-		 * the host never reported was rendered with the highest privilege in the workspace. Unstated
-		 * roles are no roles, and the runtime re-derives authority from the credential on every
-		 * command regardless — this list is for display and for the local replica's own decisions.
+		 * Never defaulted. An absent team used to be an absent role list that read as `['admin']`, so a
+		 * session the host never reported on was rendered with the highest privilege in the workspace.
+		 * No team is no authority, and the runtime re-derives it from the credential on every command
+		 * regardless — this is for display and for the local replica's own decisions.
 		 */
-		readonly roles: ReadonlyArray<string>;
-		readonly teams: ReadonlyArray<string>;
+		readonly team?: string;
+		/** The team names whose policies this session holds — its own, then any it inherits. */
+		readonly teamPath: ReadonlyArray<string>;
 		/** Administration is a status the host proved, not a role borrowed off the list above. */
 		readonly admin: boolean;
 	};

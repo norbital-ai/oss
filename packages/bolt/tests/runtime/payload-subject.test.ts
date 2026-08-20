@@ -20,6 +20,7 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { seedSession } from '../support/fixture-identity.js';
 
 /**
  * Who a command runs as, and where that answer is allowed to come from.
@@ -28,7 +29,7 @@ import {
  * and then wrote over the payload's own. A `Task` carries no credential, and a non-data-browser
  * `Plugin` is an unauthenticated `POST /_bolt/plugin/<anything>/<command>` — both hand their input
  * to the switch untouched. So on those two tags `subject` is a claim, and a claim that says
- * `roles: ['admin']` used to pass `authorize(subject, 'manage', 'secrets')` and open the vault.
+ * `teamPath: ['admin']` used to pass `authorize(subject, 'manage', 'secrets')` and open the vault.
  *
  * The refusal is one gate where identity is minted rather than a check per case, so these tests
  * hold the whole list of exposed commands against it instead of the two the issue named.
@@ -50,8 +51,7 @@ const scope = {
 const forgedSubject = {
 	userId: 'user-forged',
 	tenantId: 'test-tenant',
-	roles: ['admin'],
-	teams: []
+	teamPath: ['admin']
 };
 
 const command = (name: string, credential: string, input: unknown = null) =>
@@ -89,13 +89,6 @@ const plugin = (name: string, input: unknown) =>
 		headers: {},
 		trustedContext: {}
 	});
-
-const session = async (runtime: BoltTestRuntime, token: string, roles: ReadonlyArray<string>) => {
-	await runtime.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[token, `user-${token}`, 'test-tenant', JSON.stringify([...roles]), `${token}@example.test`]
-	);
-};
 
 const failureOf = async (runtime: BoltTestRuntime, invocation: Invocation) => {
 	const outcome = await runtime.runtime.runPromise(
@@ -168,14 +161,17 @@ const vaultWorkspace = workspace({
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] }),
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] }),
 		policy({
 			name: 'employee',
 			effect: 'allow',
-			roles: ['employee'],
 			grants: [{ collection: 'people', action: 'read' }]
 		})
 	],
+	teams: {
+		admin: ['admin', 'employee'],
+		employee: ['employee']
+	},
 	agents: [],
 	automations: [],
 	channels: [],
@@ -197,8 +193,11 @@ const gatedWorkspace = workspace({
 	],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
 	],
+	teams: {
+		admin: ['admin']
+	},
 	agents: [],
 	automations: [],
 	channels: [],
@@ -242,7 +241,9 @@ describe('payload-supplied identity', () => {
 	// afterwards, read back through the command that reports what is set.
 	it('leaves the vault unwritten after a refused task, and writes it for an authorized command', async () => {
 		harness = await makeBoltTestRuntime(vaultWorkspace);
-		await session(harness, 'admin-token', ['admin']);
+		// `admin` is the vault workspace's team holding the policy that grants `*` — the authorized
+		// half of this test needs a session that really can write a workspace secret.
+		await seedSession(harness, { token: 'admin-token', user: 'user-admin-token', team: 'admin' });
 
 		await failureOf(
 			harness,
@@ -277,7 +278,13 @@ describe('payload-supplied identity', () => {
 	// The gate refuses a claim; it does not replace the authorization that follows one.
 	it('still refuses an authenticated command whose subject lacks the authority', async () => {
 		harness = await makeBoltTestRuntime(vaultWorkspace);
-		await session(harness, 'employee-token', ['employee']);
+		// `employee` grants a read of `people` and nothing about secrets, which is what makes the
+		// refusal below an authorization refusal rather than an authentication one.
+		await seedSession(harness, {
+			token: 'employee-token',
+			user: 'user-employee-token',
+			team: 'employee'
+		});
 		const failure = await failureOf(
 			harness,
 			command('secrets.write', 'employee-token', { name: 'GEOCODING_API_KEY', value: 'stolen' })

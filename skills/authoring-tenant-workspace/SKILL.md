@@ -1,29 +1,45 @@
 ---
 name: authoring-tenant-workspace
 description: >-
-  Author filesystem-first Bolt tenant workspaces in the public OSS repository. Load for collections,
-  custom types, apps, automations, remotes, seeds, generated $types, the unified $bolt/client,
-  temporal values, filters, client rendering, and template repository metadata including the
-  marketing thumbnail (`assets/thumbnail.svg`).
+  Author filesystem-first Bolt tenant workspaces and move changes through OSS packages, template
+  repositories, Colony, and the website. Load for collections, custom types, apps, automations,
+  remotes, seeds, generated $types, $bolt/client, template metadata, or local/staging/production
+  refresh behavior.
 ---
 
 # Authoring Bolt Tenant Workspaces
 
-Bolt tenant workspaces are plain Vite projects. Authors write `src/` plus `.agents/skills/` for Agent
-Skills; the Bolt filesystem compiler
-derives the registry, workspace, client, loaders, and local types under `.norbital/`. Never hand-author
-assembly or generated output. The sealed authoring contract is the
+Bolt tenant workspaces are plain Vite projects in `norbital-ai/templates` or
+`norbital-ai/templates-private`. Authors write `src/` plus `.agents/skills/`; the Bolt filesystem
+compiler derives the registry, workspace, client, loaders, and local types under `.norbital/`. Never
+hand-author assembly or generated output. The sealed authoring contract is the
 [Bolt authoring package](https://github.com/norbital-ai/oss/blob/main/packages/bolt/src/authoring/index.ts).
 
-## Live checkpoint redeploy
+## Ownership and refresh
 
-Local `/app/...` tenants run an immutable release artifact, not editable OSS source via HMR. After
-publishing a runtime or template release, consume the new release in Colony and restart the dev
-bootstrap before reporting success. The Colony dev bootstrap converges on every start — it seeds the
-tenant from each workspace under `COLONY_WORKSPACE_ROOTS`, compiles the checkout with `bolt sync`, builds and publishes a
-release artifact, routes it, and provisions and migrates the tenant database when a Postgres URL is
-set. There is no separate `tenant:update` step; restart `pnpm --filter colony dev` after
-`pnpm yalc:link` (or a template publish) and hard-refresh the iframe.
+| Source changed                | Owner                         | Required refresh                                     |
+| ----------------------------- | ----------------------------- | ---------------------------------------------------- |
+| `oss/packages/*`              | OSS package source            | package build → consumer install → template artifact |
+| template `src/`, assets, meta | templates / templates-private | `bolt sync` → Colony publish + route                 |
+| `norbital/apps/colony`        | hosting platform              | Colony Vite reload or platform deploy                |
+| `norbital/apps/website`       | marketing/docs site           | website Vite reload or website deploy                |
+
+A tenant page loads an immutable artifact. Template and package source are never tenant HMR inputs.
+For local package/template work, stop Colony and run `pnpm --dir norbital dev --ui`; it builds OSS,
+establishes yalc links in every consumer, materializes them with pnpm, syncs templates, then starts a
+fresh Colony bootstrap that publishes and routes the artifacts. Use `--template=<directory|handle>`
+to narrow template linking and sync. `yalc push` alone is insufficient.
+
+Colony source uses its own Vite HMR; restart for `.env`, dependency, bootstrap, or artifact-routing
+changes. Website source uses its own Vite HMR; after an OSS package change, run
+`pnpm --dir norbital yalc:link` and restart the website dev server. Read
+[generated-and-build.md](references/generated-and-build.md#source-to-runtime-map) before deciding
+whether a local restart, release, deployment, or tenant rebuild is required.
+
+Yalc is local only. Staging and production consume exact registry packages, remote template refs, and
+committed Norbital builds. Staging follows Norbital `master`; production follows `production` and must
+receive the same verified tree. An existing tenant does not change until a new artifact is built and
+routed. Never use `env:reset` as a refresh command: it discards the source snapshot and database.
 
 `+seed.ts` initializes new tenants; it does not evolve deployed data. For an existing tenant, diff the
 authored models against the migration lineage and write the next entry with `pnpm exec bolt migrate`,
@@ -315,7 +331,8 @@ sentence; "runs before create" restates the key and is worse than nothing.
   `api.infer`, and `api.readFileAsset` call returns an `Effect.Effect` you `yield*` — never a
   plain Promise (promises and plain values are still admitted and normalized at the authoring
   boundary). The runtime actually executes these handlers: before/after hooks wrap create, update,
-  and delete (create also takes a `batchHandler` for bulk writes), import/export pipelines run the
+  and delete — one hook per record, whether the write was one row or a batch of four thousand —
+  import/export pipelines run the
   canonical import and export flows, and change-triggered automations receive
   `{ args, scope }` with the triggering row as `scope.incoming_record`.
 - Hooks validate and return the exact input/patch, then make only immediate database or asset
@@ -351,10 +368,11 @@ The compiler rejects the former Page/Pane/Region, layout metadata, split-client,
 
 ```bash
 # Run from the selected template workspace in a checkout of the templates repository.
-pnpm sync        # template script wrapping `bolt sync`
+pnpm sync        # validates, generates, and builds the client + server artifact
 pnpm lint
-pnpm build       # `vite build` through the `bolt()` plugin
 ```
 
-Publish through the OSS release workflow before asking Colony to consume the change. Before finishing, run
-the relevant quality audit, sync, lint, build, and focused behaviour test in OSS.
+For local review, use the yalc/bootstrap flow above; do not publish. For staging/production, release
+OSS packages first, update exact consumer pins and locks, publish template refs, deploy staging, then
+promote the verified Norbital tree to production. Before finishing, run the relevant quality audit,
+sync, lint, and focused behavior test.

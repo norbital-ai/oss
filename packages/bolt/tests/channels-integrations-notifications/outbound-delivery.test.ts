@@ -12,8 +12,6 @@ import {
 	type Activation,
 	type ConnectorRequest,
 	type ConnectorResponse,
-	type DatabaseRequest,
-	type DatabaseResponse,
 	type FacilityBinding,
 	type TaskRequest,
 	type TaskResponse
@@ -39,6 +37,8 @@ import { Secrets } from '../../src/runtime/secrets/secrets.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
+	makeTestDatabase,
+	provisioningStatements,
 	recordId,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
@@ -219,8 +219,11 @@ const definitionFor = (integrations: WorkspaceDefinition['integrations']): Works
 		],
 		apps: [],
 		policies: [
-			policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+			policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
 		],
+		teams: {
+			admin: ['admin']
+		},
 		agents: [],
 		automations: [],
 		channels: [],
@@ -453,8 +456,7 @@ describe('a write queues a delivery and does not wait for it', () => {
 			{
 				userId: 'integration:orders.partner',
 				tenantId: 'system',
-				roles: ['admin'],
-				teams: []
+				teamPath: ['admin']
 			}
 		);
 		expect(await outbox()).toEqual([]);
@@ -840,60 +842,97 @@ const unreachable = <Input, Output>(name: string): FacilityBinding<Input, Output
 	})
 });
 
-describe('activation asks the host to drain the outbox', () => {
+describe('a write queues the drain that will deliver it', () => {
 	/**
 	 * Backoff being a timestamp rather than a sleep is only half a retry policy; something has to
-	 * come back and look. That something is a registration, on the finest cron a host can express —
-	 * so a delivery that met a 503 is retried by the platform's own clock rather than by whoever
-	 * happens to call `flush` next.
-	 *
-	 * Without this registration the whole retry policy would be a comment: a delivery would sit
-	 * `pending` with a due time nobody ever read.
+	 * come back and look. That something used to be a fixed `* * * * *` registration per sending
+	 * integration — 1440 wakes a day against the tenant's database whether or not anything was ever
+	 * queued. A delivery is now enqueued by the write that caused it, in that write's own
+	 * transaction, so the job cannot exist without the delivery.
 	 */
-	it('registers one drain per integration that sends, on a recurring schedule', async () => {
+	it('enqueues one flush task per sending integration, in the write is own transaction', async () => {
+		await build(ordersModule);
+		await create('order-17', { external_id: 'A-17', status: 'placed', amount: 1 });
+		const rows = await current().database.query(
+			"select command, input, status from bolt_task where command = 'integrations.flush'",
+			[]
+		);
+		expect(rows).toEqual([
+			{ command: 'integrations.flush', input: { name: 'orders.partner' }, status: 'pending' }
+		]);
+		// And it commits with the record, not after it: the two cannot disagree on whether the
+		// delivery exists.
+		const statements = current().database.statements;
+		const rowInsert = statements.findIndex((sql) => sql.includes('insert into "orders"'));
+		const taskInsert = statements.findIndex((sql) => sql.includes('insert into "bolt_task"'));
+		expect(rowInsert).toBeGreaterThanOrEqual(0);
+		expect(taskInsert).toBeGreaterThan(rowInsert);
+	});
+
+	/**
+	 * Activation declares nothing for outbound deliveries. There is no drain cron and no schedule
+	 * row — the registration is routing only, so a host knows where a manual flush is addressed,
+	 * and a delivery that backs off schedules its own return instead of being looked for.
+	 */
+	it('activation declares no drain schedule, and only routes the flush command', async () => {
 		const described = describeIntegrations({ orders: ordersModule('https://partner.example') });
 		const definition = definitionFor(described.declarations);
 		const bundle = makeBundle(definition, buildManifest(definition, { artifactId: 'outbound' }));
 		const requests: Array<TaskRequest> = [];
-		const result = await bundle.activate(
-			activation,
-			{
-				scope: activation.scope,
-				tasks: {
-					call: async (_metadata, input) => {
-						requests.push(input);
-						return { _tag: 'Success', value: {} };
-					}
-				} satisfies FacilityBinding<TaskRequest, TaskResponse>,
-				database: unreachable<DatabaseRequest, DatabaseResponse>('database'),
-				connector: unreachable<ConnectorRequest, ConnectorResponse>('connector')
-			},
-			new AbortController().signal
-		);
-		if (result._tag !== 'Activated')
-			throw new Error(`activation failed: ${JSON.stringify(result)}`);
-		expect(result.registrations.filter(({ schedule }) => schedule !== null)).toEqual([
-			{ command: 'integrations.flush', schedule: '* * * * *', input: { name: 'orders.partner' } }
-		]);
-		// And it is an instruction to the host, not only a line in the report. Two registrations name
-		// the command: one routing-only, so a host knows where to send a manual flush, and one carrying
-		// the cron. Only the second is a schedule.
-		expect(
-			requests.filter(
-				(request) =>
-					request._tag === 'Register' &&
-					request.command === 'integrations.flush' &&
-					request.schedule !== undefined
-			)
-		).toEqual([
-			{
-				_tag: 'Register',
-				leaseId: activation.id,
-				releaseId: activation.scope.releaseId,
-				command: 'integrations.flush',
-				schedule: '* * * * *',
-				input: { name: 'orders.partner' }
+		const database = await makeTestDatabase();
+		try {
+			for (const step of await provisioningStatements(definition)) {
+				const result = await database.binding.call(
+					{
+						invocationId: activation.id,
+						effectId: EffectId.make(`provision:${step.id}`),
+						deadlineEpochMs: activation.deadlineEpochMs,
+						idempotencyKey: step.id
+					},
+					{ _tag: 'Query', sql: step.sql, parameters: [] },
+					new AbortController().signal
+				);
+				if (result._tag !== 'Success')
+					throw new Error(`provisioning failed: ${JSON.stringify(result)}`);
 			}
-		]);
+			const result = await bundle.activate(
+				activation,
+				{
+					scope: activation.scope,
+					tasks: {
+						call: async (_metadata, input) => {
+							requests.push(input);
+							return { _tag: 'Success', value: {} };
+						}
+					} satisfies FacilityBinding<TaskRequest, TaskResponse>,
+					database: database.binding,
+					connector: unreachable<ConnectorRequest, ConnectorResponse>('connector')
+				},
+				new AbortController().signal
+			);
+			if (result._tag !== 'Activated')
+				throw new Error(`activation failed: ${JSON.stringify(result)}`);
+			// Registration is routing only — one entry per command, so a host knows where a manual
+			// flush is addressed, and none of them carries a cron.
+			expect(
+				result.registrations.filter(({ command }) => command === 'integrations.flush')
+			).toEqual([{ command: 'integrations.flush' }]);
+			expect(
+				requests.filter((request) => request._tag === 'Register' && request.command === 'integrations.flush')
+			).toEqual([
+				{
+					_tag: 'Register',
+					leaseId: activation.id,
+					releaseId: activation.scope.releaseId,
+					command: 'integrations.flush'
+				}
+			]);
+			// No schedule row, because there is no cron: the only thing that schedules a drain is a
+			// delivery itself.
+			const schedules = await database.query('select key from bolt_schedule', []);
+			expect(schedules).toEqual([]);
+		} finally {
+			await database.close();
+		}
 	});
 });

@@ -12,6 +12,7 @@ import { collection, field, policy, workspace } from '../../src/authoring/worksp
 import { AccessControl } from '../../src/runtime/access/access-control.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, recordId, type BoltTestRuntime } from '../support/bolt-test-layer.js';
+import { seedSession } from '../support/fixture-identity.js';
 
 /**
  * What the Data Browser runs as, and where that answer is allowed to come from.
@@ -50,13 +51,6 @@ const query = (trustedContext: unknown, credential?: string) =>
 		trustedContext: trustedContext as never
 	});
 
-const session = async (runtime: BoltTestRuntime, token: string, roles: ReadonlyArray<string>) => {
-	await runtime.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[token, `user-${token}`, 'test-tenant', JSON.stringify([...roles]), `${token}@example.test`]
-	);
-};
-
 const outcomeOf = (runtime: BoltTestRuntime, invocation: Invocation) =>
 	runtime.runtime.runPromise(dispatchInvocation(invocation).pipe(Effect.result));
 
@@ -65,11 +59,15 @@ const secretWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	// `nobody` is deliberately absent from the policies: a role no policy names is refused by default,
-	// which is the session a payload claiming `roles: ['admin']` would try to widen.
+	// `nobody` is deliberately absent from the teams below: a team the release does not declare holds
+	// no policies at all and is refused by default, which is the session a payload claiming
+	// `teamPath: ['admin']` would try to widen.
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
 	],
+	teams: {
+		admin: ['admin']
+	},
 	agents: [],
 	automations: [],
 	channels: [],
@@ -100,7 +98,7 @@ describe('data browser plugin credential', () => {
 
 		const outcome = await outcomeOf(
 			harness,
-			query({ roles: ['admin'], subject: 'admin-external', impersonatedUser: 'admin-1' })
+			query({ teamPath: ['admin'], subject: 'admin-external', impersonatedUser: 'admin-1' })
 		);
 
 		const disclosed = outcome._tag === 'Success' ? outcome.success.value : [];
@@ -116,7 +114,7 @@ describe('data browser plugin credential', () => {
 	it('refuses rather than answering an empty page', async () => {
 		harness = await makeBoltTestRuntime(secretWorkspace);
 		await seed(harness);
-		for (const context of [{}, { roles: [] }, { subject: 'admin-external' }]) {
+		for (const context of [{}, { teamPath: [] }, { subject: 'admin-external' }]) {
 			const outcome = await outcomeOf(harness, query(context));
 			expect(outcome._tag, JSON.stringify(context)).toBe('Failure');
 			expect(
@@ -129,7 +127,7 @@ describe('data browser plugin credential', () => {
 	it('reads the rows for a credential whose session carries the authority', async () => {
 		harness = await makeBoltTestRuntime(secretWorkspace);
 		await seed(harness);
-		await session(harness, 'admin-token', ['admin']);
+		await seedSession(harness, { token: 'admin-token', user: 'user-admin-token', team: 'admin' });
 
 		const outcome = await outcomeOf(harness, query({}, 'admin-token'));
 		expect(outcome._tag).toBe('Success');
@@ -145,15 +143,22 @@ describe('data browser plugin credential', () => {
 	it('takes roles from the session and not from the trustedContext beside it', async () => {
 		harness = await makeBoltTestRuntime(secretWorkspace);
 		await seed(harness);
-		await session(harness, 'admin-token', ['admin']);
-		await session(harness, 'nobody-token', ['nobody']);
+		await seedSession(harness, { token: 'admin-token', user: 'user-admin-token', team: 'admin' });
+		// A real team row whose name the release never declares — inert, holding nothing. That is what
+		// the payload below tries to widen, and seeding no team at all would test the same refusal for
+		// the weaker reason that the person is in no team.
+		await seedSession(harness, {
+			token: 'nobody-token',
+			user: 'user-nobody-token',
+			team: 'nobody'
+		});
 
-		const claimedDown = await outcomeOf(harness, query({ roles: ['nobody'] }, 'admin-token'));
+		const claimedDown = await outcomeOf(harness, query({ teamPath: ['nobody'] }, 'admin-token'));
 		expect(claimedDown._tag === 'Success' ? claimedDown.success.value : undefined).toMatchObject([
 			{ name: 'Ada' }
 		]);
 
-		const claimedUp = await outcomeOf(harness, query({ roles: ['admin'] }, 'nobody-token'));
+		const claimedUp = await outcomeOf(harness, query({ teamPath: ['admin'] }, 'nobody-token'));
 		const leaked = claimedUp._tag === 'Success' ? claimedUp.success.value : [];
 		expect(leaked, 'a payload role widened a session that does not hold it').toEqual([]);
 		expect(claimedUp._tag === 'Failure' ? claimedUp.failure : undefined).toBeInstanceOf(
@@ -165,10 +170,15 @@ describe('data browser plugin credential', () => {
 	it('refuses a credential authenticated outside the invocation tenant', async () => {
 		harness = await makeBoltTestRuntime(secretWorkspace);
 		await seed(harness);
-		await harness.database.query(
-			`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-			['other-token', 'user-other', 'other-tenant', JSON.stringify(['admin']), 'other@example.test']
-		);
+		// Placed in `admin` — the team that grants everything — so the refusal below can only be the
+		// tenant mismatch and never an absence of authority.
+		await seedSession(harness, {
+			token: 'other-token',
+			user: 'user-other',
+			team: 'admin',
+			tenantId: 'other-tenant',
+			email: 'other@example.test'
+		});
 
 		const outcome = await outcomeOf(harness, query({}, 'other-token'));
 		expect(outcome._tag === 'Success' ? outcome.success.value : []).toEqual([]);

@@ -20,8 +20,13 @@
  */
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readPublicPackageEntries } from './package-release.mjs';
 
 export const signatureField = 'yalcSignature';
+
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const localPackageNames = new Set(readPublicPackageEntries(repositoryRoot).map(({ name }) => name));
 
 export const readJsonIfPresent = (file) => {
 	if (!existsSync(file)) return undefined;
@@ -33,18 +38,21 @@ export const readJsonIfPresent = (file) => {
 };
 
 /**
- * The packages this checkout consumes through yalc, read from its own manifest.
+ * The locally publishable packages this checkout consumes, read from its own manifest.
  *
- * Derived rather than listed so the set cannot drift: Colony consumes six, a template four, and a
- * private template whatever it declares. A hardcoded list in each linker is one more thing to
- * forget when a package is added.
+ * This must include exact registry specifiers as well as existing `file:.yalc/` overlays. Filtering
+ * only the latter made `yalc:link` capable of refreshing an old link but incapable of creating one
+ * in a clean checkout — the ordinary state where the command is first needed.
+ *
+ * The producer set comes from `package-release.mjs`, so adding a publishable package cannot make
+ * the producer and consumers silently disagree.
  */
 export const managedPackages = (consumerDirectory) => {
 	const manifest = readJsonIfPresent(path.join(consumerDirectory, 'package.json'));
 	const sections = [manifest?.dependencies, manifest?.devDependencies];
 	return sections
 		.flatMap((section) => Object.entries(section ?? {}))
-		.filter(([, specifier]) => String(specifier).startsWith('file:.yalc/'))
+		.filter(([name]) => localPackageNames.has(name))
 		.map(([name]) => name);
 };
 
@@ -74,7 +82,7 @@ export const stalePackages = (consumerDirectory, names) =>
 	});
 
 /**
- * Make every managed package in this checkout a *pure* yalc installation.
+ * Make every managed package in this checkout a *pure* yalc installation and manifest dependency.
  *
  * A non-pure installation is one where yalc writes the package into `node_modules/<name>` itself,
  * replacing pnpm's symlink with a real directory and moving whatever was there to `.ignored_<name>`.
@@ -84,18 +92,30 @@ export const stalePackages = (consumerDirectory, names) =>
  * `pnpm-workspace.yaml` — and Colony, being an app inside the workspace rather than its root, has
  * none.
  *
- * Pure is recorded per package in the consumer's `yalc.lock`, so this is a one-time migration that
- * costs a lockfile read on every later run.
+ * `yalc add --pure` alone is not enough: pure mode copies into `.yalc/` but deliberately leaves an
+ * exact registry specifier unchanged. For a package not already addressed as `file:.yalc/`, first
+ * add it normally so yalc records the replaced version and rewrites the manifest, then convert that
+ * installation to pure. pnpm owns `node_modules`; the caller re-materialises it after this returns.
  */
 export const ensurePureInstallation = ({ consumerDirectory, names, yalcBin, run }) => {
+	const manifest = readJsonIfPresent(path.join(consumerDirectory, 'package.json'));
 	const lockfile = readJsonIfPresent(path.join(consumerDirectory, 'yalc.lock'));
+	const specifierOf = (name) => manifest?.dependencies?.[name] ?? manifest?.devDependencies?.[name];
+	const unlinked = names.filter(
+		(name) => !String(specifierOf(name) ?? '').startsWith('file:.yalc/')
+	);
 	const impure = names.filter((name) => {
 		const entry = lockfile?.packages?.[name];
 		return entry !== undefined && entry.pure !== true;
 	});
-	if (impure.length === 0) return [];
-	run(yalcBin, ['add', '--pure', ...impure], consumerDirectory);
-	for (const name of impure) {
+	if (unlinked.length > 0) {
+		// Non-pure add is the only yalc path that writes `file:.yalc/` and remembers the exact
+		// specifier it replaced. The pure conversion below immediately removes its node_modules copy.
+		run(yalcBin, ['add', ...unlinked], consumerDirectory);
+	}
+	const prepared = [...new Set([...unlinked, ...impure])];
+	if (prepared.length > 0) run(yalcBin, ['add', '--pure', ...prepared], consumerDirectory);
+	for (const name of prepared) {
 		// The real directory yalc left behind, and the copy of pnpm's link it displaced. Both are
 		// dead once the installation is pure; leaving them means two resolutions for one specifier.
 		const segments = name.split('/');
@@ -103,5 +123,21 @@ export const ensurePureInstallation = ({ consumerDirectory, names, yalcBin, run 
 		rmSync(path.join(parent, segments.at(-1)), { recursive: true, force: true });
 		rmSync(path.join(parent, `.ignored_${segments.at(-1)}`), { recursive: true, force: true });
 	}
-	return impure;
+	const linkedManifest = readJsonIfPresent(path.join(consumerDirectory, 'package.json'));
+	const linkedLock = readJsonIfPresent(path.join(consumerDirectory, 'yalc.lock'));
+	const missing = names.filter((name) => {
+		const specifier =
+			linkedManifest?.dependencies?.[name] ?? linkedManifest?.devDependencies?.[name];
+		return (
+			!String(specifier ?? '').startsWith('file:.yalc/') ||
+			linkedLock?.packages?.[name]?.pure !== true ||
+			!existsSync(path.join(consumerDirectory, '.yalc', ...name.split('/')))
+		);
+	});
+	if (missing.length > 0) {
+		throw new Error(
+			`The yalc store has no usable build for ${missing.join(', ')}. Rerun without --only to publish the complete package set.`
+		);
+	}
+	return prepared;
 };

@@ -1,5 +1,4 @@
 import { makeLayer as makeBundleLoaderLayerValue } from './bundle-loader.js';
-import { makeLayer as makeDurableEngineLayerValue } from './durable-engine.js';
 import { makeAiBinding as makeAiBindingValue } from './facilities/ai.js';
 import { makeCommunicationBinding as makeCommunicationBindingValue } from './facilities/communication.js';
 import { makeConnectorBinding as makeConnectorBindingValue } from './facilities/connector.js';
@@ -19,7 +18,6 @@ import { startServer as startServerValue } from './server.js';
 /** Groups the physical self-host constructors for explicit host composition and discovery. */
 export const selfHostConstructors = {
 	bundleLoaderLayer: makeBundleLoaderLayerValue,
-	durableEngineLayer: makeDurableEngineLayerValue,
 	aiBinding: makeAiBindingValue,
 	communicationBinding: makeCommunicationBindingValue,
 	connectorBinding: makeConnectorBindingValue,
@@ -55,14 +53,6 @@ export {
 	type ConfiguredProviderFactory,
 	type ConfiguredProviderSettings
 } from './config.js';
-export {
-	DurableEngine,
-	DurableEngineError,
-	DurableEngineSnapshot,
-	developmentLayer as durableEngineDevelopmentLayer,
-	makeLayer as makeDurableEngineLayer,
-	type Adapter as DurableEngineAdapter
-} from './durable-engine.js';
 export {
 	AdmissionStopped,
 	DrainTimedOut,
@@ -112,11 +102,8 @@ export {
 	makeHostToolBindingFromConfig,
 	type Provider as HostToolProvider
 } from './facilities/host-tools.js';
-export {
-	makeTaskBinding,
-	makeTaskBindingFromConfig,
-	type Provider as TaskProvider
-} from './facilities/tasks.js';
+export { makeTaskBinding, TaskFacilities } from './facilities/tasks.js';
+export { makeScheduler, type Scheduler, type SchedulerOptions } from './scheduler.js';
 export {
 	makeMemoryTransport,
 	makeTransportBinding,

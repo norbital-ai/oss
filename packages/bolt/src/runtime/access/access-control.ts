@@ -1,8 +1,10 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import type { PolicyDeclaration } from '../../authoring/workspace-schema.js';
+import type {
+	PolicyDeclaration,
+	WorkspaceDefinition
+} from '../../authoring/workspace-schema.js';
 import { Database } from '../facilities/database.js';
-import { BUILT_IN_POLICY_NAMES } from '../schema/system-collections.js';
 import { Workspace } from '../workspace.js';
 import type { Identity } from '../identity/identity.js';
 
@@ -58,21 +60,96 @@ export class AccessDenied extends Schema.TaggedError<AccessDenied>()(
  */
 export const isAdministrator = (subject: Identity.Subject): boolean => subject.admin === true;
 
+/**
+ * Every `(team, policy)` pair already reported as unresolvable, so one stale name is one line.
+ *
+ * Module-scoped rather than per-request: this is read on the authorization path, which runs on every
+ * command, and a workspace whose `+teams.ts` names a policy that no longer exists would otherwise
+ * emit the same warning thousands of times a minute and bury everything else in the log.
+ */
+const reportedStalePolicies = new Set<string>();
+
+/**
+ * The policies a subject holds through its team, resolved against what the release actually
+ * declares.
+ *
+ * **A team naming a policy that does not exist is inert, never fatal.** The two sides are bound by
+ * name and they move independently: the team is a row an operator edits, the policy is a file that
+ * ships with a release, and a rename or a deletion on either side leaves a name pointing at nothing.
+ * Refusing the request would take a workspace down over a stale string; granting it is unthinkable.
+ * So the name is dropped — the subject holds the policies that do exist and none that do not — and
+ * the runtime says so once, naming both halves so somebody can go and fix the map.
+ *
+ * The warning is `console.warn` rather than an Effect log because this is a synchronous predicate on
+ * the authorization path. It reaches an operator: the isolate forwards guest output to the host.
+ */
+export const policiesHeldByTeam = (
+	definition: WorkspaceDefinition,
+	subject: Identity.Subject
+): ReadonlySet<string> => {
+	const held = new Set<string>();
+	const path = subject.teamPath ?? [];
+	if (path.length === 0) return held;
+	const declaredTeams = definition.teams ?? {};
+	// Folded on both sides, once, rather than at each comparison — team names are matched
+	// case-insensitively everywhere, which is the single rule replacing the two this design had.
+	const teamsByFoldedName = new Map(
+		Object.entries(declaredTeams).map(([name, policies]) => [name.toLocaleLowerCase(), policies])
+	);
+	const declaredPolicies = new Set(
+		definition.policies.map((policy) => policy.name.toLocaleLowerCase())
+	);
+	for (const teamName of path) {
+		const policies = teamsByFoldedName.get(teamName.toLocaleLowerCase());
+		// A team row whose name the release does not declare holds nothing. That is the ordinary case
+		// for a team an operator created before the code caught up, and it is not worth a line.
+		if (policies === undefined) continue;
+		for (const policyName of policies) {
+			const folded = policyName.toLocaleLowerCase();
+			if (declaredPolicies.has(folded)) {
+				held.add(folded);
+				continue;
+			}
+			const key = `${teamName}:${policyName}`;
+			if (reportedStalePolicies.has(key)) continue;
+			reportedStalePolicies.add(key);
+			console.warn(
+				`[bolt.access] team "${teamName}" names policy "${policyName}", which this release does not declare — ignoring it. ` +
+					`Either the policy was renamed or removed, or the team map in +teams.ts is stale.`
+			);
+		}
+	}
+	return held;
+};
+
 /** Owns authored policy membership, action/resource matching, and requestor-token binding. */
 const PolicyEvaluation = {
-	subjectHasPolicy: (policy: PolicyDeclaration, subject: Identity.Subject): boolean => {
-		const roles = policy.roles ?? [policy.name];
-		if (roles.length === 0) return true;
-		const subjectRoles = subject.roles.map((role) => role.toLocaleLowerCase());
-		return roles.some((role) => subjectRoles.includes(role.toLocaleLowerCase()));
+	/**
+	 * Whether this policy applies to this subject.
+	 *
+	 * `held` is the set of policy names the subject's team confers, folded, resolved by the caller
+	 * that holds the workspace definition. There is exactly one other way to match — the runtime's
+	 * own `system` flag — and no third: a policy has a name, a team declares which names it holds,
+	 * and nothing else selects one.
+	 */
+	subjectHasPolicy: (
+		policy: PolicyDeclaration,
+		subject: Identity.Subject,
+		held: ReadonlySet<string>
+	): boolean => {
+		// The runtime's own policy, selected by a flag only `systemSubject` mints. Checked first
+		// because it is the one policy no team can confer and no name can reach.
+		if (policy.system === true) return subject.system === true;
+		return held.has(policy.name.toLocaleLowerCase());
 	},
 	matches: (
 		policy: PolicyDeclaration,
 		subject: Identity.Subject,
 		action: string,
-		resource: string
+		resource: string,
+		held: ReadonlySet<string>
 	): boolean => {
-		if (!PolicyEvaluation.subjectHasPolicy(policy, subject)) return false;
+		if (!PolicyEvaluation.subjectHasPolicy(policy, subject, held)) return false;
 		const grants = policy.grants ?? [];
 		if (grants.length > 0 && action === 'agent') return (policy.apps ?? []).length > 0;
 		if (grants.length > 0)
@@ -96,18 +173,18 @@ export const decide = (
 	policies: ReadonlyArray<PolicyDeclaration>,
 	subject: Identity.Subject,
 	action: string,
-	app: string
+	app: string,
+	held: ReadonlySet<string>
 ): Decision => {
 	// Before a single policy is consulted, and deliberately so. An administrator matches no policy —
 	// `subjectHasPolicy` matches by role and no workspace declares an `admin` role — so evaluating
 	// the ladder for them can only ever answer "no matching allow policy". The alternative that was
-	// tried, granting the founder every policy's roles, made the administrator's authority a
-	// derivative of the ladder: it changed whenever a template changed, and it vanished entirely the
-	// moment something stopped supplying roles. Authority that is a property of the person is read
-	// off the person.
+	// tried, putting the founder in every team at once, made the administrator's authority a
+	// derivative of the ladder: it changed whenever a template changed. Authority that is a property
+	// of the person is read off the person.
 	if (isAdministrator(subject)) return { allowed: true, reason: 'administrator' };
 	const applicable = policies.filter((policy) =>
-		PolicyEvaluation.matches(policy, subject, action, app)
+		PolicyEvaluation.matches(policy, subject, action, app, held)
 	);
 	if (applicable.some(({ effect }) => effect === 'deny'))
 		return { allowed: false, reason: 'explicit deny' };
@@ -155,7 +232,8 @@ const rowPredicate = (
 	policies: ReadonlyArray<PolicyDeclaration>,
 	subject: Identity.Subject,
 	action: string,
-	resource: string
+	resource: string,
+	held: ReadonlySet<string>
 ): RowPredicate => {
 	// The same short-circuit as `decide`, and it has to be here too rather than only there: hiding an
 	// app is not authority, so an administrator who was allowed the app and then filtered out of its
@@ -163,7 +241,7 @@ const rowPredicate = (
 	// returns the whole row.
 	if (isAdministrator(subject)) return unrestricted;
 	const applicable = policies.filter((policy) =>
-		PolicyEvaluation.matches(policy, subject, action, resource)
+		PolicyEvaluation.matches(policy, subject, action, resource, held)
 	);
 	if (applicable.some(({ effect }) => effect === 'deny'))
 		return { allowed: false, reason: 'explicit deny', sql: 'false', parameters: [] };
@@ -173,7 +251,7 @@ const rowPredicate = (
 			[]
 	);
 	if (grants.length === 0) {
-		const decision = decide(policies, subject, action, resource);
+		const decision = decide(policies, subject, action, resource, held);
 		return { ...decision, sql: decision.allowed ? 'true' : 'false', parameters: [] };
 	}
 	const compiled = grants.map((grant) => ({
@@ -239,17 +317,30 @@ export type ImpersonationTeam = Readonly<{ readonly id: string; readonly name: s
  * compiled client registry lists policies by lowercased filename (`employee`) while the declaration
  * names them `Employee`, and either spelling has to reach the same policy.
  */
-const impersonationTeams = (
-	policies: ReadonlyArray<PolicyDeclaration>
-): ReadonlyArray<ImpersonationTeam> =>
-	// The runtime's own policies are filtered out, because a built-in is not a body of staff. The
-	// deleted `admin` policy was offered here as though it were one, and `colony system` would be
-	// worse: previewing it would put its role into `subject.roles` and hand an administrator the
-	// host's provisioning grants through the team picker. `subjectAsTeam` resolves against the same
-	// authored list, so the name is not merely hidden — it cannot be asked for.
-	policies
-		.filter(({ name }) => !BUILT_IN_POLICY_NAMES.has(name))
-		.map(({ name }) => ({ id: name, name }));
+/**
+ * The SQL the picker and the preview both resolve through.
+ *
+ * One statement, so "which teams exist" and "what does previewing this one mean" cannot disagree.
+ * `$1` is a team name, folded; passing null lists every team instead.
+ */
+/**
+ * A team's subtree, depth-ordered — the same eight-level bound `authenticate` uses, and for the same
+ * reason: `parent_id` is a graph an operator edits, and a recursive CTE over a cycle does not fail,
+ * it simply never returns.
+ */
+const TEAM_TREE_LOOKUP_SQL = `with recursive tree as (
+	select "norbital_id" as id, "name", 1 as depth from bolt_team where "norbital_id" = $1::uuid
+	union all
+	select c."norbital_id", c."name", p.depth + 1
+	  from bolt_team c join tree p on c."parent_id" = p.id
+	 where p.depth < 8
+)
+select "name" from tree order by depth`;
+
+const TEAM_LOOKUP_SQL = `select "norbital_id"::text as id, "name", "inherits"
+	from bolt_team
+	where $1::text is null or lower("name") = lower($1::text)
+	order by "name"`;
 
 /**
  * Whether this subject may view the workspace as somebody else. Always asked of the real actor.
@@ -274,7 +365,17 @@ export type Interface = Readonly<{
 		target: Identity.Subject
 	) => Effect.Effect<Identity.Subject, AccessDenied | Database.FacilityError>;
 	/** The teams an administrator may view this workspace as, for the sidebar's picker. */
-	readonly impersonationTeams: () => ReadonlyArray<ImpersonationTeam>;
+	/**
+	 * The teams this workspace has, for the picker — read from `bolt_team`, not derived from policies.
+	 *
+	 * An Effect because a team is a row now. It used to list the workspace's *policies* and call them
+	 * teams, which is why the picker offered "employee" and "hr_manager" as though they were bodies of
+	 * staff, and why previewing one could never narrow approval eligibility.
+	 */
+	readonly impersonationTeams: () => Effect.Effect<
+		ReadonlyArray<ImpersonationTeam>,
+		Database.FacilityError
+	>;
 	/** Whether this actor may impersonate at all. The picker is offered on this and nothing else. */
 	readonly mayImpersonate: (actor: Identity.Subject) => boolean;
 	/**
@@ -287,7 +388,7 @@ export type Interface = Readonly<{
 	readonly subjectAsTeam: (
 		actor: Identity.Subject,
 		teamId: string
-	) => Effect.Effect<Identity.Subject, AccessDenied>;
+	) => Effect.Effect<Identity.Subject, AccessDenied | Database.FacilityError>;
 	/** `subjectAsTeam`, plus the `bolt_audit` row recording that this actor started the preview. */
 	readonly impersonateTeam: (
 		actor: Identity.Subject,
@@ -296,8 +397,8 @@ export type Interface = Readonly<{
 	readonly resolveScope: (subject: Identity.Subject) => {
 		readonly tenantId: string;
 		readonly userId: string;
-		readonly roles: ReadonlyArray<string>;
-		readonly teams: ReadonlyArray<string>;
+		readonly team?: string;
+		readonly teamPath: ReadonlyArray<string>;
 	};
 	readonly predicate: (subject: Identity.Subject, action: string, resource: string) => RowPredicate;
 	readonly mask: (
@@ -317,38 +418,76 @@ export const layer = Layer.effect(
 	Effect.gen(function* () {
 		const workspace = yield* Workspace.Service;
 		const database = yield* Database.Service;
+		/**
+		 * The policies this subject's team confers, resolved once per question.
+		 *
+		 * Every decision below goes through it, so there is one place that knows how a team becomes
+		 * authority — and so hiding an app can never disagree with serving a row, which is the failure
+		 * this whole seam exists to prevent.
+		 */
+		const held = (subject: Identity.Subject): ReadonlySet<string> =>
+			policiesHeldByTeam(workspace.definition, subject);
 		const authorize = Effect.fn('AccessControl.authorize')(function* (
 			subject: Identity.Subject,
 			action: string,
 			app: string
 		) {
-			const decision = decide(workspace.definition.policies, subject, action, app);
+			const decision = decide(workspace.definition.policies, subject, action, app, held(subject));
 			if (!decision.allowed)
 				return yield* new AccessDenied({ action, resource: app, reason: decision.reason });
 		});
 		/**
-		 * The same person, holding one policy's roles instead of their own.
+		 * The same person, belonging to one team instead of their own.
 		 *
 		 * Identity is deliberately left alone. `userId`, `tenantId` and `email` stay the actor's, so an
 		 * `Employee` preview resolves `${requestor.email}` to the administrator's *own* employee row
-		 * rather than opening a colleague's. Impersonating a team asks what the workspace looks like
-		 * under a policy, and answering it by borrowing a real person's identity would disclose that
+		 * rather than opening a colleague's. Previewing a team asks what the workspace looks like to
+		 * that team, and answering it by borrowing a real person's identity would disclose that
 		 * person's records to answer a question that never named them — that is what
 		 * `impersonate(actor, target)` is for, and it is a different question with its own audit row.
 		 *
-		 * `roles` becomes exactly the policy's roles and nothing else, which is what makes this one
-		 * narrowing rather than an overlay: `subjectHasPolicy` reads `subject.roles`, so every decision
-		 * the runtime makes — `visibleApps`, `authorize`, `predicate`, `mask` — moves to the previewed
-		 * policy together. There is no separate app-visibility path that could drift from the row
-		 * predicate, which is the failure this seam exists to avoid: hiding navigation is not authority.
-		 *
-		 * `teams` is emptied rather than guessed. A policy names authority, not membership: nothing in
-		 * the definition says which tenant teams an `Employee` belongs to, and inventing one would hand
-		 * the preview approval eligibility it was never granted. Empty can only ever narrow.
+		 * `team` and `teamPath` become exactly the previewed team's, which is what makes this one
+		 * narrowing rather than an overlay. Both halves of authority move together: the policies the
+		 * team declares decide `visibleApps`, `authorize`, `predicate` and `mask`, and the team name
+		 * decides which approvals the preview may act on. Substituting a *policy* — which is what this
+		 * did before teams were rows — moved only the first half, so a preview could see a screen it
+		 * could never have approved on.
 		 *
 		 * `impersonatedBy` is the actor's own id. It marks the subject as synthetic for anything
 		 * downstream that keys per-user state off it, and it is the same id the audit row names.
 		 */
+		/**
+		 * One team by name, with the path its members hold — the same walk `authenticate` performs.
+		 *
+		 * Shared by the picker and the preview so the two cannot disagree about what a team is. The
+		 * path is resolved here rather than assumed to be the team alone, because a team that
+		 * `inherits` confers what sits beneath it, and a preview that ignored that would show a
+		 * narrower workspace than the team's real members see.
+		 */
+		const resolveTeam = Effect.fn('AccessControl.resolveTeam')(function* (name: string) {
+			const found = yield* database.execute(EffectId.make(`team-lookup:${name}`), {
+				_tag: 'Query',
+				sql: TEAM_LOOKUP_SQL,
+				parameters: [name]
+			});
+			const row = found.rows[0];
+			if (row === null || row === undefined || typeof row !== 'object') return undefined;
+			const teamName = Reflect.get(row, 'name');
+			const inherits = Reflect.get(row, 'inherits') === true;
+			if (typeof teamName !== 'string') return undefined;
+			if (!inherits) return { name: teamName, path: [teamName] as ReadonlyArray<string> };
+			const descendants = yield* database.execute(EffectId.make(`team-tree:${name}`), {
+				_tag: 'Query',
+				sql: TEAM_TREE_LOOKUP_SQL,
+				parameters: [Reflect.get(row, 'id')]
+			});
+			const path = descendants.rows
+				.map((entry) =>
+					entry !== null && typeof entry === 'object' ? Reflect.get(entry, 'name') : undefined
+				)
+				.filter((entry): entry is string => typeof entry === 'string');
+			return { name: teamName, path: path.length === 0 ? [teamName] : path };
+		});
 		const subjectAsTeam = Effect.fn('AccessControl.subjectAsTeam')(function* (
 			actor: Identity.Subject,
 			teamId: string
@@ -364,28 +503,31 @@ export const layer = Layer.effect(
 					reason: 'impersonation not permitted'
 				});
 			}
-			const wanted = teamId.trim().toLocaleLowerCase();
-			// The built-ins are excluded from the lookup, not merely from the picker that offers it. A
-			// name absent from this list is refused below as "no policy of that name", so asking for
-			// `colony system` by hand gets the same answer as asking for a policy nobody wrote — which
-			// is what stops the filter in `impersonationTeams` from being cosmetic. Previewing it would
-			// otherwise put `colony-system` into `subject.roles` and hand an administrator the host's
-			// provisioning grants.
-			const matched = workspace.definition.policies.find(
-				({ name }) =>
-					!BUILT_IN_POLICY_NAMES.has(name) && name.toLocaleLowerCase() === wanted
-			);
+			/**
+			 * Resolved from `bolt_team`, which is also why the runtime's own policy is now unreachable
+			 * here by construction rather than by a filter. `colony system` is not a team and cannot be
+			 * one: it is selected by a minted flag, so no row and no name reaches it.
+			 */
+			const matched = yield* resolveTeam(teamId.trim());
 			if (matched === undefined) {
 				return yield* new AccessDenied({
 					action: 'impersonate',
 					resource: teamId,
-					reason: 'no policy of that name'
+					reason: 'no team of that name'
 				});
 			}
 			return {
 				...actor,
-				roles: matched.roles ?? [matched.name],
-				teams: [],
+				/**
+				 * The previewed team, and the path it resolves to.
+				 *
+				 * A preview now names a real `bolt_team`, so it narrows the same two things a real
+				 * membership decides: which policies apply, and which approvals the subject may decide.
+				 * It used to substitute a *policy* name into `roles` and blank `teams` — so a preview
+				 * could see a screen it could never have approved on, which is not a preview of anybody.
+				 */
+				team: matched.name,
+				teamPath: matched.path,
 				// Dropped explicitly, and this is the line that makes the preview mean anything. The
 				// spread carries the actor's own `admin: true`, and every short-circuit above is guarded
 				// on it — so a preview that kept the flag would answer "administrator" to `decide`,
@@ -398,11 +540,22 @@ export const layer = Layer.effect(
 		});
 		return Service.of({
 			authorize,
-			resolveScope: ({ tenantId, userId, roles, teams }) => ({ tenantId, userId, roles, teams }),
+			resolveScope: ({ tenantId, userId, team, teamPath }) => ({
+				tenantId,
+				userId,
+				...(team === undefined ? {} : { team }),
+				teamPath
+			}),
 			predicate: (subject, action, resource) =>
-				rowPredicate(workspace.definition.policies, subject, action, resource),
+				rowPredicate(workspace.definition.policies, subject, action, resource, held(subject)),
 			mask: (subject, action, resource, value) => {
-				const predicate = rowPredicate(workspace.definition.policies, subject, action, resource);
+				const predicate = rowPredicate(
+					workspace.definition.policies,
+					subject,
+					action,
+					resource,
+					held(subject)
+				);
 				if (!predicate.allowed) return {};
 				if (predicate.fields === undefined) return value;
 				return Object.fromEntries(
@@ -410,26 +563,43 @@ export const layer = Layer.effect(
 				);
 			},
 			explain: (subject, action, resource) =>
-				decide(workspace.definition.policies, subject, action, resource),
-			visibleApps: (subject) =>
+				decide(workspace.definition.policies, subject, action, resource, held(subject)),
+			visibleApps: (subject) => {
 				// An administrator is shown the registry whole rather than the union of what the policies
 				// happen to name. Filtering them through the ladder is what produced an empty sidebar for
 				// the only person who could fix it.
-				isAdministrator(subject)
-					? workspace.definition.apps.map(({ name }) => name)
-					: workspace.definition.apps
-							.filter(({ name }) =>
-								workspace.definition.policies.some((policy) =>
-									policy.grants === undefined
-										? PolicyEvaluation.matches(policy, subject, 'view', name)
-										: PolicyEvaluation.subjectHasPolicy(policy, subject) &&
-											(policy.apps ?? []).some(
-												(app) => app === '*' || app === name || name.startsWith(`${app}/`)
-											)
+				if (isAdministrator(subject)) return workspace.definition.apps.map(({ name }) => name);
+				const holds = held(subject);
+				return workspace.definition.apps
+					.filter(({ name }) =>
+						workspace.definition.policies.some((policy) =>
+							policy.grants === undefined
+								? PolicyEvaluation.matches(policy, subject, 'view', name, holds)
+								: PolicyEvaluation.subjectHasPolicy(policy, subject, holds) &&
+									(policy.apps ?? []).some(
+										(app) => app === '*' || app === name || name.startsWith(`${app}/`)
+									)
+						)
+					)
+					.map(({ name }) => name);
+			},
+			impersonationTeams: () =>
+				database
+					.execute(EffectId.make('team-list'), {
+						_tag: 'Query',
+						sql: TEAM_LOOKUP_SQL,
+						parameters: [null]
+					})
+					.pipe(
+						Effect.map((result) =>
+							result.rows
+								.map((row) =>
+									row !== null && typeof row === 'object' ? Reflect.get(row, 'name') : undefined
 								)
-							)
-							.map(({ name }) => name),
-			impersonationTeams: () => impersonationTeams(workspace.definition.policies),
+								.filter((name): name is string => typeof name === 'string')
+								.map((name) => ({ id: name, name }))
+						)
+					),
 			mayImpersonate,
 			subjectAsTeam,
 			impersonateTeam: Effect.fn('AccessControl.impersonateTeam')(function* (actor, teamId) {
@@ -443,7 +613,7 @@ export const layer = Layer.effect(
 					parameters: [
 						'impersonation_started',
 						actor.userId,
-						{ tenantId: actor.tenantId, team: teamId, roles: [...subject.roles] }
+						{ tenantId: actor.tenantId, team: teamId, teamPath: [...subject.teamPath] }
 					]
 				});
 				return subject;

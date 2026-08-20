@@ -2,7 +2,7 @@ import { Effect, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import type { ToolDeclaration } from '../../authoring/workspace-schema.js';
 import { Database } from '../facilities/database.js';
-import { Tasks } from '../facilities/services.js';
+import { TaskQueue } from '../tasks/tasks.js';
 import type { Identity } from '../identity/identity.js';
 import { ToolNotAllowed } from './agent-errors.js';
 import { encodeAgentMessage } from './agent-message.js';
@@ -56,7 +56,7 @@ export type SandboxContext = Readonly<{
 	readonly agentName: string;
 	readonly conversationId: string;
 	readonly database: Database.Interface;
-	readonly tasks: Tasks.Interface;
+	readonly tasks: TaskQueue.Interface;
 	/**
 	 * How deep the chain that reached this turn already is, so a delegated turn can be refused before
 	 * it is enqueued rather than after the tenth one has run.
@@ -164,19 +164,22 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 					context.conversationId
 				]
 			});
-			yield* context.tasks.execute(EffectId.make(`${context.effectId}:enqueue`), {
-				_tag: 'Enqueue',
-				command: 'agents.turn',
-				input: InvocationBudget.stampDepth(
-					{
-						subject: context.subject,
-						agent: context.agentName,
-						conversationId,
-						message: parsed.task
-					},
-					depth
-				)
-			});
+			const spawnTaskId = `${context.effectId}:enqueue`;
+			yield* context.tasks.enqueue(EffectId.make(spawnTaskId), [
+				{
+					command: 'agents.turn',
+					input: InvocationBudget.stampDepth(
+						{
+							subject: context.subject,
+							agent: context.agentName,
+							conversationId,
+							message: parsed.task
+						},
+						depth
+					),
+					effectId: spawnTaskId
+				}
+			]);
 			return { waiting: true, conversationId };
 		}
 		case 'list_sandbox_agents': {
@@ -234,14 +237,17 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 		case 'await_sandbox_agent': {
 			const parsed = yield* decode(SessionInput, input);
 			const target = yield* sameSandbox(context, parsed.sessionId);
-			yield* context.tasks.execute(EffectId.make(`${context.effectId}:await`), {
-				_tag: 'Enqueue',
-				command: 'agents.resume',
-				input: {
-					conversationId: context.conversationId,
-					targetSessionId: parsed.sessionId
+			const awaitTaskId = `${context.effectId}:await`;
+			yield* context.tasks.enqueue(EffectId.make(awaitTaskId), [
+				{
+					command: 'agents.resume',
+					input: {
+						conversationId: context.conversationId,
+						targetSessionId: parsed.sessionId
+					},
+					effectId: awaitTaskId
 				}
-			});
+			]);
 			return {
 				waiting: true,
 				targetSessionId: parsed.sessionId,

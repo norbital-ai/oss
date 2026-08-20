@@ -120,4 +120,14 @@ const DeclarationRefusals = {
 	}
 };
 
-export const refuse = DeclarationRefusals.refuse;
+/**
+ * Refuses the operation, and is declared to return `never` explicitly.
+ *
+ * The annotation is load-bearing, not decoration. TypeScript only treats a call as terminating
+ * control flow when the callee is an identifier carrying an **explicit** return type, so without it
+ * `if (value == null) refuse('…')` narrows nothing and every use below the guard is
+ * `possibly undefined`. The emitted `.d.ts` infers one, which is why a workspace compiling against
+ * the published build behaved differently from one compiling against these sources — 32 phantom
+ * errors in a single template, none of them the template's fault.
+ */
+export const refuse: (message: string) => never = DeclarationRefusals.refuse;

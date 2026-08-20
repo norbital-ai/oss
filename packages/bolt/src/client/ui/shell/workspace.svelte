@@ -155,11 +155,9 @@
 	const subject = $derived({
 		userId: view.user.id,
 		tenantId: view.organization.id,
-		roles: view.user.admin
-			? [...new Set(view.user.roles)]
-			: [...new Set([...view.user.roles, ...workspace.policyNames])],
+		...(view.user.team === undefined ? {} : { team: view.user.team }),
+		teamPath: [...view.user.teamPath],
 		...(view.user.admin ? { admin: true } : {}),
-		teams: [...view.user.teams],
 		...(view.user.email === '' ? {} : { email: view.user.email })
 	});
 
@@ -492,13 +490,10 @@
 						typeof row === 'object' && row !== null ? Reflect.get(row, 'status') : undefined;
 					return raw === 'suspended' || raw === 'invited' ? raw : 'active';
 				})(),
-				teams: (() => {
-					const teams =
-						typeof row === 'object' && row !== null ? Reflect.get(row, 'teams') : undefined;
-					return Array.isArray(teams)
-						? teams.filter((team): team is string => typeof team === 'string')
-						: [];
-				})()
+				// `team`, singular, because that is the key the projection publishes — a person belongs
+				// to exactly one team. This read `teams` and filtered an array that is never on the
+				// wire, so every member rendered as belonging to nothing at all.
+				...(optionalText(row, 'team') === undefined ? {} : { team: text(row, 'team') })
 			})),
 			invitations: list('invitations').map((row) => ({
 				id: text(row, 'id'),
@@ -518,7 +513,20 @@
 					? {}
 					: { expiresAt: text(row, 'expiresAt') })
 			})),
-			teams: list('teams').map((row) => ({ id: text(row, 'id'), name: text(row, 'name') })),
+			// `parentId` and `description` are carried rather than dropped: the projection reads all four
+			// columns off `bolt_team`, and the chart below is a *hierarchy* — decoding the id and the
+			// name alone drew every team as a root and threw the nesting away between the wire and the
+			// component that exists to show it.
+			teams: list('teams').map((row) => ({
+				id: text(row, 'id'),
+				name: text(row, 'name'),
+				...(optionalText(row, 'parentId') === undefined
+					? {}
+					: { parentId: text(row, 'parentId') }),
+				...(optionalText(row, 'description') === undefined
+					? {}
+					: { description: text(row, 'description') })
+			})),
 			events: list('events').map((row) => ({
 				id: text(row, 'id'),
 				action: text(row, 'action'),
@@ -570,9 +578,13 @@
 		name: view.user.email.split('@')[0] ?? view.user.id,
 		email: view.user.email,
 		// Administration is a status, so it is reported as one rather than borrowed from the role list.
-		role: view.user.admin ? 'Admin' : (view.user.roles[0] ?? 'Member'),
+		role: view.user.admin ? 'Admin' : (view.user.team ?? 'Member'),
 		avatarUrl: null,
-		teamLabels: [...view.user.teams]
+		// The path, not a `teams` array: nothing has published one since a person came to belong to
+		// exactly one team, and this read a key the contract does not declare — a compile error sitting
+		// in the shell that renders it, which is why the label has been empty since the cutover.
+		// `teamPath` is the honest list here: their own team first, then any it inherits from.
+		teamLabels: [...view.user.teamPath]
 	}}
 	plugins={WORKSPACE_HOST_PLUGINS}
 	{impersonation}

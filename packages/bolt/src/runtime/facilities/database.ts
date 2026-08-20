@@ -63,7 +63,14 @@ export const invokeBinding = <Input, Output>(
 			deadlineEpochMs: context.deadlineEpochMs,
 			idempotencyKey: effectId,
 			...(Option.isSome(subject)
-				? { subject: { userId: subject.value.userId, roles: subject.value.roles } }
+				? {
+						subject: {
+							userId: subject.value.userId,
+							// The team, not a role list. What it entitles them to is the release's business,
+							// not something a facility binding needs told.
+							...(subject.value.team === undefined ? {} : { team: subject.value.team })
+						}
+					}
 				: {})
 		};
 		const result = yield* Effect.tryPromise({

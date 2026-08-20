@@ -50,6 +50,7 @@ export type {
 	TableName,
 	TablesForModels,
 	TableShape,
+	Teams,
 	WorkspaceAuthoringTypes
 } from './contracts-schema.js';
 

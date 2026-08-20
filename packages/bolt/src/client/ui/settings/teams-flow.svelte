@@ -21,6 +21,7 @@
 
 	type TeamFlowData = Readonly<{
 		readonly name: string;
+		readonly description?: string;
 	}>;
 
 	const chart = $derived(layoutTeamHierarchy(teams));
@@ -34,7 +35,12 @@
 				draggable: false,
 				selectable: false,
 				connectable: false,
-				data: { name: team?.name ?? position.id }
+				data: {
+					name: team?.name ?? position.id,
+					// Carried through so an empty team the release created — the shape a newly declared
+					// `approvers` name arrives in — can say what it is for on the one surface that shows it.
+					...(team?.description === undefined ? {} : { description: team.description })
+				}
 			};
 		})
 	);

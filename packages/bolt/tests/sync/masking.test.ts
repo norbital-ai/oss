@@ -45,16 +45,23 @@ const restrictedWorkspace = () =>
 		],
 		apps: [],
 		policies: [
-			policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] }),
+			policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] }),
 			policy({
 				name: 'viewer',
 				effect: 'allow',
 				actions: ['read'],
-				roles: ['viewer'],
 				apps: ['*'],
 				grants: [{ collection: 'people', action: 'read', fields: ['norbital_id', 'name'] }]
 			})
 		],
+		// `admin` holds the unrestricted policy ALONE, deliberately. Field grants are collected from
+		// every policy the team holds and a policy declaring no grants contributes none, so a team
+		// holding `admin` *and* `viewer` is masked to `viewer`'s two fields — the unrestricted policy
+		// cannot widen what a restricting one narrowed. That is the shape this file exists to pin.
+		teams: {
+			admin: ['admin'],
+			viewer: ['viewer']
+		},
 		agents: [],
 		automations: [],
 		channels: [],
@@ -65,8 +72,7 @@ const restrictedWorkspace = () =>
 const viewerSubject: Identity.Subject = {
 	userId: 'viewer-1',
 	tenantId: 'test-tenant',
-	roles: ['viewer'],
-	teams: []
+	teamPath: ['viewer']
 };
 
 let harness: BoltTestRuntime | undefined;

@@ -1,5 +1,11 @@
 import { Effect, Schema } from 'effect';
-import { EffectId, type DispatchResponse, type Invocation } from '@norbital-ai/bolt-protocol';
+import {
+	CollectionWriteValues,
+	EffectId,
+	StoredRecord,
+	type DispatchResponse,
+	type Invocation
+} from '@norbital-ai/bolt-protocol';
 import { AccessControl } from './access/access-control.js';
 import { SystemPrincipal } from './access/system-principal.js';
 import { Agents } from './agents/agents.js';
@@ -11,6 +17,7 @@ import { Collections } from './collections/collections.js';
 import { compileOrderTerms, makeWhereContext } from './collections/where.js';
 import { Integrations } from './integrations/integrations.js';
 import { ADMIN_STATUS, Identity, Subject } from './identity/identity.js';
+import { Database } from './facilities/database.js';
 import { Notification, Notifications } from './notifications/notifications.js';
 import { RemoteRegistry } from './remotes.js';
 import { WorkspaceSchema } from './schema/workspace-schema.js';
@@ -27,8 +34,9 @@ import {
 	makeBoundAuthoringOps,
 	runAuthoredHandler
 } from './collections/authored.js';
-import { DispatchError, Workspace } from './workspace.js';
+import { describeCause, DispatchError, Workspace } from './workspace.js';
 import { RateLimits } from './rate-limits.js';
+import { TaskQueue } from './tasks/tasks.js';
 
 export { DispatchError } from './workspace.js';
 
@@ -125,13 +133,43 @@ const DataBrowserInput = Schema.Struct({
 const PluginContext = Schema.Struct({
 	impersonatedSubject: Schema.optionalKey(Schema.NonEmptyString)
 });
+/**
+ * The create body, and the `id` that used to be on it.
+ *
+ * `CollectionCreateRequest` in `@norbital-ai/bolt-protocol` is this struct without `subject`, which
+ * the boundary injects from the authenticated credential. It is declared there rather than only
+ * here because the browser client posts against it and the two halves must not be able to disagree
+ * about whether an id is part of a create.
+ *
+ * It is not, any more. The client minted one with `crypto.randomUUID()` and posted it, which made
+ * the browser the authority on a primary key before the write had been authorized, before
+ * `create.before` had run, and before the row existed — and it made a nested write inexpressible,
+ * because the child of a record the client has not yet created has no parent id to carry. Ids are
+ * assigned in `mutate`, at the point the row is built, and answered with.
+ *
+ * A create that arrives carrying an `id` has it *ignored* rather than honoured, because
+ * `Schema.Struct` drops keys it does not declare. That is the one silent behaviour in this change,
+ * and it is bounded: the runtime and the browser client that talks to it are the same compiled
+ * artifact, so there is no version of the client still sending one. The paths that legitimately
+ * choose their own key — an import replaying a deterministic id, an integration keying on an
+ * external id — go through `collections.createMany` and `collections.import`, which still declare it.
+ */
 const CollectionCreateInput = Schema.Struct({
+	subject: Subject,
+	collection: Schema.NonEmptyString,
+	values: CollectionWriteValues
+});
+/**
+ * An update names the row it changes, so its `id` is required and this is no longer an alias of the
+ * create input. It was one, which is the only reason the create input could lose a field an update
+ * cannot do without.
+ */
+const CollectionUpdateInput = Schema.Struct({
 	subject: Subject,
 	collection: Schema.NonEmptyString,
 	id: Schema.NonEmptyString,
 	values: Schema.Record(Schema.String, Schema.Json)
 });
-const CollectionUpdateInput = CollectionCreateInput;
 const CollectionDeleteInput = Schema.Struct({
 	subject: Subject,
 	collection: Schema.NonEmptyString,
@@ -286,6 +324,20 @@ const IdentityAdmitFounderInput = Schema.Struct({
 	email: Schema.NonEmptyString,
 	tenantId: Schema.NonEmptyString
 });
+/**
+ * Admitting the first administrator *and* starting their session, in one invocation.
+ *
+ * `claimId` is the id of a proof the host holds — Colony verified that whoever is completing this
+ * signup controls `email` — and it is carried here for exactly one purpose: so this command can
+ * refuse to act on the same proof twice. Bolt does not check that proof and could not; what it
+ * checks is that the invocation came from the host, and that this particular claim is unspent.
+ */
+const IdentityBootstrapFounderInput = Schema.Struct({
+	email: Schema.NonEmptyString,
+	claimId: Schema.NonEmptyString,
+	tenantId: Schema.NonEmptyString,
+	subject: Subject
+});
 const IdentityVerifyCodeInput = Schema.Struct({
 	email: Schema.NonEmptyString,
 	code: Schema.NonEmptyString,
@@ -308,6 +360,55 @@ const IdentityVerifyCodeInput = Schema.Struct({
 const SIGN_IN_COMMANDS: ReadonlySet<string> = new Set(['identity.sendCode', 'identity.verifyCode']);
 const IdentityCredentialInput = Schema.Struct({ credential: Schema.NonEmptyString });
 const IdentitySettingsInput = Schema.Struct({ tenantId: Schema.NonEmptyString });
+/**
+ * What an operator may say about a team, and — by omission — what they may not.
+ *
+ * There is no policy field on any of these and there is nowhere one could go. Which policies a team
+ * holds is declared in `+teams.ts` and compiled into the release, so it changes by deploying and by
+ * nothing else; a `teams.*` command shapes the tree and decides who is in it, and that is the whole
+ * of its reach.
+ *
+ * `parentId` and `description` are `optionalKey` over a nullable value because absent and `null`
+ * mean different things: absent leaves the column as it is, `null` clears it. Collapsing them would
+ * make renaming a team silently unparent it, or make moving one to the root inexpressible.
+ */
+const TeamCreateInput = Schema.Struct({
+	subject: Subject,
+	tenantId: Schema.NonEmptyString,
+	name: Schema.NonEmptyString,
+	parentId: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
+	description: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
+	inherits: Schema.optionalKey(Schema.Boolean)
+});
+const TeamUpdateInput = Schema.Struct({
+	subject: Subject,
+	tenantId: Schema.NonEmptyString,
+	teamId: Schema.NonEmptyString,
+	name: Schema.optionalKey(Schema.NonEmptyString),
+	parentId: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
+	description: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
+	inherits: Schema.optionalKey(Schema.Boolean)
+});
+const TeamDeleteInput = Schema.Struct({
+	subject: Subject,
+	tenantId: Schema.NonEmptyString,
+	teamId: Schema.NonEmptyString
+});
+/**
+ * The person being moved is `memberId`, deliberately not `userId`.
+ *
+ * `userId` is a `MINTED_IDENTITY` field: the boundary overwrites it with the id of whoever the
+ * credential authenticated, on every command, before any case reads it. Naming the target that way
+ * would compile, decode and run — and would move the operator instead of the member, every time,
+ * with nothing anywhere reporting a fault.
+ */
+const TeamAssignInput = Schema.Struct({
+	subject: Subject,
+	tenantId: Schema.NonEmptyString,
+	memberId: Schema.NonEmptyString,
+	/** The team to put them in, or `null` to take them out of every team. */
+	teamId: Schema.Union([Schema.String, Schema.Null])
+});
 const IdentityAuthenticateInput = Schema.Struct({ credential: Schema.NonEmptyString });
 const IdentityResolveInput = Schema.Struct({
 	provider: Schema.NonEmptyString,
@@ -401,11 +502,91 @@ const checkWrittenValues = Effect.fn('Bolt.checkWrittenValues')(function* (
 	const definition = yield* workspace.collection(collection);
 	// Both faults are the same kind of thing — values this collection will not accept — so they are
 	// reported the same way, through the `invalid_input` the boundary already has.
+	//
+	// Relation keys pass through untouched: neither check looks at a key that is not a declared
+	// field, so the children of a graph are invisible here and are reached by the walk below instead.
 	const invalid =
 		describeGeneratedColumnWrite(definition.fields, values) ??
 		describeInvalidCustomValue(definition.fields, values, workspace.definition.customTypes);
 	if (invalid !== undefined)
 		yield* Effect.fail(new DispatchError({ code: 'invalid_input', message: invalid }));
+});
+
+/**
+ * How far the boundary follows a create graph down.
+ *
+ * The same bound the runtime's `flattenGraph` applies, and stated here for the same reason: the
+ * relation set has cycles in it, so a body that closes one would be walked until the isolate died.
+ * The two numbers are independent copies of one decision, which is tolerable only because exceeding
+ * either one is a refusal rather than a difference in what gets written — this walk validates and
+ * the runtime's walk is what actually refuses.
+ */
+const GRAPH_CHECK_DEPTH = 5;
+
+/**
+ * The same check, down every branch of a create graph.
+ *
+ * A nested write posts a parent and its children in one body, and the children are rows in *other*
+ * collections — so checking only the top level would let a generated column be written on a child
+ * and report nothing, which is the failure mode the top-level check exists to end. The walk follows
+ * declared `many` relations only, because those are the only keys the runtime will expand; anything
+ * else is left alone here and refused by `flattenGraph`, which can say what the key should have
+ * been.
+ */
+const checkWrittenGraph = Effect.fn('Bolt.checkWrittenGraph')(function* (
+	collection: string,
+	values: Readonly<Record<string, Schema.Json>>
+) {
+	const workspace = yield* Workspace.Service;
+	const relations = workspace.definition.relations ?? [];
+	// A worklist rather than recursion: the depth bound is the point of the walk, and a queue makes
+	// it a value the loop carries rather than something to be reconstructed from a call stack.
+	const pending: Array<{
+		readonly collection: string;
+		readonly values: Readonly<Record<string, Schema.Json>>;
+		readonly depth: number;
+	}> = [{ collection, values, depth: 0 }];
+	while (pending.length > 0) {
+		const node = pending.shift();
+		if (node === undefined) break;
+		/**
+		 * A key is a key wherever it is spelled, and a create assigns none of them.
+		 *
+		 * Dropping the `id` field off the create body would otherwise leave one way back in: put it
+		 * in `values` instead. On the parent that would route the payload through `mutate`'s update
+		 * branch, so `collections.create` would perform an update — authorized, but not the operation
+		 * anybody asked for. On a child it lands in the insert's column list beside the id the graph
+		 * assigned, and the statement fails on a duplicate column with nothing to say about why.
+		 */
+		if (Object.hasOwn(node.values, 'norbital_id'))
+			yield* Effect.fail(
+				new DispatchError({
+					code: 'invalid_input',
+					message: `A create on ${node.collection} carried a norbital_id. Ids are assigned by the server; to change an existing record use collections.update.`
+				})
+			);
+		yield* checkWrittenValues(node.collection, node.values);
+		if (node.depth >= GRAPH_CHECK_DEPTH) continue;
+		for (const [key, value] of Object.entries(node.values)) {
+			if (!Array.isArray(value)) continue;
+			const relation = relations.find(
+				(candidate) =>
+					candidate.name === key &&
+					candidate.source === node.collection &&
+					candidate.cardinality === 'many' &&
+					candidate.from?.column !== undefined
+			);
+			if (relation === undefined) continue;
+			for (const child of value) {
+				if (child === null || typeof child !== 'object' || Array.isArray(child)) continue;
+				pending.push({
+					collection: relation.target,
+					values: child as Readonly<Record<string, Schema.Json>>,
+					depth: node.depth + 1
+				});
+			}
+		}
+	}
 });
 const json = DispatchValues.json;
 
@@ -469,8 +650,25 @@ const authorizeSchemaCommand = Effect.fn('Bolt.authorizeSchemaCommand')(function
  * command is gated by adding a line here rather than by remembering to write a check inside a case.
  */
 const IDENTITY_RESOURCE = 'identity';
+/**
+ * The `teams.*` commands join it, and they are membership writes in exactly the same sense.
+ *
+ * Administration is a status on the person — `bolt_auth_user.status` — and `decide` short-circuits
+ * on it before it consults a policy, so an administrator passes this gate and that is how these are
+ * meant to be reached. They are gated on `manage`/`identity` rather than on `isAdministrator`
+ * directly for the reason stated above: provisioning needs a way in that is not "be an
+ * administrator", and `colony system` enumerates precisely this grant.
+ *
+ * What no entry here can do is change what a team may *do*. The policies a team holds are compiled
+ * into the release, so the reachable surface is the tree's shape and who is in it — a `teams.*`
+ * command has no policy argument, and the service it calls has no column to put one in.
+ */
 const MEMBERSHIP_COMMANDS: ReadonlyMap<string, string> = new Map([
-	['identity.admitFounder', 'manage']
+	['identity.admitFounder', 'manage'],
+	['teams.create', 'manage'],
+	['teams.update', 'manage'],
+	['teams.delete', 'manage'],
+	['teams.assign', 'manage']
 ]);
 const authorizeMembershipCommand = Effect.fn('Bolt.authorizeMembershipCommand')(function* (
 	action: string,
@@ -478,6 +676,89 @@ const authorizeMembershipCommand = Effect.fn('Bolt.authorizeMembershipCommand')(
 ) {
 	const input = yield* decode(Schema.Struct({ subject: Subject }), commandInput);
 	yield* (yield* AccessControl.Service).authorize(input.subject, action, IDENTITY_RESOURCE);
+});
+
+/**
+ * Commands only the host may run, checked against the subject rather than against a policy.
+ *
+ * `identity.bootstrapFounder` is deliberately *not* an entry in `MEMBERSHIP_COMMANDS` beside
+ * `admitFounder`, and the difference is the whole reason this set exists. `admitFounder` writes a
+ * row; this one writes a row and hands back a **live session credential** for the address it was
+ * given. Gated on `manage`/`identity`, any existing administrator could therefore POST it an
+ * arbitrary address and receive a working session as that person — which is a strictly worse
+ * primitive than the unchecked `admitFounder` that made `MEMBERSHIP_COMMANDS` necessary in the
+ * first place.
+ *
+ * `subject.system` is the narrower thing to gate on because it has exactly one constructor:
+ * `SystemPrincipal.systemSubject`, minted only after `verifySystemSignature` accepts a digest over
+ * the timestamp, the command, the tenant and the arguments. It cannot be decoded from a payload —
+ * `subject` is a `MINTED_IDENTITY` field, refused on every other path — so there is no route from a
+ * row, a cookie or an authored policy to holding it. An administrator is not enough, and an
+ * administrator being not enough is the point.
+ */
+const SYSTEM_ONLY_COMMANDS: ReadonlySet<string> = new Set(['identity.bootstrapFounder']);
+
+/** The prefix a spent founder claim is filed under, so it cannot collide with a sign-in code's row. */
+const FOUNDER_CLAIM_IDENTIFIER = 'founder-claim:';
+
+/**
+ * How long a spent claim stays on the ledger: a day, against a signature that is stale in five
+ * minutes.
+ *
+ * The number only has to exceed `SIGNATURE_LIFETIME_MILLIS`, because after that a replayed
+ * invocation is refused by arithmetic and needs no row to refuse it. A day is that with three
+ * orders of magnitude of headroom for clock skew and for a founder who left the tab open.
+ */
+const FOUNDER_CLAIM_LEDGER_MILLIS = 86_400_000;
+
+const authorizeSystemCommand = Effect.fn('Bolt.authorizeSystemCommand')(function* (
+	command: string,
+	commandInput: unknown
+) {
+	const input = yield* decode(Schema.Struct({ subject: Subject }), commandInput);
+	if (input.subject.system === true) return;
+	return yield* new AccessControl.AccessDenied({
+		action: 'manage',
+		resource: command,
+		reason: `${command} mints a session, so it is reachable only by the host proving itself per invocation; an administrator's own authority is not enough`
+	});
+});
+
+/**
+ * A team on the wire, with nulls where the row has none.
+ *
+ * Spelled out rather than spread, so a column added to `bolt_team` cannot reach a client by
+ * accident — and so the shape is stable whether the team has a parent or not, which is what lets the
+ * settings surface read it with one decoder.
+ */
+const teamJson = (team: Identity.TeamRecord): Schema.Json => ({
+	id: team.id,
+	name: team.name,
+	parentId: team.parentId ?? null,
+	description: team.description ?? null,
+	inherits: team.inherits
+});
+
+/**
+ * How a team write's answer reaches the caller.
+ *
+ * Every refusal these produce is the caller naming a state that is not there — a team that does not
+ * exist, a name somebody already holds, a team that still has members — so they are reported through
+ * the `invalid_input` this boundary already has, which `app.ts` maps to 400. Reusing it is the point:
+ * a new failure type would need a new arm in that match, and until somebody wrote one these would
+ * report as 500s telling the caller to retry a request that cannot succeed.
+ */
+const teamAnswer = Effect.fn('Bolt.teamAnswer')(function* (
+	outcome: Identity.TeamOutcome | Identity.TeamAssignment
+) {
+	if (outcome._tag === 'Refused')
+		return yield* new DispatchError({ code: 'invalid_input', message: outcome.reason });
+	return outcome._tag === 'Team'
+		? json({ team: teamJson(outcome.team) })
+		: json({
+				memberId: outcome.memberId,
+				team: outcome.team === undefined ? null : teamJson(outcome.team)
+			});
 });
 
 /**
@@ -497,13 +778,40 @@ const authorizeMembershipCommand = Effect.fn('Bolt.authorizeMembershipCommand')(
  * prefix, because `automations.start`, `.register`, `.runStep`, `.resume`, `.status` and `.cancel`
  * share it and are host commands rather than enqueued ones.
  */
+/** The one command a host's timer sends, named once so the gate and the router cannot disagree. */
+const TICK_COMMAND = 'tasks.tick';
+
 const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set([
 	'integrations.pull',
 	'integrations.flush',
+	// A delegated turn. `sandbox-tools.ts` has enqueued this since delegation was written, and it was
+	// never listed here — harmless only for as long as nothing executed the queue. The first tick
+	// would have refused every subagent, and the refusal would have named the provenance gate rather
+	// than the missing entry.
+	'agents.turn',
 	'agents.resume',
 	'collections.resume',
-	'collections.discard'
+	'collections.discard',
+	// The tick itself, which is the only command a host's timer ever sends. It takes no input and
+	// carries no identity, and everything it goes on to run is checked against the derived set below.
+	TICK_COMMAND
 ]);
+
+/**
+ * What a *task row* may name, which is not the same set as what a host invocation may name.
+ *
+ * The difference is one command and it is the important one. A host's timer must be able to invoke
+ * `tasks.tick`; a row inside `bolt_task` must not, because the command that runs other commands is
+ * not itself one of them. Left in, a row naming `tasks.tick` would pass the runner's check and a
+ * tick would run a tick — bounded rather than infinite, since each level hides what it takes, but it
+ * nests the invocation budget for nothing and grants a capability nobody intended.
+ *
+ * Derived rather than written out a second time, and named rather than expressed as a `.delete()`
+ * somewhere, so the asymmetry between the two gates is visible at both of them.
+ */
+const TASK_RUNNABLE_COMMANDS: ReadonlySet<string> = new Set(
+	[...ENQUEUED_COMMANDS].filter((command) => command !== TICK_COMMAND)
+);
 
 /**
  * Which invocation tags may reach the command switch, and on what authority.
@@ -525,16 +833,28 @@ const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set([
  * somebody enqueues it — the opposite polarity to the per-command list that let five `schema.*`
  * commands each ship without a check.
  */
+/**
+ * Whether a command belongs to a set the runtime enqueues, resolving authored automations by name.
+ *
+ * `automations.<name>` is checked against the declared automations rather than matched on the
+ * prefix, because `automations.start`, `.register`, `.runStep`, `.status` and `.cancel` share it and
+ * are host commands rather than enqueued ones.
+ */
+const isRunnable = Effect.fn('Bolt.isRunnable')(function* (
+	command: string,
+	allowed: ReadonlySet<string>
+) {
+	if (allowed.has(command)) return true;
+	return (yield* Workspace.Service).definition.automations.some(
+		({ name }) => `automations.${name}` === command
+	);
+});
+
 const authorizeInvocationProvenance = Effect.fn('Bolt.authorizeInvocationProvenance')(function* (
 	tag: Invocation['_tag'],
 	command: string
 ) {
-	const enqueued =
-		tag === 'Task' &&
-		(ENQUEUED_COMMANDS.has(command) ||
-			(yield* Workspace.Service).definition.automations.some(
-				({ name }) => `automations.${name}` === command
-			));
+	const enqueued = tag === 'Task' && (yield* isRunnable(command, ENQUEUED_COMMANDS));
 	if (!enqueued) {
 		yield* new AccessControl.AccessDenied({
 			action: 'invoke',
@@ -614,6 +934,43 @@ const collectionPage = Effect.fn('Bolt.collectionPage')(function* (
 				? Collections.encodeCollectionCursor(ordering, last)
 				: null
 	});
+});
+
+/**
+ * The rows a write is answered with, filtered to what this subject may read.
+ *
+ * The write path reads its rows back *elevated* — it has to, because the row it just wrote may sit
+ * behind a visibility predicate the writer cannot see past, and an `after` hook still has to be
+ * handed the record. That is right inside the runtime and wrong on the way out of it: a response is
+ * a disclosure, and a field this subject may not read must not arrive because they wrote the row
+ * rather than queried it. So the same `mask` a read applies is applied here, at the boundary, which
+ * leaves `mutate` returning the whole row to the authored code that needs it.
+ *
+ * A subject with no read grant at all is masked down to `{}` rather than refused: the write
+ * happened, and the id is still reported beside these records.
+ *
+ * A row that is not JSON is a failure rather than an empty object. The host's database facility is
+ * required to hand back JSON — a `Date` that survived the seam is the recurring form of that being
+ * broken — and a mask cannot be applied to a value whose fields it cannot read. Answering `{}` there
+ * would report a successful write that stored nothing, which reads exactly like a legitimately empty
+ * row and is therefore the version of this nobody would ever look into.
+ */
+const maskStoredRecords = Effect.fn('Bolt.maskStoredRecords')(function* (
+	subject: Identity.Subject,
+	collection: string,
+	rows: ReadonlyArray<Readonly<Record<string, unknown>>>
+) {
+	const access = yield* AccessControl.Service;
+	const masked: Array<Readonly<Record<string, Schema.Json>>> = [];
+	for (const row of rows) {
+		if (!Schema.is(StoredRecord)(row))
+			return yield* new DispatchError({
+				code: 'invalid_stored_record',
+				message: `A stored ${collection} row came back in a shape that is not JSON, so it cannot be filtered for this caller. The database facility is required to return JSON values.`
+			});
+		masked.push(access.mask(subject, 'read', collection, row));
+	}
+	return masked;
 });
 
 /**
@@ -784,7 +1141,7 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 		// It comes from `invocation.scope`, never from the payload, which is what `tenantId` being a
 		// `MINTED_IDENTITY` field means — so the refusal below is the same one the credential-free tags
 		// get, for the same reason. Whether an address may reach this command at all is the host's
-		// question, and Colony answers it in front of the forward with Turnstile and its rate limits.
+		// question, answered in front of the forward by whatever gates the host puts there.
 		if (SIGN_IN_COMMANDS.has(invocation.command)) {
 			const claimed = MINTED_IDENTITY.find((name) => name in fields);
 			if (claimed !== undefined) {
@@ -876,7 +1233,7 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 		 *
 		 * It substitutes the *subject* rather than filtering any particular answer, which is the whole
 		 * point: `visibleApps` decides what the sidebar offers, but the row predicate is what decides
-		 * whether a read is served, and both read `subject.roles`. Narrowing the subject once here moves
+		 * whether a read is served, and both read the subject's team. Narrowing the subject once here moves
 		 * every decision below together — the ninety-odd cases in `runCommand`, the collection predicates,
 		 * the field masks — so there is no path where the navigation hides an app the runtime would still
 		 * serve rows for.
@@ -940,10 +1297,81 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 			? {}
 			: { address: rateLimitAddress(invocation.input) as string })
 	});
-	const invoked = runCommand(invocation.command, effectId, authenticated.input);
+	const invoked =
+		invocation.command === TICK_COMMAND
+			? runTick(effectId)
+			: runCommand(invocation.command, effectId, authenticated.input);
 	return yield* authenticated.subject === undefined
 		? invoked
 		: Effect.provideService(invoked, Identity.CurrentSubject, authenticated.subject);
+});
+
+/**
+ * One tick of the tenant's own scheduler, and the only command a host's timer ever sends.
+ *
+ * It lives beside the switch rather than inside it, and that is a type-level fact before it is a
+ * design one: a `case` that re-enters `runCommand` makes `runCommand` referenced in its own
+ * initializer, so TypeScript cannot infer its type and answers `any` — taking every one of the
+ * ninety-odd cases below it with it. Lifting the one command that *runs other commands* out of the
+ * set of commands is also the more honest shape, because that is exactly what makes it different.
+ *
+ * Everything it goes on to run is checked against `ENQUEUED_COMMANDS` again, here, one task at a
+ * time. That second check is not belt and braces: `authorizeInvocationProvenance` gates what a
+ * `Task` *invocation* may name, and this is one invocation naming one command — `tasks.tick` — that
+ * then reaches the switch N more times with commands it read out of a table. Without it, anything
+ * that could get a row into `bolt_task` could name `identity.startSession` and have it run with no
+ * credential at all. The rows are written by the runtime, but "written by the runtime today" is not
+ * a property the switch can see, and a gate has to hold on what it can.
+ *
+ * A refused or failed command fails its own task rather than the tick, so one bad row backs off and
+ * eventually lands in `failed` instead of stopping every other task in the workspace.
+ */
+/**
+ * Whether one row of `bolt_task` may run, checked per task rather than per invocation.
+ *
+ * `authorizeInvocationProvenance` gates what a `Task` *invocation* may name, and a tick is one
+ * invocation naming one command that then reaches the switch N more times with commands read out of
+ * a table. So the check happens again here, against the narrower set: the tick itself is invocable
+ * by a host and not runnable as a row.
+ */
+const authorizeTaskCommand = Effect.fn('Bolt.authorizeTaskCommand')(function* (command: string) {
+	if (yield* isRunnable(command, TASK_RUNNABLE_COMMANDS)) return;
+	yield* new AccessControl.AccessDenied({
+		action: 'invoke',
+		resource: command,
+		reason: `${command} is not a command the runtime enqueues, so no task row may name it`
+	});
+});
+
+const runTick = Effect.fn('Bolt.runTick')(function* (effectId: EffectId) {
+	const report = yield* (yield* TaskQueue.Service).tick(effectId, (task, attemptEffectId) =>
+		authorizeTaskCommand(task.command).pipe(
+			Effect.andThen(() => runCommand(task.command, EffectId.make(attemptEffectId), task.input)),
+			Effect.match({
+				onSuccess: (response) =>
+					response.status >= 200 && response.status < 300
+						? ({ _tag: 'Done', task, result: response.value ?? null } as const)
+						: ({
+								_tag: 'Failed',
+								task,
+								// A code and a short reason. Never the value: a command's body is where a
+								// partner's data and a person's record are, and `bolt_task.error` is readable by
+								// anyone who can see the operations panel.
+								error: `status ${response.status}`
+							} as const),
+				onFailure: (cause) => ({ _tag: 'Failed', task, error: describeCause(cause) }) as const
+			})
+		)
+	);
+	return json({
+		ran: report.ran,
+		rolled: report.rolled,
+		declined: report.declined,
+		nextDueAtEpochMs: report.nextDueAtEpochMs ?? null,
+		// Surfaced rather than logged: a schedule that could not be read has been retired, and the only
+		// place that says so is the answer to the tick that retired it.
+		rejections: report.rejections.map((rejection) => ({ ...rejection }))
+	});
 });
 
 /**
@@ -1002,6 +1430,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 	if (command.startsWith('schema.')) yield* authorizeSchemaCommand(command, commandInput);
 	const membership = MEMBERSHIP_COMMANDS.get(command);
 	if (membership !== undefined) yield* authorizeMembershipCommand(membership, commandInput);
+	if (SYSTEM_ONLY_COMMANDS.has(command)) yield* authorizeSystemCommand(command, commandInput);
 	switch (command) {
 		case 'health':
 			return json({ status: 'ok' });
@@ -1096,17 +1525,19 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		 * become, and what are they right now.
 		 *
 		 * A command rather than something stamped onto the document, for the same reason `apps.visible`
-		 * is one: the answer is the compiled workspace's policy list crossed with the credential's own
-		 * roles, and only the tenant runtime holds both.
+		 * is one: the answer is this tenant's own `bolt_team` rows crossed with the credential's
+		 * standing, and only the tenant runtime holds both.
 		 */
 		case 'access.impersonation': {
 			const input = yield* decode(ImpersonationStateInput, commandInput);
 			const access = yield* AccessControl.Service;
+			// Awaited, because the teams are rows now rather than a projection of the policy list.
+			const teams = yield* access.impersonationTeams();
 			return json({
 				isAdmin: access.mayImpersonate(input.actor),
 				isActive: input.impersonatedTeam !== null,
 				activeTeamIds: input.impersonatedTeam === null ? [] : [input.impersonatedTeam],
-				teams: access.impersonationTeams()
+				teams
 			});
 		}
 		/**
@@ -1179,40 +1610,141 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			 * `roles` is therefore empty. There is nothing for it to hold: `admin` is not a role, and
 			 * assigning the six real ones would be a lie about what this person does in the workspace.
 			 *
-			 * The approver teams are still derived, and for a reason the status flag does not cover.
-			 * Approvals do not go through `decide` — `approvals.process` matches a step's `approvers`
-			 * against `subject.teams` — so a record whose create is approval-gated is written, locked,
-			 * and then waits forever if nobody in the workspace is eligible to decide it. Only the
-			 * workspace knows which teams those are, so only the workspace can name them.
+			 * They are placed in no team, and that is the whole of the change here.
+			 *
+			 * This used to *derive* a teams array by walking every policy, every grant and every approval
+			 * step in the workspace and collecting each `approvers` name — because `admin` does not
+			 * bypass approvals, so a founder who administers everything could still raise an
+			 * approval-gated record that nobody was eligible to decide. With no team rows and no place
+			 * to manage them, guessing was the only defence available.
+			 *
+			 * Teams are rows now and an operator puts people in them, so the guess goes. The consequence
+			 * is deliberate and visible rather than silently pre-empted: immediately after provisioning
+			 * the founder administers everything and can decide nothing that is gated, and the fix is to
+			 * put them in a team.
 			 */
-			const teams = new Set<string>();
-			for (const policy of definition.policies) {
-				for (const grant of policy.grants ?? []) {
-					const approval = grant.approval;
-					if (approval === null || typeof approval !== 'object') continue;
-					const steps = Reflect.get(approval, 'steps');
-					if (!Array.isArray(steps)) continue;
-					for (const step of steps) {
-						const approvers =
-							step === null || typeof step !== 'object'
-								? undefined
-								: Reflect.get(step, 'approvers');
-						if (!Array.isArray(approvers)) continue;
-						for (const team of approvers) if (typeof team === 'string') teams.add(team);
-					}
-				}
-			}
 			// `tenantId` is stamped onto every command input from the invocation scope, never read from
 			// the payload — so a caller cannot admit a founder into somebody else's workspace.
 			const founderId = yield* (yield* Identity.Service).admit(
 				effectId,
 				input.tenantId,
 				input.email,
-				[],
-				[...teams],
+				null,
 				ADMIN_STATUS
 			);
-			return json({ admitted: true, userId: founderId, roles: [], teams: [...teams], admin: true });
+			return json({ admitted: true, userId: founderId, admin: true });
+		}
+		/**
+		 * The founder, admitted and signed in, on the strength of a proof the host holds.
+		 *
+		 * ## What each side owns
+		 *
+		 * Colony proved an inbox. That proof is not an identity — no user, no session, no directory
+		 * row — and Colony has no way to turn it into one, which is the property the whole split
+		 * exists to preserve. This command is where the proven address becomes a person: `admit`
+		 * writes the administrator row and `startSession` mints the credential, both inside the
+		 * workspace that owns them. Bolt remains the only session issuer on the platform.
+		 *
+		 * Bolt does not verify the code, the challenge or the claim. It cannot — it never saw the
+		 * mail. What it verifies is that the invocation is the *host*, proved per invocation by a
+		 * signature over the timestamp, the command, the tenant and these arguments, and refused
+		 * outright for everybody else by `SYSTEM_ONLY_COMMANDS`.
+		 *
+		 * `tenantId` is stamped from `invocation.scope`, never read from the payload, so a caller
+		 * cannot bootstrap a founder into somebody else's workspace.
+		 *
+		 * ## The replay ledger, and what is deliberately not in it
+		 *
+		 * The ledger row records `claimId -> userId`. It does **not** record the credential, and that
+		 * is a decision rather than an omission: a live session token at rest in a table of
+		 * short-lived verification artifacts is a secret outliving the flow that made it. An
+		 * idempotent retry therefore looks the founder up and mints a *fresh* session for them.
+		 *
+		 * The cost is that a retried call can leave more than one live session for the founder. That
+		 * is accepted, not overlooked — same person, same tenant, same status, and sessions expire.
+		 * Please do not "fix" it by storing the credential.
+		 *
+		 * `bolt_auth_verification` is reused rather than a table added, because it already holds
+		 * exactly this kind of thing and adding a collection would put a schema step in front of
+		 * every existing tenant. Note what that reuse implies: Better Auth deletes every row whose
+		 * `expires_at` has passed on each `findVerificationValue`, so this row is genuinely swept.
+		 * That is harmless *because of the arithmetic*, and only because of it — a captured
+		 * invocation is refused by `SIGNATURE_LIFETIME_MILLIS` five minutes after it was signed, so
+		 * an expiry set well beyond that window means the ledger is always present for the entire
+		 * period in which a replay is possible at all. Shortening the expiry below the signature
+		 * lifetime would open exactly the hole this row closes.
+		 */
+		case 'identity.bootstrapFounder': {
+			const input = yield* decode(IdentityBootstrapFounderInput, commandInput);
+			const identity = yield* Identity.Service;
+			const database = yield* Database.Service;
+			const ledgerIdentifier = `${FOUNDER_CLAIM_IDENTIFIER}${input.claimId}`;
+			const recorded = yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: 'select "value" from bolt_auth_verification where "identifier" = $1 limit 1',
+				parameters: [ledgerIdentifier]
+			});
+			const ledgerRow: unknown = recorded.rows[0];
+			const spentBy =
+				typeof ledgerRow === 'object' && ledgerRow !== null
+					? Reflect.get(ledgerRow, 'value')
+					: undefined;
+			if (typeof spentBy === 'string' && spentBy.length > 0) {
+				const [userId, ...rest] = spentBy.split(' ');
+				const boundEmail = rest.join(' ');
+				/**
+				 * The same claim for a different address is a replay, and is refused.
+				 *
+				 * The same claim for the same address is the network having been retried, and is
+				 * answered — with a new session for the founder already on the row, never by
+				 * admitting anybody a second time.
+				 */
+				if (boundEmail !== input.email || userId === undefined || userId.length === 0) {
+					return yield* new AccessControl.AccessDenied({
+						action: 'manage',
+						resource: command,
+						reason: 'this founder claim has already been spent, and not for this address'
+					});
+				}
+				return json({
+					admitted: true,
+					userId,
+					admin: true,
+					credential: yield* identity.startSession(effectId, userId, input.tenantId)
+				});
+			}
+			// The same admission `identity.admitFounder` performs, and for the same reason: `admin` is
+			// a status on the row rather than a bundle of roles, and `AccessControl.decide`
+			// short-circuits on it before it consults a policy at all.
+			const founderId = yield* identity.admit(
+				effectId,
+				input.tenantId,
+				input.email,
+				null,
+				ADMIN_STATUS
+			);
+			// Written before the session is minted, so a crash between the two leaves a claim that is
+			// spent rather than one that can be spent again. The founder is already an administrator
+			// at that point and signs in the ordinary way, which is the safe direction to fail.
+			yield* database.execute(effectId, {
+				_tag: 'Query',
+				// `"expiresAt"` is quoted camelCase because that is the column the collection declares and
+				// the migration creates — `bolt_auth_*` follows Better Auth's own naming, not the
+				// snake_case the rest of the schema uses. An unquoted or snake_cased name here is a
+				// statement that fails only in the tenant database, at signup, in production.
+				sql: 'insert into bolt_auth_verification ("identifier", "value", "expiresAt") values ($1, $2, $3)',
+				parameters: [
+					ledgerIdentifier,
+					`${founderId} ${input.email}`,
+					new Date(Date.now() + FOUNDER_CLAIM_LEDGER_MILLIS).toISOString()
+				]
+			});
+			return json({
+				admitted: true,
+				userId: founderId,
+				admin: true,
+				credential: yield* identity.startSession(effectId, founderId, input.tenantId)
+			});
 		}
 		case 'identity.invite': {
 			const input = yield* decode(IdentityInviteInput, commandInput);
@@ -1270,6 +1802,80 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		case 'identity.workspaceSettings': {
 			const input = yield* decode(IdentitySettingsInput, commandInput);
 			return json(yield* (yield* Identity.Service).workspaceSettings(effectId, input.tenantId));
+		}
+		/**
+		 * The four writes behind the `teams` array `identity.workspaceAccess` returns.
+		 *
+		 * They sit here, beside that projection, because they are the other half of one surface: the
+		 * read lists every team including the empty ones, and these are how an operator makes one, moves
+		 * it, retires it, and puts somebody in it. Without them the read was a list nobody could act on
+		 * — and an empty team, which is exactly what a newly declared `approvers` name reconciles into,
+		 * would be visible and permanently unfillable.
+		 *
+		 * All four are gated once, before this switch, by `MEMBERSHIP_COMMANDS`.
+		 *
+		 * `subject.userId` is the person the audit row names. Under a team preview `subjectAsTeam`
+		 * substitutes the team and the policies but keeps the actor's own identity, so this is the real
+		 * credential holder either way — and a preview drops `admin`, so a previewing administrator is
+		 * refused by the gate above before reaching any of this.
+		 *
+		 * `tenantId` is minted from the invocation scope, never read from the payload.
+		 */
+		case 'teams.create': {
+			const input = yield* decode(TeamCreateInput, commandInput);
+			return yield* teamAnswer(
+				yield* (yield* Identity.Service).createTeam(
+					effectId,
+					input.tenantId,
+					input.subject.userId,
+					{
+						name: input.name,
+						...(input.parentId === undefined ? {} : { parentId: input.parentId }),
+						...(input.description === undefined ? {} : { description: input.description }),
+						...(input.inherits === undefined ? {} : { inherits: input.inherits })
+					}
+				)
+			);
+		}
+		case 'teams.update': {
+			const input = yield* decode(TeamUpdateInput, commandInput);
+			return yield* teamAnswer(
+				yield* (yield* Identity.Service).updateTeam(
+					effectId,
+					input.tenantId,
+					input.subject.userId,
+					input.teamId,
+					{
+						...(input.name === undefined ? {} : { name: input.name }),
+						...(input.parentId === undefined ? {} : { parentId: input.parentId }),
+						...(input.description === undefined ? {} : { description: input.description }),
+						...(input.inherits === undefined ? {} : { inherits: input.inherits })
+					}
+				)
+			);
+		}
+		case 'teams.delete': {
+			const input = yield* decode(TeamDeleteInput, commandInput);
+			return yield* teamAnswer(
+				yield* (yield* Identity.Service).deleteTeam(
+					effectId,
+					input.tenantId,
+					input.subject.userId,
+					input.teamId
+				)
+			);
+		}
+		case 'teams.assign': {
+			const input = yield* decode(TeamAssignInput, commandInput);
+			return yield* teamAnswer(
+				yield* (yield* Identity.Service).assignTeam(
+					effectId,
+					input.tenantId,
+					input.subject.userId,
+					input.memberId,
+					input.teamId
+				)
+			);
 		}
 		case 'approvals.request': {
 			const input = yield* decode(ApprovalRequestInput, commandInput);
@@ -1529,12 +2135,39 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				)
 			);
 		}
+		/**
+		 * A create over the wire, which is a batch of one and takes the batch's path.
+		 *
+		 * `mutate` rather than `create` for three things at once, none of which the old call could
+		 * do. It assigns the id, so the browser stops minting one for a row that does not exist yet.
+		 * It runs the graph through `flattenGraph`, so a body carrying a parent and its children
+		 * commits as one transaction instead of being refused or silently flattened to the parent.
+		 * And it returns the rows from the read-back it already performs, so the answer is what the
+		 * database holds rather than what the caller submitted — which, once a default, a generated
+		 * column and a `create.before` hook have run, are not the same record.
+		 */
 		case 'collections.create': {
 			const input = yield* decode(CollectionCreateInput, commandInput);
-			yield* checkWrittenValues(input.collection, input.values);
+			yield* checkWrittenGraph(input.collection, input.values);
 			const collections = yield* Collections.Service;
-			yield* collections.create(effectId, input.subject, input);
-			return json({ created: true, norbital_id: input.id });
+			const written = yield* collections.mutate(effectId, input.subject, input.collection, [
+				input.values
+			]);
+			const stored = written[0];
+			if (stored === undefined)
+				return yield* new DispatchError({
+					code: 'write_not_stored',
+					message: `A create on ${input.collection} completed without a stored record. Reporting success with no row is what made a client cache a record the database never held.`
+				});
+			const records = yield* maskStoredRecords(input.subject, input.collection, [stored]);
+			// Read off the unmasked row: the id identifies what this caller just created, so it is
+			// theirs to know even where a field policy would keep the column out of `records`.
+			const assignedId = Reflect.get(stored, 'norbital_id');
+			return json({
+				created: true,
+				norbital_id: typeof assignedId === 'string' ? assignedId : null,
+				records
+			});
 		}
 		case 'collections.createMany': {
 			const input = yield* decode(CollectionCreateManyInput, commandInput);
@@ -1547,12 +2180,29 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				norbital_ids: records.map(({ id }) => id)
 			});
 		}
+		/**
+		 * An update answers with the row too, for the same reason a create does.
+		 *
+		 * It costs one read that the old shape did not make, and it is not a read the caller was
+		 * avoiding: a client that was handed back its own submission had to invalidate and refetch to
+		 * find out what the row actually became, so this replaces a round trip rather than adding
+		 * one. The read goes through `findFirst`, so it is filtered and masked exactly as the same
+		 * caller's own query would be — no separate disclosure path.
+		 */
 		case 'collections.update': {
 			const input = yield* decode(CollectionUpdateInput, commandInput);
 			yield* checkWrittenValues(input.collection, input.values);
 			const collections = yield* Collections.Service;
 			yield* collections.update(effectId, input.subject, input);
-			return json({ updated: true, id: input.id });
+			const stored = yield* collections.findFirst(effectId, input.subject, {
+				collection: input.collection,
+				where: { norbital_id: { in: [input.id] } }
+			});
+			return json({
+				updated: true,
+				id: input.id,
+				records: stored === undefined ? [] : [stored]
+			});
 		}
 		case 'collections.delete': {
 			const input = yield* decode(CollectionDeleteInput, commandInput);
@@ -1675,11 +2325,6 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					input.input
 				)
 			});
-		}
-		case 'automations.resume': {
-			const input = yield* decode(TaskInput, commandInput);
-			yield* (yield* Automations.Service).resume(effectId, input.taskId, input.input ?? null);
-			return json({ resumed: true });
 		}
 		case 'automations.status': {
 			const input = yield* decode(TaskInput, commandInput);
@@ -1805,7 +2450,14 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					const collections = yield* Collections.Service;
 					const ai = yield* AI.Service;
 					const files = yield* Files.Service;
-					const ops = makeBoundAuthoringOps(effectId, input.bolt_run_as, collections, ai, files);
+					const ops = makeBoundAuthoringOps(
+						effectId,
+						input.bolt_run_as,
+						collections,
+						ai,
+						files,
+						yield* Automations.Service
+					);
 					const api = makeAuthoringApi(ops);
 					const output = yield* runAuthoredHandler(() =>
 						automation.handler(api, { args: input.args, scope: input.scope ?? {} })

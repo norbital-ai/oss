@@ -264,23 +264,32 @@ export const TaskRequest = Schema.TaggedUnion({
 	/**
 	 * Hands the host a durable callback for the life of this release.
 	 *
-	 * `schedule` and `input` are what make a registration recurring: present, they say "invoke
-	 * `command` with `input` on this cron until the release is superseded"; absent, the registration
-	 * only tells the host where to route work that something else enqueues. They are `optionalKey`
-	 * because most registrations genuinely have neither — a routing-only registration should not have
-	 * to write two nulls to say so.
+	 * Routing, and only routing: it says the host may be handed work addressed to `command` for this
+	 * release. It used to carry `schedule` and `input` as well, which is how a cron reached the host —
+	 * and it is the guest that reads a release's declarations, so the host was being told a thing it
+	 * could not act on without learning cron grammar. Schedules now live in the tenant's own
+	 * `bolt_schedule`, so those two fields were deleted rather than left looking supported.
 	 */
 	Register: {
 		leaseId: LeaseId,
 		releaseId: ReleaseId,
-		command: Schema.NonEmptyString,
-		schedule: Schema.optionalKey(Schema.NonEmptyString),
-		input: Schema.optionalKey(Schema.Json)
+		command: Schema.NonEmptyString
 	},
-	Enqueue: { command: Schema.NonEmptyString, input: Schema.Json },
-	Schedule: { command: Schema.NonEmptyString, input: Schema.Json, runAtEpochMs: Schema.Number },
-	Cancel: { taskId: Schema.NonEmptyString },
-	Signal: { taskId: Schema.NonEmptyString, signal: Schema.NonEmptyString, input: Schema.Json }
+	/**
+	 * "Come back to me no later than this instant."
+	 *
+	 * The whole of what a host is told about scheduling, and the reason the facility is a timer API
+	 * rather than a queue API. Enqueueing is a row in the tenant's own database, written in the same
+	 * transaction as the state change that asked for it — so there is no second place to enqueue,
+	 * because the wire cannot express one.
+	 *
+	 * A host holds one instant per scope and keeps the earliest it has been told; a message naming a
+	 * later instant costs it nothing to ignore. The guest sends this *before* the commit that creates
+	 * the work, never after: a crash between the message and the commit costs a false alarm — the host
+	 * wakes, finds nothing due, re-arms — while a crash the other way round costs a committed job
+	 * nobody ever comes back for.
+	 */
+	Wake: { notLaterThanEpochMs: Schema.Number }
 });
 export type TaskRequest = typeof TaskRequest.Type;
 export const TaskResponse = Schema.Struct({ taskId: Schema.optionalKey(Schema.String) });
@@ -311,15 +320,20 @@ export const IdentityHookRequest = Schema.TaggedUnion({
 		userId: Schema.NonEmptyString,
 		organizationId: Schema.NonEmptyString,
 		email: Schema.optionalKey(Schema.NonEmptyString),
-		roles: Schema.Array(Schema.NonEmptyString),
-		teams: Schema.Array(Schema.NonEmptyString)
+		/**
+		 * The one team this person now belongs to, or absent for nobody.
+		 *
+		 * Replaces a `roles` array and a `teams` array. A person holds one team; what that team may do
+		 * is declared in the workspace's `+teams.ts` and is not a fact a host needs on the wire.
+		 */
+		team: Schema.optionalKey(Schema.NonEmptyString)
 	},
 	MembershipChanged: {
 		userId: Schema.NonEmptyString,
 		organizationId: Schema.NonEmptyString,
 		email: Schema.optionalKey(Schema.NonEmptyString),
-		action: Schema.Literals(['joined', 'left', 'role_changed']),
-		role: Schema.optionalKey(Schema.NonEmptyString)
+		action: Schema.Literals(['joined', 'left', 'team_changed']),
+		team: Schema.optionalKey(Schema.NonEmptyString)
 	}
 });
 export type IdentityHookRequest = typeof IdentityHookRequest.Type;

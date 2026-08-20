@@ -40,16 +40,23 @@ describe('session authentication', () => {
 
 		expect(subject.userId).toBe(fixtureUserId('u1'));
 		expect(subject.tenantId).toBe('test-tenant');
-		expect(subject.roles).toEqual([]);
-		expect(subject.teams).toEqual([]);
+		// Nobody put this person in a team, so `team_id` is null and the recursive walk starts nowhere.
+		// An empty path rather than an absent one: `policiesHeldByTeam` reads it on every decision and
+		// a subject that could be missing it would move that check into every caller.
+		expect(subject.team).toBeUndefined();
+		expect(subject.teamPath).toEqual([]);
 		expect(subject.email).toBeUndefined();
 	});
 
 	it('resolves an external subject whose email column is null', async () => {
 		harness = await makeBoltTestRuntime();
 		await harness.database.query(
-			`insert into bolt_external_subjects (provider, external_id, user_id, tenant_id, roles, teams)
-			 values ('colony', 'ext-1', 'u2', 'test-tenant', '["basic"]'::jsonb, '["Platform"]'::jsonb)`,
+			`insert into bolt_team ("norbital_id", "name") values (md5('Platform'::text)::uuid, 'Platform')`,
+			[]
+		);
+		await harness.database.query(
+			`insert into bolt_external_subjects (provider, external_id, user_id, tenant_id, team_id)
+			 values ('colony', 'ext-1', 'u2', 'test-tenant', md5('Platform'::text)::uuid)`,
 			[]
 		);
 
@@ -64,15 +71,15 @@ describe('session authentication', () => {
 		);
 
 		expect(subject.userId).toBe('u2');
-		expect(subject.roles).toEqual(['basic']);
-		expect(subject.teams).toEqual(['Platform']);
+		expect(subject.team).toBe('Platform');
+		expect(subject.teamPath).toEqual(['Platform']);
 		expect(subject.email).toBeUndefined();
 	});
 
 	it('carries the email through when the session row has one', async () => {
 		harness = await makeBoltTestRuntime();
 		await harness.database.query(
-			`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5('u3'::text)::uuid, 'u3', 'ada@example.test', 'test-tenant', '["admin"]'::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), 'token-u3', person.id, now() + interval '1 hour' from person`,
+			`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId") values (md5('u3'::text)::uuid, 'u3', 'ada@example.test', 'test-tenant') on conflict ("norbital_id") do update set "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), 'token-u3', person.id, now() + interval '1 hour' from person`,
 			[]
 		);
 
@@ -83,6 +90,5 @@ describe('session authentication', () => {
 		);
 
 		expect(subject.email).toBe('ada@example.test');
-		expect(subject.roles).toEqual(['admin']);
 	});
 });

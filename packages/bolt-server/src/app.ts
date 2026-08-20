@@ -1,6 +1,8 @@
 import {
 	Activation,
 	ActivationResult,
+	BundleResult,
+	Invocation,
 	InvocationId,
 	PROTOCOL_VERSION,
 	type FacilityBindings
@@ -9,11 +11,9 @@ import { Clock, Effect, Layer, ManagedRuntime, Schema } from 'effect';
 import { randomUUID } from 'node:crypto';
 import { BundleLoader, makeLayer as makeBundleLoaderLayer } from './bundle-loader.js';
 import type { ServerConfiguration } from './config.js';
-import {
-	DurableEngine,
-	developmentLayer as durableEngineDevelopmentLayer
-} from './durable-engine.js';
 import { ServerHealth, layer as serverHealthLayer } from './health.js';
+import { makeScheduler } from './scheduler.js';
+import { makeTaskBinding } from './facilities/tasks.js';
 import { startServer, type RunningServer } from './server.js';
 
 /** Reports a lifecycle phase that prevented the self-host application from becoming usable; stupidity:allow Q4 -- Effect TaggedError declaration is the canonical rc.109 error boundary. */
@@ -30,7 +30,6 @@ export class ApplicationStartError extends Schema.TaggedError<ApplicationStartEr
 export interface ApplicationOptions {
 	readonly configuration: ServerConfiguration;
 	readonly facilities: FacilityBindings;
-	readonly durableEngineLayer?: Layer.Layer<DurableEngine>;
 	readonly finalizeFacilities?: () => Promise<void>;
 }
 
@@ -63,25 +62,10 @@ export const startApplication = async (
 ): Promise<RunningApplication> => {
 	const { configuration, facilities, finalizeFacilities = () => Promise.resolve() } = options;
 	let validationError: ApplicationStartError | undefined;
-	if (configuration.mode === 'production' && configuration.durableEngine !== 'external') {
-		validationError = new ApplicationStartError({
-			operation: 'BoltServer.Application.validateDurability',
-			message: 'Production mode must select the external durable engine'
-		});
-	} else if (
-		configuration.durableEngine === 'external' &&
-		options.durableEngineLayer === undefined
-	) {
-		validationError = new ApplicationStartError({
-			operation: 'BoltServer.Application.validateDurability',
-			message: 'The external durable engine requires an explicit adapter layer'
-		});
-	}
 	if (
-		validationError === undefined &&
-		(facilities.scope.tenantId !== configuration.scope.tenantId ||
-			facilities.scope.environment !== configuration.scope.environment ||
-			facilities.scope.releaseId !== configuration.scope.releaseId)
+		facilities.scope.tenantId !== configuration.scope.tenantId ||
+		facilities.scope.environment !== configuration.scope.environment ||
+		facilities.scope.releaseId !== configuration.scope.releaseId
 	) {
 		validationError = new ApplicationStartError({
 			operation: 'BoltServer.Application.validateScope',
@@ -95,30 +79,89 @@ export const startApplication = async (
 			throw validationError;
 		}
 	}
-	const durableEngineLayer = options.durableEngineLayer ?? durableEngineDevelopmentLayer;
+	/**
+	 * The host's timer, and the task facility that feeds it.
+	 *
+	 * The binding is built here rather than accepted from the embedder because there is nothing left
+	 * to configure: `TaskRequest` carries `Register` and `Wake`, and both are answered by this
+	 * process's own routing table and its own `setTimeout`. Whatever `tasks` binding the caller
+	 * supplied is replaced, deliberately — a host that let one be injected would be letting somebody
+	 * else own its clock.
+	 */
+	const scheduler = makeScheduler({
+		tick: () => tickOnce(),
+		onFailure: (cause) => {
+			// A tick is background work with nobody waiting on it, so a swallowed failure is silence
+			// rather than an error somebody sees. The scheduler backs off on its own count; this only
+			// has to make sure the reason reaches a log.
+			void Effect.runPromise(
+				Effect.logError(`scheduler.tick: ${cause instanceof Error ? cause.message : String(cause)}`)
+			);
+		}
+	});
+	const bound: FacilityBindings = { ...facilities, tasks: makeTaskBinding(scheduler) };
 
 	const applicationLayer = Layer.mergeAll(
 		serverHealthLayer,
-		makeBundleLoaderLayer({ bundlePath: configuration.bundlePath, facilities }),
-		durableEngineLayer
+		makeBundleLoaderLayer({ bundlePath: configuration.bundlePath, facilities: bound })
 	);
 	const runtime = ManagedRuntime.make(applicationLayer);
+
+	/**
+	 * One tick, dispatched into the bundle like any other invocation.
+	 *
+	 * `Task`, not `Command`: a `Task` carries no credential by construction, which is what the
+	 * runtime's provenance gate requires of enqueued work — and a host minting a tenant session to
+	 * talk to its own tenant would be a standing key to tenant data. The answer carries the next
+	 * instant anything is due, which is the only thing this side needs to know.
+	 */
+	const tickOnce = (): Promise<number | null> =>
+		runtime.runPromise(
+			Effect.gen(function* () {
+				const loader = yield* BundleLoader;
+				const bundle = yield* loader.load();
+				const now = yield* Clock.currentTimeMillis;
+				const unsafeResult = yield* Effect.tryPromise({
+					try: (signal) =>
+						bundle.dispatch(
+							Invocation.cases.Task.make({
+								protocolVersion: PROTOCOL_VERSION,
+								id: InvocationId.make(`tasks.tick:${now}`),
+								scope: configuration.scope,
+								deadlineEpochMs: now + configuration.invocationTimeoutMillis,
+								command: 'tasks.tick',
+								input: {},
+								attempt: 1
+							}),
+							bound,
+							signal
+						),
+					catch: (cause) =>
+						new ApplicationStartError({
+							operation: 'BoltServer.Application.tick',
+							message: 'Bolt bundle dispatch failed',
+							cause
+						})
+				}).pipe(Effect.timeout(configuration.invocationTimeoutMillis));
+				const result = yield* Schema.decodeUnknownEffect(BundleResult)(unsafeResult);
+				if (result._tag !== 'Success') {
+					return yield* new ApplicationStartError({
+						operation: 'BoltServer.Application.tick',
+						message: 'Bolt bundle refused a scheduler tick'
+					});
+				}
+				const value = result.response.value;
+				if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+				const due = Reflect.get(value, 'nextDueAtEpochMs');
+				return typeof due === 'number' && Number.isFinite(due) ? due : null;
+			})
+		);
 
 	try {
 		await runtime.runPromise(
 			Effect.gen(function* () {
 				const loader = yield* BundleLoader;
-				const durableEngine = yield* DurableEngine;
 				const bundle = yield* loader.load();
-				yield* durableEngine.recover();
-				const durableSnapshot = yield* durableEngine.snapshot();
-				const expectsDurability = configuration.durableEngine === 'external';
-				if (durableSnapshot.durable !== expectsDurability) {
-					return yield* new ApplicationStartError({
-						operation: 'BoltServer.Application.validateDurability',
-						message: 'Configured durable engine selection does not match the adapter'
-					});
-				}
 				const now = yield* Clock.currentTimeMillis;
 				const activation = Activation.make({
 					protocolVersion: PROTOCOL_VERSION,
@@ -152,6 +195,11 @@ export const startApplication = async (
 						message: result.error.message
 					});
 				}
+				// Activation has just written this release's schedules and read back when anything is next
+				// due, so the timer is armed from that answer rather than from a first tick that exists
+				// only to ask. A release with no schedule and nothing queued arms nothing at all, which is
+				// the state an idle workspace spends almost all of its life in.
+				scheduler.settle(result.nextDueAtEpochMs);
 			})
 		);
 
@@ -164,7 +212,7 @@ export const startApplication = async (
 		);
 
 		let stopPromise: Promise<void> | undefined;
-		/** Runs the ordered transport, drain, durable-engine, bundle, and facility finalizers once. */
+		/** Runs the ordered transport, drain, scheduler, bundle, and facility finalizers once. */
 		const stop = (): Promise<void> => {
 			stopPromise ??= (async () => {
 				let transportFailure: unknown;
@@ -179,11 +227,10 @@ export const startApplication = async (
 						Effect.gen(function* () {
 							const health = yield* ServerHealth;
 							const loader = yield* BundleLoader;
-							const durableEngine = yield* DurableEngine;
 							yield* health
 								.drain(configuration.drainTimeoutMillis)
 								.pipe(
-									Effect.ensuring(durableEngine.stop()),
+									Effect.ensuring(Effect.sync(() => scheduler.stop())),
 									Effect.ensuring(loader.dispose()),
 									Effect.ensuring(health.markFinalized())
 								);

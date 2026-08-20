@@ -1,4 +1,4 @@
-import { boolean, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * Better Auth's view of identity's tables.
@@ -33,15 +33,19 @@ export const boltAuthUser = pgTable('bolt_auth_user', {
 	kind: text('kind').notNull(),
 	/**
 	 * Whether this person administers the workspace — `normal` or `admin`. Bolt's concept, which
-	 * Better Auth never reads, and mapped here for the same reason `kind`, `tenantId`, `roles` and
-	 * `teams` are: this is Better Auth's view of the whole table, and a column the collection declares
-	 * but the view omits is drift no type check can see.
+	 * Better Auth never reads, and mapped here for the same reason `kind`, `tenantId` and `team_id`
+	 * are: this is Better Auth's view of the whole table, and a column the collection declares but the
+	 * view omits is drift no type check can see.
 	 */
 	status: text('status').notNull(),
 	/** The workspace this subject belongs to — Bolt's concept, which Better Auth never reads. */
 	tenantId: text('tenantId'),
-	roles: jsonb('roles').notNull(),
-	teams: jsonb('teams').notNull()
+	/**
+	 * The one team this person belongs to. Bolt's concept, which Better Auth never reads — mapped
+	 * here for the reason the columns above it are: this is Better Auth's view of the whole table,
+	 * and a column the collection declares but the view omits is drift no type check can see.
+	 */
+	team_id: uuid('team_id')
 });
 
 export const boltAuthSession = pgTable('bolt_auth_session', {

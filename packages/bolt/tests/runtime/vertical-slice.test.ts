@@ -36,38 +36,41 @@ const definition = workspace({
 			name: 'employee-app',
 			effect: 'allow',
 			actions: ['view'],
-			roles: ['employee'],
 			apps: ['hr']
 		}),
 		policy({
 			name: 'admin-approval',
 			effect: 'allow',
 			actions: ['approve'],
-			roles: ['admin'],
 			apps: ['approvals']
 		}),
 		policy({
 			name: 'admin-sync',
 			effect: 'allow',
 			actions: ['sync'],
-			roles: ['admin'],
 			apps: ['*']
 		}),
 		policy({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			roles: ['admin'],
 			apps: ['helper']
 		}),
 		policy({
 			name: 'admin-data',
 			effect: 'allow',
 			actions: ['read', 'create', 'update', 'delete'],
-			roles: ['admin'],
 			apps: ['employees']
 		})
 	],
+	teams: {
+		'employee-app': ['employee-app'],
+		'admin-approval': ['admin-approval'],
+		'admin-sync': ['admin-sync'],
+		'admin-agent': ['admin-agent'],
+		'admin-data': ['admin-data'],
+		admin: ['employee-app', 'admin-approval', 'admin-sync', 'admin-agent', 'admin-data']
+	},
 	agents: [agent({ name: 'helper', prompt: 'Help the HR team.', tools: [], skills: [] })],
 	automations: [],
 	channels: [],
@@ -158,7 +161,7 @@ const facilities: FacilityBindings = { scope, database, ai, tasks };
  *
  * Administration is `bolt_auth_user.status` and nothing else — `subjectFromRow` reads
  * `text(row, 'status') === ADMIN_STATUS` and consults no other column. This fixture used to carry
- * `admin: true` and `roles: ['admin', 'impersonator']`, neither of which that projection looks at,
+ * `admin: true` and `teamPath: ['admin', 'impersonator']`, neither of which that projection looks at,
  * so every case below named for an administrator authenticated as an ordinary user with no matching
  * policy and was refused.
  *
@@ -170,10 +173,16 @@ const subject = {
 	userId: 'admin-1',
 	tenantId: 'tenant-1',
 	status: 'admin',
-	roles: [],
-	teams: []
+	teamPath: []
 };
-const employee = { userId: 'employee-1', tenantId: 'tenant-1', roles: ['employee'], teams: [] };
+/**
+ * Placed in `employee-app`, which is a team this workspace declares.
+ *
+ * The name has to match a key in the `teams` map above: a `teamPath` naming a team no release
+ * declares resolves to no policies at all, and the subject then sees an empty app list — which
+ * reads exactly like an authorization refusal and is not one.
+ */
+const employee = { userId: 'employee-1', tenantId: 'tenant-1', teamPath: ['employee-app'] };
 
 const invoke = async (command: string, input: Schema.Json): Promise<BundleResult> => {
 	const invocation: Invocation = {
@@ -382,7 +391,7 @@ describe('runnable Bolt vertical slice', () => {
 
 	/**
 	 * These three assertions used to read the other way round: the plugin minted a subject out of
-	 * `trustedContext.roles`, so `{ roles: ['admin'] }` on an unauthenticated POST was an admin. The
+	 * `trustedContext.roles`, so `{ teamPath: ['admin'] }` on an unauthenticated POST was an admin. The
 	 * roles now come from the session the credential names, which makes the payload's copy inert — and
 	 * with no credential at all there is nothing to run as, so the read is refused rather than answered
 	 * with the empty page an inert role set would have produced.
@@ -391,7 +400,7 @@ describe('runnable Bolt vertical slice', () => {
 		const forged = await invokePlugin(
 			'query',
 			{ collection: 'employees', input: { limit: 20 } },
-			{ roles: ['admin'], subject: 'admin-external' },
+			{ teamPath: ['admin'], subject: 'admin-external' },
 			null
 		);
 		expect(forged).toMatchObject({
@@ -406,7 +415,7 @@ describe('runnable Bolt vertical slice', () => {
 		const claimed = await invokePlugin(
 			'query',
 			{ collection: 'employees' },
-			{ roles: ['forged-role'] }
+			{ teamPath: ['forged-role'] }
 		);
 		expect(claimed).toMatchObject({ _tag: 'Success', response: { value: [] } });
 	});
@@ -469,20 +478,29 @@ describe('runnable Bolt vertical slice', () => {
 		const result = await bundle.activate(activation, facilities, new AbortController().signal);
 		expect(result).toEqual({
 			_tag: 'Activated',
+			// Routing, and only routing. A registration used to carry `schedule` and `input` as well, so
+			// that a host could *originate* work — and that was the wrong side of the seam, because a
+			// cron is declared by a release and only the guest can read a release. Schedules are now
+			// rows in the tenant's own `bolt_schedule`, and what a host is told is one number.
 			registrations: [
-				{ command: 'agents.resume', schedule: null, input: null },
-				{ command: 'channels.receive', schedule: null, input: null },
+				{ command: 'agents.resume' },
+				{ command: 'agents.turn' },
+				{ command: 'channels.receive' },
 				// A refused approval has cleanup to do — the provisional row it locked. Routed beside
 				// `resume` because a rejection is followed up as deliberately as an approval is.
-				{ command: 'collections.discard', schedule: null, input: null },
-				{ command: 'collections.resume', schedule: null, input: null },
-				// Routing only. `integrations.flush` is the outbound drain, and a workspace that declares
-				// no send binding gets the route without a cron: nothing here has an outbox to empty.
-				{ command: 'integrations.flush', schedule: null, input: null },
-				{ command: 'integrations.pull', schedule: null, input: null },
-				{ command: 'notifications.drain', schedule: null, input: null }
-			]
+				{ command: 'collections.discard' },
+				{ command: 'collections.resume' },
+				{ command: 'integrations.flush' },
+				{ command: 'integrations.pull' },
+				{ command: 'notifications.drain' },
+				// The tick, which is the only command a host's timer ever sends.
+				{ command: 'tasks.tick' }
+			],
+			// This workspace declares no schedule and has nothing queued, so there is no instant to arm
+			// a timer to — which is the state an idle workspace spends almost all of its life in, and it
+			// has to cost nothing rather than a heartbeat.
+			nextDueAtEpochMs: null
 		});
-		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(7);
+		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(9);
 	});
 });

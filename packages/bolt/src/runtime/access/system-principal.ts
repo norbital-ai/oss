@@ -46,32 +46,24 @@ export const COLONY_SYSTEM_POLICY: PolicyDeclaration = Object.freeze<PolicyDecla
 	description:
 		'The host, provisioning a workspace before anybody exists in it. Reachable only by a request the host signed with its gateway secret.',
 	effect: 'allow',
-	// Never `[]`. An empty array is the `local-authoring` footgun exactly — `subjectHasPolicy`
-	// returns `true` for it, which would make this policy match every authenticated subject in the
-	// workspace instead of the one subject the signature check mints.
-	roles: ['colony-system'],
+	/**
+	 * Selected by a flag on the subject, never by a string the subject carries.
+	 *
+	 * This used to be `roles: ['colony-system']`, matched against `bolt_auth_user.roles` — so the one
+	 * thing that made it forgeable was a row spelling it, and the guard was a second string match
+	 * that stripped the role from every projected subject. A trapdoor watched by a filter.
+	 *
+	 * `system: true` is matched against `subject.system`, and `SystemPrincipal.systemSubject` is the
+	 * only constructor of a subject carrying it. It is minted after `verifySystemSignature` returns
+	 * true and cannot be decoded from a payload, so there is no route from a row, a credential, a
+	 * cookie or an authored policy to holding it. An author declaring `system: true` on their own
+	 * policy grants the host more than it needs and nobody else anything.
+	 */
+	system: true,
 	actions: ['manage'],
 	apps: ['schema', 'identity']
 });
 
-/**
- * The role that selects the policy above, and the reason no ordinary subject can hold it.
- *
- * `subjectHasPolicy` matches a subject to a policy by role, and `Identity.authenticate` builds
- * `subject.roles` from the `roles` column of `bolt_auth_user`. So the one thing that would make this
- * forgeable is a row carrying it — a founder admitted with it, a seed fixture that spells it, a host
- * writing it into the provisioner's row. `Identity.subjectFromRow` therefore *strips* this role from
- * every subject it projects, whatever the column says. There is no route from a database row, a
- * credential, a cookie or a payload to a subject holding it; `dispatchInvocation` is the only
- * constructor, and it runs after `verifySystemSignature`.
- *
- * Authored workspace code cannot reach it either. A policy an author writes is data in the workspace
- * definition, and adding `roles: ['colony-system']` to one grants that policy to nobody, because
- * nothing mints a subject with the role. The only thing an author could do is declare a *second*
- * policy that this role also matches, which grants the host more than it needs and nothing to
- * anybody else.
- */
-export const SYSTEM_PRINCIPAL_ROLE = 'colony-system';
 
 /** The subject id a system invocation runs under, so a log line names the actor rather than a uuid. */
 export const SYSTEM_PRINCIPAL_ID = 'colony-system';
@@ -350,8 +342,9 @@ const constantTimeEqual = (expected: string, actual: string): boolean => {
 export type SystemSubject = Readonly<{
 	readonly userId: string;
 	readonly tenantId: string;
-	readonly roles: ReadonlyArray<string>;
-	readonly teams: ReadonlyArray<string>;
+	/** What selects `COLONY_SYSTEM_POLICY`, and the only key that does. */
+	readonly system: true;
+	readonly teamPath: ReadonlyArray<string>;
 }>;
 
 /**
@@ -362,16 +355,17 @@ export type SystemSubject = Readonly<{
  * The host's authority is the two grants `COLONY_SYSTEM_POLICY` enumerates and nothing else, which
  * is what makes "what can this credential do" a question with a written answer.
  *
- * `teams` is empty because a system principal approves nothing: `approvals.process` matches a step's
- * approvers against `subject.teams`, and inventing a membership would hand the host an approval
- * eligibility no workspace granted it.
+ * It belongs to no team, so it holds no authored policy and is eligible to decide no approval.
  */
 export const systemSubject = (tenantId: string): SystemSubject =>
 	Object.freeze({
 		userId: SYSTEM_PRINCIPAL_ID,
 		tenantId,
-		roles: [SYSTEM_PRINCIPAL_ROLE],
-		teams: []
+		system: true,
+		// No team, because a system principal approves nothing: `approvals.decide` matches a step's
+		// approvers against `subject.team`, and inventing a membership would hand the host an approval
+		// eligibility no workspace granted it.
+		teamPath: []
 	});
 
 export * as SystemPrincipal from './system-principal.js';

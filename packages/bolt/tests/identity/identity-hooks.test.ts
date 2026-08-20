@@ -94,9 +94,7 @@ describe('identity lifecycle hooks', () => {
 				_tag: 'UserChanged',
 				userId: 'u1',
 				organizationId: 'test-tenant',
-				email: 'ada@example.test',
-				roles: [],
-				teams: []
+				email: 'ada@example.test'
 			}
 		]);
 	});
@@ -125,9 +123,7 @@ describe('identity lifecycle hooks', () => {
 			{
 				_tag: 'UserChanged',
 				userId: fixtureUserId('u1'),
-				organizationId: 'test-tenant',
-				roles: [],
-				teams: []
+				organizationId: 'test-tenant'
 			}
 		]);
 	});

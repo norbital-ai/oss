@@ -16,7 +16,13 @@ import {
 } from './replica/query-cache.js';
 import { createLiveQueryRegistry, type LiveQueryRegistry } from './replica/live-queries.js';
 import type { SyncChange, SyncCursor } from '../runtime/sync/sync.js';
-import { EnvironmentName, InvocationScope, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
+import {
+	EnvironmentName,
+	InvocationScope,
+	ReleaseId,
+	storedRecordsOf,
+	TenantId
+} from '@norbital-ai/bolt-protocol';
 import { createBoltClient, type BoltClient, type BoltTransport } from '../client.js';
 import { createRemoteQuery } from './remote-query.svelte.js';
 import { workspaceSession } from './session.js';
@@ -402,24 +408,55 @@ const ClientDatabase = {
 			RemoteQueries.make(runtime, 'collections.findFirst', { collection, ...asJsonRecord(input) }),
 		count: (input: Schema.Json = {}, options?: QueryOptions) =>
 			CountQueries.make(runtime, { collection, ...mergeWhere(asJsonRecord(input), options) }),
+		/**
+		 * Creates a record, and answers with the record — not with what was handed in.
+		 *
+		 * Two things used to happen here that could not both stay. The browser minted the primary key
+		 * with `crypto.randomUUID()`, which made the client the authority on the identity of a row
+		 * that did not exist yet and could still be refused; and the return value was the caller's own
+		 * argument with that id stapled to it. The second is the one that did damage: a submitted
+		 * value is not what the database holds once a column default, a generated column and a
+		 * `create.before` hook have run — a payroll run is posted with four fields and stored with ten
+		 * — so every caller that put this straight into a store, or rendered it, was holding a record
+		 * that had never existed anywhere.
+		 *
+		 * `values` now goes up alone and the stored row comes back. `values` may also carry a graph:
+		 * a key naming a declared `many` relation carries the records that belong to this one, and
+		 * the server writes the parent and its children in one transaction, filling each child's
+		 * foreign key from the id it assigns the parent.
+		 *
+		 * A response with no record throws rather than falling back to the submission. There is no
+		 * honest fallback: "the write succeeded and I do not know what it stored" is not a record,
+		 * and inventing one is exactly the failure this replaced.
+		 */
 		create: async (input: Schema.Json) => {
-			const id = globalThis.crypto.randomUUID();
-			await runtime.bolt.command(
+			const response = await runtime.bolt.command(
 				'collections.create',
-				{ collection, id, values: asJsonRecord(input) },
+				{ collection, values: asJsonRecord(input) },
 				Schema.Json
 			);
 			invalidateWrite(runtime, collection);
-			return { ...asJsonRecord(input), norbital_id: id };
+			const stored = storedRecordsOf(response)?.[0];
+			if (stored === undefined)
+				throw new Error(
+					`Creating a ${collection} record answered without the stored row, so there is nothing to return. The command reported: ${JSON.stringify(response)}`
+				);
+			return stored;
 		},
+		/** Answers with the stored row for the same reason `create` does — an update runs hooks too. */
 		update: async (recordId: string, input: Schema.Json) => {
-			await runtime.bolt.command(
+			const response = await runtime.bolt.command(
 				'collections.update',
 				{ collection, id: recordId, values: asJsonRecord(input) },
 				Schema.Json
 			);
 			invalidateWrite(runtime, collection);
-			return { ...asJsonRecord(input), norbital_id: recordId };
+			const stored = storedRecordsOf(response)?.[0];
+			if (stored === undefined)
+				throw new Error(
+					`Updating ${collection} ${recordId} answered without the stored row, so there is nothing to return. The command reported: ${JSON.stringify(response)}`
+				);
+			return stored;
 		},
 		delete: async (recordId: string) => {
 			await runtime.bolt.command('collections.delete', { collection, id: recordId }, Schema.Json);

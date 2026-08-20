@@ -1,9 +1,10 @@
-import { Context, Effect, Schema } from 'effect';
+import { Context, Duration, Effect, Schema } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import { AuthoredRefusal, refusalOf } from '../../authoring/refusal.js';
 import type { AuthoredIntegrationModule } from '../../authoring/integration-introspection.js';
 import type { Identity, Subject } from '../identity/identity.js';
 import type { Collections } from './collections.js';
+import type { Automations } from '../automations/automations.js';
 import type { AI, Files } from '../facilities/services.js';
 import { Database } from '../facilities/database.js';
 
@@ -23,24 +24,25 @@ export type AuthoredHookPoint = Readonly<{
 	readonly handler: (context: unknown, api: unknown) => unknown;
 }>;
 
-export type AuthoredHookPhase = AuthoredHookPoint & {
-	readonly batchHandler?: (context: unknown, api: unknown) => unknown;
-};
+/** The per-record halves of one operation. Both run once per record, whatever the batch size. */
+export type AuthoredPerRecord = Readonly<{
+	readonly before?: AuthoredHookPoint;
+	readonly after?: AuthoredHookPoint;
+}>;
 
 export type AuthoredCollectionHookModule = Readonly<{
 	readonly create?: Readonly<{
 		readonly input?: Schema.Codec<unknown, unknown>;
-		readonly before?: AuthoredHookPhase;
-		readonly after?: AuthoredHookPhase;
+		/** Runs once for the batch; what it returns reaches every record's hooks as `prepared`. */
+		readonly prepare?: (context: unknown, api: unknown) => unknown;
+		readonly perRecord?: AuthoredPerRecord;
 	}>;
 	readonly update?: Readonly<{
 		readonly input?: Schema.Codec<unknown, unknown>;
-		readonly before?: AuthoredHookPoint;
-		readonly after?: AuthoredHookPoint;
+		readonly perRecord?: AuthoredPerRecord;
 	}>;
 	readonly delete?: Readonly<{
-		readonly before?: AuthoredHookPoint;
-		readonly after?: AuthoredHookPoint;
+		readonly perRecord?: AuthoredPerRecord;
 	}>;
 }>;
 
@@ -189,8 +191,22 @@ export type AuthoredCollectionOps = Readonly<{
 	readonly delete: (collection: string, id: string) => Effect.Effect<void, unknown, never>;
 	readonly mutate: (
 		collection: string,
-		payloads: ReadonlyArray<Readonly<Record<string, unknown>>>
+		payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
+		options?: { readonly batchSize?: number }
 	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, unknown, never>;
+	/**
+	 * Starts a declared automation in the background.
+	 *
+	 * The third door an author has, beside `{ schedule }` and `{ trigger }`, and the only one that
+	 * says "from code, later, with retry". It is deliberately not a task API: a task is not a thing an
+	 * author has, and a second way to start background work would compete with the automations the
+	 * workspace already declares.
+	 */
+	readonly runAutomation: (
+		name: string,
+		input: Schema.Json,
+		options: Readonly<{ readonly after?: string | number }> | undefined
+	) => Effect.Effect<{ readonly taskId: string }, unknown, never>;
 	readonly approvalFindMany: (
 		input: Readonly<Record<string, unknown>>
 	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, unknown, never>;
@@ -322,6 +338,18 @@ export const inferenceTurnContent = (
 		return parts as Schema.Json;
 	});
 
+/**
+ * The delay `api.automations.run(..., { after })` asked for, in milliseconds.
+ *
+ * A number is already milliseconds. A string goes to `Duration`, which accepts `'1 hour'`,
+ * `'30 seconds'` and the rest of the vocabulary durations are written in everywhere else here — and
+ * refuses anything else by throwing, at the line the author wrote, which is where a mistyped
+ * duration should surface. The alternative, silently treating an unreadable string as "no delay",
+ * would turn a typo into work that ran immediately and looked deliberate.
+ */
+export const afterMillisOf = (after: string | number): number =>
+	typeof after === 'number' ? after : Duration.toMillis(after as Duration.Input);
+
 const asQueryInput = (
 	input: Readonly<Record<string, unknown>>
 ): Readonly<Record<string, unknown>> => input;
@@ -369,8 +397,10 @@ export const makeAuthoringApi = (
 		 */
 		...(options.elevated === true
 			? {
-					mutate: (payloads: ReadonlyArray<Readonly<Record<string, unknown>>>) =>
-						ops.mutate(collection, payloads),
+					mutate: (
+						payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
+						options?: { readonly batchSize?: number }
+					) => ops.mutate(collection, payloads, options),
 					delete: (identifiers: ReadonlyArray<string>) => deleteAll(collection, identifiers)
 				}
 			: {})
@@ -417,6 +447,13 @@ export const makeAuthoringApi = (
 	);
 	return {
 		db: database,
+		automations: {
+			run: (
+				name: string,
+				input: Schema.Json = {},
+				options?: Readonly<{ readonly after?: string | number }>
+			) => ops.runAutomation(name, input, options)
+		},
 		infer: (
 			input: Readonly<{
 				readonly schema: Schema.Codec<unknown, unknown>;
@@ -438,7 +475,8 @@ export const makeBoundAuthoringOps = (
 	subject: Subject,
 	collections: Collections.Interface,
 	ai: AI.Interface,
-	files: Files.Interface
+	files: Files.Interface,
+	automations: Automations.Interface
 ): AuthoredCollectionOps => {
 	type QueryInput = Parameters<Collections.Interface['findMany']>[2];
 	type NearestInput = Parameters<Collections.Interface['findNearest']>[2];
@@ -550,6 +588,29 @@ export const makeBoundAuthoringOps = (
 				),
 				{ concurrency: 'unbounded' }
 			),
+		/**
+		 * Runs a declared automation later, under the subject this handler is already running as.
+		 *
+		 * `after` accepts what Effect's `Duration` accepts — `'1 hour'`, `'30 seconds'`, or a number of
+		 * milliseconds — so an author writes the delay the way they would write any other duration in
+		 * this codebase rather than learning a second vocabulary for one field. Absent means as soon as
+		 * a tick can take it.
+		 *
+		 * Delegated to `Automations.start` rather than writing a row here, so the nesting bound, the
+		 * `bolt_run_as` stamp and the "is this automation declared?" check all happen in the one place
+		 * that has always owned them.
+		 */
+		runAutomation: (name, input, options) =>
+			Effect.gen(function* () {
+				const after = options?.after;
+				const taskId = yield* automations.start(effectId, subject, name, input, {
+					// `Duration.toMillis` accepts `'1 hour'`, `'30 seconds'` and a bare number of millis
+					// alike, so an author writes a delay the way durations are written everywhere else in
+					// this codebase rather than learning a second vocabulary for one field.
+					...(after === undefined ? {} : { afterMillis: afterMillisOf(after) })
+				});
+				return { taskId };
+			}),
 		approvalFindMany: (input) =>
 			collections
 				.findMany(effectId, subject, { collection: 'approval_request', ...input })

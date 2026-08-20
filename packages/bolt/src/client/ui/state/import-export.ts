@@ -92,8 +92,13 @@ export const downloadCollectionExport = CollectionTransfer.download;
  * whole file, and there is no row for them to ride on.
  *
  * `id` is required by the command even though a pipeline-backed import never stores it — the ids of
- * what actually gets written come back off the rows the pipeline returns. Mint it the way
- * `collections.create` mints one, with `crypto.randomUUID()`.
+ * what actually gets written come back off the rows the pipeline returns. Mint it with
+ * `crypto.randomUUID()`.
+ *
+ * `collections.create` no longer takes one, and this is the last surface that does. The difference
+ * is what the id is *for*: a create is one row and the server assigns its key at the point it
+ * builds it, while an import posts a document whose id is a handle on the posted file rather than
+ * on any row, and the pipeline decides what rows the file becomes.
  */
 export type CollectionImportRecord = Readonly<{
 	readonly collection: string;

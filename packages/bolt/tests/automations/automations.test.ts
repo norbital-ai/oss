@@ -4,6 +4,7 @@ import { EffectId, type TaskRequest } from '@norbital-ai/bolt-protocol';
 import { Automations } from '../../src/runtime/automations/automations.js';
 import { Tasks } from '../../src/runtime/facilities/services.js';
 import { Database } from '../../src/runtime/facilities/database.js';
+import { TaskQueue } from '../../src/runtime/tasks/tasks.js';
 import { Workspace } from '../../src/runtime/workspace.js';
 import { InvocationBudget } from '../../src/runtime/budget.js';
 import { automation, workspace } from '../../src/authoring/index.js';
@@ -11,18 +12,26 @@ import { adminSubject, testCallContext } from '../support/bolt-test-layer.js';
 
 describe('Automations owner', () => {
 	it('enqueues a stable authored command', async () => {
-		const requests: Array<TaskRequest> = [];
+		const wakes: Array<TaskRequest> = [];
+		const statements: Array<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }> =
+			[];
 		const tasks = Tasks.layer(
 			{
 				call: (_metadata, input) => {
-					requests.push(input);
+					wakes.push(input);
 					return Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } });
 				}
 			},
 			testCallContext('i1')
 		);
 		const database = Database.layer(
-			{ call: () => Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 0 } }) },
+			{
+				call: (_metadata, request) => {
+					if (request._tag === 'Query')
+						statements.push({ sql: request.sql, parameters: request.parameters });
+					return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 0 } });
+				}
+			},
 			testCallContext('i1')
 		);
 		const registry = Workspace.layer(
@@ -49,8 +58,11 @@ describe('Automations owner', () => {
 		// Provided explicitly rather than defaulted, because the depth is the thing that decides
 		// whether an enqueue is admitted at all — a service that silently read a stand-in would let
 		// the case below pass against a limiter that was never consulted.
+		const taskQueue = TaskQueue.layer(testCallContext('i1')).pipe(
+			Layer.provide(Layer.merge(database, tasks))
+		);
 		const layer = Automations.layer.pipe(
-			Layer.provide(Layer.mergeAll(tasks, database, registry, InvocationBudget.layer(0)))
+			Layer.provide(Layer.mergeAll(taskQueue, registry, InvocationBudget.layer(0)))
 		);
 		const taskId = await Effect.runPromise(
 			Effect.gen(function* () {
@@ -62,22 +74,29 @@ describe('Automations owner', () => {
 				);
 			}).pipe(Effect.provide(layer))
 		);
-		expect(taskId).toBe('task-1');
-		expect(requests[0]).toMatchObject({ _tag: 'Enqueue', command: 'automations.daily' });
+		// The id a caller gets back is the task's effect id, which is also its idempotency key — a
+		// replayed start names the row the first one wrote rather than minting a second identity.
+		expect(taskId).toBe('e1:start');
+		// The host is told to come back before the row is committed, so a crash between the two costs
+		// a false alarm rather than a job nobody ever wakes.
+		expect(wakes).toEqual([{ _tag: 'Wake', notLaterThanEpochMs: expect.any(Number) }]);
+		const insert = statements.find((statement) => statement.sql.includes('bolt_task'));
+		expect(insert).toBeDefined();
+		expect(insert?.parameters[0]).toBe('automations.daily');
 		// The depth the child will run at rides the payload beside `bolt_run_as`, stamped by this
 		// service and never read from what the caller passed. Without it a chain of automations that
 		// each write has nothing counting it: every link is a fresh invocation with a fresh
 		// deadline, so no wall-clock bound can see the chain at all.
-		expect(requests[0]).toMatchObject({ input: { bolt_depth: 1 } });
+		expect(insert?.parameters[1]).toMatchObject({ bolt_run_as: adminSubject, bolt_depth: 1 });
 	});
 
 	it('refuses to enqueue past the nesting limit, before it writes a run row', async () => {
-		const requests: Array<TaskRequest> = [];
+		const wakes: Array<TaskRequest> = [];
 		const statements: Array<string> = [];
 		const tasks = Tasks.layer(
 			{
 				call: (_metadata, input) => {
-					requests.push(input);
+					wakes.push(input);
 					return Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } });
 				}
 			},
@@ -113,11 +132,13 @@ describe('Automations owner', () => {
 			})
 		);
 		// Already at the limit, which is the state a chain of automations reaches by writing.
+		const taskQueue = TaskQueue.layer(testCallContext('i1')).pipe(
+			Layer.provide(Layer.merge(database, tasks))
+		);
 		const layer = Automations.layer.pipe(
 			Layer.provide(
 				Layer.mergeAll(
-					tasks,
-					database,
+					taskQueue,
 					registry,
 					InvocationBudget.layer(InvocationBudget.DEFAULT_NESTING_LIMIT)
 				)
@@ -135,11 +156,11 @@ describe('Automations owner', () => {
 		);
 		const failure = Option.getOrUndefined(Exit.findErrorOption(outcome));
 		expect(failure).toBeInstanceOf(InvocationBudget.NestingLimitExceeded);
-		expect(requests).toHaveLength(0);
-		// The half that makes the refusal worth having. The check runs before the run row is
-		// written, so a chain that has gone too deep leaves nothing behind — a `queued`
-		// `bolt_automation_runs` row that nothing will ever move off `queued` is exactly the
-		// orphan this whole pass exists to stop producing.
-		expect(statements.filter((sql) => sql.includes('bolt_automation_runs'))).toHaveLength(0);
+		expect(wakes).toHaveLength(0);
+		// The half that makes the refusal worth having. The check runs before anything is written,
+		// so a chain that has gone too deep leaves no `bolt_task` row behind that nothing will ever
+		// move off `pending` — a queued automation that can never run is exactly the orphan this
+		// whole pass exists to stop producing.
+		expect(statements.filter((sql) => sql.includes('bolt_task'))).toHaveLength(0);
 	});
 });

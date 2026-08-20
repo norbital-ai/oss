@@ -1,7 +1,7 @@
-export const protocolVersion = 1;
+export const protocolVersion = 2;
 
 export const manifest = {
-	protocolVersion: 1,
+	protocolVersion: 2,
 	artifactId: 'bolt-server-fixture',
 	artifactVersion: 'fixture-1',
 	schemaFingerprint: 'fixture-schema',
@@ -127,4 +127,11 @@ export const dispatch = async (invocation, _facilities, signal) => {
 	return ok({ status: 204, headers: {} });
 };
 
-export const activate = async () => ({ _tag: 'Activated', registrations: [] });
+// The fixture declares no schedules and nothing is ever queued, so there is no instant to arm the
+// host's timer to — which is the ordinary state of an idle workspace, and the one that must cost
+// nothing rather than a heartbeat.
+export const activate = async () => ({
+	_tag: 'Activated',
+	registrations: [],
+	nextDueAtEpochMs: null
+});

@@ -10,7 +10,7 @@ import {
 import { agentOrbState } from '../../src/client/ui/agent/agent-orb-state.js';
 import { toPanelMessages } from '../../src/client/ui/agent/transcript.js';
 
-const subject = { userId: 'admin-1', tenantId: 'tenant-1', roles: ['admin'], teams: [] };
+const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'] };
 const conversationId = 'conversation-streaming';
 const turnId = 'turn-1';
 const call = {

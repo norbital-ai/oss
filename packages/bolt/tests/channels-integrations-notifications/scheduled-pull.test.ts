@@ -11,8 +11,6 @@ import {
 	type Activation,
 	type ConnectorRequest,
 	type ConnectorResponse,
-	type DatabaseRequest,
-	type DatabaseResponse,
 	type FacilityBinding,
 	type TaskRequest,
 	type TaskResponse
@@ -34,7 +32,12 @@ import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js'
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
 import { Integrations } from '../../src/runtime/integrations/integrations.js';
-import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
+import {
+	makeBoltTestRuntime,
+	makeTestDatabase,
+	provisioningStatements,
+	type BoltTestRuntime
+} from '../support/bolt-test-layer.js';
 
 /**
  * The two halves of "an authored schedule actually runs".
@@ -111,8 +114,11 @@ const definition = workspace({
 	],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
 	],
+	teams: {
+		admin: ['admin']
+	},
 	agents: [],
 	automations: [],
 	channels: [],
@@ -257,27 +263,25 @@ const activation: Activation = {
 const recordingTasks = (): {
 	readonly binding: FacilityBinding<TaskRequest, TaskResponse>;
 	readonly requests: ReadonlyArray<TaskRequest>;
-	readonly effectIds: ReadonlyArray<string>;
 } => {
 	const requests: Array<TaskRequest> = [];
-	const effectIds: Array<string> = [];
 	return {
 		binding: {
-			call: async (metadata, input) => {
+			call: async (_metadata, input) => {
 				requests.push(input);
-				effectIds.push(metadata.effectId);
 				return { _tag: 'Success', value: {} };
 			}
 		},
-		requests,
-		effectIds
+		requests
 	};
 };
 
 /**
  * `activate` refuses before it registers anything when a required facility is unbound, and this
- * workspace requires both. Neither is reached during activation, so they are bound to a refusal
- * rather than to a fake: a registration path that started calling one should fail here loudly.
+ * workspace requires both. The connector is never reached during activation, so it is bound to a
+ * refusal rather than to a fake: a registration path that started calling it should fail here
+ * loudly. The database is real, because activation now declares this release's schedules by
+ * writing them into the tenant's own `bolt_schedule`.
  */
 const unreachable = <Input, Output>(name: string): FacilityBinding<Input, Output> => ({
 	call: async () => ({
@@ -291,89 +295,119 @@ const unreachable = <Input, Output>(name: string): FacilityBinding<Input, Output
 	})
 });
 
-const activationFacilities = (tasks: FacilityBinding<TaskRequest, TaskResponse>) => ({
+const provisionedDatabase = async (): Promise<Awaited<ReturnType<typeof makeTestDatabase>>> => {
+	const database = await makeTestDatabase();
+	for (const step of await provisioningStatements(definition)) {
+		const result = await database.binding.call(
+			{
+				invocationId: activation.id,
+				effectId: EffectId.make(`provision:${step.id}`),
+				deadlineEpochMs: activation.deadlineEpochMs,
+				idempotencyKey: step.id
+			},
+			{ _tag: 'Query', sql: step.sql, parameters: [] },
+			new AbortController().signal
+		);
+		if (result._tag !== 'Success')
+			throw new Error(`provisioning ${step.id} failed: ${JSON.stringify(result)}`);
+	}
+	return database;
+};
+
+const activationFacilities = (
+	tasks: FacilityBinding<TaskRequest, TaskResponse>,
+	database: Awaited<ReturnType<typeof makeTestDatabase>>
+) => ({
 	scope: activation.scope,
 	tasks,
-	database: unreachable<DatabaseRequest, DatabaseResponse>('database'),
+	database: database.binding,
 	connector: unreachable<ConnectorRequest, ConnectorResponse>('connector')
 });
 
 describe('activation hands the host the schedule', () => {
-	it('emits one registration per binding carrying its cron and its input', async () => {
+	it('writes one schedule row per binding, carrying its cron and its input', async () => {
 		const tasks = recordingTasks();
-		const bundle = makeBundle(definition, manifest);
-		const result = await bundle.activate(
-			activation,
-			activationFacilities(tasks.binding),
-			new AbortController().signal
-		);
-		if (result._tag !== 'Activated')
-			throw new Error(`activation failed: ${JSON.stringify(result)}`);
-		expect(result.registrations.filter(({ schedule }) => schedule !== null)).toEqual([
-			{
-				command: 'integrations.pull',
-				schedule: '0 3 * * *',
-				input: { name: 'mirrored.erp', binding: 'invoices', cursor: null }
-			},
-			{
-				command: 'integrations.pull',
-				schedule: '15 * * * *',
-				input: { name: 'mirrored.erp', binding: 'vendors', cursor: null }
-			}
-		]);
+		const database = await provisionedDatabase();
+		try {
+			const bundle = makeBundle(definition, manifest);
+			const result = await bundle.activate(
+				activation,
+				activationFacilities(tasks.binding, database),
+				new AbortController().signal
+			);
+			if (result._tag !== 'Activated')
+				throw new Error(`activation failed: ${JSON.stringify(result)}`);
+			// Registration is routing, and only routing: a host no longer needs to learn a cron to hold
+			// one, because the guest is the only party that can read a release's declarations. One
+			// routing registration per command.
+			expect(
+				result.registrations.filter(({ command }) => command === 'integrations.pull')
+			).toEqual([{ command: 'integrations.pull' }]);
+			const schedules = await database.query(
+				'select key, command, crontab, input from bolt_schedule order by key',
+				[]
+			);
+			expect(schedules).toEqual([
+				{
+					key: 'integrations.pull:mirrored.erp.invoices',
+					command: 'integrations.pull',
+					crontab: '0 3 * * *',
+					input: { name: 'mirrored.erp', binding: 'invoices', cursor: null }
+				},
+				{
+					key: 'integrations.pull:mirrored.erp.vendors',
+					command: 'integrations.pull',
+					crontab: '15 * * * *',
+					input: { name: 'mirrored.erp', binding: 'vendors', cursor: null }
+				}
+			]);
+			// The host is told the one number it can act on: when anything is next due.
+			expect(typeof result.nextDueAtEpochMs).toBe('number');
+		} finally {
+			await database.close();
+		}
 	});
 
 	/**
-	 * The returned list is a report; the `Register` facility call is the instruction. A schedule that
-	 * reached the report and not the call would look wired from here and do nothing on a host.
+	 * A schedule that exists only in the return value would look wired from here and do nothing on a
+	 * host. The row is what a host's timer eventually reads, so it is asserted as a row: the two
+	 * bindings share a command, and their schedule keys are what keep them apart.
 	 */
-	it('sends the schedule across the tasks facility, not only in the return value', async () => {
+	it('gives every schedule of the same command a distinct key', async () => {
 		const tasks = recordingTasks();
-		const bundle = makeBundle(definition, manifest);
-		await bundle.activate(
-			activation,
-			activationFacilities(tasks.binding),
-			new AbortController().signal
-		);
-		const scheduled = tasks.requests.filter(
-			(request) => request._tag === 'Register' && request.schedule !== undefined
-		);
-		expect(scheduled).toEqual([
-			{
-				_tag: 'Register',
-				leaseId: activation.id,
-				releaseId: activation.scope.releaseId,
-				command: 'integrations.pull',
-				schedule: '0 3 * * *',
-				input: { name: 'mirrored.erp', binding: 'invoices', cursor: null }
-			},
-			{
-				_tag: 'Register',
-				leaseId: activation.id,
-				releaseId: activation.scope.releaseId,
-				command: 'integrations.pull',
-				schedule: '15 * * * *',
-				input: { name: 'mirrored.erp', binding: 'vendors', cursor: null }
-			}
-		]);
-	});
-
-	/**
-	 * A host treats a `Register`'s effect id as the operation's idempotency key. Three registrations
-	 * name the command `integrations.pull` — one for routing, two scheduled — so an id derived from
-	 * the command alone would collapse them into one and the host would hold a single schedule.
-	 */
-	it('gives every registration of the same command a distinct idempotency key', async () => {
-		const tasks = recordingTasks();
-		const bundle = makeBundle(definition, manifest);
-		await bundle.activate(
-			activation,
-			activationFacilities(tasks.binding),
-			new AbortController().signal
-		);
-		const pulls = tasks.effectIds.filter((id) => id.includes('integrations.pull'));
-		expect(pulls).toHaveLength(3);
-		expect(new Set(pulls).size).toBe(3);
+		const database = await provisionedDatabase();
+		try {
+			const bundle = makeBundle(definition, manifest);
+			const result = await bundle.activate(
+				activation,
+				activationFacilities(tasks.binding, database),
+				new AbortController().signal
+			);
+			if (result._tag !== 'Activated')
+				throw new Error(`activation failed: ${JSON.stringify(result)}`);
+			const rows = await database.query(
+				'select key from bolt_schedule where command = $1 order by key',
+				['integrations.pull']
+			);
+			expect(rows.map((row) => row['key'])).toEqual([
+				'integrations.pull:mirrored.erp.invoices',
+				'integrations.pull:mirrored.erp.vendors'
+			]);
+			// One routing registration per command — the host is told where work may arrive, once.
+			const registers = tasks.requests.filter(
+				(request) => request._tag === 'Register' && request.command === 'integrations.pull'
+			);
+			expect(registers).toEqual([
+				{
+					_tag: 'Register',
+					leaseId: activation.id,
+					releaseId: activation.scope.releaseId,
+					command: 'integrations.pull'
+				}
+			]);
+		} finally {
+			await database.close();
+		}
 	});
 });
 

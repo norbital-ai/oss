@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { fixtureUserId } from '../support/fixture-identity.js';
+import { seedSession } from '../support/fixture-identity.js';
 import { parseAst } from 'vite';
 import {
 	EnvironmentName,
@@ -134,8 +134,11 @@ describe('an authored channel declaration', () => {
 				collections: [],
 				apps: [],
 				policies: [
-					policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+					policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
 				],
+				teams: {
+					admin: ['admin']
+				},
 				agents: [],
 				automations: [],
 				channels: [channel(declaration)],
@@ -143,16 +146,14 @@ describe('an authored channel declaration', () => {
 				requiredFacilities: []
 			})
 		);
-		await harness.database.query(
-			`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-			[
-				'admin-token',
-				fixtureUserId('user-admin-token'),
-				'test-tenant',
-				JSON.stringify(['admin']),
-				'admin@example.test'
-			]
-		);
+		// Placed in `admin`, which the workspace above declares — the team is what carries the policy
+		// granting `*`, so a consumer with no team would be refused before reaching the inbox.
+		await seedSession(harness, {
+			token: 'admin-token',
+			user: 'user-admin-token',
+			team: 'admin',
+			email: 'admin@example.test'
+		});
 		const response = await harness.runtime.runPromise(dispatchInvocation(manifestInvocation()));
 		const published = ((response.value ?? {}) as Record<string, unknown>)[
 			'channels'

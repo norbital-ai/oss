@@ -17,9 +17,15 @@ collection, optionally narrowed to matching rows:
 - `where` narrows a grant to rows that match, so "read only your own quotes" is a grant rather than
   something the application has to remember to enforce.
 - A policy also lists which apps it can reach.
+- **The `name` a policy declares is its filename key**, so `+sales_rep.policy.ts` declares
+  `name: 'sales_rep'`. Everything binds to a policy by that string — a team's holdings in
+  `src/+teams.ts`, a channel's `policy` ceiling — and it is the same string the generated
+  `PolicyName` union is built from, which is what typechecks the other two. A policy has no separate
+  display label; the prose a person reads is `description`.
 
 Policies attach to **teams**, and users belong to teams. Which teams exist and who is in them is
-runtime data; the policies themselves are source code and change by deploy.
+runtime data; the policies themselves are source code and change by deploy. A team names the
+policies it holds in `src/+teams.ts`, keyed by team name and valued by those policy names.
 
 Enforcement is at the data layer. Every read runs as the requestor, so it returns exactly the rows
 that person could already see. If a query comes back empty, that is the requestor's access, not a

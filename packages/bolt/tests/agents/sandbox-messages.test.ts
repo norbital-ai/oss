@@ -35,10 +35,13 @@ const definition = workspace({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			roles: ['admin'],
 			apps: ['helper']
 		})
 	],
+	teams: {
+		'admin-agent': ['admin-agent'],
+		admin: ['admin-agent']
+	},
 	agents: [agent({ name: 'helper', prompt: 'Help the HR team.', tools: [], skills: [] })],
 	automations: [],
 	channels: [],
@@ -47,7 +50,7 @@ const definition = workspace({
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-sandbox-messages' });
 const bundle = makeBundle(definition, manifest, {});
-const subject = { userId: 'admin-1', tenantId: 'tenant-1', roles: ['admin'], teams: [] };
+const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'] };
 const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
 	call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } })
 };

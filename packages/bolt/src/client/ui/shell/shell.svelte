@@ -178,7 +178,7 @@
 			norbital_id: user?.name ?? 'unknown',
 			...(user?.email === undefined ? {} : { email: user.email }),
 			...(user?.name === undefined ? {} : { name: user.name }),
-			roles: user?.role === undefined ? [] : [user.role],
+			team: user?.role,
 			/**
 			 * Administration, taken from the runtime rather than from the host's `user` summary.
 			 *

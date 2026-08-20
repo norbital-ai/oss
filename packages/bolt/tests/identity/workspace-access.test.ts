@@ -21,6 +21,14 @@ const access = (harness: BoltTestRuntime) =>
 		})
 	);
 
+/** A team row, id derived from the name so a fixture can point at one without reading it back. */
+const addTeam = (harness: BoltTestRuntime, name: string) =>
+	harness.database.query(
+		`insert into bolt_team ("norbital_id", "name") values (md5($1::text)::uuid, $1)
+		 on conflict ("norbital_id") do nothing`,
+		[name]
+	);
+
 /**
  * Seeds one member and a live session for them, the way provisioning writes them.
  *
@@ -29,36 +37,31 @@ const access = (harness: BoltTestRuntime) =>
  * fixture used to hand-write the string `admin` into `roles`, which named a role in the ladder that
  * nothing declares and nothing in production ever writes, so the suite pinned a mapping the source
  * does not perform.
+ *
+ * `team` is one name or none, because `bolt_auth_user.team_id` is one team. A fixture that could
+ * hand somebody two would be describing a shape the column cannot hold.
  */
 const addSession = (
 	harness: BoltTestRuntime,
 	userId: string,
-	roles: ReadonlyArray<string>,
-	teams: ReadonlyArray<string>,
+	team: string | null,
 	email: string,
 	status: 'normal' | 'admin' = 'normal'
 ) =>
 	harness.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams", "status") values (md5($2::text)::uuid, $2, $5, 'test-tenant', $3::jsonb, $4::jsonb, $6) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId", "status" = excluded."status" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[
-			`token-${userId}`,
-			userId,
-			JSON.stringify([...roles]),
-			JSON.stringify([...teams]),
-			email,
-			status
-		]
+		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "team_id", "status") values (md5($2::text)::uuid, $2, $4, 'test-tenant', case when $3::text is null then null else md5($3::text)::uuid end, $5) on conflict ("norbital_id") do update set "team_id" = excluded."team_id", "email" = excluded."email", "tenantId" = excluded."tenantId", "status" = excluded."status" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
+		[`token-${userId}`, userId, team, email, status]
 	);
 
 describe('workspace access projection', () => {
-	it('reports one member per user, with their highest role and their teams', async () => {
+	it('reports one member per user, with their status and their team', async () => {
 		harness = await makeBoltTestRuntime();
-		// `u1` administers this workspace by status and holds an ordinary role ladder, so the reported
-		// `admin` can only have come from the column the projection selects. `u2` is the negative case
-		// without which the same assertion would pass against a projection that answered `admin` for
-		// everybody.
-		await addSession(harness, 'u1', ['basic'], ['Platform'], 'ada@example.test', 'admin');
-		await addSession(harness, 'u2', ['basic'], ['Platform', 'People'], 'grace@example.test');
+		// `u1` administers this workspace by status. `u2` is the negative case without which the same
+		// assertion would pass against a projection that answered `admin` for everybody.
+		await addTeam(harness, 'Platform');
+		await addTeam(harness, 'People');
+		await addSession(harness, 'u1', 'Platform', 'ada@example.test', 'admin');
+		await addSession(harness, 'u2', 'People', 'grace@example.test');
 
 		const result = await access(harness);
 		// Compared as a set: members come back ordered by id, and an id is a uuid, so the order is
@@ -69,17 +72,14 @@ describe('workspace access projection', () => {
 				[fixtureUserId('u2'), 'basic']
 			].sort()
 		);
-		expect(result.members.find(({ id }) => id === fixtureUserId('u2'))?.teams).toEqual([
-			'People',
-			'Platform'
-		]);
+		expect(result.members.find(({ id }) => id === fixtureUserId('u2'))?.team).toBe('People');
 	});
 
 	it('collapses several sessions for one user into a single member', async () => {
 		harness = await makeBoltTestRuntime();
-		await addSession(harness, 'u1', ['basic'], [], 'ada@example.test');
+		await addSession(harness, 'u1', null, 'ada@example.test');
 		await harness.database.query(
-			`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5('u1'::text)::uuid, 'u1', 'ada@example.test', 'test-tenant', '["basic"]'::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), 'token-second', person.id, now() + interval '2 hours' from person`
+			`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId") values (md5('u1'::text)::uuid, 'u1', 'ada@example.test', 'test-tenant') on conflict ("norbital_id") do update set "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), 'token-second', person.id, now() + interval '2 hours' from person`
 		);
 		const result = await access(harness);
 		expect(result.members).toHaveLength(1);
@@ -87,17 +87,17 @@ describe('workspace access projection', () => {
 
 	it('excludes another tenant, and keeps a member who is merely signed out', async () => {
 		harness = await makeBoltTestRuntime();
-		await addSession(harness, 'u1', ['basic'], [], 'ada@example.test');
+		await addSession(harness, 'u1', null, 'ada@example.test');
 		// Membership is a property of the person, not of whether they happen to hold a live session.
 		// This projection used to aggregate over sessions, so signing out erased someone from their
 		// own workspace's access list — and an administrator reviewing who had access saw a shorter
 		// list than the truth. `u-signed-out` is a member with no session and must still appear.
 		await harness.database.query(
-			`insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5('u-signed-out'::text)::uuid, 'u-signed-out', 'gone@example.test', 'test-tenant', '["basic"]'::jsonb, '[]'::jsonb)`
+			`insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId") values (md5('u-signed-out'::text)::uuid, 'u-signed-out', 'gone@example.test', 'test-tenant')`
 		);
 		// Another tenant's member stays out entirely, session or no session.
 		await harness.database.query(
-			`insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5('u-other'::text)::uuid, 'u-other', 'other@example.test', 'other-tenant', '["admin"]'::jsonb, '[]'::jsonb)`
+			`insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId") values (md5('u-other'::text)::uuid, 'u-other', 'other@example.test', 'other-tenant')`
 		);
 		const result = await access(harness);
 		expect(result.members.map(({ id }) => id)).toEqual(
@@ -105,12 +105,23 @@ describe('workspace access projection', () => {
 		);
 	});
 
-	it('lists teams as the distinct set its members carry', async () => {
+	/**
+	 * Read from `bolt_team`, not derived from who is in one.
+	 *
+	 * `Reclamation` has no members and must still be listed: an empty team is what a freshly declared
+	 * `approvers` name reconciles into, and an operator who cannot see it cannot put anybody in it.
+	 * A projection that aggregated over members would answer this case by omitting the row, which is
+	 * indistinguishable from the team not existing.
+	 */
+	it('lists every team, including one nobody belongs to', async () => {
 		harness = await makeBoltTestRuntime();
-		await addSession(harness, 'u1', ['basic'], ['Platform'], 'ada@example.test');
-		await addSession(harness, 'u2', ['basic'], ['Platform', 'People'], 'grace@example.test');
+		await addTeam(harness, 'Platform');
+		await addTeam(harness, 'People');
+		await addTeam(harness, 'Reclamation');
+		await addSession(harness, 'u1', 'Platform', 'ada@example.test');
+		await addSession(harness, 'u2', 'People', 'grace@example.test');
 		const result = await access(harness);
-		expect(result.teams.map(({ name }) => name)).toEqual(['People', 'Platform']);
+		expect(result.teams.map(({ name }) => name)).toEqual(['People', 'Platform', 'Reclamation']);
 	});
 
 	it('reports outstanding invitations with their status', async () => {
@@ -148,6 +159,6 @@ describe('workspace access projection', () => {
 	it('answers an empty workspace without failing', async () => {
 		harness = await makeBoltTestRuntime();
 		const result = await access(harness);
-		expect(result).toEqual({ members: [], invitations: [], teams: [], events: [] });
+		expect(result).toEqual({ members: [], invitations: [], events: [], teams: [] });
 	});
 });

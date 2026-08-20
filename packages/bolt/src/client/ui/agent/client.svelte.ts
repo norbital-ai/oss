@@ -49,8 +49,8 @@ type ChatSessionRow = {
 type AgentSubject = Readonly<{
 	readonly userId: string;
 	readonly tenantId: string;
-	readonly roles: ReadonlyArray<string>;
-	readonly teams: ReadonlyArray<string>;
+	readonly team?: string;
+	readonly teamPath: ReadonlyArray<string>;
 	readonly email?: string;
 }>;
 

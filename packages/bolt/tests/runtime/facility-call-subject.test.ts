@@ -1,5 +1,4 @@
 import { Effect } from 'effect';
-import { fixtureUserId } from '../support/fixture-identity.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
 	EnvironmentName,
@@ -13,11 +12,7 @@ import {
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { Approvals } from '../../src/runtime/approvals/approvals.js';
 import { Collections, PendingApproval } from '../../src/runtime/collections/collections.js';
-import {
-	ADMIN_STATUS,
-	NORMAL_STATUS,
-	type SubjectStatus
-} from '../../src/runtime/identity/identity.js';
+import { ADMIN_STATUS } from '../../src/runtime/identity/identity.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	adminSubject,
@@ -25,6 +20,7 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { fixtureUserId, seedExternalSubject, seedSession } from '../support/fixture-identity.js';
 
 /**
  * Which person a facility call is made for.
@@ -87,48 +83,6 @@ const dataBrowserQuery = (credential: string, trustedContext: unknown) =>
 		trustedContext: trustedContext as never
 	});
 
-/**
- * A person in this tenant, and a live session naming them.
- *
- * `status` is what makes an administrator, and it is a column rather than a role. `impersonate`
- * asks `mayImpersonate`, which is now `isAdministrator` — `Subject.admin`, projected from
- * `bolt_auth_user.status` — so the synthetic `impersonator` role this file used to seed no longer
- * grants anything at all. It defaults to `'normal'`, matching the column's own default, so a caller
- * who says nothing gets an ordinary member.
- */
-const session = async (
-	runtime: BoltTestRuntime,
-	token: string,
-	roles: ReadonlyArray<string>,
-	status: SubjectStatus = NORMAL_STATUS
-) => {
-	await runtime.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams", "status") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb, $6) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId", "status" = excluded."status" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[
-			token,
-			`user-${token}`,
-			'test-tenant',
-			JSON.stringify([...roles]),
-			`${token}@example.test`,
-			status
-		]
-	);
-};
-
-/** The Colony-side identity the Data Browser impersonates, which is not a session and not the actor. */
-const externalSubject = async (
-	runtime: BoltTestRuntime,
-	externalId: string,
-	userId: string,
-	roles: ReadonlyArray<string>
-) => {
-	await runtime.database.query(
-		`insert into bolt_external_subjects (provider, external_id, user_id, tenant_id, roles, teams, email)
-		 values ('colony', $1, $2, $3, $4::jsonb, '[]'::jsonb, $5)`,
-		[externalId, userId, 'test-tenant', JSON.stringify([...roles]), `${userId}@example.test`]
-	);
-};
-
 const subjectsOf = (calls: ReadonlyArray<FacilityCall>) => calls.map(({ subject }) => subject);
 
 const peopleWorkspace = workspace({
@@ -136,9 +90,10 @@ const peopleWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
-	],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+	teams: {
+		admin: ['admin']
+	},
 	agents: [],
 	automations: [],
 	channels: [],
@@ -158,9 +113,10 @@ const gatedWorkspace = workspace({
 		})
 	],
 	apps: [],
-	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
-	],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+	teams: {
+		admin: ['admin']
+	},
 	agents: [],
 	automations: [],
 	channels: [],
@@ -182,7 +138,7 @@ describe('the subject a facility call carries', () => {
 			recordId('person-1'),
 			'Ada'
 		]);
-		await session(harness, 'admin-token', ['admin']);
+		await seedSession(harness, { token: 'admin-token', user: 'user-admin-token', team: 'admin' });
 		harness.database.forget();
 
 		const response = await harness.runtime.runPromise(
@@ -200,7 +156,9 @@ describe('the subject a facility call carries', () => {
 			subjectsOf(calls.slice(1)),
 			'a facility call made under an authenticated command carried no subject'
 		).toEqual(
-			calls.slice(1).map(() => ({ userId: fixtureUserId('user-admin-token'), roles: ['admin'] }))
+			// A `CallSubject` is the user and their one team, and nothing else — a facility binding has no
+			// use for a list of policy names it cannot interpret.
+			calls.slice(1).map(() => ({ userId: fixtureUserId('user-admin-token'), team: 'admin' }))
 		);
 	});
 
@@ -213,14 +171,14 @@ describe('the subject a facility call carries', () => {
 	 */
 	it('ignores a subject the request body names and uses the credential holder', async () => {
 		harness = await makeBoltTestRuntime(peopleWorkspace);
-		await session(harness, 'admin-token', ['admin']);
+		await seedSession(harness, { token: 'admin-token', user: 'user-admin-token', team: 'admin' });
 		harness.database.forget();
 
 		await harness.runtime.runPromise(
 			dispatchInvocation(
 				command('collections.findMany', 'admin-token', {
 					collection: 'people',
-					subject: { userId: 'user-victim', tenantId: 'test-tenant', roles: ['admin'], teams: [] }
+					subject: { userId: 'user-victim', tenantId: 'test-tenant', teamPath: ['admin'] }
 				})
 			)
 		);
@@ -320,11 +278,19 @@ describe('the subject a facility call carries', () => {
 			recordId('person-1'),
 			'Ada'
 		]);
-		// An administrator by status, holding no roles. `impersonator` was a role here until it was
-		// recognised as the admin flag in disguise; seeding it now grants nothing and the operator
-		// would be refused before reaching a single facility call.
-		await session(harness, 'operator-token', [], ADMIN_STATUS);
-		await externalSubject(harness, 'member-external', 'user-member', ['admin']);
+		// An administrator by status, belonging to no team. `impersonator` was a role here until it was
+		// recognised as the admin flag in disguise; a team grants nothing of the kind now, and the
+		// operator holding none is what makes the target's team below distinguishable from the actor's.
+		await seedSession(harness, {
+			token: 'operator-token',
+			user: 'user-operator-token',
+			status: ADMIN_STATUS
+		});
+		await seedExternalSubject(harness, {
+			externalId: 'member-external',
+			userId: 'user-member',
+			team: 'admin'
+		});
 		harness.database.forget();
 
 		const outcome = await harness.runtime.runPromise(
@@ -343,8 +309,9 @@ describe('the subject a facility call carries', () => {
 			stamped.map(({ userId }) => userId),
 			'the actor was stamped on a call made on the target’s behalf'
 		).toEqual(stamped.map(() => 'user-member'));
-		// The roles travel with the target too, not the operator's — a facility keying per-user state
-		// off `roles` would otherwise partition it by whoever happened to open the browser.
-		expect(stamped[stamped.length - 1]?.roles).toEqual(['admin']);
+		// The team travels with the target too, not the operator's — a facility keying per-user state
+		// off it would otherwise partition that state by whoever happened to open the browser. The
+		// operator is in no team at all, so `admin` here can only have come from the member's row.
+		expect(stamped[stamped.length - 1]?.team).toBe('admin');
 	});
 });

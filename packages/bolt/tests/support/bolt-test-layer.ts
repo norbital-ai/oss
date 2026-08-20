@@ -17,6 +17,8 @@ import {
 	type FacilityCall,
 	type IdentityHookRequest,
 	type IdentityHookResponse,
+	type TaskRequest,
+	type TaskResponse,
 	TransportRequest,
 	TransportResponse
 } from '@norbital-ai/bolt-protocol';
@@ -166,6 +168,7 @@ import { Secrets } from '../../src/runtime/secrets/secrets.js';
 import { PersonalSecrets } from '../../src/runtime/secrets/personal-secrets.js';
 import { SECRET_KEY_VARIABLE, SecretCipher } from '@norbital-ai/std/secret';
 import { Sync } from '../../src/runtime/sync/sync.js';
+import { TaskQueue } from '../../src/runtime/tasks/tasks.js';
 import { Workspace } from '../../src/runtime/workspace.js';
 
 /**
@@ -330,6 +333,7 @@ export type TestWorkspaceInput = Readonly<{
 		readonly icon?: string;
 	}>;
 	readonly policies?: ReadonlyArray<PolicyDeclaration>;
+	readonly teams?: Readonly<Record<string, ReadonlyArray<string>>>;
 	/** The `.norbital/migrations` lineage the artifact would have carried, oldest first. */
 	readonly migrations?: ReadonlyArray<WorkspaceMigrationEntry>;
 }>;
@@ -346,8 +350,29 @@ export const testWorkspace = (input: TestWorkspaceInput = {}): WorkspaceDefiniti
 		).map((entry) => collection(entry)),
 		apps: [],
 		policies: input.policies ?? [
-			policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+			policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
 		],
+		/**
+		 * One team per declared policy, named after it.
+		 *
+		 * Authority is a team's now, and a team's policies are declared rather than stored — so a
+		 * fixture that wants a subject holding the `manager` policy needs a team that declares it.
+		 * Minting one per policy keeps every test's intent legible as `teamPath: ['manager']`, which
+		 * reads as "holds exactly the manager policy" and is exactly what the old `teamPath: ['manager']`
+		 * meant. A test that wants a team combining several declares its own `teams`.
+		 */
+		teams:
+			input.teams ??
+			(() => {
+				const declared = input.policies ?? [{ name: 'admin' } as PolicyDeclaration];
+				return {
+					// One team per policy, so `teamPath: ['orders-reader']` reads as "holds exactly that".
+					...Object.fromEntries(declared.map(({ name }) => [name, [name]])),
+					// And an `admin` team holding all of them, which is what the fixtures that used to say
+					// `roles: ['admin']` against policies declaring `roles: ['admin']` actually meant.
+					admin: declared.map(({ name }) => name)
+				};
+			})(),
 		agents: [],
 		automations: [],
 		channels: [],
@@ -390,6 +415,7 @@ export const makeBoltTestRuntime = async (
 	} = {}
 ) => {
 	const database = await makeTestDatabase();
+	const tasks = makeTestTasks();
 	const run = async (id: string, sql: string): Promise<void> => {
 		const result = await database.binding.call(
 			{
@@ -452,7 +478,7 @@ export const makeBoltTestRuntime = async (
 		Files.layer(undefined, context),
 		HostTools.layer(undefined, context),
 		IdentityHooks.layer(bindings.identityHooks, context),
-		Tasks.layer(undefined, context),
+		Tasks.layer(tasks.binding, context),
 		Transport.layer(bindings.transport, context)
 	);
 	const workspaceLayer = Workspace.layer(provisioned);
@@ -464,14 +490,29 @@ export const makeBoltTestRuntime = async (
 		Layer.mergeAll(Identity.layer, AccessControl.layer),
 		Layer.merge(workspaceLayer, facilities)
 	);
-	const data = Layer.provideMerge(Approvals.layer, foundation);
+	// The task queue, over the database facility and the host's timer. Everything that used to enqueue
+	// through the tasks facility — automations, approvals, integrations, agents — writes a `bolt_task`
+	// row through this instead, and wakes the host through the facility bound above.
+	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(facilities));
+	// The budget an invocation carries. Zero depth, because a test drives the runtime directly rather
+	// than through a task the runtime itself enqueued — which is the only thing that produces a
+	// non-zero one. Provided rather than defaulted so a service that starts consulting it fails here
+	// instead of silently reading a stand-in.
+	const budget = InvocationBudget.layer(0);
+	// Automations sits above Collections rather than below it: starting one is a declaration check, a
+	// nesting check, and a row on the queue, and the authored api Collections hands a hook carries
+	// `automations.run`, so Collections is the consumer.
+	const automations = Automations.layer.pipe(
+		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, budget))
+	);
+	const data = Layer.provideMerge(Approvals.layer, Layer.mergeAll(foundation, taskQueue));
 	// Collections announces every committed write on the sync topic, so the wake has to be present for
 	// the write path to resolve at all. The harness binds no transport, which is the point: the
 	// announcement is `Effect.ignore`d, so a runtime with nowhere to publish still writes normally.
 	const wake = Layer.provideMerge(SyncWake.layer, facilities);
 	const collections = Layer.provideMerge(
 		Collections.layer,
-		Layer.mergeAll(data, authoredLayer, wake)
+		Layer.mergeAll(data, authoredLayer, wake, taskQueue, automations)
 	);
 	// Dispatch resolves authored remotes through this registry, and the registry resolves them
 	// through Collections — so it layers over them, not alongside the facilities. No handlers are
@@ -479,12 +520,7 @@ export const makeBoltTestRuntime = async (
 	const remotes = Layer.provideMerge(remoteRegistryLayer({}), collections);
 	// Dispatch routes agent commands too, so the service has to be present for the command surface to
 	// typecheck — its AI facility is bound unavailable, so calling one fails rather than pretending.
-	// The budget an invocation carries. Zero depth, because a test drives the runtime directly rather
-	// than through a task the runtime itself enqueued — which is the only thing that produces a
-	// non-zero one. Provided rather than defaulted so a service that starts consulting it fails here
-	// instead of silently reading a stand-in.
-	const budget = InvocationBudget.layer(0);
-	const agents = Layer.provideMerge(Agents.layer, Layer.merge(remotes, budget));
+	const agents = Layer.provideMerge(Agents.layer, Layer.mergeAll(remotes, taskQueue, budget));
 	// The rest of the command surface dispatch routes. Their facilities are bound unavailable, so a
 	// test that reaches one fails loudly instead of succeeding against a stub.
 	// Secrets sits under the rest rather than beside it: `Integrations` resolves a connection's
@@ -508,13 +544,12 @@ export const makeBoltTestRuntime = async (
 	);
 	const surfaces = Layer.provideMerge(
 		Layer.mergeAll(
-			Automations.layer,
 			Channels.layer,
 			Integrations.layer,
 			Notifications.layer,
 			WorkspaceSchema.layer
 		),
-		Layer.mergeAll(vault, authoredLayer, budget)
+		Layer.mergeAll(vault, authoredLayer, budget, taskQueue, automations)
 	);
 	// The workspace's own declared rate policy, or none. A test workspace declares none, so every
 	// command is admitted uncounted — which is what a suite about anything else needs, and what a
@@ -529,6 +564,7 @@ export const makeBoltTestRuntime = async (
 	return {
 		runtime,
 		database,
+		tasks,
 		effectId: (name: string) => EffectId.make(name),
 		dispose: async () => {
 			await runtime.dispose();
@@ -541,17 +577,43 @@ export const makeBoltTestRuntime = async (
 export const adminSubject: Identity.Subject = {
 	userId: 'admin-1',
 	tenantId: 'test-tenant',
-	roles: ['admin'],
-	teams: []
+	teamPath: ['admin']
 };
 
 /**
- * Derived from the harness rather than restated.
+ * Binds the host's tasks facility to a sink, recording what it was asked to hold.
  *
- * The hand-written version listed seven fewer services than the layer provides, so every dispatch
- * in a test was checked against a runtime that could not satisfy it — the mismatch surfaced as an
- * unrelated-looking complaint about a Database request not being an AI request.
+ * The runtime's only message to this facility is `Wake` — "come back no later than this instant" —
+ * so the sink's job is to accept it and remember it, never to act on it: a test runtime has no host
+ * timer, and a write that queued work must succeed whether or not one is listening. Recording is
+ * what lets a test assert that the host was told, which is the observable half of the contract.
  */
+export const makeTestTasks = (): {
+	readonly binding: FacilityBinding<TaskRequest, TaskResponse>;
+	readonly requests: ReadonlyArray<TaskRequest>;
+	readonly effectIds: ReadonlyArray<string>;
+	readonly forget: () => void;
+} => {
+	const requests: Array<TaskRequest> = [];
+	const effectIds: Array<string> = [];
+	return {
+		binding: {
+			call: async (metadata, input) => {
+				requests.push(input);
+				effectIds.push(String(metadata.effectId));
+				return { _tag: 'Success', value: {} };
+			}
+		},
+		requests,
+		effectIds,
+		forget: () => {
+			requests.length = 0;
+			effectIds.length = 0;
+		}
+	};
+};
+
+/** The harness as a type, derived rather than restated so the two can never disagree. */
 export type BoltTestRuntime = Awaited<ReturnType<typeof makeBoltTestRuntime>>;
 
 /**

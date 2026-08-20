@@ -1,6 +1,6 @@
 import { assert, it } from '@effect/vitest';
 import { ConfigProvider, Effect } from 'effect';
-import { ConfigurationError, loadConfiguration } from '../src/config.js';
+import { loadConfiguration } from '../src/config.js';
 
 const withConfiguration = (values: Record<string, string>) =>
 	ConfigProvider.layer(ConfigProvider.fromUnknown(values));
@@ -18,7 +18,6 @@ it.effect('loads deterministic development defaults', () =>
 				releaseId: 'local'
 			},
 			mode: 'development',
-			durableEngine: 'memory',
 			drainTimeoutMillis: 10_000,
 			invocationTimeoutMillis: 30_000,
 			requestBodyLimitBytes: 1_048_576
@@ -26,18 +25,7 @@ it.effect('loads deterministic development defaults', () =>
 	}).pipe(Effect.provide(withConfiguration({ BOLT_SERVER_BUNDLE: '/tmp/example-bolt.mjs' })))
 );
 
-it.effect('rejects a non-durable production engine', () =>
-	Effect.gen(function* () {
-		const error = yield* Effect.flip(loadConfiguration());
-		assert.instanceOf(error, ConfigurationError);
-		assert.strictEqual(error.operation, 'BoltServer.Configuration.validateDurability');
-	}).pipe(
-		Effect.provide(
-			withConfiguration({
-				BOLT_SERVER_BUNDLE: '/tmp/example-bolt.mjs',
-				BOLT_SERVER_MODE: 'production',
-				BOLT_SERVER_DURABLE_ENGINE: 'memory'
-			})
-		)
-	)
-);
+// The case that asserted production refuses a non-durable engine is deleted with the option it
+// checked. `BOLT_SERVER_DURABLE_ENGINE` selected between an in-memory command recorder and an
+// external adapter that was never written, and neither ever ran anything: a bolt-server's durable
+// state is the tenant's own `bolt_task` table, which is not a thing this host configures.

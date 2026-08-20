@@ -1,6 +1,17 @@
 import { Schema } from 'effect';
 
-export const PROTOCOL_VERSION = 1 as const;
+/**
+ * The wire both hosts and every bundle agree on, as a single literal a mismatch is refused against.
+ *
+ * Bumped to 2 when `TaskRequest` stopped being a queue API and became a timer API: `Enqueue`,
+ * `Schedule`, `Cancel` and `Signal` were deleted, `Register` lost `schedule` and `input`, and `Wake`
+ * arrived. That is a *shrinking* change, so an old host and a new bundle do not compose in either
+ * direction — the old host waits for enqueues that will never arrive, and the new bundle asks for a
+ * wake the old host cannot read. Nothing here is negotiated per field, deliberately: one literal
+ * means a version mismatch is a refusal at the door rather than a capability discovered halfway
+ * through an invocation.
+ */
+export const PROTOCOL_VERSION = 2 as const;
 
 export const ProtocolVersion = Schema.Literal(PROTOCOL_VERSION);
 export type ProtocolVersion = typeof ProtocolVersion.Type;
@@ -70,7 +81,14 @@ export interface WireError extends Schema.Schema.Type<typeof WireError> {}
  */
 export const CallSubject = Schema.Struct({
 	userId: Schema.NonEmptyString,
-	roles: Schema.Array(Schema.String)
+	/**
+	 * The one team this person belongs to, absent for nobody.
+	 *
+	 * Replaces a `roles` array. What a team entitles its members to is declared in the workspace's
+	 * `+teams.ts` and compiled into the release — so it is the release's business, and a facility
+	 * binding has no use for a list of policy names it cannot interpret.
+	 */
+	team: Schema.optionalKey(Schema.NonEmptyString)
 }).annotate({ identifier: 'BoltCallSubject' });
 export interface CallSubject extends Schema.Schema.Type<typeof CallSubject> {}
 

@@ -1,4 +1,4 @@
-import { Cause, Effect, Layer, Result } from 'effect';
+import { Cause, Effect, Layer, Result, type Schema } from 'effect';
 import {
 	EffectId,
 	LeaseId,
@@ -17,6 +17,8 @@ import { AccessControl } from './access/access-control.js';
 import { Agents } from './agents/agents.js';
 import { Approvals } from './approvals/approvals.js';
 import { Automations } from './automations/automations.js';
+import { TaskQueue } from './tasks/tasks.js';
+import type { Declaration } from './tasks/queue.js';
 import { Channels } from './channels/channels.js';
 import { Collections } from './collections/collections.js';
 import {
@@ -40,6 +42,7 @@ import { IdentityHooks } from './facilities/services.js';
 import { Tasks } from './facilities/services.js';
 import { Transport } from './facilities/services.js';
 import { Identity } from './identity/identity.js';
+import { reconcileApproverTeams } from './identity/approver-teams.js';
 import { Integrations } from './integrations/integrations.js';
 import { Notifications } from './notifications/notifications.js';
 import {
@@ -114,8 +117,30 @@ const InvocationLayers = {
 		const identity = Identity.layerWith(context.environment !== 'development').pipe(
 			Layer.provide(Layer.mergeAll(database, communication, identityHooks))
 		);
+		/**
+		 * The task queue, over the database facility and the host's timer.
+		 *
+		 * Everything that used to enqueue through the `tasks` facility now writes a row through this —
+		 * automations, approvals, integrations, agents and change triggers alike — so there is one
+		 * enqueue path and it is a transaction the caller can join. The facility underneath it carries
+		 * exactly one runtime message, `Wake`, which is why it is bound here beside `database` rather
+		 * than reached for separately by each of those services.
+		 */
+		const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(database, tasks)));
 		const approvals = Approvals.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, access, database, tasks))
+			Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue))
+		);
+		/**
+		 * Automations, above Collections rather than below it.
+		 *
+		 * It used to be provided `collections`, and no longer needs to be: starting an automation is a
+		 * declaration check, a nesting check, and a row on the queue. The direction has to flip because
+		 * `api.automations.run` is part of the api an authored *collection* handler receives, so
+		 * Collections is now the consumer. Nothing was lost in the flip — the dependency was already
+		 * unused.
+		 */
+		const automations = Automations.layer.pipe(
+			Layer.provide(Layer.mergeAll(workspaceLayer, database, taskQueue, budget))
 		);
 		// The wake sits between Collections and the host's transport: Collections announces, the host fans
 		// out. It is its own layer rather than part of Sync because Sync depends on Collections, and the
@@ -127,10 +152,11 @@ const InvocationLayers = {
 					workspaceLayer,
 					access,
 					approvals,
+					automations,
 					database,
 					files,
 					ai,
-					tasks,
+					taskQueue,
 					authoredLayer,
 					syncWake
 				)
@@ -140,7 +166,10 @@ const InvocationLayers = {
 			Layer.provide(Layer.mergeAll(workspaceLayer, access, collections, database))
 		);
 		const remotes = remoteRegistryLayer(handlers).pipe(
-			Layer.provide(Layer.mergeAll(collections, ai, files))
+			// `automations`, because a remote receives the same authored api a hook does, and that api now
+			// carries `automations.run`. One api, one dependency list — a remote that could not start an
+			// automation would be the second shape of authored code rather than the same one.
+			Layer.provide(Layer.mergeAll(collections, automations, ai, files))
 		);
 		const agents = Agents.layer.pipe(
 			Layer.provide(
@@ -150,7 +179,7 @@ const InvocationLayers = {
 					collections,
 					ai,
 					database,
-					tasks,
+					taskQueue,
 					files,
 					connector,
 					hostTools,
@@ -181,22 +210,6 @@ const InvocationLayers = {
 		const personalSecrets = PersonalSecrets.layer.pipe(
 			Layer.provide(Layer.merge(database, secretCipher))
 		);
-		const automations = Automations.layer.pipe(
-			Layer.provide(
-				Layer.mergeAll(
-					workspaceLayer,
-					collections,
-					database,
-					tasks,
-					ai,
-					connector,
-					files,
-					hostTools,
-					authoredLayer,
-					budget
-				)
-			)
-		);
 		const channels = Channels.layer.pipe(
 			Layer.provide(Layer.mergeAll(workspaceLayer, identity, agents, communication, database))
 		);
@@ -208,9 +221,10 @@ const InvocationLayers = {
 				Layer.mergeAll(
 					workspaceLayer,
 					collections,
+					automations,
 					connector,
 					database,
-					tasks,
+					taskQueue,
 					secrets,
 					ai,
 					files,
@@ -244,6 +258,7 @@ const InvocationLayers = {
 			identityHooks,
 			connector,
 			tasks,
+			taskQueue,
 			hostTools,
 			transport,
 			remotes,
@@ -267,83 +282,127 @@ const invocationLayer = InvocationLayers.make;
 type KeyedRegistration = Readonly<{ readonly key: string; readonly registration: Registration }>;
 
 /**
- * What the artifact asks the host to hold, and — for integrations — to originate.
+ * What the artifact asks the host to route to it, and what it asks itself to do on a clock.
  *
- * The first list is routing: commands the host may be handed work for. The second is the thing that
- * was missing entirely. Every `+integrations.ts` binding declares a cron, that cron was carried
- * faithfully through the compiler into `workspace.integrations`, and no line of code read it — so a
- * pull ran exactly once, when install or reconcile enqueued one, and the word "schedule" in a
- * template meant nothing. Here it becomes a registration that names the command to run, the cron to
- * run it on, and the input to run it with.
+ * Two lists, and the split is the seam. **Registrations** are routing and nothing else — the command
+ * names a host may be handed work for. **Schedules** are recurrence, and they are no longer told to
+ * anybody: they are rows the guest writes into the tenant's own `bolt_schedule`, because the guest
+ * is the party that can read what a release declares and a host holding a cron string would have to
+ * learn cron grammar to act on one.
  *
- * Bolt cannot do more than declare it. The artifact is sandboxed tenant code with no timer that
- * outlives an invocation, so the host owns the clock; what Bolt owes the host is a statement it can
- * act on, and a `pull` that is safe to be called by it repeatedly.
+ * That is the whole of why every `0 6 * * *` in `templates/` had never fired. The cron was authored,
+ * carried faithfully through the compiler into `workspace.automations` and `workspace.integrations`,
+ * and read by nothing: a grep for `trigger._tag` across the runtime returned one hit, `'Change'`. A
+ * schedule was a field with no reader, on either side of the seam.
  */
-const ActivationCommands = {
-	forWorkspace: (workspace: WorkspaceDefinition): ReadonlyArray<KeyedRegistration> => {
-		const routed: ReadonlyArray<KeyedRegistration> = [
+/**
+ * Exported for the schedule-parity artifact, which diffs this against the registry it replaced.
+ *
+ * The failure mode of this change is that a schedule stops existing, and a schedule that stops
+ * existing raises nothing, fails nothing and logs nothing — a green suite certifies it as fine. The
+ * only proof is a set diff of the schedules themselves, so the thing being diffed has to be
+ * reachable from a test.
+ */
+export const ActivationCommands = {
+	forWorkspace: (workspace: WorkspaceDefinition): ReadonlyArray<KeyedRegistration> =>
+		[
 			'collections.resume',
 			'collections.discard',
+			'agents.turn',
 			'agents.resume',
 			'notifications.drain',
 			'integrations.pull',
 			'integrations.flush',
 			'channels.receive',
+			// The tick, which is the one command a host's timer ever sends. A host that cannot route it
+			// still holds correct data — rows commit, schedules advance, retries are scheduled — it just
+			// loses punctuality, because nothing fires until somebody invokes this.
+			'tasks.tick',
 			...workspace.automations.map(({ name }) => `automations.${name}`)
 		]
 			.filter((command, index, commands) => commands.indexOf(command) === index)
 			.toSorted()
-			.map((command) => ({ key: command, registration: { command, schedule: null, input: null } }));
-		const scheduled: ReadonlyArray<KeyedRegistration> = workspace.integrations
-			.flatMap((integration) =>
-				integration.receive.map((binding) => ({
-					key: `integrations.pull:${integration.name}.${binding.name}`,
-					registration: {
-						command: 'integrations.pull',
-						schedule: binding.schedule,
-						// The binding is named, so a per-binding cron means a per-binding run: an integration
-						// whose vendors feed is hourly and whose invoices feed is nightly would otherwise pull
-						// both every hour, and the two schedules would be one schedule wearing two hats.
-						input: { name: integration.name, binding: binding.name, cursor: null }
-					}
-				}))
+			.map((command): KeyedRegistration => ({ key: command, registration: { command } })),
+	/**
+	 * Everything this release says should happen on a cron, as rows for `bolt_schedule`.
+	 *
+	 * One key per *binding* rather than per integration, because a vendors feed that is hourly and an
+	 * invoices feed that is nightly are two schedules and not one wearing two hats.
+	 *
+	 * There is deliberately nothing here for outbound deliveries. Those used to carry a fixed
+	 * `* * * * *` drain per sending integration — which is what pinned every sending tenant's database
+	 * awake permanently, 1440 wakes a day, whether or not anything was ever queued. A delivery is now
+	 * enqueued by the write that caused it, in that write's own transaction, and a delivery that backs
+	 * off schedules its own return. Nothing needs to come and look.
+	 */
+	schedulesFor: (workspace: WorkspaceDefinition): ReadonlyArray<Declaration> =>
+		[
+			...workspace.automations.flatMap((automation) =>
+				automation.trigger._tag === 'Schedule'
+					? [
+							{
+								key: `automations.${automation.name}`,
+								command: `automations.${automation.name}`,
+								crontab: automation.trigger.cron,
+								// No `bolt_run_as`: a scheduled automation has no person behind it, and stamping a
+								// fabricated subject here is how work with no author comes to look authored.
+								input: { args: {}, scope: {} } as Schema.Json
+							}
+						]
+					: []
+			),
+			...workspace.integrations.flatMap((integration) =>
+				integration.receive.flatMap((binding) =>
+					binding.schedule === null || binding.schedule === undefined
+						? []
+						: [
+								{
+									key: `integrations.pull:${integration.name}.${binding.name}`,
+									command: 'integrations.pull',
+									crontab: binding.schedule,
+									input: {
+										name: integration.name,
+										binding: binding.name,
+										cursor: null
+									} as Schema.Json
+								}
+							]
+				)
 			)
-			.toSorted((left, right) => left.key.localeCompare(right.key));
-		/**
-		 * One drain registration per integration that sends, on a fixed minute cron.
-		 *
-		 * It is fixed rather than authored because the author has nothing useful to say about it. A send
-		 * binding declares *what* to deliver on *which* write; when the queue is emptied is a property of
-		 * the platform, and the honest value is "as often as the host's clock can be asked", which is a
-		 * minute — the finest granularity a cron expresses and the sweep period Colony's scheduler runs.
-		 *
-		 * This is also the whole answer to how a retry ever happens. Backoff is a timestamp on the outbox
-		 * row rather than a sleep inside an invocation, so something has to come back and look; that
-		 * something is this. Without it a delivery that met a 503 would sit `pending` forever and the
-		 * retry policy would be a comment.
-		 *
-		 * A per-integration registration rather than one for all of them, so a partner that is down backs
-		 * off its own queue and not everybody's, and so the host can see which integration is costing it.
-		 */
-		const drained: ReadonlyArray<KeyedRegistration> = workspace.integrations
-			.filter((integration) => integration.send.length > 0)
-			.map((integration) => ({
-				key: `integrations.flush:${integration.name}`,
-				registration: {
-					command: 'integrations.flush',
-					schedule: OUTBOX_DRAIN_SCHEDULE,
-					input: { name: integration.name }
-				}
-			}))
-			.toSorted((left, right) => left.key.localeCompare(right.key));
-		return [...routed, ...scheduled, ...drained];
-	}
+		].toSorted((left, right) => left.key.localeCompare(right.key))
 };
 
-/** Every minute — the finest recurrence a cron can state, and the shortest a delivery can wait. */
-const OUTBOX_DRAIN_SCHEDULE = '* * * * *';
-const activationCommands = ActivationCommands.forWorkspace;
+
+/** The call context an activation's facility calls are made under. One shape, built once. */
+const activationContext = (activation: Activation): CallContext => ({
+	invocationId: activation.id,
+	deadlineEpochMs: activation.deadlineEpochMs,
+	environment: String(activation.scope.environment)
+});
+
+/**
+ * The two facilities an activation needs, and the queue built over them.
+ *
+ * Activation is the one path that talks to the database outside an invocation: it registers the
+ * release's routing with the host, and it writes this release's schedules into the tenant's own
+ * `bolt_schedule`. Both are bound from the same call context, so the deadline that bounds the
+ * activation is the deadline every one of its facility calls carries.
+ */
+const activationLayer = (activation: Activation, facilities: FacilityBindings) => {
+	const context = activationContext(activation);
+	const tasks = Tasks.layer(facilities.tasks, context);
+	const database = Database.layer(facilities.database, context);
+	// The database is merged into the result rather than only provided to the queue: activation now
+	// writes to the tenant itself — the `bolt_team` rows an approval step names — and not only through
+	// `bolt_schedule`. Provided-but-not-merged left `Database.Service` unavailable to the activation
+	// body, which is a compile error rather than a silent one, but the shape is worth stating: what
+	// activation may touch is exactly these two facilities.
+	return Layer.mergeAll(
+		tasks,
+		database,
+		TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(database, tasks)))
+	);
+};
 
 /** Owns activate behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
 const BundleActivation = {
@@ -357,7 +416,11 @@ const BundleActivation = {
 		const missing = manifest.requiredFacilities.filter((name) => facilities[name] === undefined);
 		const effect: Effect.Effect<
 			| { _tag: 'Failure'; error: ReturnType<typeof makeWireError> }
-			| { _tag: 'Activated'; registrations: ReadonlyArray<Registration> }
+			| {
+					_tag: 'Activated';
+					registrations: ReadonlyArray<Registration>;
+					nextDueAtEpochMs: number | null;
+			  }
 		> =
 			missing.length > 0
 				? Effect.succeed({
@@ -367,46 +430,83 @@ const BundleActivation = {
 							`Required facilities are not bound: ${missing.join(', ')}`
 						)
 					})
-				: Effect.sync(() => activationCommands(workspace)).pipe(
-						Effect.flatMap((keyed) => {
-							const registrations = keyed.map(({ registration }) => registration);
-							if (keyed.length === 0) {
-								return Effect.succeed({ _tag: 'Activated' as const, registrations });
-							}
-							const context: CallContext = {
-								invocationId: activation.id,
-								deadlineEpochMs: activation.deadlineEpochMs,
-								environment: String(activation.scope.environment)
-							};
-							const tasks = Tasks.layer(facilities.tasks, context);
-							return Effect.gen(function* () {
-								const service = yield* Tasks.Service;
-								for (const { key, registration } of keyed) {
-									yield* service.execute(EffectId.make(`${activation.id}:register:${key}`), {
-										_tag: 'Register',
-										leaseId: LeaseId.make(activation.id),
-										releaseId: activation.scope.releaseId,
-										command: registration.command,
-										// Written only when there is one, so a routing registration reaches the host as the
-										// three fields it has always been rather than as two nulls it has to interpret.
-										...(registration.schedule === null
-											? {}
-											: { schedule: registration.schedule, input: registration.input })
-									});
-								}
-								return { _tag: 'Activated' as const, registrations };
-							}).pipe(
-								Effect.provide(tasks),
-								Effect.catch((error) =>
-									Effect.succeed({
-										_tag: 'Failure' as const,
-										error: makeWireError('activation_failed', error.message, {
-											retryable: error.retryable
-										})
-									})
-								)
+				: Effect.gen(function* () {
+						/**
+						 * Every team an approval step names, made to exist before the release serves traffic.
+						 *
+						 * Here, and not earlier, because this is the first point in the sequence at which the
+						 * table is there to write to: `reconcileRelease` registers the route, forks the
+						 * database and runs `schema.migrate` — which is what creates `bolt_team`, an identity
+						 * collection `identitySchemaSteps` already puts ahead of migration — and only then
+						 * activates. Anything before that would be inserting into a table that does not exist
+						 * yet; anything after is a workspace already answering requests, and the approval it
+						 * cannot route is the first one somebody raises.
+						 *
+						 * Beside the schedule declaration rather than woven into it, because it is the same
+						 * kind of step: the release states what the tenant must contain, and activation is
+						 * where that statement is made true. It neither reads nor is read by the two steps
+						 * around it, so its position among them is not load-bearing.
+						 *
+						 * It cannot fail the activation. `reconcileApproverTeams` reports and steps over its
+						 * own faults and returns a `never` error channel, which is the same temperament
+						 * `policiesHeldByTeam` has for the same binding: a workspace is not taken down over a
+						 * string that two independently-moving sides disagree about.
+						 */
+						yield* reconcileApproverTeams(
+							EffectId.make(`${activation.id}:approver-teams`),
+							workspace
+						);
+						const keyed = ActivationCommands.forWorkspace(workspace);
+						const registrations = keyed.map(({ registration }) => registration);
+						const service = yield* Tasks.Service;
+						for (const { key, registration } of keyed) {
+							yield* service.execute(EffectId.make(`${activation.id}:register:${key}`), {
+								_tag: 'Register',
+								leaseId: LeaseId.make(activation.id),
+								releaseId: activation.scope.releaseId,
+								command: registration.command
+							});
+						}
+						/**
+						 * Where every cron in every template starts existing.
+						 *
+						 * Upsert what this release declares, delete what it does not, and answer with the next
+						 * instant anything is due. A key's `next_run_at` survives a redeploy unless its
+						 * expression changed — a deploy is not an event a schedule should observe, and
+						 * re-arming on every one is how a nightly digest quietly stops firing on a busy day.
+						 *
+						 * A schedule seeded here is armed from *now*, never from a past occurrence, so a
+						 * release activating for the first time has no history to catch up on and fires next at
+						 * its next ordinary occurrence.
+						 */
+						const declared = yield* (yield* TaskQueue.Service).declare(
+							EffectId.make(`${activation.id}:schedules`),
+							ActivationCommands.schedulesFor(workspace),
+							Date.now()
+						);
+						for (const rejection of declared.rejections) {
+							// Loud, and at the one moment a person is watching: a deploy. An expression that
+							// cannot be read can never fire, and the alternative to saying so here is a schedule
+							// that is simply absent with nothing anywhere to explain it.
+							yield* Effect.logError(
+								`activation: dropped schedule ${rejection.key}: ${JSON.stringify(rejection.crontab)}: ${rejection.reason}`
 							);
-						})
+						}
+						return {
+							_tag: 'Activated' as const,
+							registrations,
+							nextDueAtEpochMs: declared.nextDueAtEpochMs ?? null
+						};
+					}).pipe(
+						Effect.provide(activationLayer(activation, facilities)),
+						Effect.catch((error) =>
+							Effect.succeed({
+								_tag: 'Failure' as const,
+								error: makeWireError('activation_failed', error.message, {
+									retryable: error.retryable
+								})
+							})
+						)
 					);
 		// Activation is bounded by its own deadline for the same reason dispatch is: registering a
 		// release's durable callbacks talks to the host's task facility, and a host that never answers
@@ -487,7 +587,27 @@ const BundleDispatch = {
 			// same fiber tree, so none of them can be given a fresh budget by running deeper.
 			Effect.timeout(remainingMillis(invocation.deadlineEpochMs)),
 			Effect.match({
-				onFailure: (error): BundleResult => {
+				onFailure: (raised): BundleResult => {
+					/**
+					 * A batched write says which phase it failed in by wrapping the failure that says
+					 * why, so the mapping below has to look through the wrapper before it looks at
+					 * anything else.
+					 *
+					 * Unwrapped here, once, rather than added as a branch: every test in this chain is an
+					 * `instanceof` against a specific error, and a wrapper the chain did not know about
+					 * would fail all of them and fall through to `dispatch_failed` — so an authored
+					 * refusal on a batched create would have gone back to being a 500, which is precisely
+					 * the regression `AuthoredRefusal` exists to prevent. The phase is carried alongside
+					 * and attached to whatever the chain decides, so it adds a fact without moving one.
+					 */
+					const phase =
+						raised instanceof Collections.MutationPhaseFailure
+							? {
+									phase: raised.phase,
+									...(raised.committed.length === 0 ? {} : { committed: raised.committed })
+								}
+							: undefined;
+					const error = Collections.unwrapMutationPhase(raised);
 					if (error instanceof DispatchError && error.code === 'unauthorized')
 						return {
 							_tag: 'Failure',
@@ -598,7 +718,11 @@ const BundleDispatch = {
 								httpStatus: 422,
 								details: {
 									...(error.collection === undefined ? {} : { collection: error.collection }),
-									...(error.action === undefined ? {} : { action: error.action })
+									...(error.action === undefined ? {} : { action: error.action }),
+									// Which phase of a batch this came out of, when it came out of one. A
+									// `settle` refusal is the one a caller must read differently: the rows are
+									// already written, and `committed` names them.
+									...(phase ?? {})
 								}
 							})
 						};
@@ -625,7 +749,12 @@ const BundleDispatch = {
 							: String(error).trim() || 'Dispatch failed';
 					return {
 						_tag: 'Failure',
-						error: makeWireError('dispatch_failed', message, { httpStatus: 500 })
+						error: makeWireError('dispatch_failed', message, {
+							httpStatus: 500,
+							// The last branch is where an unrecognised failure lands, which is exactly where
+							// knowing whether the write had already happened is worth the most.
+							...(phase === undefined ? {} : { details: phase })
+						})
 					};
 				},
 				onSuccess: (response): BundleResult => ({ _tag: 'Success', response })

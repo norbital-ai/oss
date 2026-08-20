@@ -14,6 +14,9 @@ import { AI, Files, Tasks, Transport } from '../../src/runtime/facilities/servic
 import { SyncWake } from '../../src/runtime/sync/wake.js';
 import type { Identity } from '../../src/runtime/identity/identity.js';
 import { Workspace } from '../../src/runtime/workspace.js';
+import { TaskQueue } from '../../src/runtime/tasks/tasks.js';
+import { Automations } from '../../src/runtime/automations/automations.js';
+import { InvocationBudget } from '../../src/runtime/budget.js';
 import { testCallContext } from '../support/bolt-test-layer.js';
 
 /**
@@ -49,7 +52,6 @@ const definition = workspace({
 		policy({
 			name: 'admin-data',
 			effect: 'allow',
-			roles: ['admin'],
 			grants: [
 				{ collection: 'shifts', action: 'create' },
 				{ collection: 'shifts', action: 'update' },
@@ -57,6 +59,10 @@ const definition = workspace({
 			]
 		})
 	],
+	teams: {
+		'admin-data': ['admin-data'],
+		admin: ['admin-data']
+	},
 	agents: [],
 	automations: [],
 	channels: [],
@@ -67,8 +73,7 @@ const definition = workspace({
 const subject: Identity.Subject = {
 	userId: 'admin-1',
 	tenantId: 'tenant-json',
-	roles: ['admin'],
-	teams: []
+	teamPath: ['admin']
 };
 
 const RECORD_ID = '11111111-2222-4333-8444-555555555555';
@@ -98,9 +103,13 @@ const tasks = Tasks.layer(
 const testLayer = (seen: Array<DatabaseRequest>) => {
 	const database = recordingDatabase(seen);
 	const workspaceLayer = Workspace.layer(definition);
+	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(database, tasks)));
+	const automations = Automations.layer.pipe(
+		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, InvocationBudget.layer(0)))
+	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
 	const approvals = Approvals.layer.pipe(
-		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, tasks))
+		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue))
 	);
 	return Collections.layer.pipe(
 		Layer.provide(
@@ -111,7 +120,8 @@ const testLayer = (seen: Array<DatabaseRequest>) => {
 				database,
 				AI.layer(undefined, context),
 				Files.layer(undefined, context),
-				tasks,
+				taskQueue,
+				automations,
 				Layer.succeed(AuthoredRuntimeService, emptyAuthoredRuntime),
 				SyncWake.layer.pipe(Layer.provide(Transport.layer(undefined, context)))
 			)

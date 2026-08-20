@@ -4,6 +4,7 @@
 
 	type TeamFlowData = Readonly<{
 		readonly name: string;
+		readonly description?: string;
 	}>;
 
 	type TeamFlowNode = Node<TeamFlowData, 'team'>;
@@ -14,6 +15,9 @@
 
 <Stack gap="xs" class="min-w-40 rounded-md border border-border bg-card px-3 py-2 shadow-card">
 	<span class="text-xs font-semibold text-foreground">{data.name}</span>
+	{#if data.description}
+		<span class="text-[0.65rem] leading-tight text-muted-foreground">{data.description}</span>
+	{/if}
 	<Handle
 		type="target"
 		position={Position.Top}

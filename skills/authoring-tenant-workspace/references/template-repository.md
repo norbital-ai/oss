@@ -4,12 +4,13 @@ Templates live in their own repositories, one directory per template at the repo
 `norbital-ai/templates` (public) and `norbital-ai/templates-private`. The split decides one thing
 only — **whether a template is advertised**. The website generates its gallery from the templates
 the public repository publishes, so a template in the private one is structurally invisible to it.
-A host resolves both remotes into one catalogue, so a private template is a first-class template in
-the picker, in seeding, and in tenant forking.
+A host can resolve both remotes for provisioning and seeding. The signup picker applies a second
+rule: only manifests with `visibility: "public"` are listed; `unlisted` templates remain
+provisionable by key.
 
-The website (`norbital.ai/templates/*` and the homepage cards) is generated from the template
-workspace itself — there is no rewritten copy anywhere, and no list of slugs. Every display fact
-comes from the template tree, fetched at build time:
+The website (`norbital.ai/templates/*` and the homepage cards) is generated from the published public
+template projection — it never reads a sibling checkout, and there is no rewritten copy or list of
+slugs. Every display fact comes from the projected template tree, fetched at build time:
 
 | File / path              | Supplies                                                                                             |
 | ------------------------ | ---------------------------------------------------------------------------------------------------- |
@@ -122,6 +123,8 @@ the same rule: present only when the translation is kept current.
 - Change a card title or chips → edit `norbital.template.json`.
 - Change the marketing thumbnail → replace `assets/thumbnail.svg` (one file; website picks it up).
 - Add Chinese support → add `README.zh.md` (and the manifest zh fields) next to the English ones.
-- The website rebuild picks the changes up from the repository; nothing else moves.
+- The website reads GitHub, not sibling template checkouts. Publish the public template projection,
+  then rebuild/redeploy the website; restarting a local website against an unpublished edit cannot
+  show it.
 - Publish a template to the public repository and it is advertised; publish it to the private one
   and it is not. There is no third place to update.

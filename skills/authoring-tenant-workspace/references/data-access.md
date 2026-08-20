@@ -89,23 +89,16 @@ See [dates-and-time.md](dates-and-time.md) for range and timezone rules.
 
 ## Batch genuine bulk work
 
-The authored `api` has no `createMany`. Bulk creates arrive as one admitted batch, and the hook runtime
-hands it to the collection's `create.before.batchHandler` (or `create.after.batchHandler`) as `{ inputs, api }` —
-run the per-row rules once per batch there instead of looping single creates:
+Bulk creates arrive as one admitted batch and are written in one transaction. There is no batch hook
+and no `createMany`: a hook is authored for one record, and the runtime runs it once per row.
 
 ```typescript
 create: {
 	before: {
-		description: 'Validates every roster entry in the batch before any row is written.',
-		batchHandler: ({ inputs }) => {
-			for (const input of inputs) {
-				validateEntry(input);
-			}
-			return inputs;
-		},
+		description: 'Validates one roster entry before it is written.',
 		handler: ({ input, api }) =>
 			Effect.gen(function* () {
-				// per-row rules that need the database
+				validateEntry(input);
 				yield* assertShiftAvailable(api, input);
 				return input;
 			})
@@ -113,9 +106,22 @@ create: {
 }
 ```
 
-There is no per-row loop on the write path: batch handlers run for bulk imports and seeds, and a
-single create goes through the same `handler`. Chunk only when a payload or parameter bound requires it —
-do not add an open-ended pagination loop merely because a table may contain more rows.
+Two things that used to be reasons to reach for a batch hook are not:
+
+- **"Read the one thing every row needs."** Write the obvious read. Rows in a batch are prepared
+  together, so reads of the same shape are issued together and answered together — the hook does not
+  have to know a batch exists, and a hook written to hoist its own reads to the front is the shape
+  that holds the thread longest.
+- **"These rows contain a duplicate."** Declare a unique index in `+model.ts`. It is stricter than any
+  hook can be, because it also catches a collision with a row already stored — which a check over
+  only the rows in front of it cannot see.
+
+`create.before.batchHandler` used to be declared on the contract. Nothing in the runtime ever called
+it, so batch validation written there was never run; it has been removed rather than wired.
+
+A bulk import and a single create go through the same `handler`; the batch is a property of how the
+write was issued, not of how the rule is written. Chunk only when a payload or parameter bound
+requires it — do not add an open-ended pagination loop merely because a table may contain more rows.
 
 ## Eliminate query-per-record loops
 

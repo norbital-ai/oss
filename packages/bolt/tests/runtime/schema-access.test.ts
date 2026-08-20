@@ -16,6 +16,7 @@ import {
 	testWorkspace,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { seedSession } from '../support/fixture-identity.js';
 
 /**
  * Who may read the schema plan, and who may apply it.
@@ -61,12 +62,16 @@ const task = (name: string, input: unknown) =>
 		attempt: 0
 	});
 
-const session = async (runtime: BoltTestRuntime, token: string, roles: ReadonlyArray<string>) => {
-	await runtime.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[token, `user-${token}`, 'test-tenant', JSON.stringify([...roles]), `${token}@example.test`]
-	);
-};
+/**
+ * A session in one of the three teams the fixture declares.
+ *
+ * The team is the whole variable these tests turn on: `employee` holds no schema authority at all,
+ * `inspector` holds `read` over the `schema` app, and `admin` holds `*`. Each name is a key of the
+ * workspace's `teams` map below, because it is the declaration — not the row — that says what the
+ * name holds.
+ */
+const seedMember = (runtime: BoltTestRuntime, token: string, team: string) =>
+	seedSession(runtime, { token, user: `user-${token}`, team });
 
 const failureOf = async (runtime: BoltTestRuntime, invocation: Invocation) => {
 	const outcome = await runtime.runtime.runPromise(
@@ -85,27 +90,30 @@ const schemaWorkspace = () =>
 	testWorkspace({
 		collections: [{ name: 'people', fields: { name: field.string({ required: true }) } }],
 		policies: [
-			policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] }),
+			policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] }),
 			policy({
 				name: 'inspector',
 				effect: 'allow',
 				actions: ['read'],
-				roles: ['inspector'],
 				apps: ['schema']
 			}),
 			policy({
 				name: 'employee',
 				effect: 'allow',
-				roles: ['employee'],
 				grants: [{ collection: 'people', action: 'read' }]
 			})
-		]
+		],
+		teams: {
+			admin: ['admin', 'inspector', 'employee'],
+			inspector: ['inspector'],
+			employee: ['employee']
+		}
 	});
 
 describe('schema.* access control', () => {
 	it('refuses every schema command to an authenticated subject with no schema authority', async () => {
 		harness = await makeBoltTestRuntime(schemaWorkspace());
-		await session(harness, 'employee-token', ['employee']);
+		await seedMember(harness, 'employee-token', 'employee');
 		for (const name of [
 			'schema.plan',
 			'schema.fingerprint',
@@ -121,7 +129,7 @@ describe('schema.* access control', () => {
 
 	it('lets a subject holding read see the plan and still refuses the migration', async () => {
 		harness = await makeBoltTestRuntime(schemaWorkspace());
-		await session(harness, 'inspector-token', ['inspector']);
+		await seedMember(harness, 'inspector-token', 'inspector');
 
 		const plan = await harness.runtime.runPromise(
 			dispatchInvocation(command('schema.plan', 'inspector-token'))
@@ -135,7 +143,7 @@ describe('schema.* access control', () => {
 
 	it('lets a subject holding manage apply the migration', async () => {
 		harness = await makeBoltTestRuntime(schemaWorkspace());
-		await session(harness, 'admin-token', ['admin']);
+		await seedMember(harness, 'admin-token', 'admin');
 		const response = await harness.runtime.runPromise(
 			dispatchInvocation(command('schema.migrate', 'admin-token'))
 		);
@@ -147,7 +155,7 @@ describe('schema.* access control', () => {
 	it('refuses a schema command arriving as a task, however the payload names its subject', async () => {
 		harness = await makeBoltTestRuntime(schemaWorkspace());
 		const forged = {
-			subject: { userId: 'user-forged', tenantId: 'test-tenant', roles: ['admin'], teams: [] }
+			subject: { userId: 'user-forged', tenantId: 'test-tenant', teamPath: ['admin'] }
 		};
 		for (const input of [null, forged]) {
 			const failure = await failureOf(harness, task('schema.migrate', input));

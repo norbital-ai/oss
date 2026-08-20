@@ -498,7 +498,7 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 		},
 		{
 			id: 'bolt:external-subjects',
-			sql: "create table if not exists bolt_external_subjects (provider text not null, external_id text not null, user_id text not null, tenant_id text not null, roles jsonb not null default '[]', teams jsonb not null default '[]', email text, primary key (provider, external_id, tenant_id))"
+			sql: 'create table if not exists bolt_external_subjects (provider text not null, external_id text not null, user_id text not null, tenant_id text not null, team_id uuid, email text, primary key (provider, external_id, tenant_id))'
 		},
 		{
 			id: 'bolt:invitations',
@@ -507,6 +507,20 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 		{
 			id: 'bolt:notifications',
 			sql: 'create table if not exists bolt_notifications (id text primary key, recipient text not null, payload jsonb not null, read boolean not null default false, delivered_at timestamptz, created_at timestamptz not null default now())'
+		},
+		/**
+		 * What should happen, and when next — the whole of cron, as six columns.
+		 *
+		 * There is deliberately no `active` flag. Activation upserts the keys the release declares and
+		 * deletes the ones it does not, so "not declared" and "not active" have no way to disagree.
+		 */
+		{
+			id: 'bolt:schedule',
+			sql: 'create table if not exists bolt_schedule (key text primary key, command text not null, crontab text not null, input jsonb not null, next_run_at timestamptz not null, last_fired_at timestamptz)'
+		},
+		{
+			id: 'bolt:schedule-due',
+			sql: 'create index if not exists bolt_schedule_due on bolt_schedule (next_run_at)'
 		},
 		{
 			id: 'bolt:schema-state',
@@ -545,6 +559,37 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 		 * the `pg_snapshot_xmin` horizon there — but the index below is what makes serving under a
 		 * horizon cheap.
 		 */
+		/**
+		 * One thing that should happen once — the other half of scheduled work, and the only queue.
+		 *
+		 * `run_at` does double duty, which is the simplification the whole design rests on: it says
+		 * when a task is due, and taking a task pushes it into the future, which is what "hidden while
+		 * it runs" means. So there is no lease column, no `locked_by`, and no `running` status — a task
+		 * that was taken and never finished simply becomes due again when the hide expires, and crash
+		 * recovery needs no reaper.
+		 *
+		 * `effect_id` carries the UNIQUE that makes it the one idempotency mechanism. An ordinary
+		 * enqueue keys off the caller's `EffectId`; a cron occurrence keys off `schedule:<key>@<slot>`,
+		 * so exactly-once cron falls out of the constraint rather than out of leader election — two
+		 * hosts that both notice the 06:00 slot both insert, and the loser's insert is a no-op. It is a
+		 * named constraint rather than an inline `unique` so the object has the same name here as in
+		 * the Drizzle declaration the runner composes against.
+		 */
+		{
+			id: 'bolt:task',
+			sql: "create table if not exists bolt_task (id uuid primary key default gen_random_uuid(), command text not null, input jsonb not null, status text not null default 'pending', run_at timestamptz not null default now(), attempts integer not null default 0, max_attempts integer not null default 12, effect_id text not null constraint bolt_task_effect_id unique, result jsonb, error text, created_at timestamptz not null default now(), updated_at timestamptz not null default now())"
+		},
+		/**
+		 * The only read `take` makes, and the only one it should be able to make.
+		 *
+		 * Partial on purpose: a table that has drained a year of work is almost entirely `done` and
+		 * `failed`, and a full index over `run_at` would have every tick walking that history to find
+		 * the handful of rows that are actually pending.
+		 */
+		{
+			id: 'bolt:task-due',
+			sql: "create index if not exists bolt_task_due on bolt_task (run_at) where status = 'pending'"
+		},
 		{
 			id: 'bolt:sync-outbox',
 			sql: 'create table if not exists bolt_sync_outbox (xid bigint not null default (pg_current_xact_id()::text::bigint), sequence bigint generated always as identity, collection_name text not null, record_id text not null, operation text not null, record jsonb, created_at timestamptz not null default now(), primary key (xid, sequence))'
@@ -676,6 +721,11 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
  * those collections, generated from the same declaration, rather than a copy of the DDL kept
  * somewhere a host could let drift. `schema.migrate` remains the authority and re-applies them.
  */
+/** The identity collections' names, so the filter below reads the declaration and not a convention. */
+const IDENTITY_COLLECTION_NAMES: ReadonlyArray<string> = IDENTITY_COLLECTIONS.map(
+	({ name }) => name
+);
+
 export const identitySchemaSteps = (): ReadonlyArray<SchemaStep> =>
 	buildSchemaPlan({
 		name: 'identity',
@@ -684,5 +734,11 @@ export const identitySchemaSteps = (): ReadonlyArray<SchemaStep> =>
 		policies: [],
 		relations: []
 	} as unknown as WorkspaceDefinition).steps.filter((step) =>
-		step.id.startsWith('collection:bolt_auth_')
+		// Derived from the declaration rather than from a name prefix. `bolt_team` is an identity
+		// collection — resolving a subject joins it — and it does not begin with `bolt_auth_`, so a
+		// prefix test would have silently left every host that applies these steps unable to
+		// authenticate anybody.
+		IDENTITY_COLLECTION_NAMES.some(
+			(name) => step.id === `collection:${name}` || step.id.startsWith(`collection:${name}:`)
+		)
 	);

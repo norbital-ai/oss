@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Result, Schema } from 'effect';
-import type { EffectId } from '@norbital-ai/bolt-protocol';
+import { EffectId } from '@norbital-ai/bolt-protocol';
 import type { AuthoredIntegrationModule } from '../../authoring/integration-introspection.js';
 import {
 	AuthoredRuntimeService,
@@ -8,7 +8,9 @@ import {
 	runAuthoredHandler
 } from '../collections/authored.js';
 import { Collections } from '../collections/collections.js';
-import { AI, Connector, Files, Tasks } from '../facilities/services.js';
+import { AI, Connector, Files } from '../facilities/services.js';
+import { TaskQueue } from '../tasks/tasks.js';
+import { Automations } from '../automations/automations.js';
 import { Database } from '../facilities/database.js';
 import type { Identity } from '../identity/identity.js';
 import { Secrets } from '../secrets/secrets.js';
@@ -128,8 +130,7 @@ export const Service = Context.Service<Interface>('@norbital-ai/bolt/Integration
 const integrationSubject = (name: string): Identity.Subject => ({
 	userId: `integration:${name}`,
 	tenantId: 'system',
-	roles: [],
-	teams: [],
+	teamPath: [],
 	admin: true
 });
 
@@ -165,6 +166,24 @@ const OUTBOX_CLAIM_LEASE = '10 minutes';
  * this against the version the first wrote, and finds a fresh `updated_at`.
  */
 const OUTBOX_CLAIMABLE = `(status = 'pending' or (status = 'inflight' and updated_at < now() - interval '${OUTBOX_CLAIM_LEASE}'))`;
+
+/**
+ * Reads `min(next_attempt_at)` back out of the facility's JSON.
+ *
+ * `undefined` for a null — an integration with nothing claimable — which is the case that must arm
+ * no timer at all. Defensive about the type for the same reason `claimedDeliveries` is: what a
+ * driver hands back for a timestamp is a string here and could be a `Date` elsewhere, and the
+ * failure of guessing wrong would be a wake that never happens rather than an error anybody sees.
+ */
+const readDueAt = (row: Schema.Json | undefined): number | undefined => {
+	if (row === null || row === undefined || typeof row !== 'object' || Array.isArray(row)) {
+		return undefined;
+	}
+	const value = Reflect.get(row, 'due_at');
+	if (typeof value !== 'string') return undefined;
+	const parsed = Date.parse(value);
+	return Number.isFinite(parsed) ? parsed : undefined;
+};
 
 /**
  * Reads claimed outbox rows back out of the facility's JSON.
@@ -234,7 +253,8 @@ export const layer = Layer.effect(
 		const workspace = yield* Workspace.Service;
 		const connector = yield* Connector.Service;
 		const database = yield* Database.Service;
-		const tasks = yield* Tasks.Service;
+		const queue = yield* TaskQueue.Service;
+		const automations = yield* Automations.Service;
 		const collections = yield* Collections.Service;
 		const secrets = yield* Secrets.Service;
 		const ai = yield* AI.Service;
@@ -346,7 +366,7 @@ export const layer = Layer.effect(
 				// One record per call, so a pipeline that refuses a record costs that record. The `input` it
 				// receives is an array of one, which is the shape `Collections.import` already hands it.
 				const api = makeAuthoringApi(
-					makeBoundAuthoringOps(effectId, subject, collections, ai, files)
+					makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations)
 				);
 				return runAuthoredHandler(() => declared.handler({ input: [record], api }, api)).pipe(
 					Effect.flatMap((rows) =>
@@ -369,7 +389,7 @@ export const layer = Layer.effect(
 				// The same api a hook and an import pipeline receive, built through the same two functions, so
 				// a batch lookup queries under exactly the integration's own subject and nothing wider.
 				const api = makeAuthoringApi(
-					makeBoundAuthoringOps(effectId, subject, collections, ai, files)
+					makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations)
 				);
 				// `catchCause` rather than `catch`: a rejected promise or a genuine throw arrives here as a
 				// defect because `runAuthoredHandler` dies on one, and either would otherwise escape as an
@@ -626,11 +646,13 @@ export const layer = Layer.effect(
 					sql: 'insert into bolt_integrations (name, enabled, cursor) values ($1, true, $2) on conflict (name) do update set enabled = true',
 					parameters: [name, null]
 				});
-				yield* tasks.execute(effectId, {
-					_tag: 'Enqueue',
-					command: 'integrations.pull',
-					input: { name, cursor: null }
-				});
+				yield* queue.enqueue(EffectId.make(`${effectId}:pull`), [
+					{
+						command: 'integrations.pull',
+						input: { name, cursor: null },
+						effectId: `${effectId}:pull`
+					}
+				]);
 			}),
 			/**
 			 * Runs every receive binding this integration declares, and returns what each one did.
@@ -830,6 +852,38 @@ export const layer = Layer.effect(
 						(error) => new IntegrationError({ integration: name, message: error.message })
 					)
 				);
+				/**
+				 * The drain schedules its own return, which is what replaced the minute cron.
+				 *
+				 * A delivery that met a 503 is due again at its own `next_attempt_at`, and something has to
+				 * come back and look. That something used to be a fixed `* * * * *` registration per sending
+				 * integration — 1440 wakes a day against the tenant's database whether or not anything was
+				 * ever queued. Now the only thing that comes back is a task due at the exact instant the
+				 * earliest backoff expires, so an integration with nothing pending costs nothing at all and
+				 * one that is backing off costs one wake per backoff rather than sixty per hour.
+				 *
+				 * Read after the drain rather than before it, so it sees what this drain just settled: a
+				 * delivery that succeeded is no longer claimable and does not pull the next wake earlier.
+				 */
+				const pending = yield* database.execute(EffectId.make(`${effectId}:due`), {
+					_tag: 'Query',
+					sql: `select min(next_attempt_at) as due_at from bolt_integration_outbox where integration_name = $1 and ${OUTBOX_CLAIMABLE}`,
+					parameters: [name]
+				});
+				const dueAt = readDueAt(pending.rows[0]);
+				if (dueAt !== undefined) {
+					const taskId = `flush:${name}@${new Date(dueAt).toISOString()}`;
+					// Keyed on the instant rather than on this invocation, so two drains that both find the
+					// same next backoff queue one task between them instead of two.
+					yield* queue.enqueue(EffectId.make(`${effectId}:next`), [
+						{
+							command: 'integrations.flush',
+							input: { name },
+							effectId: taskId,
+							runAtEpochMs: dueAt
+						}
+					]);
+				}
 				return {
 					integration: report.integration,
 					collection: report.collection,
@@ -849,11 +903,13 @@ export const layer = Layer.effect(
 					sql: 'update bolt_integrations set cursor = null where name = $1',
 					parameters: [name]
 				});
-				yield* tasks.execute(effectId, {
-					_tag: 'Enqueue',
-					command: 'integrations.pull',
-					input: { name, cursor: null }
-				});
+				yield* queue.enqueue(EffectId.make(`${effectId}:pull`), [
+					{
+						command: 'integrations.pull',
+						input: { name, cursor: null },
+						effectId: `${effectId}:pull`
+					}
+				]);
 			}),
 			disable: Effect.fn('Integrations.disable')(function* (effectId, name) {
 				yield* requireIntegration(name);

@@ -108,8 +108,9 @@ export default {
 } satisfies Hooks;
 ```
 
-Every hook point is `{ description, handler }` (create `before` also takes an optional `batchHandler`
-for bulk writes). The bare-function form does not exist: the description is
+Every hook point is `{ description, handler }`, and a handler always receives one record — a batch of
+four thousand rows runs the same handler four thousand times rather than a different one once. The
+bare-function form does not exist: the description is
 mandatory because it travels into the manifest, and the Workspace Studio shows it to people reading a
 collection who will never open `+hooks.ts`. Write what this hook does to this data — "runs before
 create" repeats the key and says nothing.

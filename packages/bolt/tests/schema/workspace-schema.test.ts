@@ -49,9 +49,15 @@ describe('WorkspaceSchema owner', () => {
 			'collection:bolt_auth_session:index:userId',
 			'collection:bolt_auth_user',
 			'collection:bolt_auth_user:index:email',
+			'collection:bolt_auth_user:index:team_id',
 			'collection:bolt_auth_user:index:tenantId',
 			'collection:bolt_auth_verification',
 			'collection:bolt_auth_verification:index:identifier',
+			// A team is runtime-owned for the same reason identity is, and it is *part* of identity:
+			// resolving a subject joins it, so a host that created the auth tables without this one
+			// would authenticate nobody.
+			'collection:bolt_team',
+			'collection:bolt_team:index:name',
 			// An uploaded file is a row, and `file()` columns resolve against it. Sorted between the
 			// identity tables and `requestor`, like every other runtime-owned collection.
 			'collection:document_asset',

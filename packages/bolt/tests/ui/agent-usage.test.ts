@@ -12,7 +12,7 @@ import {
 	toSessionTotals
 } from '../../src/client/ui/agent/transcript.js';
 
-const subject = { userId: 'admin-1', tenantId: 'tenant', roles: ['admin'], teams: [] };
+const subject = { userId: 'admin-1', tenantId: 'tenant', teamPath: ['admin'] };
 
 /** The id `spawn_subagent` mints, and therefore the join the panel makes to nest a delegated agent. */
 const spawnCallId = 'turn-1:tool:0:0';

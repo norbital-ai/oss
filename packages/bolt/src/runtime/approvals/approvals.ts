@@ -1,9 +1,9 @@
 import { deriveRecordId } from '../derive-record-id.js';
 import { Context, Effect, Layer, Schema } from 'effect';
-import type { EffectId } from '@norbital-ai/bolt-protocol';
+import { EffectId } from '@norbital-ai/bolt-protocol';
 import { AccessControl } from '../access/access-control.js';
 import { Database } from '../facilities/database.js';
-import { Tasks } from '../facilities/services.js';
+import { TaskQueue } from '../tasks/tasks.js';
 import type { Identity } from '../identity/identity.js';
 import { Workspace } from '../workspace.js';
 
@@ -179,7 +179,7 @@ export const layer = Layer.effect(
 	Effect.gen(function* () {
 		const database = yield* Database.Service;
 		const access = yield* AccessControl.Service;
-		const tasks = yield* Tasks.Service;
+		const queue = yield* TaskQueue.Service;
 		const workspace = yield* Workspace.Service;
 		/** Resolves the durable configuration embedded at request time, with authored grants as a legacy-state fallback. */
 		const approvalConfigurations = {
@@ -331,13 +331,11 @@ export const layer = Layer.effect(
 					operation.approval === undefined &&
 					typeof operation.collection === 'string'
 				) {
-					const subjectRoles = subject.roles.map((role) => role.toLocaleLowerCase());
+					// The policies this subject's team declares, resolved the one way any policy is
+					// selected — by name, against the team map the release carries.
+					const held = AccessControl.policiesHeldByTeam(workspace.definition, subject);
 					const configuration = workspace.definition.policies
-						.filter((policy) =>
-							(policy.roles ?? [policy.name]).some((role) =>
-								subjectRoles.includes(role.toLocaleLowerCase())
-							)
-						)
+						.filter((policy) => held.has(policy.name.toLocaleLowerCase()))
 						.flatMap((policy) => policy.grants ?? [])
 						.find(
 							(grant) => grant.collection === operation.collection && grant.approval !== undefined
@@ -401,7 +399,12 @@ export const layer = Layer.effect(
 					const step = configuration.steps[current._tag === 'Pending' ? current.step : 0];
 					const eligible =
 						step !== undefined &&
-						step.approvers.some((team: string) => subject.teams.includes(team));
+						// One team, matched folded — the same rule the policy side uses. It used to be an
+						// array compared case-sensitively, which is how `approvers: ['HR Manger']` produced an
+						// approval nobody could ever decide.
+						step.approvers.some(
+							(team: string) => team.toLocaleLowerCase() === subject.team?.toLocaleLowerCase()
+						);
 					if (!eligible)
 						return yield* new AccessControl.AccessDenied({
 							action: 'approve',
@@ -429,20 +432,24 @@ export const layer = Layer.effect(
 					});
 				yield* projectRequest(effectId, next, subject.userId);
 				if (next._tag === 'Approved') {
-					yield* tasks.execute(effectId, {
-						_tag: 'Enqueue',
-						command: 'collections.resume',
-						input: { requestId: next.requestId }
-					});
+					yield* queue.enqueue(EffectId.make(`${effectId}:resume`), [
+						{
+							command: 'collections.resume',
+							input: { requestId: next.requestId },
+							effectId: `${effectId}:resume`
+						}
+					]);
 				}
 				// A rejection has work to do too. Only the approval path was ever followed up, so a
 				// refused request left its record locked for good.
 				if (next._tag === 'Rejected') {
-					yield* tasks.execute(effectId, {
-						_tag: 'Enqueue',
-						command: 'collections.discard',
-						input: { requestId: next.requestId }
-					});
+					yield* queue.enqueue(EffectId.make(`${effectId}:discard`), [
+						{
+							command: 'collections.discard',
+							input: { requestId: next.requestId },
+							effectId: `${effectId}:discard`
+						}
+					]);
 				}
 				return next;
 			}),
@@ -470,11 +477,13 @@ export const layer = Layer.effect(
 						reason: 'approval withdrawal lost a competing update'
 					});
 				yield* projectRequest(effectId, next, subject.userId);
-				yield* tasks.execute(effectId, {
-					_tag: 'Enqueue',
-					command: 'collections.discard',
-					input: { requestId: next.requestId }
-				});
+				yield* queue.enqueue(EffectId.make(`${effectId}:discard`), [
+					{
+						command: 'collections.discard',
+						input: { requestId: next.requestId },
+						effectId: `${effectId}:discard`
+					}
+				]);
 				return next;
 			}),
 			status,

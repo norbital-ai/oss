@@ -48,8 +48,11 @@ const vaultWorkspace = workspace({
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
 	],
+	teams: {
+		admin: ['admin']
+	},
 	agents: [],
 	automations: [],
 	channels: [],
@@ -61,14 +64,12 @@ const vaultWorkspace = workspace({
 const userA: Identity.Subject = {
 	userId: 'user-a',
 	tenantId: 'test-tenant',
-	roles: ['employee'],
-	teams: []
+	teamPath: ['employee']
 };
 const userB: Identity.Subject = {
 	userId: 'user-b',
 	tenantId: 'test-tenant',
-	roles: ['employee'],
-	teams: []
+	teamPath: ['employee']
 };
 
 const writePersonal = (

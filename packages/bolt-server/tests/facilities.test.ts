@@ -9,6 +9,8 @@ import {
 	FileRequest,
 	HostToolRequest,
 	InvocationId,
+	LeaseId,
+	ReleaseId,
 	TaskRequest,
 	TransportRequest
 } from '@norbital-ai/bolt-protocol';
@@ -31,7 +33,8 @@ import {
 	makeHostToolBinding,
 	makeHostToolBindingFromConfig
 } from '../src/facilities/host-tools.js';
-import { makeTaskBinding, makeTaskBindingFromConfig } from '../src/facilities/tasks.js';
+import { makeTaskBinding } from '../src/facilities/tasks.js';
+import { makeScheduler } from '../src/scheduler.js';
 import { makeMemoryTransport } from '../src/facilities/transport.js';
 
 const metadata = {
@@ -355,7 +358,14 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 		const connector = makeConnectorBinding({
 			call: async (_metadata, input) => ({ output: { operation: input.operation } })
 		});
-		const tasks = makeTaskBinding({ call: async () => ({ taskId: 'task-1' }) });
+		const registered: Array<string> = [];
+		const tasks = makeTaskBinding(
+			makeScheduler({
+				tick: async () => null,
+				onFailure: () => {}
+			}),
+			(command) => registered.push(command)
+		);
 		const hostTools = makeHostToolBinding({
 			call: async (_metadata, input) => ({ output: { tool: input.tool } })
 		});
@@ -380,10 +390,23 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 					signal
 				)
 			),
+			// The task facility is a timer now: `Register` says where to route work for this release,
+			// and `Wake` asks the host to come back no later than an instant.
 			Effect.tryPromise(() =>
 				tasks.call(
 					metadata,
-					TaskRequest.cases.Enqueue.make({ command: 'agent.turn', input: {} }),
+					TaskRequest.cases.Register.make({
+						leaseId: LeaseId.make('lease-1'),
+						releaseId: ReleaseId.make('release-1'),
+						command: 'tasks.tick'
+					}),
+					signal
+				)
+			),
+			Effect.tryPromise(() =>
+				tasks.call(
+					metadata,
+					TaskRequest.cases.Wake.make({ notLaterThanEpochMs: Date.now() + 1_000 }),
 					signal
 				)
 			),
@@ -397,8 +420,9 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 		]);
 		assert.deepStrictEqual(
 			results.map((result) => result._tag),
-			['Success', 'Success', 'Success', 'Success', 'Success']
+			['Success', 'Success', 'Success', 'Success', 'Success', 'Success']
 		);
+		assert.deepStrictEqual(registered, ['tasks.tick']);
 	})
 );
 
@@ -419,9 +443,13 @@ it.effect('constructs each extension provider selected by Effect Config', () =>
 		const connector = yield* makeConnectorBindingFromConfig({
 			fixture: { make: () => Effect.succeed({ call: async () => ({ output: {} }) }) }
 		});
-		const tasks = yield* makeTaskBindingFromConfig({
-			fixture: { make: () => Effect.succeed({ call: async () => ({ taskId: 'configured' }) }) }
-		});
+		// The task facility has no provider left to configure — the host owns the timer itself.
+		const tasks = makeTaskBinding(
+			makeScheduler({
+				tick: async () => null,
+				onFailure: () => {}
+			})
+		);
 		const hostTools = yield* makeHostToolBindingFromConfig({
 			fixture: { make: () => Effect.succeed({ call: async () => ({ output: {} }) }) }
 		});
@@ -438,7 +466,6 @@ it.effect('constructs each extension provider selected by Effect Config', () =>
 				BOLT_SERVER_AI_CREDENTIAL: 'secret-not-exposed',
 				BOLT_SERVER_COMMUNICATION_PROVIDER: 'fixture',
 				BOLT_SERVER_CONNECTOR_PROVIDER: 'fixture',
-				BOLT_SERVER_TASKS_PROVIDER: 'fixture',
 				BOLT_SERVER_HOST_TOOLS_PROVIDER: 'fixture'
 			})
 		)

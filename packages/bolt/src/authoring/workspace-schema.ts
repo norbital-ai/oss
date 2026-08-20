@@ -730,7 +730,18 @@ export interface PolicyDeclaration {
 	readonly description?: string;
 	readonly effect?: 'allow' | 'deny';
 	readonly actions?: ReadonlyArray<string>;
-	readonly roles?: ReadonlyArray<string>;
+	/**
+	 * Selects the runtime's own system policy, and nothing an author writes should carry it.
+	 *
+	 * Matched against `subject.system`, which only `SystemPrincipal.systemSubject` mints — after a
+	 * gateway signature verifies. It replaces a `roles` array that selected the same policy by the
+	 * string `colony-system`: forgeable by any row that spelled it, and guarded only by a filter that
+	 * stripped the string back out of every projected subject.
+	 *
+	 * A policy is otherwise selected by its own `name`, matched against the policies the subject's
+	 * team declares in `+teams.ts`. There is no second way to name one.
+	 */
+	readonly system?: boolean;
 	readonly apps?: ReadonlyArray<string>;
 	readonly grants?: ReadonlyArray<RuntimePolicyGrant>;
 }
@@ -823,6 +834,19 @@ export interface WorkspaceMigrationEntry {
 	readonly statements: ReadonlyArray<string>;
 }
 
+/**
+ * A team's authority: the policies its members hold, keyed by the team's name.
+ *
+ * Names are matched case-insensitively against `bolt_team.name` — one rule, everywhere. Today
+ * `roles` matched policy names folded while `teams` matched approver names exactly, and the second
+ * of those silently produced approvals nobody could decide.
+ *
+ * The generated `Teams` type in a workspace's `$types` narrows the values to that workspace's own
+ * declared policy names, so renaming or deleting a policy fails the build here rather than quietly
+ * emptying somebody's authority.
+ */
+export type TeamsDeclaration = Readonly<Record<string, ReadonlyArray<string>>>;
+
 export interface WorkspaceDefinition {
 	readonly name: string;
 	readonly version: string;
@@ -851,6 +875,23 @@ export interface WorkspaceDefinition {
 	readonly rateLimits?: import('./rate-limits-schema.js').RateLimitSpec;
 	readonly apps: ReadonlyArray<AppDeclaration>;
 	readonly policies: ReadonlyArray<PolicyDeclaration>;
+	/**
+	 * The `src/+teams.ts` declaration: which policies each named team holds.
+	 *
+	 * **Authority is declared; membership is a row.** A `bolt_team` row carries a name, a parent and
+	 * a description, and an operator edits it from a dashboard without a deploy — because who is on
+	 * which team changes constantly. What a team may *do* is this map, compiled into the release,
+	 * because a row that granted a policy would be a privilege escalation performed with an `update`
+	 * statement, in a place no diff and no type check can see.
+	 *
+	 * The two are bound by name. A team row whose name is absent here is inert: it holds no
+	 * policies, it still works as an approval target, and a deploy that drops a team therefore
+	 * removes its authority without orphaning any member.
+	 *
+	 * Absent — a workspace that declares no teams — means nobody holds any policy through
+	 * membership, which is the correct answer for a workspace that has not said otherwise.
+	 */
+	readonly teams?: TeamsDeclaration;
 	readonly agents: ReadonlyArray<AgentDeclaration>;
 	readonly automations: ReadonlyArray<AutomationDeclaration>;
 	readonly channels: ReadonlyArray<ChannelDeclaration>;

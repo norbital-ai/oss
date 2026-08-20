@@ -36,10 +36,13 @@ const definition = workspace({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			roles: ['admin'],
 			apps: ['helper']
 		})
 	],
+	teams: {
+		'admin-agent': ['admin-agent'],
+		admin: ['admin-agent']
+	},
 	agents: [agent({ name: 'helper', prompt: 'Help the HR team.', tools: [], skills: [] })],
 	automations: [],
 	channels: [],
@@ -78,7 +81,7 @@ const twiceInferringBundle = makeBundle(definition, manifest, {
 		return { first: await run('first'), second: await run('second') };
 	}
 });
-const subject = { userId: 'admin-1', tenantId: 'tenant-1', roles: ['admin'], teams: [] };
+const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'] };
 
 type Statement = { readonly sql: string; readonly parameters: ReadonlyArray<unknown> };
 

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { fixtureUserId } from '../support/fixture-identity.js';
+import { fixtureUserId, seedSession } from '../support/fixture-identity.js';
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -89,6 +89,13 @@ const PREFIX_COMMANDS: ReadonlyArray<string> = ['invoke.anything', 'schema.migra
 const ENQUEUED_COMMANDS: ReadonlyArray<string> = [
 	'integrations.pull',
 	'integrations.flush',
+	// A delegated turn. `sandbox-tools.ts` has enqueued `agents.turn` since delegation was written,
+	// and it was never listed here — harmless only for as long as nothing executed the queue. The
+	// first tick would have refused every subagent, and the refusal would have named the provenance
+	// gate rather than the missing entry. (`tasks.tick` is not listed because it is not task-runnable:
+	// the command that runs other commands is not itself one of them, so the tick is refused on a
+	// row.)
+	'agents.turn',
 	'agents.resume',
 	'collections.resume',
 	'collections.discard'
@@ -130,13 +137,6 @@ const plugin = (name: string, input: unknown = null) =>
 		trustedContext: {}
 	});
 
-const session = async (runtime: BoltTestRuntime, token: string, roles: ReadonlyArray<string>) => {
-	await runtime.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "roles", "teams") values (md5($2::text)::uuid, $2, $5, $3, $4::jsonb, '[]'::jsonb) on conflict ("norbital_id") do update set "roles" = excluded."roles", "teams" = excluded."teams", "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
-		[token, `user-${token}`, 'test-tenant', JSON.stringify([...roles]), `${token}@example.test`]
-	);
-};
-
 const outcomeOf = (runtime: BoltTestRuntime, invocation: Invocation) =>
 	runtime.runtime.runPromise(dispatchInvocation(invocation).pipe(Effect.result));
 
@@ -159,8 +159,11 @@ const gatedWorkspace = workspace({
 	],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], roles: ['admin'], apps: ['*'] })
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
 	],
+	teams: {
+		admin: ['admin']
+	},
 	agents: [],
 	automations: [
 		automation({
@@ -270,7 +273,9 @@ describe('invocation provenance', () => {
 	 */
 	it('leaves a live session usable after an unauthenticated plugin tries to revoke it', async () => {
 		harness = await makeBoltTestRuntime(testWorkspace());
-		await session(harness, 'admin-token', ['admin']);
+		// `admin` is the team `testWorkspace` declares holding the policy that grants `*` — the session
+		// has to be a usable one for the revocation attempt below to have anything to take away.
+		await seedSession(harness, { token: 'admin-token', user: 'user-admin-token', team: 'admin' });
 
 		const outcome = await outcomeOf(
 			harness,

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { request as httpRequest } from 'node:http';
 import WebSocket from 'ws';
 import { ServerConfiguration } from '../src/config.js';
-import { ApplicationStartError, startApplication } from '../src/app.js';
+import { startApplication } from '../src/app.js';
 import { HealthSnapshot } from '../src/health.js';
 
 const fixturePath = fileURLToPath(new URL('./fixtures/fixture-bundle.mjs', import.meta.url));
@@ -20,7 +20,6 @@ const configuration = ServerConfiguration.make({
 		releaseId: ReleaseId.make('test-release')
 	},
 	mode: 'development',
-	durableEngine: 'memory',
 	drainTimeoutMillis: 1_000,
 	invocationTimeoutMillis: 1_000,
 	requestBodyLimitBytes: 1024
@@ -28,38 +27,10 @@ const configuration = ServerConfiguration.make({
 
 const facilities = { scope: configuration.scope };
 
-it.effect('requires an explicitly durable engine in production', () =>
-	Effect.gen(function* () {
-		let finalizations = 0;
-		const production = ServerConfiguration.make({
-			...configuration,
-			mode: 'production',
-			durableEngine: 'external'
-		});
-		const error = yield* Effect.tryPromise({
-			try: () =>
-				startApplication({
-					configuration: production,
-					facilities,
-					finalizeFacilities: async () => {
-						finalizations += 1;
-					}
-				}),
-			catch: (cause) =>
-				cause instanceof ApplicationStartError
-					? cause
-					: new ApplicationStartError({
-							operation: 'BoltServer.Test.productionDurability',
-							message: 'Unexpected production start failure',
-							cause
-						})
-		}).pipe(Effect.flip);
-		assert.instanceOf(error, ApplicationStartError);
-		assert.strictEqual(error.operation, 'BoltServer.Application.validateDurability');
-		assert.strictEqual(finalizations, 1);
-	})
-);
-
+// The case that required an explicitly durable engine in production is deleted with the option it
+// checked. There is no host-side engine to configure: `bolt-server` owns a timer, and everything
+// durable lives in the tenant's own `bolt_task` table, written by the guest in the same transaction
+// as the state change that asked for it.
 it.effect('runs one exact artifact through static, health and request paths', () =>
 	Effect.acquireUseRelease(
 		Effect.tryPromise(() => startApplication({ configuration, facilities })),

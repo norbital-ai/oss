@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { Collections } from './collections/collections.js';
 import { AI, Files } from './facilities/services.js';
+import { Automations } from './automations/automations.js';
 import type { Identity } from './identity/identity.js';
 import { DispatchError } from './workspace.js';
 import { AuthoredRefusal } from '../authoring/refusal.js';
@@ -90,6 +91,7 @@ const RemoteRegistries = {
 				const collections = yield* Collections.Service;
 				const ai = yield* AI.Service;
 				const files = yield* Files.Service;
+				const automations = yield* Automations.Service;
 				return RemoteRegistry.of({
 					invoke: Effect.fn('RemoteRegistry.invoke')(function* (name, input, subject, effectId) {
 						const handler = handlers[name];
@@ -107,7 +109,7 @@ const RemoteRegistries = {
 						// with `Fiber.runLoop: Not a valid effect: [object Promise]` — which is what the leave page's
 						// seasonality heatmap was showing as "could not be loaded". The types were right and the
 						// runtime was wrong, so the runtime moved.
-						const ops = makeBoundAuthoringOps(effectId, subject, collections, ai, files);
+						const ops = makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations);
 						const api = makeAuthoringApi(ops) as RuntimeRemoteApi;
 						// `runAuthoredHandler` already answers an Effect and settles a value, a promise or an
 						// Effect alike, so it is yielded rather than wrapped in `tryPromise` — wrapping it
