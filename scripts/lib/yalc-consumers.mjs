@@ -104,10 +104,16 @@ export const ensurePureInstallation = ({ consumerDirectory, names, yalcBin, run 
 	const unlinked = names.filter(
 		(name) => !String(specifierOf(name) ?? '').startsWith('file:.yalc/')
 	);
-	const impure = names.filter((name) => {
-		const entry = lockfile?.packages?.[name];
-		return entry !== undefined && entry.pure !== true;
-	});
+	// Anything the lockfile does not record as pure, including anything it does not record at all.
+	//
+	// This used to require the entry to exist (`entry !== undefined && entry.pure !== true`), which
+	// left a state the script can itself produce unreachable: a consumer already pinned to
+	// `file:.yalc/` but with no `yalc.lock` — an interrupted link, or a manifest edited by hand — is
+	// not `unlinked` either, so it fell into neither bucket, was never converted, and then failed the
+	// completeness check below. The error blamed the store ("no usable build … rerun without
+	// --only"), which is a statement about the publisher and sent the reader to the wrong repository.
+	// A missing entry is the strongest possible evidence the installation is not pure.
+	const impure = names.filter((name) => lockfile?.packages?.[name]?.pure !== true);
 	if (unlinked.length > 0) {
 		// Non-pure add is the only yalc path that writes `file:.yalc/` and remembers the exact
 		// specifier it replaced. The pure conversion below immediately removes its node_modules copy.
@@ -125,13 +131,35 @@ export const ensurePureInstallation = ({ consumerDirectory, names, yalcBin, run 
 	}
 	const linkedManifest = readJsonIfPresent(path.join(consumerDirectory, 'package.json'));
 	const linkedLock = readJsonIfPresent(path.join(consumerDirectory, 'yalc.lock'));
+	// Purity is a property of the tree, not a word in the lockfile.
+	//
+	// `yalc add --pure` records `pure: true`, but a plain `add` records `file: true` and — for
+	// reasons that appear to be size-related — the `--pure` pass that follows can silently no-op on
+	// an already-installed signature, leaving the label at `file` forever. That label was the only
+	// thing checked here, so a consumer sitting in exactly the desired end state was reported as
+	// "the yalc store has no usable build", which blames the publisher for the consumer's bookkeeping
+	// and sends the reader to the wrong repository entirely.
+	//
+	// So test what this file's own doc comment says non-pure *is*: yalc having written the package
+	// into `node_modules/<name>` and displaced pnpm's link to `.ignored_<name>`. If the manifest
+	// points at `.yalc/`, the copy is there, and no displaced link was left behind, the installation
+	// is pure whichever word yalc wrote down.
 	const missing = names.filter((name) => {
 		const specifier =
 			linkedManifest?.dependencies?.[name] ?? linkedManifest?.devDependencies?.[name];
+		const segments = name.split('/');
+		const displaced = path.join(
+			consumerDirectory,
+			'node_modules',
+			...segments.slice(0, -1),
+			`.ignored_${segments.at(-1)}`
+		);
+		const entry = linkedLock?.packages?.[name];
 		return (
 			!String(specifier ?? '').startsWith('file:.yalc/') ||
-			linkedLock?.packages?.[name]?.pure !== true ||
-			!existsSync(path.join(consumerDirectory, '.yalc', ...name.split('/')))
+			entry === undefined ||
+			(entry.pure !== true && existsSync(displaced)) ||
+			!existsSync(path.join(consumerDirectory, '.yalc', ...segments))
 		);
 	});
 	if (missing.length > 0) {
