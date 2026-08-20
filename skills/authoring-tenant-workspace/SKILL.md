@@ -314,6 +314,52 @@ Collection surfaces are record summaries, not database inspectors: give each one
 description, and never expose `norbital_id`, UUID fields, or `*_id` keys as a list title or subtitle. Density,
 duplication, and data-renderer rules are in [interface-ideology.md](references/interface-ideology.md).
 
+## Who is looking at this page
+
+`getPlatformStateContext()` from `@norbital-ai/bolt/ui` is the only way an authored page learns who is
+using it. It returns a **getter**, not a value — call it, then call the result, so the page reads the
+current session rather than a snapshot taken at mount.
+
+```svelte
+import { getPlatformStateContext } from '@norbital-ai/bolt/ui';
+const platform = getPlatformStateContext();
+const me = $derived(platform().user);
+```
+
+`platform()` publishes exactly three things and nothing else — `user`, `apps`, `channels`. If you
+want something that is not in this table, it is not there; do not guess a field name.
+
+| Field | Is | Use it for |
+| --- | --- | --- |
+| `user.norbital_id` | `bolt_auth_user.norbital_id`, a **uuid** | The only value you may key a row by |
+| `user.email` | The address, as the host reports it | Display, and matching a column that genuinely holds an address |
+| `user.admin` | `bolt_auth_user.status === 'admin'` | Widening a surface for administrators |
+| `apps` | The app names **this session may see** | Deriving authority — see below |
+| `channels` | Declared channels, with `audience` | Offering a channel to the right audience |
+
+**`user.norbital_id` is the row key. There is no second spelling.** A field named `id` used to sit
+beside it carrying the same value, the shell filled both from the display name, and every authored
+query of the shape `where: { user_id: { eq: user.norbital_id } }` therefore sent an email's local
+part to a `uuid` column and failed as Postgres 22P02. The surface reported "could not load your
+profile", which is a plausible sentence for a parse error and sent two people looking at the wrong
+layer. One spelling now, and it is the one every other row key uses.
+
+**Do not publish or read a label as a key.** A `team` field is gone from this context for the same
+reason: it held the sidebar's role string — literally `'Admin'` or `'Member'` — under a name that
+reads like a team identity. That failure mode is worse than the uuid one, because a label compared
+against a key returns an empty result rather than an error, so the page renders as though the person
+simply has nothing.
+
+**Derive authority from `apps`, not from a lookup.** If a page needs to know whether this person is
+dispatch or field staff, ask whether the dispatch app is in `apps` — the runtime already narrowed
+that list by the policies the person's team holds. Fetching a profile row to answer it adds a query
+that can fail, and a query that can fail becomes an error message shown to someone whose only
+problem is that they are not an administrator.
+
+**Distinguish "not yet known" from "not permitted".** `platform()` is readable before the session
+resolves. A page that treats an unsettled value as a refusal shows a permission error to a person who
+is merely still loading; give the unsettled case its own branch.
+
 ## Server roles
 
 **Every declaration carries a mandatory `description`.** Hooks and pipelines are `{ description, handler }`;

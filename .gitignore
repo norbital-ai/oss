@@ -47,4 +47,9 @@ vite.config.*.timestamp-*
 .test-workspaces/
 
 # Agent worktrees: a working copy of this repo, never part of it.
-.claude/worktrees/
+#
+# `**/` is load-bearing. A pattern with an internal slash is anchored to this file's directory,
+# so the bare `.claude/worktrees/` matched only the repo root — and agents create worktrees under
+# the package they are working in (`packages/bolt/.claude/worktrees/…`), which stayed untracked
+# and got committed once as a gitlink: a submodule pointer to a branch that exists on no remote.
+**/.claude/worktrees/
