@@ -230,7 +230,11 @@ export type PlannedInsert = Readonly<{
 	readonly casts?: ReadonlyArray<string>;
 	readonly parameters: ReadonlyArray<Schema.Json>;
 	/**
-	 * The per-row visibility predicate, when the row is only written if the subject may write it.
+	 * The condition this row is written under, when it is not written unconditionally.
+	 *
+	 * Two things state one: the visibility predicate of a row the subject may not be allowed to
+	 * write, and the existence check a row's bookkeeping carries so that it cannot outlive the row
+	 * it describes.
 	 *
 	 * A row carrying one keeps the statement a single create has always written — `select … where
 	 * <predicate>`, one row at a time — and is merged with nothing. Two reasons, and the first is
@@ -1578,7 +1582,9 @@ export const layer = Layer.effect(
 		 * trips a batch used to make. They sit one layer past every record: nothing enforces that a
 		 * history row follows the record it describes — the table names a record rather than
 		 * referencing it — but the order is the one a reader expects, and it keeps a batch's
-		 * bookkeeping in one group instead of interleaved between the records.
+		 * bookkeeping in one group instead of interleaved between the records. That order is also what
+		 * lets a bookkeeping row ask whether its record was written: by then every record insert of the
+		 * batch has run, so the answer is final.
 		 */
 		const createStatements = (
 			effectId: EffectId,
@@ -1607,6 +1613,10 @@ export const layer = Layer.effect(
 					['norbital_id', input.id],
 					...entries.map(([name, value]) => [name, value] as const)
 				];
+				// Whether the row is written at all, or only if the predicate admits it. It decides the
+				// record insert and everything that follows the record, so it is asked once.
+				const unconditional =
+					visibility.sql.trim() === 'true' && visibility.parameters.length === 0;
 				records.push({
 					table: input.collection,
 					layer,
@@ -1618,23 +1628,61 @@ export const layer = Layer.effect(
 					// A predicate that is literally `true` — an elevated write, an administrator, a grant
 					// with no `where` — filters nothing, so the row is written unconditionally and can
 					// share a statement. Anything else keeps the `select … where` it has today, alone.
-					...(visibility.sql.trim() === 'true' && visibility.parameters.length === 0
+					...(unconditional
 						? {}
 						: { where: { sql: visibility.sql, parameters: visibility.parameters } })
 				});
+				/**
+				 * What the row's bookkeeping is written under, when the row itself is conditional.
+				 *
+				 * The row insert is a `select … where <predicate>`, so a row the predicate refuses
+				 * writes nothing — and the history entry, the sync outbox entry and the integration
+				 * deliveries that follow it were plain inserts that ran regardless. That left the
+				 * database holding an outbox row and a history row for a record that is not there:
+				 * sync replicates a `create` for a phantom, and an outbound binding delivers it.
+				 *
+				 * The condition is the row's existence rather than a second copy of the predicate,
+				 * because the two are not the same question by the time the bookkeeping runs. A
+				 * predicate is free to read the collection it guards — a quota is written exactly that
+				 * way — and bookkeeping sits a layer above every record, so re-asking it after the
+				 * batch has been written asks it of a table that has since changed: a quota of two
+				 * admits the first two rows and then reads as false for all of them, which would strip
+				 * the bookkeeping off the rows that *were* written. Asking whether the row is there
+				 * answers about this row, at this point, and cannot drift from what the insert did.
+				 *
+				 * `norbital_id` is the record's identity, so the row this finds is the row the insert
+				 * above either wrote or did not — a colliding id fails the insert and takes the
+				 * transaction with it rather than arriving here.
+				 */
+				const wrote = unconditional
+					? undefined
+					: {
+							sql: `exists (select 1 from ${quoteIdentifier(input.collection)} where norbital_id = $1)`,
+							parameters: [input.id] as ReadonlyArray<Schema.Json>
+						};
+				// A guarded row is a group of one, like the record it follows, so a predicated batch
+				// writes its bookkeeping per row instead of merged. That is the price of the guard and
+				// it is paid only where a predicate exists: an elevated or unrestricted write carries
+				// no `where` at all and its bookkeeping merges exactly as it did.
+				const follows = (row: PlannedInsert): PlannedInsert =>
+					wrote === undefined ? row : { ...row, where: wrote };
 				if (definition.history)
-					bookkeeping.push({
-						table: 'bolt_collection_history',
+					bookkeeping.push(
+						follows({
+							table: 'bolt_collection_history',
+							layer: bookkeepingLayer,
+							columns: ['collection_name', 'record_id', 'operation', 'subject_id', 'snapshot'],
+							parameters: [input.collection, input.id, 'create', subject.userId, input.values]
+						})
+					);
+				bookkeeping.push(
+					follows({
+						table: 'bolt_sync_outbox',
 						layer: bookkeepingLayer,
-						columns: ['collection_name', 'record_id', 'operation', 'subject_id', 'snapshot'],
-						parameters: [input.collection, input.id, 'create', subject.userId, input.values]
-					});
-				bookkeeping.push({
-					table: 'bolt_sync_outbox',
-					layer: bookkeepingLayer,
-					columns: ['collection_name', 'record_id', 'operation', 'record'],
-					parameters: [input.collection, input.id, 'create', input.values]
-				});
+						columns: ['collection_name', 'record_id', 'operation', 'record'],
+						parameters: [input.collection, input.id, 'create', input.values]
+					})
+				);
 				for (const delivery of outboxDeliveries(
 					subject,
 					input.collection,
@@ -1643,12 +1691,17 @@ export const layer = Layer.effect(
 					input.values,
 					undefined
 				)) {
-					bookkeeping.push({
-						table: 'bolt_integration_outbox',
-						layer: bookkeepingLayer,
-						columns: outboxDeliveryColumns,
-						parameters: delivery.parameters
-					});
+					bookkeeping.push(
+						follows({
+							table: 'bolt_integration_outbox',
+							layer: bookkeepingLayer,
+							columns: outboxDeliveryColumns,
+							parameters: delivery.parameters
+						})
+					);
+					// The drain itself stays unconditional. It is one job per integration per batch that
+					// looks for pending deliveries and exits when it finds none, so a refused row costs a
+					// wake with nothing to do rather than a delivery that should not exist.
 					integrations.push(delivery.integration);
 				}
 			}
