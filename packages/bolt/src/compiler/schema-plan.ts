@@ -353,6 +353,37 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 			id: 'bolt:channel-receipts-window',
 			sql: 'create index if not exists bolt_channel_receipts_window on bolt_channel_receipts (channel_name, direction, created_at desc)'
 		},
+		// The claim ledger that makes a redelivery cost one failed insert instead of one agent run.
+		//
+		// `receipt_key` is `(channel, conversation, provider message id)` and is unique, so
+		// `on conflict do nothing` returning no row *is* the duplicate answer. Separate from
+		// `bolt_channel_receipts`, which counts traffic for the rate limiter and deliberately admits
+		// many rows per conversation — one table cannot both count every message and refuse the second
+		// copy of one.
+		{
+			id: 'bolt:channel-inbound',
+			sql: 'create table if not exists bolt_channel_inbound (norbital_id uuid primary key default gen_random_uuid(), channel_name text not null, conversation_id uuid not null, external_conversation_id text not null, external_message_id text not null, receipt_key text not null unique, sender_external_id text, sender_display_name text, status text not null, answered_at timestamptz, created_at timestamptz not null default now())'
+		},
+		/**
+		 * The messaging identities column on `bolt_auth_user`.
+		 *
+		 * The id is `collection:…` and not `bolt:…`, and that is load-bearing rather than cosmetic.
+		 * Every step in this plan is applied in lexical id order (`buildSchemaPlan` sorts them), so a
+		 * `bolt:` id would place this ALTER ahead of `collection:bolt_auth_user` — the step that
+		 * creates the table — and a fresh provision would fail on a relation that does not exist yet.
+		 * Prefixing the table's own step id sorts it immediately after, beside `:index:` and `:search:`
+		 * which sort later still and depend on this column existing.
+		 *
+		 * Declared here as well as in `system-collections.ts` because the two answer different
+		 * databases: the collection declaration renders the column into `create table if not exists`,
+		 * which does nothing for a workspace that already has the table, and this ALTER is the only
+		 * thing that reaches one. `jsonb` matches what `SchemaPlanValues.sqlType` renders for
+		 * `field.json`, so a database provisioned either way ends up with the same column.
+		 */
+		{
+			id: 'collection:bolt_auth_user:column:channels',
+			sql: 'alter table bolt_auth_user add column if not exists channels jsonb'
+		},
 		// The integrations tables, in the same condition the channels ones were: `integrations.ts` has
 		// always read and written all three and the plan created none of them, so every command on the
 		// service failed on a missing relation the moment anything called one. Nothing did, which is why

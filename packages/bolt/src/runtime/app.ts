@@ -43,6 +43,7 @@ import { Tasks } from './facilities/services.js';
 import { Transport } from './facilities/services.js';
 import { Identity } from './identity/identity.js';
 import { reconcileApproverTeams } from './identity/approver-teams.js';
+import { reconcileChannelPrincipals } from './channels/channel-principal.js';
 import { Integrations } from './integrations/integrations.js';
 import { Notifications } from './notifications/notifications.js';
 import {
@@ -372,7 +373,6 @@ export const ActivationCommands = {
 		].toSorted((left, right) => left.key.localeCompare(right.key))
 };
 
-
 /** The call context an activation's facility calls are made under. One shape, built once. */
 const activationContext = (activation: Activation): CallContext => ({
 	invocationId: activation.id,
@@ -455,6 +455,22 @@ const BundleActivation = {
 						yield* reconcileApproverTeams(
 							EffectId.make(`${activation.id}:approver-teams`),
 							workspace
+						);
+						/**
+						 * The account each declared channel answers as, reconciled here for the same reasons
+						 * and with the same temperament as the teams above.
+						 *
+						 * It has to be activation and not first message. A channel's principal is the only
+						 * thing that gives its turns any authority at all, and the moment it is first needed
+						 * is a message already arriving — resolving it lazily would make the first
+						 * contractor to write in the person who discovers the workspace never declared a team
+						 * for the channel. Here it is a line in a deploy log, which is where a release's
+						 * unmet expectations belong.
+						 */
+						yield* reconcileChannelPrincipals(
+							EffectId.make(`${activation.id}:channel-principals`),
+							workspace,
+							activation.scope.tenantId
 						);
 						const keyed = ActivationCommands.forWorkspace(workspace);
 						const registrations = keyed.map(({ registration }) => registration);

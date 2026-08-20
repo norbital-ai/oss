@@ -135,7 +135,32 @@ const authUser = collection({
 		 * into an empty workspace, an address that has just verified a code. Such a subject holds no
 		 * policies at all, which is the correct answer and a visible one.
 		 */
-		team_id: field.uuid({ indexed: true })
+		team_id: field.uuid({ indexed: true }),
+		/**
+		 * The messaging identities this person has proven are theirs — a WhatsApp number, a Telegram
+		 * handle — as `[{ type, verified, ...address }]`.
+		 *
+		 * This is what makes an inbound channel message attributable. A transport hands the runtime an
+		 * address and nothing else, and `bolt_auth_user` held no address of any kind except `email`, so
+		 * a channel declaring `audience: 'authenticated'` had literally nothing to authenticate a
+		 * sender against — the audience was decorative.
+		 *
+		 * **It confers nothing.** A row here answers one question — is this sender someone we know —
+		 * and never widens what the resulting turn may do: capability on a channel comes from the
+		 * channel's declared `policy` and from nowhere else. A verified number belonging to a workspace
+		 * administrator still reaches exactly what the channel declares, which is why this is an
+		 * address book and not a credential.
+		 *
+		 * `verified` is stored rather than implied by the row existing, because the two are genuinely
+		 * different states: an administrator recording a contractor's number is a claim, and only a
+		 * completed proof of possession makes it an identity. `Channels.receive` matches on
+		 * `verified === true` alone, so an unproven claim is inert rather than trusted.
+		 *
+		 * Json rather than its own collection: it is read only when a message arrives, always for one
+		 * person at a time, and never queried across people. A join table would buy a query nothing
+		 * asks.
+		 */
+		channels: field.json()
 	},
 	history: false
 });

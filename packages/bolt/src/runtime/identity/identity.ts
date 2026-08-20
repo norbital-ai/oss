@@ -3,6 +3,7 @@ import { EffectId } from '@norbital-ai/bolt-protocol';
 import { Communication, IdentityHooks } from '../facilities/services.js';
 import { Database } from '../facilities/database.js';
 import { AUTH_MODELS, makeAuth } from './auth.js';
+import { identitiesOf, identityMatches } from '../channels/transport-identity.js';
 
 export const Subject = Schema.Struct({
 	userId: Schema.NonEmptyString,
@@ -193,6 +194,29 @@ const AUTHENTICATE_SQL = `with recursive subject as (
 	 where s."token" = $1 and s."expiresAt" > now()
 )${TEAM_TREE_SQL} ${SUBJECT_TAIL_SQL}`;
 
+/**
+ * One account by address, through the same team join a session goes through.
+ *
+ * It exists for channel principals, which are rows identified by an undeliverable address rather
+ * than by a credential — there is no session to authenticate and no external provider to resolve,
+ * so neither query above reaches them. Everything downstream of the projection is identical, which
+ * is the point: a principal's `teamPath` is resolved by the same recursive walk as a person's, so
+ * `AccessControl` cannot tell the two apart and a channel is held to the same policy resolution
+ * every request is.
+ *
+ * **No credential is checked, because there is none.** This is a lookup, not an authentication, and
+ * it is not reachable from a command: it has no case in `dispatch.ts` and is called only by
+ * `Channels.receive`, which reaches it with a name the *release* supplied — a channel's own
+ * principal address — never with anything from a message. An address from a payload must never
+ * arrive here; that would be a way to become anybody by naming them.
+ */
+const SUBJECT_BY_EMAIL_SQL = `with recursive subject as (
+	select u."norbital_id" as "userId", u."tenantId" as "tenantId",
+	       u."email" as "email", u."status" as "status", u."team_id" as "team_id"
+	  from ${AUTH_MODELS.user} u
+	 where u."email" = $1 and u."status" <> 'disabled'
+)${TEAM_TREE_SQL} ${SUBJECT_TAIL_SQL}`;
+
 /** Carries authentication error through the typed identity failure channel without losing diagnostic context. */
 export class AuthenticationError extends Schema.TaggedError<AuthenticationError>()(
 	'Bolt.Identity.AuthenticationError',
@@ -269,6 +293,35 @@ export type Interface = Readonly<{
 		provider: string,
 		externalId: string
 	) => Effect.Effect<Subject, AuthenticationError | Database.FacilityError>;
+	/**
+	 * One account by address, for a subject that has no credential to present — a channel principal.
+	 *
+	 * The address must come from the release, never from a payload. See `SUBJECT_BY_EMAIL_SQL`.
+	 */
+	readonly subjectByEmail: (
+		effectId: EffectId,
+		email: string
+	) => Effect.Effect<Subject, AuthenticationError | Database.FacilityError>;
+	/**
+	 * The account that has proven ownership of this address on this transport, or nothing.
+	 *
+	 * Answers `userId` and `email` and deliberately not a `Subject`. A subject carries a `teamPath`,
+	 * and this person's team is exactly what an inbound channel message must *not* inherit: their
+	 * authority on a channel is the channel's declared policy, held through the channel's own
+	 * principal, whatever they hold in the web app. Returning half an identity is what makes that
+	 * impossible to get wrong by accident downstream.
+	 *
+	 * Nothing, rather than a failure, when no account matches: an unrecognised sender is an ordinary
+	 * and expected state on a channel anyone can message, not a fault.
+	 */
+	readonly accountByTransportIdentity: (
+		effectId: EffectId,
+		transport: string,
+		senderAddress: string
+	) => Effect.Effect<
+		Readonly<{ readonly userId: string; readonly email?: string }> | undefined,
+		Database.FacilityError
+	>;
 	readonly admit: (
 		effectId: EffectId,
 		tenantId: string,
@@ -573,6 +626,48 @@ export const layerWith = (canDeliver: boolean) =>
 				resolveSubject: Effect.fn('Identity.resolveSubject')((effectId, provider, externalId) =>
 					readSubject(effectId, EXTERNAL_SUBJECT_SQL, [provider, externalId])
 				),
+				subjectByEmail: Effect.fn('Identity.subjectByEmail')((effectId, email) =>
+					readSubject(effectId, SUBJECT_BY_EMAIL_SQL, [email])
+				),
+				/**
+				 * The account holding a verified identity for this sender, matched in two stages.
+				 *
+				 * Postgres narrows to the accounts that hold *some* verified identity on this transport —
+				 * a containment test an expression index can answer — and the canonical comparison happens
+				 * here. It has to: `canonicalTransportIdentity` strips a WhatsApp JID's domain and every
+				 * non-digit from a number, so `+65 9123 4567` and `6591234567@s.whatsapp.net` are one
+				 * address, and expressing that as SQL would put the rule in two places where it must be
+				 * one. The prefilter is what keeps the loop small.
+				 *
+				 * `kind <> 'service'` keeps channel principals out of the candidate set. A principal has
+				 * no transport identities to match, so it can only be reached by a bug — and the shape of
+				 * that bug would be a sender resolving to the very account whose authority the channel
+				 * runs under, which is worth one predicate to make impossible.
+				 */
+				accountByTransportIdentity: Effect.fn('Identity.accountByTransportIdentity')(
+					function* (effectId, transport, senderAddress) {
+						const result = yield* database.execute(effectId, {
+							_tag: 'Query',
+							sql: `select u."norbital_id" as "userId", u."email" as "email", u."channels" as "channels"
+						        from ${AUTH_MODELS.user} u
+						       where u."kind" <> 'service'
+						         and u."channels" @> $1::jsonb`,
+							parameters: [JSON.stringify([{ type: transport, verified: true }])]
+						});
+						for (const row of result.rows) {
+							const held = identitiesOf(
+								row === null || typeof row !== 'object' ? undefined : Reflect.get(row, 'channels')
+							);
+							if (!held.some((identity) => identityMatches(identity, transport, senderAddress)))
+								continue;
+							const userId = IdentityRows.text(row, 'userId');
+							if (userId === undefined) continue;
+							const email = IdentityRows.text(row, 'email');
+							return email === undefined ? { userId } : { userId, email };
+						}
+						return undefined;
+					}
+				),
 				invite: Effect.fn('Identity.invite')(function* (effectId, tenantId, email, invitedBy) {
 					const invitationId = `${tenantId}:${effectId}`;
 					yield* database.execute(effectId, {
@@ -665,11 +760,10 @@ export const layerWith = (canDeliver: boolean) =>
 				 * first sign-in, and an upsert on the address means the row it finds already carries the
 				 * membership rather than the two racing.
 				 */
-				admit: Effect.fn('Identity.admit')(
-					function* (effectId, tenantId, email, teamId, status) {
-						const admitted = yield* database.execute(effectId, {
-							_tag: 'Query',
-							sql: `insert into ${AUTH_MODELS.user} ("norbital_id", "name", "email", "emailVerified", "kind", "status", "tenantId", "team_id")
+				admit: Effect.fn('Identity.admit')(function* (effectId, tenantId, email, teamId, status) {
+					const admitted = yield* database.execute(effectId, {
+						_tag: 'Query',
+						sql: `insert into ${AUTH_MODELS.user} ("norbital_id", "name", "email", "emailVerified", "kind", "status", "tenantId", "team_id")
 					      values (gen_random_uuid(), $1, $1, true, 'person', $4, $2, $3)
 					      on conflict ("email") do update set
 					        "tenantId" = excluded."tenantId",
@@ -677,23 +771,22 @@ export const layerWith = (canDeliver: boolean) =>
 					        "status" = excluded."status",
 					        "norbital_updated_at" = now()
 					      returning "norbital_id" as "id"`,
-							parameters: [email, tenantId, teamId, status]
-						});
-						const admittedId = IdentityRows.text(admitted.rows[0], 'id') ?? '';
-						// The address rides along because it is the only stable name this person has across
-						// organizations: identity is per-tenant, so the same human is a different `norbital_id`
-						// in every workspace they belong to, and a host filing memberships by user id records
-						// six strangers rather than one person in six places.
-						yield* identityHooks.emit(effectId, {
-							_tag: 'UserChanged',
-							userId: admittedId,
-							email,
-							organizationId: tenantId,
-							...(teamId === null ? {} : { team: teamId })
-						});
-						return admittedId;
-					}
-				),
+						parameters: [email, tenantId, teamId, status]
+					});
+					const admittedId = IdentityRows.text(admitted.rows[0], 'id') ?? '';
+					// The address rides along because it is the only stable name this person has across
+					// organizations: identity is per-tenant, so the same human is a different `norbital_id`
+					// in every workspace they belong to, and a host filing memberships by user id records
+					// six strangers rather than one person in six places.
+					yield* identityHooks.emit(effectId, {
+						_tag: 'UserChanged',
+						userId: admittedId,
+						email,
+						organizationId: tenantId,
+						...(teamId === null ? {} : { team: teamId })
+					});
+					return admittedId;
+				}),
 				verifyCode: Effect.fn('Identity.verifyCode')(function* (effectId, email, code, tenantId) {
 					const auth = yield* authFor(effectId);
 					const signedIn = yield* Effect.tryPromise({
@@ -719,7 +812,7 @@ export const layerWith = (canDeliver: boolean) =>
 						_tag: 'UserChanged',
 						userId: admittedId,
 						email,
-						organizationId: tenantId,
+						organizationId: tenantId
 					});
 					return signedIn.token;
 				}),
@@ -748,7 +841,7 @@ export const layerWith = (canDeliver: boolean) =>
 					yield* identityHooks.emit(effectId, {
 						_tag: 'UserChanged',
 						userId,
-						organizationId: tenantId,
+						organizationId: tenantId
 					});
 					return credential;
 				}),
@@ -884,49 +977,46 @@ export const layerWith = (canDeliver: boolean) =>
 				 * recording it, sent under one id, collapse into a single call and the second one is
 				 * silently dropped.
 				 */
-				createTeam: Effect.fn('Identity.createTeam')(function* (
-					effectId,
-					tenantId,
-					actorId,
-					draft
-				) {
-					const name = draft.name.trim();
-					if (name === '') return { _tag: 'Refused', reason: 'a team needs a name' } as const;
-					const parentId = draft.parentId ?? null;
-					if (
-						parentId !== null &&
-						(yield* readTeam(EffectId.make(`${effectId}:team-parent`), parentId)) === undefined
-					) {
-						return {
-							_tag: 'Refused',
-							reason: `there is no team ${parentId} to nest this one under`
-						} as const;
-					}
-					const created = yield* database.execute(EffectId.make(`${effectId}:team-create`), {
-						_tag: 'Query',
-						// Uniqueness is asserted folded, in the statement, rather than left to the index. Every
-						// comparison of a team name in this runtime is folded — `TEAM_LOOKUP_SQL` resolves a
-						// preview with `lower("name") = lower($1)` and `policiesHeldByTeam` folds both sides —
-						// but the unique index on the column is case-*sensitive*, so `on conflict` would admit
-						// `hr manager` beside `HR Manager` and make which one an approval matched an accident.
-						sql: `insert into bolt_team ("norbital_id", "name", "parent_id", "description", "inherits")
+				createTeam: Effect.fn('Identity.createTeam')(
+					function* (effectId, tenantId, actorId, draft) {
+						const name = draft.name.trim();
+						if (name === '') return { _tag: 'Refused', reason: 'a team needs a name' } as const;
+						const parentId = draft.parentId ?? null;
+						if (
+							parentId !== null &&
+							(yield* readTeam(EffectId.make(`${effectId}:team-parent`), parentId)) === undefined
+						) {
+							return {
+								_tag: 'Refused',
+								reason: `there is no team ${parentId} to nest this one under`
+							} as const;
+						}
+						const created = yield* database.execute(EffectId.make(`${effectId}:team-create`), {
+							_tag: 'Query',
+							// Uniqueness is asserted folded, in the statement, rather than left to the index. Every
+							// comparison of a team name in this runtime is folded — `TEAM_LOOKUP_SQL` resolves a
+							// preview with `lower("name") = lower($1)` and `policiesHeldByTeam` folds both sides —
+							// but the unique index on the column is case-*sensitive*, so `on conflict` would admit
+							// `hr manager` beside `HR Manager` and make which one an approval matched an accident.
+							sql: `insert into bolt_team ("norbital_id", "name", "parent_id", "description", "inherits")
 						      select gen_random_uuid(), $1::text, $2::uuid, $3::text, $4::boolean
 						       where not exists (select 1 from bolt_team where lower("name") = lower($1::text))
 						   returning ${TEAM_COLUMNS}`,
-						parameters: [name, parentId, draft.description ?? null, draft.inherits ?? false]
-					});
-					const row = created.rows[0];
-					if (row === undefined)
-						return { _tag: 'Refused', reason: `a team called ${name} already exists` } as const;
-					const team = teamFromRow(row);
-					yield* recordTeamEvent(
-						EffectId.make(`${effectId}:team-create-audit`),
-						'team_created',
-						actorId,
-						{ tenantId, teamId: team.id, team: team.name }
-					);
-					return { _tag: 'Team', team } as const;
-				}),
+							parameters: [name, parentId, draft.description ?? null, draft.inherits ?? false]
+						});
+						const row = created.rows[0];
+						if (row === undefined)
+							return { _tag: 'Refused', reason: `a team called ${name} already exists` } as const;
+						const team = teamFromRow(row);
+						yield* recordTeamEvent(
+							EffectId.make(`${effectId}:team-create-audit`),
+							'team_created',
+							actorId,
+							{ tenantId, teamId: team.id, team: team.name }
+						);
+						return { _tag: 'Team', team } as const;
+					}
+				),
 				/**
 				 * Renaming a team, moving it in the tree, or turning `inherits` on or off.
 				 *
@@ -941,82 +1031,78 @@ export const layerWith = (canDeliver: boolean) =>
 				 * what `+teams.ts` declares holds nothing, which is the ordinary inert case rather than an
 				 * escalation, and is why this is safe to leave in an operator's hands.
 				 */
-				updateTeam: Effect.fn('Identity.updateTeam')(function* (
-					effectId,
-					tenantId,
-					actorId,
-					teamId,
-					changes
-				) {
-					const current = yield* readTeam(EffectId.make(`${effectId}:team-read`), teamId);
-					if (current === undefined)
-						return { _tag: 'Refused', reason: `there is no team ${teamId}` } as const;
-					const name = (changes.name ?? current.name).trim();
-					if (name === '') return { _tag: 'Refused', reason: 'a team needs a name' } as const;
-					// Absent leaves the column alone; an explicit `null` clears it. Collapsing the two would
-					// mean a rename silently unparented the team, or that moving one to the root was
-					// inexpressible — both have to be sayable, so both are distinguished here.
-					const parentId =
-						changes.parentId === undefined ? (current.parentId ?? null) : changes.parentId;
-					if (parentId !== null) {
-						if (
-							(yield* readTeam(EffectId.make(`${effectId}:team-parent`), parentId)) === undefined
-						) {
-							return {
-								_tag: 'Refused',
-								reason: `there is no team ${parentId} to nest this one under`
-							} as const;
+				updateTeam: Effect.fn('Identity.updateTeam')(
+					function* (effectId, tenantId, actorId, teamId, changes) {
+						const current = yield* readTeam(EffectId.make(`${effectId}:team-read`), teamId);
+						if (current === undefined)
+							return { _tag: 'Refused', reason: `there is no team ${teamId}` } as const;
+						const name = (changes.name ?? current.name).trim();
+						if (name === '') return { _tag: 'Refused', reason: 'a team needs a name' } as const;
+						// Absent leaves the column alone; an explicit `null` clears it. Collapsing the two would
+						// mean a rename silently unparented the team, or that moving one to the root was
+						// inexpressible — both have to be sayable, so both are distinguished here.
+						const parentId =
+							changes.parentId === undefined ? (current.parentId ?? null) : changes.parentId;
+						if (parentId !== null) {
+							if (
+								(yield* readTeam(EffectId.make(`${effectId}:team-parent`), parentId)) === undefined
+							) {
+								return {
+									_tag: 'Refused',
+									reason: `there is no team ${parentId} to nest this one under`
+								} as const;
+							}
+							// The subtree walk starts *at* this team, so naming itself as its own parent is caught
+							// by the same query that catches naming one of its descendants — one refusal for one
+							// mistake, rather than two checks that can disagree.
+							const cycle = yield* database.execute(EffectId.make(`${effectId}:team-cycle`), {
+								_tag: 'Query',
+								sql: TEAM_SUBTREE_SQL,
+								parameters: [current.id, parentId]
+							});
+							if (cycle.rows[0] !== undefined) {
+								return {
+									_tag: 'Refused',
+									reason: `${current.name} cannot be nested inside its own subtree`
+								} as const;
+							}
 						}
-						// The subtree walk starts *at* this team, so naming itself as its own parent is caught
-						// by the same query that catches naming one of its descendants — one refusal for one
-						// mistake, rather than two checks that can disagree.
-						const cycle = yield* database.execute(EffectId.make(`${effectId}:team-cycle`), {
+						const description =
+							changes.description === undefined
+								? (current.description ?? null)
+								: changes.description;
+						const updated = yield* database.execute(EffectId.make(`${effectId}:team-update`), {
 							_tag: 'Query',
-							sql: TEAM_SUBTREE_SQL,
-							parameters: [current.id, parentId]
-						});
-						if (cycle.rows[0] !== undefined) {
-							return {
-								_tag: 'Refused',
-								reason: `${current.name} cannot be nested inside its own subtree`
-							} as const;
-						}
-					}
-					const description =
-						changes.description === undefined
-							? (current.description ?? null)
-							: changes.description;
-					const updated = yield* database.execute(EffectId.make(`${effectId}:team-update`), {
-						_tag: 'Query',
-						// The folded uniqueness test rides in the statement rather than in a read before it, so
-						// two operators renaming two teams to the same thing at once cannot both be told yes.
-						sql: `update bolt_team set "name" = $2::text, "parent_id" = $3::uuid, "description" = $4::text,
+							// The folded uniqueness test rides in the statement rather than in a read before it, so
+							// two operators renaming two teams to the same thing at once cannot both be told yes.
+							sql: `update bolt_team set "name" = $2::text, "parent_id" = $3::uuid, "description" = $4::text,
 						             "inherits" = $5::boolean, "norbital_updated_at" = now()
 						       where "norbital_id" = $1::uuid
 						         and not exists (select 1 from bolt_team other
 						                          where lower(other."name") = lower($2::text)
 						                            and other."norbital_id" <> $1::uuid)
 						   returning ${TEAM_COLUMNS}`,
-						parameters: [
-							current.id,
-							name,
-							parentId,
-							description,
-							changes.inherits ?? current.inherits
-						]
-					});
-					const row = updated.rows[0];
-					if (row === undefined)
-						return { _tag: 'Refused', reason: `a team called ${name} already exists` } as const;
-					const team = teamFromRow(row);
-					yield* recordTeamEvent(
-						EffectId.make(`${effectId}:team-update-audit`),
-						'team_updated',
-						actorId,
-						{ tenantId, teamId: team.id, team: team.name, previousName: current.name }
-					);
-					return { _tag: 'Team', team } as const;
-				}),
+							parameters: [
+								current.id,
+								name,
+								parentId,
+								description,
+								changes.inherits ?? current.inherits
+							]
+						});
+						const row = updated.rows[0];
+						if (row === undefined)
+							return { _tag: 'Refused', reason: `a team called ${name} already exists` } as const;
+						const team = teamFromRow(row);
+						yield* recordTeamEvent(
+							EffectId.make(`${effectId}:team-update-audit`),
+							'team_updated',
+							actorId,
+							{ tenantId, teamId: team.id, team: team.name, previousName: current.name }
+						);
+						return { _tag: 'Team', team } as const;
+					}
+				),
 				/**
 				 * Deleting a team — **refused while anybody still belongs to it.**
 				 *
@@ -1033,52 +1119,49 @@ export const layerWith = (canDeliver: boolean) =>
 				 * foreign key, so nothing performs that — this does. Losing a parent costs a team nothing
 				 * it held on its own, so there is no silent loss of authority to protect anybody from.
 				 */
-				deleteTeam: Effect.fn('Identity.deleteTeam')(function* (
-					effectId,
-					tenantId,
-					actorId,
-					teamId
-				) {
-					const current = yield* readTeam(EffectId.make(`${effectId}:team-read`), teamId);
-					if (current === undefined)
-						return { _tag: 'Refused', reason: `there is no team ${teamId}` } as const;
-					// An existence probe rather than a count: a count has to be parsed back out of a driver
-					// value, and a parse that failed would read as zero — which is exactly the answer that
-					// lets the delete through. One row or none cannot be misread that way.
-					const held = yield* database.execute(EffectId.make(`${effectId}:team-members`), {
-						_tag: 'Query',
-						sql: `select 1 from ${AUTH_MODELS.user} where "team_id" = $1::uuid and "tenantId" = $2::text
+				deleteTeam: Effect.fn('Identity.deleteTeam')(
+					function* (effectId, tenantId, actorId, teamId) {
+						const current = yield* readTeam(EffectId.make(`${effectId}:team-read`), teamId);
+						if (current === undefined)
+							return { _tag: 'Refused', reason: `there is no team ${teamId}` } as const;
+						// An existence probe rather than a count: a count has to be parsed back out of a driver
+						// value, and a parse that failed would read as zero — which is exactly the answer that
+						// lets the delete through. One row or none cannot be misread that way.
+						const held = yield* database.execute(EffectId.make(`${effectId}:team-members`), {
+							_tag: 'Query',
+							sql: `select 1 from ${AUTH_MODELS.user} where "team_id" = $1::uuid and "tenantId" = $2::text
 						      union all
 						      select 1 from bolt_external_subjects where team_id = $1::uuid and tenant_id = $2::text
 						      limit 1`,
-						parameters: [current.id, tenantId]
-					});
-					if (held.rows[0] !== undefined) {
-						return {
-							_tag: 'Refused',
-							reason: `${current.name} still has members — move them to another team before deleting it`
-						} as const;
+							parameters: [current.id, tenantId]
+						});
+						if (held.rows[0] !== undefined) {
+							return {
+								_tag: 'Refused',
+								reason: `${current.name} still has members — move them to another team before deleting it`
+							} as const;
+						}
+						const deleted = yield* database.execute(EffectId.make(`${effectId}:team-delete`), {
+							_tag: 'Query',
+							sql: `delete from bolt_team where "norbital_id" = $1::uuid returning ${TEAM_COLUMNS}`,
+							parameters: [current.id]
+						});
+						if (deleted.rows[0] === undefined)
+							return { _tag: 'Refused', reason: `there is no team ${teamId}` } as const;
+						yield* database.execute(EffectId.make(`${effectId}:team-reparent`), {
+							_tag: 'Query',
+							sql: `update bolt_team set "parent_id" = null, "norbital_updated_at" = now() where "parent_id" = $1::uuid`,
+							parameters: [current.id]
+						});
+						yield* recordTeamEvent(
+							EffectId.make(`${effectId}:team-delete-audit`),
+							'team_deleted',
+							actorId,
+							{ tenantId, teamId: current.id, team: current.name }
+						);
+						return { _tag: 'Team', team: current } as const;
 					}
-					const deleted = yield* database.execute(EffectId.make(`${effectId}:team-delete`), {
-						_tag: 'Query',
-						sql: `delete from bolt_team where "norbital_id" = $1::uuid returning ${TEAM_COLUMNS}`,
-						parameters: [current.id]
-					});
-					if (deleted.rows[0] === undefined)
-						return { _tag: 'Refused', reason: `there is no team ${teamId}` } as const;
-					yield* database.execute(EffectId.make(`${effectId}:team-reparent`), {
-						_tag: 'Query',
-						sql: `update bolt_team set "parent_id" = null, "norbital_updated_at" = now() where "parent_id" = $1::uuid`,
-						parameters: [current.id]
-					});
-					yield* recordTeamEvent(
-						EffectId.make(`${effectId}:team-delete-audit`),
-						'team_deleted',
-						actorId,
-						{ tenantId, teamId: current.id, team: current.name }
-					);
-					return { _tag: 'Team', team: current } as const;
-				}),
+				),
 				/**
 				 * Moving one person between teams, which writes `team_id` and nothing else.
 				 *
@@ -1090,61 +1173,57 @@ export const layerWith = (canDeliver: boolean) =>
 				 * Scoped by `tenantId`, which the boundary mints from the credential and never reads from
 				 * the payload, so this cannot reach a person in another workspace.
 				 */
-				assignTeam: Effect.fn('Identity.assignTeam')(function* (
-					effectId,
-					tenantId,
-					actorId,
-					memberId,
-					teamId
-				) {
-					const team =
-						teamId === null
-							? undefined
-							: yield* readTeam(EffectId.make(`${effectId}:team-read`), teamId);
-					if (teamId !== null && team === undefined)
-						return { _tag: 'Refused', reason: `there is no team ${teamId}` } as const;
-					if (!isRecordId(memberId))
-						return {
-							_tag: 'Refused',
-							reason: `there is nobody with id ${memberId} in this workspace`
-						} as const;
-					const moved = yield* database.execute(EffectId.make(`${effectId}:team-assign`), {
-						_tag: 'Query',
-						sql: `update ${AUTH_MODELS.user} set "team_id" = $2::uuid, "norbital_updated_at" = now()
+				assignTeam: Effect.fn('Identity.assignTeam')(
+					function* (effectId, tenantId, actorId, memberId, teamId) {
+						const team =
+							teamId === null
+								? undefined
+								: yield* readTeam(EffectId.make(`${effectId}:team-read`), teamId);
+						if (teamId !== null && team === undefined)
+							return { _tag: 'Refused', reason: `there is no team ${teamId}` } as const;
+						if (!isRecordId(memberId))
+							return {
+								_tag: 'Refused',
+								reason: `there is nobody with id ${memberId} in this workspace`
+							} as const;
+						const moved = yield* database.execute(EffectId.make(`${effectId}:team-assign`), {
+							_tag: 'Query',
+							sql: `update ${AUTH_MODELS.user} set "team_id" = $2::uuid, "norbital_updated_at" = now()
 						       where "norbital_id" = $1::uuid and "tenantId" = $3::text and "kind" = 'person'
 						   returning "norbital_id"::text as "id", "email"`,
-						parameters: [memberId, team?.id ?? null, tenantId]
-					});
-					const row = moved.rows[0];
-					if (row === undefined)
+							parameters: [memberId, team?.id ?? null, tenantId]
+						});
+						const row = moved.rows[0];
+						if (row === undefined)
+							return {
+								_tag: 'Refused',
+								reason: `there is nobody with id ${memberId} in this workspace`
+							} as const;
+						const email = IdentityRows.text(row, 'email');
+						yield* recordTeamEvent(
+							EffectId.make(`${effectId}:team-assign-audit`),
+							'member_team_changed',
+							actorId,
+							{ tenantId, memberId, team: team?.name ?? null }
+						);
+						// The same pair `acceptInvitation` emits, for the same reason: the host keeps a
+						// projection of who belongs where, and a move it never hears about leaves that
+						// projection describing a membership this workspace no longer has.
+						yield* identityHooks.emit(EffectId.make(`${effectId}:team-assign-hook`), {
+							_tag: 'MembershipChanged',
+							userId: memberId,
+							organizationId: tenantId,
+							...(email === undefined ? {} : { email }),
+							action: 'team_changed',
+							...(team === undefined ? {} : { team: team.name })
+						});
 						return {
-							_tag: 'Refused',
-							reason: `there is nobody with id ${memberId} in this workspace`
+							_tag: 'Assigned',
+							memberId,
+							...(team === undefined ? {} : { team })
 						} as const;
-					const email = IdentityRows.text(row, 'email');
-					yield* recordTeamEvent(
-						EffectId.make(`${effectId}:team-assign-audit`),
-						'member_team_changed',
-						actorId,
-						{ tenantId, memberId, team: team?.name ?? null }
-					);
-					// The same pair `acceptInvitation` emits, for the same reason: the host keeps a
-					// projection of who belongs where, and a move it never hears about leaves that
-					// projection describing a membership this workspace no longer has.
-					yield* identityHooks.emit(EffectId.make(`${effectId}:team-assign-hook`), {
-						_tag: 'MembershipChanged',
-						userId: memberId,
-						organizationId: tenantId,
-						...(email === undefined ? {} : { email }),
-						action: 'team_changed',
-						...(team === undefined ? {} : { team: team.name })
-					});
-					return {
-						_tag: 'Assigned',
-						memberId,
-						...(team === undefined ? {} : { team })
-					} as const;
-				}),
+					}
+				),
 				workspaceSettings: Effect.fn('Identity.workspaceSettings')(function* (effectId, tenantId) {
 					const result = yield* database.execute(effectId, {
 						_tag: 'Query',

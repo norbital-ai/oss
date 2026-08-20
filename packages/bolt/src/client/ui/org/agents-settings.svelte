@@ -1,7 +1,9 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { Bound, Cluster, Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { workspaceSession } from '../../session.js';
+	import ChannelPairing from './channel-pairing.svelte';
 
 	/**
 	 * The Agents surface: who answers in this workspace, and on which channels each one is reachable.
@@ -51,6 +53,18 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let activeTab = $state('channels');
+
+	/**
+	 * How long one status read may take before this page says so.
+	 *
+	 * Not a preference, and not defensive decoration. `transport.command` is a bare `fetch` with no
+	 * timeout of its own (`browser-transport.ts`), and the reads below were awaited with no signal —
+	 * so a command that never settled left its card reading "Checking" indefinitely, reporting
+	 * neither a status nor a failure. That is the one outcome this surface's whole premise forbids:
+	 * a state the runtime never published, rendered as though it had. A bound does not fix whatever
+	 * stalled upstream; it makes the stall say its own name instead of impersonating a slow page.
+	 */
+	const STATUS_DEADLINE_MS = 15_000;
 
 	/**
 	 * A channel names the agent that answers on it, and the manifest now carries that binding, so the
@@ -118,21 +132,45 @@
 			return;
 		}
 		loading = false;
-		await Promise.all(
-			channels.map(async ({ name }) => {
-				try {
-					statuses[name] = (await transport.command('channels.status', {
-						channel: name
-					})) as ChannelStatus;
-				} catch (cause) {
-					statusErrors[name] =
-						cause instanceof Error ? cause.message : 'The runtime did not report this channel.';
-				}
-			})
-		);
+		await Promise.all(channels.map(({ name }) => readStatus(name)));
 	};
 
-	void load();
+	/**
+	 * One channel's connection state, or the reason there is none, inside the deadline.
+	 *
+	 * The signal is handed to the command rather than raced beside it, so a read this page has
+	 * stopped waiting for also stops costing a request — a race would leave the fetch running
+	 * unobserved behind a card that already reported it as unanswered.
+	 *
+	 * A timeout is reported as a timeout and not as whatever `AbortSignal` happens to name its
+	 * reason. The distinction matters to whoever reads the card: "the runtime did not answer" is a
+	 * fact about this workspace's runtime, while `signal timed out` is a fact about the browser and
+	 * tells an operator nothing they can act on.
+	 */
+	const readStatus = async (channel: string): Promise<void> => {
+		const deadline = AbortSignal.timeout(STATUS_DEADLINE_MS);
+		try {
+			statuses[channel] = (await transport.command(
+				'channels.status',
+				{ channel },
+				deadline
+			)) as ChannelStatus;
+		} catch (cause) {
+			statusErrors[channel] = deadline.aborted
+				? `The runtime did not answer within ${Math.round(STATUS_DEADLINE_MS / 1000)}s.`
+				: cause instanceof Error
+					? cause.message
+					: 'The runtime did not report this channel.';
+		}
+	};
+
+	// The read is the browser's, as it is in `studio/agents-panel.svelte`: server rendering must not
+	// issue a Bolt command, and a reader who opens Agents has already asked the question it answers.
+	// It ran at component init here, which happens on the server too under any host that renders this
+	// surface — `workspaceSession()` throws there rather than returning a session to command with.
+	onMount(() => {
+		void load();
+	});
 </script>
 
 {#snippet channelEntry(declared: DeclaredChannel)}
@@ -144,27 +182,8 @@
 				<!-- A step below the agent's own name: inside an agent's card the channel is the detail,
 				     and at the same size the two read as siblings. -->
 				<h4 class="text-sm font-medium">{declared.name}</h4>
-				<p class="text-meta">
-					{#if failure !== undefined}
-						Connection state unreported
-					{:else if status === undefined}
-						Reading connection state…
-					{:else if status.registered}
-						Registered with the runtime
-					{:else}
-						Not registered
-					{/if}
-				</p>
+				<p class="text-meta">Declared in the workspace source.</p>
 			</div>
-			<span class="rounded-sm bg-muted px-1.5 py-0.5 text-meta">
-				{failure !== undefined
-					? 'Unreported'
-					: status === undefined
-						? 'Checking'
-						: status.registered
-							? 'Registered'
-							: 'Not registered'}
-			</span>
 		</Inline>
 		<!-- Outside the status block on purpose. The transport and the audience are declared in the
 		     workspace source, so they are known whether or not `channels.status` answered; folding them
@@ -185,20 +204,26 @@
 				</dd>
 			</Stack>
 		</Grid>
+		<!--
+			Whether this channel is connected is the *host's* answer, and it is the only one shown.
+			
+			There used to be a second status here, taken from `channels.status.registered`, and the two
+			would have contradicted each other on every card: that flag means "something once called
+			`channels.register`", nothing ever does, so it read "Not registered" beside a live paired
+			session. Worse, the honest fix is not to start writing it — a connection is host state, and
+			a marker row in the tenant database recording that a socket was once up would be exactly
+			the state this design keeps out of the tenant, and would stay true after an unpair.
+			
+			So the runtime is asked what only it knows — how much traffic this channel carried — and the
+			host is asked what only it knows. Neither answers for the other.
+		-->
+		<ChannelPairing channel={declared.name} provider={declared.transport} />
 		{#if failure !== undefined}
 			<!-- The message is shown verbatim: an operator who sees a blank card concludes the channel is
 			     idle, when the runtime in fact refused to answer for it. -->
 			<p class="border-t pt-4 text-xs text-destructive">{failure}</p>
 		{:else if status !== undefined}
 			<Grid as="dl" gap="sm" minimum="compact" class="border-t pt-4 text-xs">
-				<Stack gap="xs">
-					<dt class="font-medium text-foreground">Registration</dt>
-					<dd class="text-muted-foreground">
-						{status.registered
-							? 'The runtime holds a registration for this channel.'
-							: 'No registration recorded; nothing has called channels.register.'}
-					</dd>
-				</Stack>
 				<Stack gap="xs">
 					<dt class="font-medium text-foreground">Messages received</dt>
 					<dd class="text-muted-foreground">{status.received}</dd>
@@ -208,6 +233,8 @@
 					<dd class="text-muted-foreground">{status.replied}</dd>
 				</Stack>
 			</Grid>
+		{:else}
+			<p class="border-t pt-4 text-meta">Reading this channel's traffic…</p>
 		{/if}
 	</Stack>
 {/snippet}

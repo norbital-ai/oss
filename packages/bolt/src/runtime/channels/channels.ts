@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schema } from 'effect';
-import type { EffectId } from '@norbital-ai/bolt-protocol';
+import { EffectId } from '@norbital-ai/bolt-protocol';
 import { Agents } from '../agents/agents.js';
 import { AccessControl } from '../access/access-control.js';
 import { ApprovalConflict } from '../approvals/approvals.js';
@@ -7,7 +7,8 @@ import { PendingApproval } from '../collections/collections.js';
 import type { WhereCompileError } from '../collections/where.js';
 import { Communication } from '../facilities/services.js';
 import { Database } from '../facilities/database.js';
-import type { Identity } from '../identity/identity.js';
+import { Identity } from '../identity/identity.js';
+import { channelPrincipalEmail, channelSubject } from './channel-principal.js';
 import { Workspace } from '../workspace.js';
 import { AuthoredRefusal } from '../../authoring/refusal.js';
 import { InvocationBudget } from '../budget.js';
@@ -27,6 +28,64 @@ export const ChannelStatus = Schema.Struct({
 	replied: Schema.Number
 });
 export interface ChannelStatus extends Schema.Schema.Type<typeof ChannelStatus> {}
+
+/**
+ * One message a host took off a transport, with everything the transport knows about it.
+ *
+ * Notice what is *not* here: a subject. It used to be the second argument of `receive`, supplied by
+ * the caller, and that could never be right — the host holds a socket, not a workspace identity, and
+ * `subject` is a `MINTED_IDENTITY` field precisely so nothing outside this runtime decides who a
+ * request is. A phone number is a fact about a wire; who that is, and what they may do, is resolved
+ * below from the release's own declarations.
+ */
+export const ChannelDelivery = Schema.Struct({
+	/** The transport's own conversation address — a chat id, a group id. */
+	conversationId: Schema.NonEmptyString,
+	conversationKind: Schema.Literals(['dm', 'group']),
+	/**
+	 * The transport's own message id, which is what makes a redelivery recognisable.
+	 *
+	 * It must be the provider's and not one the host minted, or two deliveries of one message get two
+	 * ids and the deduplication below silently stops deduplicating.
+	 */
+	messageId: Schema.NonEmptyString,
+	/** How the agent was addressed in a group: directly, by mention, by reply, or not at all. */
+	invocation: Schema.Literals(['direct', 'mention', 'reply', 'ambient']),
+	text: Schema.String,
+	sender: Schema.optionalKey(
+		Schema.Struct({
+			/** The transport's address for the sender — a JID, a handle. Never an account id. */
+			id: Schema.NonEmptyString,
+			displayName: Schema.optionalKey(Schema.NonEmptyString)
+		})
+	)
+});
+export interface ChannelDelivery extends Schema.Schema.Type<typeof ChannelDelivery> {}
+
+/**
+ * What became of one delivery.
+ *
+ * Every arm is a state the runtime actually reached, and each is reported rather than folded into a
+ * failure: a duplicate is not an error, a group message the channel ignores is not an error, and an
+ * unregistered sender on an `authenticated` channel is the channel working exactly as declared. Only
+ * `answered` ran a model.
+ */
+export const ChannelOutcome = Schema.Struct({
+	status: Schema.Literals([
+		'answered',
+		'duplicate',
+		'silent',
+		'registration_required',
+		'no_principal'
+	]),
+	channel: Schema.NonEmptyString,
+	conversationId: Schema.NonEmptyString,
+	/** The reply the sender was given, when one was sent without running a model. */
+	text: Schema.optionalKey(Schema.String),
+	result: Schema.optionalKey(Agents.TurnResult)
+});
+export interface ChannelOutcome extends Schema.Schema.Type<typeof ChannelOutcome> {}
+
 export type Interface = Readonly<{
 	readonly register: (
 		effectId: EffectId,
@@ -35,12 +94,10 @@ export type Interface = Readonly<{
 	/** Runs an agent turn, so it inherits every way that turn can fail, including a refused filter. */
 	readonly receive: (
 		effectId: EffectId,
-		subject: Identity.Subject,
 		channelName: string,
-		conversationId: string,
-		message: string
+		delivery: ChannelDelivery
 	) => Effect.Effect<
-		Agents.TurnResult,
+		ChannelOutcome,
 		| ChannelError
 		| Workspace.WorkspaceLookupError
 		| AccessControl.AccessDenied
@@ -76,6 +133,7 @@ export const layer = Layer.effect(
 	Effect.gen(function* () {
 		const workspace = yield* Workspace.Service;
 		const agents = yield* Agents.Service;
+		const identity = yield* Identity.Service;
 		const communication = yield* Communication.Service;
 		const database = yield* Database.Service;
 		/** Owns declaration behavior at the channels boundary so validation and typed semantics stay consistent for every caller. */
@@ -147,6 +205,37 @@ export const layer = Layer.effect(
 				});
 			}
 		});
+		/**
+		 * Close one claimed message off with what became of it.
+		 *
+		 * Separate from the claim so the ledger records an *outcome* rather than an intention. It
+		 * cannot fail the delivery: the message has been answered by the time this runs, and losing
+		 * the audit line is not a reason to tell the sender their message failed — nor to answer it
+		 * twice on the redelivery that a raised error would invite.
+		 */
+		const settle = Effect.fn('Channels.settle')(function* (
+			effectId: EffectId,
+			claimed: { readonly rows: ReadonlyArray<unknown> },
+			status: string
+		) {
+			const row = claimed.rows[0];
+			const id =
+				row !== null && typeof row === 'object' ? Reflect.get(row, 'norbital_id') : undefined;
+			if (typeof id !== 'string') return;
+			yield* database
+				.execute(EffectId.make(`${effectId}:settle`), {
+					_tag: 'Query',
+					sql: 'update bolt_channel_inbound set status = $2, answered_at = now() where "norbital_id" = $1::uuid',
+					parameters: [id, status]
+				})
+				.pipe(
+					Effect.catch((failure) =>
+						Effect.logWarning(
+							`channels: could not record the outcome of an inbound message: ${failure.message}`
+						)
+					)
+				);
+		});
 		return Service.of({
 			register: Effect.fn('Channels.register')(function* (effectId, channelName) {
 				yield* requireChannel(channelName);
@@ -156,26 +245,157 @@ export const layer = Layer.effect(
 					parameters: [channelName]
 				});
 			}),
-			receive: Effect.fn('Channels.receive')(
-				function* (effectId, subject, channelName, conversationId, message) {
-					const channel = yield* requireChannel(channelName);
-					yield* admitInbound(effectId, channel, conversationId, subject.userId);
-					const result = yield* agents.turn(
-						effectId,
-						subject,
-						channel.agent,
-						conversationId,
-						message
-					);
-					yield* communication.execute(effectId, {
+			receive: Effect.fn('Channels.receive')(function* (effectId, channelName, delivery) {
+				const channel = yield* requireChannel(channelName);
+				const senderId = delivery.sender?.id;
+				const reply = (text: string) =>
+					communication.execute(effectId, {
 						_tag: 'Send',
 						channel: channel.transport,
-						recipient: subject.userId,
-						payload: result.output
+						recipient: delivery.conversationId,
+						payload: { text }
 					});
-					return result;
+
+				/**
+				 * A group message the channel was not addressed by is not for the agent.
+				 *
+				 * Checked before the claim below, so an ambient message in a busy group costs a
+				 * declaration read rather than a row. `disabled` means the agent is not in groups at all;
+				 * `mention_or_reply` means it answers when spoken to and stays quiet otherwise.
+				 */
+				const addressed =
+					delivery.conversationKind !== 'group' ||
+					(channel.groupMessages !== 'disabled' &&
+						(channel.groupMessages !== 'mention_or_reply' ||
+							delivery.invocation === 'mention' ||
+							delivery.invocation === 'reply'));
+				if (!addressed)
+					return {
+						status: 'silent' as const,
+						channel: channelName,
+						conversationId: delivery.conversationId
+					};
+
+				/**
+				 * Claim this message exactly once, before anything expensive happens.
+				 *
+				 * The claim is the whole duplicate defence and its position is the point: a transport
+				 * that redelivers — and every one of them does — costs one failed insert here instead of
+				 * one agent run, one bill, and a second answer to a question already answered. An empty
+				 * `returning` *is* the duplicate, so no second read is needed to detect one.
+				 */
+				const claimed = yield* database.execute(effectId, {
+					_tag: 'Query',
+					sql: `insert into bolt_channel_inbound
+					        (channel_name, external_conversation_id, external_message_id, receipt_key,
+					         sender_external_id, sender_display_name, status)
+					      values ($1, $2, $3, $4, $5, $6, 'received')
+					      on conflict (receipt_key) do nothing
+					  returning "norbital_id"`,
+					parameters: [
+						channelName,
+						delivery.conversationId,
+						delivery.messageId,
+						`${channelName}:${delivery.conversationId}:${delivery.messageId}`,
+						senderId ?? null,
+						delivery.sender?.displayName ?? null
+					]
+				});
+				if (claimed.rows[0] === undefined)
+					return {
+						status: 'duplicate' as const,
+						channel: channelName,
+						conversationId: delivery.conversationId
+					};
+
+				yield* admitInbound(effectId, channel, delivery.conversationId, senderId ?? 'anonymous');
+
+				/**
+				 * The principal is what gives this turn any authority at all, so its absence is a refusal.
+				 *
+				 * Not a fallback, and deliberately not the system subject or an empty-team subject either.
+				 * A workspace that declares no team holding this channel's policy has not said what the
+				 * channel may do; running anyway would either grant everything or grant nothing while
+				 * looking like it worked. `reconcileChannelPrincipals` logs the same condition at deploy,
+				 * naming the team that needs declaring, so this is the second time somebody is told.
+				 */
+				const principal = yield* identity
+					.subjectByEmail(effectId, channelPrincipalEmail(channelName))
+					.pipe(Effect.catch(() => Effect.succeed(undefined)));
+				if (principal === undefined) {
+					const text =
+						'This agent is not configured yet and cannot answer. An administrator needs to finish setting up its permissions.';
+					yield* reply(text);
+					return {
+						status: 'no_principal' as const,
+						channel: channelName,
+						conversationId: delivery.conversationId,
+						text
+					};
 				}
-			),
+
+				/**
+				 * Who is speaking — and *only* who. This decides nothing about capability.
+				 *
+				 * `authenticated` means the channel answers people who hold an account here, so an
+				 * unmatched sender is turned away before a model runs. `public` means it answers anyone,
+				 * so nobody is looked up at all.
+				 */
+				const linked =
+					channel.audience === 'authenticated' && senderId !== undefined
+						? yield* identity.accountByTransportIdentity(effectId, channel.transport, senderId)
+						: undefined;
+				if (channel.audience === 'authenticated' && linked === undefined) {
+					const text =
+						'This agent is available only to registered members. Ask an administrator to verify this ' +
+						'number on your workspace account, then send your message again.';
+					yield* reply(text);
+					yield* settle(effectId, claimed, 'registration_required');
+					return {
+						status: 'registration_required' as const,
+						channel: channelName,
+						conversationId: delivery.conversationId,
+						text
+					};
+				}
+
+				// The one rule that must not be wrong, named and asserted on in `channel-principal.ts`:
+				// capability stays the principal's, identity becomes the sender's, `admin` is dropped.
+				const subject = channelSubject(principal, linked);
+
+				const who =
+					delivery.sender === undefined
+						? `This message arrived on the ${channel.transport} channel "${channelName}" from an unidentified sender.`
+						: `This message arrived on the ${channel.transport} channel "${channelName}" from ${
+								delivery.sender.displayName ?? 'an unnamed contact'
+							} at ${delivery.sender.id}, who ${
+								linked === undefined
+									? 'holds no account in this workspace'
+									: 'is a registered member of this workspace'
+							}.`;
+
+				const result = yield* agents.turn(
+					effectId,
+					subject,
+					channel.agent,
+					`${channelName}:${delivery.conversationKind}:${delivery.conversationId}`,
+					delivery.text,
+					who
+				);
+				yield* communication.execute(effectId, {
+					_tag: 'Send',
+					channel: channel.transport,
+					recipient: delivery.conversationId,
+					payload: result.output
+				});
+				yield* settle(effectId, claimed, 'answered');
+				return {
+					status: 'answered' as const,
+					channel: channelName,
+					conversationId: delivery.conversationId,
+					result
+				};
+			}),
 			reply: Effect.fn('Channels.reply')(function* (effectId, channelName, recipient, payload) {
 				const channel = yield* requireChannel(channelName);
 				yield* communication.execute(effectId, {

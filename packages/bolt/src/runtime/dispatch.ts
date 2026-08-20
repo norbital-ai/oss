@@ -12,7 +12,7 @@ import { Agents } from './agents/agents.js';
 import { AI, Files } from './facilities/services.js';
 import { Approvals, ApprovalState } from './approvals/approvals.js';
 import { Automations } from './automations/automations.js';
-import { Channels } from './channels/channels.js';
+import { ChannelDelivery, Channels } from './channels/channels.js';
 import { Collections } from './collections/collections.js';
 import { compileOrderTerms, makeWhereContext } from './collections/where.js';
 import { Integrations } from './integrations/integrations.js';
@@ -189,11 +189,19 @@ const AutomationStartInput = Schema.Struct({
 	name: Schema.NonEmptyString,
 	input: Schema.Json
 });
+/**
+ * What a host may say about a message it took off a transport.
+ *
+ * `subject` is gone from this input and its absence is the point. It was a `Subject` the caller
+ * supplied, which made the identity of a channel turn something outside the runtime decided — and on
+ * a `Command` the boundary overwrites `subject` from the credential anyway, so a host relaying a
+ * WhatsApp message could only ever have run the turn as *itself*, an administrator. `Channels.receive`
+ * resolves the requestor from the release's own declarations now; the host supplies the wire's facts
+ * and nothing about authority.
+ */
 const ChannelReceiveInput = Schema.Struct({
-	subject: Subject,
 	channel: Schema.NonEmptyString,
-	conversationId: Schema.NonEmptyString,
-	message: Schema.String
+	delivery: ChannelDelivery
 });
 /**
  * `binding` is what a scheduled pull carries and an enqueued one does not.
@@ -696,7 +704,26 @@ const authorizeMembershipCommand = Effect.fn('Bolt.authorizeMembershipCommand')(
  * row, a cookie or an authored policy to holding it. An administrator is not enough, and an
  * administrator being not enough is the point.
  */
-const SYSTEM_ONLY_COMMANDS: ReadonlySet<string> = new Set(['identity.bootstrapFounder']);
+const SYSTEM_ONLY_COMMANDS: ReadonlySet<string> = new Set([
+	'identity.bootstrapFounder',
+	/**
+	 * The inbound channel port, which would otherwise be the widest hole in this runtime.
+	 *
+	 * `channels.receive` no longer decodes a `Subject` — it resolves the requestor itself from the
+	 * channel's declared policy — and that removal is exactly what makes this entry necessary. A
+	 * command that names no identity is a command the credential path admits without one, so without
+	 * this line anybody who could reach the port could post a JSON body and make a workspace's agent
+	 * run a turn, as that workspace's channel principal, against that workspace's data. The sender
+	 * address in the payload is attacker-chosen, so they could also choose *whose* assignments the
+	 * turn narrowed to.
+	 *
+	 * Gating it on the gateway signature is the honest expression of what a channel message is: proof
+	 * that a message came from WhatsApp requires WhatsApp's credential, which the tenant does not
+	 * hold, so the host authenticates the wire and says so with a signature over the timestamp, the
+	 * command, the tenant and the arguments. Nothing else can assert that a message arrived.
+	 */
+	'channels.receive'
+]);
 
 /** The prefix a spent founder claim is filed under, so it cannot collide with a sign-in code's row. */
 const FOUNDER_CLAIM_IDENTIFIER = 'founder-claim:';
@@ -2338,15 +2365,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		case 'channels.receive': {
 			const input = yield* decode(ChannelReceiveInput, commandInput);
 			const channels = yield* Channels.Service;
-			return json(
-				yield* channels.receive(
-					effectId,
-					input.subject,
-					input.channel,
-					input.conversationId,
-					input.message
-				)
-			);
+			return json(yield* channels.receive(effectId, input.channel, input.delivery));
 		}
 		case 'channels.register': {
 			const input = yield* decode(ChannelNameInput, commandInput);

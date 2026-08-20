@@ -48,6 +48,10 @@ describe('WorkspaceSchema owner', () => {
 			'collection:bolt_auth_session:index:token',
 			'collection:bolt_auth_session:index:userId',
 			'collection:bolt_auth_user',
+			// Sorts between the table and its indexes, which is the whole reason its id is
+			// `collection:…` rather than `bolt:…`: a `bolt:` prefix would sort ahead of the
+			// `create table` and a fresh provision would fail on a relation that does not exist yet.
+			'collection:bolt_auth_user:column:channels',
 			'collection:bolt_auth_user:index:email',
 			'collection:bolt_auth_user:index:team_id',
 			'collection:bolt_auth_user:index:tenantId',

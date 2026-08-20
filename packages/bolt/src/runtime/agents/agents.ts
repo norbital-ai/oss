@@ -262,7 +262,20 @@ export type Interface = Readonly<{
 		subject: Identity.Subject,
 		agentName: string,
 		conversationId: string,
-		message: string
+		message: string,
+		/**
+		 * Who is speaking, when the caller knows something the transcript does not.
+		 *
+		 * A channel message arrives from a phone number, and the person behind it may or may not have
+		 * an account — so the agent has to be *told* who it is answering, and told separately from
+		 * what they said. It is a system message rather than a prefix on `message` precisely so the
+		 * model cannot confuse a fact the runtime asserted with a claim the sender typed; somebody
+		 * writing "I am the site controller" into WhatsApp must not read as this.
+		 *
+		 * It grants nothing and is not consulted by anything. Capability is `subject`'s, resolved
+		 * from a team through `+teams.ts`, whatever this string says.
+		 */
+		senderContext?: string
 	) => Effect.Effect<
 		TurnResult,
 		| Workspace.WorkspaceLookupError
@@ -489,7 +502,7 @@ export const layer = Layer.effect(
 			}),
 			// stupidity:allow Q3 -- the tool loop and the records it writes are one unit of meaning
 			turn: Effect.fn('Agents.turn')(
-				function* (effectId, subject, agentName, conversationId, message) {
+				function* (effectId, subject, agentName, conversationId, message, senderContext) {
 					const agent = yield* workspace.agent(agentName).pipe(
 						Effect.catch((error) =>
 							error instanceof WorkspaceLookupError
@@ -529,6 +542,11 @@ export const layer = Layer.effect(
 					}));
 					const messages: Array<Schema.Json> = [
 						{ role: 'system', content: agent.prompt },
+						// Second and separate, so the agent's standing instruction stays the thing the author
+						// wrote and this stays the runtime's own statement about who it is talking to.
+						...(senderContext === undefined
+							? []
+							: [{ role: 'system', content: senderContext } as Schema.Json]),
 						...transcript.rows.flatMap((row): ReadonlyArray<Schema.Json> => {
 							const decoded = Schema.decodeUnknownOption(MessageRow)(row);
 							if (decoded._tag === 'None') return [];

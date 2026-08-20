@@ -1,4 +1,5 @@
-import { boolean, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import type { TransportIdentity } from '../channels/transport-identity.js';
 
 /**
  * Better Auth's view of identity's tables.
@@ -45,7 +46,14 @@ export const boltAuthUser = pgTable('bolt_auth_user', {
 	 * here for the reason the columns above it are: this is Better Auth's view of the whole table,
 	 * and a column the collection declares but the view omits is drift no type check can see.
 	 */
-	team_id: uuid('team_id')
+	team_id: uuid('team_id'),
+	/**
+	 * The messaging identities this person has proven are theirs. Bolt's concept, which Better Auth
+	 * never reads — mapped here for the reason `kind`, `tenantId` and `team_id` are: this is Better
+	 * Auth's view of the whole table, and a column the collection declares but the view omits is
+	 * drift no type check can see.
+	 */
+	channels: jsonb('channels').$type<ReadonlyArray<TransportIdentity>>()
 });
 
 export const boltAuthSession = pgTable('bolt_auth_session', {
