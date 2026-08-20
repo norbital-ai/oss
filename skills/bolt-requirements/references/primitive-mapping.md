@@ -41,9 +41,9 @@ should be used unless a specific requirement breaks it.
 
 | Requirement                               | Construction                             | Notes                                                                                                        |
 | ----------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Internal roles with different permissions | teams + `src/policies/+<name>.policy.ts` | policy is source: who may read what, what needs approval; precedent: field-operations                        |
+| Internal roles with different permissions | `src/policies/+<name>.policy.ts` + `src/+teams.ts` | policy is source: who may read what, what needs approval. A person is on exactly one team, so a combination of authority is its own named team; there are no roles. Precedent: field-operations |
 | A decision that needs a second person     | an approval flow on the policy           | write-then-lock: the write lands pending, approval moves it; the `norbital-platform` skill has the behaviour |
-| External people with accounts             | policies + teams, same as internal       | nothing special about external users except who grants them                                                  |
+| External people with accounts             | policies + teams, same as internal       | nothing special about external users except which team they are put on                                       |
 | External people without accounts          | a channel + agent surface                | scoped by policy to their own records; precedent: field-operations contractors on WhatsApp                   |
 
 ## The outside world

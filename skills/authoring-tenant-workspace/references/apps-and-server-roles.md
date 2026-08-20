@@ -165,7 +165,17 @@ const forecast = await client.invoke.compute_forecast({ site_id: '…' });
 
 Reads are reactive queries, mutations are promises, and mutations invalidate related queries. Use opaque
 cursors (`after`), query-level grouping/aggregation, and collection filters rather than broad in-memory work.
-Server roles use the same database method names with promises.
+
+`create` and `update` answer with the **stored row**, not with the values that were handed in: a
+record is not what the form posted once a column default, a generated column and a
+`perRecord.before` hook have run, and a caller that put its own argument into a store was holding a
+record that had never existed. The browser does not mint the primary key either — the server assigns
+it. `create` also accepts a **graph**: a key naming a declared `many` relation carries the records
+that belong to this one, and the server writes the parent and its children in one transaction,
+filling each child's foreign key from the id it assigns the parent.
+
+Server roles reach the same collections under the same names, but through Effects rather than
+promises — `yield* api.db.query.<collection>.findMany(...)`, `yield* api.db.<collection>.create(...)`.
 
 ## Automation
 

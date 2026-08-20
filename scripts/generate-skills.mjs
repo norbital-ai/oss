@@ -324,18 +324,28 @@ function generateSource(skills) {
 	return `${header.join('\n')}\n${body}\n];\n`;
 }
 
+/**
+ * Formats through prettier's own binary, not through `pnpm exec`.
+ *
+ * This captures stdout and writes it to the bundle, so anything else that speaks on stdout ends up
+ * *inside* the generated file. `pnpm exec` does: on a cold store it prints its scope and
+ * supply-chain banner there, and six lines of it were written into the head of
+ * `skills.generated.ts`, breaking the parse with twenty-three syntax errors. It reproduces only on a
+ * machine whose pnpm has not spoken yet — a fresh clone, or CI — which is the worst shape of bug to
+ * leave in a generator: invisible everywhere it was written, and failing on the machine nobody is
+ * watching.
+ *
+ * Calling the binary directly removes the layer that can speak rather than filtering what it says.
+ */
 function formatSource(source) {
+	const prettier = path.join(repositoryRoot, 'node_modules', '.bin', 'prettier');
 	try {
-		return execFileSync(
-			'pnpm',
-			['exec', 'prettier', '--stdin-filepath', path.relative(repositoryRoot, outputFile)],
-			{
-				cwd: repositoryRoot,
-				input: source,
-				encoding: 'utf8',
-				stdio: ['pipe', 'pipe', 'pipe']
-			}
-		);
+		return execFileSync(prettier, ['--stdin-filepath', path.relative(repositoryRoot, outputFile)], {
+			cwd: repositoryRoot,
+			input: source,
+			encoding: 'utf8',
+			stdio: ['pipe', 'pipe', 'pipe']
+		});
 	} catch (cause) {
 		const detail = cause?.stderr?.toString().trim();
 		fail(`prettier failed${detail ? `: ${detail}` : ''}`);

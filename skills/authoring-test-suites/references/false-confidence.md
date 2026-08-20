@@ -48,8 +48,8 @@ oss/packages/bolt/src/runtime/identity/identity.ts:76
 
 The vertical-slice suite's subject fixture stands in for the `bolt_auth_user` row that query returns.
 When that fixture carried authority as `admin: true` or as `roles: ['admin']` instead of
-`status: 'admin'` (`oss/packages/bolt/tests/runtime/vertical-slice.test.ts:155`), seven tests
-believed they were exercising an administrator and were silently authenticating as an ordinary user.
+`status: 'admin'` (`oss/packages/bolt/tests/runtime/vertical-slice.test.ts`), seven tests believed
+they were exercising an administrator and were silently authenticating as an ordinary user.
 The suite was green, the cases were named for admin behaviour, and none of them touched the admin
 path.
 
@@ -87,11 +87,13 @@ column the real query forgot to ask for.** The only thing that catches it is a r
 answering a real query — which is why the workspace-access suite runs against PGlite and seeds
 `bolt_auth_user` rows with SQL rather than handing the service a literal.
 
-Note that the real database is necessary and not sufficient. That suite still seeds authority into
-the wrong column (`oss/packages/bolt/tests/identity/workspace-access.test.ts:39` writes the string
-`admin` into `roles`, which nothing in production does), so it pins a mapping the source no longer
-performs. Getting the database into the test buys you nothing if the row you write is one the system
-cannot produce — see [worked-examples.md](worked-examples.md) §2.
+Note that the real database is necessary and not sufficient. That suite used to seed authority into
+the wrong column — `workspace-access.test.ts` wrote the string `admin` into a `roles` array, which
+nothing in production ever did — so it pinned a mapping the source did not perform, with PGlite
+underneath it the whole time. Getting the database into the test buys you nothing if the row you
+write is one the system cannot produce. It is seeded as `status` now, and `bolt_auth_user` has no
+`roles` column left to write into: a person's authority is their `status`, and their policies come
+from the one team `team_id` names. See [worked-examples.md](worked-examples.md) §2.
 
 **Rule.** When the behaviour is "what the database gives back", the database has to be in the test.
 That is what integration tests are for, and it is a short list: constraints, cascades, indexes,
@@ -163,8 +165,9 @@ test is the next line.
 
 **Rule.** Assert the state that resulted. Where a sequence is the behaviour, record it and assert
 the recorded sequence
-(`templates/hr-payroll/src/collections/payroll_runs/settlement-lock.test.ts:255` asserts locks were
-released before payslips, and that another run's claims survived).
+(`templates/hr-payroll/src/collections/payroll_runs/payslip-sources-lock.test.ts:222` records what
+`clearRunResults` deleted and asserts it was the run's payslips and only those — their source rows go
+by the database's own cascade — and then asserts another run's payslips survived).
 
 ---
 
@@ -175,15 +178,24 @@ A test that reimplements the rule it is checking passes forever against its own 
 *good* example, because of how it handles it:
 
 ```
-:11  "  - `subjectHasPolicy`  — `const roles = policy.roles ?? [policy.name]`, compared case-folded.
-      …"
-:16  "The restatement is the known weakness: if the runtime's matcher changes, these keep passing
+:11  "  - `policiesHeldByTeam` — `teamsByFoldedName.get(teamName.toLocaleLowerCase())`, then each name
+                                it yields kept only when `declaredPolicies.has(folded)`. So a policy is
+                                held when a team in the subject's `teamPath` declares its `name`, with
+                                both team names and policy names folded."
+:19  "The restatement is the known weakness: if the runtime's matcher changes, these keep passing
       against a stale copy. It is three lines rather than three hundred for exactly that reason,
       and each one is quoted so the drift is visible in a diff of either side."
 ```
 
 Three properties make the trade-off acceptable: the restatement is minimal, each line is quoted from
 the source it copies, and the weakness is stated in the header where the next reader will see it.
+
+**And the weakness fired.** That header used to restate `subjectHasPolicy` as
+`const roles = policy.roles ?? [policy.name]`. `PolicyDeclaration.roles` no longer exists — a policy
+is selected by its `name` and by the teams that declare it in `src/+teams.ts`, and nothing else — so
+for as long as the rename went unnoticed those assertions were passing against a copy of a rule the
+runtime had stopped performing. The restatement is exactly what made that visible in a diff instead
+of invisible in a green run, which is the argument for the discipline rather than against it.
 
 **Rule.** Prefer driving the real rule. If you must restate it, keep the restatement to a line, quote
 its origin, and write down that it can drift. A documented weakness is a maintained test; an

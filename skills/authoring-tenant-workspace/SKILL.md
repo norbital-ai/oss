@@ -108,6 +108,7 @@ src/
 ├── lib/**                         # optional, free-form helper code — no role, no `+` prefix
 ├── +agent.ts                      # optional
 ├── +env.ts                        # optional — declare env vars; private keys are server-only
+├── +teams.ts                      # optional — which policies each named team holds
 └── +seed.ts                       # optional
 ```
 
@@ -330,21 +331,34 @@ sentence; "runs before create" restates the key and is worse than nothing.
   `Effect.gen(function* () { ... })` receiving `{ input, api }`, and every `api.db.*`,
   `api.infer`, and `api.readFileAsset` call returns an `Effect.Effect` you `yield*` — never a
   plain Promise (promises and plain values are still admitted and normalized at the authoring
-  boundary). The runtime actually executes these handlers: before/after hooks wrap create, update,
-  and delete — one hook per record, whether the write was one row or a batch of four thousand —
-  import/export pipelines run the
-  canonical import and export flows, and change-triggered automations receive
-  `{ args, scope }` with the triggering row as `scope.incoming_record`.
-- Hooks validate and return the exact input/patch, then make only immediate database or asset
+  boundary). Import/export pipelines run the canonical import and export flows, and
+  change-triggered automations receive `{ args, scope }` with the triggering row as
+  `scope.incoming_record`.
+- **A write declaration is arranged by how often each part runs**, and the nesting is the
+  documentation: `create: { input, prepare, perRecord: { before, after } }`. `prepare` runs **once
+  for the batch** and exists for the reads a whole batch needs — the bulk query a person can write
+  and a resolver cannot derive; it returns data and decides nothing. `perRecord.before` and
+  `perRecord.after` run **once per record**, and every decision lives there, written once, whether
+  the write was one row or four thousand. `update` and `delete` take the same `perRecord` nesting;
+  only `create` has `prepare`. `batchHandler` no longer exists. Details in
+  [data-access.md](references/data-access.md#batch-genuine-bulk-work).
+- Hooks validate and return the exact input/patch — and a create's `perRecord.before` may return the
+  record **plus the records that belong to it**, keyed by a declared `many` relation name, which the
+  runtime commits in the same transaction. Otherwise they make only immediate database or asset
   reads. Hooks MAY call bounded `api.infer` for judgement (photos etc.); heavy/durable infer still
-  belongs in automations. They never queue work, send email, or spawn agent sessions. Reject a write
-  with `refuse(message)` from `@norbital-ai/bolt/authoring` — it reaches the caller as a typed
-  refusal (422 with your sentence), not as a runtime fault.
-- **Validation goes in `before`, always.** There are no transactions around a hook: the database
-  facility autocommits every statement, so by the time `after` runs the row is a fact and nothing can
-  undo it. A check in `after` that refuses leaves the record behind — hr-payroll's orphaned DRAFT
-  runs with no payslips came from exactly that. `after` is for work that follows the record
-  existing, and its failures are reported rather than swallowed.
+  belongs in automations. They never send email or spawn agent sessions; background work goes
+  through `api.automations.run(name, input, { after })`, which starts a **declared** automation
+  durably and with retry, and is the only such door (there is no `api.tasks`). Reject a write with
+  `refuse(message)` from `@norbital-ai/bolt/authoring` — it reaches the caller as a typed refusal
+  (422 with your sentence), not as a runtime fault.
+- **Validation goes in `perRecord.before`, always — and this is a correctness rule, not a
+  preference.** A batch runs PREPARE → COMMIT → SETTLE. `before` and the graph it returns are inside
+  PREPARE, before the one transaction, so a refusal fails the whole batch with nothing written.
+  `after` runs in SETTLE, past the commit, so by then the row is a fact and nothing can undo it —
+  a check there that refuses leaves the record behind, which is where hr-payroll's orphaned DRAFT
+  runs with no payslips came from. **Anything that must succeed or fail atomically with the record
+  belongs in `before` and its graph, never in `after`.** `after` is for work that follows the record
+  existing, its failures are reported rather than swallowed, and a caller must not retry them.
 - Automations run after commit, are durable and idempotent, and receive stable event IDs. They are
   always deterministic handlers; when one needs model judgement, call `api.infer` with an Effect
   `Schema.Schema` for `schema` (never zod), optional `images`, and optional named workspace tools.
@@ -354,6 +368,14 @@ sentence; "runs before create" restates the key and is worse than nothing.
 - Remotes are imperative request/response methods declared with `defineQueryHandler` /
   `defineCommandHandler`; their payload schema is an Effect `Schema` (e.g. `Schema.Struct`), adapted
   to `~standard` for dispatch validation. Reactive reads belong to `client.db`.
+- **A policy is named by its file, and a team is what holds it.** `+sales_rep.policy.ts` declares
+  `name: 'sales_rep'`, and that one string is what everything binds to — the generated `PolicyName`
+  union, a channel's `policy` ceiling, and `src/+teams.ts`, which maps each team name to the policy
+  names it holds (`satisfies Teams`, narrowed to this workspace's declared policies). There is no
+  `roles` array on a policy and no second way to select one: a person belongs to exactly one team
+  (`bolt_auth_user.team_id`), team membership is a row an operator edits, and what a team may *do*
+  is this compiled file. Team names are matched case-insensitively. Behaviour is in the
+  `norbital-platform` skill's `approvals-and-policies.md`.
 - Integrations use portable runtime delivery facilities; missing facilities fail at boot.
 - Put tenant-specific fixture behavior in `src/+seed.ts`. Sensitive statutory or system seed remains Colony-owned.
 

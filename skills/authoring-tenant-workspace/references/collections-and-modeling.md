@@ -92,72 +92,112 @@ import type { Hooks } from './$types.js';
 
 export default {
 	create: {
-		before: {
-			description: 'Rejects a visit against an unknown site and defaults the visit date to today.',
-			handler: ({ input, api }) =>
-				Effect.gen(function* () {
-					const site = yield* api.db.query.sites.findFirst({
-						where: { norbital_id: { eq: input.site_id } },
-						columns: { norbital_id: true }
-					});
-					if (site == null) refuse('Referenced site does not exist.');
+		/** ONCE for the whole batch. Reads; decides nothing. Only `create` has one. */
+		prepare: ({ inputs, api }) =>
+			Effect.gen(function* () {
+				const siteIds = [...new Set(inputs.map((input) => input.site_id))];
+				const sites = yield* api.db.query.sites.findMany({
+					where: { norbital_id: { in: siteIds } },
+					columns: { norbital_id: true },
+					limit: 5000
+				});
+				return { knownSites: new Set(sites.map((site) => site.norbital_id)) };
+			}),
+		perRecord: {
+			before: {
+				description: 'Rejects a visit against an unknown site and defaults the visit date to today.',
+				handler: ({ input, prepared }) => {
+					if (!prepared.knownSites.has(input.site_id)) refuse('Referenced site does not exist.');
 					return { ...input, visited_at: input.visited_at ?? new Date() };
-				})
+				}
+			}
 		}
 	}
-} satisfies Hooks;
+} satisfies Hooks<{ readonly knownSites: ReadonlySet<string> }>;
 ```
 
-Every hook point is `{ description, handler }`, and a handler always receives one record — a batch of
-four thousand rows runs the same handler four thousand times rather than a different one once. The
-bare-function form does not exist: the description is
-mandatory because it travels into the manifest, and the Workspace Studio shows it to people reading a
-collection who will never open `+hooks.ts`. Write what this hook does to this data — "runs before
-create" repeats the key and says nothing.
+**The nesting is the declaration's documentation**, and it is arranged by how often each part runs:
+`prepare` once for the batch, `perRecord.before` and `perRecord.after` once per record. `update` and
+`delete` take the same `perRecord` nesting; only `create` has `prepare`, because only a create
+arrives as a batch. An earlier shape put a batch-wide function (`batchHandler`) *beside* a per-record
+one at the same level, and nothing about the declaration said which ran when, or that one was a rule
+and the other a second copy of it — five collections shipped batch validation the runtime never
+called.
 
-Handlers are **Effect-native**: `handler` receives `{ input, api }` (create/update) or
-`{ existing, api }` (delete), and every `api.db.*`, `api.infer`, and `api.readFileAsset` call
-returns an `Effect.Effect` composed with `yield*`. The runtime executes hooks around create, update,
-and delete — `before` returns the accepted payload or patch; `after` makes follow-on database or
-asset changes through the elevated `api.db.<collection>.mutate([...])` /
-`api.db.<collection>.delete([...])`. A collection is always reached as a property, never as a first
-argument. Neither may send traffic,
-queue work, email, invoke AI (bounded `api.infer` for judgement on the write path excepted), or
-notify. Reject a write with `refuse(message)`.
+`prepare` is for the reads, never for the rules. A hook is authored for one record, so a hook that
+*reads* per record is an N+1 by construction; the rule and the reads are separable and only the reads
+want to be batched. Every decision lives in `perRecord`, written once, for one record, whether the
+write was one row or four thousand. `prepare` returns data and is typed by what it returns —
+`satisfies Hooks<Prepared>`. The batched-read reasoning, the phases, and the cost budget are in
+[data-access.md](data-access.md#batch-genuine-bulk-work).
+
+Every hook point is `{ description, handler }`. The bare-function form does not exist: the
+description is mandatory because it travels into the manifest, and the Workspace Studio shows it to
+people reading a collection who will never open `+hooks.ts`. Write what this hook does to this data —
+"runs before create" repeats the key and says nothing.
+
+Handlers are **Effect-native**: `perRecord.before` receives `{ input, prepared, api }` (create),
+`{ input, existing, api }` (update) or `{ existing, api }` (delete); `perRecord.after` receives
+`{ record, api }`, plus `prepared` on a create. Every `api.db.*`, `api.infer`, and `api.readFileAsset` call returns
+an `Effect.Effect` composed with `yield*`. `before` returns the accepted payload or patch — and for a
+create it may return a **nested graph**, the record plus the records that belong to it, keyed by the
+relation name `+relationship.ts` declared. `after` makes follow-on database or asset changes through
+the elevated `api.db.<collection>.mutate([...])` / `api.db.<collection>.delete([...])`. A collection
+is always reached as a property, never as a first argument. Neither may send traffic, email, or
+notify, and neither may invoke AI beyond a bounded `api.infer` for judgement on the write path.
+Background work is the one exception and it has exactly one door: `api.automations.run(name, input,
+{ after })` starts a **declared** automation, durably and with retry — there is deliberately no
+`api.tasks`, because a second way to start background work would compete with the automations a
+declaration already produces. Reject a write with `refuse(message)`.
 
 ## Where validation goes, and why it is not a preference
 
-**`before` refuses. `after` cannot undo.**
+**`perRecord.before` refuses. `perRecord.after` cannot undo.**
 
 ```
-create ─► before hook ─► write ─► after hook
-          │                       │
-          │                       └─ cannot roll back, and should not:
-          │                          the write is a fact. Failures here are
-          │                          reported, never silently swallowed.
-          └─ refuses here. Nothing written, nothing to undo.
+PREPARE                     COMMIT              SETTLE
+prepare · before · FLATTEN  one transaction     read-back · after · events
+   │                           │                   │
+   │                           │                   └─ past the transaction. Cannot roll back,
+   │                           │                      and should not: the write is a fact.
+   │                           │                      Failures are reported, never swallowed,
+   │                           │                      and a caller must NOT retry — retrying
+   │                           │                      writes the batch twice.
+   │                           └─ atomic. A failure here wrote nothing either.
+   └─ refuses here. Nothing written, nothing to undo; the whole batch fails clean.
 ```
 
-There is no transaction around a hook and there is not going to be one. The database facility has no
-transaction primitive — every statement is its own autocommitted call — so by the time `after` runs,
-the row exists and nothing an `after` hook does can take it back.
+The transaction is real now, and it is the thing to reason about. `applyGraph` issues one
+`Transaction` for the batch — the parent record, every record its `perRecord.before` returned in a
+nested graph, and every other row in the same batch, all in one envelope. What has **not** changed is
+where `after` sits: it runs in SETTLE, on the far side of COMMIT, so by the time it runs the row is a
+fact and nothing it does can take it back.
 
-That makes the placement of a check load-bearing rather than stylistic. hr-payroll ran its whole
-engine, validation included, in `payroll_runs` `create.after`: the run row committed, the build then
-refused because someone had an unclosed time entry, and what was left behind was a DRAFT payroll run
-with no payslips under it — a record asserting a period had been calculated, blocking the next
-period, describing a calculation that never happened.
+**So the rule is a correctness rule, not a preference: anything that must succeed or fail atomically
+with the record belongs in `perRecord.before` and the graph it returns — never in `after`.**
 
-So: **anything that can refuse the write belongs in `before`**, where refusing costs nothing.
-`after` is for work that follows the record existing — building the thing the record describes,
-writing derived rows, announcing it. A failure there is reported to the caller rather than swallowed,
-and leaves a record an operator can see and act on.
+Two failures record why. hr-payroll ran its whole engine, validation included, in `payroll_runs`
+`create.after`: the run row committed, the build then refused because someone had an unclosed time
+entry, and what was left behind was a DRAFT payroll run with no payslips under it — a record
+asserting a period had been calculated, blocking the next period, describing a calculation that never
+happened. The second is what the nested graph replaced: the run was committed and *then* its payslips
+were written in a second transaction, their lines in a third, their sources in a fourth, so a build
+that died between them left a run with no payslips. The local database was holding 92 orphaned
+payslips and 15 lines from exactly that.
+
+So: **anything that can refuse the write belongs in `perRecord.before`**, where refusing costs
+nothing and fails the whole batch clean. Anything the record is not true without belongs in the graph
+that `before` returns, so it commits with the record. `after` is for work that only makes sense once
+the record exists — announcing it, kicking off durable work through `api.automations.run`. Its
+failures are reported to the caller rather than swallowed, and leave a record an operator can see and
+act on; the failure carries the phase (`prepare` │ `commit` │ `settle`) precisely so a caller can tell
+"nothing was written, retry" from "it was written, do not".
 
 A refusal raised with `refuse(message)` reaches the caller as a typed refusal — HTTP 422 carrying
 your sentence — not as a runtime fault. Write the sentence for the person who has to fix it.
 
-A `create.before` hook may validate the payload schema through its own Effect `Schema` by declaring
-`create.input`; the compiler validates incoming writes through it before the handler runs.
+A create may validate the payload schema through its own Effect `Schema` by declaring `create.input`;
+the write boundary decodes through it before `prepare` or any handler runs.
 
 ## Pipelines and integrations
 

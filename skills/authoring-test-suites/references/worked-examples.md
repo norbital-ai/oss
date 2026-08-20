@@ -7,18 +7,18 @@ Citations are `file:line` plus a quoted anchor; search the phrase if the line ha
 ## 1. What a good test file's header does
 
 ```
-templates/hr-payroll/src/collections/payroll_runs/settlement-lock.test.ts:1
-	"The settlement lock: taken when a run persists, released when the run is deleted, and permanent
-	 once the run is paid.
+templates/hr-payroll/src/collections/payroll_runs/payslip-sources-lock.test.ts:2
+	"The settlement lock: taken when a run persists, released when the payslip that holds it is
+	 deleted, and permanent once the run is paid.
 
 	 Four things are exercised here and they are deliberately four different kinds of check, because
 	 the lock is enforced in four different places:
-	   1. `claimsForBundle` — what a run claims. Pure arithmetic over one gathered bundle.
+	   1. `claimsForBundle` — what a payslip claims. Pure arithmetic over one gathered bundle.
 	   2. `sourceLock` — how a claim reads as a refusal. Pure, shared verbatim with the screens.
 	   3. `payroll_runs` `delete.before` — the refusal that makes a PAID run's claims permanent. The
 	      real authored handler, called directly.
 	   4. `clearRunResults` — the rebuild's release. The real function, against a database double
-	      whose whole surface is the three calls that function makes.
+	      whose whole surface is the two calls that function makes.
 
 	 What is *not* exercised is the cascade itself, because Postgres performs it. What is checked is
 	 that the cascade is declared, which is the only thing this workspace controls."
@@ -35,7 +35,7 @@ Everything worth copying is in that header:
   is what stops the next person adding a slow, redundant test to cover it again — and stops a reader
   believing coverage that is not there.
 
-And when the declaration test arrives (`:285`, "the declaration, not the cascade"), it explains what
+And when the declaration test arrives (`:244`, "the declarations that cascade"), it explains what
 would have been worse: a hook looping over `api.db.<collection>.delete(identifiers)` "would have been
 wrong in a way no happy-path test catches, because that call takes `identifiers[0]` and drops the
 rest: the release would free one claim out of several hundred and report success."
@@ -57,8 +57,8 @@ oss/packages/bolt/src/runtime/identity/identity.ts:585
 	role: IdentityRows.text(row, 'status') === ADMIN_STATUS ? 'admin' : …
 ```
 
-**Before** — live in the tree as of this writing
-(`oss/packages/bolt/tests/identity/workspace-access.test.ts:39`):
+**Before** — how the suite stood before the fix
+(`oss/packages/bolt/tests/identity/workspace-access.test.ts`):
 
 ```ts
 await addSession(harness, 'u1', ['admin', 'basic'], ['Platform'], 'ada@example.test');
@@ -68,23 +68,25 @@ expect(result.members.map(({ id, role }) => [id, role]).sort()).toEqual(
 );
 ```
 
-The fixture hand-writes the string `admin` into the *roles* column. Nothing in production ever puts
-it there — `admit` writes `bolt_auth_user.status`, and `subjectFromRow` compares against that column
-and nothing else (`identity.ts:76`). So this seeds a row no workspace can produce, and pins a mapping
-the source no longer performs. It is a test of the fixture.
+The fixture hand-writes the string `admin` into a *roles* column. Nothing in production ever put it
+there — `admit` writes `bolt_auth_user.status`, and `subjectFromRow` compares against that column and
+nothing else (`identity.ts:76`). So this seeded a row no workspace could produce, and pinned a mapping
+the source did not perform. It was a test of the fixture. There is no `roles` column on
+`bolt_auth_user` at all now, so the same fixture would not even insert.
 
-The same fault, in the same shape, is in the vertical-slice suite: its subject literal carries
-`roles: ['admin', 'impersonator']` and no `status`
-(`oss/packages/bolt/tests/runtime/vertical-slice.test.ts:155`), so every case named for
-administrator behaviour authenticates as an ordinary user.
+The same fault, in the same shape, was in the vertical-slice suite: its subject literal carried
+`roles: ['admin', 'impersonator']` and no `status`, so every case named for administrator behaviour
+authenticated as an ordinary user.
 
-**After** — seed the column the code actually reads:
+**After** — seed the columns the code actually reads
+(`oss/packages/bolt/tests/identity/workspace-access.test.ts:44`):
 
 ```ts
-// `status` becomes a parameter, defaulted to 'normal', because administration is a status now and
-// the fixture has to say so the way a real workspace does.
-await addSession(harness, 'u1', ['basic'], ['Platform'], 'ada@example.test', 'admin');
-await addSession(harness, 'u2', ['basic'], ['Platform', 'People'], 'grace@example.test');
+// `status` is a parameter, defaulted to 'normal', because administration is a status on the person.
+// `team` is one name or none, because `bolt_auth_user.team_id` is one team — a fixture that could
+// hand somebody two would be describing a shape the column cannot hold. There is no roles array.
+await addSession(harness, 'u1', 'Platform', 'ada@example.test', 'admin');
+await addSession(harness, 'u2', 'People', 'grace@example.test');
 
 const result = await access(harness);
 expect(result.members.map(({ id, role }) => [id, role]).sort()).toEqual(
@@ -94,9 +96,12 @@ expect(result.members.map(({ id, role }) => [id, role]).sort()).toEqual(
 
 What changed, and why each part matters:
 
-- **Authority is seeded where production writes it.** `u1` now holds an ordinary role ladder *and*
-  the status, so the test distinguishes "reads the status column" from "finds the string `admin`
-  somewhere in the row" — the two are indistinguishable in the before.
+- **Authority is seeded where production writes it** — the `status` column, not a role array. The
+  test now distinguishes "reads the status column" from "finds the string `admin` somewhere in the
+  row"; the two were indistinguishable in the before.
+- **The fixture's shape is the schema's shape.** One team, or none. A parameter that could take a
+  list would let a test assert behaviour the column cannot produce — which is the same class of
+  error as the roles array, one step earlier.
 - **Both outcomes are present.** `u1` administers, `u2` does not. A test with only the positive case
   passes against a projection that returns `'admin'` unconditionally.
 - **The row is written the way production writes it**, an `insert` into `bolt_auth_user`, so the

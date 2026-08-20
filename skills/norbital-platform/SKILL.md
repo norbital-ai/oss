@@ -32,6 +32,7 @@ mode: an agent invents an admin console that does not exist, and the user goes l
 | Business logic around a write                              | `src/collections/<name>/+hooks.ts`     |
 | Import and export shaping                                  | `src/collections/<name>/+pipelines.ts` |
 | Who may read or write what; what needs approval            | `src/policies/+<name>.policy.ts`       |
+| Which policies a team holds                                | `src/+teams.ts`                        |
 | Screens                                                    | `src/apps/`                            |
 | Scheduled or event-triggered work                          | `src/automation/+<name>.ts`            |
 | Extra tools for the workspace agent                        | `src/tools/+<name>.tool.ts`            |
@@ -42,8 +43,10 @@ mode: an agent invents an admin console that does not exist, and the user goes l
 Compiled output lands in `.norbital/` and is never hand-edited.
 
 Runtime data — users, teams, team membership, records — lives in the database and is edited in the
-app. The line between the two matters: _which teams exist_ is data, but _which team approves step
-two of the payroll flow_ is source.
+app. The line between the two matters, and it runs straight through the middle of "teams": _which
+teams exist and who is on them_ is data an operator edits without a deploy, but _what a team may do_
+and _which team approves step two of the payroll flow_ are both source. A person belongs to exactly
+one team; there are no roles.
 
 ## Reference routing
 

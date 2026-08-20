@@ -24,7 +24,7 @@ what "done" looks like on an ordinary day. No platform vocabulary.
 | ----------- | --------------------------- | --------------------- | ---------------------------- |
 | (job title) | (their job in the workflow) | (scope of visibility) | (what they can start/finish) |
 
-_Build notes: teams + policy file names; which role maps to which policy._
+_Build notes: team names for `src/+teams.ts` and the policy file names each holds. A person is on exactly one team, so name a team for every combination of authority somebody actually holds — there are no roles to stack._
 
 ## 3. What it manages
 
