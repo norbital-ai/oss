@@ -200,6 +200,165 @@ export const quoteIdentifier = CollectionSql.quoteIdentifier;
 export const compilePredicate = CollectionSql.compilePredicate;
 const offsetParameters = CollectionSql.offsetParameters;
 
+/**
+ * The most parameters one statement may carry.
+ *
+ * Postgres sends a statement's parameters under a 16-bit count and refuses one carrying more than
+ * 65,535 of them, so a multi-row insert is bounded by `columns x rows` and never by rows: 10,000
+ * rows of ten columns is 100,000 and is not a statement any server will accept. The headroom under
+ * the hard ceiling is deliberate rather than superstitious — a batch is already capped at 5,000
+ * rows, a wide collection reaches this bound at thirteen columns, and a group that later gains one
+ * more parameter per row should split one row earlier instead of failing at the server.
+ */
+const MAX_STATEMENT_PARAMETERS = 60_000;
+
+/**
+ * One row on its way into a table, before anything has decided how many rows a statement carries.
+ *
+ * Stating the row separately from the statement is the whole of the batching: rows that name the
+ * same columns in the same order under the same casts are one statement with more tuples in it.
+ */
+export type PlannedInsert = Readonly<{
+	readonly table: string;
+	/**
+	 * The ordering constraint, and the only one. Every row of a layer is written before any row of a
+	 * higher layer; inside a layer nothing names anything, so those rows may be merged and reordered.
+	 */
+	readonly layer: number;
+	readonly columns: ReadonlyArray<string>;
+	/** Per column, the cast its placeholder carries — `::jsonb` for a list-valued JSON column. */
+	readonly casts?: ReadonlyArray<string>;
+	readonly parameters: ReadonlyArray<Schema.Json>;
+	/**
+	 * The per-row visibility predicate, when the row is only written if the subject may write it.
+	 *
+	 * A row carrying one keeps the statement a single create has always written — `select … where
+	 * <predicate>`, one row at a time — and is merged with nothing. Two reasons, and the first is
+	 * correctness. A `VALUES` list has nowhere to hang a predicate, so merging would mean `select *
+	 * from (values …) where <predicate>`, and the columns of that subquery are *in scope* for the
+	 * predicate: a grant whose `where` names a column of the collection being created fails today
+	 * with `column "owner" does not exist`, and under a subquery it would quietly start resolving
+	 * against the row being written instead. Turning a refusal into a different answer is not an
+	 * optimisation. The second reason is duller: `insert … select $1` takes its parameter types from
+	 * the target columns, while a `VALUES` subquery is analysed on its own, where they are unknown.
+	 */
+	readonly where?: Readonly<{
+		readonly sql: string;
+		readonly parameters: ReadonlyArray<Schema.Json>;
+	}>;
+}>;
+
+/** What two rows must share to be one statement: layer, table, columns, and the casts on them. */
+const insertSignature = (row: PlannedInsert): string =>
+	`${row.layer}\u0000${row.table}\u0000${row.columns
+		.map((column, index) => `${column}${row.casts?.[index] ?? ''}`)
+		.join(',')}`;
+
+/**
+ * Rows as the fewest statements that write them.
+ *
+ * This is where a payroll run's write went. A tenant database is a Neon instance a region away;
+ * every statement of a transaction is a round trip of its own, because the host runs a transaction's
+ * statements serially and that is the only correct way to run one connection's transaction; and 89
+ * payslips at three statements each is 267 round trips at ~84ms, which is the 22.4 seconds that was
+ * measured. None of it is parse cost — it is distance — so the only lever is how many statements
+ * there are, and rows that share a signature share one.
+ *
+ * Grouping is by signature rather than by "the batch", because rows of one batch do not have to
+ * name the same columns: a `create.perRecord.before` may return different keys per row, and padding
+ * the gaps with explicit NULLs would write a NULL where the column default belongs. Rows that share
+ * a signature have no gaps to pad, so the defaults apply exactly as they do when each row is written
+ * alone, and a batch whose rows disagree degrades to one statement per shape rather than losing the
+ * distinction.
+ */
+export const groupedInsertStatements = (
+	rows: ReadonlyArray<PlannedInsert>
+): ReadonlyArray<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
+	const groups = new Map<string, Array<PlannedInsert>>();
+	rows
+		.map((row, index) => ({ row, index }))
+		.sort((left, right) => left.row.layer - right.row.layer || left.index - right.index)
+		.forEach(({ row, index }) => {
+			// A predicated row is keyed on where it stands, so it is a group of one: it keeps the exact
+			// statement it has today, in the position it has today.
+			const key = row.where === undefined ? insertSignature(row) : `\u0000row ${index}`;
+			const group = groups.get(key);
+			if (group === undefined) groups.set(key, [row]);
+			else group.push(row);
+		});
+	const statements: Array<{
+		readonly sql: string;
+		readonly parameters: ReadonlyArray<Schema.Json>;
+	}> = [];
+	const tuple = (row: PlannedInsert, offset: number): string =>
+		row.columns.map((_, index) => `$${offset + index + 1}${row.casts?.[index] ?? ''}`).join(', ');
+	for (const group of groups.values()) {
+		const first = group[0];
+		if (first === undefined) continue;
+		const columns = first.columns.map(quoteIdentifier).join(', ');
+		if (first.where !== undefined) {
+			statements.push({
+				sql: `insert into ${quoteIdentifier(first.table)} (${columns}) select ${tuple(first, 0)} where ${offsetParameters(first.where.sql, first.columns.length)}`,
+				parameters: [...first.parameters, ...first.where.parameters]
+			});
+			continue;
+		}
+		// Every row of a group carries the same number of parameters, which is what makes the ceiling
+		// a division rather than a running total.
+		const perRow = Math.max(first.columns.length, 1);
+		const chunk = Math.max(Math.floor(MAX_STATEMENT_PARAMETERS / perRow), 1);
+		for (let start = 0; start < group.length; start += chunk) {
+			const slice = group.slice(start, start + chunk);
+			statements.push({
+				sql: `insert into ${quoteIdentifier(first.table)} (${columns}) values ${slice
+					.map((row, index) => `(${tuple(row, index * perRow)})`)
+					.join(', ')}`,
+				parameters: slice.flatMap((row) => [...row.parameters])
+			});
+		}
+	}
+	return statements;
+};
+
+/**
+ * The layer each row of a batch belongs to, so that merging rows into one statement cannot move a
+ * row in front of the row it points at.
+ *
+ * A flattened graph arrives parent before child, because a foreign key must already name a row, and
+ * merging moves later rows earlier. A row points at another row of this same batch by carrying its
+ * id — that is the only thing read here — so a row naming an earlier row's id sits one layer above
+ * it. Layers are emitted in order, so a parent is still written first, while rows inside a layer
+ * name nothing of each other's and may be merged freely. A payroll run, its 89 payslips and their
+ * lines are three layers, and therefore three statements rather than several hundred.
+ *
+ * A row that names a *later* row's id is left alone: it is either not a reference at all or it is
+ * already broken today, and rows merged into one statement can name each other in any case, because
+ * a non-deferred foreign key fires its check at the end of the statement rather than per tuple.
+ */
+const insertionLayers = (
+	nodes: ReadonlyArray<{
+		readonly id: string;
+		readonly values: Readonly<Record<string, Schema.Json>>;
+	}>
+): ReadonlyArray<number> => {
+	const positions = new Map<string, number>();
+	nodes.forEach((node, index) => {
+		if (!positions.has(node.id)) positions.set(node.id, index);
+	});
+	const layers: Array<number> = [];
+	for (const [index, node] of nodes.entries()) {
+		let layer = 0;
+		for (const value of Object.values(node.values)) {
+			if (typeof value !== 'string') continue;
+			const referenced = positions.get(value);
+			if (referenced === undefined || referenced >= index) continue;
+			layer = Math.max(layer, (layers[referenced] ?? 0) + 1);
+		}
+		layers.push(layer);
+	}
+	return layers;
+};
+
 export type QueryInput = Readonly<{
 	readonly collection: string;
 	readonly predicate?: Predicate;
@@ -687,15 +846,36 @@ export const layer = Layer.effect(
 		 * predicate and silently dropping the event: the write lands, and the reason is a row an
 		 * operator can find.
 		 */
-		const outboxStatements = (
-			effectId: EffectId,
+		/** The columns an integration delivery is written with, in the order its parameters arrive. */
+		const outboxDeliveryColumns = [
+			'integration_name',
+			'binding_name',
+			'collection_name',
+			'record_id',
+			'operation',
+			'path',
+			'payload',
+			'status',
+			'last_error'
+		];
+		/**
+		 * The deliveries this write queues, as parameters rather than as statements.
+		 *
+		 * Parameters, because a batch writes all of its deliveries as one multi-row insert and only a
+		 * single write needs them rendered one at a time. `outboxStatements` below is that rendering,
+		 * unchanged, for the update and delete paths.
+		 */
+		const outboxDeliveries = (
 			subject: Identity.Subject,
 			collection: string,
 			id: string,
 			operation: 'create' | 'update' | 'delete',
 			values: Readonly<Record<string, Schema.Json>>,
 			previous: Readonly<Record<string, unknown>> | undefined
-		): ReadonlyArray<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
+		): ReadonlyArray<{
+			readonly integration: string;
+			readonly parameters: ReadonlyArray<Schema.Json>;
+		}> => {
 			const subscriptions = subscriptionsFor(collection);
 			if (subscriptions.length === 0 || !watchesOperation(subscriptions, operation)) return [];
 			const entries = outboxEntriesFor(subscriptions, subject, {
@@ -704,8 +884,8 @@ export const layer = Layer.effect(
 				record: eventRecord(operation, id, values, previous),
 				...(previous === undefined ? {} : { previous })
 			});
-			const deliveries = entries.map((entry) => ({
-				sql: 'insert into bolt_integration_outbox (integration_name, binding_name, collection_name, record_id, operation, path, payload, status, last_error) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+			return entries.map((entry) => ({
+				integration: entry.integration,
 				parameters: [
 					entry.integration,
 					entry.binding,
@@ -718,22 +898,31 @@ export const layer = Layer.effect(
 					entry.refusal
 				] as ReadonlyArray<Schema.Json>
 			}));
-			/**
-			 * And the job that drains them, in this same transaction.
-			 *
-			 * This is what replaced a fixed `* * * * *` drain per sending integration — 1440 wakes a day
-			 * against every sending tenant's database whether or not anything was ever queued, which was
-			 * the single largest standing cost in the runtime. The delivery is now told about by the write
-			 * that caused it: the row and the job commit together, so the job cannot exist without the
-			 * delivery and the delivery cannot exist without the record change, and there is no window
-			 * where one is true and the other is not.
-			 *
-			 * One task per *integration*, not per delivery and not per record. Per integration is what the
-			 * drain already claims at — `distinct on (collection_name, record_id)` gives per-record
-			 * ordering inside one drain — and it keeps the property the minute cron had for the right
-			 * reason: a partner that is down backs off its own queue and nobody else's.
-			 */
-			const drains = [...new Set(entries.map((entry) => entry.integration))]
+		};
+		/**
+		 * The job that drains them, in this same transaction.
+		 *
+		 * This is what replaced a fixed `* * * * *` drain per sending integration — 1440 wakes a day
+		 * against every sending tenant's database whether or not anything was ever queued, which was
+		 * the single largest standing cost in the runtime. The delivery is now told about by the write
+		 * that caused it: the row and the job commit together, so the job cannot exist without the
+		 * delivery and the delivery cannot exist without the record change, and there is no window
+		 * where one is true and the other is not.
+		 *
+		 * One task per *integration*, not per delivery and not per record. Per integration is what the
+		 * drain already claims at — `distinct on (collection_name, record_id)` gives per-record
+		 * ordering inside one drain — and it keeps the property the minute cron had for the right
+		 * reason: a partner that is down backs off its own queue and nobody else's.
+		 *
+		 * Per integration *per batch*, too. The task id is `<effectId>:flush:<integration>` and the
+		 * enqueue is `on conflict (effect_id) do nothing`, so a batch of 89 rows watched by one
+		 * integration was already writing the same row 89 times and keeping one; it now says it once.
+		 */
+		const outboxDrains = (
+			effectId: EffectId,
+			integrations: ReadonlyArray<string>
+		): ReadonlyArray<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> =>
+			[...new Set(integrations)]
 				.toSorted()
 				.map((integration) => ({ integration, taskId: `${effectId}:flush:${integration}` }))
 				.flatMap(({ integration, taskId }) =>
@@ -745,7 +934,26 @@ export const layer = Layer.effect(
 					sql: statement.sql,
 					parameters: statement.parameters as ReadonlyArray<Schema.Json>
 				}));
-			return [...deliveries, ...drains];
+		const outboxStatements = (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			collection: string,
+			id: string,
+			operation: 'create' | 'update' | 'delete',
+			values: Readonly<Record<string, Schema.Json>>,
+			previous: Readonly<Record<string, unknown>> | undefined
+		): ReadonlyArray<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
+			const deliveries = outboxDeliveries(subject, collection, id, operation, values, previous);
+			return [
+				...deliveries.map(({ parameters }) => ({
+					sql: `insert into bolt_integration_outbox (${outboxDeliveryColumns.join(', ')}) values (${outboxDeliveryColumns.map((_, index) => `$${index + 1}`).join(', ')})`,
+					parameters
+				})),
+				...outboxDrains(
+					effectId,
+					deliveries.map(({ integration }) => integration)
+				)
+			];
 		};
 
 		/**
@@ -1352,63 +1560,101 @@ export const layer = Layer.effect(
 			`$${position}${isJsonColumn(definition, column) && Array.isArray(value) ? '::jsonb' : ''}`;
 
 		/**
-		 * Every statement one create is, without executing any of them.
+		 * Every statement a batch of creates is, without executing any of them.
 		 *
-		 * Extracted so a batch can be one round trip rather than N. The row, its history entry, its
-		 * sync outbox row and its integration deliveries have to land together — a record visible to
-		 * the sync engine but absent from history is a worse state than no record — and the only way
-		 * to say "together" through this facility is to hand it one `Transaction`. Building the
-		 * statements separately from running them is what lets a batch concatenate several rows'
-		 * worth into that one transaction instead of opening one per row.
+		 * Separated from running them so a batch is one round trip rather than N. The rows, their
+		 * history entries, their sync outbox rows and their integration deliveries have to land
+		 * together — a record visible to the sync engine but absent from history is a worse state
+		 * than no record — and the only way to say "together" through this facility is to hand it one
+		 * `Transaction`.
+		 *
+		 * One transaction was never the end of it, though: the host executes a transaction's
+		 * statements serially on one connection, correctly, so a transaction of 267 statements
+		 * against a database a region away is 267 round trips. So this takes every row of the batch
+		 * rather than one, and hands the whole lot to `groupedInsertStatements`, which writes the rows
+		 * that share a shape as one statement each.
+		 *
+		 * The three bookkeeping tables are collapsed the same way, and are two thirds of the round
+		 * trips a batch used to make. They sit one layer past every record: nothing enforces that a
+		 * history row follows the record it describes — the table names a record rather than
+		 * referencing it — but the order is the one a reader expects, and it keeps a batch's
+		 * bookkeeping in one group instead of interleaved between the records.
 		 */
 		const createStatements = (
 			effectId: EffectId,
 			subject: Identity.Subject,
-			input: MutationInput,
-			definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
-			visibility: AccessControl.RowPredicate
+			nodes: ReadonlyArray<{
+				readonly input: MutationInput;
+				readonly definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>;
+				readonly visibility: AccessControl.RowPredicate;
+				readonly layer: number;
+			}>
 		): ReadonlyArray<{
 			readonly sql: string;
 			readonly parameters: ReadonlyArray<Schema.Json>;
 		}> => {
-			const writable = writableValues(input.values, definition);
-			const entries = Object.entries(writable).sort(([left], [right]) => left.localeCompare(right));
-			const columns = ['norbital_id', ...entries.map(([name]) => name)];
-			const columnValues: ReadonlyArray<readonly [string, Schema.Json]> = [
-				['norbital_id', input.id],
-				...entries.map(([name, value]) => [name, value] as const)
-			];
-			const parameters: ReadonlyArray<Schema.Json> = [
-				...columnValues.map(([name, value]) => boundParameter(definition, name, value)),
-				...visibility.parameters
-			];
-			const history = definition.history
-				? [
-						{
-							sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id, snapshot) values ($1, $2, $3, $4, $5)',
-							parameters: [input.collection, input.id, 'create', subject.userId, input.values]
-						}
-					]
-				: [];
-			return [
-				{
-					sql: `insert into ${quoteIdentifier(input.collection)} (${columns.map(quoteIdentifier).join(', ')}) select ${columnValues.map(([name, value], index) => boundPlaceholder(definition, name, value, index + 1)).join(', ')} where ${offsetParameters(visibility.sql, columns.length)}`,
-					parameters
-				},
-				...history,
-				{
-					sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation, record) values ($1, $2, $3, $4)',
+			const records: Array<PlannedInsert> = [];
+			const bookkeeping: Array<PlannedInsert> = [];
+			const integrations: Array<string> = [];
+			const bookkeepingLayer =
+				nodes.reduce((highest, node) => Math.max(highest, node.layer), 0) + 1;
+			for (const { input, definition, visibility, layer } of nodes) {
+				const writable = writableValues(input.values, definition);
+				const entries = Object.entries(writable).sort(([left], [right]) =>
+					left.localeCompare(right)
+				);
+				const columnValues: ReadonlyArray<readonly [string, Schema.Json]> = [
+					['norbital_id', input.id],
+					...entries.map(([name, value]) => [name, value] as const)
+				];
+				records.push({
+					table: input.collection,
+					layer,
+					columns: columnValues.map(([name]) => name),
+					casts: columnValues.map(([name, value]) =>
+						isJsonColumn(definition, name) && Array.isArray(value) ? '::jsonb' : ''
+					),
+					parameters: columnValues.map(([name, value]) => boundParameter(definition, name, value)),
+					// A predicate that is literally `true` — an elevated write, an administrator, a grant
+					// with no `where` — filters nothing, so the row is written unconditionally and can
+					// share a statement. Anything else keeps the `select … where` it has today, alone.
+					...(visibility.sql.trim() === 'true' && visibility.parameters.length === 0
+						? {}
+						: { where: { sql: visibility.sql, parameters: visibility.parameters } })
+				});
+				if (definition.history)
+					bookkeeping.push({
+						table: 'bolt_collection_history',
+						layer: bookkeepingLayer,
+						columns: ['collection_name', 'record_id', 'operation', 'subject_id', 'snapshot'],
+						parameters: [input.collection, input.id, 'create', subject.userId, input.values]
+					});
+				bookkeeping.push({
+					table: 'bolt_sync_outbox',
+					layer: bookkeepingLayer,
+					columns: ['collection_name', 'record_id', 'operation', 'record'],
 					parameters: [input.collection, input.id, 'create', input.values]
-				},
-				...outboxStatements(
-					effectId,
+				});
+				for (const delivery of outboxDeliveries(
 					subject,
 					input.collection,
 					input.id,
 					'create',
 					input.values,
 					undefined
-				)
+				)) {
+					bookkeeping.push({
+						table: 'bolt_integration_outbox',
+						layer: bookkeepingLayer,
+						columns: outboxDeliveryColumns,
+						parameters: delivery.parameters
+					});
+					integrations.push(delivery.integration);
+				}
+			}
+			return [
+				...groupedInsertStatements([...records, ...bookkeeping]),
+				...outboxDrains(effectId, integrations)
 			];
 		};
 		/**
@@ -1428,9 +1674,12 @@ export const layer = Layer.effect(
 		 * This is the only thing that writes a created row — a single `create`, a batch, and a nested
 		 * graph all arrive here. A flattened graph is a payroll run, its payslips, their lines and
 		 * their source claims, and all of them have to land together or the run is a fact its payslips
-		 * are not. So the statements are collected in the order
-		 * `flattenGraph` produced them — parent before child, because a foreign key must already name
-		 * a row — and issued once.
+		 * are not. So every node's statements are collected here and issued once.
+		 *
+		 * Not in the order `flattenGraph` produced them, though: rows that share a shape are merged
+		 * into one statement, which moves the later ones earlier. `insertionLayers` is what keeps that
+		 * safe — a row that names another row's id sits a layer above it, layers are written in order,
+		 * so a foreign key still names a row that is already there.
 		 *
 		 * The collection definition and the visibility predicate are resolved per node rather than
 		 * per call, because the nodes are not all the same collection any more. Elevation is honoured
@@ -1449,24 +1698,30 @@ export const layer = Layer.effect(
 			elevated: boolean
 		) {
 			if (nodes.length === 0) return;
-			const statements: Array<ReturnType<typeof createStatements>[number]> = [];
+			// Which rows may be merged, and in what order — a foreign key must already name a row, and
+			// merging moves rows earlier.
+			const layers = insertionLayers(nodes);
+			const planned: Array<{
+				readonly input: MutationInput;
+				readonly definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>;
+				readonly visibility: AccessControl.RowPredicate;
+				readonly layer: number;
+			}> = [];
 			const touched = new Set<string>();
-			for (const node of nodes) {
+			for (const [index, node] of nodes.entries()) {
 				const definition = yield* workspace.collection(node.collection);
 				const visibility = elevated
 					? AccessControl.unrestricted
 					: access.predicate(subject, 'create', node.collection);
-				statements.push(
-					...createStatements(
-						effectId,
-						subject,
-						{ collection: node.collection, id: node.id, values: node.values },
-						definition,
-						visibility
-					)
-				);
+				planned.push({
+					input: { collection: node.collection, id: node.id, values: node.values },
+					definition,
+					visibility,
+					layer: layers[index] ?? 0
+				});
 				touched.add(node.collection);
 			}
+			const statements = createStatements(effectId, subject, planned);
 			for (const collection of touched) yield* announceFlush(effectId, collection, 'create');
 			yield* database.execute(effectId, { _tag: 'Transaction', statements });
 			yield* wake.announce(effectId, [...touched]);
