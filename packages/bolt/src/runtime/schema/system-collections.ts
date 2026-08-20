@@ -279,6 +279,117 @@ export const SYSTEM_COLLECTION_NAMES: ReadonlySet<string> = new Set(
 );
 
 /**
+ * The approval requests this subject raised.
+ *
+ * The `requestor` join table is the only record of who that was: `approval_request` carries the
+ * collection, the record, the action and the status, and no requestor column at all, so "is this
+ * mine" cannot be answered from the row itself. `Approvals.request` writes exactly one `requestor`
+ * row per request, in the same block that projects the `approval_request` row.
+ *
+ * `${requestor.norbital_id}` is **not** interpolated by JavaScript here — these are single-quoted
+ * strings, so the literal token reaches the policy compiler, which binds `subject.userId` as a
+ * parameter. `party` rather than `requestor` as the alias only because the table and the token
+ * prefix share a spelling and a reader should not have to work out which is which.
+ */
+const RAISED_BY_SUBJECT =
+	'select party."approval_request_id" from requestor party ' +
+	'where party."user_id" = ${requestor.norbital_id}';
+
+/**
+ * The name of this subject's one team, folded — reached by a join, because no token names it.
+ *
+ * `AccessControl.subjectValue` resolves exactly three paths — `requestor.norbital_id`,
+ * `requestor.tenantId`, `requestor.email` — so a team is something the predicate has to go and look
+ * up. `bolt_auth_user.team_id` is one team, nullable, and a subject nobody has placed yields no row:
+ * the scalar subquery is then `null`, `lower(...) = null` is `null`, and the approver leg below
+ * matches nothing. Absence narrows, which is the only safe direction for it to go.
+ *
+ * The subject's own team and not `teamPath`. `Approvals.decide` matches `step.approvers` against
+ * `subject.team` alone, so anything wider here would show a member approvals they are not eligible
+ * to decide — and `teamPath` runs *downward* through the hierarchy when a team `inherits`, which is
+ * the opposite of "their higher ups".
+ */
+const SUBJECT_TEAM_NAME =
+	'select lower(subject_team."name") from bolt_auth_user subject_user ' +
+	'join bolt_team subject_team on subject_team."norbital_id" = subject_user."team_id" ' +
+	'where subject_user."norbital_id"::text = ${requestor.norbital_id}';
+
+/**
+ * The approval requests this subject's team is named as an approver of — the "higher ups" leg.
+ *
+ * **Read from `bolt_approvals`, not from `approval_request.steps`, and that is not a preference.**
+ * `steps` is a *cursor*, not a configuration: `Approvals.projectRequest` writes
+ * `[{ step: <n> }]` while a request is pending and `[]` once it closes, and no approver name has
+ * ever been in that column. A containment test over it would compile, run, and match nothing —
+ * silently withholding from approvers the very requests they exist to decide.
+ *
+ * The approver names live in the durable state `Approvals.request` embeds at request time, under
+ * `state.operation.approval` — the whole `ApprovalConfiguration` the subject's own grant carried,
+ * copied into the row so that a later release changing the grant cannot restate an in-flight
+ * request. `Approvals.decide` resolves the same path (`approvalConfigurations.resolve`) before it
+ * decides eligibility, so read scope and decide eligibility are two readings of one value.
+ *
+ * `jsonb_typeof(...) = 'array'` guards both unnests rather than trusting the shape: a legacy or
+ * hand-written state whose `steps` is not an array would otherwise raise
+ * `cannot extract elements from an object` from inside a permission check, which turns a narrowing
+ * into an outage. Folded comparison, because every other comparison of a team name in this runtime
+ * is folded — `TEAM_LOOKUP_SQL`, `policiesHeldByTeam`, `Approvals.decide` — and two spellings must
+ * not mean two teams.
+ */
+const APPROVED_BY_SUBJECT_TEAM =
+	'select approval.request_id from bolt_approvals approval ' +
+	'cross join lateral jsonb_array_elements(' +
+	"case when jsonb_typeof(approval.state #> '{operation,approval,steps}') = 'array' " +
+	"then approval.state #> '{operation,approval,steps}' else '[]'::jsonb end" +
+	') as approval_step(step_value) ' +
+	'cross join lateral jsonb_array_elements_text(' +
+	"case when jsonb_typeof(step_value->'approvers') = 'array' " +
+	"then step_value->'approvers' else '[]'::jsonb end" +
+	') as approver(team_name) ' +
+	'where lower(team_name) = (' +
+	SUBJECT_TEAM_NAME +
+	')';
+
+/**
+ * An approval request is readable by its parties and by whoever may decide it.
+ *
+ * Written against unqualified column names on purpose: the same predicate is spliced into three
+ * statements that alias the table differently — `findMany` uses none, `Sync.snapshot` uses `r`,
+ * `Sync.diff` correlates through `visible` — and an unqualified reference resolves to the outer row
+ * in all three. Nothing inside either subquery declares a `norbital_id`, so the correlation cannot
+ * be captured by them.
+ */
+const READABLE_APPROVAL_REQUEST = Object.freeze({
+	$sql:
+		'"norbital_id"::text in (' +
+		RAISED_BY_SUBJECT +
+		') or "norbital_id"::text in (' +
+		APPROVED_BY_SUBJECT_TEAM +
+		')'
+});
+
+/**
+ * Who raised a request is readable exactly when the request is — one rule, expressed once.
+ *
+ * Left unconditional this leaks the membership of every approval in the workspace: `requestor` is
+ * two columns, one of which is a person, so a member who may not read a single `approval_request`
+ * row could still enumerate who had raised each one.
+ *
+ * Scoped by `approval_request_id` rather than by `user_id = ${requestor.norbital_id}`. The narrower
+ * form would answer "which requests did I raise" and hide the parties of a request the subject may
+ * legitimately read as an approver — and would silently start hiding rows the day anything writes a
+ * second requestor for one request.
+ */
+const READABLE_REQUESTOR = Object.freeze({
+	$sql:
+		'"approval_request_id" in (' +
+		RAISED_BY_SUBJECT +
+		') or "approval_request_id" in (' +
+		APPROVED_BY_SUBJECT_TEAM +
+		')'
+});
+
+/**
  * Reading runtime state is allowed for any authenticated subject; writing never is, because the
  * owning service is the only writer. An authored `deny` policy still wins — this is an ordinary
  * declaration evaluated with the rest, not a bypass.
@@ -288,6 +399,24 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 	description:
 		'Read access to runtime-owned collections that authored queries and reports depend on.',
 	effect: 'allow',
+	/**
+	 * What makes the sentence above true, and it was missing.
+	 *
+	 * A policy is otherwise selected by name, against the set `policiesHeldByTeam` builds from
+	 * `+teams.ts` — and no template declares a team holding `bolt.system-collections`, because the
+	 * whole reason this policy is merged rather than authored is that a workspace should not have to
+	 * declare it. So it matched nobody: `subjectHasPolicy` fell through to `held.has(...)` on a set
+	 * that could never contain this name, every grant below was inert, and the only thing making
+	 * these collections readable was the `isAdministrator` short-circuit in `decide` and
+	 * `rowPredicate`. An ordinary member — `field-operations`' non-admin controllers, reading
+	 * `bolt_auth_user` for the names behind `user_id` — was refused and rendered a column of dashes.
+	 *
+	 * It is not a bypass. The flag decides only *whether this policy applies to this subject*; the
+	 * grants below still have to name the collection and the action, an authored `deny` still wins,
+	 * and the field mask still applies. `COLONY_SYSTEM_POLICY` carries `system: true` instead and is
+	 * deliberately excluded — see the flag's own note.
+	 */
+	authenticated: true,
 	/**
 	 * Identity is here only as a directory of names, and only because workspaces need one.
 	 *
@@ -303,11 +432,43 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 	 * teams are not merely unselected: they cannot be read through this grant at all. Replication is
 	 * unaffected — `Sync.shape` and the change stream exclude every identity collection, so a
 	 * directory is answered by a query and never mirrored into a browser.
+	 *
+	 * ## Enumerated, not derived
+	 *
+	 * This list used to be `SYSTEM_COLLECTIONS.filter(not identity).map(unconditional read)`, and the
+	 * shape of that expression was the defect rather than an implementation detail of it: every
+	 * runtime-owned collection that is not an identity table got an unconditional read of its whole
+	 * contents, and a collection added here in future would have got one too, by default, with
+	 * nothing in the diff to notice. Naming each grant means adding a runtime collection now forces
+	 * an answer to "who may read this", because the alternative is a collection nobody can read at
+	 * all — a visible failure rather than a silent grant.
+	 *
+	 * ## Why the two approval grants must stay the only ones on their collections
+	 *
+	 * `rowPredicate` **unions** the `where` of every matching grant, and a grant with no `where`
+	 * compiles to `true` — at which point it short-circuits the union and the predicate is `true` for
+	 * the whole collection. So a second, unconditional `read` on `approval_request` anywhere in this
+	 * list does not add a case to the narrowing below, it deletes it.
 	 */
 	grants: [
-		...SYSTEM_COLLECTIONS.filter(
-			({ name }) => !IDENTITY_COLLECTIONS.some((identity) => identity.name === name)
-		).map(({ name }) => ({ collection: name, action: 'read' as const })),
+		/**
+		 * Unconditional, and deliberately still so.
+		 *
+		 * `file()` renders a plain `uuid` with no foreign key, so an asset row carries no record it
+		 * belongs to and there is nothing for a predicate to reach through; the tie runs the other
+		 * way, from the authored column into here. The renderer that turns a `file()` value into a
+		 * name and a URL is `data-renderer/file`, running in the browser as the signed-in subject —
+		 * it resolves the row with `records.findMany('document_asset', …)` and reads `file_name`,
+		 * `file_size`, `mime_type` and `storage_key` off it — so this grant is what makes every file
+		 * column render at all, and withholding it empties them workspace-wide.
+		 */
+		{ collection: documentAsset.name, action: 'read' as const },
+		{
+			collection: approvalRequest.name,
+			action: 'read' as const,
+			where: READABLE_APPROVAL_REQUEST
+		},
+		{ collection: requestor.name, action: 'read' as const, where: READABLE_REQUESTOR },
 		{ collection: authUser.name, action: 'read' as const, fields: ['norbital_id', 'name'] }
 	]
 });
@@ -323,7 +484,10 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
  * a change to this list takes effect the moment the runtime does.
  *
  * Neither is a bypass. Both are ordinary declarations evaluated by `decide` with the authored ones,
- * both name a role, and an authored `deny` still wins over either.
+ * and an authored `deny` still wins over either. What is unusual about them is only how a subject
+ * reaches one: no team can declare either name, so each carries the flag that selects it —
+ * `authenticated` for the read policy, `system` for the host's — and those two flags are the whole
+ * of what `PolicyDeclaration` has and `PolicyDefinition` does not.
  */
 export const BUILT_IN_POLICIES: ReadonlyArray<PolicyDeclaration> = Object.freeze([
 	SYSTEM_READ_POLICY,

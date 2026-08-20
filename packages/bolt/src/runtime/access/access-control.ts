@@ -128,9 +128,10 @@ const PolicyEvaluation = {
 	 * Whether this policy applies to this subject.
 	 *
 	 * `held` is the set of policy names the subject's team confers, folded, resolved by the caller
-	 * that holds the workspace definition. There is exactly one other way to match — the runtime's
-	 * own `system` flag — and no third: a policy has a name, a team declares which names it holds,
-	 * and nothing else selects one.
+	 * that holds the workspace definition. The two other ways to match are both flags the runtime
+	 * sets on its own declarations and `PolicyDefinition` cannot express, so for anything a workspace
+	 * authors there is still exactly one selector: a policy has a name, a team declares which names
+	 * it holds, and nothing else selects one.
 	 */
 	subjectHasPolicy: (
 		policy: PolicyDeclaration,
@@ -140,6 +141,11 @@ const PolicyEvaluation = {
 		// The runtime's own policy, selected by a flag only `systemSubject` mints. Checked first
 		// because it is the one policy no team can confer and no name can reach.
 		if (policy.system === true) return subject.system === true;
+		// `SYSTEM_READ_POLICY`, which grants reads of the runtime's own collections to whoever signed
+		// in. Excluding the host principal is the point of writing it this way rather than as an
+		// unconditional `true`: it is not a person, and its authority is the two grants
+		// `COLONY_SYSTEM_POLICY` enumerates and nothing else.
+		if (policy.authenticated === true) return subject.system !== true;
 		return held.has(policy.name.toLocaleLowerCase());
 	},
 	matches: (

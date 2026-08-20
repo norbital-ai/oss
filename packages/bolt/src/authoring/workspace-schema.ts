@@ -742,6 +742,25 @@ export interface PolicyDeclaration {
 	 * team declares in `+teams.ts`. There is no second way to name one.
 	 */
 	readonly system?: boolean;
+	/**
+	 * Selects every subject that signed in, and nothing an author writes should carry it either.
+	 *
+	 * `PolicyDefinition` — the type a `+*.policy.ts` is checked against — exposes neither this nor
+	 * `system`, so the only declarations that can carry one are the runtime's own in
+	 * `BUILT_IN_POLICIES`. It exists because `SYSTEM_READ_POLICY` grants what a workspace's queries
+	 * need of the runtime's own collections, and there is no team for it to be held by: a policy
+	 * name only reaches a subject through `+teams.ts`, and asking twenty templates to each declare a
+	 * team naming `bolt.system-collections` would make a promise the runtime makes depend on every
+	 * workspace remembering to opt into it. Merged and unreachable, it granted nobody: an ordinary
+	 * member reading `bolt_auth_user` for a display name was refused, and only the administrator
+	 * short-circuit made those collections readable at all.
+	 *
+	 * It is deliberately *not* "every subject". The host principal carries `system: true` and holds
+	 * the two grants `COLONY_SYSTEM_POLICY` enumerates and nothing else — it can migrate a workspace
+	 * and admit its founder, and cannot open a record in it — so `subjectHasPolicy` excludes it here
+	 * rather than quietly widening it by one collection at a time.
+	 */
+	readonly authenticated?: boolean;
 	readonly apps?: ReadonlyArray<string>;
 	readonly grants?: ReadonlyArray<RuntimePolicyGrant>;
 }

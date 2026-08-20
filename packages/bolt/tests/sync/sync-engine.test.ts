@@ -1,13 +1,19 @@
 import { createHash } from 'node:crypto';
 import { Effect, Schema } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
+import { EffectId } from '@norbital-ai/bolt-protocol';
+import { policy } from '../../src/authoring/workspace-schema.js';
+import { Approvals } from '../../src/runtime/approvals/approvals.js';
 import { Collections } from '../../src/runtime/collections/collections.js';
+import type { Identity } from '../../src/runtime/identity/identity.js';
 import { Sync } from '../../src/runtime/sync/sync.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
+	testWorkspace,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { fixtureUserId, seedSession, seedTeam } from '../support/fixture-identity.js';
 
 /**
  * A valid record id for a readable fixture name.
@@ -387,13 +393,34 @@ describe('Sync engine over SQL', () => {
 			// the renderer resolves it client-side, so a surface that cannot replicate it shows an empty
 			// file. It is not one of the identity collections, which stay out of the shape deliberately.
 		).toEqual(['approval_request', 'document_asset', 'people', 'requestor']);
+		/**
+		 * The authored collection is what an outsider does not replicate, and the runtime-owned three
+		 * are what they do.
+		 *
+		 * This used to assert `[]`, and that was the defect rather than the rule: `SYSTEM_READ_POLICY`
+		 * grants these reads to any authenticated subject, but nothing selected it — no team can
+		 * declare `bolt.system-collections` — so only the `isAdministrator` short-circuit reached them
+		 * and every ordinary member replicated an empty shape. The same argument the admin case above
+		 * makes applies to a member: a surface rendering a `file()` column client-side needs
+		 * `document_asset`, and it is not an administrator's surface.
+		 *
+		 * `people` staying out is what carries the test. An outsider holds no authored policy, and the
+		 * built-in grant names the runtime's collections and no workspace's.
+		 *
+		 * **A shape is a list of collections, not a licence over their rows**, and the two answers
+		 * moved apart when `approval_request` and `requestor` became conditional. `shape` filters on
+		 * `predicate.allowed`, and a narrowed grant is still *allowed* — it carries a `where` instead
+		 * of `true` — so both still appear here and both are row-filtered on the way out by the same
+		 * predicate `diff` and `snapshot` splice into their SQL. The case below is what pins that
+		 * second half; asserting only this list would read as "an outsider replicates every approval".
+		 */
 		expect(
 			await runtime.runPromise(
 				Effect.gen(function* () {
 					return yield* (yield* Sync.Service).shape(outsider);
 				})
 			)
-		).toEqual([]);
+		).toEqual(['approval_request', 'document_asset', 'requestor']);
 		expect(
 			await runtime.runPromise(
 				Effect.gen(function* () {
@@ -406,6 +433,102 @@ describe('Sync engine over SQL', () => {
 				})
 			)
 		).toEqual([]);
+	});
+
+	/**
+	 * The rows behind the shape: a replica pulls the approvals its subject is party to or may decide,
+	 * and no others.
+	 *
+	 * Asserted through `snapshot` rather than `diff` because `bolt_sync_outbox` is written by
+	 * `Collections` alone — `Approvals` projects `approval_request` with its own SQL, so an approval
+	 * never produces a change row and a `diff` assertion here would pass against any predicate at
+	 * all. `snapshot` is the half of replication that reads the table, and it splices in exactly the
+	 * predicate `diff` correlates through.
+	 *
+	 * The approver holds no authored policy whatsoever — `Approvers` is declared with an empty policy
+	 * list — so what admits their read is the built-in grant and nothing else.
+	 */
+	it('replicates only the approvals a subject raised or may decide', async () => {
+		const CONTRACTOR_TEAM = 'Contractors';
+		const APPROVER_TEAM = 'Approvers';
+		const REQUEST_ID = '019f6f10-0004-7000-8000-000000000001';
+		harness = await makeBoltTestRuntime(
+			testWorkspace({
+				policies: [
+					policy({
+						name: 'contractor',
+						effect: 'allow',
+						apps: ['*'],
+						grants: [
+							{ collection: 'people', action: 'read' },
+							{
+								collection: 'people',
+								action: 'create',
+								approval: {
+									id: '019f6f10-0004-7000-8000-000000000101',
+									name: 'People change approval',
+									steps: [
+										{
+											id: '019f6f10-0004-7000-8000-000000000201',
+											name: 'Review',
+											approvers: [APPROVER_TEAM]
+										}
+									]
+								}
+							}
+						]
+					})
+				],
+				teams: { [CONTRACTOR_TEAM]: ['contractor'], [APPROVER_TEAM]: [] }
+			})
+		);
+		const { runtime, effectId } = harness;
+		await seedTeam(harness, CONTRACTOR_TEAM);
+		await seedTeam(harness, APPROVER_TEAM);
+		await seedSession(harness, { token: 'p', user: 'party', team: CONTRACTOR_TEAM });
+		await seedSession(harness, { token: 'a', user: 'approver', team: APPROVER_TEAM });
+		await seedSession(harness, { token: 'b', user: 'bystander', team: CONTRACTOR_TEAM });
+		const member = (user: string, team: string): Identity.Subject => ({
+			userId: fixtureUserId(user),
+			tenantId: 'test-tenant',
+			team,
+			teamPath: [team]
+		});
+		const party = member('party', CONTRACTOR_TEAM);
+		await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Approvals.Service).request(effectId('raise'), party, REQUEST_ID, {
+					collection: 'people',
+					id: rid('p-approved'),
+					action: 'create',
+					values: { name: 'Grace' }
+				});
+			})
+		);
+		const replicated = (subject: Identity.Subject, collection: string) =>
+			runtime.runPromise(
+				Effect.gen(function* () {
+					const page = yield* (yield* Sync.Service).snapshot(
+						effectId(`snapshot-${subject.userId}-${collection}`),
+						subject,
+						collection,
+						undefined,
+						100
+					);
+					return page.rows.map((row) => field(row, 'norbital_id'));
+				})
+			);
+
+		expect(await replicated(party, 'approval_request')).toEqual([REQUEST_ID]);
+		expect(await replicated(member('approver', APPROVER_TEAM), 'approval_request')).toEqual([
+			REQUEST_ID
+		]);
+		// The row exists and two other subjects replicate it, so an empty page here is a narrowing
+		// rather than an empty table — the assertion a collapsed `true` predicate could not survive.
+		expect(await replicated(member('bystander', CONTRACTOR_TEAM), 'approval_request')).toEqual([]);
+		expect(await replicated(adminSubject, 'approval_request')).toEqual([REQUEST_ID]);
+		expect(await replicated(member('bystander', CONTRACTOR_TEAM), 'requestor')).toEqual([]);
+		expect(await replicated(party, 'requestor')).toHaveLength(1);
 	});
 
 	it('carries the record body so a replica can apply a change without refetching', async () => {

@@ -577,7 +577,17 @@ export const makeBoltTestRuntime = async (
 export const adminSubject: Identity.Subject = {
 	userId: 'admin-1',
 	tenantId: 'test-tenant',
-	teamPath: ['admin']
+	teamPath: ['admin'],
+	/**
+	 * What makes the name true, and it was missing.
+	 *
+	 * `isAdministrator` is `subject.admin === true`, read from `bolt_auth_user.status` — a status on
+	 * the person. `teamPath: ['admin']` is the roles-era spelling of the same idea and has selected
+	 * nothing since teams replaced roles: no `+teams.ts` maps a team called `admin` to anything, so
+	 * this fixture was an ordinary member wearing an administrator's name. Every case asserting
+	 * "an administrator sees all" through it was asserting that an ordinary member does.
+	 */
+	admin: true
 };
 
 /**
