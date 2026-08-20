@@ -1,70 +1,34 @@
 <script lang="ts">
-	import { useI18n, type UiKeys } from '#lib/i18n';
-	import * as Sheet from '#lib/sheet';
-	import { Bound } from '#lib/layout';
 	import type { Snippet } from 'svelte';
-	import CollectionDetailActions from './collection-detail-actions.svelte';
 	import { CollectionDetailPreferences } from './collection-detail-preferences.svelte.js';
+	import CollectionTableNavigationFrame from './internal/collection-table-navigation-frame.svelte';
 	import {
 		CollectionTableUrlNavigation,
 		setCollectionTableNavigationContext
 	} from './collection-table-navigation.svelte.js';
-
-	const { t } = useI18n<UiKeys>();
 
 	let {
 		url,
 		navigate,
 		children
 	}: { url: URL; navigate: (href: string) => void; children: Snippet } = $props();
-	let registrationRevision = $state(0);
 	const preferences = new CollectionDetailPreferences();
 	const navigation = new CollectionTableUrlNavigation({
 		getUrl: () => url,
-		navigate: (href) => navigate(href),
-		onRegistrationsChanged: () => (registrationRevision += 1)
+		navigate: (href) => navigate(href)
 	});
 	setCollectionTableNavigationContext(navigation);
-	const current = $derived(navigation.current);
-	const fullScreen = $derived(current ? preferences.isFullScreen(current.collectionName) : false);
-	const registration = $derived.by(() => {
-		void registrationRevision;
-		return navigation.resolveCurrentRegistration();
-	});
-
-	function toggleFullScreen(): void {
-		if (!current) return;
-		preferences.toggleFullScreen(current.collectionName);
-	}
+	const targets = $derived(navigation.targets);
 </script>
-
-{#snippet detailActions()}
-	<CollectionDetailActions
-		{fullScreen}
-		onToggleFullScreen={toggleFullScreen}
-		onClose={() => navigation.pop()}
-	/>
-{/snippet}
 
 {@render children()}
 
-<Sheet.Root open={Boolean(current)} onOpenChange={(open) => !open && navigation.pop()}>
-	<Sheet.Content
-		flush
-		contained
-		portalTarget="[data-slot='sidebar-inset']"
-		class="w-[520px] sm:max-w-[520px]"
-		showCloseButton={false}
-		{fullScreen}
-		onOpenAutoFocus={(event) => event.preventDefault()}
-		onCloseAutoFocus={(event) => event.preventDefault()}
-	>
-		<Bound size="full" clip>
-			{#if current && registration}
-				{@render registration.renderDetail({ recordId: current.recordId, actions: detailActions })}
-			{:else if current}
-				<p class="p-5 text-sm text-muted-foreground">{t('table.detailUnavailable')}</p>
-			{/if}
-		</Bound>
-	</Sheet.Content>
-</Sheet.Root>
+<!--
+	One sheet per stack frame, shallowest first. Each renders its record from the collection name and
+	record id in the URL, against the workspace's own client and representation registry — so a frame
+	resolves whether or not the table that linked to it is mounted, on an open tab, or on screen at
+	all. The sheets share a portal target and overlap, so the deepest frame is the one on top.
+-->
+{#each targets as target, depth (depth)}
+	<CollectionTableNavigationFrame {navigation} {target} {depth} {preferences} />
+{/each}

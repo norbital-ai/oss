@@ -3,10 +3,8 @@
 	generics="TCollections extends CollectionRegistry, TName extends CollectionKanbanName<TCollections>"
 >
 	import type {
-		CollectionApprovalRequest,
 		CollectionDefinition,
 		CollectionGroupedResult,
-		CollectionQuery,
 		CollectionRegistry,
 		CollectionRow,
 		CollectionType,
@@ -45,7 +43,6 @@
 	} from '../collection-table/collection-card-derivation.js';
 	import CollectionKanbanSkeleton from './collection-kanban-skeleton.svelte';
 	import CollectionKanbanLane from './collection-kanban-lane.svelte';
-	import CollectionKanbanRecordDetail from './collection-kanban-record-detail.svelte';
 	import { CollectionQueryState } from '#lib/collection-query';
 	import { CollectionActionToolbar } from '#lib/collection-toolbar';
 	import { laneMoveUpdate, runOptimisticKanbanMove } from './collection-kanban-move.js';
@@ -227,57 +224,6 @@
 			routeKey: resolvedDetailRouteKey
 		})
 	);
-	const loadedActiveRecord = $derived.by(() => {
-		if (!activeRecordId) return undefined;
-		for (const records of Object.values(boardQuery.result)) {
-			const record = records.find(
-				(candidate) => String(Reflect.get(candidate, recordIdField)) === activeRecordId
-			);
-			if (record) return record;
-		}
-		return undefined;
-	});
-	const activeRecordQueryInput = $derived.by(() => {
-		if (!activeRecordId || loadedActiveRecord) return null;
-		return {
-			operations,
-			query: {
-				where: {
-					[recordIdField]: { eq: activeRecordId }
-				} as CollectionQuery<Row>['where'], // stupidity: boundary-cast — the configured row key becomes a runtime string.
-				limit: 1
-			}
-		};
-	});
-	let activeRecordQuery = $state<RemoteQuery<Row[]> | null>(null);
-	watch(
-		() => activeRecordQueryInput,
-		(input) => {
-			activeRecordQuery = input ? input.operations.findMany(input.query) : null;
-		},
-		{ lazy: false }
-	);
-	const activeRecord = $derived(loadedActiveRecord ?? activeRecordQuery?.current?.[0]);
-	const activeApprovalId = $derived.by(() => {
-		if (!activeRecord) return undefined;
-		const value = Reflect.get(activeRecord, 'norbital_approval_id');
-		return typeof value === 'string' ? value : undefined;
-	});
-	const approvalQueryInput = $derived(
-		activeApprovalId && workspaceClient.approvals
-			? { approvalId: activeApprovalId, approvals: workspaceClient.approvals }
-			: null
-	);
-	// stupidity:allow V8 -- query, drag, detail, approval, optimistic move, and selection state meet at the board owner.
-	let approvalQuery = $state<RemoteQuery<readonly CollectionApprovalRequest[]> | null>(null);
-	watch(
-		() => approvalQueryInput,
-		(input) => {
-			approvalQuery = input ? input.approvals.findMany(input.approvalId) : null;
-		},
-		{ lazy: false }
-	);
-	const approvalRequest = $derived(approvalQuery?.current?.[0]);
 	function openRecord(record: Row): void {
 		if (!detailNavigation)
 			throw new Error('CollectionKanban requires a record navigation provider.');
@@ -334,10 +280,6 @@
 
 	async function refresh(): Promise<void> {
 		await query?.refresh();
-	}
-
-	async function refreshDetail(): Promise<void> {
-		await Promise.all([query?.refresh(), activeRecordQuery?.refresh(), approvalQuery?.refresh()]);
 	}
 
 	function setRecordLane(recordId: string, lane: string | undefined): void {
@@ -492,23 +434,6 @@
 	{/if}
 {/snippet}
 
-{#if detailNavigation}
-	<CollectionKanbanRecordDetail
-		{client}
-		{collection}
-		{definition}
-		{recordIdField}
-		{resolvedDetailRouteKey}
-		navigation={detailNavigation}
-		{activeRecordId}
-		{activeRecord}
-		activeRecordLoading={Boolean(activeRecordQuery?.loading)}
-		activeRecordError={activeRecordQuery?.error?.message}
-		approvalLoading={Boolean(approvalQuery?.loading)}
-		{approvalRequest}
-		refresh={refreshDetail}
-	/>
-{/if}
 
 {#snippet kanbanToolbar()}
 	<Stack gap="xs">

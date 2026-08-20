@@ -35,8 +35,6 @@ export {
 	getCollectionTableNavigationContext,
 	resolveCollectionTableRecordId,
 	setCollectionTableNavigationContext,
-	type CollectionTableDetailRegistration,
-	type CollectionTableDetailRenderContext,
 	type CollectionTableNavigation,
 	type CollectionTableNavigationTarget
 } from './collection-table-navigation.svelte.js';

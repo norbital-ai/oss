@@ -356,6 +356,7 @@ const WorkspaceApis = {
 					},
 					Schema.Json
 				);
+				invalidateApproval(runtime);
 			},
 			withdraw: async (approvalRequestId: string) => {
 				const state = await runtime.bolt.command(
@@ -365,6 +366,7 @@ const WorkspaceApis = {
 				);
 				if (state === null || typeof state !== 'object') return;
 				await runtime.bolt.command('approvals.withdraw', { state }, Schema.Json);
+				invalidateApproval(runtime);
 			}
 		}
 	})
@@ -394,6 +396,21 @@ const browserTransport: BoltTransport = {
 const invalidateWrite = (runtime: WorkspaceClientRuntime, collection: string): void => {
 	runtime.cache?.invalidate([collection]);
 	runtime.queries?.refreshAffected([collection]);
+};
+
+/**
+ * Drops every cached answer and re-runs every live query, after an approval decision.
+ *
+ * An approval decision is not a `db.*` write, so it never passed through `invalidateWrite`. The one
+ * table that happened to own the open sheet refreshed its own rows by hand, and every other surface
+ * showing the same record — a board, a second table, a nested sheet — stayed stale until something
+ * else refetched. The decision commits against a record this call cannot name a collection for, so
+ * `ANY_COLLECTION` is the honest scope: something changed, and nothing held is provably still true.
+ * Approvals are rare and deliberate, which is what makes a full re-read the cheap half of the trade.
+ */
+const invalidateApproval = (runtime: WorkspaceClientRuntime): void => {
+	runtime.cache?.invalidate([ANY_COLLECTION]);
+	runtime.queries?.refreshAffected([ANY_COLLECTION]);
 };
 
 /** Owns collection proxy behavior at the client boundary so validation and typed semantics stay consistent for every caller. */

@@ -38,10 +38,6 @@
 			"types": "./build/client/ui/state/platform.d.ts",
 			"default": "./build/client/ui/state/platform.js"
 		},
-		"./client/navigation": {
-			"types": "./build/client/ui/collection/detail-surface.d.ts",
-			"default": "./build/client/ui/collection/detail-surface.js"
-		},
 		"./client/import-export": {
 			"types": "./build/client/ui/state/import-export.d.ts",
 			"default": "./build/client/ui/state/import-export.js"

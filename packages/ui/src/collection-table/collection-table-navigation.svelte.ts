@@ -1,5 +1,5 @@
 import { safeParse } from '@norbital-ai/std';
-import { getContext, setContext, type Snippet } from 'svelte';
+import { getContext, setContext } from 'svelte';
 import { Schema } from 'effect';
 
 export interface CollectionTableNavigationTarget {
@@ -9,17 +9,6 @@ export interface CollectionTableNavigationTarget {
 	parentRouteKey?: string;
 }
 
-export interface CollectionTableDetailRenderContext {
-	recordId: string;
-	actions?: Snippet;
-}
-
-export interface CollectionTableDetailRegistration {
-	routeKey: string;
-	parentRouteKey?: string;
-	renderDetail: Snippet<[CollectionTableDetailRenderContext]>;
-}
-
 export interface CollectionTableNavigation {
 	readonly current: CollectionTableNavigationTarget | null;
 	resolveRecordId(params: {
@@ -27,7 +16,6 @@ export interface CollectionTableNavigation {
 		routeKey: string;
 		parentRouteKey?: string;
 	}): string | undefined;
-	register(registration: CollectionTableDetailRegistration): () => void;
 	href(target: CollectionTableNavigationTarget): string;
 	open(target: CollectionTableNavigationTarget): void;
 	pop(): void;
@@ -90,28 +78,29 @@ function parseUrlNavigationStack(url: URL): UrlNavigationStackItem[] {
 	return result._tag === 'Success' ? [...result.success.stack] : [];
 }
 
-function registrationKey(routeKey: string, parentRouteKey?: string): string {
-	return `${parentRouteKey ?? ''}\u0000${routeKey}`;
-}
-
 export class CollectionTableUrlNavigation implements CollectionTableNavigation {
 	readonly #getUrl: () => URL;
 	readonly #navigate: (href: string) => void;
-	readonly #onRegistrationsChanged: () => void;
-	readonly #registrations = new Map<string, CollectionTableDetailRegistration>();
 
-	constructor(params: {
-		getUrl: () => URL;
-		navigate: (href: string) => void;
-		onRegistrationsChanged?: () => void;
-	}) {
+	constructor(params: { getUrl: () => URL; navigate: (href: string) => void }) {
 		this.#getUrl = params.getUrl;
 		this.#navigate = params.navigate;
-		this.#onRegistrationsChanged = params.onRegistrationsChanged ?? (() => undefined);
 	}
 
 	get current(): CollectionTableNavigationTarget | null {
 		return this.#targets().at(-1) ?? null;
+	}
+
+	/**
+	 * Every frame of the URL stack, shallowest first.
+	 *
+	 * A detail registration only exists while the table that owns it is mounted, and a nested
+	 * table is mounted by its parent frame's detail surface. Rendering only the deepest frame
+	 * therefore unmounts the very table the deepest frame needs, so the surface renders the
+	 * whole chain and keeps each ancestor alive.
+	 */
+	get targets(): CollectionTableNavigationTarget[] {
+		return this.#targets();
 	}
 
 	resolveRecordId(params: {
@@ -130,26 +119,6 @@ export class CollectionTableUrlNavigation implements CollectionTableNavigation {
 			routeKey: item.node_id,
 			parentRouteKey: stack[index - 1]?.node_id
 		}));
-	}
-
-	register(registration: CollectionTableDetailRegistration): () => void {
-		const key = registrationKey(registration.routeKey, registration.parentRouteKey);
-		this.#registrations.set(key, registration);
-		this.#onRegistrationsChanged();
-		return () => {
-			if (this.#registrations.get(key) !== registration) return;
-			this.#registrations.delete(key);
-			this.#onRegistrationsChanged();
-		};
-	}
-
-	resolveCurrentRegistration(): CollectionTableDetailRegistration | undefined {
-		const current = this.current;
-		if (!current) return undefined;
-		return (
-			this.#registrations.get(registrationKey(current.routeKey, current.parentRouteKey)) ??
-			this.#registrations.get(registrationKey(current.routeKey))
-		);
 	}
 
 	href(target: CollectionTableNavigationTarget): string {
@@ -181,10 +150,15 @@ export class CollectionTableUrlNavigation implements CollectionTableNavigation {
 		this.#navigate(this.href(target));
 	}
 
-	pop(): void {
+	/** Close the frame at `depth`, keeping every shallower frame open. */
+	popTo(depth: number): void {
 		const url = this.#getUrl();
 		const stack = parseUrlNavigationStack(url);
-		this.#navigate(this.#hrefForStack(url, stack.slice(0, -1)));
+		this.#navigate(this.#hrefForStack(url, stack.slice(0, Math.max(0, depth))));
+	}
+
+	pop(): void {
+		this.popTo(parseUrlNavigationStack(this.#getUrl()).length - 1);
 	}
 
 	#hrefForStack(url: URL, stack: UrlNavigationStackItem[]): string {

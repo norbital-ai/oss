@@ -3,7 +3,6 @@
 	generics="TCollections extends CollectionRegistry = CollectionRegistry, TName extends CollectionName<TCollections> = CollectionName<TCollections>, TRow extends object = CollectionTableRow<TCollections, TName>"
 >
 	import type {
-		CollectionApprovalRequest,
 		CollectionDefinition,
 		CollectionField,
 		CollectionFieldName,
@@ -20,16 +19,13 @@
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
 	import { onMount } from 'svelte';
-	import { Button } from '#lib/button';
-	import * as Dialog from '#lib/dialog';
-	import { Textarea } from '#lib/textarea';
 	import * as Popover from '#lib/popover';
 	import * as Sheet from '#lib/sheet';
 	import { cn, renderSnippet, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { DataRenderer } from '../data-renderer/index.js';
 	import { formatDataValue, type Translate } from '../data-renderer/index.js';
-	import { Cluster, Cover, Grid, Inline, Stack, Bound } from '#lib/layout';
+	import { Cover, Inline, Stack, Bound } from '#lib/layout';
 	import { CollectionQueryState } from '#lib/collection-query';
 	import {
 		CollectionActionToolbar,
@@ -53,15 +49,11 @@
 		setCollectionTablePartContext
 	} from './collection-table-part.svelte';
 	import CollectionGrid from './internal/collection-grid.svelte';
-	import CollectionTableDetailRegistration from './internal/collection-table-detail-registration.svelte';
 	import CollectionTableList from './collection-table-list.svelte';
 	import CollectionTableAppliedFilters from './collection-table-applied-filters.svelte';
-	import CollectionRecordDetailTabs from './collection-record-detail-tabs.svelte';
-	import CollectionRecordDetailEmpty from './collection-record-detail-empty.svelte';
 	import {
 		createCollectionTableRouteKey,
-		getCollectionTableNavigationContext,
-		type CollectionTableDetailRenderContext
+		getCollectionTableNavigationContext
 	} from './collection-table-navigation.svelte.js';
 	import {
 		ColumnAPI,
@@ -101,15 +93,8 @@
 	interface CollectionTableQueries {
 		rows: CollectionPageQuery<Row> | null;
 		count: RemoteQuery<number> | null;
-		record: CollectionPageQuery<Row> | null;
-		approval: RemoteQuery<readonly CollectionApprovalRequest[]> | null;
 		cursors: Array<string | undefined>;
 	}
-
-	type ApprovalActionState =
-		| { status: 'idle' }
-		| { status: 'pending' }
-		| { status: 'requesting_changes'; reason: string; pending: boolean };
 
 	let {
 		client,
@@ -149,8 +134,6 @@
 			CollectionType<Row, object, object>
 		> // stupidity: boundary-cast — the generated client and runtime manifest share collection keys.
 	);
-	const rawRecordFields = $derived(definition.fields.filter((field) => !isSystemField(field.name)));
-	const rawSystemFields = $derived(definition.fields.filter((field) => isSystemField(field.name)));
 	const operations = $derived(
 		client.db[collection] as CollectionOperations<CollectionType<Row, object, object>> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row.
 	);
@@ -184,8 +167,6 @@
 	let queries = $state<CollectionTableQueries>({
 		rows: null,
 		count: null,
-		record: null,
-		approval: null,
 		cursors: [undefined]
 	});
 	const configuredColumns = new Map<object, ColumnConfig>();
@@ -528,56 +509,12 @@
 			routeKey: resolvedDetailRouteKey
 		})
 	);
-	const activeRecordQueryInput = $derived.by(() => {
-		if (!activeRecordId || disabled) return null;
-		return {
-			operations,
-			query: {
-				where: { [recordIdField]: { eq: activeRecordId } } as CollectionQuery<Row>['where'], // stupidity: boundary-cast — the configured row key is constrained by CollectionTableProps but becomes a runtime string.
-				limit: 1
-			}
-		};
-	});
-	watch(
-		() => activeRecordQueryInput,
-		(input) => {
-			if (!input) {
-				queries.record = null;
-				return;
-			}
-			queries.record = input.operations.findMany(input.query);
-		},
-		{ lazy: false }
-	);
-	const activeRecord = $derived.by(() => {
-		const record = queries.record?.current?.[0];
-		// Remote queries retain the previous result while a new key in the same family loads. Never
-		// mount a stateful representation with that carry-over row: its form captures recordId at
-		// construction, so showing record B with record A's form would send edits to the wrong row.
-		if (!record || !activeRecordId || String(Reflect.get(record, recordIdField)) !== activeRecordId)
-			return undefined;
-		return record;
-	});
-	// A table nested in this table's detail surface belongs to the open record; it persists its view
-	// against that record instead of sharing one key across every parent row.
-	setCollectionRecordScope(() => activeRecordId);
-	const activeRecordLoading = $derived(Boolean(queries.record?.loading));
-	const activeRecordError = $derived(queries.record?.error?.message);
 	// A missing query resource or an undefined first value is still "unknown", never an empty
 	// collection. Keep the loader visible until the first locally-synced or server-proven result
 	// arrives; only a resolved [] may render the empty state.
 	const tableLoading = $derived(
 		!disabled &&
 			(queries.rows == null || (queries.rows.current === undefined && queries.rows.error == null))
-	);
-	let approvalActionState = $state<ApprovalActionState>({ status: 'idle' });
-	let changeRequestOpen = $state(false);
-	const approvalActionPending = $derived(
-		approvalActionState.status === 'pending' ||
-			(approvalActionState.status === 'requesting_changes' && approvalActionState.pending)
-	);
-	const changeRequestReason = $derived(
-		approvalActionState.status === 'requesting_changes' ? approvalActionState.reason : ''
 	);
 	const selectedRecords = $derived(
 		tableApi.data
@@ -591,33 +528,6 @@
 		bulkEnabled && operations?.delete ? deleteSelectedRecords : undefined
 	);
 	let createOpen = $state(false);
-	const activeApprovalId = $derived.by(() => {
-		if (!activeRecord) return undefined;
-		const value = Reflect.get(activeRecord, 'norbital_approval_id');
-		return typeof value === 'string' ? value : undefined;
-	});
-	const approvalQueryInput = $derived(
-		activeApprovalId && workspaceClient.approvals
-			? { approvalId: activeApprovalId, approvals: workspaceClient.approvals }
-			: null
-	);
-	watch(
-		() => approvalQueryInput,
-		(input) => {
-			queries.approval = input ? input.approvals.findMany(input.approvalId) : null;
-		},
-		{ lazy: false }
-	);
-	const approvalRequest = $derived(queries.approval?.current?.[0]);
-	const approvalStatusMessage = $derived(
-		queries.approval?.loading
-			? t('table.approvalLoading')
-			: approvalRequest?.status === 'ONGOING'
-				? t('table.approvalAwaiting')
-				: t('table.approvalStatus', {
-						status: approvalRequest?.status ?? t('common.unknown')
-					})
-	);
 
 	function openRecord(row: GridRow): void {
 		if (!detailNavigation)
@@ -735,113 +645,12 @@
 		return fallback ?? t('table.recordDescription', { name: humanize(String(collection)) });
 	}
 
-	function formatRawStructuredValue(value: unknown): string {
-		if (value == null) return '—';
-		try {
-			return JSON.stringify(value, null, 2) ?? String(value);
-		} catch {
-			return String(value);
-		}
-	}
-
-	async function processApproval(
-		action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE',
-		comments?: string
-	): Promise<boolean> {
-		const approvals = workspaceClient.approvals;
-		if (!activeApprovalId || !approvals) return false;
-		approvalActionState =
-			action === 'REQUEST_FOR_CHANGE'
-				? { status: 'requesting_changes', reason: comments ?? '', pending: true }
-				: { status: 'pending' };
-		try {
-			await approvals.process({ approvalRequestId: activeApprovalId, action, comments });
-			if (action === 'REQUEST_FOR_CHANGE') changeRequestOpen = false;
-			approvalActionState = { status: 'idle' };
-			toast.success(approvalActionSuccessMessage(action));
-			// The decision is already committed. Keep slow or failed reads from turning a successful
-			// mutation into a stuck dialog and a false "action failed" message; live sync normally wins
-			// this race, while these refreshes are only an immediate consistency assist.
-			void Promise.all([queries.approval?.refresh(), refreshRows()]).catch((error: unknown) => {
-				toast.error(
-					error instanceof Error
-						? `${t('table.actionRefreshFailed')}: ${error.message}`
-						: t('table.actionRefreshFailed')
-				);
-			});
-			return true;
-		} catch (error) {
-			toast.error(error instanceof Error ? error.message : t('table.approvalActionFailed'));
-			approvalActionState =
-				action === 'REQUEST_FOR_CHANGE'
-					? { status: 'requesting_changes', reason: comments ?? '', pending: false }
-					: { status: 'idle' };
-			return false;
-		}
-	}
-
-	function approvalActionSuccessMessage(
-		action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE'
-	): string {
-		switch (action) {
-			case 'APPROVED':
-				return t('table.approvalApproved');
-			case 'REJECTED':
-				return t('table.approvalRejected');
-			case 'REQUEST_FOR_CHANGE':
-				return t('table.approvalChangesRequested');
-			default:
-				return action satisfies never;
-		}
-	}
-
-	function openChangeRequest(): void {
-		approvalActionState = { status: 'requesting_changes', reason: '', pending: false };
-		changeRequestOpen = true;
-	}
-
-	function closeChangeRequest(): void {
-		if (approvalActionPending) return;
-		changeRequestOpen = false;
-		approvalActionState = { status: 'idle' };
-	}
-
-	function updateChangeRequestReason(reason: string): void {
-		if (approvalActionState.status !== 'requesting_changes') return;
-		approvalActionState = { ...approvalActionState, reason };
-	}
-
-	async function requestChanges(): Promise<void> {
-		const reason = changeRequestReason.trim();
-		if (!reason) return;
-		await processApproval('REQUEST_FOR_CHANGE', reason);
-	}
-
-	async function withdrawApproval(): Promise<void> {
-		const approvals = workspaceClient.approvals;
-		if (!activeApprovalId || !approvals) return;
-		approvalActionState = { status: 'pending' };
-		try {
-			await approvals.withdraw(activeApprovalId);
-			await Promise.all([queries.approval?.refresh(), refreshRows()]);
-			toast.success(t('table.approvalWithdrawn'));
-		} catch (error) {
-			toast.error(error instanceof Error ? error.message : t('table.approvalWithdrawFailed'));
-		} finally {
-			approvalActionState = { status: 'idle' };
-		}
-	}
-
 	async function refreshRows(): Promise<void> {
 		await queries.rows?.refresh();
 	}
 
 	async function refresh(): Promise<void> {
 		await Promise.all([refreshRows(), queries.count?.refresh()]);
-	}
-
-	async function refreshDetail(): Promise<void> {
-		await Promise.all([refreshRows(), queries.record?.refresh(), queries.approval?.refresh()]);
 	}
 
 	async function refreshData(): Promise<void> {
@@ -1014,230 +823,11 @@
 	</Inline>
 {/snippet}
 
-{#snippet recordDetails()}
-	{#if activeRecord && collectionSurface?.representation}
-		{@const Representation = collectionSurface.representation}
-		{#key activeRecordId}
-			<Representation
-				record={activeRecord}
-				close={() => detailNavigation?.pop()}
-				refresh={refreshDetail}
-			/>
-		{/key}
-	{:else if activeRecord}
-		<!-- Default detail surface (RFC V.2/V.6): a schema-derived form bound to the record. -->
-		{#key activeRecordId}
-			<CollectionForm {client} {collection} defaultValues={activeRecord} />
-		{/key}
-	{:else}
-		<CollectionRecordDetailEmpty
-			icon="lucide:panel-top-dashed"
-			title={t('table.noCustomView')}
-			description={t('table.noCustomViewDesc')}
-		/>
-	{/if}
-{/snippet}
-
-{#snippet approvalDetails()}
-	<Stack gap="md">
-		{#if queries.approval?.loading}
-			<Inline
-				gap="sm"
-				class="rounded-lg border bg-card p-4 text-sm text-muted-foreground"
-				role="status"
-			>
-				<Icon icon="lucide:loader-circle" class="size-4 animate-spin" aria-hidden="true" />
-				{t('table.approvalLoading')}
-			</Inline>
-		{:else if approvalRequest}
-			<Stack gap="md" class="rounded-lg border bg-card p-4">
-				<Inline align="start" gap="md">
-					<div
-						class={cn(
-							'flex size-9 shrink-0 items-center justify-center rounded-full',
-							approvalRequest.status === 'APPROVED' && 'bg-success/10 text-success',
-							approvalRequest.status === 'REJECTED' && 'bg-destructive/10 text-destructive',
-							approvalRequest.status === 'REQUEST_FOR_CHANGE' &&
-								'bg-warning/15 text-warning-foreground',
-							approvalRequest.status === 'ONGOING' && 'bg-brand/10 text-brand',
-							!['APPROVED', 'REJECTED', 'REQUEST_FOR_CHANGE', 'ONGOING'].includes(
-								approvalRequest.status
-							) && 'bg-muted text-muted-foreground'
-						)}
-					>
-						<Icon
-							icon={approvalRequest.status === 'APPROVED'
-								? 'lucide:circle-check'
-								: approvalRequest.status === 'REJECTED'
-									? 'lucide:circle-x'
-									: approvalRequest.status === 'REQUEST_FOR_CHANGE'
-										? 'lucide:message-square-warning'
-										: approvalRequest.status === 'ONGOING'
-											? 'lucide:clock-3'
-											: 'lucide:shield-check'}
-							class="size-4"
-							aria-hidden="true"
-						/>
-					</div>
-					<Stack gap="xs" grow>
-						<Inline gap="sm" justify="between">
-							<p class="text-sm font-medium">{t('table.approvalRequest')}</p>
-							<span
-								class={cn(
-									'rounded-full border px-2 py-0.5 text-xs font-medium',
-									approvalRequest.status === 'APPROVED' &&
-										'border-success/25 bg-success/10 text-success',
-									approvalRequest.status === 'REJECTED' &&
-										'border-destructive/25 bg-destructive/10 text-destructive',
-									approvalRequest.status === 'REQUEST_FOR_CHANGE' &&
-										'border-warning/30 bg-warning/15 text-warning-foreground',
-									approvalRequest.status === 'ONGOING' && 'border-brand/25 bg-brand/10 text-brand'
-								)}>{humanize(approvalRequest.status)}</span
-							>
-						</Inline>
-						<p class="text-sm leading-5 text-muted-foreground">{approvalStatusMessage}</p>
-						<p
-							class="truncate font-mono text-micro text-muted-foreground"
-							title={approvalRequest.norbital_id}
-						>
-							{t('table.approvalRequestId')}: {approvalRequest.norbital_id}
-						</p>
-					</Stack>
-				</Inline>
-				{#if approvalRequest.status === 'ONGOING'}
-					<Cluster gap="sm" class="border-t pt-4">
-						<Button
-							disabled={approvalActionPending}
-							onclick={() => void processApproval('APPROVED')}
-						>
-							<Icon icon="lucide:check" class="mr-1.5 size-3.5" aria-hidden="true" />
-							{t('table.approve')}
-						</Button>
-						<Button variant="outline" disabled={approvalActionPending} onclick={openChangeRequest}
-							>{t('table.requestChanges')}</Button
-						>
-						<Button
-							variant="outline"
-							class="text-destructive hover:text-destructive"
-							disabled={approvalActionPending}
-							onclick={() => void processApproval('REJECTED')}>{t('table.reject')}</Button
-						>
-						<Button variant="ghost" disabled={approvalActionPending} onclick={withdrawApproval}
-							>{t('table.withdrawRequest')}</Button
-						>
-					</Cluster>
-				{/if}
-			</Stack>
-		{:else}
-			<CollectionRecordDetailEmpty
-				icon="lucide:shield-check"
-				title={t('table.noApprovalRequest')}
-				description={t('table.noApprovalRequestDesc')}
-			/>
-		{/if}
-	</Stack>
-{/snippet}
-
-{#snippet rawFieldGrid({
-	record,
-	fields,
-	className
-}: {
-	record: Row;
-	fields: readonly CollectionField[];
-	className?: string;
-})}
-	<Grid as="dl" minimum="compact" gap="md" class={className}>
-		{#each fields as field (field.name)}
-			<div class="min-w-0">
-				<dt class="text-xs font-medium leading-4 text-muted-foreground">
-					{field.label ?? humanize(field.name)}
-				</dt>
-				<dd class="mt-0.5 min-w-0 break-words text-sm leading-5">
-					{#if field.kind === 'json'}
-						<pre
-							class="whitespace-pre-wrap break-words font-mono text-xs leading-5">{formatRawStructuredValue(
-								Reflect.get(record, field.name)
-							)}</pre>
-					{:else}
-						<DataRenderer {field} value={Reflect.get(record, field.name)} mode="display" />
-					{/if}
-				</dd>
-			</div>
-		{/each}
-	</Grid>
-{/snippet}
-
-{#snippet rawDetails()}
-	{#if activeRecord}
-		<Stack gap="md">
-			{#if rawRecordFields.length > 0}
-				{@render rawFieldGrid({
-					record: activeRecord,
-					fields: rawRecordFields,
-					className: 'rounded-lg border bg-card p-3'
-				})}
-			{/if}
-			{#if rawSystemFields.length > 0}
-				<details class="group rounded-lg border bg-muted/15">
-					<summary
-						class="cursor-pointer list-none rounded-lg px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-					>
-						<Inline gap="sm" justify="between">
-							<Inline gap="sm">
-								<Icon
-									icon="lucide:database"
-									class="size-3.5 text-muted-foreground"
-									aria-hidden="true"
-								/>
-								<span class="text-sm font-medium">{t('table.systemFields')}</span>
-								<span class="text-meta">{rawSystemFields.length}</span>
-							</Inline>
-							<Icon
-								icon="lucide:chevron-down"
-								class="size-4 text-muted-foreground transition-transform group-open:rotate-180"
-								aria-hidden="true"
-							/>
-						</Inline>
-					</summary>
-					{@render rawFieldGrid({
-						record: activeRecord,
-						fields: rawSystemFields,
-						className: 'border-t p-3'
-					})}
-				</details>
-			{/if}
-		</Stack>
-	{/if}
-{/snippet}
-
-{#snippet recordSurface({ recordId, actions }: CollectionTableDetailRenderContext)}
-	<CollectionRecordDetailTabs
-		title={activeRecord ? recordTitle(activeRecord) : humanize(String(collection))}
-		description={t('table.recordDetails', { name: humanize(String(collection)) })}
-		loading={recordId !== activeRecordId || activeRecordLoading}
-		error={activeRecordError}
-		found={Boolean(activeRecord)}
-		{actions}
-		ui={recordDetails}
-		approval={approvalDetails}
-		raw={rawDetails}
-	/>
-{/snippet}
-
 <div class="hidden" aria-hidden="true">
 	{@render columns({ Column: CollectionTablePart })}
 </div>
 
-{#if detailNavigation}
-	{#key resolvedDetailRouteKey}
-		<CollectionTableDetailRegistration
-			navigation={detailNavigation}
-			routeKey={resolvedDetailRouteKey}
-			renderDetail={recordSurface}
-		/>
-	{/key}
-{/if}
+
 
 <!-- stupidity:allow UI10 -- collection surfaces need a natural minimum height (header + a few rows); no Bound size expresses it -->
 <!-- stupidity:allow UI15 -- the table keeps a usable empty/loading viewport before rows establish intrinsic height -->
@@ -1331,34 +921,6 @@
 		</div>
 	</Sheet.Content>
 </Sheet.Root>
-
-<Dialog.Root open={changeRequestOpen} onOpenChange={(open) => !open && closeChangeRequest()}>
-	<Dialog.Content class="max-w-md">
-		<Dialog.Header>
-			<Dialog.Title>{t('table.requestChanges')}</Dialog.Title>
-			<Dialog.Description>{t('table.requestChangesDescription')}</Dialog.Description>
-		</Dialog.Header>
-		<label class="grid gap-1.5 text-sm font-medium">
-			{t('table.changeRequestReason')}
-			<Textarea
-				value={changeRequestReason}
-				placeholder={t('table.describeChangesPlaceholder')}
-				maxlength={1000}
-				required
-				oninput={(event) => updateChangeRequestReason(event.currentTarget.value)}
-			/>
-		</label>
-		<Dialog.Footer>
-			<Dialog.Close disabled={approvalActionPending}>{t('common.cancel')}</Dialog.Close>
-			<Button
-				disabled={approvalActionPending || changeRequestReason.trim().length === 0}
-				onclick={() => void requestChanges()}
-			>
-				{approvalActionPending ? t('table.requesting') : t('table.requestChanges')}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
 
 <style>
 	/* These classes are forwarded to child-component roots. They must be global:
