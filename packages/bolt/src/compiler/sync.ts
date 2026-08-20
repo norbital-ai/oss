@@ -529,6 +529,19 @@ class WorkspaceCompiler {
 		if (path.endsWith('.svg')) return 'image/svg+xml';
 		if (path.endsWith('.webp')) return 'image/webp';
 		if (path.endsWith('.png')) return 'image/png';
+		if (path.endsWith('.jpg') || path.endsWith('.jpeg')) return 'image/jpeg';
+		if (path.endsWith('.gif')) return 'image/gif';
+		if (path.endsWith('.woff2')) return 'font/woff2';
+		/**
+		 * The one entry the browser refuses to guess for.
+		 *
+		 * `WebAssembly.instantiateStreaming` checks the media type and rejects anything that is not
+		 * `application/wasm` — it will not sniff the magic bytes. PGlite ships its engine as `.wasm`
+		 * inside the workspace bundle, so falling through to `application/octet-stream` failed the
+		 * replica with `Response has unsupported MIME type`, from a file that was served correctly in
+		 * every other respect. A missing line here is indistinguishable from a corrupt download.
+		 */
+		if (path.endsWith('.wasm')) return 'application/wasm';
 		if (path.endsWith('.sql')) return 'text/plain; charset=utf-8';
 		return 'application/octet-stream';
 	};
