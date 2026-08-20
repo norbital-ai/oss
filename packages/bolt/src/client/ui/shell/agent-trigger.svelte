@@ -44,8 +44,20 @@
 		expanded ? 'h-8 px-2' : 'size-8 justify-center p-0'
 	)}
 >
-	<!-- No label on the orb: the button already carries one, and a second would be read twice. -->
-	<NorbitalThinkingOrb {state} size={16} />
+	<!--
+		The same box every other sidebar icon sits in, so the orb lands where a `size-4` glyph lands.
+
+		`Notifications` beside it is `IconWrapper class="size-4 shrink-0"`, and the agent sheet's own
+		header already wrapped its orb this way — this trigger was the one call site left rendering the
+		orb bare. The orb is 16px and `flex: none` on its own, so nothing was resizing it; what it
+		lacked was the fixed grid cell its neighbours are centred in, which is what makes a row of
+		icons share one optical axis rather than each sitting wherever its own glyph falls.
+
+		No label on the orb: the button already carries one, and a second would be read twice.
+	-->
+	<div class="grid size-4 shrink-0 place-items-center">
+		<NorbitalThinkingOrb {state} size={16} />
+	</div>
 	{#if expanded}
 		<span class="min-w-0 flex-1 truncate text-left {WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS}"
 			>{label}</span

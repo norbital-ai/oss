@@ -813,10 +813,15 @@ class WorkspaceCompiler {
 		const pipelineEntriesByCollection = pipelineFiles
 			.map((path, index) => `${JSON.stringify(basename(dirname(path)))}: pipelines${index}`)
 			.join(', ');
-		// Keyed by what each module calls itself rather than by its filename: `AuthoredAutomationModule`
-		// declares `name`, the runtime looks automations up by it, and a file renamed without renaming
-		// the automation would otherwise silently stop matching.
-		const automationEntries = automationFiles.map((_, index) => `automation${index}`).join(', ');
+		// A definition deliberately has no name: the `+<name>.ts` file owns it. Project the authored
+		// definition into the runtime shape here so change events stay change events, schedules retain
+		// their real cron, and the emitted map cannot collapse onto an `undefined` key.
+		const automationEntries = automations
+			.map(
+				(name, index) =>
+					`{ name: ${JSON.stringify(name)}, trigger: 'schedule' in automation${index}.trigger ? { _tag: 'Schedule', cron: automation${index}.trigger.schedule } : { _tag: 'Change', collection: automation${index}.trigger.trigger.collection, event: automation${index}.trigger.trigger.event }, handler: automation${index}.spec.handler }`
+			)
+			.join(', ');
 		// Imported live, as models, policies and tools are, rather than being read out of the file's text.
 		// A channel module is a plain object literal today, but reading it as source is how the model
 		// scraper lost every generated column, and the import costs nothing the artifact was not already
@@ -878,8 +883,11 @@ class WorkspaceCompiler {
 			agentFile === undefined
 				? ''
 				: `import declaredAgentSpec from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, agentFile))};`;
+		const automationDeclarationEntry =
+			', automations: Object.values(declaredAutomations).map(({ name, trigger }) => ({ name, trigger, command: name }))';
 		const environmentEntry =
-			environmentFile === undefined ? '' : ', environment: declaredEnvironment';
+			(environmentFile === undefined ? '' : ', environment: declaredEnvironment') +
+			automationDeclarationEntry;
 		const customTypeEntries = customTypeDefinitions
 			.map((path, index) => `${JSON.stringify(basename(dirname(path)))}: customType${index}`)
 			.join(', ');

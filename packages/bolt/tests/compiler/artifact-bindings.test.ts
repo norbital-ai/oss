@@ -73,8 +73,12 @@ describe('emitted artifact bindings', () => {
 		expect(artifact).toContain('import pipelines0 from');
 		expect(artifact).toContain('import automation0 from');
 		expect(artifact).toContain('"invoices": pipelines0');
-		expect(artifact).toContain('[automation0]');
+		expect(artifact).toContain('name: "nightly"');
 		expect(artifact).toContain('pipelines: declaredPipelines');
 		expect(artifact).toContain('automations: declaredAutomations');
+		expect(artifact).toContain('cron: automation0.trigger.schedule');
+		expect(artifact).toContain('collection: automation0.trigger.trigger.collection');
+		expect(artifact).toContain('event: automation0.trigger.trigger.event');
+		expect(artifact).toContain('automations: Object.values(declaredAutomations)');
 	});
 });

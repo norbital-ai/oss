@@ -11,7 +11,11 @@ export interface AutomationDeclaration {
 	readonly name: string;
 	readonly trigger:
 		| { readonly _tag: 'Schedule'; readonly cron: string }
-		| { readonly _tag: 'Change'; readonly collection: string };
+		| {
+				readonly _tag: 'Change';
+				readonly collection: string;
+				readonly event: 'created' | 'updated' | 'deleted';
+		  };
 	readonly command: string;
 }
 
