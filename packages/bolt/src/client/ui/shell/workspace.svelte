@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { Component } from 'svelte';
 	import {
+		resolveCollectionClient,
+		setCollectionClientContext,
 		setCollectionSurfaceRuntime,
 		type CollectionSurface
 	} from '@norbital-ai/ui/collection-runtime';
@@ -85,6 +87,21 @@
 		surfaces: collectionSurfaces,
 		claimView: () => () => undefined
 	});
+
+	/**
+	 * The workspace's own collection client, published for surfaces that have no table above them.
+	 *
+	 * A record sheet used to be rendered by whichever `CollectionTable` had registered it on mount,
+	 * which meant a `?stack=` frame naming a table on an unopened tab had nothing to render with. The
+	 * sheet now reads the record itself, and this is where it gets the client to read it through —
+	 * the same compiled client Studio's Data tab uses, from the bundle, never from a host lookup.
+	 *
+	 * Duck-checked rather than cast: `WorkspaceClient` under-declares what the generated runtime
+	 * actually carries (`records`, `history`, `approvals`), and this is the seam that verifies it.
+	 */
+	// svelte-ignore state_referenced_locally -- the compiled workspace is fixed for this mount.
+	const collectionClient = resolveCollectionClient(workspace.client);
+	if (collectionClient) setCollectionClientContext(() => collectionClient);
 
 	/**
 	 * A custom type's own renderer, keyed by the type name its columns declare.
@@ -520,9 +537,7 @@
 			teams: list('teams').map((row) => ({
 				id: text(row, 'id'),
 				name: text(row, 'name'),
-				...(optionalText(row, 'parentId') === undefined
-					? {}
-					: { parentId: text(row, 'parentId') }),
+				...(optionalText(row, 'parentId') === undefined ? {} : { parentId: text(row, 'parentId') }),
 				...(optionalText(row, 'description') === undefined
 					? {}
 					: { description: text(row, 'description') })
@@ -575,6 +590,7 @@
 	organization={{ id: view.organization.id, name: view.organization.name }}
 	organizations={view.organizations}
 	user={{
+		id: view.user.id,
 		name: view.user.email.split('@')[0] ?? view.user.id,
 		email: view.user.email,
 		// Administration is a status, so it is reported as one rather than borrowed from the role list.

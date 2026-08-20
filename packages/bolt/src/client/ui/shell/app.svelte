@@ -69,6 +69,8 @@
 			readonly logoUrl: string | null;
 		}>;
 		user?: {
+			/** The viewer's `norbital_id`, forwarded so the platform context can publish a real key. */
+			id: string;
 			name: string;
 			email: string;
 			role: string;

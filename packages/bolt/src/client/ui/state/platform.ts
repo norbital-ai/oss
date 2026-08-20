@@ -2,11 +2,19 @@ import { createContext } from 'svelte';
 import { Cause, Effect, Exit, Fiber, Result } from 'effect';
 
 export type PlatformUser = Readonly<{
-	readonly id: string;
+	/**
+	 * The person, as the row they are: `bolt_auth_user.norbital_id`, the uuid every workspace column
+	 * that points at a person holds.
+	 *
+	 * The only identity published here. There used to be a second field, `id`, carrying the same
+	 * value under a name that did not say what the value was — and the shell filled both from the
+	 * display name, so `where: { user_id: { eq: user.norbital_id } }` sent an email's local part to a
+	 * `uuid` column and Postgres refused it as 22P02. Two spellings for one identity is what let a
+	 * label sit in the key's slot unnoticed; the spelling kept is the one authored code already uses
+	 * for a row's key everywhere else.
+	 */
 	readonly norbital_id: string;
 	readonly email?: string;
-	readonly name?: string;
-	readonly team?: string;
 	/**
 	 * Whether this person administers the workspace: `bolt_auth_user.status`, as the host reports it.
 	 *
@@ -17,6 +25,17 @@ export type PlatformUser = Readonly<{
 	 */
 	readonly admin?: boolean;
 }>;
+
+/**
+ * Three fields used to sit here and are deliberately gone: `name`, `team` and `organization`.
+ *
+ * Nothing read any of them — not bolt, not any of the six templates, not colony. `team` is the one
+ * worth naming, because it was not merely dead: the shell filled it from the sidebar's role label,
+ * so a field spelled like a team identity published the string `'Admin'` or `'Member'`. Authored
+ * code that reached for it would have got a silent empty result rather than an error, which is
+ * the same defect as the old `id`/`norbital_id` pair and harder to see. A label belongs to the
+ * surface that renders it, not to the context authored queries key on.
+ */
 /**
  * A channel as `workspace.manifest` publishes it — the authored declaration minus what only the
  * runtime needs.
@@ -34,7 +53,6 @@ export type PlatformChannel = Readonly<{
 }>;
 export type PlatformState = Readonly<{
 	readonly user: PlatformUser;
-	readonly organization: string;
 	readonly apps: ReadonlyArray<string>;
 	readonly channels: ReadonlyArray<PlatformChannel>;
 }>;

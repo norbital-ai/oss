@@ -89,6 +89,16 @@
 			readonly logoUrl: string | null;
 		}>;
 		user?: {
+			/**
+			 * The viewer's `norbital_id`, and the only thing a workspace can key its own rows by.
+			 *
+			 * Carried explicitly because the platform context published `norbital_id: user.name` —
+			 * the local part of an email address — and every authored query of the shape
+			 * `where: { user_id: { eq: user.norbital_id } }` therefore sent `'dion.neo'` to a `uuid`
+			 * column and failed with 22P02. It read as "could not load your profile", so the surface
+			 * had never worked for anybody, contractor or administrator.
+			 */
+			id: string;
 			name: string;
 			email: string;
 			role: string;
@@ -174,11 +184,9 @@
 	 */
 	setPlatformStateContext((): PlatformState => ({
 		user: {
-			id: user?.name ?? 'unknown',
-			norbital_id: user?.name ?? 'unknown',
+			// The row's key, not a label. A name here is what made `user_id = 'dion.neo'` reach a uuid.
+			norbital_id: user?.id ?? 'unknown',
 			...(user?.email === undefined ? {} : { email: user.email }),
-			...(user?.name === undefined ? {} : { name: user.name }),
-			team: user?.role,
 			/**
 			 * Administration, taken from the runtime rather than from the host's `user` summary.
 			 *
@@ -199,7 +207,6 @@
 			 */
 			admin: impersonation?.isAdmin === true && !(impersonation?.isActive ?? false)
 		},
-		organization: organization?.name ?? 'workspace',
 		apps: visibleApps.map(({ name }) => name),
 		channels: declaredChannels
 	}));
