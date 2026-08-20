@@ -63,10 +63,37 @@ jobs:
       - name: Build publishable packages
         run: pnpm exec turbo run build --filter=...@norbital-ai/ui --filter=...@norbital-ai/bolt --filter=...@norbital-ai/bolt-server
 
+      # Skipped, not failed, when this version is already on the registry.
+      #
+      # This workflow fires on every push touching `packages/**`, and most of those do not bump the
+      # version — a test, a comment, a rename. Each one used to end in `409 Conflict - Cannot publish
+      # over existing version` and a red release, which is the shape of failure that teaches everyone
+      # to ignore a red release. The next one that means something would have been ignored too.
+      #
+      # Checked per package rather than once, because the set must stay coherent: if a version is
+      # half-published — the registry refuses deletes, which is how 0.0.11 became permanently
+      # poisoned — the remaining packages still publish and the set converges instead of needing a
+      # version burned to recover.
       - name: Publish one coherent beta package set
         run: |
+          set -euo pipefail
+          published=0
+          skipped=0
           for package in config std ui bolt-protocol bolt-server bolt; do
+            name="$(node -p "require('./packages/$package/package.json').name")"
+            version="$(node -p "require('./packages/$package/package.json').version")"
+            if npm view "$name@$version" version --registry="$PACKAGE_REGISTRY_URL" >/dev/null 2>&1; then
+              echo "skip    $name@$version is already published"
+              skipped=$((skipped + 1))
+              continue
+            fi
+            echo "publish $name@$version"
             pnpm --dir "packages/$package" publish --access public --no-git-checks --force
+            published=$((published + 1))
           done
+          echo "published=$published skipped=$skipped"
+          if [ "$published" -eq 0 ]; then
+            echo "::notice::Nothing to publish — every package is already at its declared version."
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
