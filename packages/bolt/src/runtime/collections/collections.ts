@@ -628,6 +628,22 @@ const seekFilter = (
 		: Effect.succeed(CollectionCursor.seek(terms, values.success, offset));
 };
 
+/**
+ * The refusal an authored `db.create` or `db.update` raises when the write stored no row.
+ *
+ * An `AuthoredRefusal` rather than a defect, because the way this is reached is an access predicate
+ * declining the row — a workspace rule doing its job. Reporting a business refusal as an
+ * infrastructure fault is the exact regression `AuthoredRefusal` was built to prevent.
+ */
+const storedNothing = (operation: 'create' | 'update', collection: string, id: string) =>
+	Effect.fail(
+		new AuthoredRefusal({
+			message: `stored no row for ${id}; the record was refused before it was written`,
+			collection,
+			action: operation
+		})
+	);
+
 export const layer = Layer.effect(
 	Service,
 	Effect.gen(function* () {
@@ -910,17 +926,33 @@ export const layer = Layer.effect(
 					});
 					return { taskId };
 				}),
+			/**
+			 * Answers with the row the database holds, and refuses when it holds none.
+			 *
+			 * These two used to end `row ?? { norbital_id: id, ...values }` — the caller's own payload
+			 * handed back as though it had been stored. `readBack` did the same thing on the batch path
+			 * and this was the other half of it.
+			 *
+			 * Refusing rather than answering `undefined`, which is the opposite of what the batch path
+			 * does, and deliberately: there a refused row is one of many and the batch legitimately
+			 * proceeds without it, while here an authored hook asked for one record and the next line it
+			 * runs will use what comes back. A hook that silently continued on an invented record would
+			 * write the consequences of a create that never happened. The access predicate refusing the
+			 * insert is the way this is reached, so the refusal says that rather than reporting a fault.
+			 */
 			create: (collection, id, values) =>
 				Effect.gen(function* () {
 					yield* create(effectId, subject, { collection, id, values }, depth);
 					const row = yield* readRowElevated(effectId, collection, id);
-					return row ?? ({ norbital_id: id, ...values } as Readonly<Record<string, unknown>>);
+					if (row === undefined) return yield* storedNothing('create', collection, id);
+					return row;
 				}),
 			update: (collection, id, values) =>
 				Effect.gen(function* () {
 					yield* update(effectId, subject, { collection, id, values }, depth);
 					const row = yield* readRowElevated(effectId, collection, id);
-					return row ?? ({ norbital_id: id, ...values } as Readonly<Record<string, unknown>>);
+					if (row === undefined) return yield* storedNothing('update', collection, id);
+					return row;
 				}),
 			delete: (collection, id) => deleteRecord(effectId, subject, collection, id, depth),
 			mutate: (collection, payloads, options) =>
@@ -1806,86 +1838,84 @@ export const layer = Layer.effect(
 			values: Readonly<Record<string, unknown>>,
 			id: string,
 			depth: number
-		) => Effect.Effect<
-			ReadonlyArray<FlatRow>,
-			Workspace.WorkspaceLookupError | AuthoredRefusal
-		> = Effect.fn('Collections.flattenGraph')(function* (
-			collection: string,
-			values: Readonly<Record<string, unknown>>,
-			id: string,
-			depth: number
-		) {
-			if (depth > GRAPH_DEPTH_LIMIT)
-				return yield* Effect.fail(
-					new AuthoredRefusal({
-						message: `A nested write on ${collection} is more than ${GRAPH_DEPTH_LIMIT} levels deep. A record that owns records that own records that far is usually a cycle in +relationship.ts rather than a shape anybody meant to write.`,
-						collection,
-						action: 'create'
-					})
-				);
-			const definition = yield* workspace.collection(collection);
-			const relations = workspace.definition.relations ?? [];
-			const own: Record<string, Schema.Json> = {};
-			const nested: Array<{
-				readonly collection: string;
-				readonly column: string;
-				readonly rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
-			}> = [];
-			for (const [key, value] of Object.entries(values)) {
-				if (key in definition.fields || key.startsWith('norbital_')) {
-					own[key] = value as Schema.Json;
-					continue;
+		) => Effect.Effect<ReadonlyArray<FlatRow>, Workspace.WorkspaceLookupError | AuthoredRefusal> =
+			Effect.fn('Collections.flattenGraph')(function* (
+				collection: string,
+				values: Readonly<Record<string, unknown>>,
+				id: string,
+				depth: number
+			) {
+				if (depth > GRAPH_DEPTH_LIMIT)
+					return yield* Effect.fail(
+						new AuthoredRefusal({
+							message: `A nested write on ${collection} is more than ${GRAPH_DEPTH_LIMIT} levels deep. A record that owns records that own records that far is usually a cycle in +relationship.ts rather than a shape anybody meant to write.`,
+							collection,
+							action: 'create'
+						})
+					);
+				const definition = yield* workspace.collection(collection);
+				const relations = workspace.definition.relations ?? [];
+				const own: Record<string, Schema.Json> = {};
+				const nested: Array<{
+					readonly collection: string;
+					readonly column: string;
+					readonly rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
+				}> = [];
+				for (const [key, value] of Object.entries(values)) {
+					if (key in definition.fields || key.startsWith('norbital_')) {
+						own[key] = value as Schema.Json;
+						continue;
+					}
+					// Read against the relation's *declared* name, and only where this collection is the
+					// source and the edge is a `many` with an endpoint. A `one` relation points at a record
+					// that has to exist already, so expanding it inline would mean inventing its target.
+					const relation = relations.find(
+						(candidate) =>
+							candidate.name === key &&
+							candidate.source === collection &&
+							candidate.cardinality === 'many' &&
+							candidate.from?.column !== undefined
+					);
+					if (relation === undefined)
+						return yield* Effect.fail(
+							new AuthoredRefusal({
+								message: `${collection} has no column or declared relation named "${key}". A create hook returned it, so it would otherwise have been dropped on the way to the database.`,
+								collection,
+								action: 'create'
+							})
+						);
+					if (!Array.isArray(value))
+						return yield* Effect.fail(
+							new AuthoredRefusal({
+								message: `"${key}" is a many relation on ${collection}, so it is written as a list of records.`,
+								collection,
+								action: 'create'
+							})
+						);
+					nested.push({
+						collection: relation.target,
+						column: relation.from?.column ?? '',
+						rows: value as ReadonlyArray<Readonly<Record<string, unknown>>>
+					});
 				}
-				// Read against the relation's *declared* name, and only where this collection is the
-				// source and the edge is a `many` with an endpoint. A `one` relation points at a record
-				// that has to exist already, so expanding it inline would mean inventing its target.
-				const relation = relations.find(
-					(candidate) =>
-						candidate.name === key &&
-						candidate.source === collection &&
-						candidate.cardinality === 'many' &&
-						candidate.from?.column !== undefined
-				);
-				if (relation === undefined)
-					return yield* Effect.fail(
-						new AuthoredRefusal({
-							message: `${collection} has no column or declared relation named "${key}". A create hook returned it, so it would otherwise have been dropped on the way to the database.`,
-							collection,
-							action: 'create'
-						})
-					);
-				if (!Array.isArray(value))
-					return yield* Effect.fail(
-						new AuthoredRefusal({
-							message: `"${key}" is a many relation on ${collection}, so it is written as a list of records.`,
-							collection,
-							action: 'create'
-						})
-					);
-				nested.push({
-					collection: relation.target,
-					column: relation.from?.column ?? '',
-					rows: value as ReadonlyArray<Readonly<Record<string, unknown>>>
-				});
-			}
-			// Parent first, and the order is load-bearing rather than tidy: the statements are applied
-			// in the order they are collected, so a child's foreign key must already name a row.
-			const rows: Array<FlatRow> = [{ collection, id, values: own }];
-			for (const child of nested)
-				for (const row of child.rows)
-					rows.push(
-						...(yield* flattenGraph(
-							child.collection,
-							// The link the author did not write and could not have: it is this parent's id,
-							// minted a moment ago. A value they *did* write for it is overwritten rather
-							// than honoured — the type omits the column for exactly this reason.
-							{ ...row, [child.column]: id },
-							globalThis.crypto.randomUUID(),
-							depth + 1
-						))
-					);
-			return rows;
-		});
+				// Parent first, and the order is load-bearing rather than tidy: the statements are applied
+				// in the order they are collected, so a child's foreign key must already name a row.
+				const rows: Array<FlatRow> = [{ collection, id, values: own }];
+				for (const child of nested)
+					for (const row of child.rows)
+						rows.push(
+							...(yield* flattenGraph(
+								child.collection,
+								// The link the author did not write and could not have: it is this parent's id,
+								// minted a moment ago. A value they *did* write for it is overwritten rather
+								// than honoured — the type omits the column for exactly this reason.
+								{ ...row, [child.column]: id },
+								globalThis.crypto.randomUUID(),
+								depth + 1
+							))
+						);
+				return rows;
+			});
 		const mutateBatch = Effect.fn('Collections.mutateBatch')(function* (
 			effectId: EffectId,
 			subject: Identity.Subject,
@@ -1956,9 +1986,7 @@ export const layer = Layer.effect(
 				);
 				return { built, nodes: flattened.flat() };
 			}).pipe(
-				Effect.catch((cause) =>
-					Effect.fail(mutationPhaseFailure('prepare', collection, [], cause))
-				)
+				Effect.catch((cause) => Effect.fail(mutationPhaseFailure('prepare', collection, [], cause)))
 			);
 			const { built, nodes } = preparation;
 			// COMMIT. One transaction for the batch, whatever it grew into — and atomic, so a failure
@@ -2105,9 +2133,7 @@ export const layer = Layer.effect(
 				}
 				return [
 					...updated,
-					...(yield* readBack(effectId, collection, identified)).filter(
-						(row) => row !== undefined
-					)
+					...(yield* readBack(effectId, collection, identified)).filter((row) => row !== undefined)
 				];
 			}
 			const size = options?.batchSize ?? identified.length;
@@ -2130,15 +2156,7 @@ export const layer = Layer.effect(
 						? effectId
 						: EffectId.make(`${effectId}:b${offset / Math.max(size, 1)}`);
 				written.push(
-					...(yield* mutateBatch(
-						batchId,
-						subject,
-						collection,
-						slice,
-						definition,
-						elevated,
-						depth
-					))
+					...(yield* mutateBatch(batchId, subject, collection, slice, definition, elevated, depth))
 				);
 			}
 			return [...updated, ...written];
@@ -2233,7 +2251,8 @@ export const layer = Layer.effect(
 			// the hook needs it because it always has. The read is skipped entirely when neither does,
 			// so a collection with no `update` hook and no outbound binding costs nothing for it.
 			const wantsPrevious =
-				module?.update?.perRecord?.before !== undefined || needsPreviousRow(input.collection, 'update');
+				module?.update?.perRecord?.before !== undefined ||
+				needsPreviousRow(input.collection, 'update');
 			const existing = wantsPrevious
 				? yield* readRowElevated(effectId, input.collection, input.id)
 				: undefined;
@@ -2260,57 +2279,69 @@ export const layer = Layer.effect(
 			if (module?.update?.perRecord?.after !== undefined) {
 				const afterApi = buildApi(effectId, subject, true, depth + 1);
 				const record = yield* readRowElevated(effectId, input.collection, input.id);
-				yield* runHook<unknown>(module.update.perRecord.after, { record, api: afterApi }, afterApi, {
-					collection: input.collection,
-					action: 'update.after'
-				});
+				yield* runHook<unknown>(
+					module.update.perRecord.after,
+					{ record, api: afterApi },
+					afterApi,
+					{
+						collection: input.collection,
+						action: 'update.after'
+					}
+				);
 			}
 			yield* emitChangeEvents(effectId, subject, input.collection, input.id, 'updated');
 		});
-		const deleteRecord = Effect.fn('Collections.delete')(
-			function* (effectId, subject, collection, id, depth = 0) {
-				yield* refuseRunawayHooks('delete', collection, depth);
-				const definition = yield* workspace.collection(collection);
-				yield* access.authorize(subject, 'delete', collection);
-				const visibility = access.predicate(subject, 'delete', collection);
-				if (requiresApproval(definition, visibility)) {
-					return yield* holdForApproval(
-						effectId,
-						subject,
-						{ collection, id, values: {} },
-						'delete'
-					);
-				}
-				const module = authored.hooks[collection];
-				const api = buildApi(effectId, subject, false, depth + 1);
-				let existing: Readonly<Record<string, unknown>> | undefined;
-				if (module?.delete?.perRecord?.before !== undefined || needsPreviousRow(collection, 'delete')) {
-					// An outbound delete binding needs this read for a reason no hook has: after the statement
-					// runs there is no row left to describe, so a delivery that did not capture it first can
-					// only say that *something* with this id is gone.
-					existing = yield* readRowElevated(effectId, collection, id);
-				}
-				if (module?.delete?.perRecord?.before !== undefined) {
-					yield* runHook<unknown>(module.delete.perRecord.before, { existing, api }, api, {
-						collection,
-						action: 'delete.before'
-					});
-				}
-				const record =
-					module?.delete?.perRecord?.after !== undefined
-						? (existing ?? (yield* readRowElevated(effectId, collection, id)))
-						: undefined;
-				yield* applyDelete(effectId, subject, collection, id, definition, false, existing);
-				if (module?.delete?.perRecord?.after !== undefined) {
-					const afterApi = buildApi(effectId, subject, true, depth + 1);
-					yield* runHook<unknown>(module.delete.perRecord.after, { record, api: afterApi }, afterApi, {
+		const deleteRecord = Effect.fn('Collections.delete')(function* (
+			effectId,
+			subject,
+			collection,
+			id,
+			depth = 0
+		) {
+			yield* refuseRunawayHooks('delete', collection, depth);
+			const definition = yield* workspace.collection(collection);
+			yield* access.authorize(subject, 'delete', collection);
+			const visibility = access.predicate(subject, 'delete', collection);
+			if (requiresApproval(definition, visibility)) {
+				return yield* holdForApproval(effectId, subject, { collection, id, values: {} }, 'delete');
+			}
+			const module = authored.hooks[collection];
+			const api = buildApi(effectId, subject, false, depth + 1);
+			let existing: Readonly<Record<string, unknown>> | undefined;
+			if (
+				module?.delete?.perRecord?.before !== undefined ||
+				needsPreviousRow(collection, 'delete')
+			) {
+				// An outbound delete binding needs this read for a reason no hook has: after the statement
+				// runs there is no row left to describe, so a delivery that did not capture it first can
+				// only say that *something* with this id is gone.
+				existing = yield* readRowElevated(effectId, collection, id);
+			}
+			if (module?.delete?.perRecord?.before !== undefined) {
+				yield* runHook<unknown>(module.delete.perRecord.before, { existing, api }, api, {
+					collection,
+					action: 'delete.before'
+				});
+			}
+			const record =
+				module?.delete?.perRecord?.after !== undefined
+					? (existing ?? (yield* readRowElevated(effectId, collection, id)))
+					: undefined;
+			yield* applyDelete(effectId, subject, collection, id, definition, false, existing);
+			if (module?.delete?.perRecord?.after !== undefined) {
+				const afterApi = buildApi(effectId, subject, true, depth + 1);
+				yield* runHook<unknown>(
+					module.delete.perRecord.after,
+					{ record, api: afterApi },
+					afterApi,
+					{
 						collection,
 						action: 'delete.after'
-					});
-				}
-				yield* emitChangeEvents(effectId, subject, collection, id, 'deleted');
+					}
+				);
 			}
-		);
+			yield* emitChangeEvents(effectId, subject, collection, id, 'deleted');
+		});
 		/**
 		 * The record an approval request was opened over, from whichever state the request reached.
 		 *

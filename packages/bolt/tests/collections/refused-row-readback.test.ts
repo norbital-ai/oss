@@ -47,7 +47,11 @@ const definition = workspace({
 			name: 'note-quota',
 			effect: 'allow',
 			grants: [
-				{ collection: 'notes', action: 'create', where: { $sql: '(select count(*) from notes) < 2' } },
+				{
+					collection: 'notes',
+					action: 'create',
+					where: { $sql: '(select count(*) from notes) < 2' }
+				},
 				{ collection: 'notes', action: 'read' },
 				{ collection: 'notes', action: 'update' }
 			]
@@ -181,4 +185,64 @@ describe('a batch the subject may write only part of', () => {
 			'kept, edited'
 		]);
 	}, 60_000);
+});
+
+/**
+ * The same lie, in the authoring API, where it must be refused rather than dropped.
+ *
+ * `api.db.create` used to end `row ?? { norbital_id: id, ...values }` exactly as the batch path did.
+ * The batch path now omits a refused row and proceeds, because a batch legitimately has others; here
+ * an authored hook asked for one record and the very next line it runs will use what comes back, so
+ * answering `undefined` would only move the fabrication into the workspace's own code. It refuses.
+ *
+ * Driven through a hook rather than through the service, because `api.db.create` is the authoring
+ * surface and a hook is the only place it exists. The quota is already full by the time the inner
+ * create runs, so the predicate declines the insert and nothing is stored — which is the way this is
+ * actually reached, not a fault injected to reach it.
+ */
+describe('an authored create the predicate refused', () => {
+	it('refuses rather than answering the values it was handed', async () => {
+		let innerAnswer: unknown = 'hook did not run';
+		const authoredInner = {
+			...emptyAuthoredRuntime,
+			hooks: {
+				notes: {
+					create: {
+						perRecord: {
+							before: {
+								description: 'creates a second note through the authoring api',
+								handler: (context: unknown, api: unknown) =>
+									Effect.gen(function* () {
+										const input = (context as { readonly input: Record<string, unknown> }).input;
+										const notes = (api as { readonly db: Record<string, Record<string, Function>> })
+											.db['notes'];
+										innerAnswer = yield* (
+											notes?.['create'] as (v: unknown) => Effect.Effect<unknown>
+										)({ body: 'inner' }).pipe(Effect.result);
+										return input;
+									})
+							}
+						}
+					}
+				}
+			}
+		} as unknown as typeof authored;
+
+		harness = await makeBoltTestRuntime(definition, { authored: authoredInner });
+		const collections = await harness.runtime.runPromise(Collections.Service);
+
+		// Two through the ordinary path fills the quota; each one's hook also attempts an inner
+		// create, so by the second the inner one is the write the predicate declines.
+		await harness.runtime.runPromise(
+			collections
+				.mutate(EffectId.make('inner-1'), writer, 'notes', [
+					{ body: 'a' },
+					{ body: 'b' },
+					{ body: 'c' }
+				])
+				.pipe(Effect.result)
+		);
+
+		expect(innerAnswer).toMatchObject({ _tag: 'Failure' });
+	});
 });
