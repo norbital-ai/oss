@@ -2,16 +2,22 @@ packages:
   - packages/*
 catalog:
   '@iconify/svelte': ^5.2.2
-  '@sveltejs/kit': ^2.70.1
-  '@xyflow/svelte': 1.6.2
+  '@sveltejs/kit': ^2.70.3
+  '@xyflow/svelte': 1.6.3
   drizzle-kit: 1.0.0-rc.4
   drizzle-orm: 1.0.0-rc.4
   runed: ^0.37.1
   rolldown: ^1.2.1
   svelte: ^5.56.9
   # TS 7 breaks svelte2tsx / @sveltejs/package (fileExists). Stay on latest 6.x.
+  #
+  # It also breaks us directly, which is worth recording next to the reason above: `quality/audit.ts`
+  # uses the compiler API — `createSourceFile`, `ScriptTarget`, `Node`, `isImportDeclaration` — and
+  # TypeScript 7 is the Go port, whose JS surface does not carry them. `pnpm update --latest` moved
+  # this line to 7.0.2 while the override below held the install at 6.0.3, so the catalog and the
+  # installed version disagreed and this comment described a pin that was no longer here.
   typescript: 6.0.3
-  vite: ^8.1.5
+  vite: ^8.2.1
   zod: ^4.4.3
 
 # Migrated from .npmrc / package.json#pnpm for pnpm 11.

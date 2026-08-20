@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-protocol",
-	"version": "0.0.15",
+	"version": "0.0.16",
 	"description": "Neutral Bolt artifact invocation and facility contracts.",
 	"type": "module",
 	"sideEffects": false,
@@ -48,7 +48,7 @@
 		"@effect/vitest": "4.0.0-rc.109",
 		"effect": "4.0.0-rc.109",
 		"typescript": "catalog:",
-		"vitest": "4.1.10"
+		"vitest": "4.1.11"
 	},
 	"repository": {
 		"type": "git",
