@@ -30,6 +30,7 @@ const declareSession = (): void => {
 		tenantId: 'test-tenant',
 		environment: 'development',
 		releaseId: 'local',
+		accessScope: 'operator',
 		credential: 'test-credential',
 		transport: { command: async () => null },
 		syncStreamUrl: STREAM_URL,

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Component } from 'svelte';
+	import { ModeWatcher } from 'mode-watcher';
 	import {
 		resolveCollectionClient,
 		setCollectionClientContext,
@@ -252,6 +253,7 @@
 	 * that appears a round trip late.
 	 */
 	let impersonation = $state<WorkspaceImpersonation | null>(null);
+	let replicaAccessScope = $state(session.accessScope);
 
 	const readImpersonation = (payload: unknown): WorkspaceImpersonation | null => {
 		if (typeof payload !== 'object' || payload === null) return null;
@@ -298,8 +300,9 @@
 	 * a preview would append one row per request and bury the entry that says it began.
 	 */
 	const impersonateTeam = async (teamId: string): Promise<void> => {
+		let response: unknown;
 		try {
-			await session.transport.command('access.impersonateTeam', { teamId });
+			response = await session.transport.command('access.impersonateTeam', { teamId });
 		} catch (cause) {
 			// Swallowing it would leave a picker that appears to have selected a team the runtime never
 			// granted. Re-reading the state snaps the control back to what is actually in force.
@@ -307,7 +310,40 @@
 			loadImpersonation();
 			return;
 		}
+		// The host callback writes the cookie synchronously. Switch the browser caches immediately after
+		// it, in the same turn, so refreshed queries carry the new preview while the previous replica is
+		// already unavailable to readers.
 		actions.impersonate(teamId);
+		const nextScope = `team:${teamId}`;
+		workspace.changeAccessScope(nextScope);
+		replicaAccessScope = nextScope;
+		accessibleApps = readVisibleApps(response);
+		if (impersonation !== null) {
+			impersonation = {
+				...impersonation,
+				isActive: true,
+				activeTeamIds: [teamId]
+			};
+		}
+	};
+
+	const stopImpersonating = (): void => {
+		actions.stopImpersonating();
+		workspace.changeAccessScope('operator');
+		replicaAccessScope = 'operator';
+		accessibleApps = [];
+		if (impersonation !== null) {
+			impersonation = { ...impersonation, isActive: false, activeTeamIds: [] };
+		}
+		// The visual mode changes immediately; these two reads repopulate the administrator's app list
+		// and reconcile the picker without remounting the workspace or waiting on a document navigation.
+		void session.transport
+			.command('apps.visible', {})
+			.then((payload) => {
+				accessibleApps = readVisibleApps(payload);
+			})
+			.catch(() => undefined);
+		loadImpersonation();
 	};
 
 	/**
@@ -435,10 +471,11 @@
 	 * open.
 	 */
 	$effect(() => {
+		const accessScope = replicaAccessScope;
 		let stop: (() => void) | undefined;
 		let unmounted = false;
 		void workspace
-			.startLocalReplica()
+			.startLocalReplica(accessScope)
 			.then((replica) => {
 				// Resolved after teardown — stop it now rather than leaking the stream it just opened.
 				if (unmounted) replica.stop();
@@ -581,6 +618,15 @@
 
 <svelte:head><title>{workspace.title}</title></svelte:head>
 
+<!--
+	The workspace is a separately compiled bundle, so it owns a separate `mode-watcher` module graph
+	from Colony's document shell. Language already lives inside this tree and is reactive; theme did
+	not, because the sidebar mutated this bundle's store while only the host bundle had mounted the
+	watcher that applies `.dark` to `<html>`. Mount the lightweight watcher here so this tree's toggle
+	updates the shared document immediately. The host already owns the FOUC-prevention head script.
+-->
+<ModeWatcher disableHeadScriptInjection />
+
 <BoltApp
 	title={workspace.title}
 	search={view.search}
@@ -607,7 +653,7 @@
 	{impersonation}
 	isAdmin={hostPluginsVisible}
 	onImpersonate={impersonateTeam}
-	onStopImpersonating={actions.stopImpersonating}
+	onStopImpersonating={stopImpersonating}
 	onNavigate={actions.navigate}
 	onOrganizationChange={actions.changeOrganization}
 	onSignOut={actions.signOut}

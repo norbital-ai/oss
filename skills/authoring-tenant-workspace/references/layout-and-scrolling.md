@@ -72,6 +72,26 @@ tab already owns the app inset, so those inner owners do not add `inset`.
 "stuck" in a small region, unable to scroll the parent. The stupidity scanner rule **UI16** flags
 the common cases automatically.
 
+Every framework scroll owner has the same affordances: the thumb is hidden at rest and appears on
+hover, and a directional edge fade appears only where more content exists. Do not recreate either
+behavior with component-local scrollbar CSS, gradient overlays, or scroll listeners. Use `Scroll`;
+for the exceptional primitive that cannot render `Scroll`, attach `scrollAffordance()` to its actual
+scrollport.
+
+### Compound component shells
+
+A compound component keeps its identifying chrome outside its scrollport. Calendar month controls,
+weekday headings, table column headings, filters, legends, and pagination remain mounted and fixed;
+only the cells/rows beneath them own overflow. When a fixed header must follow horizontal body
+scroll, translate its inner track from the body scroll position instead of making the whole shell a
+scrollport. Wheel input over that header may forward to the body it labels.
+
+Loading a new page, month, or filter result must preserve the same outer shell. Keep controls,
+header, border, legend/footer, and height contract mounted; replace only the data region with
+shape-matched `Skeleton` rows or cells and set `aria-busy` on the component. Replacing the whole
+component with a paragraph, pulse rectangle, or empty branch is a layout shift and is not a legal
+loading state.
+
 ### Scroll-trap checklist (UI16)
 
 | Anti-pattern                                                                                  | Fix                                                                                          |

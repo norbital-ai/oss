@@ -42,7 +42,7 @@ The gallery card image and Open Graph image share **one** file:
 
 Do not reuse the marketing file as `bolt:thumbnail` / `bolt:banner` unless you intentionally want the
 same art inside the product. App and record media normally live under `assets/app-media/` and
-`assets/record-media/` and are wired with `/api/template-seed-assets/<key>/…` URLs — see
+`assets/record-media/` and are wired with `/__bolt/request/api/template-seed-assets/<key>/…` URLs — see
 [apps-and-server-roles.md](apps-and-server-roles.md#app-media--icons-thumbnails-banners).
 
 Legacy manifests may still carry `"banner": "…"`. Hosts and the website map that onto `thumbnail`

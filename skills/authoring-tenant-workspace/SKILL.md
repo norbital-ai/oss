@@ -218,7 +218,7 @@ Apps are `src/apps/**/+<app>.svelte`. Their `<svelte:head>` metadata is static (
 `description`, literal `bolt:icon`, optional static `bolt:thumbnail` / `bolt:banner` URLs). There is no host layout metadata.
 App thumbnails and banners are optional — missing ones get a same-size icon fallback in the shell (overview
 cards keep their 16:9 media slot, omni finder keeps its 6×6 tile). Ship product images under `assets/`
-and reference `/api/template-seed-assets/<key>/<path>` URLs. The collection-owned `+representation.svelte`
+and reference `/__bolt/request/api/template-seed-assets/<key>/<path>` URLs. The collection-owned `+representation.svelte`
 can also declare a static `bolt:banner` meta, rendered above the record detail sheet header. See
 [apps-and-server-roles.md](references/apps-and-server-roles.md#app-media--icons-thumbnails-banners) for the
 in-product media contract.
@@ -264,6 +264,13 @@ is keyboard focusable and owns overscroll containment and scrollbar behavior. Do
 wrappers, flex/min-size chains, raw layout flex/grid wrappers, margins between siblings, or literal
 `px-4 sm:px-6` classes. Clipping is valid only for text truncation, `Frame` media, or an audited popup/sheet
 boundary.
+
+Framework scroll owners share one visible contract: the scrollbar thumb appears only on hover and
+directional edge fades appear only where more content exists. Compound components keep controls,
+headers, legends, and pagination outside their internal scrollport; only their rows or cells scroll.
+On page/month/filter changes, keep that shell and its height mounted, mark it `aria-busy`, and replace
+only the data region with shape-matched `Skeleton` rows or cells. Never swap the whole component for a
+loading paragraph, generic pulse rectangle, or empty branch.
 
 **Read the layout guides** before authoring an app surface:
 [interface-ideology.md](references/interface-ideology.md) for the axioms every rule below derives from,
@@ -321,21 +328,20 @@ using it. It returns a **getter**, not a value — call it, then call the result
 current session rather than a snapshot taken at mount.
 
 ```svelte
-import { getPlatformStateContext } from '@norbital-ai/bolt/ui';
-const platform = getPlatformStateContext();
+import {getPlatformStateContext} from '@norbital-ai/bolt/ui'; const platform = getPlatformStateContext();
 const me = $derived(platform().user);
 ```
 
 `platform()` publishes exactly three things and nothing else — `user`, `apps`, `channels`. If you
 want something that is not in this table, it is not there; do not guess a field name.
 
-| Field | Is | Use it for |
-| --- | --- | --- |
-| `user.norbital_id` | `bolt_auth_user.norbital_id`, a **uuid** | The only value you may key a row by |
-| `user.email` | The address, as the host reports it | Display, and matching a column that genuinely holds an address |
-| `user.admin` | `bolt_auth_user.status === 'admin'` | Widening a surface for administrators |
-| `apps` | The app names **this session may see** | Deriving authority — see below |
-| `channels` | Declared channels, with `audience` | Offering a channel to the right audience |
+| Field              | Is                                       | Use it for                                                     |
+| ------------------ | ---------------------------------------- | -------------------------------------------------------------- |
+| `user.norbital_id` | `bolt_auth_user.norbital_id`, a **uuid** | The only value you may key a row by                            |
+| `user.email`       | The address, as the host reports it      | Display, and matching a column that genuinely holds an address |
+| `user.admin`       | `bolt_auth_user.status === 'admin'`      | Widening a surface for administrators                          |
+| `apps`             | The app names **this session may see**   | Deriving authority — see below                                 |
+| `channels`         | Declared channels, with `audience`       | Offering a channel to the right audience                       |
 
 **`user.norbital_id` is the row key. There is no second spelling.** A field named `id` used to sit
 beside it carrying the same value, the shell filled both from the display name, and every authored
@@ -419,7 +425,7 @@ sentence; "runs before create" restates the key and is worse than nothing.
   union, a channel's `policy` ceiling, and `src/+teams.ts`, which maps each team name to the policy
   names it holds (`satisfies Teams`, narrowed to this workspace's declared policies). There is no
   `roles` array on a policy and no second way to select one: a person belongs to exactly one team
-  (`bolt_auth_user.team_id`), team membership is a row an operator edits, and what a team may *do*
+  (`bolt_auth_user.team_id`), team membership is a row an operator edits, and what a team may _do_
   is this compiled file. Team names are matched case-insensitively. Behaviour is in the
   `norbital-platform` skill's `approvals-and-policies.md`.
 - Integrations use portable runtime delivery facilities; missing facilities fail at boot.

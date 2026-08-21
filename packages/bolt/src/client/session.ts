@@ -56,6 +56,14 @@ export type WorkspaceSession = Readonly<{
 	readonly tenantId: string;
 	readonly environment: string;
 	readonly releaseId: string;
+	/**
+	 * The authority-shaped browser scope this document is currently rendering.
+	 *
+	 * It is not an authorization input — every command is still checked by the runtime. It keeps
+	 * policy-filtered query answers and the local replica for an administrator separate from the
+	 * replicas opened while that administrator previews a team.
+	 */
+	readonly accessScope: string;
 	/** The signed-in operator's bearer credential, without the `Bearer ` prefix. */
 	readonly credential: string;
 	readonly transport: BoltTransport;
@@ -77,8 +85,9 @@ let session: WorkspaceSession | undefined;
  * Declares the session every later read runs under.
  *
  * Called by `mountWorkspace` before the generated client is imported, because importing it builds
- * the browser runtime and that runtime's query cache is namespaced by tenant and environment. A
- * cache namespaced from a value that arrives later is a cache shared between organizations.
+ * the browser runtime and that runtime's query cache is namespaced by tenant, environment, and
+ * access scope. A cache namespaced from a value that arrives later is a cache shared between
+ * organizations or policy scopes.
  */
 export const setWorkspaceSession = (next: WorkspaceSession): void => {
 	session = next;

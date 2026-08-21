@@ -32,6 +32,12 @@ describe('where the replica persists', () => {
 		expect(replicaLocation('acme::staging')).not.toEqual(replicaLocation('acme::production'));
 	});
 
+	it('separates an operator replica from each impersonated team', () => {
+		expect(replicaLocation('acme::production::operator')).not.toEqual(
+			replicaLocation('acme::production::team:employee')
+		);
+	});
+
 	it('keeps the name usable as a storage key', () => {
 		// Tenant ids reach this from a routing header, so a name is not guaranteed to be tame.
 		expect(replicaLocation('a/../b space::dev')).toMatch(/^idb:\/\/bolt-replica::[a-zA-Z0-9:_-]+$/);

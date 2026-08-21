@@ -652,20 +652,60 @@ const REPLICA_CHANNEL = 'bolt_replica_changed';
  */
 const runningReplicas = new Map<string, Promise<LocalReplica>>();
 
+type RuntimeAccessState = {
+	current: string;
+	cache: QueryCache;
+	readonly cacheNamespace: (accessScope: string) => string;
+};
+
+const runtimeAccessStates = new WeakMap<WorkspaceClientRuntime, RuntimeAccessState>();
+
+const normalizedAccessScope = (value: string): string => value.trim() || 'operator';
+
+const accessScopeFor = (runtime: WorkspaceClientRuntime): string =>
+	runtimeAccessStates.get(runtime)?.current ??
+	normalizedAccessScope(workspaceSession().accessScope);
+
+/**
+ * Moves one mounted client between policy scopes without rebuilding its component tree.
+ *
+ * The cache object is a stable delegate, so already-mounted queries immediately read from the new
+ * access-scoped cache. The old local reader is withdrawn synchronously; subsequent reads go over
+ * the wire until the matching replica has bootstrapped. Authorization still belongs to the server —
+ * this boundary prevents data that was correctly returned for one authority from being reused for
+ * another authority in the browser.
+ */
+export const switchWorkspaceAccessScope = (
+	runtime: WorkspaceClientRuntime,
+	accessScope: string
+): void => {
+	const state = runtimeAccessStates.get(runtime);
+	if (state === undefined) return;
+	const next = normalizedAccessScope(accessScope);
+	if (state.current === next) return;
+	state.current = next;
+	state.cache = createQueryCache(state.cacheNamespace(next));
+	if (runtime.local !== undefined) runtime.local.current = undefined;
+	runtime.queries?.refreshAffected([ANY_COLLECTION]);
+};
+
 export const startLocalReplica = async (
 	runtime: WorkspaceClientRuntime,
 	open?: (steps: ReadonlyArray<ProvisioningStep>) => Promise<PGliteLike>,
 	options: {
+		readonly accessScope?: string;
 		readonly onChange?: (applied: number) => void;
 		readonly onError?: (cause: unknown) => void;
 	} = {}
 ): Promise<LocalReplica> => {
-	const key = `${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}`;
+	const accessScope = normalizedAccessScope(options.accessScope ?? accessScopeFor(runtime));
+	switchWorkspaceAccessScope(runtime, accessScope);
+	const key = `${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}::${accessScope}`;
 	const running = runningReplicas.get(key);
 	if (running !== undefined) return running;
 	// `stop` forgets the entry as well as closing the engine, so a caller that tears one down and
 	// mounts again gets a new replica rather than the corpse of the last one.
-	const started = startReplica(runtime, open, options).then((replica) => ({
+	const started = startReplica(runtime, open, { ...options, accessScope }).then((replica) => ({
 		...replica,
 		stop: () => {
 			runningReplicas.delete(key);
@@ -681,22 +721,32 @@ export const startLocalReplica = async (
 
 const startReplica = async (
 	runtime: WorkspaceClientRuntime,
-	open?: (steps: ReadonlyArray<ProvisioningStep>) => Promise<PGliteLike>,
+	open: ((steps: ReadonlyArray<ProvisioningStep>) => Promise<PGliteLike>) | undefined,
 	options: {
+		readonly accessScope: string;
 		readonly onChange?: (applied: number) => void;
 		readonly onError?: (cause: unknown) => void;
-	} = {}
+	}
 ): Promise<LocalReplica> => {
 	const cache = runtime.cache;
 	const registry = runtime.queries;
 	// Scoped to the workspace, because browser storage is shared across every workspace this browser
 	// has signed into and two built from the same template share a fingerprint.
-	const scope = `${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}`;
+	const scope = `${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}::${options.accessScope}`;
 	const openEngine = open ?? ((steps: ReadonlyArray<ProvisioningStep>) => openPGlite(steps, scope));
 	const transport: BootstrapTransport = {
-		command: (command, input) => runtime.bolt.command(command, input, Schema.Json)
+		command: (command, input) => {
+			if (accessScopeFor(runtime) !== options.accessScope) {
+				return Promise.reject(new Error('Local replica access scope changed during startup'));
+			}
+			return runtime.bolt.command(command, input, Schema.Json);
+		}
 	};
 	const local = await openLocalDatabase(transport, openEngine);
+	if (accessScopeFor(runtime) !== options.accessScope) {
+		await local.close();
+		throw new Error('Local replica access scope changed during startup');
+	}
 	// The snapshot brought in rows no cursor accounts for, so everything cached predates it.
 	cache?.clear();
 	registry?.refreshAffected([ANY_COLLECTION]);
@@ -835,7 +885,7 @@ const startReplica = async (
 	 * Installed after the snapshot rather than before: until the rows are in, a local answer would be
 	 * a confident empty result, which is worse than a slow correct one.
 	 */
-	if (runtime.local !== undefined) {
+	if (runtime.local !== undefined && accessScopeFor(runtime) === options.accessScope) {
 		runtime.local.current = createLocalReader(local.engine, local.shape, local.readable);
 	}
 
@@ -924,9 +974,25 @@ export const createBrowserWorkspaceRuntime = (
 		releaseId: ReleaseId.make(options.releaseId ?? session.releaseId)
 	});
 	const bolt = createBoltClient(scope, options.transport ?? browserTransport);
-	// Namespaced by tenant and environment: browser storage is shared across every workspace this
-	// browser has signed into, and an unscoped cache would paint one tenant's rows into another's page
-	// for as long as the revalidation took.
+	// Namespaced by tenant, environment, and access scope: browser storage is shared across every
+	// workspace this browser has signed into, and an administrator's answers must not be reused while
+	// they preview a restricted team (or vice versa) for as long as revalidation takes.
+	const cacheNamespace = (accessScope: string): string =>
+		`${scope.tenantId}::${scope.environment}::${normalizedAccessScope(accessScope)}`;
+	const accessState: RuntimeAccessState = {
+		current: normalizedAccessScope(session.accessScope),
+		cache: createQueryCache(cacheNamespace(session.accessScope)),
+		cacheNamespace
+	};
+	const cache: QueryCache = {
+		get hydrated() {
+			return accessState.cache.hydrated;
+		},
+		read: (key) => accessState.cache.read(key),
+		write: (key, value, collections) => accessState.cache.write(key, value, collections),
+		invalidate: (collections) => accessState.cache.invalidate(collections),
+		clear: () => accessState.cache.clear()
+	};
 	const runtime: {
 		bolt: BoltClient;
 		db: Readonly<Record<string, unknown>>;
@@ -937,9 +1003,10 @@ export const createBrowserWorkspaceRuntime = (
 		bolt,
 		db: {},
 		local: {},
-		cache: createQueryCache(`${scope.tenantId}::${scope.environment}`),
+		cache,
 		queries: createLiveQueryRegistry()
 	};
+	runtimeAccessStates.set(runtime, accessState);
 	runtime.db = ClientDatabase.database(runtime);
 	return runtime;
 };

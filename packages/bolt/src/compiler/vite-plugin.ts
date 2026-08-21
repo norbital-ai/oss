@@ -114,7 +114,7 @@ const VitePlugins = {
 				// never re-exported, so `vite build` failed for every template while `bolt sync` — which
 				// did not resolve this module — stayed green.
 				if (id === clientRuntimeId)
-					return `export { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startBrowserReplica, startLocalReplica } from '@norbital-ai/bolt/client-runtime';`;
+					return `export { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startBrowserReplica, startLocalReplica, switchWorkspaceAccessScope } from '@norbital-ai/bolt/client-runtime';`;
 				if (id === applicationId)
 					return [
 						`import { mountWorkspace as mountBoltWorkspace } from '@norbital-ai/bolt/client/workspace';`,
@@ -150,7 +150,8 @@ const VitePlugins = {
 						`\t\t\t\tagentNames: workspace.agentNames,`,
 						`\t\t\t\ttenantMessages: messages.tenantMessages,`,
 						`\t\t\t\tclient: workspace.client,`,
-						`\t\t\t\tstartLocalReplica: () => workspace.startLocalReplica(workspace.runtime)`,
+						`\t\t\t\tchangeAccessScope: workspace.changeAccessScope,`,
+						`\t\t\t\tstartLocalReplica: (accessScope) => workspace.startLocalReplica(workspace.runtime, undefined, { accessScope })`,
 						`\t\t\t};`,
 						`\t\t}`,
 						`\t});`,

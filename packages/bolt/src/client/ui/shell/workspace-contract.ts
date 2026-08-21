@@ -67,7 +67,7 @@ export type WorkspaceHostActions = {
 	readonly signOut: () => void;
 	readonly changeOrganization: (organizationId: string) => void;
 	/**
-	 * Persist a team preview that the runtime has already accepted, and reload under it.
+	 * Persist a team preview that the runtime has already accepted.
 	 *
 	 * Called only after `access.impersonateTeam` succeeded: the tenant runtime is the authority on
 	 * whether this session may preview, and storing the choice before it agreed turned one refused
@@ -113,8 +113,10 @@ export type CompiledWorkspace = Readonly<{
 	readonly tenantMessages: TenantMessageCatalogs;
 	/** The workspace's own collection client, for Studio's Data tab. */
 	readonly client: WorkspaceClient;
+	/** Withdraws browser data from the previous policy scope before reactive reads resume. */
+	readonly changeAccessScope: (accessScope: string) => void;
 	/** Boots the local PGlite replica against the same runtime `client` reads through. */
-	readonly startLocalReplica: () => Promise<{ readonly stop: () => void }>;
+	readonly startLocalReplica: (accessScope: string) => Promise<{ readonly stop: () => void }>;
 }>;
 
 /**

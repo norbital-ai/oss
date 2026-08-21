@@ -5,7 +5,7 @@
  * only where there is genuinely more to reach. Scrollbar visibility is CSS hover state;
  * it deliberately is not persisted after keyboard or programmatic scrolling.
  *
- * Both are attributes rather than reactive state because the styling lives entirely in
+ * The edge list is an attribute rather than reactive state because the styling lives entirely in
  * CSS: nothing in Svelte reads them back, so a re-render per scroll frame would buy
  * nothing. The write is guarded on change for the same reason — a scroll event fires per
  * frame and only the first one in a run actually alters the attribute.
