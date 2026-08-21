@@ -11,7 +11,10 @@ describe('compiler template generation', () => {
 				collection({ name: 'z', fields: {} }),
 				collection({ name: 'a', fields: { name: field.string() } })
 			],
-			apps: [app({ name: 'z-app', label: 'Z' }), app({ name: 'a-app', label: 'A' })],
+			apps: [
+				app({ name: 'z-app/details', label: 'Z details' }),
+				app({ name: 'a-app', label: 'A' })
+			],
 			policies: [],
 			automations: [],
 			envoys: [],
@@ -23,6 +26,6 @@ describe('compiler template generation', () => {
 		});
 		const output = generateWorkspaceTypes(definition);
 		expect(output).toContain('export type CollectionName = "a" | "z"');
-		expect(output).toContain('export type AppName = "a-app" | "z-app"');
+		expect(output).toContain('export type AppName = "a-app" | "z-app" | "z-app/details"');
 	});
 });

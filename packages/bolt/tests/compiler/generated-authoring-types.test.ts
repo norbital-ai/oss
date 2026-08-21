@@ -19,7 +19,7 @@ const diagnosticText = (diagnostic: ts.Diagnostic): string => {
 };
 
 describe('generated authoring unions', () => {
-	it('keeps TeamName exact without making +teams.ts its own type dependency', async () => {
+	it('keeps team names and app group prefixes exact without circular workspace types', async () => {
 		const root = await mkdtemp(join(tmpdir(), 'bolt-authoring-types-'));
 		roots.push(root);
 		await mkdir(join(root, 'src', 'access'), { recursive: true });
@@ -39,7 +39,7 @@ export default {
 			join(root, '.norbital', 'generated', 'authoring-types.ts'),
 			renderAuthoringTypes({
 				collections: ['records'],
-				apps: [],
+				apps: ['hr_controller/leave'],
 				policies: ['operator'],
 				functions: [],
 				tools: [],
@@ -63,12 +63,17 @@ export type WorkspaceSchema = AnySchema;
 		);
 		await writeFile(
 			join(root, 'src', 'witness.ts'),
-			`import type { PolicyDefinition, TeamName } from '@norbital-ai/bolt/authoring';
+			`import type { AppName, PolicyDefinition, TeamName } from '@norbital-ai/bolt/authoring';
 const valid: TeamName = 'Reviewers';
 // @ts-expect-error -- a generated team union must still reject misspellings.
 const typo: TeamName = 'Reviewer';
+const appGroup: AppName = 'hr_controller';
+const appLeaf: AppName = 'hr_controller/leave';
+// @ts-expect-error -- a directory grant remains a generated union, not an arbitrary string.
+const appGroupTypo: AppName = 'hr_controllers';
 export default {
 	description: 'Operator writes require review.',
+	capabilities: { apps: [appGroup] },
 	grants: [{
 		collection: 'records',
 		action: 'create',
@@ -76,6 +81,8 @@ export default {
 	}]
 } satisfies PolicyDefinition;
 void typo;
+void appLeaf;
+void appGroupTypo;
 `
 		);
 

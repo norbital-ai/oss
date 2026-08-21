@@ -12,6 +12,7 @@ import {
 	BOLT_TENANT_STATIC_PREFIX,
 	WORKSPACE_ENTRY_FILE_NAME
 } from './client-entry.js';
+import { appCapabilityNames } from './app-names.js';
 import { extractAppMetadata, extractGroupMetadata } from './app-metadata.js';
 import {
 	extractCollectionCatalog,
@@ -221,6 +222,10 @@ class WorkspaceCompiler {
 	 * The rule is now uniform, so an author never has to know which names are checked: **if one
 	 * declaration names another, that name is a generated union and a rename fails the build.**
 	 *
+	 * `AppName` includes both concrete leaves and their directory prefixes because runtime app access
+	 * deliberately treats a prefix as a group grant. Keeping those prefixes in the generated union
+	 * makes `apps: ['hr_controller']` exact without widening every application capability to `string`.
+	 *
 	 * `TeamName` is derived from the teams module's own keys rather than from a quoted list, because
 	 * the compiler does not evaluate `+teams.ts` — it discovers it. `keyof typeof` reads the keys the
 	 * type checker sees, which includes any a scan of the source text would miss. A workspace with no
@@ -249,7 +254,7 @@ class WorkspaceCompiler {
 			teams,
 			`export type CollectionName = ${union(input.collections)};`,
 			`export type PolicyName = ${union(input.policies)};`,
-			`export type AppName = ${union(input.apps)};`,
+			`export type AppName = ${union(appCapabilityNames(input.apps))};`,
 			`export type ToolName = ${union(input.tools)};`,
 			`export type McpServerName = ${union(input.mcpServers)};`,
 			`export type SkillName = ${union(input.skills)};`,
