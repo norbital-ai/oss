@@ -4,6 +4,75 @@
 	// Constant lookups into a frozen table: per-module, and not computations to make reactive.
 	const AUTOMATION_STYLES = FEATURE_COLOR_STYLES.automations;
 	const REMOTE_STYLES = FEATURE_COLOR_STYLES.applications;
+	/**
+	 * What a manual run of each automation is doing, keyed by automation name.
+	 *
+	 * An automation otherwise only runs on its own schedule, which for the field-operations
+	 * reconciliation is `0 2 * * *` — so a workspace reset at any other hour shows unreconciled data
+	 * for the rest of the day with no way to ask for the work. The runtime already had the command;
+	 * what was missing was somebody able to press it.
+	 *
+	 * `automations.start` declares `subject` in its input schema, and the client deliberately does not
+	 * send one: the invocation boundary overwrites `subject` from the credential on every command
+	 * before any case reads it, which is what `MINTED_IDENTITY` is for. A run therefore happens as the
+	 * person who pressed the button and cannot be made to happen as anybody else.
+	 */
+	type AutomationRun = Readonly<{
+		readonly state: 'starting' | 'running' | 'done' | 'failed';
+		readonly taskId?: string;
+		readonly detail?: string;
+		readonly at: number;
+	}>;
+	let runs = $state<Record<string, AutomationRun>>({});
+
+	const runAutomation = async (name: string): Promise<void> => {
+		if (runs[name]?.state === 'starting' || runs[name]?.state === 'running') return;
+		runs = { ...runs, [name]: { state: 'starting', at: Date.now() } };
+		try {
+			const started = (await workspaceSession().transport.command('automations.start', {
+				name,
+				input: {}
+			})) as { readonly taskId?: string };
+			const taskId = started?.taskId;
+			runs = {
+				...runs,
+				[name]: { state: 'running', at: Date.now(), ...(taskId ? { taskId } : {}) }
+			};
+			if (taskId === undefined) return;
+			// Polled rather than pushed: the runtime reports a task's state on request and nothing
+			// streams it, so the surface asks until the answer stops being "running".
+			for (let attempt = 0; attempt < 60; attempt += 1) {
+				await new Promise((resolve) => setTimeout(resolve, 1_000));
+				// `status` and not `state`: the task row's column is `status`, and the queue writes exactly
+				// `done` or `failed` into it from `pending`. Reading a field the row does not have would
+				// have polled sixty times and then reported a run as still going.
+				const status = (await workspaceSession().transport.command('automations.status', {
+					taskId
+				})) as { readonly status?: string; readonly error?: string } | null;
+				const settled = status?.status;
+				if (settled !== 'done' && settled !== 'failed') continue;
+				runs = {
+					...runs,
+					[name]: {
+						state: settled,
+						taskId,
+						at: Date.now(),
+						...(status?.error ? { detail: status.error } : {})
+					}
+				};
+				return;
+			}
+		} catch (cause) {
+			runs = {
+				...runs,
+				[name]: {
+					state: 'failed',
+					at: Date.now(),
+					detail: cause instanceof Error ? cause.message : String(cause)
+				}
+			};
+		}
+	};
 </script>
 
 <script lang="ts">
@@ -16,6 +85,8 @@
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
 	import { cn } from '@norbital-ai/ui/utils';
 	import type { WorkspaceClient } from './workspace-client.js';
+	import { workspaceSession } from '../../session.js';
+	import { Button } from '@norbital-ai/ui/button';
 	import type {
 		EnvironmentVariable,
 		ManifestSection,
@@ -278,12 +349,49 @@
 									>
 										Declared
 									</span>
+									<Button
+										size="sm"
+										variant="outline"
+										disabled={runs[automation.name]?.state === 'starting' ||
+											runs[automation.name]?.state === 'running'}
+										onclick={() => void runAutomation(automation.name)}
+									>
+										{runs[automation.name]?.state === 'starting' ||
+										runs[automation.name]?.state === 'running'
+											? 'Running…'
+											: 'Run now'}
+									</Button>
 									{#if files.includes(path)}
 										{@render sourceLink(path)}
 									{/if}
 								</Inline>
 							</Inline>
 							<p class="font-mono text-micro text-muted-foreground">{path}</p>
+							{#if runs[automation.name]}
+								{@const run = runs[automation.name]}
+								<!--
+									The last run this session started, and what came of it.
+
+									Deliberately says nothing about runs it did not start: the runtime reports a task
+									by id and there is no history endpoint to read, so a panel claiming to be a log
+									would be asserting a completeness it cannot have. "Nothing shown" here means
+									"nothing pressed here", not "nothing has run".
+								-->
+								<p
+									class={cn(
+										'text-micro',
+										run.state === 'failed' ? 'text-destructive' : 'text-muted-foreground'
+									)}
+								>
+									{run.state === 'starting'
+										? 'Starting…'
+										: run.state === 'running'
+											? `Running${run.taskId ? ` · task ${run.taskId.slice(0, 8)}` : ''}`
+											: run.state === 'done'
+												? `Finished at ${new Date(run.at).toLocaleTimeString()}`
+												: `Failed: ${run.detail ?? 'the host reported no reason'}`}
+								</p>
+							{/if}
 						</Stack>
 					{/each}
 				</Stack>
