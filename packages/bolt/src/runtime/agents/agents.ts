@@ -263,10 +263,14 @@ export interface ConversationUsage extends Schema.Schema.Type<typeof Conversatio
 const maxDelegationDepth = 8;
 
 const NullableString = Schema.Union([Schema.String, Schema.Null]);
+const ConversationVisibility = Schema.Literals(['personal', 'envoy_dm', 'envoy_group']);
 const ConversationRow = Schema.Struct({
 	id: Schema.String,
-	agent_name: Schema.optionalKey(NullableString),
-	title: Schema.optionalKey(NullableString)
+	agent_name: Schema.String,
+	title: NullableString,
+	user_id: Schema.String,
+	visibility: ConversationVisibility,
+	envoy_key: NullableString
 });
 const MessageRow = Schema.Struct({
 	role: Schema.String,
@@ -459,6 +463,40 @@ export const layer = Layer.effect(
 		const connector = yield* Connector.Service;
 		const budget = yield* InvocationBudget.Service;
 		const remotes = yield* RemoteRegistry;
+
+		/**
+		 * The rows one signed-in reader may inspect, expressed once for both listing and history.
+		 *
+		 * Ownership remains the ordinary rule. The only wider inbox is an administrator's view of a
+		 * currently declared public envoy. Its row must also carry every invariant `openConversation`
+		 * writes for that surface: an envoy visibility, matching agent/key, and the conversation-scoped
+		 * public sandbox key. Requiring the key shape prevents a formerly authenticated/private envoy
+		 * row becoming readable merely because a later release changes that envoy's audience to public.
+		 */
+		const conversationReadScope = (subject: Identity.Subject, firstParameter: number) => {
+			const publicEnvoys =
+				subject.admin === true
+					? workspace.definition.envoys
+							.filter(({ audience }) => audience === 'public')
+							.map(({ name }) => name)
+					: [];
+			const owner = `conversation.user_id = $${firstParameter}`;
+			if (publicEnvoys.length === 0) {
+				return { sql: owner, parameters: [subject.userId] as ReadonlyArray<Schema.Json> };
+			}
+			const names = publicEnvoys
+				.map((_, index) => `$${firstParameter + index + 1}`)
+				.join(', ');
+			return {
+				sql: `(${owner} or (
+					conversation.visibility in ('envoy_dm', 'envoy_group')
+					and conversation.envoy_key in (${names})
+					and conversation.agent_name = conversation.envoy_key
+					and conversation.user_id = 'envoy:' || conversation.envoy_key || '#' || conversation.id
+				))`,
+				parameters: [subject.userId, ...publicEnvoys] as ReadonlyArray<Schema.Json>
+			};
+		};
 
 		/**
 		 * The tools one turn is offered, decided by the subject's policies and nothing else.
@@ -1230,10 +1268,17 @@ export const layer = Layer.effect(
 				// Delegated sessions are excluded: nobody started one and nobody can reply to it, and listing
 				// them put a subagent's task prompt in the conversation picker as though it were a chat the
 				// person had opened. They still reach the reader — inside the turn that spawned them.
+				const scope = conversationReadScope(subject, 1);
 				const result = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: "select id, agent_name, title from bolt_conversations where user_id = $1 and parent_id is null and id not like 'subagent:%' order by id desc",
-					parameters: [subject.userId]
+					sql: `select conversation.id, conversation.agent_name, conversation.title,
+						conversation.user_id, conversation.visibility, conversation.envoy_key
+					from bolt_conversations conversation
+					where ${scope.sql}
+						and conversation.parent_id is null
+						and conversation.id not like 'subagent:%'
+					order by conversation.id desc`,
+					parameters: scope.parameters
 				});
 				return result.rows.flatMap((row) => {
 					const decoded = Schema.decodeUnknownOption(ConversationRow)(row);
@@ -1241,14 +1286,19 @@ export const layer = Layer.effect(
 				});
 			}),
 			history: Effect.fn('Agents.history')(function* (effectId, subject, conversationId) {
+				const scope = conversationReadScope(subject, 2);
 				const owned = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: 'select id, title, usage_cost_usd, usage_cost_micro_units, usage_cost_currency, usage_total_tokens, usage_turns_counted, usage_turns_unreported from bolt_conversations where id = $1 and user_id = $2',
-					parameters: [conversationId, subject.userId]
+					sql: `select conversation.id, conversation.agent_name, conversation.title,
+						conversation.user_id, conversation.visibility, conversation.envoy_key,
+						conversation.usage_cost_usd, conversation.usage_cost_micro_units,
+						conversation.usage_cost_currency, conversation.usage_total_tokens,
+						conversation.usage_turns_counted, conversation.usage_turns_unreported
+					from bolt_conversations conversation
+					where conversation.id = $1 and ${scope.sql}`,
+					parameters: [conversationId, ...scope.parameters]
 				});
-				const conversation = Schema.decodeUnknownOption(
-					Schema.Struct({ id: Schema.String, title: Schema.optionalKey(NullableString) })
-				)(owned.rows[0]);
+				const conversation = Schema.decodeUnknownOption(ConversationRow)(owned.rows[0]);
 				if (conversation._tag === 'None') {
 					return yield* new AccessControl.AccessDenied({
 						action: 'read',

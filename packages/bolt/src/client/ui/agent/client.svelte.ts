@@ -72,8 +72,11 @@ type SessionQuery = {
 
 type ConversationListRow = {
 	readonly id: string;
-	readonly agent_name?: string;
-	readonly title?: string | null;
+	readonly agent_name: string;
+	readonly title: string | null;
+	readonly user_id: string;
+	readonly visibility: 'personal' | 'envoy_dm' | 'envoy_group';
+	readonly envoy_key: string | null;
 };
 
 /** One conversation's cumulative spend, as `agents.history` reports it off the session row. */
@@ -223,7 +226,20 @@ export function getInitializedWorkspaceClient(_collection?: string) {
 function isConversationListRow(value: unknown): value is ConversationListRow {
 	if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
 	const id = Reflect.get(value, 'id');
-	return typeof id === 'string' && id.length > 0;
+	const agentName = Reflect.get(value, 'agent_name');
+	const title = Reflect.get(value, 'title');
+	const userId = Reflect.get(value, 'user_id');
+	const visibility = Reflect.get(value, 'visibility');
+	const envoyKey = Reflect.get(value, 'envoy_key');
+	return (
+		typeof id === 'string' &&
+		id.length > 0 &&
+		typeof agentName === 'string' &&
+		(typeof title === 'string' || title === null) &&
+		typeof userId === 'string' &&
+		(visibility === 'personal' || visibility === 'envoy_dm' || visibility === 'envoy_group') &&
+		(typeof envoyKey === 'string' || envoyKey === null)
+	);
 }
 
 function isConversationHistory(value: unknown): value is ConversationHistory {
@@ -317,8 +333,7 @@ function usageCount(value: unknown): number {
 
 function mapHistoryToSession(
 	history: ConversationHistory,
-	userId: string,
-	fallbackTitle?: string | null
+	listed: ConversationListRow
 ): ChatSessionRow {
 	// Derived from the assistant messages rather than listed beside them: the turn is the message.
 	const turns = history.messages.flatMap((message) => {
@@ -348,13 +363,14 @@ function mapHistoryToSession(
 			? history.title
 			: firstUser
 				? decodeMessageText(firstUser.content).slice(0, 48) || 'New conversation'
-				: (fallbackTitle ?? 'New conversation');
+				: (listed.title ?? 'New conversation');
 	return {
 		norbital_id: history.conversationId,
 		automation_run_id: history.conversationId,
 		title,
-		user_id: userId,
-		visibility: 'personal',
+		user_id: listed.user_id,
+		visibility: listed.visibility,
+		envoy_key: listed.envoy_key,
 		messages: history.messages.map((message, index) => ({
 			...mapHistoryMessage(message, index),
 			...(delegated(message) ? { delegated: true } : {})
@@ -387,7 +403,7 @@ function mapHistoryToSession(
  */
 async function loadSession(
 	conversationId: string,
-	fallbackTitle?: string | null
+	listed?: ConversationListRow
 ): Promise<boolean> {
 	if (!runtime) return false;
 	try {
@@ -399,7 +415,17 @@ async function loadSession(
 		// reply rather than off the question would file it under the conversation it describes, leaving
 		// the one actually asked about untouched and its caller believing it had been refreshed.
 		if (!isConversationHistory(history) || history.conversationId !== conversationId) return false;
-		const row = mapHistoryToSession(history, runtime.userId, fallbackTitle ?? null);
+		const row = mapHistoryToSession(
+			history,
+			listed ?? {
+				id: conversationId,
+				agent_name: runtime.agentName,
+				title: null,
+				user_id: runtime.userId,
+				visibility: 'personal',
+				envoy_key: null
+			}
+		);
 		const merged = new Map(sessions.map((session) => [session.norbital_id, session]));
 		merged.set(row.norbital_id, row);
 		sessions = [...merged.values()];
@@ -429,7 +455,7 @@ export async function refreshAgentSessions(): Promise<void> {
 		if (rows.length === 0) return;
 		await Effect.runPromise(
 			Effect.all(
-				rows.map((row) => Effect.tryPromise(() => loadSession(row.id, row.title ?? null))),
+				rows.map((row) => Effect.tryPromise(() => loadSession(row.id, row))),
 				{
 					concurrency: 'unbounded'
 				}
