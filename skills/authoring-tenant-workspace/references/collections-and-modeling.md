@@ -32,9 +32,10 @@ already exists.
 > the table, keep the workspace datatype intact until the platform owns both a field builder and a
 > renderer for it. A renderer alone does not make a datatype built in.
 
-`std/finance/money.ts` is a **separate concern**: it manipulates money _values_ — `addAmount`,
-`assertSameCurrency`, `toMinorUnits`. A workspace `money` datatype declares the column shape; the
-finance helpers do arithmetic on its values. Never fold one into the other.
+`std/finance` is a **separate concern**: it converts money values at storage boundaries with
+`currencyFractionDigits`, `toMinorUnits`, and `fromMinorUnits`. A workspace `money` datatype
+declares the column shape; these helpers keep decimal and minor-unit representations coherent. Never
+fold one into the other.
 
 ## Collection model
 

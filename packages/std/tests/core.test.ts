@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { isCalendarDate, isClockTime, isUtcIsoInstant, parseUtcInstant } from '../src/date/wire.ts';
 import { getErrorMessage } from '../src/error/index.ts';
+import { currencyFractionDigits, ISO_CURRENCY } from '../src/finance/currency.ts';
 import { safeParse } from '../src/json/index.ts';
+import { humanize, textSearchMatches } from '../src/string/index.ts';
+import { treeFind, treeFlatten } from '../src/tree/index.ts';
 
 describe('retained core utilities', () => {
 	it('parses valid JSON and returns null at the invalid boundary', () => {
@@ -14,5 +18,47 @@ describe('retained core utilities', () => {
 		assert.equal(getErrorMessage('refused'), 'refused');
 		assert.equal(getErrorMessage({ message: 409 }), '409');
 		assert.equal(getErrorMessage(false), 'false');
+	});
+
+	it('retains currency metadata and synchronous fraction lookup', () => {
+		assert.equal(currencyFractionDigits('JPY'), 0);
+		assert.equal(currencyFractionDigits('kwd'), 3);
+		assert.equal(currencyFractionDigits('USD'), 2);
+		assert.equal(
+			ISO_CURRENCY.some(({ code }) => code === 'USD'),
+			true
+		);
+	});
+
+	it('retains human labels and bounded literal text search', () => {
+		assert.equal(humanize('hr_employee_id'), 'HR Employee Id');
+		assert.equal(textSearchMatches('Construction permit', 'constrction'), true);
+		assert.equal(textSearchMatches('Construction permit', 'payroll'), false);
+	});
+
+	it('retains tree traversal without mutating the input', () => {
+		type Node = { readonly id: string; readonly children?: readonly Node[] };
+		const tree: readonly Node[] = [
+			{ id: 'root', children: [{ id: 'branch', children: [{ id: 'leaf' }] }] }
+		];
+		assert.deepEqual(
+			treeFlatten(tree, 'children').map(({ id }) => id),
+			['root', 'branch', 'leaf']
+		);
+		assert.equal(treeFind(tree, 'children', ({ id }) => id === 'leaf')?.id, 'leaf');
+		assert.equal(
+			treeFind(tree, 'children', ({ id }) => id === 'missing'),
+			null
+		);
+	});
+
+	it('retains strict temporal validation and parsing', () => {
+		const instant = '2026-07-01T02:03:04.000Z';
+		assert.equal(isCalendarDate('2026-07-01'), true);
+		assert.equal(isCalendarDate('2026-02-30'), false);
+		assert.equal(isClockTime('23:59'), true);
+		assert.equal(isClockTime('24:00'), false);
+		assert.equal(isUtcIsoInstant(instant), true);
+		assert.equal(parseUtcInstant(instant).toISOString(), instant);
 	});
 });

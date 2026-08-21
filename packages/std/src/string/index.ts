@@ -19,7 +19,7 @@ export function humanize(str: string): string {
 }
 
 /** Canonical user-entered search text shared by UI and server query handlers. */
-export function normalizeSearchTerm(value: string): string {
+function normalizeSearchTerm(value: string): string {
 	return value.trim().normalize('NFC');
 }
 
@@ -28,7 +28,7 @@ function searchTokens(value: string): string[] {
 }
 
 /** Levenshtein distance. Small inputs only — names, identifiers, search tokens. */
-export function editDistance(left: string, right: string): number {
+function editDistance(left: string, right: string): number {
 	const leftCharacters = [...left];
 	const rightCharacters = [...right];
 	let previous = Array.from({ length: rightCharacters.length + 1 }, (_, index) => index);
@@ -53,27 +53,6 @@ function editDistanceAtMost(left: string, right: string, limit: number): boolean
 	return editDistance(left, right) <= limit;
 }
 
-/**
- * The candidate nearest to `value`, when one is close enough that a typo or a rename is the likely
- * cause — otherwise undefined.
- *
- * Shared so every "that is not a known X" diagnostic suggests names the same way: the compiler's
- * orphaned-role-directory check and the seed executor's unknown-column abort both read better as
- * "did you mean Y?" than as a bare rejection.
- */
-export function nearestName(
-	value: string,
-	candidates: Iterable<string>,
-	maxDistance = 2
-): string | undefined {
-	let best: { readonly name: string; readonly distance: number } | undefined;
-	for (const candidate of candidates) {
-		const distance = editDistance(value, candidate);
-		if (!best || distance < best.distance) best = { name: candidate, distance };
-	}
-	return best && best.distance <= maxDistance ? best.name : undefined;
-}
-
 function searchTokenMatches(candidate: string, query: string): boolean {
 	if (candidate.includes(query)) return true;
 	const tolerance = query.length >= 8 ? 2 : query.length >= 4 ? 1 : 0;
@@ -93,16 +72,4 @@ export function textSearchMatches(value: string, search: string): boolean {
 			candidateTokens.some((candidateToken) => searchTokenMatches(candidateToken, queryToken))
 		)
 	);
-}
-
-/**
- * Build a literal PostgreSQL ILIKE contains pattern.
- *
- * PostgreSQL treats `\\`, `%`, and `_` specially in LIKE patterns, so escape them before adding
- * the two intentional contains wildcards.
- */
-export function literalIlikeContainsPattern(value: string): string | undefined {
-	const normalized = normalizeSearchTerm(value);
-	if (!normalized) return undefined;
-	return `%${normalized.replace(/[\\%_]/g, '\\$&')}%`;
 }

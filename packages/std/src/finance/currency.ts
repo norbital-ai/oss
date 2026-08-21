@@ -27,10 +27,6 @@ export function currencyFractionDigits(currency: string): number {
 	return 2;
 }
 
-export function isValidCurrencyCode(code: string): boolean {
-	return /^[A-Z]{3}$/.test(code);
-}
-
 /**
  * Consolidated ISO Currency constant with all currency information
  * Each object contains: code, symbol, name, country, and flag
@@ -1147,5 +1143,3 @@ export const ISO_CURRENCY = [
 		flag: '🇿🇼'
 	}
 ] as const;
-
-export type TISOCurrencyCode = (typeof ISO_CURRENCY)[number]['code'];
