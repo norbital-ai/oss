@@ -25,6 +25,10 @@ export default defineConfig({
 		// change identity between runs and say nothing about the code. A suite whose default run is
 		// flaky is worse than a slow one, because every real regression then has to be argued with.
 		maxWorkers: 4,
+		// The four workers still share a two-core Actions runner. Database boot and an in-process
+		// TypeScript program both cross five seconds under that contention even though their focused
+		// runs take two to three; give real integration work headroom without leaving a hung test loose.
+		testTimeout: 15_000,
 		sequence: {
 			concurrent: false
 		},

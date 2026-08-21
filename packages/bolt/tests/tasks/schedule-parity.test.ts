@@ -27,8 +27,12 @@ import type { WorkspaceDefinition } from '../../src/authoring/workspace-schema.j
 // public source into the workspace itself and states its location explicitly; keeping that path an
 // input makes this cross-repository parity proof portable without weakening it into a skipped or
 // synthetic test when the sibling checkout is absent.
+const checkedOutTemplates = join(import.meta.dirname, '../../../../template-fixtures');
 const TEMPLATES =
-	process.env.NORBITAL_TEMPLATE_SOURCE ?? join(import.meta.dirname, '../../../../../templates');
+	process.env.NORBITAL_TEMPLATE_SOURCE ??
+	(existsSync(checkedOutTemplates)
+		? checkedOutTemplates
+		: join(import.meta.dirname, '../../../../../templates'));
 
 /** One cron a template's source actually contains, and where. */
 type DeclaredCron = Readonly<{

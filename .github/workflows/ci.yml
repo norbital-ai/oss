@@ -54,4 +54,3 @@ jobs:
         run: pnpm check:packages:ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
-          NORBITAL_TEMPLATE_SOURCE: ${{ github.workspace }}/template-fixtures
