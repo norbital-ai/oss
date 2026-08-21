@@ -389,10 +389,10 @@ describe('Sync engine over SQL', () => {
 					return yield* (yield* Sync.Service).shape(adminSubject);
 				})
 			)
-			// `document_asset` replicates with them: a `file()` column is a uuid whose row lives here, and
-			// the renderer resolves it client-side, so a surface that cannot replicate it shows an empty
-			// file. It is not one of the identity collections, which stay out of the shape deliberately.
-		).toEqual(['approval_request', 'document_asset', 'people', 'requestor']);
+			// No file collection replicates with them. A `file()` column carries the file inline, so it
+			// arrives with the record that owns it and there is nothing separate to bulk-replicate —
+			// which also stops every file's metadata in the workspace landing in every browser.
+		).toEqual(['approval_request', 'people', 'requestor']);
 		/**
 		 * The authored collection is what an outsider does not replicate, and the runtime-owned three
 		 * are what they do.
@@ -401,8 +401,8 @@ describe('Sync engine over SQL', () => {
 		 * grants these reads to any authenticated subject, but nothing selected it — no team can
 		 * declare `bolt.system-collections` — so only the `isAdministrator` short-circuit reached them
 		 * and every ordinary member replicated an empty shape. The same argument the admin case above
-		 * makes applies to a member: a surface rendering a `file()` column client-side needs
-		 * `document_asset`, and it is not an administrator's surface.
+		 * makes applies to a member: the approval surfaces are read by whoever the approval names,
+		 * and that is not an administrator's surface.
 		 *
 		 * `people` staying out is what carries the test. An outsider holds no authored policy, and the
 		 * built-in grant names the runtime's collections and no workspace's.
@@ -420,7 +420,7 @@ describe('Sync engine over SQL', () => {
 					return yield* (yield* Sync.Service).shape(outsider);
 				})
 			)
-		).toEqual(['approval_request', 'document_asset', 'requestor']);
+		).toEqual(['approval_request', 'requestor']);
 		expect(
 			await runtime.runPromise(
 				Effect.gen(function* () {

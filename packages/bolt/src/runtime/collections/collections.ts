@@ -999,39 +999,40 @@ export const layer = Layer.effect(
 				: undefined;
 		});
 		/**
-		 * The bytes and description behind a `file()` column's value.
+		 * The bytes behind a `file()` value.
 		 *
-		 * A `file()` column holds the `norbital_id` of a `document_asset` row, and that row is the only
-		 * thing that names the object-store key the bytes were written under, along with the file name,
-		 * size and mime type nothing else records. Asking the Files facility for the *asset id* — which
-		 * is what this used to do — asks for a key no upload ever wrote, so every authored
-		 * `readFileAsset` resolved against nothing and `mimeType` was hardcoded `null` because there
-		 * was no row being read to get one from.
+		 * A `file()` column holds the file — `{storage_key, file_name, file_size, mime_type}` — so this
+		 * takes the value and reads the object it names. It used to take an *id* and look up a
+		 * `document_asset` row for the key, elevated, because that row was the only thing that knew
+		 * where the bytes were and the caller had no route to it.
 		 *
-		 * Read elevated, like every other read a hook's own follow-ups make: the caller already passed
-		 * authorization for the record carrying the column, and `document_asset` is granted to any
-		 * authenticated subject by the system read policy anyway.
+		 * The elevation is gone with the lookup, and that is the point rather than a side effect: it
+		 * existed because an asset row was not reachable through the record's own authorization, and a
+		 * value on the record needs no second read to authorize.
 		 */
 		const readAsset = Effect.fn('Collections.readAsset')(function* (
 			effectId: EffectId,
-			assetId: string
+			file: {
+				readonly storage_key?: unknown;
+				readonly file_name?: unknown;
+				readonly mime_type?: unknown;
+			}
 		) {
-			const row = yield* readRowElevated(effectId, 'document_asset', assetId);
-			const storageKey = typeof row?.['storage_key'] === 'string' ? row['storage_key'] : undefined;
-			if (row === undefined || storageKey === undefined) {
+			const storageKey = typeof file?.storage_key === 'string' ? file.storage_key : undefined;
+			if (storageKey === undefined) {
 				return yield* new Database.FacilityError({
 					operation: 'files.read',
 					code: 'files.asset_missing',
-					message: `No document_asset ${assetId}, so there is no stored object to read.`,
+					message: 'This file value names no stored object, so there is nothing to read.',
 					retryable: false,
 					outcome: 'known'
 				});
 			}
 			const response = yield* files.execute(effectId, { _tag: 'Read', key: storageKey });
 			const bytes = response.bytes ?? new Uint8Array();
-			const mimeType = typeof row['mime_type'] === 'string' ? row['mime_type'] : null;
-			const name = typeof row['file_name'] === 'string' ? row['file_name'] : assetId;
-			return { id: assetId, name, mimeType, size: bytes.byteLength, bytes };
+			const mimeType = typeof file.mime_type === 'string' ? file.mime_type : null;
+			const name = typeof file.file_name === 'string' ? file.file_name : storageKey;
+			return { id: storageKey, name, mimeType, size: bytes.byteLength, bytes };
 		});
 		/**
 		 * Runs one authored hook handler with its context object, resolving Effect, promise, and plain
@@ -1179,8 +1180,8 @@ export const layer = Layer.effect(
 				),
 			infer: (input) =>
 				Effect.gen(function* () {
-					const content = yield* inferenceTurnContent(input.prompt, input.images, (assetId) =>
-						readAsset(effectId, assetId)
+					const content = yield* inferenceTurnContent(input.prompt, input.images, (file) =>
+						readAsset(effectId, file)
 					);
 					const response = yield* ai.execute(effectId, {
 						_tag: 'Turn',
@@ -1191,7 +1192,7 @@ export const layer = Layer.effect(
 					});
 					return Schema.decodeUnknownSync(input.schema)(response.output);
 				}),
-			readFileAsset: (assetId) => readAsset(effectId, assetId)
+			readFileAsset: (file) => readAsset(effectId, file)
 		});
 		const buildApi = (
 			effectId: EffectId,

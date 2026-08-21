@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Schema } from 'effect';
+import type { FileRef } from '../authoring/models-schema.js';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { Collections } from './collections/collections.js';
 import { AI, Files } from './facilities/services.js';
@@ -19,7 +20,7 @@ export type RuntimeRemoteApi = Readonly<{
 		readonly prompt: string;
 		readonly model?: string;
 	}) => Promise<unknown>;
-	readonly readFileAsset: (assetId: string) => Promise<{
+	readonly readFileAsset: (file: FileRef) => Promise<{
 		readonly id: string;
 		readonly name: string;
 		readonly mimeType: string | null;

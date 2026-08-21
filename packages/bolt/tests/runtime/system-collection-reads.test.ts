@@ -253,7 +253,7 @@ const readAs = (runtime: BoltTestRuntime, credential: string, collectionName: st
 	);
 
 /** The runtime's own collections that `SYSTEM_READ_POLICY` grants `read` on. */
-const RUNTIME_OWNED = ['document_asset', 'approval_request', 'requestor', 'bolt_auth_user'];
+const RUNTIME_OWNED = ['approval_request', 'requestor', 'bolt_auth_user'];
 
 /**
  * Reaching a collection and reading its rows are two different questions, and this suite asks both.
@@ -328,9 +328,9 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 	 * the obvious way to widen it by accident.
 	 *
 	 * `COLONY_SYSTEM_POLICY` enumerates two `manage` grants and no read at all, so a system principal
-	 * can migrate a workspace and admit its founder and cannot open a record in it. `document_asset`
-	 * and `bolt_auth_user` are exactly the collections it would gain if `authenticated` had been
-	 * written as an unconditional `true`, so they are what this pins.
+	 * can migrate a workspace and admit its founder and cannot open a record in it. `bolt_auth_user`
+	 * and `requestor` are exactly the collections it would gain if `authenticated` had been written
+	 * as an unconditional `true`, so they are what this pins.
 	 */
 	it('does not extend the built-in read grant to the host principal', () => {
 		const policies = withSystemCollections(fieldOpsWorkspace).policies;

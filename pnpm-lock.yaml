@@ -96,6 +96,9 @@ importers:
       effect:
         specifier: 4.0.0-rc.109
         version: 4.0.0-rc.109
+      mode-watcher:
+        specifier: ^1.1.0
+        version: 1.1.0(svelte@5.56.9)
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4

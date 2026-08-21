@@ -36,6 +36,14 @@ export interface BeginUploadOptions {
 /** Result of a successful upload (matches app JSON + `TFileValue`). */
 export interface UploadResult {
 	norbital_id: string;
+	/**
+	 * The object store's key for these bytes, which is what a `file()` column persists.
+	 *
+	 * Not the same string as `norbital_id`: the workspace client stores under `<uuid><extension>`
+	 * and returns the bare uuid as the id. Reconstructing one from the other by string surgery is
+	 * how a read lands on a key nothing was ever written under, so the key is carried.
+	 */
+	storageKey: string;
 	url: string;
 	name: string;
 	type: string;

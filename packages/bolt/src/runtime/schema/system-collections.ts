@@ -215,20 +215,6 @@ const authConfig = collection({
 });
 
 /**
- * An uploaded file, as a row.
- *
- * `file()` renders a plain `uuid` column with a mime hint and no foreign key, and the value it holds
- * is a row in here — `data-renderer/file` resolves it with `records.findMany('document_asset', …)`
- * and reads `file_name`, `file_size`, `mime_type` and `storage_key` off the result. That table was
- * never carried across when identity became runtime-owned, so every `file()` column in every
- * workspace resolved against nothing: a photo, a permit scan and a tender document all rendered
- * empty, and no asset could be seeded because there was no row to seed.
- *
- * Deliberately not one of the identity collections below. Those are excluded from the system read
- * policy and from replication because they carry a person's address, roles and teams; an uploaded
- * file is ordinary workspace data that the surfaces showing it must be able to read.
- */
-/**
  * A team: who a person belongs to, and nothing about what that entitles them to.
  *
  * The split is the point, and it is the whole reason this collection can be a runtime row at all.
@@ -265,18 +251,6 @@ const team = collection({
 	history: false
 });
 
-const documentAsset = collection({
-	name: 'document_asset',
-	fields: {
-		file_name: field.string({ required: true }),
-		file_size: field.number(),
-		mime_type: field.string(),
-		/** Where the bytes are, in the host's object store. The Files facility is keyed by this. */
-		storage_key: field.string({ required: true, indexed: true })
-	},
-	history: false
-});
-
 /**
  * The collections authentication itself reads, and therefore the ones a host must create before it
  * can migrate anything else. `bolt_team` is among them because resolving a subject now joins it: a
@@ -288,7 +262,7 @@ export const IDENTITY_COLLECTIONS: ReadonlyArray<
 
 export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
-> = Object.freeze([...IDENTITY_COLLECTIONS, documentAsset, approvalRequest, requestor]);
+> = Object.freeze([...IDENTITY_COLLECTIONS, approvalRequest, requestor]);
 
 export const SYSTEM_COLLECTION_NAMES: ReadonlySet<string> = new Set(
 	SYSTEM_COLLECTIONS.map(({ name }) => name)
@@ -468,17 +442,16 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 	 */
 	grants: [
 		/**
-		 * Unconditional, and deliberately still so.
+		 * Row-scoped, where the grant above it used to be unconditional.
 		 *
-		 * `file()` renders a plain `uuid` with no foreign key, so an asset row carries no record it
-		 * belongs to and there is nothing for a predicate to reach through; the tie runs the other
-		 * way, from the authored column into here. The renderer that turns a `file()` value into a
-		 * name and a URL is `data-renderer/file`, running in the browser as the signed-in subject —
-		 * it resolves the row with `records.findMany('document_asset', …)` and reads `file_name`,
-		 * `file_size`, `mime_type` and `storage_key` off it — so this grant is what makes every file
-		 * column render at all, and withholding it empties them workspace-wide.
+		 * There was a blanket `document_asset` read here, held by every authenticated subject, and it
+		 * was load-bearing rather than lazy: `file()` emitted a bare `uuid` with no foreign key, so an
+		 * asset row named no record it belonged to and no predicate had anything to reach through.
+		 * Withholding it emptied every file column in every workspace. A `file()` value now carries
+		 * the file — key, name, size, mime type — as a field of the record that owns it, so it
+		 * inherits that record's row predicate and field mask, and the grant is gone with the
+		 * collection rather than narrowed.
 		 */
-		{ collection: documentAsset.name, action: 'read' as const },
 		{
 			collection: approvalRequest.name,
 			action: 'read' as const,

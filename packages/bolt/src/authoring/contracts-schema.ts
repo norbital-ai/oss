@@ -2,7 +2,7 @@ import { Effect, Schema } from 'effect';
 import type { AnyPgColumnBuilder } from 'drizzle-orm/pg-core';
 import type { SystemColumnName } from '../compiler/schema-plan.js';
 import type { TExportManifest } from './handlers-schema.js';
-import type { ModelDeclaration } from './models-schema.js';
+import type { FileRef, ModelDeclaration } from './models-schema.js';
 // Type-only, and therefore erased: `workspace-schema.ts` already imports `ChannelDefinition` from
 // here, so a value import in this direction would be a real cycle.
 import type { HttpConnection, PrivateEnvReference } from './workspace-schema.js';
@@ -283,17 +283,17 @@ export interface ApprovalRequestQuery {
  * and no indication that it had. They are gone rather than stubbed, because a declared capability
  * that silently does nothing is the defect, not the absence of one.
  *
- * `images` is real. Each entry names a `document_asset` by `norbital_id` — the value a `file()`
- * column holds — and the runtime resolves its bytes and mime type, inlines them on the turn, and
- * refuses a non-image, more than eight of them, or more than 20 MiB in total rather than dropping
- * any silently.
+ * `images` is real. Each entry carries a `file()` column's value straight through — that value is
+ * the whole description of the file, so pass `record.photo`, not an id off it — and the runtime
+ * reads the object it names, inlines the bytes on the turn, and refuses a non-image, more than
+ * eight of them, or more than 20 MiB in total rather than dropping any silently.
  */
 export interface StructuredInferenceInput<Output> {
 	readonly schema: Schema.Schema<Output>;
 	readonly prompt: string;
 	readonly model?: string;
 	readonly images?: ReadonlyArray<{
-		readonly assetId: string;
+		readonly file: FileRef;
 		readonly detail?: 'auto' | 'low' | 'high';
 	}>;
 }
@@ -336,7 +336,7 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 		) => Effect.Effect<{ readonly taskId: string }>;
 	};
 	readonly infer: <Output>(input: StructuredInferenceInput<Output>) => Effect.Effect<Output>;
-	readonly readFileAsset: (assetId: string) => Effect.Effect<{
+	readonly readFileAsset: (file: FileRef) => Effect.Effect<{
 		readonly id: string;
 		readonly name: string;
 		readonly mimeType: string | null;

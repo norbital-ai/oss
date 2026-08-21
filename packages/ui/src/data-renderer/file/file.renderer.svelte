@@ -1,5 +1,4 @@
 <script lang="ts">
-	import type { CollectionRecord, RemoteQuery } from '@norbital-ai/std/collection';
 	import type { IFileUploadClient } from '#lib/file-upload';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
@@ -8,7 +7,6 @@
 	import type { DataRendererProps } from '../data-renderer.types.js';
 	import FileInput from './file.input.svelte';
 	import type { FileValue as TFileValue } from '#lib/file-value';
-	import { getCollectionClientContext } from '#lib/collection-runtime';
 
 	const MAX_WORKSPACE_FILE_SIZE = 10 * 1024 * 1024;
 
@@ -22,7 +20,6 @@
 		class: className,
 		onValueChange
 	}: DataRendererProps & { runtime?: DataRendererRuntime } = $props();
-	const records = getCollectionClientContext().records;
 
 	// svelte-ignore state_referenced_locally -- the identity watch replaces this initial client.
 	let client = $state<IFileUploadClient | undefined>(runtime?.createFileUploadClient());
@@ -34,57 +31,62 @@
 		{ lazy: true }
 	);
 
-	const selectedIds = $derived.by((): string[] => {
-		const candidates = Array.isArray(value) ? value : value == null ? [] : [value];
-		return candidates.filter((candidate): candidate is string => typeof candidate === 'string');
+	/**
+	 * What a `file()` column holds: `{storage_key, file_name, file_size, mime_type}`, or an array of
+	 * them under `multiple: true`.
+	 *
+	 * There is no fetch here and that is the whole change. The column used to hold a `uuid` naming a
+	 * `document_asset` row, so rendering a filename meant a second query per record — and the upload
+	 * path never wrote that row, so the query resolved against nothing and every file rendered
+	 * empty. The value now describes the file, so this reads it.
+	 */
+	type FileRef = {
+		storage_key: string;
+		file_name: string;
+		file_size: number;
+		mime_type: string;
+	};
+	const asRef = (candidate: unknown): FileRef | null => {
+		if (typeof candidate !== 'object' || candidate === null) return null;
+		const record = candidate as Record<string, unknown>;
+		const key = record['storage_key'];
+		if (typeof key !== 'string' || key === '') return null;
+		return {
+			storage_key: key,
+			file_name: typeof record['file_name'] === 'string' ? record['file_name'] : key,
+			file_size: typeof record['file_size'] === 'number' ? record['file_size'] : 0,
+			mime_type:
+				typeof record['mime_type'] === 'string' ? record['mime_type'] : 'application/octet-stream'
+		};
+	};
+	const toFileValue = (ref: FileRef): TFileValue => ({
+		norbital_id: ref.storage_key,
+		name: ref.file_name,
+		size: ref.file_size,
+		type: ref.mime_type,
+		url: `/api/files/${encodeURIComponent(ref.storage_key)}`
 	});
-	const selectedQueryInput = $derived.by(() =>
-		selectedIds.length > 0
-			? {
-					records,
-					query: {
-						where: { norbital_id: { in: selectedIds } },
-						limit: selectedIds.length
-					}
-				}
-			: null
-	);
-	let selectedQuery = $state<RemoteQuery<CollectionRecord[]> | null>(null);
-	watch(
-		() => selectedQueryInput,
-		(input) => {
-			selectedQuery = input ? input.records.findMany('document_asset', input.query) : null;
-		},
-		{ lazy: false }
-	);
-	const selectedFiles = $derived.by((): TFileValue[] =>
-		(selectedQuery?.current ?? []).flatMap((record: CollectionRecord) => {
-			const id = record.norbital_id;
-			const name = record.file_name;
-			const size = record.file_size;
-			const type = record.mime_type;
-			const storageKey = record.storage_key;
-			if (
-				typeof id !== 'string' ||
-				typeof name !== 'string' ||
-				typeof size !== 'number' ||
-				typeof storageKey !== 'string'
-			) {
-				return [];
-			}
-			return [
-				{
-					norbital_id: id,
-					name,
-					size,
-					type: typeof type === 'string' ? type : 'application/octet-stream',
-					url: `/api/files/${encodeURIComponent(storageKey)}`
-				}
-			];
-		})
-	);
+	const selectedFiles = $derived.by((): TFileValue[] => {
+		const candidates = Array.isArray(value) ? value : value == null ? [] : [value];
+		return candidates.flatMap((candidate) => {
+			const ref = asRef(candidate);
+			return ref === null ? [] : [toFileValue(ref)];
+		});
+	});
 	const selectedFile = $derived(selectedFiles[0]);
 	const acceptedTypes = $derived(field.mimeTypes?.length ? [...field.mimeTypes] : ['*/*']);
+
+	/**
+	 * `FileInput` speaks `TFileValue` because that is what it renders; the column stores a `FileRef`.
+	 * Writing the input's own shape back would persist a `url` and a `norbital_id` the server never
+	 * agreed to, so the conversion is explicit in both directions.
+	 */
+	const toRef = (file: TFileValue): FileRef => ({
+		storage_key: file.norbital_id,
+		file_name: file.name,
+		file_size: file.size,
+		mime_type: file.type
+	});
 </script>
 
 {#if !client}
@@ -103,7 +105,7 @@
 		accept={acceptedTypes}
 		{disabled}
 		class={className}
-		onValueChange={(files) => onValueChange?.(files.map((file) => file.norbital_id))}
+		onValueChange={(files) => onValueChange?.(files.map(toRef))}
 	/>
 {:else}
 	<FileInput
@@ -114,6 +116,6 @@
 		accept={acceptedTypes}
 		{disabled}
 		class={className}
-		onValueChange={(file) => onValueChange?.(file?.norbital_id ?? null)}
+		onValueChange={(file) => onValueChange?.(file ? toRef(file) : null)}
 	/>
 {/if}

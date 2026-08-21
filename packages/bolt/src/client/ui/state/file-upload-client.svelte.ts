@@ -59,9 +59,10 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 		this.uploads.push(entry);
 		options.onProgress?.('uploading');
 		const extension = file.name.includes('.') ? `.${file.name.split('.').at(-1)}` : '';
+		const storageKey = `${id}${extension}`;
 		const promise = workspaceSession()
 			.files.store(
-				`${id}${extension}`,
+				storageKey,
 				file,
 				({ loaded, total }) => {
 					entry.percent = total === 0 ? 100 : Math.round((loaded / total) * 100);
@@ -71,6 +72,7 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 			.then((url) => {
 				const result: UploadResult = {
 					norbital_id: id,
+					storageKey,
 					url,
 					name: file.name,
 					type: file.type,

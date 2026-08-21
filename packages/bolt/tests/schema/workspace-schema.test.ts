@@ -62,10 +62,6 @@ describe('WorkspaceSchema owner', () => {
 			// would authenticate nobody.
 			'collection:bolt_team',
 			'collection:bolt_team:index:name',
-			// An uploaded file is a row, and `file()` columns resolve against it. Sorted between the
-			// identity tables and `requestor`, like every other runtime-owned collection.
-			'collection:document_asset',
-			'collection:document_asset:index:storage_key',
 			'collection:requestor',
 			'collection:requestor:index:approval_request_id',
 			'collection:requestor:index:user_id'

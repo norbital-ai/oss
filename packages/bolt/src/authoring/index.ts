@@ -108,6 +108,7 @@ export type {
 	CustomTypeResolvedSchema,
 	CustomTypeValueMap,
 	DateRange,
+	FileRef,
 	ModelDeclaration,
 	ModelMetadata
 } from './models-schema.js';

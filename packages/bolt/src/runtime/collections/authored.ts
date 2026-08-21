@@ -1,6 +1,7 @@
 import { Context, Duration, Effect, Schema } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import { AuthoredRefusal, refusalOf } from '../../authoring/refusal.js';
+import type { FileRef } from '../../authoring/models-schema.js';
 import type { AuthoredIntegrationModule } from '../../authoring/integration-introspection.js';
 import type { Identity, Subject } from '../identity/identity.js';
 import type { Collections } from './collections.js';
@@ -219,12 +220,12 @@ export type AuthoredCollectionOps = Readonly<{
 			readonly prompt: string;
 			readonly model?: string;
 			readonly images?: ReadonlyArray<{
-				readonly assetId: string;
+				readonly file: FileRef;
 				readonly detail?: 'auto' | 'low' | 'high';
 			}>;
 		}>
 	) => Effect.Effect<unknown, unknown, never>;
-	readonly readFileAsset: (assetId: string) => Effect.Effect<
+	readonly readFileAsset: (file: FileRef) => Effect.Effect<
 		{
 			readonly id: string;
 			readonly name: string;
@@ -237,7 +238,14 @@ export type AuthoredCollectionOps = Readonly<{
 	>;
 }>;
 
-/** What an authored `readFileAsset` answers with, and what an inference image is built from. */
+/**
+ * What an authored `readFileAsset` answers with, and what an inference image is built from.
+ *
+ * `id` is the object store's key, which is the file's only identifier now — there is no second one.
+ * It used to be a `document_asset` row id, and the gap between the two is exactly the bug this
+ * shape closes: an id that named a row, a row that named a key, and an upload path that wrote the
+ * key and never the row.
+ */
 export type AuthoredFileAsset = Readonly<{
 	readonly id: string;
 	readonly name: string;
@@ -246,9 +254,9 @@ export type AuthoredFileAsset = Readonly<{
 	readonly bytes: Uint8Array;
 }>;
 
-/** One image an authored `api.infer` attached to its turn. */
+/** One image an authored `api.infer` attached to its turn, taken straight from a `file()` column. */
 export type AuthoredInferenceImage = Readonly<{
-	readonly assetId: string;
+	readonly file: FileRef;
 	readonly detail?: 'auto' | 'low' | 'high';
 }>;
 
@@ -292,7 +300,7 @@ const base64 = (bytes: Uint8Array): string => {
 export const inferenceTurnContent = (
 	prompt: string,
 	images: ReadonlyArray<AuthoredInferenceImage> | undefined,
-	readAsset: (assetId: string) => Effect.Effect<AuthoredFileAsset, Database.FacilityError>
+	readAsset: (file: FileRef) => Effect.Effect<AuthoredFileAsset, Database.FacilityError>
 ): Effect.Effect<Schema.Json, Database.FacilityError> =>
 	Effect.gen(function* () {
 		if (images === undefined || images.length === 0) return prompt as Schema.Json;
@@ -313,11 +321,11 @@ export const inferenceTurnContent = (
 		const parts: Array<Schema.Json> = [{ type: 'text', text: prompt }];
 		let total = 0;
 		for (const image of images) {
-			const asset = yield* readAsset(image.assetId);
+			const asset = yield* readAsset(image.file);
 			if (asset.mimeType === null || !asset.mimeType.startsWith('image/')) {
 				return yield* refuse(
 					'ai.not_an_image',
-					`document_asset ${image.assetId} is ${asset.mimeType ?? 'of unknown type'}, which is not an image.`
+					`${asset.name} is ${asset.mimeType ?? 'of unknown type'}, which is not an image.`
 				);
 			}
 			total += asset.size;
@@ -460,12 +468,12 @@ export const makeAuthoringApi = (
 				readonly prompt: string;
 				readonly model?: string;
 				readonly images?: ReadonlyArray<{
-					readonly assetId: string;
+					readonly file: FileRef;
 					readonly detail?: 'auto' | 'low' | 'high';
 				}>;
 			}>
 		) => ops.infer(input),
-		readFileAsset: (assetId: string) => ops.readFileAsset(assetId)
+		readFileAsset: (file: FileRef) => ops.readFileAsset(file)
 	};
 };
 
@@ -487,32 +495,21 @@ export const makeBoundAuthoringOps = (
 	/**
 	 * The bytes and description behind a `file()` column's value.
 	 *
-	 * A `file()` column holds the `norbital_id` of a `document_asset` row, and that row is the only
-	 * thing that names the object-store key the bytes were written under, along with the file name,
-	 * size and mime type nothing else records. Asking the Files facility for the *asset id* — which
-	 * is what this used to do — asks for a key no upload ever wrote, so every authored
-	 * `readFileAsset` resolved against nothing and `mimeType` was hardcoded `null` because there was
-	 * no row being read to get one from.
+	 * The value *is* the description — `{storage_key, file_name, file_size, mime_type}` — so this
+	 * asks the Files facility for the key it names and attaches the rest. There is nothing to look
+	 * up, which is the point: a `file()` column used to hold the `norbital_id` of a `document_asset`
+	 * row, that row was the only thing naming the object-store key, and the upload path never wrote
+	 * one. So every authored `readFileAsset` resolved against a row that did not exist, and
+	 * `mimeType` came back `null` because there was no row to read it from.
 	 */
-	const readAsset = (assetId: string): Effect.Effect<AuthoredFileAsset, Database.FacilityError> =>
+	const readAsset = (file: FileRef): Effect.Effect<AuthoredFileAsset, Database.FacilityError> =>
 		Effect.gen(function* () {
-			const row = yield* collections
-				.findFirst(effectId, subject, {
-					collection: 'document_asset',
-					where: { norbital_id: { eq: assetId } }
-				})
-				.pipe(Effect.orElseSucceed(() => undefined));
-			const record =
-				typeof row === 'object' && row !== null && !Array.isArray(row)
-					? (row as Readonly<Record<string, unknown>>)
-					: undefined;
-			const storageKey =
-				typeof record?.['storage_key'] === 'string' ? record['storage_key'] : undefined;
+			const storageKey = typeof file?.storage_key === 'string' ? file.storage_key : undefined;
 			if (storageKey === undefined) {
 				return yield* new Database.FacilityError({
 					operation: 'files.read',
 					code: 'files.asset_missing',
-					message: `No document_asset ${assetId}, so there is no stored object to read.`,
+					message: 'This file value names no stored object, so there is nothing to read.',
 					retryable: false,
 					outcome: 'known'
 				});
@@ -520,9 +517,9 @@ export const makeBoundAuthoringOps = (
 			const response = yield* files.execute(effectId, { _tag: 'Read', key: storageKey });
 			const bytes = response.bytes ?? new Uint8Array();
 			return {
-				id: assetId,
-				name: typeof record?.['file_name'] === 'string' ? record['file_name'] : assetId,
-				mimeType: typeof record?.['mime_type'] === 'string' ? record['mime_type'] : null,
+				id: storageKey,
+				name: typeof file.file_name === 'string' ? file.file_name : storageKey,
+				mimeType: typeof file.mime_type === 'string' ? file.mime_type : null,
 				size: bytes.byteLength,
 				bytes
 			};
@@ -631,6 +628,6 @@ export const makeBoundAuthoringOps = (
 				});
 				return Schema.decodeUnknownSync(input.schema)(response.output);
 			}),
-		readFileAsset: (assetId) => readAsset(assetId)
+		readFileAsset: (file) => readAsset(file)
 	};
 };

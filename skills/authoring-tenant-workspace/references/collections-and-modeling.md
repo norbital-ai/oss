@@ -28,6 +28,33 @@ The directory owns the collection ID. Models hold storage and data identity only
 applications own presentation. Use `enums([...])` for closed values. Do not put visual metadata, enum
 colors, default sorting, or renderer variants in a model.
 
+## Files (`file()`)
+
+A `file()` column is one `jsonb` value holding the whole file:
+
+```ts
+{ storage_key: string; file_name: string; file_size: number; mime_type: string }
+```
+
+```ts
+import { defineModel, file, text } from '@norbital-ai/bolt/authoring';
+
+export default defineModel({
+	caption: text(),
+	photo: file({ mimeTypes: ['image/jpeg', 'image/png'] }).notNull(),
+	attachments: file({ multiple: true })
+});
+```
+
+Read it with `api.readFileAsset(record.photo)` and pass it to a model with
+`images: [{ file: record.photo }]`. There is no id to resolve and no second table: the metadata is a
+field of the record that owns it, so it inherits that record's row predicate and field mask.
+
+**Use `file({ multiple: true })`, never `file().array()`.** `.array()` throws at declaration. A
+dimensioned builder records only its dimensions and drops the scalar type, so the write would bind a
+JSON array as a Postgres array; `multiple: true` is one `jsonb` column holding a JSON array, which
+takes the binding path that works.
+
 ## Embeddings (pgvector)
 
 One column type: `vector({ dimensions })`. Use it for Meta PDQ (256-dim 0/1 via

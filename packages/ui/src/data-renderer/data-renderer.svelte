@@ -9,11 +9,9 @@
 	import { cn } from '#lib/utils';
 	import DataRendererEditor from './data-renderer-editor.svelte';
 	import { getDataRendererRuntimeContext } from './data-renderer-runtime.js';
-	import type { CollectionRecord } from '@norbital-ai/std/collection';
 	import type { DataRendererProps } from './data-renderer.types.js';
 	import { formatDataValue, type Translate } from './data-renderer.utils.js';
 	import NumericRenderer from './numeric/numeric.renderer.svelte';
-	import RelationshipRenderer from './relationship/relationship.renderer.svelte';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -62,19 +60,32 @@
 	const customRenderer = $derived(rendererRuntime?.customTypeRenderers[field.kind]);
 
 	/**
-	 * Only files route to the relationship renderer here, and only because a file's label is the
-	 * asset's own name — something the platform owns rather than the view.
+	 * A `file()` value displayed: its name, linking to its bytes.
 	 *
-	 * A relation field is a uuid, so by default it renders as exactly that: text. Showing it as a
+	 * This used to route through `RelationshipRenderer` at `document_asset`, which was the only
+	 * renderer able to turn an id into a label — a file column held a uuid and the name lived on
+	 * another row. It fetched per record to show a filename, and it showed nothing at all, because
+	 * the upload path never wrote the row it was fetching. The value now carries the name, so there
+	 * is no target, no fetch, and no id to resolve.
+	 *
+	 * A relation field is still a uuid and still renders as exactly that: text. Showing it as a
 	 * labelled record is an explicit choice, made by passing `RelationshipRenderer` yourself with
 	 * the option set you want (a table column's `render`, a form field's `renderer`). Nothing about
 	 * the relation is inferred, and no surface fetches on your behalf.
 	 */
-	const fileTarget = $derived(field.kind === 'file' && !field.relation ? 'document_asset' : null);
-	const fileOptions = {
-		label: (record: CollectionRecord) =>
-			typeof record.file_name === 'string' ? record.file_name : String(record.norbital_id)
-	};
+	const displayedFiles = $derived.by((): ReadonlyArray<{ name: string; url: string }> => {
+		if (field.kind !== 'file' || field.relation) return [];
+		const candidates = Array.isArray(value) ? value : value == null ? [] : [value];
+		return candidates.flatMap((candidate) => {
+			if (typeof candidate !== 'object' || candidate === null) return [];
+			const record = candidate as Record<string, unknown>;
+			const key = record['storage_key'];
+			if (typeof key !== 'string' || key === '') return [];
+			const name = typeof record['file_name'] === 'string' ? record['file_name'] : key;
+			return [{ name, url: `/api/files/${encodeURIComponent(key)}` }];
+		});
+	});
+	const isFileDisplay = $derived(field.kind === 'file' && !field.relation && mode !== 'edit');
 	const geolocationValue = $derived.by(
 		(): TGeolocationPickerValue | TGeolocationPickerValue[] | null =>
 			parseGeolocationPickerValues(value, field.array ?? false)
@@ -140,25 +151,23 @@
 		locale={localeEffective}
 		class={className}
 	/>
-{:else if fileTarget}
-	<RelationshipRenderer
-		target={fileTarget}
-		value={field.array
-			? Array.isArray(value)
-				? value.map(String)
-				: []
-			: typeof value === 'string'
-				? value
-				: null}
-		multiple={field.array ?? false}
-		options={fileOptions}
-		{placeholder}
-		{disabled}
-		readonly={mode === 'display'}
-		displayOnly={mode === 'display'}
-		class={className}
-		onValueChange={(next) => onValueChange?.(next)}
-	/>
+{:else if isFileDisplay}
+	{#if displayedFiles.length === 0}
+		<span class={cn('text-muted-foreground', className)}>{placeholder}</span>
+	{:else}
+		<span class={cn('inline-flex flex-wrap gap-x-2 gap-y-1', className)}>
+			{#each displayedFiles as file (file.url)}
+				<a
+					href={file.url}
+					target="_blank"
+					rel="noreferrer"
+					class="truncate underline underline-offset-2"
+				>
+					{file.name}
+				</a>
+			{/each}
+		</span>
+	{/if}
 {:else if mode === 'edit'}
 	<DataRendererEditor
 		{field}

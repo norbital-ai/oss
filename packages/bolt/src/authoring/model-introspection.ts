@@ -51,6 +51,15 @@ type ColumnConfig = Readonly<{
 	readonly boltSearch?: boolean;
 	/** Written by `file()` so the declared accept list survives into the description. */
 	readonly boltMimeTypes?: ReadonlyArray<string>;
+	/**
+	 * Whether this `jsonb` column is a `file()`, and whether it holds a list of them.
+	 *
+	 * `file()` emits `jsonb` now, so the builder's own name no longer says what it is — every
+	 * `file()` column would otherwise describe itself as ordinary JSON, and the renderer would draw a
+	 * code block where an upload belongs. The flag is what keeps the catalog's `kind` honest.
+	 */
+	readonly boltFile?: boolean;
+	readonly boltFileMultiple?: boolean;
 }>;
 
 const dialect = new PgDialect();
@@ -203,7 +212,9 @@ export const describeModelColumns = (
 			...(config.boltSearch === true ? { search: true } : {}),
 			...(config.boltMimeTypes === undefined || config.boltMimeTypes.length === 0
 				? {}
-				: { mimeTypes: [...config.boltMimeTypes] })
+				: { mimeTypes: [...config.boltMimeTypes] }),
+			...(config.boltFile === true ? { file: true } : {}),
+			...(config.boltFileMultiple === true ? { fileMultiple: true } : {})
 		};
 	}
 	return fields;

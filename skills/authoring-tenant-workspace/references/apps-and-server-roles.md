@@ -107,15 +107,15 @@ and reference them with the seed-asset URL — no external CDN needed:
 ```svelte
 <meta
 	name="bolt:thumbnail"
-	content="/api/template-seed-assets/<key>/app-media/operations-banner.svg"
+	content="/__bolt/request/api/template-seed-assets/<key>/app-media/operations-banner.svg"
 />
 <meta
 	name="bolt:banner"
-	content="/api/template-seed-assets/<key>/app-media/operations-banner.svg"
+	content="/__bolt/request/api/template-seed-assets/<key>/app-media/operations-banner.svg"
 />
 ```
 
-Any file under `assets/` is served by the host at `/api/template-seed-assets/<key>/<path>` (PNG, JPEG,
+Any file under `assets/` is served by the host at `/__bolt/request/api/template-seed-assets/<key>/<path>` (PNG, JPEG,
 WebP, GIF, SVG, IFC, PDF, …). Reuse one wide image (e.g. 1600×800) for both thumbnail and banner:
 the overview `Frame ratio="banner"` crops it 2:1 and the shell media header crops it `object-top`
 into a fixed compact strip. Keep the interesting composition in the top ~260px of the art.
@@ -131,14 +131,14 @@ header — on both table and kanban detail surfaces. It is optional and independ
 <svelte:head>
 	<meta
 		name="bolt:banner"
-		content="/api/template-seed-assets/<key>/record-media/employments-banner.svg"
+		content="/__bolt/request/api/template-seed-assets/<key>/record-media/employments-banner.svg"
 	/>
 </svelte:head>
 ```
 
 The same seed-asset pattern applies: commit the image under the template's `assets/` directory
 (e.g. `assets/record-media/<collection>-banner.svg`) and point at its
-`/api/template-seed-assets/<key>/…` URL. A missing or dynamic banner is ignored — the sheet header
+`/__bolt/request/api/template-seed-assets/<key>/…` URL. A missing or dynamic banner is ignored — the sheet header
 renders without one.
 
 The shell owns document scroll and one app query container. Use `Stack`, `Inline`, `Cluster`, `Split`,
@@ -249,10 +249,11 @@ export default defineAutomation(
 ```
 
 Automations and hooks may make schema-validated inference over explicitly selected workspace
-images. Pass only `document_asset` IDs already associated with the record being processed — the id a
-`file()` column holds. Bolt resolves each asset's stored bytes and mime type, inlines them on the
-turn, and refuses a non-image, more than eight images, or more than 20 MiB in total rather than
-dropping any of them silently:
+images. Pass the `file()` column's value itself — that value _is_ the file
+(`{storage_key, file_name, file_size, mime_type}`), so pass `record.photo`, not something read off
+it. Bolt reads the object it names, inlines the bytes and mime type on the turn, and refuses a
+non-image, more than eight images, or more than 20 MiB in total rather than dropping any of them
+silently:
 
 ```ts
 const result =
@@ -260,7 +261,7 @@ const result =
 	api.infer({
 		model: 'stepfun/step-3.7-flash',
 		prompt: 'Read the visibly printed site name and unit number. Use null when absent.',
-		images: [{ assetId: scope.incoming_record.document_asset_id, detail: 'high' }],
+		images: [{ file: scope.incoming_record.photo, detail: 'high' }],
 		schema: Schema.Struct({
 			site_name: Schema.NullOr(Schema.String),
 			unit_number: Schema.NullOr(Schema.String)

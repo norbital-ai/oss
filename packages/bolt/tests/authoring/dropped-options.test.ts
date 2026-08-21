@@ -33,12 +33,12 @@ describe('file({ mimeTypes })', () => {
 		expect(fields.anything).not.toHaveProperty('mimeTypes');
 	});
 
-	/** A uuid column either way — the accept list is a rendering concern, never a storage one. */
+	/** A json column either way — the accept list is a rendering concern, never a storage one. */
 	it('changes nothing about the column it declares', () => {
 		const fields = describeModel(
 			defineModel({ contract: file({ mimeTypes: ['application/pdf'] }) })
 		);
-		expect(fields.contract?.type).toBe('uuid');
+		expect(fields.contract?.type).toBe('json');
 	});
 });
 

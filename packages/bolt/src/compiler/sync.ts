@@ -8,7 +8,11 @@ import { Effect, Schema } from 'effect';
 import { PROTOCOL_VERSION } from '@norbital-ai/bolt-protocol';
 import type { RelationDefinition, WorkspaceMigrationEntry } from '../authoring/workspace-schema.js';
 import { workspaceAgentNameFromPackage } from './agent-name.js';
-import { WORKSPACE_ENTRY_FILE_NAME } from './client-entry.js';
+import {
+	BOLT_TENANT_REQUEST_PREFIX,
+	BOLT_TENANT_STATIC_PREFIX,
+	WORKSPACE_ENTRY_FILE_NAME
+} from './client-entry.js';
 import { extractAppMetadata, extractGroupMetadata } from './app-metadata.js';
 import {
 	extractCollectionCatalog,
@@ -359,7 +363,7 @@ class WorkspaceCompiler {
 
 	/** Owns render client runtime declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderClientRuntimeDeclaration = (): string =>
-		`declare module 'virtual:bolt/client-runtime' {\n\timport type { CollectionCatalog, WorkspaceClientRuntime } from '@norbital-ai/bolt/client-runtime';\n\texport function createBrowserWorkspaceRuntime(): WorkspaceClientRuntime;\n\texport function createWorkspaceApiProxy(runtime: WorkspaceClientRuntime, catalog?: CollectionCatalog): { readonly db: object; readonly invoke: object; readonly collections: object };\n\texport function startBrowserReplica(runtime: WorkspaceClientRuntime): Promise<void>;\n\texport function startLocalReplica(runtime: WorkspaceClientRuntime): Promise<unknown>;\n}\n`;
+		`declare module 'virtual:bolt/client-runtime' {\n\timport type { CollectionCatalog, WorkspaceClientRuntime } from '@norbital-ai/bolt/client-runtime';\n\texport function createBrowserWorkspaceRuntime(): WorkspaceClientRuntime;\n\texport function createWorkspaceApiProxy(runtime: WorkspaceClientRuntime, catalog?: CollectionCatalog): { readonly db: object; readonly invoke: object; readonly collections: object };\n\texport function startBrowserReplica(runtime: WorkspaceClientRuntime): Promise<void>;\n\texport function startLocalReplica(runtime: WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }): Promise<unknown>;\n\texport function switchWorkspaceAccessScope(runtime: WorkspaceClientRuntime, accessScope: string): void;\n}\n`;
 
 	/** Owns render client declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderClientDeclaration = (
@@ -379,7 +383,7 @@ class WorkspaceCompiler {
 					`\treadonly ${JSON.stringify(basename(path).slice(1, -3))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
 			)
 			.join('\n');
-		return `import type { CollectionRegistryFor, InvokeClientApi, PlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceSchema } from './types.js';\ntype CollectionHooks = {\n${hookEntries}\n};\ntype TenantCollections = CollectionRegistryFor<WorkspaceSchema, CollectionHooks>;\ntype Collections = TenantCollections & CollectionRegistryFor<PlatformSchema>;\ntype Invoke = {\n${invokeEntries}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceCreate<N extends keyof TenantCollections> = TenantCollections[N]['create'];\nexport type WorkspaceUpdate<N extends keyof TenantCollections> = TenantCollections[N]['update'];\nexport interface Client { readonly db: { findMany(collection: string, limit?: number): Promise<unknown> }; readonly invoke: InvokeClientApi<Invoke>; }\nexport declare const client: Client;\nexport declare const runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime;\nexport declare const startLocalReplica: (runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime) => Promise<{ readonly stop: () => void }>;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string }>>;\nexport declare const policyNames: ReadonlyArray<string>;\nexport declare const agentNames: ReadonlyArray<string>;\n`;
+		return `import type { CollectionRegistryFor, InvokeClientApi, PlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceSchema } from './types.js';\ntype CollectionHooks = {\n${hookEntries}\n};\ntype TenantCollections = CollectionRegistryFor<WorkspaceSchema, CollectionHooks>;\ntype Collections = TenantCollections & CollectionRegistryFor<PlatformSchema>;\ntype Invoke = {\n${invokeEntries}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceCreate<N extends keyof TenantCollections> = TenantCollections[N]['create'];\nexport type WorkspaceUpdate<N extends keyof TenantCollections> = TenantCollections[N]['update'];\nexport interface Client { readonly db: { findMany(collection: string, limit?: number): Promise<unknown> }; readonly invoke: InvokeClientApi<Invoke>; }\nexport declare const client: Client;\nexport declare const runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime;\nexport declare const changeAccessScope: (accessScope: string) => void;\nexport declare const startLocalReplica: (runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }) => Promise<{ readonly stop: () => void }>;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string }>>;\nexport declare const policyNames: ReadonlyArray<string>;\nexport declare const agentNames: ReadonlyArray<string>;\n`;
 	};
 
 	/** Owns render client runtime behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
@@ -445,7 +449,7 @@ class WorkspaceCompiler {
 					})}`
 			)
 			.join(',\n');
-		return `import './app.css';\n// The workspace stylesheet rides this module, not the entry.\n//\n// Vite links an entry's CSS from the HTML document it generates, and this build generates no\n// document — so a sheet imported by the entry is emitted beside it and never loaded. A sheet\n// imported by a *dynamically* imported chunk is different: Vite's own preload helper inserts the\n// link before the chunk executes. This module is only ever reached through \`import('$bolt/client')\`\n// inside \`mountWorkspace\`, so the supported mechanism applies and nothing has to rewrite chunk\n// text to make the workspace render styled.\nimport { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startLocalReplica } from 'virtual:bolt/client-runtime';\nimport { collectionCatalog } from './collections.js';\nconst runtime = createBrowserWorkspaceRuntime();\nexport const client = createWorkspaceApiProxy(runtime, collectionCatalog);\n// The replica is started by whoever owns its lifetime, never by importing this module.\n//\n// It used to start here, at module scope. But this module is also what a host imports to read\n// \`appLoaders\` — so merely reaching for the app registry opened a database, and it opened one\n// before anybody had signed in: \`sync.provisioning\` answered 401 and the replica gave up on a\n// workspace it would have been allowed to read a moment later. A host that then started its own\n// replica after sign-in got a second engine for the same scope, because starting one is not\n// idempotent.\n//\n// \`startLocalReplica\` is re-exported instead, so the owner starts it once it has a session and can\n// stop it on teardown. PGlite is several megabytes of WebAssembly, so bringing it up after the page\n// is interactive — rather than before first paint — remains the point.\nexport { runtime, startLocalReplica };\nexport const appLoaders = {\n${loaders}\n};\nexport const representationLoaders = {\n${representationLoaders}\n};\nexport const customTypeRendererLoaders = {\n${customRendererLoaders}\n};\nexport const appGroups = {\n${groupEntries}\n};\nexport const appMeta = ${JSON.stringify(appMeta)};\nexport const policyNames = ${JSON.stringify(policies)};\nexport const agentNames = ${JSON.stringify(agentNames)};\n`;
+		return `import './app.css';\n// The workspace stylesheet rides this module, not the entry.\n//\n// Vite links an entry's CSS from the HTML document it generates, and this build generates no\n// document — so a sheet imported by the entry is emitted beside it and never loaded. A sheet\n// imported by a *dynamically* imported chunk is different: Vite's own preload helper inserts the\n// link before the chunk executes. This module is only ever reached through \`import('$bolt/client')\`\n// inside \`mountWorkspace\`, so the supported mechanism applies and nothing has to rewrite chunk\n// text to make the workspace render styled.\nimport { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startLocalReplica, switchWorkspaceAccessScope } from 'virtual:bolt/client-runtime';\nimport { collectionCatalog } from './collections.js';\nconst runtime = createBrowserWorkspaceRuntime();\nexport const client = createWorkspaceApiProxy(runtime, collectionCatalog);\n// The replica is started by whoever owns its lifetime, never by importing this module.\n//\n// It used to start here, at module scope. But this module is also what a host imports to read\n// \`appLoaders\` — so merely reaching for the app registry opened a database, and it opened one\n// before anybody had signed in: \`sync.provisioning\` answered 401 and the replica gave up on a\n// workspace it would have been allowed to read a moment later. A host that then started its own\n// replica after sign-in got a second engine for the same scope, because starting one is not\n// idempotent.\n//\n// \`startLocalReplica\` is re-exported instead, so the owner starts it once it has a session and can\n// stop it on teardown. PGlite is several megabytes of WebAssembly, so bringing it up after the page\n// is interactive — rather than before first paint — remains the point.\nexport const changeAccessScope = (accessScope) => switchWorkspaceAccessScope(runtime, accessScope);\nexport { runtime, startLocalReplica };\nexport const appLoaders = {\n${loaders}\n};\nexport const representationLoaders = {\n${representationLoaders}\n};\nexport const customTypeRendererLoaders = {\n${customRendererLoaders}\n};\nexport const appGroups = {\n${groupEntries}\n};\nexport const appMeta = ${JSON.stringify(appMeta)};\nexport const policyNames = ${JSON.stringify(policies)};\nexport const agentNames = ${JSON.stringify(agentNames)};\n`;
 	};
 
 	/**
@@ -581,10 +585,10 @@ class WorkspaceCompiler {
 			 * The emptiness check above cannot see the failure this catches. A workspace whose resolved
 			 * `@norbital-ai/bolt/vite` predates the fixed entry name builds happily and fills this
 			 * directory with an `index.html` and a content-hashed entry — non-empty, so nothing
-			 * complained — and the host then asked for `/_static/workspace.js`, got a 404, and rendered a
-			 * workspace with no apps. That is a stale plugin, and a stale plugin is invisible at the only
-			 * place it can be named cheaply: here, where the build has just run and the file list is
-			 * already in hand.
+			 * complained — and the host then asked for `/__bolt/static/workspace.js`, got a 404, and
+			 * rendered a workspace with no apps. That is a stale plugin, and a stale plugin is invisible
+			 * at the only place it can be named cheaply: here, where the build has just run and the file
+			 * list is already in hand.
 			 *
 			 * It is checked against `bolt sync`'s own constant rather than the resolved plugin's, on
 			 * purpose. The name is the contract between the artifact and every host that serves it; if
@@ -596,7 +600,7 @@ class WorkspaceCompiler {
 					[
 						`The client build under ${dist} emitted no ${WORKSPACE_ENTRY_FILE_NAME}.`,
 						`It emitted: ${built.map((path) => WorkspaceCompiler.posix(relative(dist, path))).join(', ')}.`,
-						`A host fetches this artifact's client at \`/_static/${WORKSPACE_ENTRY_FILE_NAME}\`, so an artifact without it serves a workspace with no apps.`,
+						`A host fetches this artifact's client at \`${BOLT_TENANT_STATIC_PREFIX}/${WORKSPACE_ENTRY_FILE_NAME}\`, so an artifact without it serves a workspace with no apps.`,
 						`This is what a stale \`@norbital-ai/bolt\` looks like: check that the workspace resolves the same build as the \`bolt\` that ran this sync (\`node -e "console.log(require.resolve('@norbital-ai/bolt/package.json'))"\` in the workspace root), and re-link or re-install if it does not.`
 					].join(' ')
 				);
@@ -612,7 +616,7 @@ class WorkspaceCompiler {
 					...authored.map((path) =>
 						read(
 							path,
-							`/api/template-seed-assets/${workspaceKey}/${WorkspaceCompiler.posix(relative(media, path))}`
+							`${BOLT_TENANT_REQUEST_PREFIX}/api/template-seed-assets/${workspaceKey}/${WorkspaceCompiler.posix(relative(media, path))}`
 						)
 					)
 				],

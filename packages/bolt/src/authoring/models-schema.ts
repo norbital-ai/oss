@@ -136,20 +136,30 @@ const ColumnAuthoring = {
 	phone: (options: { readonly search?: boolean } = {}) =>
 		ColumnAuthoring.searchable(pgText(), options),
 	/**
-	 * Records the declared upload types on the builder rather than dropping them.
+	 * An uploaded file, stored as the file rather than as a pointer to one.
 	 *
-	 * The column stores a file id, not the file, so this can never be a database constraint — the
-	 * accept list only exists to reach whatever offers the upload. It was `_options`, so four
-	 * workspaces declared `['application/pdf']` and every picker still offered every file on disk.
+	 * The column held a `uuid` naming a `document_asset` row. Two things were wrong with that, and
+	 * the second is why the collection is gone.
+	 *
+	 * **It never worked.** `WorkspaceUploadClient.beginUpload` mints a uuid, writes the bytes under
+	 * it, and returns it — no row was ever inserted. The only writer of `document_asset` in the whole
+	 * tree was the dev seeder, by raw SQL. So every file uploaded at runtime resolved against nothing
+	 * and rendered empty, and had done since the table was introduced.
+	 *
+	 * **A pointer with no owner cannot be authorized.** `file()` emitted a bare `uuid` with no foreign
+	 * key and nothing validated it on write, so any record could name any asset — and the asset row
+	 * carried nothing saying which record it belonged to, so "may this person read this file" had no
+	 * answer except a blanket grant to every authenticated subject, which is what existed. Inline, the
+	 * metadata is a field of the record and inherits its row predicate and field mask: there is no id
+	 * to forge and no second grant to widen.
+	 *
+	 * **`.array()` is deliberately unavailable.** `describeModelColumns` records only `dimensions` for
+	 * a dimensioned builder and drops the scalar type, so `isJsonColumn` would answer false and every
+	 * multi-file write would bind a JSON array as a Postgres array — the `worked_intervals` defect,
+	 * reintroduced. `multiple: true` is one `jsonb` column holding a JSON array, which takes the
+	 * binding path that already works.
 	 */
-	file: (options: { readonly mimeTypes?: ReadonlyArray<string> } = {}) => {
-		const builder = pgUuid();
-		const config = Reflect.get(builder, 'config');
-		if (options.mimeTypes !== undefined && config !== null && typeof config === 'object') {
-			Reflect.set(config, 'boltMimeTypes', [...options.mimeTypes]);
-		}
-		return builder;
-	},
+	file: fileColumn,
 	vector: (options: { readonly dimensions: number }) =>
 		pgVector({ dimensions: decodeVectorDimensions(options.dimensions) }),
 	hexToBinaryEmbedding: (hex: string): Array<number> => {
@@ -180,6 +190,73 @@ const ColumnAuthoring = {
 	enums: (values: readonly [string, ...string[]], options: { readonly search?: boolean } = {}) =>
 		ColumnAuthoring.searchable(pgText({ enum: values }), options)
 };
+
+/**
+ * What a `file()` column holds.
+ *
+ * `storage_key` is the identity and there is deliberately no `norbital_id` beside it: the upload
+ * client writes bytes under `<uuid>.<ext>` and the uuid *is* the key's stem, so a second identifier
+ * would be one more thing that can disagree with the first — which is the defect this shape exists
+ * to remove.
+ */
+/**
+ * The jsonb builder narrowed to what a `file()` column holds, named by construction.
+ *
+ * Written as `ReturnType` over a thunk because Drizzle's `$type` is a generic *method* — there is no
+ * way to apply a type argument through an indexed access, so the builder has to be built to be
+ * named.
+ */
+const oneFileColumn = () => jsonb().$type<FileRef>();
+const manyFilesColumn = () => jsonb().$type<ReadonlyArray<FileRef>>();
+
+/**
+ * `file()`, declared apart from the object so it can carry overloads.
+ *
+ * Inside the object literal it was a single arrow whose body branched on `options.multiple`, and
+ * TypeScript widened its return to the *union* of both builders. Every authored row then typed
+ * `photo` as `FileRef | readonly FileRef[]`, so a template that read `photo.storage_key` did not
+ * compile and one that passed it to `readFileAsset` did not either — a declaration-site detail
+ * surfacing as a type error in somebody else's collection. The overloads make the literal
+ * `multiple: true` decide, which is what an author writes and what the column actually is.
+ */
+function fileColumn(options?: {
+	readonly mimeTypes?: ReadonlyArray<string>;
+	readonly multiple?: false;
+}): ReturnType<typeof oneFileColumn>;
+function fileColumn(options: {
+	readonly mimeTypes?: ReadonlyArray<string>;
+	readonly multiple: true;
+}): ReturnType<typeof manyFilesColumn>;
+function fileColumn(
+	options: {
+		readonly mimeTypes?: ReadonlyArray<string>;
+		readonly multiple?: boolean;
+	} = {}
+) {
+	const builder = options.multiple === true ? manyFilesColumn() : oneFileColumn();
+	const config = Reflect.get(builder, 'config');
+	if (config !== null && typeof config === 'object') {
+		if (options.mimeTypes !== undefined) Reflect.set(config, 'boltMimeTypes', [...options.mimeTypes]);
+		Reflect.set(config, 'boltFile', true);
+		if (options.multiple === true) Reflect.set(config, 'boltFileMultiple', true);
+	}
+	// The refusal the `file` comment describes, made real. Left to the prose alone it is a rule
+	// nobody reads until the write has already bound a JSON array as a Postgres array, and that
+	// failure surfaces at insert time in a template, nowhere near this declaration.
+	Reflect.set(builder, 'array', () => {
+		throw new Error(
+			'file().array() is not supported: a dimensioned builder loses its scalar type, so the write would bind a JSON array as a Postgres array. Use file({ multiple: true }), which is one jsonb column holding a JSON array.'
+		);
+	});
+	return builder as never;
+}
+
+export type FileRef = Readonly<{
+	readonly storage_key: string;
+	readonly file_name: string;
+	readonly file_size: number;
+	readonly mime_type: string;
+}>;
 
 export const defineModel = ColumnAuthoring.defineModel;
 export const text = ColumnAuthoring.text;

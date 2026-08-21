@@ -135,20 +135,10 @@ export type GroupDefinition = import('./models-schema.js').BoltGroupDefinition;
 interface PlatformPersonRow extends SystemRow {
 	readonly name: string;
 }
-interface PlatformDocumentAssetRow extends SystemRow {
-	readonly file_name: string;
-	readonly file_size: number | null;
-	readonly mime_type: string | null;
-	readonly storage_key: string;
-}
 type PlatformTables = {
 	readonly bolt_auth_user: import('./contracts-schema.js').TableShape<
 		PlatformPersonRow,
 		Partial<PlatformPersonRow>
-	>;
-	readonly document_asset: import('./contracts-schema.js').TableShape<
-		PlatformDocumentAssetRow,
-		Partial<PlatformDocumentAssetRow>
 	>;
 };
 export type PlatformSchema = {

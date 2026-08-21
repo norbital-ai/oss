@@ -109,6 +109,8 @@ const catalogKinds: Readonly<Record<string, string>> = {
 export type CollectionCatalogField = Readonly<{
 	readonly name: string;
 	readonly kind: string;
+	/** Whether the column holds a list of its kind — today only `file({ multiple: true })`. */
+	readonly array?: boolean;
 	readonly nullable: boolean;
 	/** A column the database computes; a form must not offer it as editable. */
 	readonly readOnly?: boolean;
@@ -209,6 +211,9 @@ export const extractCollectionCatalog = (
 			// ordinary columns read-only, which is a worse fault than the one it fixes.
 			...(window.includes('.generatedAlwaysAs(') ? { readOnly: true } : {}),
 			...(window.includes('search: true') ? { search: true } : {}),
+			// A multi-file column, so a renderer offers one picker for many files rather than one.
+			// Read from the declaration's own text, as every other flag here is.
+			...(window.includes('multiple: true') ? { array: true } : {}),
 			...(values === undefined ? {} : { values }),
 			...(relation === undefined
 				? {}
