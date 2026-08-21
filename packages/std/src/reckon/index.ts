@@ -11,7 +11,7 @@ export type {
 
 export { hashDefinition, sha256Json } from './hash.js';
 
-// Server-only runtime entry points (use node:crypto internally).
+// Synchronous computation runtime entry points; hashing stays portable for tenant bundles.
 export { createEnvironment, validateDefinition } from './cel.server.js';
 export type { ReckonEnvironment, CustomOp } from './cel.server.js';
 export { runComputation, runComputationWithEnv } from './runtime.server.js';

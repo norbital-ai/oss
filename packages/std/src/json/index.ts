@@ -20,14 +20,6 @@ export function safeParse(json: string): unknown {
 	}
 }
 
-export function safeStringify(value: unknown, space?: number): string {
-	try {
-		return JSON.stringify(value, null, space);
-	} catch {
-		return '{"error":"Unable to stringify value"}';
-	}
-}
-
 function escapePointer(s: string): string {
 	return s.replace(/~/g, '~0').replace(/\//g, '~1');
 }

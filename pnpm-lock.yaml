@@ -10,9 +10,6 @@ catalogs:
     '@iconify/svelte':
       specifier: ^5.2.2
       version: 5.2.2
-    '@sveltejs/kit':
-      specifier: ^2.70.3
-      version: 2.70.3
     '@xyflow/svelte':
       specifier: 1.6.3
       version: 1.6.3
@@ -202,25 +199,13 @@ importers:
       '@marcbachmann/cel-js':
         specifier: ^8.0.0
         version: 8.0.0
-      dedent:
-        specifier: ^1.7.2
-        version: 1.7.2
       effect:
         specifier: 4.0.0-rc.111
         version: 4.0.0-rc.111
-      js-yaml:
-        specifier: ^5.3.0
-        version: 5.3.0
     devDependencies:
       '@norbital-ai/config':
         specifier: workspace:*
         version: link:../config
-      '@sveltejs/kit':
-        specifier: 'catalog:'
-        version: 2.70.3(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.56.10)(vite@8.2.1(@types/node@26.2.0)(jiti@2.7.0)(yaml@2.9.0)))(svelte@5.56.10)(typescript@6.0.3)(vite@8.2.1(@types/node@26.2.0)(jiti@2.7.0)(yaml@2.9.0))
-      '@types/js-yaml':
-        specifier: ^4.0.9
-        version: 4.0.9
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
@@ -1405,9 +1390,6 @@ packages:
   '@types/hast@3.0.5':
     resolution: {integrity: sha512-rp/ezSWaD1m44dPKICGhiskI13nVr7qTloFwDa/IYkhhf5nzwP+zIQcIJh3WIFSBOy/H1PzB40jPjMDksN4F+g==}
 
-  '@types/js-yaml@4.0.9':
-    resolution: {integrity: sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg==}
-
   '@types/leaflet@1.9.22':
     resolution: {integrity: sha512-h3lhECYEKDasG7LFHu+GiHqAvsgLuQvlJvVZzJDGONo3sEL+wUOqSFLnwkZlK0qVxnxbuGFW8iBlJNYs5wgndA==}
 
@@ -2211,10 +2193,6 @@ packages:
 
   jose@6.2.9:
     resolution: {integrity: sha512-XrchZOFZUl/T3vTwRe8XK+cJrGtMF4th1ARnDfwbBXFKThGhlsxEE4Zu03AD/bjJSt/9jT/mxrOCkJWOg77aPA==}
-
-  js-yaml@5.3.0:
-    resolution: {integrity: sha512-muutsYr+e2+d3rTgUGslq5rxbBlUy3cJ61IsHag2QNDQV+7zXWjkUpmALIajhrlLlrgRUiymj6U3zUr/TMK84Q==}
-    hasBin: true
 
   jsbi@4.3.2:
     resolution: {integrity: sha512-9fqMSQbhJykSeii05nxKl4m6Eqn2P6rOlYiS+C5Dr/HPIU/7yZxu5qzbs40tgaFORiw2Amd0mirjxatXYMkIew==}
@@ -3514,7 +3492,8 @@ snapshots:
 
   '@oxc-project/types@0.146.0': {}
 
-  '@polka/url@1.0.0-next.29': {}
+  '@polka/url@1.0.0-next.29':
+    optional: true
 
   '@popperjs/core@2.11.8': {}
 
@@ -3614,6 +3593,7 @@ snapshots:
       vite: 8.2.1(@types/node@26.2.0)(jiti@2.7.0)(yaml@2.9.0)
     optionalDependencies:
       typescript: 6.0.3
+    optional: true
 
   '@sveltejs/load-config@0.2.3': {}
 
@@ -3928,7 +3908,8 @@ snapshots:
       '@types/deep-eql': 4.0.2
       assertion-error: 2.0.1
 
-  '@types/cookie@0.6.0': {}
+  '@types/cookie@0.6.0':
+    optional: true
 
   '@types/d3-array@3.2.2': {}
 
@@ -3967,8 +3948,6 @@ snapshots:
   '@types/hast@3.0.5':
     dependencies:
       '@types/unist': 3.0.3
-
-  '@types/js-yaml@4.0.9': {}
 
   '@types/leaflet@1.9.22':
     dependencies:
@@ -4232,7 +4211,8 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
-  cookie@0.6.0: {}
+  cookie@0.6.0:
+    optional: true
 
   crelt@1.0.7: {}
 
@@ -4592,10 +4572,6 @@ snapshots:
 
   jose@6.2.9: {}
 
-  js-yaml@5.3.0:
-    dependencies:
-      argparse: 2.0.1
-
   jsbi@4.3.2: {}
 
   jsonfile@4.0.0:
@@ -4812,7 +4788,8 @@ snapshots:
 
   mri@1.2.0: {}
 
-  mrmime@2.0.1: {}
+  mrmime@2.0.1:
+    optional: true
 
   msgpackr-extract@3.0.4:
     dependencies:
@@ -5125,6 +5102,7 @@ snapshots:
       '@polka/url': 1.0.0-next.29
       mrmime: 2.0.1
       totalist: 3.0.1
+    optional: true
 
   sortablejs@1.15.7: {}
 
@@ -5246,7 +5224,8 @@ snapshots:
     dependencies:
       '@popperjs/core': 2.11.8
 
-  totalist@3.0.1: {}
+  totalist@3.0.1:
+    optional: true
 
   tslib@2.8.1: {}
 

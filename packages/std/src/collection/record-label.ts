@@ -1,4 +1,4 @@
-import { evaluateCelExpression } from '../cel/index.js';
+import { Environment } from '@marcbachmann/cel-js';
 
 /**
  * How a record reads as a name — the other half of `CollectionDefinition.recordLabel`.
@@ -8,9 +8,61 @@ import { evaluateCelExpression } from '../cel/index.js';
  * into a transport package to learn how the expression it is holding is meant to be read. Both the
  * table and the kanban card do exactly that, and both are pure view code.
  *
- * CEL is the language because that is what the compiler emits into the manifest, and `std/cel` is
- * already this package's own — nothing new is pulled in and no dependency is inverted.
+ * CEL is the language because that is what the compiler emits into the manifest. Its evaluator is
+ * private to the collection contract, so record labels do not create a second general CEL surface.
  */
+
+const celEnvironment = (() => {
+	const env = new Environment({
+		unlistedVariablesAreDyn: true,
+		homogeneousAggregateLiterals: false
+	});
+
+	const reduceValues = (values: unknown[], expression: unknown, initial: unknown): unknown => {
+		const expr = String(expression ?? 'acc');
+		let acc: unknown = initial;
+		for (let index = 0; index < values.length; index += 1) {
+			const item = values[index];
+			acc = env.evaluate(expr, { acc, item, index, list: values });
+		}
+		return acc;
+	};
+
+	env.registerFunction('reduce(list<dyn>, string, dyn): dyn', (values, expression, initial) => {
+		if (!Array.isArray(values)) return initial;
+		return reduceValues(values, expression, initial);
+	});
+	env.registerFunction(
+		'reduce(map<string, dyn>, string, dyn): dyn',
+		(values, expression, initial) => {
+			if (values === null || typeof values !== 'object' || Array.isArray(values)) return initial;
+			return reduceValues(Object.values(values), expression, initial);
+		}
+	);
+	env.registerFunction('toDouble(dyn): double', (value: unknown) => {
+		if (typeof value === 'number') return value;
+		if (typeof value === 'string') {
+			const parsed = parseFloat(value);
+			return Number.isNaN(parsed) ? 0.0 : parsed;
+		}
+		return 0.0;
+	});
+	env.registerFunction('has(dyn, string): bool', (obj: unknown, field: unknown) => {
+		if (obj === null || typeof obj !== 'object') return false;
+		return Object.prototype.hasOwnProperty.call(obj, String(field ?? ''));
+	});
+	return env;
+})();
+
+function evaluateCelExpression(expr: string, context: unknown): unknown {
+	const data =
+		context == null
+			? {}
+			: typeof context !== 'object' || Array.isArray(context)
+				? { value: context }
+				: Object.fromEntries(Object.entries(context));
+	return celEnvironment.evaluate(expr, data);
+}
 
 /** Separator the schema builder compiles between the fields of a multi-field record label. */
 const LABEL_TERM_SEPARATOR = ' · ';

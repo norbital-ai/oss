@@ -1,18 +1,15 @@
 **Norbital API Reference v0.0.1**
 
-***
+---
 
 # Norbital API Reference v0.0.1
 
 ## Modules
 
 - [std/build](/docs/api-reference/std/build.md)
-- [std/build/async](/docs/api-reference/std/build/async.md)
 - [std/build/billing](/docs/api-reference/std/build/billing.md)
 - [std/build/billing/metering](/docs/api-reference/std/build/billing/metering.md)
 - [std/build/billing/rate-card](/docs/api-reference/std/build/billing/rate-card.md)
-- [std/build/cache](/docs/api-reference/std/build/cache.md)
-- [std/build/cel](/docs/api-reference/std/build/cel.md)
 - [std/build/collection](/docs/api-reference/std/build/collection.md)
 - [std/build/collection/record-label](/docs/api-reference/std/build/collection/record-label.md)
 - [std/build/date](/docs/api-reference/std/build/date.md)
@@ -38,11 +35,7 @@
 - [std/build/reckon/runtime.server](/docs/api-reference/std/build/reckon/runtime.server.md)
 - [std/build/secret](/docs/api-reference/std/build/secret.md)
 - [std/build/string](/docs/api-reference/std/build/string.md)
-- [std/build/text](/docs/api-reference/std/build/text.md)
-- [std/build/text/dedent](/docs/api-reference/std/build/text/dedent.md)
 - [std/build/tree](/docs/api-reference/std/build/tree.md)
-- [std/build/truncate](/docs/api-reference/std/build/truncate.md)
-- [std/build/truncate/base64](/docs/api-reference/std/build/truncate/base64.md)
 - [ui/build/accordion](/docs/api-reference/ui/build/accordion.md)
 - [ui/build/accordion/accordion-content.svelte](/docs/api-reference/ui/build/accordion/accordion-content.svelte.md)
 - [ui/build/accordion/accordion-item.svelte](/docs/api-reference/ui/build/accordion/accordion-item.svelte.md)

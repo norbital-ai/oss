@@ -1,22 +1,10 @@
 [**Norbital API Reference v0.0.1**](../README.md)
 
-***
+---
 
 [Norbital API Reference](/docs/api-reference/README.md) / std/build
 
 # std/build
-
-## Variables
-
-<a id="dedent"></a>
-
-### dedent
-
-```ts
-const dedent: Dedent;
-```
-
-Defined in: packages/std/build/text/dedent/index.d.ts:1
 
 ## References
 
@@ -26,7 +14,7 @@ Defined in: packages/std/build/text/dedent/index.d.ts:1
 
 Re-exports [addAmount](/docs/api-reference/std/build/finance/money.md#addamount)
 
-***
+---
 
 <a id="amount"></a>
 
@@ -34,7 +22,7 @@ Re-exports [addAmount](/docs/api-reference/std/build/finance/money.md#addamount)
 
 Re-exports [amount](/docs/api-reference/std/build/finance/money.md#amount)
 
-***
+---
 
 <a id="assertsamecurrency"></a>
 
@@ -42,7 +30,7 @@ Re-exports [amount](/docs/api-reference/std/build/finance/money.md#amount)
 
 Re-exports [assertSameCurrency](/docs/api-reference/std/build/finance/money.md#assertsamecurrency)
 
-***
+---
 
 <a id="bucketkey"></a>
 
@@ -50,7 +38,7 @@ Re-exports [assertSameCurrency](/docs/api-reference/std/build/finance/money.md#a
 
 Re-exports [bucketKey](/docs/api-reference/std/build/rate-limit.md#bucketkey)
 
-***
+---
 
 <a id="countattempt"></a>
 
@@ -58,7 +46,7 @@ Re-exports [bucketKey](/docs/api-reference/std/build/rate-limit.md#bucketkey)
 
 Re-exports [countAttempt](/docs/api-reference/std/build/rate-limit.md#countattempt)
 
-***
+---
 
 <a id="currencyfractiondigits"></a>
 
@@ -66,7 +54,7 @@ Re-exports [countAttempt](/docs/api-reference/std/build/rate-limit.md#countattem
 
 Re-exports [currencyFractionDigits](/docs/api-reference/std/build/finance/currency.md#currencyfractiondigits)
 
-***
+---
 
 <a id="deepdiff"></a>
 
@@ -74,23 +62,7 @@ Re-exports [currencyFractionDigits](/docs/api-reference/std/build/finance/curren
 
 Re-exports [deepDiff](/docs/api-reference/std/build/json.md#deepdiff)
 
-***
-
-<a id="errorsummary"></a>
-
-### ErrorSummary
-
-Re-exports [ErrorSummary](/docs/api-reference/std/build/error.md#errorsummary)
-
-***
-
-<a id="evaluatecelexpression"></a>
-
-### evaluateCelExpression
-
-Re-exports [evaluateCelExpression](/docs/api-reference/std/build/cel.md#evaluatecelexpression)
-
-***
+---
 
 <a id="fixedwindow"></a>
 
@@ -98,7 +70,7 @@ Re-exports [evaluateCelExpression](/docs/api-reference/std/build/cel.md#evaluate
 
 Re-exports [FixedWindow](/docs/api-reference/std/build/rate-limit.md#fixedwindow)
 
-***
+---
 
 <a id="flattentreeoptions"></a>
 
@@ -106,7 +78,7 @@ Re-exports [FixedWindow](/docs/api-reference/std/build/rate-limit.md#fixedwindow
 
 Re-exports [flattenTreeOptions](/docs/api-reference/std/build/tree.md#flattentreeoptions)
 
-***
+---
 
 <a id="formatamount"></a>
 
@@ -114,7 +86,7 @@ Re-exports [flattenTreeOptions](/docs/api-reference/std/build/tree.md#flattentre
 
 Re-exports [formatAmount](/docs/api-reference/std/build/finance/money.md#formatamount)
 
-***
+---
 
 <a id="fromminorunits"></a>
 
@@ -122,7 +94,7 @@ Re-exports [formatAmount](/docs/api-reference/std/build/finance/money.md#formata
 
 Re-exports [fromMinorUnits](/docs/api-reference/std/build/finance/money.md#fromminorunits)
 
-***
+---
 
 <a id="geterrormessage"></a>
 
@@ -130,7 +102,7 @@ Re-exports [fromMinorUnits](/docs/api-reference/std/build/finance/money.md#fromm
 
 Re-exports [getErrorMessage](/docs/api-reference/std/build/error.md#geterrormessage)
 
-***
+---
 
 <a id="humanize"></a>
 
@@ -138,7 +110,7 @@ Re-exports [getErrorMessage](/docs/api-reference/std/build/error.md#geterrormess
 
 Re-exports [humanize](/docs/api-reference/std/build/string.md#humanize)
 
-***
+---
 
 <a id="iso_currency"></a>
 
@@ -146,7 +118,7 @@ Re-exports [humanize](/docs/api-reference/std/build/string.md#humanize)
 
 Re-exports [ISO_CURRENCY](/docs/api-reference/std/build/finance/currency.md#iso_currency)
 
-***
+---
 
 <a id="isvalidcurrencycode"></a>
 
@@ -154,7 +126,7 @@ Re-exports [ISO_CURRENCY](/docs/api-reference/std/build/finance/currency.md#iso_
 
 Re-exports [isValidCurrencyCode](/docs/api-reference/std/build/finance/currency.md#isvalidcurrencycode)
 
-***
+---
 
 <a id="jsonpatchoperation"></a>
 
@@ -162,31 +134,7 @@ Re-exports [isValidCurrencyCode](/docs/api-reference/std/build/finance/currency.
 
 Re-exports [JsonPatchOperation](/docs/api-reference/std/build/json.md#jsonpatchoperation)
 
-***
-
-<a id="lru"></a>
-
-### lru
-
-Re-exports [lru](/docs/api-reference/std/build/cache.md#lru)
-
-***
-
-<a id="lrucache"></a>
-
-### LruCache
-
-Re-exports [LruCache](/docs/api-reference/std/build/cache.md#lrucache)
-
-***
-
-<a id="lrucacheoptions"></a>
-
-### LruCacheOptions
-
-Re-exports [LruCacheOptions](/docs/api-reference/std/build/cache.md#lrucacheoptions)
-
-***
+---
 
 <a id="moneyamount"></a>
 
@@ -194,7 +142,7 @@ Re-exports [LruCacheOptions](/docs/api-reference/std/build/cache.md#lrucacheopti
 
 Re-exports [MoneyAmount](/docs/api-reference/std/build/finance/money.md#moneyamount)
 
-***
+---
 
 <a id="rendertreeascii"></a>
 
@@ -202,7 +150,7 @@ Re-exports [MoneyAmount](/docs/api-reference/std/build/finance/money.md#moneyamo
 
 Re-exports [renderTreeAscii](/docs/api-reference/std/build/tree.md#rendertreeascii)
 
-***
+---
 
 <a id="retryafterseconds"></a>
 
@@ -210,7 +158,7 @@ Re-exports [renderTreeAscii](/docs/api-reference/std/build/tree.md#rendertreeasc
 
 Re-exports [retryAfterSeconds](/docs/api-reference/std/build/rate-limit.md#retryafterseconds)
 
-***
+---
 
 <a id="safeparse"></a>
 
@@ -218,15 +166,7 @@ Re-exports [retryAfterSeconds](/docs/api-reference/std/build/rate-limit.md#retry
 
 Re-exports [safeParse](/docs/api-reference/std/build/json.md#safeparse)
 
-***
-
-<a id="safestringify"></a>
-
-### safeStringify
-
-Re-exports [safeStringify](/docs/api-reference/std/build/json.md#safestringify)
-
-***
+---
 
 <a id="sumamounts"></a>
 
@@ -234,15 +174,7 @@ Re-exports [safeStringify](/docs/api-reference/std/build/json.md#safestringify)
 
 Re-exports [sumAmounts](/docs/api-reference/std/build/finance/money.md#sumamounts)
 
-***
-
-<a id="summarizeerror"></a>
-
-### summarizeError
-
-Re-exports [summarizeError](/docs/api-reference/std/build/error.md#summarizeerror)
-
-***
+---
 
 <a id="tisocurrencycode"></a>
 
@@ -250,7 +182,7 @@ Re-exports [summarizeError](/docs/api-reference/std/build/error.md#summarizeerro
 
 Re-exports [TISOCurrencyCode](/docs/api-reference/std/build/finance/currency.md#tisocurrencycode)
 
-***
+---
 
 <a id="toasciitree"></a>
 
@@ -258,7 +190,7 @@ Re-exports [TISOCurrencyCode](/docs/api-reference/std/build/finance/currency.md#
 
 Re-exports [toAsciiTree](/docs/api-reference/std/build/tree.md#toasciitree)
 
-***
+---
 
 <a id="tominorunits"></a>
 
@@ -266,7 +198,7 @@ Re-exports [toAsciiTree](/docs/api-reference/std/build/tree.md#toasciitree)
 
 Re-exports [toMinorUnits](/docs/api-reference/std/build/finance/money.md#tominorunits)
 
-***
+---
 
 <a id="treebuildindex"></a>
 
@@ -274,7 +206,7 @@ Re-exports [toMinorUnits](/docs/api-reference/std/build/finance/money.md#tominor
 
 Re-exports [treeBuildIndex](/docs/api-reference/std/build/tree.md#treebuildindex)
 
-***
+---
 
 <a id="treefilterleaves"></a>
 
@@ -282,7 +214,7 @@ Re-exports [treeBuildIndex](/docs/api-reference/std/build/tree.md#treebuildindex
 
 Re-exports [treeFilterLeaves](/docs/api-reference/std/build/tree.md#treefilterleaves)
 
-***
+---
 
 <a id="treefind"></a>
 
@@ -290,7 +222,7 @@ Re-exports [treeFilterLeaves](/docs/api-reference/std/build/tree.md#treefilterle
 
 Re-exports [treeFind](/docs/api-reference/std/build/tree.md#treefind)
 
-***
+---
 
 <a id="treeflatten"></a>
 
@@ -298,7 +230,7 @@ Re-exports [treeFind](/docs/api-reference/std/build/tree.md#treefind)
 
 Re-exports [treeFlatten](/docs/api-reference/std/build/tree.md#treeflatten)
 
-***
+---
 
 <a id="treeinsert"></a>
 
@@ -306,7 +238,7 @@ Re-exports [treeFlatten](/docs/api-reference/std/build/tree.md#treeflatten)
 
 Re-exports [treeInsert](/docs/api-reference/std/build/tree.md#treeinsert)
 
-***
+---
 
 <a id="treemap"></a>
 
@@ -314,7 +246,7 @@ Re-exports [treeInsert](/docs/api-reference/std/build/tree.md#treeinsert)
 
 Re-exports [treeMap](/docs/api-reference/std/build/tree.md#treemap)
 
-***
+---
 
 <a id="treemaprecordasync"></a>
 
@@ -322,7 +254,7 @@ Re-exports [treeMap](/docs/api-reference/std/build/tree.md#treemap)
 
 Re-exports [treeMapRecordAsync](/docs/api-reference/std/build/tree.md#treemaprecordasync)
 
-***
+---
 
 <a id="treemaprecordasyncconfig"></a>
 
@@ -330,7 +262,7 @@ Re-exports [treeMapRecordAsync](/docs/api-reference/std/build/tree.md#treemaprec
 
 Re-exports [TreeMapRecordAsyncConfig](/docs/api-reference/std/build/tree.md#treemaprecordasyncconfig)
 
-***
+---
 
 <a id="treereduce"></a>
 
@@ -338,7 +270,7 @@ Re-exports [TreeMapRecordAsyncConfig](/docs/api-reference/std/build/tree.md#tree
 
 Re-exports [treeReduce](/docs/api-reference/std/build/tree.md#treereduce)
 
-***
+---
 
 <a id="treeremove"></a>
 
@@ -346,7 +278,7 @@ Re-exports [treeReduce](/docs/api-reference/std/build/tree.md#treereduce)
 
 Re-exports [treeRemove](/docs/api-reference/std/build/tree.md#treeremove)
 
-***
+---
 
 <a id="treeupdate"></a>
 
@@ -354,7 +286,7 @@ Re-exports [treeRemove](/docs/api-reference/std/build/tree.md#treeremove)
 
 Re-exports [treeUpdate](/docs/api-reference/std/build/tree.md#treeupdate)
 
-***
+---
 
 <a id="treewalk"></a>
 
@@ -362,42 +294,10 @@ Re-exports [treeUpdate](/docs/api-reference/std/build/tree.md#treeupdate)
 
 Re-exports [treeWalk](/docs/api-reference/std/build/tree.md#treewalk)
 
-***
-
-<a id="truncate"></a>
-
-### truncate
-
-Re-exports [truncate](/docs/api-reference/std/build/truncate.md#truncate)
-
-***
-
-<a id="truncationoptions"></a>
-
-### TruncationOptions
-
-Re-exports [TruncationOptions](/docs/api-reference/std/build/truncate.md#truncationoptions)
-
-***
-
-<a id="truncationresult"></a>
-
-### TruncationResult
-
-Re-exports [TruncationResult](/docs/api-reference/std/build/truncate.md#truncationresult)
-
-***
+---
 
 <a id="windowstate"></a>
 
 ### WindowState
 
 Re-exports [WindowState](/docs/api-reference/std/build/rate-limit.md#windowstate)
-
-***
-
-<a id="withabortableoperation"></a>
-
-### withAbortableOperation
-
-Re-exports [withAbortableOperation](/docs/api-reference/std/build/async.md#withabortableoperation)

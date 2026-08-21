@@ -27,21 +27,9 @@
 			"types": "./build/index.d.ts",
 			"default": "./build/index.js"
 		},
-		"./async": {
-			"types": "./build/async/index.d.ts",
-			"default": "./build/async/index.js"
-		},
 		"./billing": {
 			"types": "./build/billing/index.d.ts",
 			"default": "./build/billing/index.js"
-		},
-		"./cache": {
-			"types": "./build/cache/index.d.ts",
-			"default": "./build/cache/index.js"
-		},
-		"./cel": {
-			"types": "./build/cel/index.d.ts",
-			"default": "./build/cel/index.js"
 		},
 		"./collection": {
 			"types": "./build/collection/index.d.ts",
@@ -79,29 +67,13 @@
 			"types": "./build/secret/index.d.ts",
 			"default": "./build/secret/index.js"
 		},
-		"./result": {
-			"types": "./build/result/index.d.ts",
-			"default": "./build/result/index.js"
-		},
 		"./string": {
 			"types": "./build/string/index.d.ts",
 			"default": "./build/string/index.js"
 		},
-		"./text": {
-			"types": "./build/text/index.d.ts",
-			"default": "./build/text/index.js"
-		},
-		"./text/dedent": {
-			"types": "./build/text/dedent/index.d.ts",
-			"default": "./build/text/dedent/index.js"
-		},
 		"./tree": {
 			"types": "./build/tree/index.d.ts",
 			"default": "./build/tree/index.js"
-		},
-		"./truncate": {
-			"types": "./build/truncate/index.d.ts",
-			"default": "./build/truncate/index.js"
 		}
 	},
 	"scripts": {
@@ -112,14 +84,10 @@
 	},
 	"dependencies": {
 		"@marcbachmann/cel-js": "^8.0.0",
-		"dedent": "^1.7.2",
-		"effect": "4.0.0-rc.111",
-		"js-yaml": "^5.3.0"
+		"effect": "4.0.0-rc.111"
 	},
 	"devDependencies": {
 		"@norbital-ai/config": "workspace:*",
-		"@sveltejs/kit": "catalog:",
-		"@types/js-yaml": "^4.0.9",
 		"@types/node": "^26.2.0",
 		"typescript": "catalog:"
 	}

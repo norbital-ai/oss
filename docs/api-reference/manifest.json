@@ -1,5 +1,5 @@
 {
-	"generatedAt": "2026-08-21T11:01:10.411Z",
+	"generatedAt": "2026-08-21T15:04:44.749Z",
 	"packages": [
 		{
 			"id": "@norbital-ai/std",
@@ -11,11 +11,6 @@
 					"title": "std/build",
 					"slug": "std/build",
 					"href": "/docs/api-reference/std/build"
-				},
-				{
-					"title": "std/build/async",
-					"slug": "std/build/async",
-					"href": "/docs/api-reference/std/build/async"
 				},
 				{
 					"title": "std/build/billing",
@@ -31,16 +26,6 @@
 					"title": "std/build/billing/rate-card",
 					"slug": "std/build/billing/rate-card",
 					"href": "/docs/api-reference/std/build/billing/rate-card"
-				},
-				{
-					"title": "std/build/cache",
-					"slug": "std/build/cache",
-					"href": "/docs/api-reference/std/build/cache"
-				},
-				{
-					"title": "std/build/cel",
-					"slug": "std/build/cel",
-					"href": "/docs/api-reference/std/build/cel"
 				},
 				{
 					"title": "std/build/collection",
@@ -168,29 +153,9 @@
 					"href": "/docs/api-reference/std/build/string"
 				},
 				{
-					"title": "std/build/text",
-					"slug": "std/build/text",
-					"href": "/docs/api-reference/std/build/text"
-				},
-				{
-					"title": "std/build/text/dedent",
-					"slug": "std/build/text/dedent",
-					"href": "/docs/api-reference/std/build/text/dedent"
-				},
-				{
 					"title": "std/build/tree",
 					"slug": "std/build/tree",
 					"href": "/docs/api-reference/std/build/tree"
-				},
-				{
-					"title": "std/build/truncate",
-					"slug": "std/build/truncate",
-					"href": "/docs/api-reference/std/build/truncate"
-				},
-				{
-					"title": "std/build/truncate/base64",
-					"slug": "std/build/truncate/base64",
-					"href": "/docs/api-reference/std/build/truncate/base64"
 				}
 			]
 		},
@@ -3565,11 +3530,6 @@
 			"href": "/docs/api-reference/std/build"
 		},
 		{
-			"title": "std/build/async",
-			"slug": "std/build/async",
-			"href": "/docs/api-reference/std/build/async"
-		},
-		{
 			"title": "std/build/billing",
 			"slug": "std/build/billing",
 			"href": "/docs/api-reference/std/build/billing"
@@ -3583,16 +3543,6 @@
 			"title": "std/build/billing/rate-card",
 			"slug": "std/build/billing/rate-card",
 			"href": "/docs/api-reference/std/build/billing/rate-card"
-		},
-		{
-			"title": "std/build/cache",
-			"slug": "std/build/cache",
-			"href": "/docs/api-reference/std/build/cache"
-		},
-		{
-			"title": "std/build/cel",
-			"slug": "std/build/cel",
-			"href": "/docs/api-reference/std/build/cel"
 		},
 		{
 			"title": "std/build/collection",
@@ -3720,29 +3670,9 @@
 			"href": "/docs/api-reference/std/build/string"
 		},
 		{
-			"title": "std/build/text",
-			"slug": "std/build/text",
-			"href": "/docs/api-reference/std/build/text"
-		},
-		{
-			"title": "std/build/text/dedent",
-			"slug": "std/build/text/dedent",
-			"href": "/docs/api-reference/std/build/text/dedent"
-		},
-		{
 			"title": "std/build/tree",
 			"slug": "std/build/tree",
 			"href": "/docs/api-reference/std/build/tree"
-		},
-		{
-			"title": "std/build/truncate",
-			"slug": "std/build/truncate",
-			"href": "/docs/api-reference/std/build/truncate"
-		},
-		{
-			"title": "std/build/truncate/base64",
-			"slug": "std/build/truncate/base64",
-			"href": "/docs/api-reference/std/build/truncate/base64"
 		},
 		{
 			"title": "ui/build/accordion",
