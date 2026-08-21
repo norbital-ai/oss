@@ -8,6 +8,16 @@ import type { FileRef, ModelDeclaration } from './models-schema.js';
 import type { HttpConnection, PrivateEnvReference } from './workspace-schema.js';
 
 export interface WorkspaceAuthoringTypes {}
+/**
+ * The generated team union is kept on a separate augmentation graph.
+ *
+ * `TeamName` is `keyof` the authored `+teams.ts` default export. That module uses `satisfies Teams`,
+ * and `Teams` resolves the generated policy union through `WorkspaceAuthoringTypes`. Putting the
+ * team augmentation on that same interface makes policy-name resolution traverse back through
+ * `TeamName` and the `+teams.ts` default export, producing a circular type. This separate interface
+ * keeps both generated unions exact while making the dependency graph one-way.
+ */
+export interface WorkspaceTeamAuthoringTypes {}
 
 type ApplyDimensions<Value, Dimensions, Depth extends ReadonlyArray<unknown> = readonly []> = [
 	Dimensions
@@ -97,13 +107,14 @@ export type DefaultWorkspaceSchema = WorkspaceAuthoringTypes extends {
 /**
  * One generated union, read off the augmentation the compiler writes.
  *
- * Every name one declaration uses to reach another is one of these. `sync.ts` generates the union
- * from the filenames it discovered and `workspace-authoring.d.ts` augments `WorkspaceAuthoringTypes`
- * with it, so a rename fails the build at the reference rather than emptying an authority at run
- * time. A workspace that has not been synced has no augmentation and falls back to `string`, which
- * is also what Bolt's own sources see.
+ * Ten names one declaration uses to reach another use this helper. `sync.ts` generates each union
+ * from the filenames it discovered and `workspace-authoring.d.ts` augments
+ * `WorkspaceAuthoringTypes`, so a rename fails the build at the reference rather than emptying an
+ * authority at run time. `TeamName` uses the separate interface above to keep its self-derived map
+ * out of this graph. A workspace that has not been synced has no augmentation and falls back to
+ * `string`, which is also what Bolt's own sources see.
  *
- * Written once as a helper rather than eleven times as a conditional, because eleven copies is how
+ * Written once as a helper rather than ten times as a conditional, because repeated copies are how
  * six of them came to be generated, declared, and read by nobody: `AgentToolName`, `McpServerName`,
  * `AppName`, `RemoteName` and `ChannelName` were all emitted by the compiler and only
  * `DeclaredPolicyName` ever had a resolver here.
@@ -140,7 +151,11 @@ export type PolicyName = DeclaredPolicyName;
  * The union is derived from the teams module's own keys rather than from a scan of its text, so a
  * team declared behind a spread or a computed key is still in it.
  */
-export type TeamName = DeclaredName<'teamName'>;
+export type TeamName = WorkspaceTeamAuthoringTypes extends {
+	readonly teamName: infer Name extends string;
+}
+	? Name
+	: string;
 
 /** A collection, by its `src/collections/<name>/` directory. */
 export type CollectionName = DeclaredName<'collectionName'>;

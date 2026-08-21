@@ -65,7 +65,8 @@ export type {
 	Teams,
 	WebhookRequestSpec,
 	WebhookSignatureSpec,
-	WorkspaceAuthoringTypes
+	WorkspaceAuthoringTypes,
+	WorkspaceTeamAuthoringTypes
 } from './contracts-schema.js';
 
 export { defineAgentTool } from './agent-tools.js';

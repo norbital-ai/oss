@@ -415,12 +415,13 @@ class WorkspaceCompiler {
 	/**
 	 * The augmentation that makes every generated union reachable from an authored file.
 	 *
-	 * All eleven, because a union that is generated and not resolved here is a union nothing checks —
-	 * which is what six of them were. `contracts-schema.ts` reads each of these keys through
-	 * `DeclaredName<'...'>`, so adding a union means adding a line in both places and nowhere else.
+	 * All eleven, because a union that is generated and not resolved here is a union nothing checks.
+	 * Ten share `WorkspaceAuthoringTypes`; `TeamName` uses `WorkspaceTeamAuthoringTypes` so the teams
+	 * map may consume `PolicyName` without becoming its own dependency. Adding a union still requires
+	 * a generated property and its matching resolver.
 	 */
 	static readonly renderWorkspaceAuthoring = (): string =>
-		`import type { AppName, AutomationName, CollectionName, DatatypeName, EnvoyName, FunctionName, McpServerName, PolicyName, SkillName, TeamName, ToolName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\ndeclare module '@norbital-ai/bolt/authoring' { interface WorkspaceAuthoringTypes { readonly schema: WorkspaceSchema; readonly collectionName: CollectionName; readonly policyName: PolicyName; readonly teamName: TeamName; readonly appName: AppName; readonly toolName: ToolName; readonly mcpServerName: McpServerName; readonly skillName: SkillName; readonly envoyName: EnvoyName; readonly automationName: AutomationName; readonly functionName: FunctionName; readonly datatypeName: DatatypeName } }\nexport {};\n`;
+		`import type { AppName, AutomationName, CollectionName, DatatypeName, EnvoyName, FunctionName, McpServerName, PolicyName, SkillName, TeamName, ToolName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\ndeclare module '@norbital-ai/bolt/authoring' { interface WorkspaceAuthoringTypes { readonly schema: WorkspaceSchema; readonly collectionName: CollectionName; readonly policyName: PolicyName; readonly appName: AppName; readonly toolName: ToolName; readonly mcpServerName: McpServerName; readonly skillName: SkillName; readonly envoyName: EnvoyName; readonly automationName: AutomationName; readonly functionName: FunctionName; readonly datatypeName: DatatypeName } interface WorkspaceTeamAuthoringTypes { readonly teamName: TeamName } }\nexport {};\n`;
 
 	/** Owns render client runtime declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderClientRuntimeDeclaration = (): string =>
@@ -1192,17 +1193,14 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 			)
 			.sort();
 		/**
-		 * `+env.ts` is reserved and lives at the workspace root, not under `src/`.
+		 * `src/+env.ts` — the workspace's declared relationship with its outside environment.
 		 *
-		 * Root because it describes the workspace's relationship with the outside world rather than any
-		 * part of its schema, and reserved because the Secrets form, the vault's name check and the
-		 * Studio's Environment node all read the same one file.
+		 * It is a compiler-owned source declaration like `+agents.md` and `+seed.ts`, so it belongs under
+		 * `src/`. Looking at the repository root made the compiler miss the tracked declaration in every
+		 * template and then reject it as an unknown authored path.
 		 */
-		const rootFiles = yield* compiler
-			.filesUnder(root)
-			.pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)));
-		const environmentFile = rootFiles.find(
-			(path) => basename(path) === '+env.ts' && dirname(path) === root
+		const environmentFile = files.find(
+			(path) => basename(path) === '+env.ts' && dirname(path) === sourceRoot
 		);
 		/**
 		 * `src/+agents.md` — the system message of every agent turn in this workspace.
@@ -1323,6 +1321,7 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 			...automationFiles,
 			...skillFiles,
 			...groupFiles,
+			...(environmentFile === undefined ? [] : [environmentFile]),
 			...(promptFile === undefined ? [] : [promptFile]),
 			...(anonymousLimitFile === undefined ? [] : [anonymousLimitFile]),
 			...(teamsFile === undefined ? [] : [teamsFile])
@@ -1350,6 +1349,7 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 					'  something on a schedule       automations/+<name>.ts',
 					'  something a page calls        functions/+<name>.ts',
 					'  a page                        apps/+<name>.svelte',
+					'  declared environment          +env.ts',
 					'  the shared system prompt      +agents.md',
 					'',
 					'A helper the compiler must ignore is any file without a "+".'
@@ -1798,3 +1798,5 @@ const WorkspaceSynchronization = {
 export const syncWorkspace = WorkspaceSynchronization.sync;
 export const renderI18nMessages = WorkspaceCompiler.renderI18nMessages;
 export const renderArtifact = WorkspaceCompiler.renderArtifact;
+export const renderAuthoringTypes = WorkspaceCompiler.renderAuthoringTypes;
+export const renderWorkspaceAuthoring = WorkspaceCompiler.renderWorkspaceAuthoring;

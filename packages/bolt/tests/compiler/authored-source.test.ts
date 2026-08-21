@@ -48,6 +48,10 @@ describe('Bolt authored source discovery', () => {
 
 		await writeFile(join(root, 'src', 'apps', '+desk.svelte'), '<script></script>');
 		await writeFile(
+			join(root, 'src', '+env.ts'),
+			"export default { MAPS_API_KEY: { visibility: 'private' } }"
+		);
+		await writeFile(
 			join(root, 'src', 'apps', 'desk', '+group.ts'),
 			"export default group({ label: 'Desk', icon: 'lucide:ticket', defaultChild: 'inbox' });"
 		);
@@ -91,6 +95,7 @@ describe('Bolt authored source discovery', () => {
 		expect(discovered.policies).toEqual(['agent']);
 		expect(discovered.teamsFile).toBeDefined();
 		expect(discovered.anonymousLimitFile).toBeDefined();
+		expect(discovered.environmentFile).toBe(join(root, 'src', '+env.ts'));
 		expect(discovered.prompt).toContain('Answer from tickets.');
 	});
 
