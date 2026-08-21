@@ -340,7 +340,7 @@ const TEAM_TREE_LOOKUP_SQL = `with recursive tree as (
 )
 select "name" from tree order by depth`;
 
-const TEAM_LOOKUP_SQL = `select "norbital_id"::text as id, "name", "inherits"
+const TEAM_LOOKUP_SQL = `select "norbital_id"::text as id, "name"
 	from bolt_team
 	where $1::text is null or lower("name") = lower($1::text)
 	order by "name"`;
@@ -463,9 +463,9 @@ export const layer = Layer.effect(
 		 * One team by name, with the path its members hold — the same walk `authenticate` performs.
 		 *
 		 * Shared by the picker and the preview so the two cannot disagree about what a team is. The
-		 * path is resolved here rather than assumed to be the team alone, because a team that
-		 * `inherits` confers what sits beneath it, and a preview that ignored that would show a
-		 * narrower workspace than the team's real members see.
+		 * path is resolved here rather than assumed to be the team alone, because a team confers what
+		 * sits beneath it — descent is unconditional — and a preview that ignored the subtree would
+		 * show a narrower workspace than the team's real members see.
 		 */
 		const resolveTeam = Effect.fn('AccessControl.resolveTeam')(function* (name: string) {
 			const found = yield* database.execute(EffectId.make(`team-lookup:${name}`), {
@@ -476,9 +476,7 @@ export const layer = Layer.effect(
 			const row = found.rows[0];
 			if (row === null || row === undefined || typeof row !== 'object') return undefined;
 			const teamName = Reflect.get(row, 'name');
-			const inherits = Reflect.get(row, 'inherits') === true;
 			if (typeof teamName !== 'string') return undefined;
-			if (!inherits) return { name: teamName, path: [teamName] as ReadonlyArray<string> };
 			const descendants = yield* database.execute(EffectId.make(`team-tree:${name}`), {
 				_tag: 'Query',
 				sql: TEAM_TREE_LOOKUP_SQL,

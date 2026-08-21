@@ -260,16 +260,7 @@ const team = collection({
 		name: field.string({ required: true, indexed: true, unique: true }),
 		description: field.string(),
 		/** The parent in the hierarchy, or null at the root. See `resolveTeamPolicies`. */
-		parent_id: field.uuid(),
-		/**
-		 * Whether this team also holds the policies of the teams beneath it.
-		 *
-		 * Off by default, deliberately. `rowPredicate` **unions** the `where` of every matching
-		 * grant, so composition can only ever widen — a single unconditional grant anywhere in the
-		 * inherited set collapses a narrowing declared above it, with no diff to look at. Inheritance
-		 * is therefore something a team opts into, not something the tree does on its behalf.
-		 */
-		inherits: field.boolean({ required: true, sqlDefault: 'false' })
+		parent_id: field.uuid()
 	},
 	history: false
 });
@@ -331,7 +322,7 @@ const RAISED_BY_SUBJECT =
  *
  * The subject's own team and not `teamPath`. `Approvals.decide` matches `step.approvers` against
  * `subject.team` alone, so anything wider here would show a member approvals they are not eligible
- * to decide — and `teamPath` runs *downward* through the hierarchy when a team `inherits`, which is
+ * to decide — and `teamPath` runs *downward* through the hierarchy unconditionally, which is
  * the opposite of "their higher ups".
  */
 const SUBJECT_TEAM_NAME =

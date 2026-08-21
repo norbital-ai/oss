@@ -99,7 +99,7 @@ const teamOf = (response: { readonly value?: unknown }): Record<string, unknown>
 
 const teamRows = (runtime: BoltTestRuntime) =>
 	runtime.database.query(
-		'select "norbital_id"::text as "id", "name", "parent_id"::text as "parentId", "inherits" from bolt_team order by "name"'
+		'select "norbital_id"::text as "id", "name", "parent_id"::text as "parentId" from bolt_team order by "name"'
 	);
 
 const memberRow = (runtime: BoltTestRuntime, user: string) =>
@@ -148,8 +148,7 @@ describe('teams.create', () => {
 		expect(teamOf(created)).toMatchObject({
 			name: 'Approvers',
 			description: 'Decides payroll runs',
-			parentId: null,
-			inherits: false
+			parentId: null
 		});
 
 		// The row, and the projection the settings surface reads. An empty team has to appear in both:
@@ -213,14 +212,12 @@ describe('teams.update', () => {
 			command('teams.update', 'admin-token', {
 				teamId: child['id'],
 				name: 'Payroll Approvers',
-				parentId: parent['id'],
-				inherits: true
+				parentId: parent['id']
 			})
 		);
 		expect(teamOf(updated)).toMatchObject({
 			name: 'Payroll Approvers',
-			parentId: parent['id'],
-			inherits: true
+			parentId: parent['id']
 		});
 		expect((await teamRows(harness)).map((row) => row['name'])).toEqual([
 			'Employee',

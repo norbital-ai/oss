@@ -385,8 +385,7 @@ const TeamCreateInput = Schema.Struct({
 	tenantId: Schema.NonEmptyString,
 	name: Schema.NonEmptyString,
 	parentId: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
-	description: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
-	inherits: Schema.optionalKey(Schema.Boolean)
+	description: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]))
 });
 const TeamUpdateInput = Schema.Struct({
 	subject: Subject,
@@ -394,8 +393,7 @@ const TeamUpdateInput = Schema.Struct({
 	teamId: Schema.NonEmptyString,
 	name: Schema.optionalKey(Schema.NonEmptyString),
 	parentId: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
-	description: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
-	inherits: Schema.optionalKey(Schema.Boolean)
+	description: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]))
 });
 const TeamDeleteInput = Schema.Struct({
 	subject: Subject,
@@ -762,8 +760,7 @@ const teamJson = (team: Identity.TeamRecord): Schema.Json => ({
 	id: team.id,
 	name: team.name,
 	parentId: team.parentId ?? null,
-	description: team.description ?? null,
-	inherits: team.inherits
+	description: team.description ?? null
 });
 
 /**
@@ -1858,8 +1855,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					{
 						name: input.name,
 						...(input.parentId === undefined ? {} : { parentId: input.parentId }),
-						...(input.description === undefined ? {} : { description: input.description }),
-						...(input.inherits === undefined ? {} : { inherits: input.inherits })
+						...(input.description === undefined ? {} : { description: input.description })
 					}
 				)
 			);
@@ -1875,8 +1871,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					{
 						...(input.name === undefined ? {} : { name: input.name }),
 						...(input.parentId === undefined ? {} : { parentId: input.parentId }),
-						...(input.description === undefined ? {} : { description: input.description }),
-						...(input.inherits === undefined ? {} : { inherits: input.inherits })
+						...(input.description === undefined ? {} : { description: input.description })
 					}
 				)
 			);

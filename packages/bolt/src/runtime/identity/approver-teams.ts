@@ -115,12 +115,12 @@ export const reconcileApproverTeams = Effect.fn('Bolt.reconcileApproverTeams')(f
 				// folded: `on conflict` would let `approvers: ['hr manager']` mint a second row beside
 				// `HR Manager` and make which one an approval matched an accident of spelling.
 				//
-				// `inherits` is false. A team created because a release named it holds nothing on its own
-				// and must not silently acquire what sits beneath it — inheritance is something an
-				// operator opts a team into, in `teams.update`, where the widening is a decision somebody
-				// made rather than a default nobody chose.
-				sql: `insert into bolt_team ("norbital_id", "name", "inherits")
-				      select gen_random_uuid(), $1::text, false
+				// Created at the root, with no parent. A team the release conjured holds nothing on its own
+				// and sits under nobody: descent is unconditional, so *where* a team is placed is the
+				// whole of what it composes, and placing one is an operator's decision in `teams.update`
+				// rather than something the reconciler makes on their behalf.
+				sql: `insert into bolt_team ("norbital_id", "name")
+				      select gen_random_uuid(), $1::text
 				       where not exists (select 1 from bolt_team where lower("name") = lower($1::text))
 				   returning "name"`,
 				parameters: [name]

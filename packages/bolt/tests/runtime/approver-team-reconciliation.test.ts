@@ -145,9 +145,7 @@ const provisionedDatabase = async (seed: ReadonlyArray<string> = []) => {
 };
 
 const teamRows = (database: Awaited<ReturnType<typeof makeTestDatabase>>) =>
-	database.query(
-		'select "name", "parent_id"::text as "parentId", "inherits" from bolt_team order by "name"'
-	);
+	database.query('select "name", "parent_id"::text as "parentId" from bolt_team order by "name"');
 
 const activate = (database: Awaited<ReturnType<typeof makeTestDatabase>>) =>
 	makeBundle(definition, manifest).activate(
@@ -181,12 +179,13 @@ describe('activation reconciles the teams a release names as approvers', () => {
 		const database = await provisionedDatabase();
 		try {
 			await activate(database);
-			// `inherits` off: a team the release conjured must not silently acquire the policies of
-			// whatever ends up beneath it. Turning that on is an operator's decision, made in
-			// `teams.update`, where somebody is choosing the widening.
+			// Unnested: a team the release conjured is created at the root, holding nothing and sitting
+			// under nobody. Descent is unconditional now, so *where* a team sits is the whole of what it
+			// composes — placing one is an operator decision made in `teams.update`, and the reconciler
+			// declines to make it on their behalf.
 			expect(await teamRows(database)).toEqual([
-				{ name: 'Payroll Approvers', parentId: null, inherits: false },
-				{ name: 'Senior Management', parentId: null, inherits: false }
+				{ name: 'Payroll Approvers', parentId: null },
+				{ name: 'Senior Management', parentId: null }
 			]);
 			// And nobody is in it — there is no defensible person to put there, and an empty team is
 			// exactly what the workspace-access projection is built to keep visible.

@@ -68,19 +68,12 @@ export const seedTeam = async (
 	options: {
 		/** The parent team, by name. Its row has to exist already — the hierarchy is inserted downward. */
 		readonly parent?: string;
-		/** Whether this team also holds the policies of the teams beneath it. Off unless asked for. */
-		readonly inherits?: boolean;
 	} = {}
 ): Promise<void> => {
 	await harness.database.query(
-		`insert into bolt_team ("norbital_id", "name", "parent_id", "inherits")
-		 values ($1::uuid, $2, $3::uuid, $4) on conflict do nothing`,
-		[
-			fixtureTeamId(name),
-			name,
-			options.parent === undefined ? null : fixtureTeamId(options.parent),
-			options.inherits ?? false
-		]
+		`insert into bolt_team ("norbital_id", "name", "parent_id")
+		 values ($1::uuid, $2, $3::uuid) on conflict do nothing`,
+		[fixtureTeamId(name), name, options.parent === undefined ? null : fixtureTeamId(options.parent)]
 	);
 };
 

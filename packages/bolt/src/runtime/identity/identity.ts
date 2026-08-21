@@ -18,7 +18,7 @@ export const Subject = Schema.Struct({
 	team: Schema.optionalKey(Schema.NonEmptyString),
 	/**
 	 * The team names whose declared policies this subject holds: its own team first, then the teams
-	 * beneath it in the hierarchy when that team `inherits`.
+	 * beneath it in the hierarchy.
 	 *
 	 * Names, not policies. The mapping from a team name to the policies it holds is authored — it
 	 * lives in the compiled release, not in a row — so only `AccessControl` resolves it, and identity
@@ -57,16 +57,7 @@ const IdentityRows = {
 		return Array.isArray(value)
 			? value.filter((entry): entry is string => typeof entry === 'string')
 			: [];
-	},
-	/**
-	 * A boolean column, where anything that is not exactly `true` is `false`.
-	 *
-	 * `inherits` widens what a team's members hold, so absence must never read as "on": a column the
-	 * query forgot to select, or a driver that hands the value back as the string `'t'`, has to end
-	 * up narrowing rather than granting.
-	 */
-	flag: (row: unknown, field: string): boolean =>
-		(row === null || typeof row !== 'object' ? undefined : Reflect.get(row, field)) === true
+	}
 };
 
 /**
@@ -81,7 +72,7 @@ const RECORD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 const isRecordId = (value: string): boolean => RECORD_ID_PATTERN.test(value);
 
 /** Every column a team is read back as, spelled once so the four writes cannot project it differently. */
-const TEAM_COLUMNS = `"norbital_id"::text as "id", "name", "parent_id"::text as "parentId", "description", "inherits"`;
+const TEAM_COLUMNS = `"norbital_id"::text as "id", "name", "parent_id"::text as "parentId", "description"`;
 
 /**
  * The subtree under one team, bounded exactly as `TEAM_TREE_SQL` is and for the same reason.
@@ -146,14 +137,24 @@ const subjectFromRow = (row: unknown): Record<string, unknown> => {
 /**
  * The team hierarchy, walked in the same round trip that authenticates.
  *
- * A subject's authority is its team's declared policies plus — when that team `inherits` — the
- * policies of every team beneath it. Resolving that with a second query would put another round
- * trip on the authentication path, and a round trip out of a guest isolate is the most expensive
- * thing this runtime does: writing 89 rows through one that made one per row cost 18 seconds.
+ * A subject's authority is its team's declared policies plus the policies of every team beneath it.
+ * Resolving that with a second query would put another round trip on the authentication path, and a
+ * round trip out of a guest isolate is the most expensive thing this runtime does: writing 89 rows
+ * through one that made one per row cost 18 seconds.
  *
- * `descend` is carried down from the root rather than re-read at each level, so `inherits` is a
- * statement about the team a person belongs to — "this team also holds what sits under it" — and
- * not something each descendant re-decides on its parent's behalf.
+ * **Descent is unconditional, and a `bolt_team.inherits` flag used to gate it.** The flag defaulted
+ * to off, on the reasoning that `rowPredicate` unions grants so composition can only ever widen —
+ * one unconditional grant anywhere beneath a team collapsed a narrowing declared above it, with no
+ * diff to look at. That reasoning still describes what happens; what changed is that it is now the
+ * intent rather than a hazard. Somebody above sees what somebody below can see — that is what being
+ * above means, and a per-team opt-in made it a property each row remembered to have rather than a
+ * property of the hierarchy.
+ *
+ * Note what this does *not* do, because it is the thing most likely to be misread: inheriting a
+ * policy is not inheriting its rows. A grant scoped `${requestor.norbital_id}` re-evaluates against
+ * whoever is asking, so a manager holding a report's self-scoped policy sees their *own* records.
+ * Reaching a report's rows is a predicate written against the team subtree — see
+ * `requestor.team_scope_users` in `access-control.ts` — not a consequence of descending here.
  *
  * The depth bound is not defensive dressing. `parent_id` is a graph an operator edits from a
  * dashboard, so it can be made cyclic, and a recursive CTE over a cycle does not fail — it runs
@@ -161,12 +162,12 @@ const subjectFromRow = (row: unknown): Record<string, unknown> => {
  * the same reasoning as `HOOK_NESTING_LIMIT`.
  */
 const TEAM_TREE_SQL = `, tree as (
-	select t."norbital_id" as id, t."name" as name, t."inherits" as descend, 1 as depth
+	select t."norbital_id" as id, t."name" as name, 1 as depth
 	  from bolt_team t join subject on t."norbital_id" = subject."team_id"
 	union all
-	select c."norbital_id", c."name", p.descend, p.depth + 1
+	select c."norbital_id", c."name", p.depth + 1
 	  from bolt_team c join tree p on c."parent_id" = p.id
-	 where p.descend and p.depth < 8
+	 where p.depth < 8
 )`;
 
 /**
@@ -240,7 +241,6 @@ export type TeamRecord = Readonly<{
 	readonly name: string;
 	readonly parentId?: string;
 	readonly description?: string;
-	readonly inherits: boolean;
 }>;
 
 /** The fields a new team is created with. Everything but the name is optional and defaults to none. */
@@ -248,7 +248,6 @@ export type TeamDraft = Readonly<{
 	readonly name: string;
 	readonly parentId?: string | null;
 	readonly description?: string | null;
-	readonly inherits?: boolean;
 }>;
 
 /**
@@ -262,7 +261,6 @@ export type TeamChanges = Readonly<{
 	readonly name?: string;
 	readonly parentId?: string | null;
 	readonly description?: string | null;
-	readonly inherits?: boolean;
 }>;
 
 /**
@@ -570,7 +568,6 @@ export const layerWith = (canDeliver: boolean) =>
 				return {
 					id: IdentityRows.text(row, 'id') ?? 'unknown',
 					name: IdentityRows.text(row, 'name') ?? 'unknown',
-					inherits: IdentityRows.flag(row, 'inherits'),
 					...(parentId === undefined ? {} : { parentId }),
 					...(description === undefined ? {} : { description })
 				};
@@ -998,11 +995,11 @@ export const layerWith = (canDeliver: boolean) =>
 							// preview with `lower("name") = lower($1)` and `policiesHeldByTeam` folds both sides —
 							// but the unique index on the column is case-*sensitive*, so `on conflict` would admit
 							// `hr manager` beside `HR Manager` and make which one an approval matched an accident.
-							sql: `insert into bolt_team ("norbital_id", "name", "parent_id", "description", "inherits")
-						      select gen_random_uuid(), $1::text, $2::uuid, $3::text, $4::boolean
+							sql: `insert into bolt_team ("norbital_id", "name", "parent_id", "description")
+						      select gen_random_uuid(), $1::text, $2::uuid, $3::text
 						       where not exists (select 1 from bolt_team where lower("name") = lower($1::text))
 						   returning ${TEAM_COLUMNS}`,
-							parameters: [name, parentId, draft.description ?? null, draft.inherits ?? false]
+							parameters: [name, parentId, draft.description ?? null]
 						});
 						const row = created.rows[0];
 						if (row === undefined)
@@ -1018,14 +1015,16 @@ export const layerWith = (canDeliver: boolean) =>
 					}
 				),
 				/**
-				 * Renaming a team, moving it in the tree, or turning `inherits` on or off.
+				 * Renaming a team, or moving it in the tree.
 				 *
 				 * What it cannot do is change what the team may *do*. There is no policy argument here and
 				 * there is nowhere to put one: the map from a team's name to its policies is compiled into
 				 * the release, precisely so that authority cannot be granted with an `update` statement.
-				 * `inherits` is the one edit that changes what a member holds, and it can only ever
-				 * compose policies teams *already* declare — it cannot name one the release does not give
-				 * that subtree.
+				 *
+				 * Moving a team does change what its members hold, because descent is unconditional — a
+				 * team gains whatever sits beneath its new parent. That is the hierarchy doing what a
+				 * hierarchy is for, and it can still only ever compose policies teams *already* declare;
+				 * there is no edit here that names a policy the release does not give that subtree.
 				 *
 				 * A rename does move authority, because the name is the binding: a team renamed away from
 				 * what `+teams.ts` declares holds nothing, which is the ordinary inert case rather than an
@@ -1076,19 +1075,13 @@ export const layerWith = (canDeliver: boolean) =>
 							// The folded uniqueness test rides in the statement rather than in a read before it, so
 							// two operators renaming two teams to the same thing at once cannot both be told yes.
 							sql: `update bolt_team set "name" = $2::text, "parent_id" = $3::uuid, "description" = $4::text,
-						             "inherits" = $5::boolean, "norbital_updated_at" = now()
+						             "norbital_updated_at" = now()
 						       where "norbital_id" = $1::uuid
 						         and not exists (select 1 from bolt_team other
 						                          where lower(other."name") = lower($2::text)
 						                            and other."norbital_id" <> $1::uuid)
 						   returning ${TEAM_COLUMNS}`,
-							parameters: [
-								current.id,
-								name,
-								parentId,
-								description,
-								changes.inherits ?? current.inherits
-							]
+							parameters: [current.id, name, parentId, description]
 						});
 						const row = updated.rows[0];
 						if (row === undefined)

@@ -20,23 +20,20 @@ const TEAM = {
 /**
  * Puts a team tree and one person in it, then authenticates as them.
  *
- * The hierarchy is `senior → manager → supervisor`, so a subject placed at the top with `inherits`
- * set has two levels beneath it to walk and a subject placed there without it has none.
+ * The hierarchy is `senior → manager → supervisor`, so a subject placed at the top has two levels
+ * beneath it to walk and one placed at the bottom has none.
  */
-const placeAndAuthenticate = async (options: {
-	readonly seniorInherits: boolean;
-	readonly teamId: string | null;
-}) => {
+const placeAndAuthenticate = async (options: { readonly teamId: string | null }) => {
 	const runtime = await makeBoltTestRuntime();
 	harness = runtime;
-	for (const [id, name, parent, inherits] of [
-		[TEAM.senior, 'Senior Management', null, options.seniorInherits],
-		[TEAM.manager, 'L1 Manager', TEAM.senior, false],
-		[TEAM.supervisor, 'Supervisor', TEAM.manager, false]
+	for (const [id, name, parent] of [
+		[TEAM.senior, 'Senior Management', null],
+		[TEAM.manager, 'L1 Manager', TEAM.senior],
+		[TEAM.supervisor, 'Supervisor', TEAM.manager]
 	] as const) {
 		await runtime.database.query(
-			`insert into bolt_team ("norbital_id", "name", "parent_id", "inherits") values ($1, $2, $3, $4)`,
-			[id, name, parent, inherits]
+			`insert into bolt_team ("norbital_id", "name", "parent_id") values ($1, $2, $3)`,
+			[id, name, parent]
 		);
 	}
 	await runtime.database.query(
@@ -64,25 +61,22 @@ const placeAndAuthenticate = async (options: {
  * and not stubbed at the projection.
  */
 describe('team resolution during authentication', () => {
-	it('resolves the subject to its own team and no further when it does not inherit', async () => {
-		const subject = await placeAndAuthenticate({ seniorInherits: false, teamId: TEAM.senior });
-		expect(subject.team).toBe('Senior Management');
-		expect(subject.teamPath).toEqual(['Senior Management']);
-	});
-
-	it('walks the whole subtree, depth-first ordered, when the team inherits', async () => {
-		const subject = await placeAndAuthenticate({ seniorInherits: true, teamId: TEAM.senior });
+	it('walks the whole subtree, depth-first ordered', async () => {
+		const subject = await placeAndAuthenticate({ teamId: TEAM.senior });
 		expect(subject.team).toBe('Senior Management');
 		// Ordered by depth, so the subject's own team is first — the order a diagnostic reads best in.
-		// `descend` is carried from the root, so the walk does not stop at `L1 Manager`, which has
-		// `inherits` false: whether to descend is the root's statement about itself.
+		//
+		// Descent is unconditional. A `bolt_team.inherits` flag used to gate it, defaulting to off, and
+		// a team two levels up therefore held nothing from beneath it unless a row remembered to say
+		// so. Being above somebody is now the whole of the statement: authority composes downward
+		// because that is what a hierarchy is.
 		expect(subject.teamPath).toEqual(['Senior Management', 'L1 Manager', 'Supervisor']);
 	});
 
 	it('resolves a leaf team to itself even though teams sit above it', async () => {
-		const subject = await placeAndAuthenticate({ seniorInherits: true, teamId: TEAM.supervisor });
-		// Authority composes downward, never upward: being under a team that inherits does not hand a
-		// supervisor the manager's policies.
+		const subject = await placeAndAuthenticate({ teamId: TEAM.supervisor });
+		// Composition runs downward and never upward, which is the half that did not change: standing
+		// under a team does not hand a supervisor the manager's policies.
 		expect(subject.team).toBe('Supervisor');
 		expect(subject.teamPath).toEqual(['Supervisor']);
 	});
@@ -105,7 +99,7 @@ describe('team resolution during authentication', () => {
 			// that does not exist yet, which is also why an operator can only ever create a cycle by
 			// editing an existing team rather than by creating one.
 			await runtime.database.query(
-				`insert into bolt_team ("norbital_id", "name", "inherits") values ($1, $2, true)`,
+				`insert into bolt_team ("norbital_id", "name") values ($1, $2)`,
 				[id, name]
 			);
 			void parent;
@@ -145,7 +139,7 @@ describe('team resolution during authentication', () => {
 	});
 
 	it('authenticates a person nobody has placed, holding no team at all', async () => {
-		const subject = await placeAndAuthenticate({ seniorInherits: false, teamId: null });
+		const subject = await placeAndAuthenticate({ teamId: null });
 		// A founder admitted into an empty workspace is exactly this. It must authenticate — it simply
 		// holds no policies through membership.
 		expect(subject.team).toBeUndefined();
