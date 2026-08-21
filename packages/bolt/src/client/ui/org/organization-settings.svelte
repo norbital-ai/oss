@@ -44,6 +44,8 @@
 	let hostLoading = $state(true);
 	let hostFailure = $state<string | null>(null);
 	let activeTab = $state('general');
+	/** Whether the Stripe-backed figures have been asked for. They are fetched at most once. */
+	let billingLoaded = $state(false);
 
 	/** Reads a string field off an untyped payload, treating anything else as absent. */
 	const text = (row: unknown, field: string): string => {
@@ -84,7 +86,9 @@
 		hostLoading = true;
 		hostFailure = null;
 		try {
-			const snapshot: unknown = await session.operations.read();
+			// Billing only when the Billing tab is the one being shown. General renders a name, a slug
+			// and a logo, and used to wait on two sequential Stripe calls to do it.
+			const snapshot: unknown = await session.operations.read({ billing: activeTab === 'billing' });
 			const stored = Reflect.get(Object(snapshot), 'organization');
 			profile = {
 				name: text(stored, 'name'),
@@ -179,7 +183,16 @@
 			<Cluster gap="sm" align="center" shrink={false}>
 				<Tabs
 					value={activeTab}
-					onValueChange={(next) => (activeTab = next)}
+					onValueChange={(next) => {
+						activeTab = next;
+						// Fetched the first time Billing is opened, and not again. The initial load skips
+						// Stripe so General renders immediately; opening Billing is the moment somebody has
+						// actually asked for the numbers, and is where the round trip belongs.
+						if (next === 'billing' && !billingLoaded) {
+							billingLoaded = true;
+							void loadHost();
+						}
+					}}
 					showContent={false}
 					animate={false}
 					variant="default"

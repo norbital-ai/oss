@@ -44,7 +44,11 @@ export type WorkspaceFilesHost = Readonly<{
  * different authorities, so they are two different members here rather than one `fetch`.
  */
 export type WorkspaceOperationsHost = Readonly<{
-	readonly read: () => Promise<unknown>;
+	/**
+	 * The host snapshot. `billing` costs two Stripe round trips, so it is asked for rather than
+	 * assumed — a surface that does not show money should not wait on a payments API to render.
+	 */
+	readonly read: (options?: { readonly billing?: boolean }) => Promise<unknown>;
 	readonly run: (input: unknown) => Promise<unknown>;
 }>;
 

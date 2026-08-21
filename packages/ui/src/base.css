@@ -781,9 +781,10 @@
 	permanent hairline down the inside edge of every pane in a dense layout — read as a
 	second border beside the real one, and doubly wrong on a rail whose content only just
 	overflows. The thumb is therefore transparent at rest and resolves to `--color-border`
-	while the pointer is inside the scroll container, or while `data-scrolling` is stamped
-	on it by the `scrollAffordance` attachment (keyboard, anchor jumps, programmatic
-	scrolls — every case where the pointer is somewhere else).
+	while the pointer is inside the scroll container. Keeping programmatic and keyboard
+	scrolls from painting a thumb after the pointer has left is deliberate: the edge cue
+	below carries the persistent "there is more" signal, while the bar appears only when
+	the reader is interacting with that region.
 
 	What replaces the resting thumb as the "there is more below" signal is the edge fade
 	below, which — unlike a thumb — only appears on the edges that actually have more. */
@@ -803,12 +804,10 @@
 	min-height: 40px;
 	transition: background-color 0.2s ease;
 }
-:hover::-webkit-scrollbar-thumb,
-[data-scrolling]::-webkit-scrollbar-thumb {
+:hover::-webkit-scrollbar-thumb {
 	background-color: var(--color-border);
 }
-:hover::-webkit-scrollbar-thumb:hover,
-[data-scrolling]::-webkit-scrollbar-thumb:hover {
+:hover::-webkit-scrollbar-thumb:hover {
 	background-color: color-mix(in oklab, var(--color-border) 75%, var(--foreground));
 }
 ::-webkit-scrollbar-corner {
@@ -821,8 +820,7 @@
 	scrollbar-width: thin;
 	scrollbar-color: transparent transparent;
 }
-*:hover,
-[data-scrolling] {
+*:hover {
 	scrollbar-color: var(--color-border) transparent;
 }
 
@@ -839,11 +837,16 @@
 	composited layer — and paying that on every scrollport in the app to draw a gradient
 	from 0px to 0px would be a cost for nothing. */
 [data-overflow] {
-	--overflow-fade: 1.5rem;
+	/* Light surfaces need a longer runway: white content fading into a white shell otherwise
+		looks like ordinary whitespace rather than content continuing beyond the viewport. */
+	--overflow-fade: 2.5rem;
 	--overflow-fade-block-start: 0px;
 	--overflow-fade-block-end: 0px;
 	--overflow-fade-inline-start: 0px;
 	--overflow-fade-inline-end: 0px;
+}
+.dark [data-overflow] {
+	--overflow-fade: 1.75rem;
 }
 [data-overflow~='block-start'],
 [data-overflow~='block-end'],

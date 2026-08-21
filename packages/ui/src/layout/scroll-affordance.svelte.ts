@@ -1,18 +1,15 @@
 /**
- * The two pieces of state a scrollport has to publish for `base.css` to style it.
+ * The overflow state a scrollport publishes for `base.css` to style it.
  *
- * `data-scrolling` reveals the scroll bar for the cases hover cannot cover — a keyboard
- * `PageDown`, an anchor jump, a programmatic `scrollTo` — and clears again once the
- * region settles. `data-overflow` lists the edges that have content past them, so the
- * edge fade appears only where there is genuinely more to reach.
+ * `data-overflow` lists the edges that have content past them, so the edge fade appears
+ * only where there is genuinely more to reach. Scrollbar visibility is CSS hover state;
+ * it deliberately is not persisted after keyboard or programmatic scrolling.
  *
  * Both are attributes rather than reactive state because the styling lives entirely in
  * CSS: nothing in Svelte reads them back, so a re-render per scroll frame would buy
  * nothing. The write is guarded on change for the same reason — a scroll event fires per
  * frame and only the first one in a run actually alters the attribute.
  */
-const SETTLE_MS = 700;
-
 type Edge = 'block-start' | 'block-end' | 'inline-start' | 'inline-end';
 
 function overflowEdges(node: HTMLElement): string {
@@ -43,15 +40,13 @@ function overflowEdges(node: HTMLElement): string {
  * `<Scroll>` applies it already; reach for it directly only on a scrollport that cannot
  * be one, such as a component's internal rail.
  *
- * `fade: false` keeps the scroll-bar reveal and drops the edge attribute, for a region
- * whose content must stay opaque to its own edge.
+ * `fade: false` drops the edge attribute for a region whose content must stay opaque to
+ * its own edge. Its scrollbar still follows the global hover-only rule.
  */
 export function scrollAffordance(options?: { fade?: boolean }) {
 	const fade = options?.fade ?? true;
 
 	return (node: HTMLElement) => {
-		let settleTimer: ReturnType<typeof setTimeout> | undefined;
-
 		const syncOverflow = () => {
 			if (!fade) return;
 			const edges = overflowEdges(node);
@@ -62,9 +57,6 @@ export function scrollAffordance(options?: { fade?: boolean }) {
 
 		const onScroll = () => {
 			syncOverflow();
-			node.setAttribute('data-scrolling', '');
-			clearTimeout(settleTimer);
-			settleTimer = setTimeout(() => node.removeAttribute('data-scrolling'), SETTLE_MS);
 		};
 
 		// Content arriving or the pane resizing changes what overflows without any scroll
@@ -83,7 +75,6 @@ export function scrollAffordance(options?: { fade?: boolean }) {
 		syncOverflow();
 
 		return () => {
-			clearTimeout(settleTimer);
 			observer.disconnect();
 			mutations.disconnect();
 			node.removeEventListener('scroll', onScroll);

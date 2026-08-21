@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { scrollAffordance } from '#lib/layout';
 	import { ScrollArea as ScrollAreaPrimitive, type WithoutChild } from 'bits-ui';
 	import Scrollbar from './scroll-area-scrollbar.svelte';
 
@@ -8,6 +9,7 @@
 		ref = $bindable(null),
 		class: className,
 		orientation = 'vertical',
+		fade = true,
 		scrollbarXClasses = '',
 		scrollbarYClasses = '',
 		viewPortClasses = '',
@@ -17,17 +19,23 @@
 	}: WithoutChild<ScrollAreaPrimitive.RootProps> & {
 		viewportRef?: HTMLElement | null;
 		orientation?: 'vertical' | 'horizontal' | 'both' | undefined;
+		fade?: boolean;
 		scrollbarXClasses?: string | undefined;
 		scrollbarYClasses?: string | undefined;
 		viewPortClasses?: string | undefined;
 	} = $props();
 </script>
 
-<ScrollAreaPrimitive.Root bind:ref {...restProps} class={cn('relative overflow-hidden', className)}>
+<ScrollAreaPrimitive.Root
+	bind:ref
+	{...restProps}
+	class={cn('group/scroll-area relative overflow-hidden', className)}
+>
 	<ScrollAreaPrimitive.Viewport
 		bind:ref={viewportRef}
 		{onscroll}
 		class={cn('h-full w-full rounded-[inherit]', viewPortClasses)}
+		{@attach scrollAffordance({ fade })}
 	>
 		{@render children?.()}
 	</ScrollAreaPrimitive.Viewport>
