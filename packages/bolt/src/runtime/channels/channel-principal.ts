@@ -113,14 +113,20 @@ export const reconcileChannelPrincipals = Effect.fn('Bolt.reconcileChannelPrinci
 				 * runtime is folded, so `on conflict` would let two spellings mint two rows and make which
 				 * one a subject resolved to an accident of typing.
 				 *
+				 * The team insert names `norbital_id` and `name` and nothing else. It named `inherits`
+				 * too until that column was dropped, when descent became unconditional — so the whole
+				 * statement failed, the `catch` below turned it into a log line, and every channel in
+				 * every workspace silently refused inbound messages. Raw SQL is invisible to the
+				 * typechecker, so dropping a column means grepping for its name.
+				 *
 				 * The account conflicts on `email`, which is unique, so re-activating is a no-op. It does
 				 * *not* update `team_id` on conflict: an operator who deliberately moved a principal has
 				 * made a decision, and a deploy silently moving it back is the kind of correction nobody
 				 * asked for. The team is set when the row is minted and belongs to whoever holds it after.
 				 */
 				sql: `with placed as (
-				        insert into bolt_team ("norbital_id", "name", "inherits")
-				        select gen_random_uuid(), $1::text, false
+				        insert into bolt_team ("norbital_id", "name")
+				        select gen_random_uuid(), $1::text
 				         where not exists (select 1 from bolt_team where lower("name") = lower($1::text))
 				     returning "norbital_id"
 				      ), resolved as (
