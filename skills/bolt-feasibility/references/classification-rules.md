@@ -23,7 +23,7 @@ Q3  Does it run on a schedule or after an event?
 
 Q4  Is it a custom endpoint, dashboard, or button beyond the
     standard surfaces?
-        yes → NATIVE (remotes, apps, agent tools)
+        yes → NATIVE (functions, apps, agent tools)
         no  → Q5
 
 Q5  Is it AI judgement (classification, extraction, summarisation,
@@ -33,7 +33,7 @@ Q5  Is it AI judgement (classification, extraction, summarisation,
 
 Q6  Is it people outside the company interacting (customers,
     contractors, suppliers over chat without accounts)?
-        yes → NATIVE (channels + agent surface)
+        yes → NATIVE (envoy agent surface)
         no  → Q7
 
 Q7  Is it math, graphics, or processing in the browser

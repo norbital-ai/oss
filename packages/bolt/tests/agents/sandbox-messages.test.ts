@@ -35,7 +35,7 @@ const definition = workspace({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			capabilities: { apps: ['helper'] }
+			capabilities: { apps: ['web'] }
 		})
 	],
 	teams: {
@@ -88,7 +88,7 @@ const store = (transcript: ReadonlyArray<Row>) => {
 			if (request.sql.includes('from bolt_conversations')) {
 				const title = titles[id];
 				if (title === undefined) return answer([]);
-				return answer([{ id, user_id: subject.userId, agent_name: 'helper', title }]);
+				return answer([{ id, user_id: subject.userId, agent_name: 'web', title }]);
 			}
 			if (request.sql.includes('from bolt_agent_messages')) {
 				return answer(id === sender ? transcript : []);
@@ -109,7 +109,7 @@ const turn = (conversationId: string, message: string): Invocation => ({
 	scope,
 	deadlineEpochMs: Date.now() + 10_000,
 	command: 'agents.turn',
-	input: { subject, agent: 'helper', conversationId, message },
+	input: { subject, agent: 'web', conversationId, message },
 	headers: { authorization: ['Bearer test-session'] }
 });
 
@@ -157,7 +157,7 @@ describe('messages between sandbox agent sessions', () => {
 			kind: 'agent_message',
 			from: {
 				sessionId: sender,
-				agentName: 'helper',
+				agentName: 'web',
 				title: 'Wrote bolt-owned auth module'
 			},
 			text: 'Those four are already fixed.'
@@ -176,7 +176,7 @@ describe('messages between sandbox agent sessions', () => {
 			kind: 'agent_message',
 			from: {
 				sessionId: recipient,
-				agentName: 'helper',
+				agentName: 'web',
 				title: 'Migration and performance verification'
 			},
 			text: 'Heads-up: four errors in auth-store.ts'

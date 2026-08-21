@@ -2,15 +2,15 @@
 name: authoring-tenant-workspace
 description: >-
   Author filesystem-first Bolt tenant workspaces and move changes through OSS packages, template
-  repositories, Colony, and the website. Load for collections, custom types, apps, automations,
-  remotes, seeds, generated $types, $bolt/client, template metadata, or local/staging/production
+  repositories, Colony, and the website. Load for collections, datatypes, apps, automations,
+  functions, seeds, generated $types, $bolt/client, template metadata, or local/staging/production
   refresh behavior.
 ---
 
 # Authoring Bolt Tenant Workspaces
 
 Bolt tenant workspaces are plain Vite projects in `norbital-ai/templates` or
-`norbital-ai/templates-private`. Authors write `src/` plus `.agents/skills/`; the Bolt filesystem
+`norbital-ai/templates-private`. Authors write the compiler-owned `+` files under `src/`; the Bolt filesystem
 compiler derives the registry, workspace, client, loaders, and local types under `.norbital/`. Never
 hand-author assembly or generated output. The sealed authoring contract is the
 [Bolt authoring package](https://github.com/norbital-ai/oss/blob/main/packages/bolt/src/authoring/index.ts).
@@ -47,20 +47,20 @@ then edit its SQL before deploying through Colony.
 
 ## Reference routing
 
-| Task                                                                    | Reference                                                             |
-| ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Task                                                                                                | Reference                                                             |
+| --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | **Built-in column types — read before using `custom()`**, collections, relationships, hooks, values | [collections-and-modeling.md](references/collections-and-modeling.md) |
-| Dates, clock times, timestamps, filters                                 | [dates-and-time.md](references/dates-and-time.md)                     |
-| Queries: `$derived`, no N+1, batching                                   | [data-access.md](references/data-access.md)                           |
-| Apps, client, automation, remotes, seed                                 | [apps-and-server-roles.md](references/apps-and-server-roles.md)       |
-| Why the layout system is shaped this way                                | [interface-ideology.md](references/interface-ideology.md)             |
-| Composition, scrolling, scroll traps                                    | [layout-and-scrolling.md](references/layout-and-scrolling.md)         |
-| Controller UI: inline, `$derived`, no UUIDs                             | [controller-surfaces.md](references/controller-surfaces.md)           |
-| Padding, gaps, the app inset                                            | [padding-and-spacing.md](references/padding-and-spacing.md)           |
-| Headings, labels, captions: which type class                            | [typography.md](references/typography.md)                             |
-| Generated files and build lifecycle                                     | [generated-and-build.md](references/generated-and-build.md)           |
-| Mandatory bilingual copy, catalogs, the raw-text rule                   | [internationalization.md](references/internationalization.md)         |
-| Template manifest, README, marketing thumbnail (`assets/thumbnail.svg`) | [template-repository.md](references/template-repository.md)           |
+| Dates, clock times, timestamps, filters                                                             | [dates-and-time.md](references/dates-and-time.md)                     |
+| Queries: `$derived`, no N+1, batching                                                               | [data-access.md](references/data-access.md)                           |
+| Apps, client, automations, functions, seed                                                          | [apps-and-server-roles.md](references/apps-and-server-roles.md)       |
+| Why the layout system is shaped this way                                                            | [interface-ideology.md](references/interface-ideology.md)             |
+| Composition, scrolling, scroll traps                                                                | [layout-and-scrolling.md](references/layout-and-scrolling.md)         |
+| Controller UI: inline, `$derived`, no UUIDs                                                         | [controller-surfaces.md](references/controller-surfaces.md)           |
+| Padding, gaps, the app inset                                                                        | [padding-and-spacing.md](references/padding-and-spacing.md)           |
+| Headings, labels, captions: which type class                                                        | [typography.md](references/typography.md)                             |
+| Generated files and build lifecycle                                                                 | [generated-and-build.md](references/generated-and-build.md)           |
+| Mandatory bilingual copy, catalogs, the raw-text rule                                               | [internationalization.md](references/internationalization.md)         |
+| Template manifest, README, marketing thumbnail (`assets/thumbnail.svg`)                             | [template-repository.md](references/template-repository.md)           |
 
 Read only the relevant reference. Use the Bolt runtime internals
 (`packages/bolt/src/runtime/` in the OSS repository) for hook, pipeline, and automation execution,
@@ -74,13 +74,17 @@ or gratuitous parallel fetches; never show system UUIDs, including on relationsh
 ## Authored filesystem
 
 ```text
-.agents/skills/
-└── <name>/
-    └── SKILL.md                   # optional — workspace Agent Skill (repo root, sibling of src/)
-
 src/
-├── mcp/
-│   └── +<name>.mcp.ts             # optional — remote MCP server declaration
+├── +agents.md                    # shared workspace prompt for web and envoy turns
+├── +env.ts                       # optional — declare env vars; private keys are server-only
+├── access/
+│   ├── +teams.ts                  # which policies each named team holds
+│   ├── +anonymous_limits.ts       # pre-sign-in address limits only
+│   └── policies/+<name>.ts        # grants, approvals, capabilities, and limits
+├── capabilities/
+│   ├── tools/+<name>.ts           # optional workspace tool
+│   ├── mcp/+<name>.ts             # optional remote MCP server
+│   └── skills/<name>/+skill.md    # optional workspace Agent Skill
 ├── collections/
 │   ├── +relationship.ts
 │   └── <collection>/
@@ -89,7 +93,7 @@ src/
 │       ├── +pipelines.ts          # optional
 │       ├── +integrations.ts       # optional
 │       └── +representation.svelte # optional create/display/edit override
-├── custom-types/
+├── datatypes/
 │   └── <name>/
 │       ├── +definition.ts
 │       └── +renderer.svelte       # required
@@ -98,17 +102,13 @@ src/
 │   └── <group>/
 │       ├── +group.ts
 │       └── +<app>.svelte
-├── automation/+<automation>.ts
-├── remotes/+<remote>.ts
-├── policies/+<name>.policy.ts     # optional
-├── channels/+<name>.channel.ts    # optional
+├── automations/+<automation>.ts
+├── envoys/+<envoy>.ts
+├── functions/+<function>.ts
 ├── i18n/
 │   ├── messages.en.json           # required — English copy
 │   └── messages.zh.json           # required — Chinese copy, exact same keys
 ├── lib/**                         # optional, free-form helper code — no role, no `+` prefix
-├── +agent.ts                      # optional
-├── +env.ts                        # optional — declare env vars; private keys are server-only
-├── +teams.ts                      # optional — which policies each named team holds
 └── +seed.ts                       # optional
 ```
 
@@ -118,11 +118,11 @@ roles import adjacent `./$types.js` only when they need generated types.
 **What the compiler actually enforces.** Every topology check keys on a leading `+`, so the rules below
 bind role files and nothing else:
 
-| Rule                                                                                  | Applies to                            |
-| ------------------------------------------------------------------------------------- | ------------------------------------- |
-| An unknown, duplicate, misplaced, or legacy role file is a compiler error             | `+`-prefixed basenames only           |
-| A `+`-prefixed file nested _below_ a collection directory is a compiler error         | e.g. `collections/x/panels/+y.svelte` |
-| `src/policies` and `src/channels` hold only `+<lower_snake_case>.{policy,channel}.ts` | those directories                     |
+| Rule                                                                           | Applies to                             |
+| ------------------------------------------------------------------------------ | -------------------------------------- |
+| An unknown, duplicate, misplaced, or legacy role file is a compiler error      | `+`-prefixed basenames only            |
+| A `+`-prefixed file nested _below_ a collection directory is a compiler error  | e.g. `collections/x/panels/+y.svelte`  |
+| A declared kind exists only in its assigned directory and uses `+<name>.<ext>` | compiler-owned declaration directories |
 
 Everything without a `+` is ordinary source the compiler does not claim. `src/lib/**`,
 `collections/<c>/lib/**`, `collections/<c>/panels/`, co-located `*.test.ts`, and adjacent components such
@@ -154,7 +154,7 @@ Two consequences worth stating, because the compiler will not state them for you
 `dist`, and `tsconfig.json`. `.norbital/migrations` is generated but committed; other `.norbital` output is
 ignored. The authored root `tsconfig.json` only extends `.norbital/tsconfig.json`.
 
-## Models and custom types
+## Models and datatypes
 
 Use one model signature: `defineModel(columns, metadata?)`. The directory owns the collection name.
 
@@ -176,14 +176,14 @@ Classify temporal fields before choosing `date()`, `clockTime()`, `timestamp()`,
 [dates-and-time.md](references/dates-and-time.md) whenever a model, filter, seed, import/export, or UI
 touches dates or time.
 
-Inline custom schemas do not exist. Structured domain values live in `custom-types/<name>/` with exactly a
+Inline custom schemas do not exist. Structured domain values live in `datatypes/<name>/` with exactly a
 `+definition.ts` default-exporting `defineCustomType({ name, description, schema })` and a mandatory
 `+renderer.svelte`. Models use `custom('<name>')`; a schema factory infers its optional second argument,
 such as `custom('money', { allowedCurrencies: ['MYR'] })`. The definition is the only schema and inferred
 value-type source, and named values use JSONB storage. Scalar references stay ordinary `uuid()`/`text()`
 columns plus relationships. The compiler discovers renderers statically; manual imports, registration, and
-runtime registries do not exist. There are no built-in custom-type exceptions: `money` must also have its
-filesystem definition and renderer in every workspace that uses it. Do not cast the inferred value type.
+runtime registries do not exist. `money` remains a workspace datatype until Bolt ships both a matching
+field builder and renderer; keep its definition and renderer together. Do not cast the inferred value type.
 
 ## One client and one database vocabulary
 
@@ -332,7 +332,7 @@ import {getPlatformStateContext} from '@norbital-ai/bolt/ui'; const platform = g
 const me = $derived(platform().user);
 ```
 
-`platform()` publishes exactly three things and nothing else — `user`, `apps`, `channels`. If you
+`platform()` publishes exactly three things and nothing else — `user`, `apps`, `envoys`. If you
 want something that is not in this table, it is not there; do not guess a field name.
 
 | Field              | Is                                       | Use it for                                                     |
@@ -341,7 +341,7 @@ want something that is not in this table, it is not there; do not guess a field 
 | `user.email`       | The address, as the host reports it      | Display, and matching a column that genuinely holds an address |
 | `user.admin`       | `bolt_auth_user.status === 'admin'`      | Widening a surface for administrators                          |
 | `apps`             | The app names **this session may see**   | Deriving authority — see below                                 |
-| `channels`         | Declared channels, with `audience`       | Offering a channel to the right audience                       |
+| `envoys`           | Declared envoys, with `audience`         | Offering an envoy to the right audience                        |
 
 **`user.norbital_id` is the row key. There is no second spelling.** A field named `id` used to sit
 beside it carrying the same value, the shell filled both from the display name, and every authored
@@ -369,17 +369,15 @@ is merely still loading; give the unsettled case its own branch.
 ## Server roles
 
 **Every declaration carries a mandatory `description`.** Hooks and pipelines are `{ description, handler }`;
-automations, remotes, policies, channels, agent tools, custom types, apps, and groups each take one as a
+automations, functions, policies, envoys, tools, datatypes, apps, and groups each take one as a
 field. They are not comments — they are compiled into the manifest, and the Workspace Studio has nothing
 else to show somebody who will never open the source. Write what the code does to this data in one
 sentence; "runs before create" restates the key and is worse than nothing.
 
-- `src/+agent.ts` configures the interactive agent. Do not list sandbox host tools in `hostTools` —
-  the funnel supplies them when a sandbox is bound (including WhatsApp and other channels). Use
-  typesafe `denyTools` to withhold workspace or platform tools; it cannot hide a bound sandbox.
-  Non-sandbox host tools remain an explicit `hostTools` opt-in. The funnel is documented in the
-  platform skill (`agent-capabilities.md`).
-- Hooks, pipelines, automations, remotes, and agent tools are **Effect-native**. Every handler is an
+- `src/+agents.md` is the shared workspace prompt. A web turn runs as the signed-in person; an envoy
+  adds its own `task` and runs under the policies declared in `src/envoys/+<name>.ts`. Tools, MCP
+  servers, and skills are capabilities of policies, never fields on an agent or envoy.
+- Hooks, pipelines, automations, functions, and tools are **Effect-native**. Every handler is an
   `Effect.gen(function* () { ... })` receiving `{ input, api }`, and every `api.db.*`,
   `api.infer`, and `api.readFileAsset` call returns an `Effect.Effect` you `yield*` — never a
   plain Promise (promises and plain values are still admitted and normalized at the authoring
@@ -417,13 +415,13 @@ sentence; "runs before create" restates the key and is worse than nothing.
   It never offers authoring, sandbox, `write_collection`, or `spawn_subagent`, and it does not own a
   chat transcript. Each run is one admitted function. If the work is not finished, the host calls
   the same function again.
-- Remotes are imperative request/response methods declared with `defineQueryHandler` /
+- Functions are imperative request/response methods declared with `defineQueryHandler` /
   `defineCommandHandler`; their payload schema is an Effect `Schema` (e.g. `Schema.Struct`), adapted
   to `~standard` for dispatch validation. Reactive reads belong to `client.db`.
-- **A policy is named by its file, and a team is what holds it.** `+sales_rep.policy.ts` declares
-  `name: 'sales_rep'`, and that one string is what everything binds to — the generated `PolicyName`
-  union, a channel's `policy` ceiling, and `src/+teams.ts`, which maps each team name to the policy
-  names it holds (`satisfies Teams`, narrowed to this workspace's declared policies). There is no
+- **A policy is named by its file, and a team is what holds it.**
+  `src/access/policies/+sales_rep.ts` declares `sales_rep` without a `name` field, and that filename
+  is what the generated `PolicyName` union, teams, envoys, and automations bind to.
+  `src/access/+teams.ts` maps each team name to the policy names it holds (`satisfies Teams`). There is no
   `roles` array on a policy and no second way to select one: a person belongs to exactly one team
   (`bolt_auth_user.team_id`), team membership is a row an operator edits, and what a team may _do_
   is this compiled file. Team names are matched case-insensitively. Behaviour is in the

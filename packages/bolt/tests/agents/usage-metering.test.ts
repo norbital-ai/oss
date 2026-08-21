@@ -36,7 +36,7 @@ const definition = workspace({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			capabilities: { apps: ['helper'] }
+			capabilities: { apps: ['web'] }
 		})
 	],
 	teams: {
@@ -118,7 +118,7 @@ const turnInvocation = (conversationId: string, message: string): Invocation => 
 	scope,
 	deadlineEpochMs: Date.now() + 10_000,
 	command: 'agents.turn',
-	input: { subject, agent: 'helper', conversationId, message },
+	input: { subject, agent: 'web', conversationId, message },
 	headers: { authorization: ['Bearer test-session'] }
 });
 

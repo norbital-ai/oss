@@ -23,9 +23,9 @@ describe('WorkspaceSchema owner', () => {
 			automations: [],
 			envoys: [],
 			integrations: [],
-		prompt: 'You are the test workspace agent.',
-		tools: [],
-		skills: [],
+			prompt: 'You are the test workspace agent.',
+			tools: [],
+			skills: [],
 			requiredFacilities: []
 		});
 		const plan = buildSchemaPlan(definition);
@@ -54,6 +54,7 @@ describe('WorkspaceSchema owner', () => {
 			// `collection:…` rather than `bolt:…`: a `bolt:` prefix would sort ahead of the
 			// `create table` and a fresh provision would fail on a relation that does not exist yet.
 			'collection:bolt_auth_user:column:channels',
+			'collection:bolt_auth_user:column:kind:drop',
 			'collection:bolt_auth_user:index:email',
 			'collection:bolt_auth_user:index:team_id',
 			'collection:bolt_auth_user:index:tenantId',
@@ -63,6 +64,7 @@ describe('WorkspaceSchema owner', () => {
 			// resolving a subject joins it, so a host that created the auth tables without this one
 			// would authenticate nobody.
 			'collection:bolt_team',
+			'collection:bolt_team:column:inherits:drop',
 			'collection:bolt_team:index:name',
 			'collection:requestor',
 			'collection:requestor:index:approval_request_id',

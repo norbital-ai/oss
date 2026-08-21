@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/std",
-	"version": "0.0.21",
+	"version": "0.0.1",
 	"description": "Shared schema, date, CEL, finance, and utility modules for Norbital.",
 	"type": "module",
 	"sideEffects": false,
@@ -113,7 +113,7 @@
 	"dependencies": {
 		"@marcbachmann/cel-js": "^8.0.0",
 		"dedent": "^1.7.2",
-		"effect": "4.0.0-rc.109",
+		"effect": "4.0.0-rc.111",
 		"js-yaml": "^5.3.0"
 	},
 	"devDependencies": {

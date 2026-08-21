@@ -48,7 +48,7 @@ Precedent: the hr-payroll template is the native half of this table.
 | -------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | View, rotate, measure CAD/3D models in the browser | native   | client-side library (three.js-class) bundled into the app                                             | —                                                                    |
 | Annotate and link models to project records        | native   | collections + apps                                                                                    | —                                                                    |
-| Volumetric computation from geometry               | native   | WASM/JS computation client-side, or server-side in remotes                                            | heavy batch analysis may be delegated to an external compute service |
+| Volumetric computation from geometry               | native   | WASM/JS computation client-side, or server-side in functions                                          | heavy batch analysis may be delegated to an external compute service |
 | Import model files                                 | mediated | upload + conversion via a format library; formats the bundle cannot parse go through a conversion API | proprietary formats need their vendor                                |
 
 ## "Physics simulation for load planning"
@@ -69,19 +69,19 @@ Precedent: the hr-payroll template is the native half of this table.
 
 ## "A customer-facing chatbot"
 
-| Sub-function                                | Verdict  | How it is built                                                         | Boundary                                  |
-| ------------------------------------------- | -------- | ----------------------------------------------------------------------- | ----------------------------------------- |
-| External chat with the workspace agent      | native   | channels + agent surface; accountless users scoped to their own records | —                                         |
-| Reading and updating the user's own records | native   | policies scope the channel agent to the caller's data                   | —                                         |
-| Escalation to staff                         | native   | notifications + remotes                                                 | —                                         |
-| Integration with the customer's own systems | mediated | webhooks / sends / MCP                                                  | the customer's system is the record owner |
+| Sub-function                                | Verdict  | How it is built                                                    | Boundary                                  |
+| ------------------------------------------- | -------- | ------------------------------------------------------------------ | ----------------------------------------- |
+| External chat with the workspace agent      | native   | envoy agent surface; accountless users scoped to their own records | —                                         |
+| Reading and updating the user's own records | native   | policies scope the envoy agent to the caller's data                | —                                         |
+| Escalation to staff                         | native   | notifications + functions                                          | —                                         |
+| Integration with the customer's own systems | mediated | webhooks / sends / MCP                                             | the customer's system is the record owner |
 
 Precedent: field-operations (contractors over WhatsApp, scoped policies, photo integrity).
 
 ## "Live multiplayer operations game"
 
-| Sub-function                               | Verdict         | How it is built                     | Boundary                                                                                                 |
-| ------------------------------------------ | --------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| The game itself                            | not-appropriate | —                                   | continuous real-time multiplayer is outside the sync model; SSE/WebSocket transport is not a game server |
-| Player/team rosters, scores, league tables | native          | collections + apps                  | —                                                                                                        |
-| Turn-based play, planning, results         | native          | collections + automations + remotes | —                                                                                                        |
+| Sub-function                               | Verdict         | How it is built                       | Boundary                                                                                                 |
+| ------------------------------------------ | --------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| The game itself                            | not-appropriate | —                                     | continuous real-time multiplayer is outside the sync model; SSE/WebSocket transport is not a game server |
+| Player/team rosters, scores, league tables | native          | collections + apps                    | —                                                                                                        |
+| Turn-based play, planning, results         | native          | collections + automations + functions | —                                                                                                        |

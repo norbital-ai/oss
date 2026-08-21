@@ -28,7 +28,7 @@ export interface Interface {
 	readonly dispose: () => Effect.Effect<void>;
 }
 
-/** Owns one cached, checksum-verified Bolt bundle for the application lifetime; stupidity:allow Q4 -- Effect Context.Service declaration is the canonical rc.109 service tag. */
+/** Owns one cached, checksum-verified Bolt bundle for the application lifetime; stupidity:allow Q4 -- Effect Context.Service declaration is the canonical Effect v4 service tag. */
 export class BundleLoader extends Context.Service<BundleLoader, Interface>()(
 	'@norbital-ai/bolt-server/BundleLoader'
 ) {}

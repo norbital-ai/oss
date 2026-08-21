@@ -14,14 +14,7 @@ import {
 	type TaskResponse
 } from '@norbital-ai/bolt-protocol';
 import { EnvironmentName, InvocationId, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
-import {
-	app,
-	collection,
-	field,
-	policy,
-	tool,
-	workspace
-} from '../../src/authoring/index.js';
+import { app, collection, field, policy, tool, workspace } from '../../src/authoring/index.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
 
@@ -42,7 +35,7 @@ const definition = workspace({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			capabilities: { apps: ['helper'] }
+			capabilities: { apps: ['web'], tools: ['summarize'], mcp: ['search'] }
 		}),
 		policy({
 			name: 'admin-data',
@@ -60,7 +53,7 @@ const definition = workspace({
 	envoys: [],
 	integrations: [],
 	prompt: 'You are the test workspace agent.',
-	tools: [],
+	tools: [tool({ name: 'summarize', description: 'Summarize records.', command: 'summarize' })],
 	skills: [],
 	requiredFacilities: ['database', 'ai', 'tasks', 'hostTools']
 });
@@ -130,7 +123,7 @@ describe('Bolt agent tool loop', () => {
 			command: 'agents.turn',
 			input: {
 				subject,
-				agent: 'helper',
+				agent: 'web',
 				conversationId: 'conversation-tools',
 				message: 'What collections exist?'
 			},
@@ -197,7 +190,7 @@ describe('Bolt agent tool loop', () => {
 				turns += 1;
 				const output: AIResponse['output'] =
 					turns === 1
-						? { toolCalls: [{ name: 'sandbox_ls', input: { path: 'src' } }] }
+						? { toolCalls: [{ name: 'summarize', input: { path: 'src' } }] }
 						: { text: 'One directory' };
 				return Promise.resolve({ _tag: 'Success', value: { output } });
 			}
@@ -217,19 +210,24 @@ describe('Bolt agent tool loop', () => {
 			}
 		};
 		let duringCall: unknown = null;
+		const observedBundle = makeBundle(
+			definition,
+			manifest,
+			{},
+			{
+				summarize: async () => {
+					duringCall = stored;
+					return { entries: ['src'] };
+				}
+			}
+		);
 		const facilities: FacilityBindings = {
 			scope,
 			database,
 			ai,
-			tasks: { call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } }) },
-			hostTools: {
-				call: () => {
-					duringCall = stored;
-					return Promise.resolve({ _tag: 'Success', value: { output: { entries: ['src'] } } });
-				}
-			}
+			tasks: { call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } }) }
 		};
-		const result = await bundle.dispatch(
+		const result = await observedBundle.dispatch(
 			{
 				_tag: 'Command',
 				protocolVersion: PROTOCOL_VERSION,
@@ -239,7 +237,7 @@ describe('Bolt agent tool loop', () => {
 				command: 'agents.turn',
 				input: {
 					subject,
-					agent: 'helper',
+					agent: 'web',
 					conversationId: 'conversation-streaming',
 					message: 'List the source directory'
 				},
@@ -304,7 +302,7 @@ describe('Bolt agent tool loop', () => {
 				command: 'agents.turn',
 				input: {
 					subject,
-					agent: 'helper',
+					agent: 'web',
 					conversationId: 'conversation-two-rounds',
 					message: 'Describe the workspace and list skills'
 				},
@@ -392,7 +390,7 @@ describe('Bolt agent tool loop', () => {
 			command: 'agents.turn',
 			input: {
 				subject,
-				agent: 'helper',
+				agent: 'web',
 				conversationId: 'conversation-mcp',
 				message: 'Search payroll'
 			},
@@ -444,7 +442,7 @@ describe('Bolt agent tool loop', () => {
 			command: 'agents.turn',
 			input: {
 				subject,
-				agent: 'helper',
+				agent: 'web',
 				conversationId: 'conversation-spawn',
 				message: 'Delegate the offer'
 			},
@@ -494,7 +492,7 @@ describe('Bolt agent tool loop', () => {
 				command: 'agents.turn',
 				input: {
 					subject,
-					agent: 'helper',
+					agent: 'web',
 					conversationId: 'conversation-workspace-tool',
 					message: 'Summarize tickets'
 				},

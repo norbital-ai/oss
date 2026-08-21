@@ -54,7 +54,7 @@ const definition = workspace({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			capabilities: { apps: ['helper'] }
+			capabilities: { apps: ['web'] }
 		}),
 		policy({
 			name: 'admin-data',
@@ -175,7 +175,8 @@ const subject = {
 	userId: 'admin-1',
 	tenantId: 'tenant-1',
 	status: 'admin',
-	teamPath: [], policies: []
+	teamPath: ['admin'],
+	policies: []
 };
 /**
  * Placed in `employee-app`, which is a team this workspace declares.
@@ -184,7 +185,12 @@ const subject = {
  * declares resolves to no policies at all, and the subject then sees an empty app list — which
  * reads exactly like an authorization refusal and is not one.
  */
-const employee = { userId: 'employee-1', tenantId: 'tenant-1', teamPath: ['employee-app'], policies: [] };
+const employee = {
+	userId: 'employee-1',
+	tenantId: 'tenant-1',
+	teamPath: ['employee-app'],
+	policies: []
+};
 
 const invoke = async (command: string, input: Schema.Json): Promise<BundleResult> => {
 	const invocation: Invocation = {
@@ -349,7 +355,7 @@ describe('runnable Bolt vertical slice', () => {
 	it('communicates with an agent and persists the turn before scheduling continuation', async () => {
 		const result = await invoke('agents.turn', {
 			subject,
-			agent: 'helper',
+			agent: 'web',
 			conversationId: 'conversation-1',
 			message: 'Hello'
 		});
@@ -362,7 +368,7 @@ describe('runnable Bolt vertical slice', () => {
 	it('refuses an unknown agent name and lists the declared workspace agent', async () => {
 		expect(await invoke('workspace.agents', null)).toMatchObject({
 			_tag: 'Success',
-			response: { value: ['helper'] }
+			response: { value: ['web'] }
 		});
 		expect(
 			await invoke('agents.turn', {
@@ -487,11 +493,11 @@ describe('runnable Bolt vertical slice', () => {
 			registrations: [
 				{ command: 'agents.resume' },
 				{ command: 'agents.turn' },
-				{ command: 'channels.receive' },
 				// A refused approval has cleanup to do — the provisional row it locked. Routed beside
 				// `resume` because a rejection is followed up as deliberately as an approval is.
 				{ command: 'collections.discard' },
 				{ command: 'collections.resume' },
+				{ command: 'envoys.receive' },
 				{ command: 'integrations.flush' },
 				{ command: 'integrations.pull' },
 				{ command: 'notifications.drain' },

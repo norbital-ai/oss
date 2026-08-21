@@ -61,7 +61,7 @@ and the full decision tree are in [classification-rules.md](references/classific
 3. **Is it work that runs on a schedule or after an event?** Expiry watchers, nightly syncs,
    reminder runs, status nudges. → **native** (automations, durable and idempotent).
 4. **Is it a custom endpoint or dashboard?** Reads, writes, or buttons beyond the standard
-   surfaces. → **native** (remotes, apps, agent tools).
+   surfaces. → **native** (functions, apps, agent tools).
 5. **Is it AI judgement?** Classification, extraction, summarisation, image reading, drafting.
    → **native** (`api.infer` with structured output; bounded in hooks, durable in automations).
 6. **Is it people talking to the workspace from outside?** Customers, contractors, suppliers

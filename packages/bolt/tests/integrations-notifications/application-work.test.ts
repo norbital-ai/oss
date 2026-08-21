@@ -72,10 +72,10 @@ describe('Envoys, Integrations, and Notifications owners', () => {
 	 * regression visible as "the plan stopped planning it" rather than as a missing-relation error
 	 * from whichever query happened to run first.
 	 */
-	it('plans the channel tables the channels runtime reads and writes', () => {
+	it('plans the envoy tables the envoy runtime reads and writes', () => {
 		const ids = buildSchemaPlan(envoyedWorkspace()).steps.map(({ id }) => id);
-		expect(ids).toContain('bolt:channel-registrations');
-		expect(ids).toContain('bolt:channel-receipts');
+		expect(ids).toContain('bolt:envoy-registrations');
+		expect(ids).toContain('bolt:envoy-receipts');
 	});
 
 	/**

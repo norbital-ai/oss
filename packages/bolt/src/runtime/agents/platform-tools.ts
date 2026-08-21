@@ -19,7 +19,7 @@ export type PlatformToolName = (typeof platformToolNames)[number];
 export const platformToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'describe_workspace',
-		description: 'Describe collections, apps, agents, tools, automations, and channels.',
+		description: 'Describe collections, apps, envoys, tools, automations, and integrations.',
 		command: 'platform:describe_workspace'
 	},
 	{

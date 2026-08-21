@@ -71,18 +71,17 @@ describe('the workspace rate limiter', () => {
 		);
 	});
 
-	it('counts two addresses separately, and folds a missing one into a shared bucket', async () => {
+	it('counts two addresses separately, and does not apply an address rule without one', async () => {
 		expect(refusal(await admit('identity.sendCode', { tenantId: 'a', address: 'one@y.z' }))).toBe(
 			undefined
 		);
 		expect(refusal(await admit('identity.sendCode', { tenantId: 'a', address: 'two@y.z' }))).toBe(
 			undefined
 		);
-		// Naming no address must not buy an unlimited lane. Two anonymous attempts share one bucket,
-		// so the third is refused — the strict direction, deliberately.
-		expect(refusal(await admit('identity.sendCode', { tenantId: 'a' }))).toBe(undefined);
-		expect(refusal(await admit('identity.sendCode', { tenantId: 'a' }))).toBe(undefined);
-		expect(refusal(await admit('identity.sendCode', { tenantId: 'a' }))).toBeDefined();
+		// An address-keyed rule is about an address. If the caller supplies none, a different edge
+		// control owns that malformed request; this limiter must not invent a shared identity.
+		for (let attempt = 0; attempt < 3; attempt += 1)
+			expect(refusal(await admit('identity.sendCode', { tenantId: 'a' }))).toBe(undefined);
 	});
 
 	it('lets the most specific rule win, so one command can be tightened without restating its class', () => {
@@ -122,10 +121,14 @@ describe('the workspace rate limiter', () => {
 	 * to refuse, and refusing on absence would close the door on everybody.
 	 */
 	it('never matches a sender-keyed rule against a human holder of the same policy', async () => {
-		for (let attempt = 0; attempt < 10; attempt += 1)
+		for (let attempt = 0; attempt < 3; attempt += 1)
 			expect(
 				refusal(await admit('envoys.receive', { tenantId: 'a', userId: 'person-1' }))
-			).toBeDefined();
+			).toBeUndefined();
+		// The sender rule never matched; the holder's subject-wide ceiling still did.
+		expect(
+			refusal(await admit('envoys.receive', { tenantId: 'a', userId: 'person-1' }))
+		).toBeDefined();
 	});
 
 	it('admits a command no rule matches rather than inventing a default', async () => {

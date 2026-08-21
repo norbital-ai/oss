@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-server",
-	"version": "0.0.21",
+	"version": "0.0.1",
 	"description": "Standalone and local-development server shell for immutable Norbital Bolt bundles.",
 	"type": "module",
 	"sideEffects": false,
@@ -24,12 +24,12 @@
 	"dependencies": {
 		"@electric-sql/pglite": "^0.3.16",
 		"@norbital-ai/bolt-protocol": "workspace:*",
-		"effect": "4.0.0-rc.109",
+		"effect": "4.0.0-rc.111",
 		"pg": "^8.23.0",
 		"ws": "^8.21.3"
 	},
 	"devDependencies": {
-		"@effect/vitest": "4.0.0-rc.109",
+		"@effect/vitest": "4.0.0-rc.111",
 		"@norbital-ai/config": "workspace:*",
 		"@types/node": "^26.2.0",
 		"@types/pg": "^8.23.1",

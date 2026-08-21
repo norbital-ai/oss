@@ -8,7 +8,7 @@ catalog:
   drizzle-orm: 1.0.0-rc.4
   runed: ^0.37.1
   rolldown: ^1.2.1
-  svelte: ^5.56.9
+  svelte: ^5.56.10
   # TS 7 breaks svelte2tsx / @sveltejs/package (fileExists). Stay on latest 6.x.
   #
   # It also breaks us directly, which is worth recording next to the reason above: `quality/audit.ts`
@@ -58,5 +58,5 @@ peerDependencyRules:
 # notices. Our own scope is not third-party, and pinning exact versions here meant editing this
 # list on every publish.
 minimumReleaseAgeExclude:
-  - svelte@5.56.7
+  - svelte@5.56.10
   - '@norbital-ai/*'

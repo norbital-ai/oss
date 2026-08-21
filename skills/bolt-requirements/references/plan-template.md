@@ -24,7 +24,7 @@ what "done" looks like on an ordinary day. No platform vocabulary.
 | ----------- | --------------------------- | --------------------- | ---------------------------- |
 | (job title) | (their job in the workflow) | (scope of visibility) | (what they can start/finish) |
 
-_Build notes: team names for `src/+teams.ts` and the policy file names each holds. A person is on exactly one team, so name a team for every combination of authority somebody actually holds — there are no roles to stack._
+_Build notes: team names for `src/access/+teams.ts` and the policy file names each holds. A person is on exactly one team, so name a team for every combination of authority somebody actually holds — there are no roles to stack._
 
 ## 3. What it manages
 
@@ -32,7 +32,7 @@ _Build notes: team names for `src/+teams.ts` and the policy file names each hold
 | --------------------- | ------------------------------ | ------------------------------- |
 | (e.g. a job)          | (facts that are not derivable) | (state list, in business words) |
 
-_Build notes: collection names, custom types, relationships, effective-dated facts._
+_Build notes: collection names, datatypes, relationships, effective-dated facts._
 
 ## 4. How work flows
 
@@ -64,7 +64,7 @@ can check it. A rule that is missing here will be invented later and usually wro
 - A quote older than 30 days cannot be confirmed without the director.
 - …
 
-_Build notes: money custom types, reckon graphs, CEL rules, hook invariants._
+_Build notes: money datatypes, reckon graphs, CEL rules, hook invariants._
 
 ## 7. What connects to it
 

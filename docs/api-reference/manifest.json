@@ -1,5 +1,5 @@
 {
-	"generatedAt": "2026-08-18T20:17:05.450Z",
+	"generatedAt": "2026-08-21T11:01:10.411Z",
 	"packages": [
 		{
 			"id": "@norbital-ai/std",
@@ -106,6 +106,11 @@
 					"title": "std/build/json",
 					"slug": "std/build/json",
 					"href": "/docs/api-reference/std/build/json"
+				},
+				{
+					"title": "std/build/rate-limit",
+					"slug": "std/build/rate-limit",
+					"href": "/docs/api-reference/std/build/rate-limit"
 				},
 				{
 					"title": "std/build/reckon",
@@ -981,11 +986,6 @@
 					"href": "/docs/api-reference/ui/build/collection-kanban/collection-kanban-move"
 				},
 				{
-					"title": "ui/build/collection-kanban/collection-kanban-record-detail.svelte",
-					"slug": "ui/build/collection-kanban/collection-kanban-record-detail.svelte",
-					"href": "/docs/api-reference/ui/build/collection-kanban/collection-kanban-record-detail.svelte"
-				},
-				{
 					"title": "ui/build/collection-kanban/collection-kanban-skeleton.svelte",
 					"slug": "ui/build/collection-kanban/collection-kanban-skeleton.svelte",
 					"href": "/docs/api-reference/ui/build/collection-kanban/collection-kanban-skeleton.svelte"
@@ -1009,6 +1009,21 @@
 					"title": "ui/build/collection-query/collection-query-state.svelte",
 					"slug": "ui/build/collection-query/collection-query-state.svelte",
 					"href": "/docs/api-reference/ui/build/collection-query/collection-query-state.svelte"
+				},
+				{
+					"title": "ui/build/collection-record-metadata",
+					"slug": "ui/build/collection-record-metadata",
+					"href": "/docs/api-reference/ui/build/collection-record-metadata"
+				},
+				{
+					"title": "ui/build/collection-record-metadata/collection-record-metadata",
+					"slug": "ui/build/collection-record-metadata/collection-record-metadata",
+					"href": "/docs/api-reference/ui/build/collection-record-metadata/collection-record-metadata"
+				},
+				{
+					"title": "ui/build/collection-record-metadata/collection-record-metadata.svelte",
+					"slug": "ui/build/collection-record-metadata/collection-record-metadata.svelte",
+					"href": "/docs/api-reference/ui/build/collection-record-metadata/collection-record-metadata.svelte"
 				},
 				{
 					"title": "ui/build/collection-runtime",
@@ -1054,6 +1069,11 @@
 					"title": "ui/build/collection-table/collection-record-detail-tabs.svelte",
 					"slug": "ui/build/collection-table/collection-record-detail-tabs.svelte",
 					"href": "/docs/api-reference/ui/build/collection-table/collection-record-detail-tabs.svelte"
+				},
+				{
+					"title": "ui/build/collection-table/collection-record-detail.svelte",
+					"slug": "ui/build/collection-table/collection-record-detail.svelte",
+					"href": "/docs/api-reference/ui/build/collection-table/collection-record-detail.svelte"
 				},
 				{
 					"title": "ui/build/collection-table/collection-table-applied-filters",
@@ -1151,9 +1171,9 @@
 					"href": "/docs/api-reference/ui/build/collection-table/internal/collection-grid.svelte"
 				},
 				{
-					"title": "ui/build/collection-table/internal/collection-table-detail-registration.svelte",
-					"slug": "ui/build/collection-table/internal/collection-table-detail-registration.svelte",
-					"href": "/docs/api-reference/ui/build/collection-table/internal/collection-table-detail-registration.svelte"
+					"title": "ui/build/collection-table/internal/collection-table-navigation-frame.svelte",
+					"slug": "ui/build/collection-table/internal/collection-table-navigation-frame.svelte",
+					"href": "/docs/api-reference/ui/build/collection-table/internal/collection-table-navigation-frame.svelte"
 				},
 				{
 					"title": "ui/build/collection-table/internal/collection-table-state.svelte",
@@ -2136,6 +2156,11 @@
 					"href": "/docs/api-reference/ui/build/i18n/messages/misc.messages"
 				},
 				{
+					"title": "ui/build/i18n/messages/record-metadata.messages",
+					"slug": "ui/build/i18n/messages/record-metadata.messages",
+					"href": "/docs/api-reference/ui/build/i18n/messages/record-metadata.messages"
+				},
+				{
 					"title": "ui/build/i18n/messages/table.messages",
 					"slug": "ui/build/i18n/messages/table.messages",
 					"href": "/docs/api-reference/ui/build/i18n/messages/table.messages"
@@ -2379,6 +2404,11 @@
 					"title": "ui/build/layout/layout.shared",
 					"slug": "ui/build/layout/layout.shared",
 					"href": "/docs/api-reference/ui/build/layout/layout.shared"
+				},
+				{
+					"title": "ui/build/layout/scroll-affordance.svelte",
+					"slug": "ui/build/layout/scroll-affordance.svelte",
+					"href": "/docs/api-reference/ui/build/layout/scroll-affordance.svelte"
 				},
 				{
 					"title": "ui/build/layout/scroll.svelte",
@@ -3331,6 +3361,21 @@
 					"href": "/docs/api-reference/ui/build/theme-toggle/theme-toggle.svelte"
 				},
 				{
+					"title": "ui/build/thinking-orb",
+					"slug": "ui/build/thinking-orb",
+					"href": "/docs/api-reference/ui/build/thinking-orb"
+				},
+				{
+					"title": "ui/build/thinking-orb/thinking-orb.svelte",
+					"slug": "ui/build/thinking-orb/thinking-orb.svelte",
+					"href": "/docs/api-reference/ui/build/thinking-orb/thinking-orb.svelte"
+				},
+				{
+					"title": "ui/build/thinking-orb/types",
+					"slug": "ui/build/thinking-orb/types",
+					"href": "/docs/api-reference/ui/build/thinking-orb/types"
+				},
+				{
 					"title": "ui/build/time-field",
 					"slug": "ui/build/time-field",
 					"href": "/docs/api-reference/ui/build/time-field"
@@ -3613,6 +3658,11 @@
 			"title": "std/build/json",
 			"slug": "std/build/json",
 			"href": "/docs/api-reference/std/build/json"
+		},
+		{
+			"title": "std/build/rate-limit",
+			"slug": "std/build/rate-limit",
+			"href": "/docs/api-reference/std/build/rate-limit"
 		},
 		{
 			"title": "std/build/reckon",
@@ -4480,11 +4530,6 @@
 			"href": "/docs/api-reference/ui/build/collection-kanban/collection-kanban-move"
 		},
 		{
-			"title": "ui/build/collection-kanban/collection-kanban-record-detail.svelte",
-			"slug": "ui/build/collection-kanban/collection-kanban-record-detail.svelte",
-			"href": "/docs/api-reference/ui/build/collection-kanban/collection-kanban-record-detail.svelte"
-		},
-		{
 			"title": "ui/build/collection-kanban/collection-kanban-skeleton.svelte",
 			"slug": "ui/build/collection-kanban/collection-kanban-skeleton.svelte",
 			"href": "/docs/api-reference/ui/build/collection-kanban/collection-kanban-skeleton.svelte"
@@ -4508,6 +4553,21 @@
 			"title": "ui/build/collection-query/collection-query-state.svelte",
 			"slug": "ui/build/collection-query/collection-query-state.svelte",
 			"href": "/docs/api-reference/ui/build/collection-query/collection-query-state.svelte"
+		},
+		{
+			"title": "ui/build/collection-record-metadata",
+			"slug": "ui/build/collection-record-metadata",
+			"href": "/docs/api-reference/ui/build/collection-record-metadata"
+		},
+		{
+			"title": "ui/build/collection-record-metadata/collection-record-metadata",
+			"slug": "ui/build/collection-record-metadata/collection-record-metadata",
+			"href": "/docs/api-reference/ui/build/collection-record-metadata/collection-record-metadata"
+		},
+		{
+			"title": "ui/build/collection-record-metadata/collection-record-metadata.svelte",
+			"slug": "ui/build/collection-record-metadata/collection-record-metadata.svelte",
+			"href": "/docs/api-reference/ui/build/collection-record-metadata/collection-record-metadata.svelte"
 		},
 		{
 			"title": "ui/build/collection-runtime",
@@ -4553,6 +4613,11 @@
 			"title": "ui/build/collection-table/collection-record-detail-tabs.svelte",
 			"slug": "ui/build/collection-table/collection-record-detail-tabs.svelte",
 			"href": "/docs/api-reference/ui/build/collection-table/collection-record-detail-tabs.svelte"
+		},
+		{
+			"title": "ui/build/collection-table/collection-record-detail.svelte",
+			"slug": "ui/build/collection-table/collection-record-detail.svelte",
+			"href": "/docs/api-reference/ui/build/collection-table/collection-record-detail.svelte"
 		},
 		{
 			"title": "ui/build/collection-table/collection-table-applied-filters",
@@ -4650,9 +4715,9 @@
 			"href": "/docs/api-reference/ui/build/collection-table/internal/collection-grid.svelte"
 		},
 		{
-			"title": "ui/build/collection-table/internal/collection-table-detail-registration.svelte",
-			"slug": "ui/build/collection-table/internal/collection-table-detail-registration.svelte",
-			"href": "/docs/api-reference/ui/build/collection-table/internal/collection-table-detail-registration.svelte"
+			"title": "ui/build/collection-table/internal/collection-table-navigation-frame.svelte",
+			"slug": "ui/build/collection-table/internal/collection-table-navigation-frame.svelte",
+			"href": "/docs/api-reference/ui/build/collection-table/internal/collection-table-navigation-frame.svelte"
 		},
 		{
 			"title": "ui/build/collection-table/internal/collection-table-state.svelte",
@@ -5635,6 +5700,11 @@
 			"href": "/docs/api-reference/ui/build/i18n/messages/misc.messages"
 		},
 		{
+			"title": "ui/build/i18n/messages/record-metadata.messages",
+			"slug": "ui/build/i18n/messages/record-metadata.messages",
+			"href": "/docs/api-reference/ui/build/i18n/messages/record-metadata.messages"
+		},
+		{
 			"title": "ui/build/i18n/messages/table.messages",
 			"slug": "ui/build/i18n/messages/table.messages",
 			"href": "/docs/api-reference/ui/build/i18n/messages/table.messages"
@@ -5878,6 +5948,11 @@
 			"title": "ui/build/layout/layout.shared",
 			"slug": "ui/build/layout/layout.shared",
 			"href": "/docs/api-reference/ui/build/layout/layout.shared"
+		},
+		{
+			"title": "ui/build/layout/scroll-affordance.svelte",
+			"slug": "ui/build/layout/scroll-affordance.svelte",
+			"href": "/docs/api-reference/ui/build/layout/scroll-affordance.svelte"
 		},
 		{
 			"title": "ui/build/layout/scroll.svelte",
@@ -6828,6 +6903,21 @@
 			"title": "ui/build/theme-toggle/theme-toggle.svelte",
 			"slug": "ui/build/theme-toggle/theme-toggle.svelte",
 			"href": "/docs/api-reference/ui/build/theme-toggle/theme-toggle.svelte"
+		},
+		{
+			"title": "ui/build/thinking-orb",
+			"slug": "ui/build/thinking-orb",
+			"href": "/docs/api-reference/ui/build/thinking-orb"
+		},
+		{
+			"title": "ui/build/thinking-orb/thinking-orb.svelte",
+			"slug": "ui/build/thinking-orb/thinking-orb.svelte",
+			"href": "/docs/api-reference/ui/build/thinking-orb/thinking-orb.svelte"
+		},
+		{
+			"title": "ui/build/thinking-orb/types",
+			"slug": "ui/build/thinking-orb/types",
+			"href": "/docs/api-reference/ui/build/thinking-orb/types"
 		},
 		{
 			"title": "ui/build/time-field",

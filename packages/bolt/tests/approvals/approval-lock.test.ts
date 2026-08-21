@@ -83,7 +83,8 @@ const definition = workspace({
 	teams: {
 		'admin-data': ['admin-data'],
 		'admin-approval': ['admin-approval'],
-		admin: ['admin-data', 'admin-approval']
+		admin: ['admin-data', 'admin-approval'],
+		approvers: ['admin-data', 'admin-approval']
 	},
 	automations: [],
 	integrations: [],
@@ -97,7 +98,7 @@ const definition = workspace({
 const subject = Subject.make({
 	userId: 'admin-1',
 	tenantId: 'tenant-1',
-	teamPath: ['admin'],
+	teamPath: ['approvers'],
 	policies: []
 });
 

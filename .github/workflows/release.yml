@@ -71,9 +71,8 @@ jobs:
       # to ignore a red release. The next one that means something would have been ignored too.
       #
       # Checked per package rather than once, because the set must stay coherent: if a version is
-      # half-published — the registry refuses deletes, which is how 0.0.11 became permanently
-      # poisoned — the remaining packages still publish and the set converges instead of needing a
-      # version burned to recover.
+      # only partly published, the remaining packages still publish and the set converges without
+      # turning an ordinary source-only push into a failed release.
       - name: Publish one coherent beta package set
         run: |
           set -euo pipefail

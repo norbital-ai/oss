@@ -68,15 +68,15 @@ the defaults that cover most cases:
 | Requirement pattern                                                 | Default construction                                                                                 |
 | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | A record with a lifecycle                                           | a collection with a `status` enum, a hook enforcing the transition map, audit built in               |
-| Money anywhere                                                      | a `money` custom type; amounts computed once per document, totals as sums of rounded lines           |
+| Money anywhere                                                      | a `money` datatype; amounts computed once per document, totals as sums of rounded lines              |
 | Master data from another system                                     | a mirrored collection with the external key in `external_code`, kept in step by a scheduled pull     |
 | A committed document (quote, order, invoice)                        | a document collection that locks when it leaves draft; lines snapshot the prices they were struck at |
 | A number that must hold up to scrutiny (pay, accrual, contribution) | a reckon computation graph — deterministic, replayable, auditable                                    |
 | Work on a schedule or after an event                                | an automation; idempotent, durable, `api.infer` when judgement is needed                             |
 | A screen beyond the standard table                                  | an app; derived queries only (`$derived`), one scroll owner, bilingual copy                          |
-| A custom endpoint or dashboard                                      | a remote (query/command) or an app with `findGrouped`/`aggregate`                                    |
+| A custom endpoint or dashboard                                      | a function (query/command) or an app with `findGrouped`/`aggregate`                                  |
 | External people with accounts                                       | policies + teams, approval flows where a second pair of eyes is needed                               |
-| External people without accounts                                    | a channel + agent surface, scoped by policy to their own records                                     |
+| External people without accounts                                    | an envoy agent surface, scoped by policy to their own records                                        |
 | An external system or provider                                      | an integration: pull / webhook / send / connector / MCP; decide its credentials and its outbox       |
 
 Anti-patterns to refuse while mapping: storing a number that can be derived (stock position, paid

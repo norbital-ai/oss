@@ -155,7 +155,7 @@ describe('authored system-column audit', () => {
 		expect(
 			auditAuthoredSystemColumns({
 				'a.svelte':
-					'<CollectionTable query={{ where: { employee_id: { eq: record.norbital_id } }} />'
+					'<CollectionTable query={{ where: { employee_id: { eq: record.norbital_id } } }} />'
 			})
 		).toEqual([]);
 		expect(

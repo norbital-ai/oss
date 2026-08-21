@@ -72,7 +72,7 @@ where: {
 ```
 
 Client controls accept the user's local perspective and convert timestamp operands to UTC before
-the query crosses the server boundary. Server roles, seeds, remotes, and direct API callers must
+the query crosses the server boundary. Server roles, seeds, functions, and direct API callers must
 already provide canonical wire values. Never make the server guess a timezone.
 
 For `dateRange()` filters, `contains_date` starts from the viewer's calendar date and resolves it

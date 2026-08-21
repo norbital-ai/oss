@@ -6,53 +6,51 @@ sign-off first?" are answered in the same place, from the same declaration.
 
 ## Policies
 
-A policy is a named set of **grants** in `src/policies/+<name>.policy.ts`. A grant is an action on a
-collection, optionally narrowed to matching rows:
+A policy is a named set of **grants** in `src/access/policies/+<name>.ts`. The filename supplies the
+name; the module default-exports `{ description, grants, capabilities?, limits? }`. A grant is an
+action on a collection, optionally narrowed to matching rows:
 
 ```ts
-{ collection: 'quotes', action: 'read', where: { owner_id: '${requestor.id}' } }
+{ collection: 'quotes', action: 'read', where: { owner_id: '${requestor.norbital_id}' } }
 ```
 
 - Actions are `create`, `read`, `update`, `delete`.
 - `where` narrows a grant to rows that match, so "read only your own quotes" is a grant rather than
   something the application has to remember to enforce.
-- A policy also lists which apps it can reach.
-- **The `name` a policy declares is its filename key**, so `+sales_rep.policy.ts` declares
-  `name: 'sales_rep'`. Everything binds to a policy by that string — a team's holdings in
-  `src/+teams.ts`, a channel's `policy` ceiling — and it is the same string the generated
-  `PolicyName` union is built from, which is what typechecks the other two. A policy has no separate
-  display label; the prose a person reads is `description`.
+- `capabilities` grants apps, authored tools, MCP servers, and workspace skills. `limits` holds the
+  rate rules for this policy's holders.
+- **The filename is the only policy name.** `+sales_rep.ts` is `sales_rep`; do not restate `name`,
+  `effect`, or `actions` in the object. The compiler derives those fields and generates the
+  `PolicyName` union used by teams, envoys, and automations. The human-facing label is `description`.
+- Combining a narrowed and an unconditional grant for the same collection/action would erase the
+  narrowing, so the compiler refuses that unsafe composition.
 
 ## Teams hold policies; people belong to one team
 
-There are **no roles**. A policy has a `name` and nothing else selects it — `PolicyDeclaration` has
-no `roles` array, and the runtime's own system policy (`system: true`, reachable only by a
-gateway-signed subject) is the single exception that proves it.
+There are **no roles**. A policy has a filename-derived name and nothing else selects it.
 
 Three facts, and they are the whole model:
 
 1. **A person belongs to exactly one team.** `bolt_auth_user.team_id` points at one `bolt_team` row.
    Not a set. A combination of authority that used to come from holding two roles at once has to be
-   a *named team* now — more verbose, and more honest, because every combination anybody actually
+   a _named team_ now — more verbose, and more honest, because every combination anybody actually
    holds appears in a diff.
-2. **Which policies a team holds is declared in `src/+teams.ts`**, keyed by team name and valued by
+2. **Which policies a team holds is declared in `src/access/+teams.ts`**, keyed by team name and valued by
    policy names, `satisfies Teams`. Team names are matched **case-insensitively** against
    `bolt_team.name` — one rule, everywhere.
 3. **Membership is a row; authority is source.** An operator creates teams and moves people between
-   them from a dashboard, without a deploy, because that changes constantly. What a team may *do* is
+   them from a dashboard, without a deploy, because that changes constantly. What a team may _do_ is
    compiled into the release, because a row that granted a policy would be a privilege escalation
    performed with an `update` statement, in a place no diff and no type check can see.
 
-The two halves are bound by name and they move independently, so both directions fail **soft**:
+The two halves are bound by name and they move independently at runtime:
 
 - A `bolt_team` row whose name `+teams.ts` does not mention holds no policies. Inert, not broken —
   an operator may create a team before the code that gives it authority ships.
-- A team naming a policy the release does not declare has that name **dropped and warned about, once,
-  naming both halves** — never refused. Taking a workspace down over a stale string is the wrong
-  answer; granting it is unthinkable. The generated `PolicyName` union is what catches this at build
-  time instead, in the map that hands authority to people.
+- Source cannot name a missing policy because the generated `PolicyName` union makes that a build
+  error. A stale database team row remains inert until source declares authority for its name.
 
-`teamPath` is the team and its ancestors by `parent_id`, depth-ordered, and a subject holds the union
+`teamPath` is the team and its descendants by `parent_id`, depth-ordered, and a subject holds the union
 of the policies every team on that path declares. Note that **approval eligibility does not walk the
 path** — see below.
 
@@ -71,12 +69,9 @@ grant behind.
   collection: 'variation_requests',
   action: 'create',
   approval: {
-    id: '019f6f10-0001-7000-8000-000000000003',
-    name: 'Field operations variation approval',
     steps: [
       {
-        id: '019f6f10-0001-7000-8000-000000000103',
-        name: 'Field operations controller review',
+        key: 'controller_review',
         approvers: ['Field Operations Controllers'],
         description: 'Controller verifies scope change and selected photo evidence.'
       }
@@ -89,21 +84,22 @@ Details that matter:
 
 - **`approvers` entries and `bolt_team` names are the same string.** There is no id resolution and no
   separate approver registry: an entry is matched against the deciding subject's own team name,
-  folded. That is the whole binding, which is also why a typo in one is invisible until somebody
-  tries to decide an approval and finds nobody is eligible.
+  folded. `approvers` is generated `TeamName`, so misspellings fail the build. Declare review-only
+  teams in `src/access/+teams.ts` with an empty policy list.
 - **Activation creates the teams a step names.** On deploy, `reconcileApproverTeams` inserts an
-  *empty* `bolt_team` row for every `approvers` entry that has no row yet, guarded by a folded
+  _empty_ `bolt_team` row for every `approvers` entry that has no row yet, guarded by a folded
   `not exists` so two spellings cannot mint two teams. It never refuses a release, and it logs each
   creation — so a name here that nobody expected is a typo in `approvers` showing itself at the one
   moment somebody is watching. An empty team is the correct thing to create: the name now resolves,
   the team appears in the settings surface, and putting somebody in it is one assignment away.
-- **`steps` is flat.** A step carries `{ id, name, approvers, description? }` and runs in order.
+- **`steps` is flat.** An authored step carries `{ key, approvers, description? }` and runs in order.
   There is no nested `steps` array, no `supercededBy`, and no `where` on the flow or on a step.
 - **`steps` and `approvers` must both be non-empty.** An empty step list resolves as
   already-approved, so the gate would be declared and then not exist. A step with no approvers can
   never be acted on and permanently wedges every write it gates.
-- **The `id` values are permanent.** An in-flight request stores the step ids it is waiting on.
-  Reissuing one strands the request against a step the config no longer has.
+- **Identity is derived, not authored.** The configuration id derives from
+  `(policy, collection, action)` and each step id adds its stable `key`. Reordering steps is safe;
+  changing a key changes the identity an in-flight request is waiting on.
 
 ## Write-then-lock
 
@@ -112,7 +108,7 @@ Norbital does not hold a write and apply it after approval. It writes first and 
 When a mutation matches a gated grant:
 
 1. **The hooks run and the row is written exactly as an ungated write would write it.** This order
-   matters: the earlier design stored the *operation* and wrote nothing, so the stored values were
+   matters: the earlier design stored the _operation_ and wrote nothing, so the stored values were
    only what the form posted — a collection that derives six `not null` columns in
    `create.perRecord.before` produced an operation that could not satisfy its own schema when it was
    replayed, and its `after` hook never ran at all.
@@ -136,10 +132,10 @@ request, which a reviewer has to decide on separately.
 
 `approval_request.status` is one of `ONGOING`, `APPROVED`, `REJECTED`, `WITHDRAWN`.
 
-| Outcome                   | What happens                                                                                                                                                                                       |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Approved                  | The lock clears. For a create the row was already there, so approval releases it **and runs `create.perRecord.after` then** — that is what "approved" means for a created record. An update applies its stored values; a delete performs the delete. |
-| Rejected, or withdrawn    | For a create the row is deleted, because it only ever existed under the request. For an update or delete the lock is simply released and the record stands as it was.                              |
+| Outcome                | What happens                                                                                                                                                                                                                                         |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Approved               | The lock clears. For a create the row was already there, so approval releases it **and runs `create.perRecord.after` then** — that is what "approved" means for a created record. An update applies its stored values; a delete performs the delete. |
+| Rejected, or withdrawn | For a create the row is deleted, because it only ever existed under the request. For an update or delete the lock is simply released and the record stands as it was.                                                                                |
 
 There is no request-for-change flow. The client's `approvals.process` still accepts
 `REQUEST_FOR_CHANGE` in its action union and does nothing with it — it issues no decision and
@@ -154,21 +150,21 @@ nobody else, including every rung above it.
 
 ## Where the state lives
 
-| Table / column                                 | Holds                                                                                     |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `approval_request`                             | Status, the steps, which record it holds, the operation to apply, when it closed          |
-| `requestor`                                    | Links a request to the user who raised it                                                 |
-| `norbital_approval_id` on every collection row | The stamp identifying the open request holding it — **this is the lock**                  |
-| `bolt_team`                                    | The teams themselves; `approvers` entries are matched against `name`                      |
-| `bolt_auth_user.team_id`                       | Which single team a person belongs to                                                     |
+| Table / column                                 | Holds                                                                            |
+| ---------------------------------------------- | -------------------------------------------------------------------------------- |
+| `approval_request`                             | Status, the steps, which record it holds, the operation to apply, when it closed |
+| `requestor`                                    | Links a request to the user who raised it                                        |
+| `norbital_approval_id` on every collection row | The stamp identifying the open request holding it — **this is the lock**         |
+| `bolt_team`                                    | The teams themselves; `approvers` entries are matched against `name`             |
+| `bolt_auth_user.team_id`                       | Which single team a person belongs to                                            |
 
 The flow itself is not a separate table: it rides on the policy grant's own `approval` field, in the
 compiled release, carrying **team names** — there is no `approval_config` with ids resolved into it,
 and no `_approval_lock` table. Nothing is enforced by database triggers; the runtime checks the stamp
 before it writes.
 
-`approval_request` and `requestor` are system collections. Whether a given agent may read them
-depends on its configuration, but they exist and this is where the answers are.
+`approval_request` and `requestor` are system collections. Whether a subject may read them depends
+on its policies, but they exist and this is where the answers are.
 
 ## Approver teams on a fresh tenant
 
@@ -177,10 +173,9 @@ inserts an **empty** `bolt_team` row for any name that has none, so on a brand-n
 exist as soon as the workspace activates. It never refuses a release and never invents membership —
 who is on a team is an operator's decision.
 
-So the failure mode is no longer "no approvers on every step"; it is a team that exists and is
-**empty**. If an approval cannot be decided by anybody, look for a `bolt_team` row with no members,
-or for an `approvers` spelling that created a team nobody recognises — the activation log names every
-team it created for exactly that reason.
+So the failure mode is no longer an unknown approver name; generated types reject that. It is a
+declared team that exists and is **empty**. If an approval cannot be decided, look for a
+`bolt_team` row with no members. The activation log names every team it created.
 
 ## What does not exist
 

@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/bolt-protocol",
-	"version": "0.0.21",
+	"version": "0.0.1",
 	"description": "Neutral Bolt artifact invocation and facility contracts.",
 	"type": "module",
 	"sideEffects": false,
@@ -42,11 +42,11 @@
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt-protocol"
 	},
 	"peerDependencies": {
-		"effect": "4.0.0-rc.109"
+		"effect": "4.0.0-rc.111"
 	},
 	"devDependencies": {
-		"@effect/vitest": "4.0.0-rc.109",
-		"effect": "4.0.0-rc.109",
+		"@effect/vitest": "4.0.0-rc.111",
+		"effect": "4.0.0-rc.111",
 		"typescript": "catalog:",
 		"vitest": "4.1.11"
 	},

@@ -23,7 +23,7 @@ handler and it would still pass.
 Two structural defences, both now in that file:
 
 - **A case that must be admitted.** `:307` `accepts an administrator, and the profile it wrote is
-  the profile stored` — its comment says it plainly: "The gate has to still let the two people who
+the profile stored` — its comment says it plainly: "The gate has to still let the two people who
   administer this workspace through, or the tests above would pass just as well against a handler
   that refused everybody."
 - **An assertion on the effect, not the status.** `:193` reads the control store back, because "a
@@ -53,7 +53,7 @@ they were exercising an administrator and were silently authenticating as an ord
 The suite was green, the cases were named for admin behaviour, and none of them touched the admin
 path.
 
-This is the general failure recorded as *fixtures must match the real API*: a fixture written from
+This is the general failure recorded as _fixtures must match the real API_: a fixture written from
 what the code expects, rather than from what the system returns, makes a green suite prove a false
 premise. It has happened here against an external API too — a fixture described a sandbox provider
 as returning memory and CPU at the top level when it has never returned that shape; the check read
@@ -62,7 +62,7 @@ on every request.
 
 **Rule.** A fixture standing in for a row, a response, or a payload must be checked against the thing
 that actually produces it — the query's `select` list, the vendor's docs, a real response. Where a
-shape has burned you, keep a case that pins the *wrong* shape to failing so it cannot drift back.
+shape has burned you, keep a case that pins the _wrong_ shape to failing so it cannot drift back.
 
 ---
 
@@ -159,7 +159,7 @@ oss/packages/bolt/tests/client/replica.test.ts:189
 	expect(client.cursor()).toEqual(ORIGIN_CURSOR);   // the behaviour: the cursor did not advance
 ```
 
-`onError` is a callback the caller passes *in* — an output port of the subject, not a collaborator
+`onError` is a callback the caller passes _in_ — an output port of the subject, not a collaborator
 it reaches out to — so its firing is part of the contract. Even so, the assertion that carries the
 test is the next line.
 
@@ -175,7 +175,7 @@ by the database's own cascade — and then asserts another run's payslips surviv
 
 A test that reimplements the rule it is checking passes forever against its own copy.
 `templates/hr-payroll/src/lib/policy_grants.test.ts` does exactly this — and is in this skill as the
-*good* example, because of how it handles it:
+_good_ example, because of how it handles it:
 
 ```
 :11  "  - `policiesHeldByTeam` — `teamsByFoldedName.get(teamName.toLocaleLowerCase())`, then each name
@@ -192,7 +192,7 @@ the source it copies, and the weakness is stated in the header where the next re
 
 **And the weakness fired.** That header used to restate `subjectHasPolicy` as
 `const roles = policy.roles ?? [policy.name]`. `PolicyDeclaration.roles` no longer exists — a policy
-is selected by its `name` and by the teams that declare it in `src/+teams.ts`, and nothing else — so
+is selected by its `name` and by the teams that declare it in `src/access/+teams.ts`, and nothing else — so
 for as long as the rename went unnoticed those assertions were passing against a copy of a rule the
 runtime had stopped performing. The restatement is exactly what made that visible in a diff instead
 of invisible in a green run, which is the argument for the discipline rather than against it.

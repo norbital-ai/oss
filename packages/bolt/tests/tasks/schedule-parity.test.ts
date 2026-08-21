@@ -37,7 +37,7 @@ type DeclaredCron = Readonly<{
 /** Every `schedule: '<cron>'` in a template's authored source, read off disk rather than assumed. */
 const declaredCrons = (template: string): ReadonlyArray<DeclaredCron> => {
 	const found: Array<DeclaredCron> = [];
-	const automations = join(TEMPLATES, template, 'src/automation');
+	const automations = join(TEMPLATES, template, 'src/automations');
 	if (existsSync(automations)) {
 		for (const file of readdirSync(automations).filter((entry) => entry.startsWith('+'))) {
 			const crontab = /schedule:\s*'([^']+)'/u.exec(readFileSync(join(automations, file), 'utf8'));
@@ -90,6 +90,7 @@ const workspaceFrom = (crons: ReadonlyArray<DeclaredCron>): WorkspaceDefinition 
 			.map((cron) => ({
 				name: cron.name,
 				trigger: { _tag: 'Schedule', cron: cron.crontab },
+				policies: [],
 				command: `automations.${cron.name}`
 			})),
 		integrations: crons

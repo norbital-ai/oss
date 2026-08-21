@@ -79,7 +79,7 @@ correct renderer per column kind. Do not pair a read-only label with a `DataRend
 field. Section headings (`h3` + `p`) are not duplication — they describe the section, not a value.
 
 **Data renderers first.** Use `formatDataValue` or `Field`/`DataRenderer` before hand-rolling
-display. Create a custom renderer (`+renderer.svelte` in `custom-types/`) only for interaction or
+display. Create a custom renderer (`+renderer.svelte` in `datatypes/`) only for interaction or
 display the built-ins genuinely cannot express.
 
 | Kind                      | Renders as          | Edit mode             |

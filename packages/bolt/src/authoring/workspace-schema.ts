@@ -82,11 +82,14 @@ export interface FieldDefinition<TType extends ScalarType = ScalarType> {
 	/**
 	 * The upload types authored as `file({ mimeTypes })`.
 	 *
-	 * The column holds a file id, so nothing about the file is knowable here at write time — this
-	 * only exists to reach the surface that offers the upload, which is why it travels on the field
-	 * description and is projected by `workspace.manifest` rather than checked anywhere.
+	 * The column holds the file value inline. This metadata reaches the upload surface and the
+	 * manifest; it does not change the JSON value the database stores.
 	 */
 	readonly mimeTypes?: ReadonlyArray<string>;
+	/** Whether this JSON column was authored with `file()`. */
+	readonly file?: boolean;
+	/** Whether it was authored with `file({ multiple: true })`. */
+	readonly fileMultiple?: boolean;
 }
 /** Owns make field behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 const makeField =

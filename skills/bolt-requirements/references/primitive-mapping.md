@@ -11,7 +11,7 @@ should be used unless a specific requirement breaks it.
 | A record with a lifecycle                                                    | collection + `status` enum + a `+hooks.ts` transition map | the hook refuses every transition not in the map; history and audit are system columns, nothing to build   |
 | One entity, several independent lifecycles                                   | separate collections                                      | a collection trying to be two lifecycles is a modelling error; split it                                    |
 | A fact that changes over time and must be provable                           | effective-dated facts                                     | precedent: hr-payroll employee facts                                                                       |
-| A structured value that is not a row (money, address, bank account, pattern) | a `custom-types/<name>` definition + renderer             | JSONB storage; the definition is the only schema                                                           |
+| A structured value that is not a row (money, address, bank account, pattern) | a `datatypes/<name>` definition + renderer                | JSONB storage; the definition is the only schema                                                           |
 | Two things that belong to each other (document lines, shipment items)        | a child collection with a relationship                    | children snapshot their parent's context (price, code, name) at creation; precedent: crm quote_lines       |
 | Numbering, uniqueness, versions                                              | a hook (before create) + text columns                     | numbering rules are business logic; put them in the hook, not in the UI                                    |
 | Deletion                                                                     | none by default                                           | deletions are policy; prefer lifecycle terminal states — an approved record should usually end, not vanish |
@@ -20,7 +20,7 @@ should be used unless a specific requirement breaks it.
 
 | Requirement                                                                   | Construction                                                                                  | Notes                                                                                   |
 | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Money anywhere                                                                | `money` custom type per workspace                                                             | currency, rounding, tax modes from `@norbital-ai/std` finance                           |
+| Money anywhere                                                                | `money` datatype per workspace                                                                | currency, rounding, tax modes from `@norbital-ai/std` finance                           |
 | A document's amounts                                                          | compute each line's net/tax/total once, in the hook; totals are sums of already-rounded lines | never recompute in the UI; precedent: crm                                               |
 | A figure that must hold up to audit (pay, accrual, contribution, eligibility) | a reckon computation graph                                                                    | deterministic, replayable, hashable — the hr-payroll precedent                          |
 | Derived status (paid, in stock, available)                                    | derive at render from events                                                                  | never store what can be derived; precedent: crm settlement and goods-receipt derivation |
@@ -30,21 +30,21 @@ should be used unless a specific requirement breaks it.
 
 | Requirement                                    | Construction                                                      | Notes                                                                                        |
 | ---------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Work on a schedule or after an event           | `src/automation/+<name>.ts`                                       | durable and idempotent by contract; the automation is re-run, not re-implemented, on failure |
+| Work on a schedule or after an event           | `src/automations/+<name>.ts`                                      | durable and idempotent by contract; the automation is re-run, not re-implemented, on failure |
 | Judgement inside automated work                | `api.infer` with a structured output schema                       | the schema is the contract with the model; never free-form text as the output                |
-| A custom endpoint or dashboard                 | `src/remotes/+<name>.ts` (query/command)                          | schemas are Effect `Schema`; the payload is validated at dispatch                            |
+| A custom endpoint or dashboard                 | `src/functions/+<name>.ts` (query/command)                        | schemas are Effect `Schema`; the payload is validated at dispatch                            |
 | A screen beyond the standard table             | an app (`src/apps/+<name>.svelte`) + CollectionTable/kanban/chart | `$derived` queries; one scroll owner; bilingual copy                                         |
-| A report of numbers                            | `findGrouped` / `aggregate` in an app or remote                   | never load wide datasets and regroup in memory                                               |
+| A report of numbers                            | `findGrouped` / `aggregate` in an app or function                 | never load wide datasets and regroup in memory                                               |
 | A reusable calculation shared by UI and server | a plain module in `src/lib/` imported by both                     | with tests alongside                                                                         |
 
 ## People
 
-| Requirement                               | Construction                             | Notes                                                                                                        |
-| ----------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Internal roles with different permissions | `src/policies/+<name>.policy.ts` + `src/+teams.ts` | policy is source: who may read what, what needs approval. A person is on exactly one team, so a combination of authority is its own named team; there are no roles. Precedent: field-operations |
-| A decision that needs a second person     | an approval flow on the policy           | write-then-lock: the write lands pending, approval moves it; the `norbital-platform` skill has the behaviour |
-| External people with accounts             | policies + teams, same as internal       | nothing special about external users except which team they are put on                                       |
-| External people without accounts          | a channel + agent surface                | scoped by policy to their own records; precedent: field-operations contractors on WhatsApp                   |
+| Requirement                               | Construction                                              | Notes                                                                                                                                                                                           |
+| ----------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Internal roles with different permissions | `src/access/policies/+<name>.ts` + `src/access/+teams.ts` | policy is source: who may read what, what needs approval. A person is on exactly one team, so a combination of authority is its own named team; there are no roles. Precedent: field-operations |
+| A decision that needs a second person     | an approval flow on the policy                            | write-then-lock: the write lands pending, approval moves it; the `norbital-platform` skill has the behaviour                                                                                    |
+| External people with accounts             | policies + teams, same as internal                        | nothing special about external users except which team they are put on                                                                                                                          |
+| External people without accounts          | an envoy agent surface                                    | scoped by policy to their own records; precedent: field-operations contractors on WhatsApp                                                                                                      |
 
 ## The outside world
 
@@ -54,7 +54,7 @@ should be used unless a specific requirement breaks it.
 | A provider writing into the workspace                           | a signed inbound webhook binding                                                                 | unsigned deliveries are refused; the signature header is mandatory           |
 | The workspace writing to a provider                             | an outbound send with a vault credential                                                         | outbox semantics: the send is retried, never duplicated                      |
 | A browser SDK or client library (maps, CAD, physics, documents) | a normal dependency in the workspace package                                                     | precedent: `pdq-wasm`, `exceljs`, `exifr` — a dependency, not an integration |
-| Remote tools for the agent                                      | an MCP server declaration in `src/mcp/`                                                          | tools are allowlisted per server                                             |
+| Remote tools for the agent                                      | an MCP server declaration in `src/capabilities/mcp/`                                             | servers are granted by policy                                                |
 | Secrets                                                         | `+env.ts` declarations; values entered in the vault                                              | server-only by construction                                                  |
 
 ## Anti-patterns

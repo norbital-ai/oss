@@ -57,7 +57,10 @@ const MODEL_METADATA: Required<ModelMetadata> = {
 
 /** `text()`, `phone()` and `enums()` share one bag, so one witness covers all three. */
 const TEXT_OPTIONS: Required<NonNullable<Parameters<typeof text>[0]>> = { search: true };
-const FILE_OPTIONS: Required<NonNullable<Parameters<typeof file>[0]>> = { mimeTypes: [] };
+const FILE_OPTIONS: Required<NonNullable<Parameters<typeof file>[0]>> = {
+	mimeTypes: [],
+	multiple: true
+};
 const VECTOR_OPTIONS: Required<Parameters<typeof vector>[0]> = { dimensions: 1 };
 
 type Witness = Readonly<{
@@ -100,7 +103,7 @@ const WITNESSES: ReadonlyArray<Witness> = [
 	{
 		authoring: 'file options',
 		options: FILE_OPTIONS,
-		readBy: { mimeTypes: 'describeModelColumns' },
+		readBy: { mimeTypes: 'describeModelColumns', multiple: 'describeModelColumns' },
 		acceptedButUnread: {}
 	},
 	{

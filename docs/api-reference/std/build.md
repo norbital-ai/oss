@@ -44,6 +44,22 @@ Re-exports [assertSameCurrency](/docs/api-reference/std/build/finance/money.md#a
 
 ***
 
+<a id="bucketkey"></a>
+
+### bucketKey
+
+Re-exports [bucketKey](/docs/api-reference/std/build/rate-limit.md#bucketkey)
+
+***
+
+<a id="countattempt"></a>
+
+### countAttempt
+
+Re-exports [countAttempt](/docs/api-reference/std/build/rate-limit.md#countattempt)
+
+***
+
 <a id="currencyfractiondigits"></a>
 
 ### currencyFractionDigits
@@ -73,6 +89,14 @@ Re-exports [ErrorSummary](/docs/api-reference/std/build/error.md#errorsummary)
 ### evaluateCelExpression
 
 Re-exports [evaluateCelExpression](/docs/api-reference/std/build/cel.md#evaluatecelexpression)
+
+***
+
+<a id="fixedwindow"></a>
+
+### FixedWindow
+
+Re-exports [FixedWindow](/docs/api-reference/std/build/rate-limit.md#fixedwindow)
 
 ***
 
@@ -177,6 +201,14 @@ Re-exports [MoneyAmount](/docs/api-reference/std/build/finance/money.md#moneyamo
 ### renderTreeAscii
 
 Re-exports [renderTreeAscii](/docs/api-reference/std/build/tree.md#rendertreeascii)
+
+***
+
+<a id="retryafterseconds"></a>
+
+### retryAfterSeconds
+
+Re-exports [retryAfterSeconds](/docs/api-reference/std/build/rate-limit.md#retryafterseconds)
 
 ***
 
@@ -353,6 +385,14 @@ Re-exports [TruncationOptions](/docs/api-reference/std/build/truncate.md#truncat
 ### TruncationResult
 
 Re-exports [TruncationResult](/docs/api-reference/std/build/truncate.md#truncationresult)
+
+***
+
+<a id="windowstate"></a>
+
+### WindowState
+
+Re-exports [WindowState](/docs/api-reference/std/build/rate-limit.md#windowstate)
 
 ***
 

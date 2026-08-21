@@ -179,7 +179,7 @@ promises — `yield* api.db.query.<collection>.findMany(...)`, `yield* api.db.<c
 
 ## Automation
 
-`src/automation/+daily_site_digest.ts`:
+`src/automations/+daily_site_digest.ts`:
 
 ```ts
 import { defineAutomation } from '@norbital-ai/bolt/authoring';
@@ -190,6 +190,7 @@ export default defineAutomation(
 	{
 		description:
 			'Counts every active site each morning so the ops desk opens on a fresh roll-call.',
+		policies: ['operations'],
 		handler: (api) =>
 			Effect.gen(function* () {
 				const sites = yield* api.db.query.sites.findMany({ limit: 250 });
@@ -209,6 +210,7 @@ export default defineAutomation(
 	{ trigger: { collection: 'sites', event: 'created' } },
 	{
 		description: 'Recounts sites whenever one is added, so the desk total never drifts.',
+		policies: ['operations'],
 		handler: (api, { scope }) =>
 			Effect.gen(function* () {
 				const count = yield* api.db.query.sites.count({});
@@ -218,8 +220,8 @@ export default defineAutomation(
 );
 ```
 
-`kind: 'agent'` is not a `defineAutomation` body — interactive chat and channels use
-`AgentAutomationSpec` on `src/+agent.ts` instead. When a handler or hook needs model judgement, call
+Interactive web chat uses the shared `src/+agents.md` prompt as the signed-in person. An envoy adds
+its own `task` and policy array from `src/envoys/+<name>.ts`. When a handler or hook needs model judgement, call
 `api.infer({ schema, prompt, model?, images? })` — an Effect `Schema.Schema` for `schema` (never
 zod), and optionally the workspace images the turn should see. It is a single schema-validated turn:
 it offers no tools, owns no transcript, and never reaches authoring, a sandbox, MCP, or a write.
@@ -232,6 +234,7 @@ export default defineAutomation(
 	{
 		description:
 			'Weekly statutory alignment check — rule-based drift detection, optional successor copies, AI-written report.',
+		policies: ['payroll_automation'],
 		handler: (api) =>
 			Effect.gen(function* () {
 				const findings = detectDrift(/* bounded reads */);
@@ -279,12 +282,12 @@ writes roll back, the host runs the model, and a later admit resumes the handler
 result. The successful writes commit when the function returns. Keep the authored handler straightforward;
 do not add home-grown queues, timers or retry tables.
 
-Interactive chat and channel inbound start the same way: persist the user turn, then admit the loop
+Interactive chat and envoy inbound start the same way: persist the user turn, then admit the loop
 function. Authors never choose a queue.
 
-## Remotes
+## Functions
 
-`src/remotes/+compute_forecast.ts`:
+`src/functions/+compute_forecast.ts`:
 
 ```ts
 import { defineQueryHandler } from '@norbital-ai/bolt/authoring';
@@ -304,8 +307,8 @@ export default defineQueryHandler({
 });
 ```
 
-`description` is required on both handler kinds and reaches `manifest.handlers`: a remote's name is
-author-chosen and its payload schema describes the request, not the effect. Remotes are imperative
+`description` is required on both handler kinds and reaches `manifest.handlers`: a function's name is
+author-chosen and its payload schema describes the request, not the effect. Functions are imperative
 request/response calls; reactive reads belong to `client.db`. The filename becomes the
 generated `client.invoke` property. Use `defineQueryHandler` for reactive, read-only server computation and
 `defineCommandHandler` for imperative work that may mutate data. Payload schemas are Effect `Schema`

@@ -6,38 +6,35 @@
 hand-write a schema or a renderer for it.** Everything below is a named export of
 `@norbital-ai/bolt/authoring`, and every one renders natively with its own display and input.
 
-| import | stores | notes |
-| --- | --- | --- |
-| `text()` | text | `{ search: true }` puts it in the search index |
-| `numeric()` | exact decimal | never `number` for anything you do arithmetic on |
-| `integer()` | integer | |
-| `boolean()` | boolean | |
-| `uuid()` | uuid | foreign keys and ids |
-| `date()` | date | no time component |
-| `timestamp()` | timestamptz | an instant |
-| `clockTime()` | wall-clock time | a time of day with no date |
-| `dateRange()` | a start/end pair | one value, so the ends cannot separate |
-| `enums([...])` | a closed set | the members reach the manifest |
-| `money()` | amount + currency | **one value.** Never `numeric()` beside an `enums()` currency |
-| `file()` | a file | the column carries the file |
-| `geolocation()` | a point | picker and map come with it |
-| `phone()` | a phone number | |
-| `vector({ dimensions })` | an embedding | |
-| `jsonb()` | opaque JSON | last resort; nothing can query or render it meaningfully |
+| import                   | stores           | notes                                                    |
+| ------------------------ | ---------------- | -------------------------------------------------------- |
+| `text()`                 | text             | `{ search: true }` puts it in the search index           |
+| `numeric()`              | exact decimal    | never `number` for anything you do arithmetic on         |
+| `integer()`              | integer          |                                                          |
+| `boolean()`              | boolean          |                                                          |
+| `uuid()`                 | uuid             | foreign keys and ids                                     |
+| `date()`                 | date             | no time component                                        |
+| `timestamp()`            | timestamptz      | an instant                                               |
+| `clockTime()`            | wall-clock time  | a time of day with no date                               |
+| `dateRange()`            | a start/end pair | one value, so the ends cannot separate                   |
+| `enums([...])`           | a closed set     | the members reach the manifest                           |
+| `file()`                 | a file           | the column carries the file                              |
+| `geolocation()`          | a point          | picker and map come with it                              |
+| `phone()`                | a phone number   |                                                          |
+| `vector({ dimensions })` | an embedding     |                                                          |
+| `jsonb()`                | opaque JSON      | last resort; nothing can query or render it meaningfully |
 
-`custom('<name>')` is the escape hatch for a shape **none of the above covers** — `payslip_source`,
-`leave_event`, `work_pattern`. It is not a way to add flavour to a type that already exists.
+`custom('<name>')` is the escape hatch for a shape **none of the above covers** — `money`,
+`payslip_source`, `leave_event`, `work_pattern`. It is not a way to add flavour to a type that
+already exists.
 
-> **The rule: never hand-write something the platform owns.** A workspace that declares its own
-> `money` type ends up with a schema that can drift from `std/finance`'s arithmetic, and a renderer
-> that forwards to the platform's own. Four workspaces did exactly that, and a fifth modelled money
-> as `numeric()` beside `enums([...currency])` — three spellings of one idea, free to disagree. If
-> you are about to write a schema for something that sounds universal, it is in the table above or
-> it belongs there; ask before you declare it.
+> **The rule: never hand-write something the platform owns.** If a universal shape is missing from
+> the table, keep the workspace datatype intact until the platform owns both a field builder and a
+> renderer for it. A renderer alone does not make a datatype built in.
 
-`std/finance/money.ts` is a **separate concern**: it manipulates money *values* — `addAmount`,
-`assertSameCurrency`, `toMinorUnits`. `money()` declares a money *column*. One defines the shape, the
-other does arithmetic on it. Never fold one into the other.
+`std/finance/money.ts` is a **separate concern**: it manipulates money _values_ — `addAmount`,
+`assertSameCurrency`, `toMinorUnits`. A workspace `money` datatype declares the column shape; the
+finance helpers do arithmetic on its values. Never fold one into the other.
 
 ## Collection model
 
@@ -72,7 +69,12 @@ colors, default sorting, or renderer variants in a model.
 A `file()` column is one `jsonb` value holding the whole file:
 
 ```ts
-{ storage_key: string; file_name: string; file_size: number; mime_type: string }
+{
+	storage_key: string;
+	file_name: string;
+	file_size: number;
+	mime_type: string;
+}
 ```
 
 ```ts
@@ -118,7 +120,7 @@ indexes: [
 ```
 
 Nearest-neighbor search is **server-only** (`api.db.query.<collection>.findNearest` in hooks /
-remotes / automations). The browser replica remaps `vector` to text and cannot evaluate distance
+functions / automations). The browser replica remaps `vector` to text and cannot evaluate distance
 operators. A future per-record omni embedding system column reuses this same path — do not invent a
 parallel one.
 
@@ -171,7 +173,8 @@ export default {
 			}),
 		perRecord: {
 			before: {
-				description: 'Rejects a visit against an unknown site and defaults the visit date to today.',
+				description:
+					'Rejects a visit against an unknown site and defaults the visit date to today.',
 				handler: ({ input, prepared }) => {
 					if (!prepared.knownSites.has(input.site_id)) refuse('Referenced site does not exist.');
 					return { ...input, visited_at: input.visited_at ?? new Date() };
@@ -185,13 +188,13 @@ export default {
 **The nesting is the declaration's documentation**, and it is arranged by how often each part runs:
 `prepare` once for the batch, `perRecord.before` and `perRecord.after` once per record. `update` and
 `delete` take the same `perRecord` nesting; only `create` has `prepare`, because only a create
-arrives as a batch. An earlier shape put a batch-wide function (`batchHandler`) *beside* a per-record
+arrives as a batch. An earlier shape put a batch-wide function (`batchHandler`) _beside_ a per-record
 one at the same level, and nothing about the declaration said which ran when, or that one was a rule
 and the other a second copy of it — five collections shipped batch validation the runtime never
 called.
 
 `prepare` is for the reads, never for the rules. A hook is authored for one record, so a hook that
-*reads* per record is an N+1 by construction; the rule and the reads are separable and only the reads
+_reads_ per record is an N+1 by construction; the rule and the reads are separable and only the reads
 want to be batched. Every decision lives in `perRecord`, written once, for one record, whether the
 write was one row or four thousand. `prepare` returns data and is typed by what it returns —
 `satisfies Hooks<Prepared>`. The batched-read reasoning, the phases, and the cost budget are in
@@ -246,7 +249,7 @@ Two failures record why. hr-payroll ran its whole engine, validation included, i
 `create.after`: the run row committed, the build then refused because someone had an unclosed time
 entry, and what was left behind was a DRAFT payroll run with no payslips under it — a record
 asserting a period had been calculated, blocking the next period, describing a calculation that never
-happened. The second is what the nested graph replaced: the run was committed and *then* its payslips
+happened. The second is what the nested graph replaced: the run was committed and _then_ its payslips
 were written in a second transaction, their lines in a third, their sources in a fourth, so a build
 that died between them left a run with no payslips. The local database was holding 92 orphaned
 payslips and 15 lines from exactly that.
@@ -296,7 +299,7 @@ Inline custom schemas do not exist. Use a collection and relationship when a val
 query, policy, hooks, or lifecycle. Represent mutually exclusive owned variants with a strict Effect
 Schema, never nullable columns that can disagree.
 
-An owned structured value lives in `custom-types/<name>/` with exactly a `+definition.ts` default-exporting
+An owned structured value lives in `datatypes/<name>/` with exactly a `+definition.ts` default-exporting
 `defineCustomType({ name, description, schema })` and a mandatory `+renderer.svelte`. The description is
 required and reaches the manifest, because a `custom('settlement_policy')` column says nothing about what
 it holds. Models reference it through
@@ -307,10 +310,8 @@ definition must never import or re-export its schema from a collection. Keep sca
 The compiler discovers the renderer statically; manual imports, registration calls, and runtime renderer
 registries do not exist.
 
-**`money` is not one of these.** It is a built-in column type — `money()` — with its own renderer and
-input, and a workspace must never declare it. The same goes for every row of the table at the top of
-this file. This paragraph previously said the opposite, and every workspace that read it hand-wrote a
-money type as instructed.
+`money` currently follows this contract. Do not replace it with separate amount and currency
+columns: keep it as one custom value until Bolt owns both a `money()` field builder and the renderer.
 
 Custom-type schemas are **Effect Schema**, never zod. Compose with `Schema.Struct`, `Schema.Union`,
 `Schema.Literals`, and `Schema.NullOr` from `effect`, and export the value type as

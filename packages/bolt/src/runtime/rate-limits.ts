@@ -12,7 +12,7 @@ import {
 	type RateLimitSpec
 } from '../authoring/rate-limits-schema.js';
 
-/** Reports a caller who has spent this window's admissions; stupidity:allow Q4 -- Effect TaggedError declaration is the canonical rc.109 error boundary. */
+/** Reports a caller who has spent this window's admissions; stupidity:allow Q4 -- Effect TaggedError declaration is the canonical Effect v4 error boundary. */
 export class RateLimited extends Schema.TaggedError<RateLimited>()('Bolt.RateLimited', {
 	command: Schema.NonEmptyString,
 	limit: Schema.Number.check(Schema.isInt()),
