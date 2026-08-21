@@ -59,7 +59,7 @@ export function replayManifest(
 		}
 	}
 
-	return { outputs, matches, mismatches: matches ? undefined : mismatches };
+	return { outputs, matches, ...(matches ? {} : { mismatches }) };
 }
 
 function deepEqual(a: unknown, b: unknown): boolean {

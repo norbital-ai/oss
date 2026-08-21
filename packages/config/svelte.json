@@ -10,7 +10,10 @@
 		"skipLibCheck": true,
 		"sourceMap": true,
 		"strict": true,
-		"verbatimModuleSyntax": false,
+		"verbatimModuleSyntax": true,
+		"noUncheckedIndexedAccess": true,
+		"exactOptionalPropertyTypes": true,
+		"erasableSyntaxOnly": true,
 		"moduleResolution": "bundler"
 	}
 }

@@ -84,11 +84,11 @@ function evaluate<TInput extends object, TOutput>(
 
 		nodes.push({
 			id: name,
-			expr: reckonEnv.exprs[name],
+			expr: reckonEnv.exprs[name]!,
 			inputs,
 			output: result,
-			opAudit,
-			iterations
+			...(opAudit === undefined ? {} : { opAudit }),
+			...(iterations === undefined ? {} : { iterations })
 		});
 	}
 

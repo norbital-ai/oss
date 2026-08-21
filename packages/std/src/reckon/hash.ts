@@ -38,7 +38,7 @@ function sha256(message: string): string {
 		0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 	];
 
-	const H = [
+	const H: [number, number, number, number, number, number, number, number] = [
 		0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
 	];
 
@@ -55,18 +55,20 @@ function sha256(message: string): string {
 	view.setUint32(padLen - 4, bl >>> 0, false);
 
 	for (let o = 0; o < padLen; o += 64) {
-		const W = new Array(64);
+		const W = new Array<number>(64);
 		for (let i = 0; i < 16; i++) W[i] = view.getUint32(o + i * 4, false);
 		for (let i = 16; i < 64; i++) {
-			const s0 = rr(W[i - 15], 7) ^ rr(W[i - 15], 18) ^ (W[i - 15] >>> 3);
-			const s1 = rr(W[i - 2], 17) ^ rr(W[i - 2], 19) ^ (W[i - 2] >>> 10);
-			W[i] = (W[i - 16] + s0 + W[i - 7] + s1) | 0;
+			const w15 = W[i - 15]!;
+			const w2 = W[i - 2]!;
+			const s0 = rr(w15, 7) ^ rr(w15, 18) ^ (w15 >>> 3);
+			const s1 = rr(w2, 17) ^ rr(w2, 19) ^ (w2 >>> 10);
+			W[i] = (W[i - 16]! + s0 + W[i - 7]! + s1) | 0;
 		}
 		let [a, b, c, d, e, f, g, h] = H;
 		for (let i = 0; i < 64; i++) {
 			const S1 = rr(e, 6) ^ rr(e, 11) ^ rr(e, 25);
 			const ch = (e & f) ^ (~e & g);
-			const t1 = (h + S1 + ch + K[i] + W[i]) | 0;
+			const t1 = (h + S1 + ch + K[i]! + W[i]!) | 0;
 			const S0 = rr(a, 2) ^ rr(a, 13) ^ rr(a, 22);
 			const maj = (a & b) ^ (a & c) ^ (b & c);
 			const t2 = (S0 + maj) | 0;

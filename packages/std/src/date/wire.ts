@@ -30,6 +30,7 @@ function hasValidInstantComponents(value: string): boolean {
 	const match = ZONED_ISO_INSTANT.exec(value);
 	if (!match) return false;
 	const [, date, hour, minute, second] = match;
+	if (date === undefined) return false;
 	return (
 		isCalendarDate(date) &&
 		Number(hour) <= 23 &&

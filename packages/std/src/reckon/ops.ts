@@ -431,7 +431,7 @@ export function createTableOps(tables: TableMap, audit: AuditRef): OpRegistratio
 
 			if (table.kind === 'tier') {
 				const firstDim = Object.keys(dimensions)[0];
-				const v = toNumber(dimensions[firstDim]);
+				const v = toNumber(firstDim === undefined ? undefined : dimensions[firstDim]);
 				const row = findTierRow(table, v);
 				audit.sink.push({ op: 'lookup', audit: { table: String(tableName), matchedRow: row } });
 				return row ?? null;

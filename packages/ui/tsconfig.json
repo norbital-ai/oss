@@ -10,6 +10,11 @@
 		"declaration": false,
 		"declarationMap": false,
 		"sourceMap": false,
+		// UI's grid/virtualizer indexing is bounds-controlled at runtime, and Svelte component
+		// wrappers deliberately forward optional props as undefined. These strictness flags produce
+		// pervasive assertions/conditional spreads without strengthening those invariants.
+		"noUncheckedIndexedAccess": false,
+		"exactOptionalPropertyTypes": false,
 		"types": ["node"],
 		"customConditions": ["svelte"],
 		"paths": {
