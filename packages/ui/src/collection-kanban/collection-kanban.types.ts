@@ -6,6 +6,7 @@ import type {
 	CollectionRow
 } from '@norbital-ai/std/collection';
 import type { Snippet } from 'svelte';
+import type { CollectionRecordMetadataResolver } from '../collection-record-metadata/index.js';
 import type { AuthoredLaneInput } from '../collection-table/collection-card-derivation.js';
 import type {
 	CollectionTableIntegrationStatus,
@@ -36,6 +37,7 @@ export interface CollectionKanbanProps<
 	/** Number of visual lane rows. Defaults to one horizontal row. */
 	rows?: number;
 	query?: CollectionQuery<CollectionRow<TCollections[TName]>>;
+	recordMetadata?: CollectionRecordMetadataResolver<CollectionRow<TCollections[TName]>>;
 	selectable?: boolean;
 	title?: string;
 	description?: string;

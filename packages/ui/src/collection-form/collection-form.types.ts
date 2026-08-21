@@ -10,6 +10,7 @@ import type {
 } from '@norbital-ai/std/collection';
 import type { Schema } from 'effect';
 import type { StandardSchemaOf } from '../form/standard_schema_form_errors.js';
+import type { CollectionRecordMetadata } from '../collection-record-metadata/index.js';
 import type {
 	Component,
 	ComponentConstructorOptions,
@@ -146,6 +147,8 @@ export interface CollectionFormProps<
 		values: CollectionFormValidationValues
 	) => CollectionRow<TCollections[TName]> | Promise<CollectionRow<TCollections[TName]>>;
 	deleteAction?: CollectionFormDeleteAction;
+	/** Application-authored behaviour and flags for this record. System metadata is injected. */
+	recordMetadata?: readonly CollectionRecordMetadata[];
 	disabled?: boolean;
 	loading?: boolean;
 	skeletonRows?: number;

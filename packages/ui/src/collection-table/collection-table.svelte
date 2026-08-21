@@ -34,6 +34,13 @@
 	} from '#lib/collection-toolbar';
 	import { CollectionForm } from '../collection-form/index.js';
 	import {
+		collectionRecordMetadataDescription,
+		collectionRecordMutationReason,
+		resolveCollectionRecordMetadata,
+		type CollectionRecordMutation,
+		type ResolvedCollectionRecordMetadata
+	} from '../collection-record-metadata/index.js';
+	import {
 		collectionRecordId,
 		createActionLabel,
 		deriveAutoCard,
@@ -103,8 +110,7 @@
 		query,
 		initialFilters = [],
 		disabled = false,
-		isRowLocked,
-		rowLockReason,
+		recordMetadata,
 		selectable = false,
 		class: className,
 		rootClass,
@@ -170,9 +176,6 @@
 		cursors: [undefined]
 	});
 	const configuredColumns = new Map<object, ColumnConfig>();
-	const hasSystemApprovalLock = (record: Row): boolean =>
-		typeof Reflect.get(record, 'norbital_approval_id') === 'string';
-
 	const activeColumns = $derived(registeredColumns);
 
 	// svelte-ignore state_referenced_locally
@@ -186,10 +189,13 @@
 		conditionDefault: undefined,
 		parseCondition: (condition) => condition
 	});
-	// System approval locks and application locks both prevent bulk mutation, but they remain
-	// separate states everywhere the UI explains or draws them.
-	tableApi.rowLocked = (row) =>
-		hasSystemApprovalLock(row.record) || isRowLocked?.(row.record) === true;
+
+	function resolvedRecordMetadata(record: Row): readonly ResolvedCollectionRecordMetadata[] {
+		return resolveCollectionRecordMetadata(record, recordMetadata?.(record), {
+			pendingApprovalLabel: t('recordMetadata.pendingApproval'),
+			pendingApprovalReason: t('recordMetadata.pendingApprovalReason')
+		});
+	}
 	/**
 	 * The one search + filter + page model this table runs on.
 	 *
@@ -272,8 +278,7 @@
 				};
 			}),
 			effectiveSelectable,
-			t as Translate,
-			(row) => isRowLocked?.(row.raw.record) === true
+			t as Translate
 		)
 	);
 
@@ -526,6 +531,24 @@
 			.filter((row) => tableApi.rowSelection.current[row.__collectionTableRowId])
 			.map((row) => row.record)
 	);
+	function mutationReason(
+		rows: readonly Row[],
+		operation: CollectionRecordMutation
+	): string | null {
+		for (const record of rows) {
+			const reason = collectionRecordMutationReason(resolvedRecordMetadata(record), operation);
+			if (reason) return reason;
+		}
+		return null;
+	}
+	const updateUnavailable = $derived.by(() => {
+		const reason = mutationReason(selectedRecords, 'update');
+		return reason ? t('recordMetadata.selectedUpdateRestricted', { reason }) : null;
+	});
+	const deleteUnavailable = $derived.by(() => {
+		const reason = mutationReason(selectedRecords, 'delete');
+		return reason ? t('recordMetadata.selectedDeleteRestricted', { reason }) : null;
+	});
 	const updateSelectedAction = $derived(
 		bulkEnabled && operations?.updateMany ? updateSelectedRecords : undefined
 	);
@@ -560,37 +583,37 @@
 		});
 	}
 
-	/**
-	 * The leading marker classifies why a record cannot be treated as final.
-	 *
-	 * A pending approval is a platform-owned SYSTEM lock, drawn as a strong rounded brand rail. An
-	 * application lock is authored by the tenant's domain and stays a thin neutral line. They share
-	 * no label or visual token. A write waiting in the sync outbox is a third transport state, shown
-	 * in warning amber.
-	 *
-	 * Unsynced outranks awaiting-approval, because it is the more consequential of the two: an
-	 * approval is a record the server already holds, an unsynced row is one it does not.
-	 *
-	 * A *rejected* write is never in this state — the mutation is rolled back, so the row either
-	 * reverts or disappears, and the failure is reported where it was made.
-	 */
+	function flagMarkerClass(
+		metadata: Extract<ResolvedCollectionRecordMetadata, { readonly kind: 'flag' }>
+	): string {
+		switch (metadata.tone) {
+			case 'info':
+				return 'w-1 bg-info';
+			case 'success':
+				return 'w-1 bg-success';
+			case 'warning':
+				return 'w-1 bg-warning';
+			case 'danger':
+				return 'w-1 bg-destructive';
+			case 'neutral':
+				return 'w-1 bg-muted-foreground';
+		}
+	}
+
+	/** One compact marker on the dense grid; list and Kanban surfaces render every metadata item. */
 	function rowLeadingAccent(row: GridRow): { markerClass: string; tooltip: string } | null {
-		if (Reflect.get(row.record, 'norbital_pending_sync') === true) {
-			return { markerClass: 'w-1 bg-warning', tooltip: t('table.pendingSync') };
-		}
-		if (hasSystemApprovalLock(row.record)) {
-			return {
-				markerClass: 'inset-y-1 w-1 rounded-r-full bg-brand',
-				tooltip: t('table.systemLockPendingApproval')
-			};
-		}
-		if (isRowLocked?.(row.record) === true) {
-			return {
-				markerClass: 'w-px bg-muted-foreground',
-				tooltip: rowLockReason?.(row.record) ?? t('table.recordLocked')
-			};
-		}
-		return null;
+		const metadata = resolvedRecordMetadata(row.record);
+		const primary = metadata[0];
+		if (!primary) return null;
+		const tooltip = metadata.map(collectionRecordMetadataDescription).join(' • ');
+		if (primary.kind === 'flag') return { markerClass: flagMarkerClass(primary), tooltip };
+		return {
+			markerClass:
+				primary.source === 'system'
+					? 'inset-y-1 w-1 rounded-r-full bg-brand'
+					: 'w-px bg-muted-foreground',
+			tooltip
+		};
 	}
 
 	function isRecordDetailActive(rowId: string): boolean {
@@ -674,6 +697,10 @@
 		value: unknown,
 		rows: readonly Row[]
 	): Promise<void> {
+		const unavailable = mutationReason(rows, 'update');
+		if (unavailable) {
+			throw new Error(t('recordMetadata.selectedUpdateRestricted', { reason: unavailable }));
+		}
 		const updateMany = operations?.updateMany;
 		if (!updateMany) throw new Error('This collection does not allow bulk updates.');
 		await updateMany(
@@ -685,6 +712,10 @@
 	}
 
 	async function deleteSelectedRecords(rows: readonly Row[]): Promise<void> {
+		const unavailable = mutationReason(rows, 'delete');
+		if (unavailable) {
+			throw new Error(t('recordMetadata.selectedDeleteRestricted', { reason: unavailable }));
+		}
 		const deleteRecord = operations?.delete;
 		if (!deleteRecord) throw new Error('This collection does not allow deletion.');
 		await Promise.all(rows.map((record) => deleteRecord(collectionRecordId(record))));
@@ -715,7 +746,8 @@
 	{#each rowActions ?? [] as action}
 		{@const context: CollectionTableRowActionContext<Row> = {
 			row: row.raw.record,
-			hovered
+			hovered,
+			metadata: resolvedRecordMetadata(row.raw.record)
 		}}
 		{@render action(context)}
 	{/each}
@@ -790,6 +822,8 @@
 					selectedRows: selectedRecords,
 					updateSelected: updateSelectedAction,
 					deleteSelected: deleteSelectedAction,
+					updateUnavailable,
+					deleteUnavailable,
 					clearSelection: () => tableApi.setRowSelection({}),
 					refresh
 				}
@@ -878,8 +912,7 @@
 			ListCard={ListCard ?? autoListCard}
 			{emptyPlaceholder}
 			{rowActions}
-			{isRowLocked}
-			{rowLockReason}
+			getRecordMetadata={resolvedRecordMetadata}
 			{recordTitle}
 			{activeRecordId}
 			recordHref={(record) =>

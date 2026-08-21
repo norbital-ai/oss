@@ -28,6 +28,11 @@
 		setCollectionFormFieldContext
 	} from './collection-form-field.svelte';
 	import CollectionFormSkeleton from './collection-form-skeleton.svelte';
+	import {
+		CollectionRecordMetadataView,
+		collectionRecordRestriction,
+		resolveCollectionRecordMetadata
+	} from '../collection-record-metadata/index.js';
 	import type {
 		CollectionFormFieldComponent,
 		CollectionFormName,
@@ -139,6 +144,7 @@
 		validation,
 		onSubmit,
 		deleteAction,
+		recordMetadata = [],
 		disabled = false,
 		loading = false,
 		skeletonRows = 4,
@@ -162,6 +168,18 @@
 	 */
 	// svelte-ignore state_referenced_locally
 	const recordId = optionalCollectionRecordId(defaultValues);
+	const resolvedRecordMetadata = $derived(
+		resolveCollectionRecordMetadata(defaultValues, recordMetadata, {
+			pendingApprovalLabel: t('recordMetadata.pendingApproval'),
+			pendingApprovalReason: t('recordMetadata.pendingApprovalReason')
+		})
+	);
+	const updateRestriction = $derived(
+		recordId ? collectionRecordRestriction(resolvedRecordMetadata, 'update') : null
+	);
+	const deleteRestriction = $derived(
+		recordId ? collectionRecordRestriction(resolvedRecordMetadata, 'delete') : null
+	);
 	const definition = $derived(workspaceClient.collections[String(collection)]);
 	// Auto field emission (RFC V.4): a `fields` pick wins over the model-ordered writable set; both
 	// are ignored when a `children` composition is provided.
@@ -199,7 +217,7 @@
 		schema: runtimeSchema,
 		defaultState: initialValues,
 		serverState: recordId ? initialValues : null,
-		disabled: () => loading || disabled,
+		disabled: () => loading || disabled || updateRestriction != null,
 		submitSuccessBehavior: 'commit',
 		successMessage: null,
 		translate: t as TranslateFn,
@@ -278,7 +296,7 @@
 	}
 
 	async function deleteRecord(): Promise<void> {
-		if (!deleteAction || deleting) return;
+		if (!deleteAction || deleting || deleteRestriction || disabled || loading) return;
 		deleting = true;
 		try {
 			await deleteAction.onDelete();
@@ -302,29 +320,33 @@
 			<p class="text-sm text-destructive" role="alert">{t('form.fixErrors')}</p>
 		{/if}
 		<Cluster gap="xs" align="center">
-			<Button
-				type="submit"
-				disabled={loading ||
-					form.disabled ||
-					form.isSubmitting ||
-					Boolean(recordId && !form.isDirty)}
-			>
-				{form.isSubmitting
-					? t('form.saving')
-					: (submitLabel ?? (recordId ? t('form.save') : t('common.create')))}
-			</Button>
-			<Button
-				type="button"
-				variant="outline"
-				disabled={loading || form.disabled || form.isSubmitting || !form.isDirty}
-				onclick={clear}>{t('common.clear')}</Button
-			>
-			{#if form.isDirty}
-				<span class="text-meta" role="status">
-					{dirtyFieldCount === 1
-						? t('form.unsavedField', { count: dirtyFieldCount })
-						: t('form.unsavedFields', { count: dirtyFieldCount })}
-				</span>
+			{#if updateRestriction}
+				<span class="text-meta">{t('recordMetadata.readOnly')}</span>
+			{:else}
+				<Button
+					type="submit"
+					disabled={loading ||
+						form.disabled ||
+						form.isSubmitting ||
+						Boolean(recordId && !form.isDirty)}
+				>
+					{form.isSubmitting
+						? t('form.saving')
+						: (submitLabel ?? (recordId ? t('form.save') : t('common.create')))}
+				</Button>
+				<Button
+					type="button"
+					variant="outline"
+					disabled={loading || form.disabled || form.isSubmitting || !form.isDirty}
+					onclick={clear}>{t('common.clear')}</Button
+				>
+				{#if form.isDirty}
+					<span class="text-meta" role="status">
+						{dirtyFieldCount === 1
+							? t('form.unsavedField', { count: dirtyFieldCount })
+							: t('form.unsavedFields', { count: dirtyFieldCount })}
+					</span>
+				{/if}
 			{/if}
 			{#if deleteAction}
 				<Button
@@ -332,9 +354,10 @@
 					variant="destructive"
 					class="sm:ml-auto"
 					disabled={loading ||
-						form.disabled ||
+						disabled ||
 						form.isSubmitting ||
 						deleting ||
+						Boolean(deleteRestriction) ||
 						deleteAction.disabled}
 					onclick={() => void deleteRecord()}
 				>
@@ -353,6 +376,7 @@
 	onsubmit={submit}
 	bottom={formFooter}
 >
+	<CollectionRecordMetadataView metadata={resolvedRecordMetadata} display="notice" class="mx-1" />
 	<Scroll name={t('form.fieldsRegion', { name: String(collection) })}>
 		<div class="flex min-h-full min-w-0 flex-col pb-4">
 			{#if loading}

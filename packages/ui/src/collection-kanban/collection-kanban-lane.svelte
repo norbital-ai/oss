@@ -32,7 +32,10 @@
 		selectable: boolean;
 		selectedRecordIds: ReadonlySet<string>;
 		pendingRecordIds: ReadonlySet<string>;
+		updateRestrictedRecordIds: ReadonlySet<string>;
+		updateRestrictionReasonById: ReadonlyMap<string, string>;
 		renderCard: Snippet<[string]>;
+		renderMetadata: Snippet<[string]>;
 		onOpen: (recordId: string) => void;
 		onToggleSelection: (recordId: string) => void;
 		onMove: (move: LaneMove) => void;
@@ -51,7 +54,10 @@
 		selectable,
 		selectedRecordIds,
 		pendingRecordIds,
+		updateRestrictedRecordIds,
+		updateRestrictionReasonById,
 		renderCard,
+		renderMetadata,
 		onOpen,
 		onToggleSelection,
 		onMove,
@@ -122,6 +128,7 @@
 
 	function handleCardKeydown(event: KeyboardEvent, recordId: string): void {
 		if (pendingRecordIds.has(recordId)) return;
+		const updateRestrictionReason = updateRestrictionReasonById.get(recordId);
 		if (event.key === 'Escape' && keyboardPickedId === recordId) {
 			event.preventDefault();
 			keyboardPickedId = null;
@@ -130,6 +137,13 @@
 		}
 		if (event.key === ' ') {
 			event.preventDefault();
+			if (updateRestrictionReason) {
+				keyboardPickedId = null;
+				announcement = t('recordMetadata.readOnlyMove', {
+					reason: updateRestrictionReason
+				});
+				return;
+			}
 			keyboardPickedId = keyboardPickedId === recordId ? null : recordId;
 			announcement =
 				keyboardPickedId === recordId ? t('kanban.cardPickedUp') : t('kanban.moveCancelled');
@@ -137,11 +151,25 @@
 		}
 		if (keyboardPickedId === recordId && event.key === 'ArrowLeft') {
 			event.preventDefault();
+			if (updateRestrictionReason) {
+				keyboardPickedId = null;
+				announcement = t('recordMetadata.readOnlyMove', {
+					reason: updateRestrictionReason
+				});
+				return;
+			}
 			moveWithKeyboard(recordId, previousLane);
 			return;
 		}
 		if (keyboardPickedId === recordId && event.key === 'ArrowRight') {
 			event.preventDefault();
+			if (updateRestrictionReason) {
+				keyboardPickedId = null;
+				announcement = t('recordMetadata.readOnlyMove', {
+					reason: updateRestrictionReason
+				});
+				return;
+			}
 			moveWithKeyboard(recordId, nextLane);
 			return;
 		}
@@ -207,12 +235,17 @@
 					{#each recordIds as recordId (recordId)}
 						<div
 							data-sortable-id={recordId}
-							data-sortable-disabled={!movable || pendingRecordIds.has(recordId)
+							data-sortable-disabled={!movable ||
+							pendingRecordIds.has(recordId) ||
+							updateRestrictedRecordIds.has(recordId)
 								? 'true'
 								: undefined}
 							class={cn(
 								'sortable-item min-w-0 overflow-hidden',
-								(!movable || pendingRecordIds.has(recordId)) && 'sortable-disabled',
+								(!movable ||
+									pendingRecordIds.has(recordId) ||
+									updateRestrictedRecordIds.has(recordId)) &&
+									'sortable-disabled',
 								draggedItemId === recordId && 'sortable-dragging'
 							)}
 						>
@@ -226,6 +259,7 @@
 								aria-describedby={instructionId}
 								aria-pressed={keyboardPickedId === recordId}
 								data-selected={selectedRecordIds.has(recordId) ? 'true' : undefined}
+								data-readonly={updateRestrictedRecordIds.has(recordId) ? 'true' : undefined}
 								aria-busy={pendingRecordIds.has(recordId)}
 								onclick={() => onOpen(recordId)}
 								onkeydown={(event) => handleCardKeydown(event, recordId)}
@@ -233,7 +267,10 @@
 								<CardPrimitive.Content
 									class="h-full min-w-0 overflow-x-hidden overflow-y-auto p-3 text-sm"
 								>
-									{@render renderCard(recordId)}
+									<Stack gap="sm">
+										{@render renderCard(recordId)}
+										{@render renderMetadata(recordId)}
+									</Stack>
 								</CardPrimitive.Content>
 								{#if selectable}
 									<Checkbox
@@ -248,7 +285,7 @@
 										onCheckedChange={() => onToggleSelection(recordId)}
 									/>
 								{/if}
-								{#if movable}
+								{#if movable && !updateRestrictedRecordIds.has(recordId)}
 									<button
 										type="button"
 										class={cn(

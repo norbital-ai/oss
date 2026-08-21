@@ -9,6 +9,14 @@ export { default as CollectionDetailActions } from './collection-detail-actions.
 export { default as CollectionRecordDetailEmpty } from './collection-record-detail-empty.svelte';
 export { default as CollectionRecordDetailTabs } from './collection-record-detail-tabs.svelte';
 export { CollectionDetailPreferences } from './collection-detail-preferences.svelte.js';
+export type {
+	CollectionRecordFlagMetadata,
+	CollectionRecordFlagTone,
+	CollectionRecordMetadata,
+	CollectionRecordMetadataResolver,
+	CollectionRecordMutation,
+	CollectionRecordRestrictionMetadata
+} from '../collection-record-metadata/index.js';
 export {
 	getCollectionClientContext,
 	getCollectionClientForSurface,

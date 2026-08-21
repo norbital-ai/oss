@@ -46,6 +46,13 @@
 	import { CollectionQueryState } from '#lib/collection-query';
 	import { CollectionActionToolbar } from '#lib/collection-toolbar';
 	import { laneMoveUpdate, runOptimisticKanbanMove } from './collection-kanban-move.js';
+	import {
+		CollectionRecordMetadataView,
+		collectionRecordMutationReason,
+		resolveCollectionRecordMetadata,
+		type CollectionRecordMutation,
+		type ResolvedCollectionRecordMetadata
+	} from '../collection-record-metadata/index.js';
 	import type { CollectionKanbanName, CollectionKanbanProps } from './collection-kanban.types.js';
 	import {
 		getCollectionClientForSurface,
@@ -66,6 +73,7 @@
 		lanes,
 		rows = 1,
 		query: collectionQuery,
+		recordMetadata,
 		selectable = false,
 		title,
 		description,
@@ -80,6 +88,12 @@
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionKanban');
 	setCollectionClientContext(() => workspaceClient);
 	const { t } = useI18n<UiKeys>();
+	function resolvedRecordMetadata(record: Row): readonly ResolvedCollectionRecordMetadata[] {
+		return resolveCollectionRecordMetadata(record, recordMetadata?.(record), {
+			pendingApprovalLabel: t('recordMetadata.pendingApproval'),
+			pendingApprovalReason: t('recordMetadata.pendingApprovalReason')
+		});
+	}
 	const surfaceRuntime = getCollectionSurfaceRuntime();
 	const recordScope = getCollectionRecordScope();
 	const resolvedView = $derived(
@@ -176,6 +190,24 @@
 		}
 		return records;
 	});
+	const metadataById = $derived.by(() => {
+		const metadata = new Map<string, readonly ResolvedCollectionRecordMetadata[]>();
+		for (const [recordId, record] of recordById) {
+			metadata.set(recordId, resolvedRecordMetadata(record));
+		}
+		return metadata;
+	});
+	const updateRestrictionReasonById = $derived.by(() => {
+		const reasons = new Map<string, string>();
+		for (const [recordId, metadata] of metadataById) {
+			const reason = collectionRecordMutationReason(metadata, 'update');
+			if (reason) reasons.set(recordId, reason);
+		}
+		return reasons;
+	});
+	const updateRestrictedRecordIds = $derived(
+		new Set(updateRestrictionReasonById.keys()) as ReadonlySet<string>
+	);
 	const groups = $derived.by((): Array<[string, Row[]]> => {
 		const laneKeys =
 			resolvedLaneValues.length > 0 ? resolvedLaneValues : Object.keys(boardQuery.result);
@@ -196,6 +228,25 @@
 			.map((recordId) => recordById.get(recordId))
 			.filter((record): record is Row => record != null)
 	);
+	function mutationReason(
+		rows: readonly Row[],
+		operation: CollectionRecordMutation
+	): string | null {
+		for (const record of rows) {
+			const recordId = collectionRecordId(record);
+			const reason = collectionRecordMutationReason(metadataById.get(recordId) ?? [], operation);
+			if (reason) return reason;
+		}
+		return null;
+	}
+	const updateUnavailable = $derived.by(() => {
+		const reason = mutationReason(selectedRecords, 'update');
+		return reason ? t('recordMetadata.selectedUpdateRestricted', { reason }) : null;
+	});
+	const deleteUnavailable = $derived.by(() => {
+		const reason = mutationReason(selectedRecords, 'delete');
+		return reason ? t('recordMetadata.selectedDeleteRestricted', { reason }) : null;
+	});
 	const allVisibleSelected = $derived(
 		recordById.size > 0 &&
 			[...recordById.keys()].every((recordId) => selectedRecordIds.has(recordId))
@@ -262,6 +313,10 @@
 		value: unknown,
 		rows: readonly Row[]
 	): Promise<void> {
+		const unavailable = mutationReason(rows, 'update');
+		if (unavailable) {
+			throw new Error(t('recordMetadata.selectedUpdateRestricted', { reason: unavailable }));
+		}
 		const updateMany = operations.updateMany;
 		if (!updateMany) throw new Error('This collection does not allow bulk updates.');
 		await updateMany(
@@ -273,6 +328,10 @@
 	}
 
 	async function deleteSelectedRecords(rows: readonly Row[]): Promise<void> {
+		const unavailable = mutationReason(rows, 'delete');
+		if (unavailable) {
+			throw new Error(t('recordMetadata.selectedDeleteRestricted', { reason: unavailable }));
+		}
 		const deleteRecord = operations.delete;
 		if (!deleteRecord) throw new Error('This collection does not allow deletion.');
 		await Promise.all(rows.map((record) => deleteRecord(collectionRecordId(record))));
@@ -358,7 +417,13 @@
 		fromLane: string;
 		toLane: string;
 	}): Promise<void> {
-		if (!canMove || fromLane === toLane || pendingRecordIds.has(recordId)) return;
+		if (
+			!canMove ||
+			fromLane === toLane ||
+			pendingRecordIds.has(recordId) ||
+			updateRestrictedRecordIds.has(recordId)
+		)
+			return;
 		const record = recordById.get(recordId);
 		if (!record) return;
 		moveError = '';
@@ -434,6 +499,10 @@
 	{/if}
 {/snippet}
 
+{#snippet kanbanMetadata(recordId: string)}
+	<CollectionRecordMetadataView metadata={metadataById.get(recordId) ?? []} />
+{/snippet}
+
 {#snippet kanbanToolbar()}
 	<Stack gap="xs">
 		<CollectionActionToolbar
@@ -450,6 +519,8 @@
 				selectedRows: selectedRecords,
 				updateSelected: updateSelectedAction,
 				deleteSelected: deleteSelectedAction,
+				updateUnavailable,
+				deleteUnavailable,
 				clearSelection,
 				selectionControls,
 				disabled: actionsDisabled,
@@ -501,7 +572,10 @@
 					selectable={effectiveSelectable}
 					{selectedRecordIds}
 					{pendingRecordIds}
+					{updateRestrictedRecordIds}
+					{updateRestrictionReasonById}
 					renderCard={kanbanCard}
+					renderMetadata={kanbanMetadata}
 					onOpen={openRecordById}
 					onToggleSelection={toggleSelection}
 					onMove={(move) => void moveRecord(move)}

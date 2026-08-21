@@ -5,6 +5,7 @@ import { kanbanMessages } from './kanban.messages.js';
 import { formMessages } from './form.messages.js';
 import { dataRendererMessages } from './data-renderer.messages.js';
 import { miscMessages } from './misc.messages.js';
+import { recordMetadataMessages } from './record-metadata.messages.js';
 
 /**
  * The complete `@norbital-ai/ui` catalog: English source of truth plus the
@@ -20,7 +21,8 @@ export const uiMessages = defineMessages({
 		...kanbanMessages.en,
 		...formMessages.en,
 		...dataRendererMessages.en,
-		...miscMessages.en
+		...miscMessages.en,
+		...recordMetadataMessages.en
 	},
 	zh: {
 		...commonMessages.zh,
@@ -28,7 +30,8 @@ export const uiMessages = defineMessages({
 		...kanbanMessages.zh,
 		...formMessages.zh,
 		...dataRendererMessages.zh,
-		...miscMessages.zh
+		...miscMessages.zh,
+		...recordMetadataMessages.zh
 	}
 });
 

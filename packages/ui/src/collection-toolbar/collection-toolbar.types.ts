@@ -129,6 +129,10 @@ export interface CollectionToolbarOperations<TRow extends object> {
 		rows: readonly TRow[]
 	) => Promise<void>;
 	readonly deleteSelected?: (rows: readonly TRow[]) => Promise<void>;
+	/** Mutation-only refusal. Selection and pipelines remain available. */
+	readonly updateUnavailable?: string | null;
+	/** Mutation-only refusal. Selection and pipelines remain available. */
+	readonly deleteUnavailable?: string | null;
 	readonly clearSelection?: () => void;
 	readonly selectionControls?: {
 		readonly totalRows: number;

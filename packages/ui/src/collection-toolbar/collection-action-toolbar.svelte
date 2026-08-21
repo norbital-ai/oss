@@ -181,6 +181,8 @@
 					fields={definition.fields}
 					updateSelected={operations.updateSelected}
 					deleteSelected={operations.deleteSelected}
+					updateUnavailable={operations.updateUnavailable}
+					deleteUnavailable={operations.deleteUnavailable}
 					clearSelection={operations.clearSelection}
 					selectionControls={operations.selectionControls}
 					disabled={disabled || (operations.disabled ?? false)}

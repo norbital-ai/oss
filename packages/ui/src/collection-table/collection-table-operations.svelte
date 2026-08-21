@@ -48,6 +48,8 @@
 		fields,
 		updateSelected,
 		deleteSelected,
+		updateUnavailable,
+		deleteUnavailable,
 		clearSelection,
 		selectionControls,
 		disabled,
@@ -61,6 +63,8 @@
 		fields: readonly CollectionField[];
 		updateSelected?: (fieldName: string, value: unknown, rows: readonly TRow[]) => Promise<void>;
 		deleteSelected?: (rows: readonly TRow[]) => Promise<void>;
+		updateUnavailable?: string | null;
+		deleteUnavailable?: string | null;
 		clearSelection?: () => void;
 		selectionControls?: {
 			readonly totalRows: number;
@@ -108,6 +112,7 @@
 		Boolean(
 			updateSelected &&
 			selectedRows.length > 0 &&
+			!updateUnavailable &&
 			selectedField &&
 			bulkValueTouched &&
 			bulkValue !== undefined
@@ -160,7 +165,13 @@
 	}
 
 	async function runBulkOperation(kind: BulkOperation): Promise<void> {
-		if (pendingOperation || disabled || selectedRows.length === 0) return;
+		if (
+			pendingOperation ||
+			disabled ||
+			selectedRows.length === 0 ||
+			(kind === 'update' ? updateUnavailable : deleteUnavailable)
+		)
+			return;
 		pendingOperation = `bulk:${kind}`;
 		try {
 			if (kind === 'update') {
@@ -264,6 +275,9 @@
 				</Accordion.Trigger>
 				<Accordion.Content class="px-1">
 					<Stack gap="md" class="rounded-md border bg-muted/30 p-3">
+						{#if updateUnavailable}
+							<p class="text-sm text-warning-foreground" role="status">{updateUnavailable}</p>
+						{/if}
 						<Stack gap="xs">
 							<p class="text-xs font-medium">{t('table.bulkStep1')}</p>
 							<Combobox
@@ -272,7 +286,7 @@
 								searchable={fieldOptions.length > 8}
 								emptyPlaceholder={t('table.selectFieldPlaceholder')}
 								ariaLabel={t('table.chooseFieldToUpdate')}
-								disabled={disabled || selectedRows.length === 0}
+								disabled={disabled || Boolean(updateUnavailable) || selectedRows.length === 0}
 								onValueChange={chooseField}
 							/>
 						</Stack>
@@ -326,14 +340,24 @@
 						gap="md"
 						class="rounded-md border border-destructive/30 bg-destructive/5 p-3"
 					>
-						<p class="text-meta">
-							{t('table.deleteSelectedLabel', { label: selectionLabel })}
-						</p>
+						<div class="min-w-0">
+							<p class="text-meta">
+								{t('table.deleteSelectedLabel', { label: selectionLabel })}
+							</p>
+							{#if deleteUnavailable}
+								<p class="mt-1 text-sm text-warning-foreground" role="status">
+									{deleteUnavailable}
+								</p>
+							{/if}
+						</div>
 						<Button
 							type="button"
 							variant="destructive"
 							size="sm"
-							disabled={disabled || pendingOperation != null || selectedRows.length === 0}
+							disabled={disabled ||
+								Boolean(deleteUnavailable) ||
+								pendingOperation != null ||
+								selectedRows.length === 0}
 							onclick={() => void reviewBulkOperation('delete')}
 						>
 							{t('table.reviewDeletion')}

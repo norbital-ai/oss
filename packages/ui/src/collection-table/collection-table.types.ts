@@ -6,6 +6,10 @@ import type {
 	CollectionRow
 } from '@norbital-ai/std/collection';
 import type { Component, Snippet } from 'svelte';
+import type {
+	CollectionRecordMetadataResolver,
+	ResolvedCollectionRecordMetadata
+} from '../collection-record-metadata/index.js';
 import type { CollectionFilterOperator } from './collection-table-filter-operators.js';
 
 export type CollectionName<TCollections extends CollectionRegistry> = Extract<
@@ -101,6 +105,7 @@ export type CollectionTableColumnPrimitiveProps<TRow extends object> = Omit<
 export interface CollectionTableRowActionContext<TRow extends object> {
 	row: TRow;
 	hovered: boolean;
+	metadata: readonly ResolvedCollectionRecordMetadata[];
 }
 
 export interface CollectionTableColumnsComposition<TRow extends object> {
@@ -162,10 +167,11 @@ interface CollectionTableBaseProps<
 	 */
 	initialFilters?: readonly CollectionTableInitialFilter[];
 	disabled?: boolean;
-	/** When true, the row cannot be selected for bulk writes and shows a locked leading accent. */
-	isRowLocked?: (row: NoInfer<TRow>) => boolean;
-	/** Operator-facing sentence for why `isRowLocked` is true. */
-	rowLockReason?: (row: NoInfer<TRow>) => string | null;
+	/**
+	 * Application-authored record behaviour and flags. Bolt injects protected system metadata such as
+	 * pending approval and sync state before any collection surface consumes the result.
+	 */
+	recordMetadata?: CollectionRecordMetadataResolver<NoInfer<TRow>>;
 	selectable?: boolean;
 	class?: string;
 	/**

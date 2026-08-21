@@ -1,6 +1,13 @@
 export { default as CollectionForm } from './collection-form.svelte';
 export { getCollectionFormFieldContext } from './collection-form-field.svelte';
 export type {
+	CollectionRecordFlagMetadata,
+	CollectionRecordFlagTone,
+	CollectionRecordMetadata,
+	CollectionRecordMutation,
+	CollectionRecordRestrictionMetadata
+} from '../collection-record-metadata/index.js';
+export type {
 	CollectionFormCallerRendererProps,
 	CollectionFormComposition,
 	CollectionFormController,
