@@ -184,6 +184,18 @@ const CollectionCreateManyInput = Schema.Struct({
 	subject: Subject,
 	records: Schema.Array(CollectionMutation)
 });
+/**
+ * Which automation's runs to read, and how many.
+ *
+ * No `subject`, deliberately. Every other automation input carries one because the boundary
+ * overwrites it from the credential, and a read that needs no identity should not declare a field
+ * whose only purpose is to be replaced — a schema that names one invites the belief it is honoured.
+ */
+const AutomationHistoryInput = Schema.Struct({
+	name: Schema.NonEmptyString,
+	limit: Schema.optionalKey(Schema.Number)
+});
+
 const AutomationStartInput = Schema.Struct({
 	subject: Subject,
 	name: Schema.NonEmptyString,
@@ -2346,6 +2358,12 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					input.name,
 					input.input
 				)
+			});
+		}
+		case 'automations.history': {
+			const input = yield* decode(AutomationHistoryInput, commandInput);
+			return json({
+				runs: yield* (yield* Automations.Service).history(effectId, input.name, input.limit ?? 20)
 			});
 		}
 		case 'automations.status': {

@@ -75,6 +75,20 @@ export type Interface = Readonly<{
 		effectId: EffectIdType,
 		run: Run<E, R>
 	) => Effect.Effect<TickReport, E | Database.FacilityError, R>;
+	/**
+	 * The recent runs of one command, newest first.
+	 *
+	 * `status` answers about a task somebody already holds the id of, which is enough to watch a run
+	 * you started and useless for the question "what has this automation been doing" — the answer to
+	 * which is rows nobody in this session enqueued. Bounded rather than paged: a log surface wants
+	 * the last handful, and an unbounded read of a table that has drained a year of work is a
+	 * different feature with a different cost.
+	 */
+	readonly history: (
+		effectId: EffectIdType,
+		command: string,
+		limit: number
+	) => Effect.Effect<ReadonlyArray<Schema.Json>, Database.FacilityError>;
 	/** What a queued item came to, by the id its enqueuer was given. */
 	readonly status: (
 		effectId: EffectIdType,
@@ -214,6 +228,19 @@ export const layer = (context: CallContext) =>
 						nowEpochMs: Date.now(),
 						remainingMillis: remainingMillis(context.deadlineEpochMs)
 					}),
+				history: Effect.fn('TaskQueue.history')(function* (effectId, command, limit) {
+					const rows = yield* database.execute(effectId, {
+						_tag: 'Query',
+						// `created_at` and not `updated_at`: a row that failed and was retried updates, and
+						// ordering by that would shuffle a run up the list every time it was attempted again.
+						// When a run *started* is the thing a reader is placing on a timeline.
+						sql:
+							'select effect_id, status, attempts, error, created_at, updated_at ' +
+							'from bolt_task where command = $1 order by created_at desc limit $2',
+						parameters: [command, Math.max(1, Math.min(50, Math.trunc(limit)))]
+					});
+					return rows.rows as ReadonlyArray<Schema.Json>;
+				}),
 				status: Effect.fn('TaskQueue.status')(function* (effectId, taskId) {
 					const rows = yield* database.execute(effectId, {
 						_tag: 'Query',

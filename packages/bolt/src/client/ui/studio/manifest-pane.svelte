@@ -25,6 +25,37 @@
 	}>;
 	let runs = $state<Record<string, AutomationRun>>({});
 
+	/**
+	 * What each automation has actually been doing, read from the queue rather than remembered here.
+	 *
+	 * `runs` above knows only what this session pressed. That is the wrong answer to "has this run" —
+	 * a scheduled run at 2am is exactly the one somebody is looking for, and no browser was open for
+	 * it. `automations.history` reads the task rows, so an empty list means the automation has never
+	 * run rather than that nobody watched.
+	 */
+	type AutomationRunRow = Readonly<{
+		readonly effect_id?: string;
+		readonly status?: string;
+		readonly attempts?: number;
+		readonly error?: string | null;
+		readonly created_at?: string;
+	}>;
+	let history = $state<Record<string, ReadonlyArray<AutomationRunRow>>>({});
+	let historyLoaded = $state<Record<string, boolean>>({});
+
+	const loadHistory = async (name: string): Promise<void> => {
+		try {
+			const answer = (await workspaceSession().transport.command('automations.history', {
+				name,
+				limit: 10
+			})) as { readonly runs?: ReadonlyArray<AutomationRunRow> } | null;
+			history = { ...history, [name]: answer?.runs ?? [] };
+		} catch {
+			// A history that cannot be read is left absent rather than shown as empty: "no runs" and
+			// "could not ask" are different facts and an empty list would assert the first.
+		}
+	};
+
 	const runAutomation = async (name: string): Promise<void> => {
 		if (runs[name]?.state === 'starting' || runs[name]?.state === 'running') return;
 		runs = { ...runs, [name]: { state: 'starting', at: Date.now() } };
@@ -60,6 +91,7 @@
 						...(status?.error ? { detail: status.error } : {})
 					}
 				};
+				await loadHistory(name);
 				return;
 			}
 		} catch (cause) {
@@ -125,6 +157,21 @@
 		command: (name: string, input: Readonly<Record<string, string>>) => Promise<unknown>;
 		onopenSource?: ((path: string) => void) | undefined;
 	} = $props();
+
+	/**
+	 * Loaded once per automation, from an effect rather than from the template.
+	 *
+	 * Reading it inside the markup would fire during render and again on every state change the read
+	 * itself caused — the shape of an infinite loop, and one that would look like a slow panel rather
+	 * than like a bug. `historyLoaded` is the guard, so a failed read is not retried forever either.
+	 */
+	$effect(() => {
+		for (const automation of manifest?.automations ?? []) {
+			if (historyLoaded[automation.name] === true) continue;
+			historyLoaded = { ...historyLoaded, [automation.name]: true };
+			void loadHistory(automation.name);
+		}
+	});
 
 	const kind = $derived(selected.split(':')[0] ?? 'collections');
 	const name = $derived(selected.slice(kind.length + 1));
@@ -367,6 +414,47 @@
 								</Inline>
 							</Inline>
 							<p class="font-mono text-micro text-muted-foreground">{path}</p>
+							{#if historyLoaded[automation.name] && history[automation.name] !== undefined}
+								{@const rows = history[automation.name] ?? []}
+								{#if rows.length === 0}
+									<p class="text-micro text-muted-foreground">
+										No runs recorded. This automation has not run on its schedule or by hand.
+									</p>
+								{:else}
+									<Stack gap="xs" class="border-t border-border/60 pt-2">
+										<p class="text-micro font-semibold text-muted-foreground">Recent runs</p>
+										{#each rows as row (row.effect_id ?? row.created_at)}
+											<Inline gap="sm" align="center" class="min-w-0">
+												<span
+													class={cn(
+														'shrink-0 rounded-full px-1.5 py-0.5 text-micro font-semibold',
+														row.status === 'failed'
+															? 'bg-destructive/10 text-destructive'
+															: row.status === 'done'
+																? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+																: 'bg-muted text-muted-foreground'
+													)}>{row.status ?? 'pending'}</span
+												>
+												<span class="shrink-0 text-micro text-muted-foreground">
+													{row.created_at
+														? new Date(row.created_at).toLocaleString()
+														: 'unknown time'}
+												</span>
+												{#if (row.attempts ?? 0) > 1}
+													<span class="shrink-0 text-micro text-muted-foreground"
+														>· {row.attempts} attempts</span
+													>
+												{/if}
+												{#if row.error}
+													<span class="min-w-0 truncate text-micro text-destructive"
+														>· {row.error}</span
+													>
+												{/if}
+											</Inline>
+										{/each}
+									</Stack>
+								{/if}
+							{/if}
 							{#if runs[automation.name]}
 								{@const run = runs[automation.name]}
 								<!--

@@ -34,6 +34,12 @@ export type Interface = Readonly<{
 		effectId: EffectIdType,
 		taskId: string
 	) => Effect.Effect<Schema.Json | undefined, Database.FacilityError>;
+	/** The recent runs of one automation, newest first — including runs nobody here started. */
+	readonly history: (
+		effectId: EffectIdType,
+		name: string,
+		limit: number
+	) => Effect.Effect<ReadonlyArray<Schema.Json>, Database.FacilityError>;
 	readonly cancel: (
 		effectId: EffectIdType,
 		taskId: string
@@ -100,6 +106,15 @@ export const layer = Layer.effect(
 			start,
 			runStep: start,
 			status: queue.status,
+			/**
+			 * What this automation has been doing, by the command name its runs are enqueued under.
+			 *
+			 * A caller names the automation; the queue is keyed by `automations.<name>`, which is an
+			 * encoding detail and stays here rather than in a surface that would then have to know it.
+			 */
+			history: Effect.fn('Automations.history')(function* (effectId, name, limit) {
+				return yield* queue.history(effectId, `automations.${name}`, limit);
+			}),
 			cancel: queue.cancel
 		});
 	})
