@@ -24,6 +24,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Schedule parity is intentionally checked against the real public authoring tree. Local realm
+      # checkouts keep it beside OSS; the isolated Actions workspace needs the same source explicitly.
+      - name: Checkout public template fixtures
+        uses: actions/checkout@v7
+        with:
+          repository: norbital-ai/templates
+          path: template-fixtures
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
 
@@ -46,3 +54,4 @@ jobs:
         run: pnpm check:packages:ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+          NORBITAL_TEMPLATE_SOURCE: ${{ github.workspace }}/template-fixtures
