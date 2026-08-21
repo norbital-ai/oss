@@ -64,9 +64,13 @@ const definition = workspace({
 							{
 								id: 'sign-off',
 								name: 'Sign off',
-								// Named by the release and by nothing else. No `bolt_team` row is seeded for
-								// either of these anywhere in this file — the assertions below are what has to
-								// bring them into existence.
+								// Declared in `+teams.ts` as holding nothing, which is what a review-only team
+								// is: `approvers` is a generated union of that file's keys, so a name it does
+								// not declare is a compile error rather than an approval nobody can decide.
+								//
+								// **No `bolt_team` row is seeded for either of them anywhere in this file.**
+								// Declaring a team is a statement in the release; the row is runtime, and the
+								// assertions below are what has to bring it into existence.
 								approvers: ['Payroll Approvers', 'Senior Management']
 							}
 						]
@@ -83,7 +87,15 @@ const definition = workspace({
 			grants: [{ collection: 'payroll_runs', action: 'read' }]
 		})
 	],
-	teams: { 'Payroll Officer': ['Payroll Officer'], Employee: ['Employee'] },
+	teams: {
+		'Payroll Officer': ['Payroll Officer'],
+		Employee: ['Employee'],
+		// Holding nothing, and that is the whole declaration: these two decide approvals and act on
+		// nothing else. Before `approvers` was typed, a review-only team's only trace anywhere was a
+		// string inside one policy file.
+		'Payroll Approvers': [],
+		'Senior Management': []
+	},
 	automations: [],
 	integrations: [],
 	prompt: 'You are the test workspace agent.',

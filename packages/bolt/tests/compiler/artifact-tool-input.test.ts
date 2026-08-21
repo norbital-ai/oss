@@ -63,7 +63,7 @@ const artifactWithOneTool = (): string =>
 		apps: [],
 		policies: [],
 		functions: [],
-		toolFiles: [`${root}/src/tools/+summarize.tool.ts`],
+		toolFiles: [`${root}/src/capabilities/tools/+summarize.ts`],
 		envoyFiles: [],
 		automations: [],
 		automationFiles: [],

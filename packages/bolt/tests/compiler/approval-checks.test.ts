@@ -72,7 +72,7 @@ describe('approval bindings', () => {
 			{ Approvers: ['field_ops_controller', 'a_policy_that_was_renamed'] }
 		);
 		expect(rules(definition)).toEqual(['undeclared-team-policy']);
-		expect(approvalDiagnostics(definition)[0]?.message).toContain('silently hold less');
+		expect(approvalDiagnostics(definition)[0]?.message).toContain('silently holds less');
 	});
 
 	it('matches team and policy names case-insensitively, as every other comparison does', () => {
@@ -85,15 +85,149 @@ describe('approval bindings', () => {
 		expect(approvalDiagnostics(definition)).toEqual([]);
 	});
 
-	it('allows an approver team +teams.ts never declares, because activation creates it', () => {
-		// The rule that reads as obvious and is wrong. `reconcileApproverTeams` mints a `bolt_team` row
-		// for every approver name a release declares, and `Approvals.decide` matches on team *name*,
-		// never on held policies — so a team holding nothing can still decide. Refusing this would make
-		// the reconciler's entire purpose unreachable, which its own tests demonstrate.
+	/**
+	 * An approver that `+teams.ts` does not declare, which used to be allowed and is not any more.
+	 *
+	 * The old rule read as obvious and was defensible: `reconcileApproverTeams` mints a `bolt_team`
+	 * row for every approver name a release declares, and `Approvals.decide` matches on team *name*
+	 * rather than on held policies — so a team holding nothing could still decide, and refusing it
+	 * would have made the reconciler's purpose unreachable.
+	 *
+	 * `approvers` is `TeamName` now, generated from `+teams.ts`'s own keys, so a misspelling is a
+	 * compile error instead of an approval nobody can ever decide. The shape that rule protected is
+	 * still expressible and is now *visible*: declare the team holding nothing.
+	 */
+	it('refuses an approver team +teams.ts never declares', () => {
 		const definition = workspace([guarded(['Payroll Approvers'])], {
 			'Payroll Officer': ['field_ops_contractor']
 		});
+		expect(rules(definition)).toEqual(['unresolvable-approver']);
+		expect(approvalDiagnostics(definition)[0]?.message).toContain('": []');
+	});
+
+	it('accepts a review-only approver team, declared as holding nothing', () => {
+		const definition = workspace([guarded(['Payroll Approvers'])], {
+			'Payroll Approvers': [],
+			Contractor: ['field_ops_contractor']
+		});
 		expect(approvalDiagnostics(definition)).toEqual([]);
+	});
+
+	/**
+	 * **The check that makes an array of policies safe**, and the reason envoys and automations may
+	 * name arrays at all.
+	 *
+	 * `rowPredicate` unions the `where` of every matching grant, so an unconditional grant beside a
+	 * narrowed one on the same `(collection, action)` collapses the predicate to `true`. The holder
+	 * does not get "their own rows plus dispatch" — they get everything, with nothing to say so.
+	 * `Contractor (Controller)` in field-operations was exactly that shape, with two seeded people in
+	 * it.
+	 */
+	it('refuses a team whose two policies widen a narrowed grant', () => {
+		const narrowed = {
+			name: 'contractor',
+			grants: [
+				{
+					collection: 'variation_requests',
+					action: 'update',
+					where: { assignee_user_id: { eq: '${requestor.norbital_id}' } }
+				}
+			]
+		} as unknown as WorkspaceDefinition['policies'][number];
+		const unconditional = {
+			name: 'controller',
+			grants: [{ collection: 'variation_requests', action: 'update' }]
+		} as unknown as WorkspaceDefinition['policies'][number];
+		const definition = workspace([narrowed, unconditional], {
+			'Contractor (Controller)': ['contractor', 'controller']
+		});
+		expect(rules(definition)).toEqual(['composition-widens-grant']);
+		const [diagnostic] = approvalDiagnostics(definition);
+		expect(diagnostic?.message).toContain('"contractor"');
+		expect(diagnostic?.message).toContain('"controller"');
+		expect(diagnostic?.message).toContain('update on variation_requests');
+	});
+
+	/** Holding the two separately is fine — it is the *union* that widens, not either policy. */
+	it('accepts the same two policies held by two different teams', () => {
+		const narrowed = {
+			name: 'contractor',
+			grants: [
+				{
+					collection: 'variation_requests',
+					action: 'update',
+					where: { assignee_user_id: { eq: '${requestor.norbital_id}' } }
+				}
+			]
+		} as unknown as WorkspaceDefinition['policies'][number];
+		const unconditional = {
+			name: 'controller',
+			grants: [{ collection: 'variation_requests', action: 'update' }]
+		} as unknown as WorkspaceDefinition['policies'][number];
+		expect(
+			approvalDiagnostics(
+				workspace([narrowed, unconditional], {
+					Contractor: ['contractor'],
+					Controllers: ['controller']
+				})
+			)
+		).toEqual([]);
+	});
+
+	/**
+	 * An envoy is a holder too, and the one where this matters most.
+	 *
+	 * Without the check running over envoys, shipping arrays would take the hazard from teams — where
+	 * the widened holder is an employee — to a public surface, where it is a stranger with a phone.
+	 */
+	it('refuses an envoy whose two policies widen a narrowed grant', () => {
+		const narrowed = {
+			name: 'contractor',
+			grants: [
+				{
+					collection: 'jobs',
+					action: 'read',
+					where: { assignee_user_id: { eq: '${requestor.norbital_id}' } }
+				}
+			]
+		} as unknown as WorkspaceDefinition['policies'][number];
+		const unconditional = {
+			name: 'controller',
+			grants: [{ collection: 'jobs', action: 'read' }]
+		} as unknown as WorkspaceDefinition['policies'][number];
+		const definition = {
+			name: 'test',
+			version: '0',
+			collections: [],
+			relations: [],
+			policies: [narrowed, unconditional],
+			teams: {},
+			automations: [],
+			envoys: [{ name: 'sales_desk', policies: ['contractor', 'controller'] }],
+			apps: []
+		} as unknown as WorkspaceDefinition;
+		expect(rules(definition)).toEqual(['composition-widens-grant']);
+		expect(approvalDiagnostics(definition)[0]?.message).toContain('envoy "sales_desk"');
+	});
+
+	/** One policy carrying both is the author's own composition, and it is refused by name. */
+	it('refuses one policy that grants the same thing twice, narrowed and not', () => {
+		const both = {
+			name: 'contractor',
+			grants: [
+				{
+					collection: 'jobs',
+					action: 'read',
+					where: { assignee_user_id: { eq: '${requestor.norbital_id}' } }
+				},
+				{ collection: 'jobs', action: 'read' }
+			]
+		} as unknown as WorkspaceDefinition['policies'][number];
+		const other = { name: 'controller', grants: [] } as unknown as
+			WorkspaceDefinition['policies'][number];
+		const definition = workspace([both, other], { Contractor: ['contractor', 'controller'] });
+		expect(rules(definition)).toEqual(['composition-widens-grant']);
+		expect(approvalDiagnostics(definition)[0]?.message).toContain('Policy "contractor"');
 	});
 
 	it('reports every unresolved binding at once rather than the first', () => {
@@ -107,6 +241,7 @@ describe('approval bindings', () => {
 			'undeclared-team-policy',
 			'undeclared-team-policy'
 		]);
-		expect(approvalRefusal(definition)).toContain('4 approval bindings');
+		// Four bindings, four lines, one build.
+		expect(approvalRefusal(definition)).toContain('4 authority bindings');
 	});
 });

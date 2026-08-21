@@ -16,8 +16,8 @@ const held = (...names: ReadonlyArray<string>) => new Set(names);
 describe('Identity and AccessControl owners', () => {
 	it('applies explicit deny before allow', () => {
 		const policies = [
-			{ name: 'allow', effect: 'allow' as const, actions: ['read'], apps: ['people'] },
-			{ name: 'deny', effect: 'deny' as const, actions: ['read'], apps: ['people'] }
+			{ name: 'allow', effect: 'allow' as const, actions: ['read'], capabilities: { apps: ['people'] } },
+			{ name: 'deny', effect: 'deny' as const, actions: ['read'], capabilities: { apps: ['people'] } }
 		];
 		expect(decide(policies, subject, 'read', 'people', held('allow', 'deny'))).toEqual({
 			allowed: false,
@@ -38,7 +38,7 @@ describe('Identity and AccessControl owners', () => {
 	 */
 	it('ignores a policy the team does not hold', () => {
 		const policies = [
-			{ name: 'allow', effect: 'allow' as const, actions: ['read'], apps: ['people'] }
+			{ name: 'allow', effect: 'allow' as const, actions: ['read'], capabilities: { apps: ['people'] } }
 		];
 		expect(decide(policies, subject, 'read', 'people', held())).toEqual({
 			allowed: false,
@@ -48,7 +48,12 @@ describe('Identity and AccessControl owners', () => {
 	it('refuses an unknown agent name and allows a declared workspace agent', () => {
 		const admin = { userId: 'u1', tenantId: 't1', policies: [], teamPath: ['admin'] };
 		const policies = [
-			{ name: 'admin-agent', effect: 'allow' as const, actions: ['agent'], apps: ['helper'] }
+			{
+				name: 'admin-agent',
+				effect: 'allow' as const,
+				actions: ['agent'],
+				capabilities: { apps: ['helper'] }
+			}
 		];
 		expect(decide(policies, admin, 'agent', 'workspace', held('admin-agent'))).toEqual({
 			allowed: false,

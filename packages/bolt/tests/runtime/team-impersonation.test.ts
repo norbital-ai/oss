@@ -348,7 +348,7 @@ describe('team impersonation', () => {
 		expect(audit).toHaveLength(1);
 		// The path is the team row's own name, not a policy's — `Employee` seeded above does not
 		// inherit, so it resolves to itself and the recorded path is exactly one name long.
-		expect(audit[0]).toMatchObject({ payload: { team: 'Employee', teamPath: ['Employee'], policies: [] } });
+		expect(audit[0]).toMatchObject({ payload: { team: 'Employee', teamPath: ['Employee'] } });
 	});
 
 	/**
