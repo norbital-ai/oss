@@ -197,6 +197,57 @@ export const decide = (
 };
 
 /** Resolves the small, explicit requestor token vocabulary without allowing arbitrary property traversal. */
+/**
+ * Tokens that expand to a *subquery* rather than to a bound value.
+ *
+ * `${requestor.norbital_id}` and its siblings are values: the compiler binds each as a parameter,
+ * which is the only safe way to put an identity into SQL. A hierarchy is not a value — "everybody at
+ * or below my team" is a set the database has to walk — so it cannot be expressed that way, and an
+ * author trying to write it by hand would be hand-rolling a recursive CTE inside a policy string.
+ *
+ * **This exists because inheriting a policy is not inheriting its rows.** Descent gives a manager
+ * every policy their reports hold, but a grant scoped `${requestor.norbital_id}` re-evaluates
+ * against whoever is asking — so the manager holding a report's self-scoped policy sees their *own*
+ * records and nobody else's. The hierarchy has to enter the predicate, not just the policy set.
+ *
+ * One rule then reads differently at every level, because the tree does the work:
+ *
+ * ```ts
+ * const ownOrBelow = { $sql: '"owner_id"::text IN ${requestor.team_scope_users}' } as const;
+ * ```
+ *
+ * The expansion yields `text`, and the owning column is cast to match. That is deliberate rather
+ * than sloppy: a `file()`-style `uuid` column and a `string()` column both name people in real
+ * workspaces, and Postgres has no `uuid = text` operator — so a fragment that emitted `uuid` would
+ * work for one shape and fail the other with `operator does not exist`, an error naming neither the
+ * policy nor the column. One cast on each side is the spelling that works for both.
+ *
+ * A salesperson whose team has no children matches their own team's members; their manager matches
+ * those plus everyone beneath; a director matches the whole branch. Team *granularity* is therefore
+ * how "mine" versus "my team's" is chosen — a person who is their own leaf team matches only
+ * themselves — and that is an organisational decision, not a code one.
+ *
+ * `$1` inside the expansion is the subject's own id, bound by the caller exactly like any other
+ * identity value; nothing about the subject is interpolated as text. The depth bound matches
+ * `TEAM_TREE_SQL` and exists for the same reason: `parent_id` is an operator-edited graph that can
+ * be made cyclic, and a recursive CTE over a cycle does not fail, it runs.
+ */
+const SCOPE_FRAGMENTS: Readonly<Record<string, string>> = {
+	'requestor.team_scope_users': `(
+		with recursive scope as (
+			select t."norbital_id" as id, 1 as depth
+			  from bolt_team t
+			  join bolt_auth_user me on me."team_id" = t."norbital_id"
+			 where me."norbital_id"::text = $SUBJECT
+			union all
+			select c."norbital_id", p.depth + 1
+			  from bolt_team c join scope p on c."parent_id" = p.id
+			 where p.depth < 8
+		)
+		select u."norbital_id"::text from bolt_auth_user u where u."team_id" in (select id from scope)
+	)`
+};
+
 /** Compiles trusted authored row scope into parameterized SQL while binding every identity value separately. */
 const compileWhereOwner = {
 	compile: (
@@ -208,6 +259,16 @@ const compileWhereOwner = {
 		if (typeof raw === 'string') {
 			const parameters: Array<Schema.Json> = [];
 			const sql = raw.replaceAll(/\$\{([^}]+)\}/g, (_token, path: string) => {
+				// A fragment first, because it is SQL rather than a value and must not be bound. It still
+				// carries the subject's id as a parameter — `$SUBJECT` is replaced with the placeholder
+				// number, never with the id itself.
+				const fragment = SCOPE_FRAGMENTS[path];
+				if (fragment !== undefined) {
+					const id = PolicyEvaluation.subjectValue(subject, 'requestor.norbital_id');
+					if (id === undefined) return '(select null where false)';
+					parameters.push(id);
+					return fragment.replaceAll('$SUBJECT', `$${parameters.length}`);
+				}
 				const value = PolicyEvaluation.subjectValue(subject, path);
 				if (value === undefined) return 'null';
 				parameters.push(value);
