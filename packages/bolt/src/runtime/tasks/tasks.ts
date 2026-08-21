@@ -1,5 +1,9 @@
 import { Context, Effect, Layer, type Schema } from 'effect';
-import { EffectId, type DatabaseRequest, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
+import {
+	EffectId,
+	type DatabaseRequest,
+	type EffectId as EffectIdType
+} from '@norbital-ai/bolt-protocol';
 import { Database, type CallContext } from '../facilities/database.js';
 import { Tasks } from '../facilities/services.js';
 import {
@@ -142,12 +146,14 @@ export const layer = (context: CallContext) =>
 				return async (statements: ReadonlyArray<Statement>) => {
 					issued += 1;
 					const outcome = await Effect.runPromise(
-						database.execute(EffectId.make(`${effectId}:${label}:${issued}`), asRequest(statements)).pipe(
-							Effect.match({
-								onSuccess: (response) => ({ ok: true as const, response }),
-								onFailure: (error) => ({ ok: false as const, error })
-							})
-						)
+						database
+							.execute(EffectId.make(`${effectId}:${label}:${issued}`), asRequest(statements))
+							.pipe(
+								Effect.match({
+									onSuccess: (response) => ({ ok: true as const, response }),
+									onFailure: (error) => ({ ok: false as const, error })
+								})
+							)
 					);
 					if (!outcome.ok) throw outcome.error;
 					return outcome.response.rows as ReadonlyArray<Record<string, unknown>>;

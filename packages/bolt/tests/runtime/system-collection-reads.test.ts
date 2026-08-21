@@ -440,12 +440,12 @@ describe('approval requests are scoped to their parties and approvers', () => {
 		await seedBystander(harness);
 		await raiseApproval(harness);
 
-		expect(
-			await readIds(harness, 'contractor-token', 'requestor', 'approval_request_id')
-		).toEqual([REQUEST_ID]);
-		expect(await readIds(harness, 'controller-token', 'requestor', 'approval_request_id')).toEqual(
-			[REQUEST_ID]
-		);
+		expect(await readIds(harness, 'contractor-token', 'requestor', 'approval_request_id')).toEqual([
+			REQUEST_ID
+		]);
+		expect(await readIds(harness, 'controller-token', 'requestor', 'approval_request_id')).toEqual([
+			REQUEST_ID
+		]);
 		expect(await readIds(harness, 'bystander-token', 'requestor', 'approval_request_id')).toEqual(
 			[]
 		);

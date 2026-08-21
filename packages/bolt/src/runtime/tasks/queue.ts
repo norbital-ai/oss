@@ -530,7 +530,10 @@ const pruneStatement = (): Statement =>
 							or(
 								and(
 									eq(boltTask.status, 'done'),
-									lte(boltTask.updatedAt, sql`now() - make_interval(days => ${RETENTION_DAYS.done})`)
+									lte(
+										boltTask.updatedAt,
+										sql`now() - make_interval(days => ${RETENTION_DAYS.done})`
+									)
 								),
 								and(
 									eq(boltTask.status, 'failed'),

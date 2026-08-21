@@ -28,10 +28,7 @@ type Sent = { readonly command: string; readonly input: unknown };
 
 type CollectionWriter = {
 	readonly create: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
-	readonly update: (
-		id: string,
-		input: Record<string, unknown>
-	) => Promise<Record<string, unknown>>;
+	readonly update: (id: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>;
 };
 
 /** A client whose transport records what it was asked to post and answers with `answer`. */

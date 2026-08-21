@@ -218,9 +218,7 @@ const definitionFor = (integrations: WorkspaceDefinition['integrations']): Works
 			})
 		],
 		apps: [],
-		policies: [
-			policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
-		],
+		policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
 		teams: {
 			admin: ['admin']
 		},
@@ -918,7 +916,9 @@ describe('a write queues the drain that will deliver it', () => {
 				result.registrations.filter(({ command }) => command === 'integrations.flush')
 			).toEqual([{ command: 'integrations.flush' }]);
 			expect(
-				requests.filter((request) => request._tag === 'Register' && request.command === 'integrations.flush')
+				requests.filter(
+					(request) => request._tag === 'Register' && request.command === 'integrations.flush'
+				)
 			).toEqual([
 				{
 					_tag: 'Register',

@@ -59,7 +59,10 @@ const runtimeFiles = (directory: string = RUNTIME): ReadonlyArray<string> =>
 	);
 
 const named = (set: ReadonlyMap<string, string>, pattern: RegExp): ReadonlyArray<string> =>
-	[...set].filter(([, body]) => pattern.test(body)).map(([name]) => name).toSorted();
+	[...set]
+		.filter(([, body]) => pattern.test(body))
+		.map(([name]) => name)
+		.toSorted();
 
 describe('instance 2 — every write path that queues a delivery also queues its drain', () => {
 	const source = readFileSync(join(RUNTIME, 'collections/collections.ts'), 'utf8');
@@ -85,7 +88,9 @@ describe('instance 2 — every write path that queues a delivery also queues its
 	it('is not vacuous — there are write paths to check', () => {
 		// A parity assertion over two empty sets passes and proves nothing. This is the guard against
 		// the check silently becoming decorative after a refactor renames the builders.
-		expect(named(blocks, /outboxStatements\(|createStatements\(/u).length).toBeGreaterThanOrEqual(3);
+		expect(named(blocks, /outboxStatements\(|createStatements\(/u).length).toBeGreaterThanOrEqual(
+			3
+		);
 	});
 });
 

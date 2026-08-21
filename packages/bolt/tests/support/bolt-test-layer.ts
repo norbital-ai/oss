@@ -543,12 +543,7 @@ export const makeBoltTestRuntime = async (
 		Layer.merge(agents, cipher)
 	);
 	const surfaces = Layer.provideMerge(
-		Layer.mergeAll(
-			Channels.layer,
-			Integrations.layer,
-			Notifications.layer,
-			WorkspaceSchema.layer
-		),
+		Layer.mergeAll(Channels.layer, Integrations.layer, Notifications.layer, WorkspaceSchema.layer),
 		Layer.mergeAll(vault, authoredLayer, budget, taskQueue, automations)
 	);
 	// The workspace's own declared rate policy, or none. A test workspace declares none, so every

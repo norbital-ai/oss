@@ -27,21 +27,53 @@ const ApproverSteps = Schema.Struct({
  * The *authored* spelling is what survives deduplication, because that is what an operator reading
  * the settings surface should see next to the code they wrote.
  */
-export const declaredApproverTeams = (
-	definition: WorkspaceDefinition
-): ReadonlyArray<string> => {
-	const byFoldedName = new Map<string, string>();
+export type ApprovalStep = Readonly<{
+	/** The policy the step was declared in, so a diagnostic can name the file to open. */
+	readonly policy: string;
+	/** The collection the guarded grant is on — what an approver is being asked to look at. */
+	readonly collection: string;
+	readonly action: string;
+	/** Position within the grant's `steps`, which is what an operator sees in the approval UI. */
+	readonly index: number;
+	readonly approvers: ReadonlyArray<string>;
+}>;
+
+/**
+ * Every approval step a release declares, flattened.
+ *
+ * One walk with two readers. `declaredApproverTeams` reconciles `bolt_team` rows from it at
+ * activation, and the compiler's `approval-checks` refuses a build from it — and those two were
+ * always going to be asked to agree about what an approval step *is*. Written twice, a change to
+ * the shape would have moved one and left the other reconciling rows for steps the build no longer
+ * has, or refusing builds over steps activation ignores.
+ */
+export const approvalSteps = (definition: WorkspaceDefinition): ReadonlyArray<ApprovalStep> => {
+	const steps: Array<ApprovalStep> = [];
 	for (const policy of definition.policies) {
 		for (const grant of policy.grants ?? []) {
 			if (!Schema.is(ApproverSteps)(grant.approval)) continue;
-			for (const step of grant.approval.steps) {
-				for (const approver of step.approvers) {
-					const name = approver.trim();
-					if (name === '') continue;
-					const folded = name.toLocaleLowerCase();
-					if (!byFoldedName.has(folded)) byFoldedName.set(folded, name);
-				}
-			}
+			grant.approval.steps.forEach((step, index) => {
+				steps.push({
+					policy: policy.name,
+					collection: grant.collection,
+					action: grant.action,
+					index,
+					approvers: step.approvers
+				});
+			});
+		}
+	}
+	return steps;
+};
+
+export const declaredApproverTeams = (definition: WorkspaceDefinition): ReadonlyArray<string> => {
+	const byFoldedName = new Map<string, string>();
+	for (const step of approvalSteps(definition)) {
+		for (const approver of step.approvers) {
+			const name = approver.trim();
+			if (name === '') continue;
+			const folded = name.toLocaleLowerCase();
+			if (!byFoldedName.has(folded)) byFoldedName.set(folded, name);
 		}
 	}
 	return [...byFoldedName.values()];

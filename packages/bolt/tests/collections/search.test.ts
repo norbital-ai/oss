@@ -46,9 +46,7 @@ const searchable = workspace({
 		})
 	],
 	apps: [],
-	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
-	],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
 	teams: {
 		admin: ['admin']
 	},

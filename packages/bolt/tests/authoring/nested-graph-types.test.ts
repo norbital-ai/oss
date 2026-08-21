@@ -78,9 +78,7 @@ const nested: RunGraph = {
 const deep: RunGraph = {
 	company_id: 'c',
 	period: '2026-08',
-	payslip_payroll_run: [
-		{ employment_id: 'e', gross: 100, payslip_line_payslip: [{ amount: 25 }] }
-	]
+	payslip_payroll_run: [{ employment_id: 'e', gross: 100, payslip_line_payslip: [{ amount: 25 }] }]
 };
 
 /** A misspelled relation name is not a free-form key. */
@@ -124,6 +122,16 @@ const hooks: CollectionHooks<TestSchema, 'payroll_runs'> = {
 
 describe('the nested write graph', () => {
 	it('admits the shapes above and rejects the ones marked, at compile time', () => {
-		expect([flat, nested, deep, typo, notAnArray, wrongChildColumn, writesTheForeignKey, expandsAOneRelation, hooks]).toHaveLength(9);
+		expect([
+			flat,
+			nested,
+			deep,
+			typo,
+			notAnArray,
+			wrongChildColumn,
+			writesTheForeignKey,
+			expandsAOneRelation,
+			hooks
+		]).toHaveLength(9);
 	});
 });

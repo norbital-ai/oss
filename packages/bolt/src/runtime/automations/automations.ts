@@ -27,9 +27,7 @@ export type Interface = Readonly<{
 		options?: Readonly<{ readonly afterMillis?: number }>
 	) => Effect.Effect<
 		string,
-		| Database.FacilityError
-		| Workspace.WorkspaceLookupError
-		| InvocationBudget.NestingLimitExceeded
+		Database.FacilityError | Workspace.WorkspaceLookupError | InvocationBudget.NestingLimitExceeded
 	>;
 	readonly runStep: Interface['start'];
 	readonly status: (

@@ -43,6 +43,7 @@ import { Tasks } from './facilities/services.js';
 import { Transport } from './facilities/services.js';
 import { Identity } from './identity/identity.js';
 import { reconcileApproverTeams } from './identity/approver-teams.js';
+import { approvalRefusal } from '../compiler/approval-checks.js';
 import { reconcileChannelPrincipals } from './channels/channel-principal.js';
 import { Integrations } from './integrations/integrations.js';
 import { Notifications } from './notifications/notifications.js';
@@ -414,6 +415,24 @@ const BundleActivation = {
 		signal: AbortSignal
 	) => {
 		const missing = manifest.requiredFacilities.filter((name) => facilities[name] === undefined);
+		/**
+		 * A release whose approval bindings do not resolve, refused before it serves anything.
+		 *
+		 * Same guard as a missing facility and for the same reason: the release states what it needs,
+		 * and a statement that cannot be satisfied is not something to activate and find out about
+		 * later. The failure it prevents is silent — an approval routed to a team nobody holds waits
+		 * for a decision that can never come, and "waiting" is indistinguishable from "not decided
+		 * yet" on every surface that shows it.
+		 *
+		 * This deliberately *does* fail activation where `reconcileApproverTeams` below deliberately
+		 * does not, and the difference is what is being compared. The reconciler compares a release
+		 * against `bolt_team` **rows**, which an operator edits from a dashboard at any moment — so a
+		 * disagreement there is an ordinary state and taking a workspace down over it would be wrong.
+		 * These three rules compare two artifacts that both ship *inside* the release: `+teams.ts` and
+		 * the policy files. Nothing can move them apart after a build, so a disagreement is not drift,
+		 * it is a release that was never coherent, and no amount of waiting will fix it.
+		 */
+		const approvalsRefused = approvalRefusal(workspace);
 		const effect: Effect.Effect<
 			| { _tag: 'Failure'; error: ReturnType<typeof makeWireError> }
 			| {
@@ -430,100 +449,105 @@ const BundleActivation = {
 							`Required facilities are not bound: ${missing.join(', ')}`
 						)
 					})
-				: Effect.gen(function* () {
-						/**
-						 * Every team an approval step names, made to exist before the release serves traffic.
-						 *
-						 * Here, and not earlier, because this is the first point in the sequence at which the
-						 * table is there to write to: `reconcileRelease` registers the route, forks the
-						 * database and runs `schema.migrate` — which is what creates `bolt_team`, an identity
-						 * collection `identitySchemaSteps` already puts ahead of migration — and only then
-						 * activates. Anything before that would be inserting into a table that does not exist
-						 * yet; anything after is a workspace already answering requests, and the approval it
-						 * cannot route is the first one somebody raises.
-						 *
-						 * Beside the schedule declaration rather than woven into it, because it is the same
-						 * kind of step: the release states what the tenant must contain, and activation is
-						 * where that statement is made true. It neither reads nor is read by the two steps
-						 * around it, so its position among them is not load-bearing.
-						 *
-						 * It cannot fail the activation. `reconcileApproverTeams` reports and steps over its
-						 * own faults and returns a `never` error channel, which is the same temperament
-						 * `policiesHeldByTeam` has for the same binding: a workspace is not taken down over a
-						 * string that two independently-moving sides disagree about.
-						 */
-						yield* reconcileApproverTeams(
-							EffectId.make(`${activation.id}:approver-teams`),
-							workspace
-						);
-						/**
-						 * The account each declared channel answers as, reconciled here for the same reasons
-						 * and with the same temperament as the teams above.
-						 *
-						 * It has to be activation and not first message. A channel's principal is the only
-						 * thing that gives its turns any authority at all, and the moment it is first needed
-						 * is a message already arriving — resolving it lazily would make the first
-						 * contractor to write in the person who discovers the workspace never declared a team
-						 * for the channel. Here it is a line in a deploy log, which is where a release's
-						 * unmet expectations belong.
-						 */
-						yield* reconcileChannelPrincipals(
-							EffectId.make(`${activation.id}:channel-principals`),
-							workspace,
-							activation.scope.tenantId
-						);
-						const keyed = ActivationCommands.forWorkspace(workspace);
-						const registrations = keyed.map(({ registration }) => registration);
-						const service = yield* Tasks.Service;
-						for (const { key, registration } of keyed) {
-							yield* service.execute(EffectId.make(`${activation.id}:register:${key}`), {
-								_tag: 'Register',
-								leaseId: LeaseId.make(activation.id),
-								releaseId: activation.scope.releaseId,
-								command: registration.command
-							});
-						}
-						/**
-						 * Where every cron in every template starts existing.
-						 *
-						 * Upsert what this release declares, delete what it does not, and answer with the next
-						 * instant anything is due. A key's `next_run_at` survives a redeploy unless its
-						 * expression changed — a deploy is not an event a schedule should observe, and
-						 * re-arming on every one is how a nightly digest quietly stops firing on a busy day.
-						 *
-						 * A schedule seeded here is armed from *now*, never from a past occurrence, so a
-						 * release activating for the first time has no history to catch up on and fires next at
-						 * its next ordinary occurrence.
-						 */
-						const declared = yield* (yield* TaskQueue.Service).declare(
-							EffectId.make(`${activation.id}:schedules`),
-							ActivationCommands.schedulesFor(workspace),
-							Date.now()
-						);
-						for (const rejection of declared.rejections) {
-							// Loud, and at the one moment a person is watching: a deploy. An expression that
-							// cannot be read can never fire, and the alternative to saying so here is a schedule
-							// that is simply absent with nothing anywhere to explain it.
-							yield* Effect.logError(
-								`activation: dropped schedule ${rejection.key}: ${JSON.stringify(rejection.crontab)}: ${rejection.reason}`
+				: approvalsRefused !== undefined
+					? Effect.succeed({
+							_tag: 'Failure' as const,
+							error: makeWireError('unroutable_approval', approvalsRefused)
+						})
+					: Effect.gen(function* () {
+							/**
+							 * Every team an approval step names, made to exist before the release serves traffic.
+							 *
+							 * Here, and not earlier, because this is the first point in the sequence at which the
+							 * table is there to write to: `reconcileRelease` registers the route, forks the
+							 * database and runs `schema.migrate` — which is what creates `bolt_team`, an identity
+							 * collection `identitySchemaSteps` already puts ahead of migration — and only then
+							 * activates. Anything before that would be inserting into a table that does not exist
+							 * yet; anything after is a workspace already answering requests, and the approval it
+							 * cannot route is the first one somebody raises.
+							 *
+							 * Beside the schedule declaration rather than woven into it, because it is the same
+							 * kind of step: the release states what the tenant must contain, and activation is
+							 * where that statement is made true. It neither reads nor is read by the two steps
+							 * around it, so its position among them is not load-bearing.
+							 *
+							 * It cannot fail the activation. `reconcileApproverTeams` reports and steps over its
+							 * own faults and returns a `never` error channel, which is the same temperament
+							 * `policiesHeldByTeam` has for the same binding: a workspace is not taken down over a
+							 * string that two independently-moving sides disagree about.
+							 */
+							yield* reconcileApproverTeams(
+								EffectId.make(`${activation.id}:approver-teams`),
+								workspace
 							);
-						}
-						return {
-							_tag: 'Activated' as const,
-							registrations,
-							nextDueAtEpochMs: declared.nextDueAtEpochMs ?? null
-						};
-					}).pipe(
-						Effect.provide(activationLayer(activation, facilities)),
-						Effect.catch((error) =>
-							Effect.succeed({
-								_tag: 'Failure' as const,
-								error: makeWireError('activation_failed', error.message, {
-									retryable: error.retryable
+							/**
+							 * The account each declared channel answers as, reconciled here for the same reasons
+							 * and with the same temperament as the teams above.
+							 *
+							 * It has to be activation and not first message. A channel's principal is the only
+							 * thing that gives its turns any authority at all, and the moment it is first needed
+							 * is a message already arriving — resolving it lazily would make the first
+							 * contractor to write in the person who discovers the workspace never declared a team
+							 * for the channel. Here it is a line in a deploy log, which is where a release's
+							 * unmet expectations belong.
+							 */
+							yield* reconcileChannelPrincipals(
+								EffectId.make(`${activation.id}:channel-principals`),
+								workspace,
+								activation.scope.tenantId
+							);
+							const keyed = ActivationCommands.forWorkspace(workspace);
+							const registrations = keyed.map(({ registration }) => registration);
+							const service = yield* Tasks.Service;
+							for (const { key, registration } of keyed) {
+								yield* service.execute(EffectId.make(`${activation.id}:register:${key}`), {
+									_tag: 'Register',
+									leaseId: LeaseId.make(activation.id),
+									releaseId: activation.scope.releaseId,
+									command: registration.command
+								});
+							}
+							/**
+							 * Where every cron in every template starts existing.
+							 *
+							 * Upsert what this release declares, delete what it does not, and answer with the next
+							 * instant anything is due. A key's `next_run_at` survives a redeploy unless its
+							 * expression changed — a deploy is not an event a schedule should observe, and
+							 * re-arming on every one is how a nightly digest quietly stops firing on a busy day.
+							 *
+							 * A schedule seeded here is armed from *now*, never from a past occurrence, so a
+							 * release activating for the first time has no history to catch up on and fires next at
+							 * its next ordinary occurrence.
+							 */
+							const declared = yield* (yield* TaskQueue.Service).declare(
+								EffectId.make(`${activation.id}:schedules`),
+								ActivationCommands.schedulesFor(workspace),
+								Date.now()
+							);
+							for (const rejection of declared.rejections) {
+								// Loud, and at the one moment a person is watching: a deploy. An expression that
+								// cannot be read can never fire, and the alternative to saying so here is a schedule
+								// that is simply absent with nothing anywhere to explain it.
+								yield* Effect.logError(
+									`activation: dropped schedule ${rejection.key}: ${JSON.stringify(rejection.crontab)}: ${rejection.reason}`
+								);
+							}
+							return {
+								_tag: 'Activated' as const,
+								registrations,
+								nextDueAtEpochMs: declared.nextDueAtEpochMs ?? null
+							};
+						}).pipe(
+							Effect.provide(activationLayer(activation, facilities)),
+							Effect.catch((error) =>
+								Effect.succeed({
+									_tag: 'Failure' as const,
+									error: makeWireError('activation_failed', error.message, {
+										retryable: error.retryable
+									})
 								})
-							})
-						)
-					);
+							)
+						);
 		// Activation is bounded by its own deadline for the same reason dispatch is: registering a
 		// release's durable callbacks talks to the host's task facility, and a host that never answers
 		// would otherwise leave a deploy hanging with no report of why.

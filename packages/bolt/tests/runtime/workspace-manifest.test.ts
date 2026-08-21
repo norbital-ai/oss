@@ -103,9 +103,7 @@ describe('workspace.manifest command', () => {
 				version: '1',
 				collections: [],
 				apps: [],
-				policies: [
-					policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
-				],
+				policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
 				teams: {
 					admin: ['admin']
 				},

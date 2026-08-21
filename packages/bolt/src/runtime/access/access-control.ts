@@ -1,9 +1,6 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import type {
-	PolicyDeclaration,
-	WorkspaceDefinition
-} from '../../authoring/workspace-schema.js';
+import type { PolicyDeclaration, WorkspaceDefinition } from '../../authoring/workspace-schema.js';
 import { Database } from '../facilities/database.js';
 import { Workspace } from '../workspace.js';
 import type { Identity } from '../identity/identity.js';

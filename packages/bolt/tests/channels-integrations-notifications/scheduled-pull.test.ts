@@ -113,9 +113,7 @@ const definition = workspace({
 		})
 	],
 	apps: [],
-	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
-	],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
 	teams: {
 		admin: ['admin']
 	},
@@ -340,9 +338,9 @@ describe('activation hands the host the schedule', () => {
 			// Registration is routing, and only routing: a host no longer needs to learn a cron to hold
 			// one, because the guest is the only party that can read a release's declarations. One
 			// routing registration per command.
-			expect(
-				result.registrations.filter(({ command }) => command === 'integrations.pull')
-			).toEqual([{ command: 'integrations.pull' }]);
+			expect(result.registrations.filter(({ command }) => command === 'integrations.pull')).toEqual(
+				[{ command: 'integrations.pull' }]
+			);
 			const schedules = await database.query(
 				'select key, command, crontab, input from bolt_schedule order by key',
 				[]

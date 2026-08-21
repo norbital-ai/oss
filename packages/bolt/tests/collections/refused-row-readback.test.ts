@@ -41,13 +41,13 @@ import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-
  * what the collection already holds, and the count is re-evaluated for each insert inside the
  * transaction. The first two rows of a batch are written and every row after them is refused.
  */
-const workspaceWith = (
-	integrations: WorkspaceDefinition['integrations']
-): WorkspaceDefinition =>
+const workspaceWith = (integrations: WorkspaceDefinition['integrations']): WorkspaceDefinition =>
 	workspace({
 		name: 'refused-readback',
 		version: '1.0.0',
-		collections: [collection({ name: 'notes', fields: { body: field.string({ required: true }) } })],
+		collections: [
+			collection({ name: 'notes', fields: { body: field.string({ required: true }) } })
+		],
 		apps: [app({ name: 'refused', label: 'Refused' })],
 		teams: { writers: ['note-quota'] },
 		agents: [],

@@ -64,7 +64,6 @@ export const COLONY_SYSTEM_POLICY: PolicyDeclaration = Object.freeze<PolicyDecla
 	apps: ['schema', 'identity']
 });
 
-
 /** The subject id a system invocation runs under, so a log line names the actor rather than a uuid. */
 export const SYSTEM_PRINCIPAL_ID = 'colony-system';
 
@@ -262,46 +261,50 @@ export const hostConfigFromFacility = (
  * own verifier uses `timingSafeEqual`: a byte-dependent shortcut leaks the expected digest one
  * measurement at a time, which is precisely what an HMAC exists to prevent.
  */
-export const verifySystemSignature = Effect.fn('Bolt.verifySystemSignature')(function* (parameters: {
-	readonly headers: Readonly<Record<string, ReadonlyArray<string>>>;
-	readonly command: string;
-	readonly tenantId: string;
-	readonly input: unknown;
-	readonly now: number;
-}) {
-	const provided = headerValue(parameters.headers, SYSTEM_SIGNATURE_HEADER);
-	const stamped = headerValue(parameters.headers, SYSTEM_TIMESTAMP_HEADER);
-	if (provided === undefined || stamped === undefined) return false;
-	const timestamp = Number(stamped);
-	if (!Number.isSafeInteger(timestamp)) return false;
-	if (Math.abs(parameters.now - timestamp) > SIGNATURE_LIFETIME_MILLIS) return false;
-	// A configuration *source* failure collapses to "no secret", which is the fail-closed direction:
-	// not being able to tell whether a secret exists means there is nothing to verify against, and an
-	// unverified request is an unsigned one.
-	//
-	// The secret is read through the invocation's `HostConfig` — the value the host supplied for this
-	// invocation, which is the only way a sandboxed runtime with no `process` can hold one. A bundle
-	// running in a plain process gets the process-env implementation; a caller that provided neither
-	// falls back to the ambient environment for the same reason.
-	const hostConfig = Option.getOrElse(
-		yield* Effect.serviceOption(HostConfig),
-		() => hostConfigFromProcessEnv()
-	);
-	const secret = yield* hostConfig.read(GATEWAY_SECRET_VARIABLE).pipe(
-		Effect.catch(() => Effect.succeed(Option.none<Redacted.Redacted<string>>()))
-	);
-	if (Option.isNone(secret)) return false;
-	const expected = yield* Effect.promise(() =>
-		hmacHex(Redacted.value(secret.value), systemSignaturePayload({
-			timestamp,
-			command: parameters.command,
-			tenantId: parameters.tenantId,
-			input: parameters.input
-		}))
-	);
-	const actual = provided.replace(/^sha256=/, '');
-	return constantTimeEqual(expected, actual);
-});
+export const verifySystemSignature = Effect.fn('Bolt.verifySystemSignature')(
+	function* (parameters: {
+		readonly headers: Readonly<Record<string, ReadonlyArray<string>>>;
+		readonly command: string;
+		readonly tenantId: string;
+		readonly input: unknown;
+		readonly now: number;
+	}) {
+		const provided = headerValue(parameters.headers, SYSTEM_SIGNATURE_HEADER);
+		const stamped = headerValue(parameters.headers, SYSTEM_TIMESTAMP_HEADER);
+		if (provided === undefined || stamped === undefined) return false;
+		const timestamp = Number(stamped);
+		if (!Number.isSafeInteger(timestamp)) return false;
+		if (Math.abs(parameters.now - timestamp) > SIGNATURE_LIFETIME_MILLIS) return false;
+		// A configuration *source* failure collapses to "no secret", which is the fail-closed direction:
+		// not being able to tell whether a secret exists means there is nothing to verify against, and an
+		// unverified request is an unsigned one.
+		//
+		// The secret is read through the invocation's `HostConfig` — the value the host supplied for this
+		// invocation, which is the only way a sandboxed runtime with no `process` can hold one. A bundle
+		// running in a plain process gets the process-env implementation; a caller that provided neither
+		// falls back to the ambient environment for the same reason.
+		const hostConfig = Option.getOrElse(yield* Effect.serviceOption(HostConfig), () =>
+			hostConfigFromProcessEnv()
+		);
+		const secret = yield* hostConfig
+			.read(GATEWAY_SECRET_VARIABLE)
+			.pipe(Effect.catch(() => Effect.succeed(Option.none<Redacted.Redacted<string>>())));
+		if (Option.isNone(secret)) return false;
+		const expected = yield* Effect.promise(() =>
+			hmacHex(
+				Redacted.value(secret.value),
+				systemSignaturePayload({
+					timestamp,
+					command: parameters.command,
+					tenantId: parameters.tenantId,
+					input: parameters.input
+				})
+			)
+		);
+		const actual = provided.replace(/^sha256=/, '');
+		return constantTimeEqual(expected, actual);
+	}
+);
 
 /**
  * An HMAC-SHA256 digest as lowercase hex, through WebCrypto.

@@ -70,7 +70,10 @@ const CollectionTransfer = {
 		options: CollectionExportOptions = {}
 	): Promise<ExportManifest> => {
 		const manifest = decodeExportManifest(
-			await workspaceSession().transport.command('collections.export', input as unknown as Schema.Json)
+			await workspaceSession().transport.command(
+				'collections.export',
+				input as unknown as Schema.Json
+			)
 		);
 		return options.includeAction === undefined ? manifest : manifest.filter(options.includeAction);
 	},

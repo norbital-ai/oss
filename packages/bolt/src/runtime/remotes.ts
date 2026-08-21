@@ -109,7 +109,14 @@ const RemoteRegistries = {
 						// with `Fiber.runLoop: Not a valid effect: [object Promise]` — which is what the leave page's
 						// seasonality heatmap was showing as "could not be loaded". The types were right and the
 						// runtime was wrong, so the runtime moved.
-						const ops = makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations);
+						const ops = makeBoundAuthoringOps(
+							effectId,
+							subject,
+							collections,
+							ai,
+							files,
+							automations
+						);
 						const api = makeAuthoringApi(ops) as RuntimeRemoteApi;
 						// `runAuthoredHandler` already answers an Effect and settles a value, a promise or an
 						// Effect alike, so it is yielded rather than wrapped in `tryPromise` — wrapping it

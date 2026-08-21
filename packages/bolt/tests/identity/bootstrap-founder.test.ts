@@ -303,7 +303,9 @@ describe('spending a founder claim', () => {
 		// And what is stored is the founder's id and address — never the credential that was minted.
 		const value = String(read(ledger[0], 'value'));
 		expect(value).toContain('founder@example.com');
-		expect(value.split(' ')[0]).toBe(String(read(await founderRow(harness, 'founder@example.com'), 'id')));
+		expect(value.split(' ')[0]).toBe(
+			String(read(await founderRow(harness, 'founder@example.com'), 'id'))
+		);
 	});
 });
 

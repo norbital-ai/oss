@@ -41,9 +41,10 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 		return promise;
 	}
 
-	async uploadMany(files: File[], options: Pick<UploadOptions, 'stream'> = {}): Promise<
-		UploadResult[]
-	> {
+	async uploadMany(
+		files: File[],
+		options: Pick<UploadOptions, 'stream'> = {}
+	): Promise<UploadResult[]> {
 		return Promise.all(files.map((file) => this.upload(file, options)));
 	}
 
@@ -104,9 +105,7 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 	async delete(fileUrl: string): Promise<void> {
 		const entry = this.uploads.find((candidate) => candidate.result?.url === fileUrl);
 		if (entry?.result === undefined) return;
-		const extension = entry.file.name.includes('.')
-			? `.${entry.file.name.split('.').at(-1)}`
-			: '';
+		const extension = entry.file.name.includes('.') ? `.${entry.file.name.split('.').at(-1)}` : '';
 		await workspaceSession().files.remove(`${entry.result.norbital_id}${extension}`);
 		this.clear(entry.id);
 	}

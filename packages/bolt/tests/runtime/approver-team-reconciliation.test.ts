@@ -302,9 +302,7 @@ describe('reconciliation never refuses a release', () => {
 	it('reports and carries on when the row cannot be written', async () => {
 		const created = await Effect.runPromise(
 			reconcileApproverTeams(EffectId.make('reconcile-refusing'), definition).pipe(
-				Effect.provide(
-					Database.layer(refusingDatabase, testCallContext('reconcile-refusing'))
-				)
+				Effect.provide(Database.layer(refusingDatabase, testCallContext('reconcile-refusing')))
 			)
 		);
 		// It succeeded, and it created nothing — the two halves that make this a report rather than a

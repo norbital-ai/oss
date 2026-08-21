@@ -18,10 +18,8 @@ const spec = defineRateLimits({
 	'collections.create': { window: '1 min', limit: 1, key: 'subject' }
 });
 
-const admit = (
-	command: string,
-	subject: { tenantId: string; userId?: string; address?: string }
-) => Effect.runPromiseExit(make(spec).admit(command, subject));
+const admit = (command: string, subject: { tenantId: string; userId?: string; address?: string }) =>
+	Effect.runPromiseExit(make(spec).admit(command, subject));
 
 const refusal = (exit: Exit.Exit<void, RateLimited>): RateLimited | undefined => {
 	const error = Option.getOrUndefined(Exit.findErrorOption(exit));

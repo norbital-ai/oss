@@ -231,9 +231,9 @@ describe('the schedule set, before and after the owner changed', () => {
 			for (const cron of declared) {
 				expect(after.get(`automations.${cron.name}`)).toBe(cron.crontab);
 			}
-			expect([...oldSchedules(workspace).keys()].some((key) => key.startsWith('automations.'))).toBe(
-				false
-			);
+			expect(
+				[...oldSchedules(workspace).keys()].some((key) => key.startsWith('automations.'))
+			).toBe(false);
 		});
 	}
 });

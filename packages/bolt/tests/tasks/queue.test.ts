@@ -124,7 +124,12 @@ describe('bolt task queue over a host facility', () => {
 			const now = at('2026-08-20T04:00:00.000Z');
 			await queue().declare(
 				[
-					{ key: 'automations.digest', command: 'automations.digest', crontab: '0 6 * * *', input: {} },
+					{
+						key: 'automations.digest',
+						command: 'automations.digest',
+						crontab: '0 6 * * *',
+						input: {}
+					},
 					{ key: 'automations.gone', command: 'automations.gone', crontab: '0 7 * * *', input: {} }
 				],
 				now
@@ -135,7 +140,12 @@ describe('bolt task queue over a host facility', () => {
 			]);
 			const second = await queue().declare(
 				[
-					{ key: 'automations.digest', command: 'automations.digest', crontab: '0 6 * * *', input: {} }
+					{
+						key: 'automations.digest',
+						command: 'automations.digest',
+						crontab: '0 6 * * *',
+						input: {}
+					}
 				],
 				now
 			);
@@ -185,7 +195,14 @@ describe('bolt task queue over a host facility', () => {
 			const now = Date.now();
 			const slot = nextDailySix(now) - DAY_MS * 2;
 			await queue().declare(
-				[{ key: 'automations.digest', command: 'automations.digest', crontab: '0 6 * * *', input: { a: 1 } }],
+				[
+					{
+						key: 'automations.digest',
+						command: 'automations.digest',
+						crontab: '0 6 * * *',
+						input: { a: 1 }
+					}
+				],
 				now
 			);
 			await database.exec(
@@ -213,7 +230,14 @@ describe('bolt task queue over a host facility', () => {
 			const now = Date.now();
 			const missed = hourAt(now) - HOUR_MS * 3;
 			await queue().declare(
-				[{ key: 'integrations.pull:rfis.erp', command: 'integrations.pull', crontab: '0 * * * *', input: {} }],
+				[
+					{
+						key: 'integrations.pull:rfis.erp',
+						command: 'integrations.pull',
+						crontab: '0 * * * *',
+						input: {}
+					}
+				],
 				now
 			);
 			await database.exec(
@@ -233,7 +257,14 @@ describe('bolt task queue over a host facility', () => {
 		it('gives one slot to one task however many hosts notice it', async () => {
 			const now = Date.now();
 			await queue().declare(
-				[{ key: 'automations.digest', command: 'automations.digest', crontab: '0 6 * * *', input: {} }],
+				[
+					{
+						key: 'automations.digest',
+						command: 'automations.digest',
+						crontab: '0 6 * * *',
+						input: {}
+					}
+				],
 				now
 			);
 			await database.exec(
@@ -387,7 +418,14 @@ describe('bolt task queue over a host facility', () => {
 		it('answers the earliest of a queued task and a schedule, and nothing when there is neither', async () => {
 			expect(await queue().when()).toBeUndefined();
 			await queue().declare(
-				[{ key: 'automations.digest', command: 'automations.digest', crontab: '0 6 * * *', input: {} }],
+				[
+					{
+						key: 'automations.digest',
+						command: 'automations.digest',
+						crontab: '0 6 * * *',
+						input: {}
+					}
+				],
 				at('2026-08-20T04:00:00.000Z')
 			);
 			expect(await queue().when()).toBe(at('2026-08-20T06:00:00.000Z'));
@@ -423,7 +461,14 @@ describe('bolt task queue over a host facility', () => {
 
 		it('rolls, runs what it rolled, and reports when to come back', async () => {
 			await queue().declare(
-				[{ key: 'automations.digest', command: 'automations.digest', crontab: '0 6 * * *', input: {} }],
+				[
+					{
+						key: 'automations.digest',
+						command: 'automations.digest',
+						crontab: '0 6 * * *',
+						input: {}
+					}
+				],
 				Date.now()
 			);
 			await database.exec("update bolt_schedule set next_run_at = now() - interval '1 second'");
@@ -454,7 +499,14 @@ describe('bolt task queue over a host facility', () => {
 
 		it('declines to take work it has no time to finish, and still keeps the host armed', async () => {
 			await queue().declare(
-				[{ key: 'automations.digest', command: 'automations.digest', crontab: '0 6 * * *', input: {} }],
+				[
+					{
+						key: 'automations.digest',
+						command: 'automations.digest',
+						crontab: '0 6 * * *',
+						input: {}
+					}
+				],
 				Date.now()
 			);
 			await database.exec("update bolt_schedule set next_run_at = now() - interval '1 second'");

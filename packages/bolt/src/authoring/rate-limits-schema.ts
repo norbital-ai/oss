@@ -62,7 +62,8 @@ export interface RateLimitSpec {
 }
 
 /** `'1 hour'`, `'15 min'`, `'30 s'`, `'1 day'` — and nothing else, so a typo is a build failure. */
-const WINDOW = /^\s*(\d+)\s*(ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\s*$/;
+const WINDOW =
+	/^\s*(\d+)\s*(ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\s*$/;
 
 const UNIT_MILLIS: Readonly<Record<string, number>> = {
 	ms: 1,
@@ -98,9 +99,7 @@ export const rateLimitWindowMillis = (window: string): number | undefined => {
 	if (parsed === null) return undefined;
 	const amount = Number(parsed[1]);
 	const unit = UNIT_MILLIS[parsed[2] ?? ''];
-	return unit === undefined || !Number.isFinite(amount) || amount <= 0
-		? undefined
-		: amount * unit;
+	return unit === undefined || !Number.isFinite(amount) || amount <= 0 ? undefined : amount * unit;
 };
 
 const PATTERN = /^[a-z][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)*(\.\*)?$/;

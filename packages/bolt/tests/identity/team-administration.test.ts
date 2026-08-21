@@ -294,9 +294,9 @@ describe('teams.assign', () => {
 		);
 		expect(subject.team).toBe('Approvers');
 		expect(subject.teamPath).toEqual(['Approvers']);
-		expect((await access(harness)).members.find(({ id }) => id === fixtureUserId('grace'))?.team).toBe(
-			'Approvers'
-		);
+		expect(
+			(await access(harness)).members.find(({ id }) => id === fixtureUserId('grace'))?.team
+		).toBe('Approvers');
 	});
 
 	it('takes somebody out of every team when the team is null', async () => {

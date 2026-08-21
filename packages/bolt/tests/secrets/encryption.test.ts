@@ -47,9 +47,7 @@ const vaultWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
-	],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
 	teams: {
 		admin: ['admin']
 	},
