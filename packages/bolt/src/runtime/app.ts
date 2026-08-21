@@ -1,7 +1,6 @@
 import { Cause, Effect, Layer, Result, type Schema } from 'effect';
 import {
 	EffectId,
-	LeaseId,
 	makeWireError,
 	PROTOCOL_VERSION,
 	type Activation,
@@ -521,7 +520,6 @@ const BundleActivation = {
 							for (const { key, registration } of keyed) {
 								yield* service.execute(EffectId.make(`${activation.id}:register:${key}`), {
 									_tag: 'Register',
-									leaseId: LeaseId.make(activation.id),
 									releaseId: activation.scope.releaseId,
 									command: registration.command
 								});

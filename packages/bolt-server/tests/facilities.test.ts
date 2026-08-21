@@ -9,7 +9,6 @@ import {
 	FileRequest,
 	HostToolRequest,
 	InvocationId,
-	LeaseId,
 	ReleaseId,
 	TaskRequest,
 	TransportRequest
@@ -396,7 +395,6 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 				tasks.call(
 					metadata,
 					TaskRequest.cases.Register.make({
-						leaseId: LeaseId.make('lease-1'),
 						releaseId: ReleaseId.make('release-1'),
 						command: 'tasks.tick'
 					}),

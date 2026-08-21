@@ -132,3 +132,25 @@ describe('published surface', () => {
 		expect(missing).toEqual([]);
 	});
 });
+
+/**
+ * These names belonged to two disconnected authoring/client APIs. The environment declaration and
+ * browser replica storage seam remain live, so assert those anchors before asserting that their
+ * obsolete siblings cannot leak back into a public barrel or implementation unnoticed.
+ */
+describe('retired public surfaces', () => {
+	it('keeps the duplicate environment helper and Replica service out of the package', async () => {
+		const [authoring, root, client, replica] = await Promise.all([
+			readFile(new URL('../../src/authoring/index.ts', import.meta.url), 'utf8'),
+			readFile(new URL('../../src/index.ts', import.meta.url), 'utf8'),
+			readFile(new URL('../../src/client.ts', import.meta.url), 'utf8'),
+			readFile(new URL('../../src/client/replica/replica.ts', import.meta.url), 'utf8')
+		]);
+		expect(authoring).toContain('defineEnvironment');
+		expect(replica).toContain('export type LocalSql');
+		expect([authoring, root, client].join('\n')).not.toMatch(/defineEnvVars|\bReplica\b/);
+		expect(replica).not.toMatch(
+			/settleOptimistic|ReplicaError|Context\.Service|export \* as Replica/
+		);
+	});
+});

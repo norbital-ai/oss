@@ -31,9 +31,6 @@ export type InvocationId = typeof InvocationId.Type;
 export const EffectId = Schema.NonEmptyString.pipe(Schema.brand('BoltEffectId'));
 export type EffectId = typeof EffectId.Type;
 
-export const LeaseId = Schema.NonEmptyString.pipe(Schema.brand('BoltLeaseId'));
-export type LeaseId = typeof LeaseId.Type;
-
 export const FacilityName = Schema.Literals([
 	'database',
 	'files',

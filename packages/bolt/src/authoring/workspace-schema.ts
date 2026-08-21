@@ -791,34 +791,6 @@ export const environment = (
 		production: options.production ?? false
 	});
 };
-export interface EnvVarConfig {
-	readonly schema?: Schema.Codec<string | undefined, unknown>;
-	readonly public?: boolean;
-	readonly static?: boolean;
-	readonly description?: string;
-}
-/** Owns environment-variable authoring validation while retaining each literal declaration type. */
-const EnvironmentVariables = {
-	define: <const Variables extends Readonly<Record<string, EnvVarConfig>>>(
-		variables: Variables
-	): Variables => {
-		for (const [name, config] of Object.entries(variables)) {
-			if (!/^[A-Z][A-Z0-9_]*$/.test(name)) {
-				throw new TypeError(`Environment variable "${name}" must be UPPER_SNAKE_CASE.`);
-			}
-			if (config.description !== undefined && config.description.trim() === '') {
-				throw new TypeError(`Environment variable ${name} has an empty description.`);
-			}
-			if (config.public && !name.startsWith('PUBLIC_')) {
-				throw new TypeError(`Public environment variable ${name} must use the PUBLIC_ prefix.`);
-			}
-		}
-		return Object.freeze(variables);
-	}
-};
-
-export const defineEnvVars = EnvironmentVariables.define;
-
 export interface AppDeclaration {
 	readonly name: string;
 	readonly label: string;

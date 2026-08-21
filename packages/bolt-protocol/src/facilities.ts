@@ -1,6 +1,6 @@
 import { Schema } from 'effect';
 import { InvocationScope } from './invocation.js';
-import { EffectId, FacilityCall, FacilityResult, LeaseId, ReleaseId } from './wire.js';
+import { EffectId, FacilityCall, FacilityResult, ReleaseId } from './wire.js';
 
 export const DatabaseRequest = Schema.TaggedUnion({
 	Query: { sql: Schema.NonEmptyString, parameters: Schema.Array(Schema.Json) },
@@ -271,7 +271,6 @@ export const TaskRequest = Schema.TaggedUnion({
 	 * `bolt_schedule`, so those two fields were deleted rather than left looking supported.
 	 */
 	Register: {
-		leaseId: LeaseId,
 		releaseId: ReleaseId,
 		command: Schema.NonEmptyString
 	},

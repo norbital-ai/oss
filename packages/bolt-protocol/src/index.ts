@@ -56,12 +56,7 @@ export {
 } from './facilities.js';
 export type { FacilityBinding, FacilityBindings } from './facilities.js';
 
-export {
-	Activation,
-	Invocation,
-	InvocationScope,
-	invocationProtocolVersion
-} from './invocation.js';
+export { Activation, Invocation, InvocationScope } from './invocation.js';
 
 export {
 	EffectId,
@@ -72,7 +67,6 @@ export {
 	FacilityName,
 	FacilityResult,
 	InvocationId,
-	LeaseId,
 	makeWireError,
 	PROTOCOL_VERSION,
 	ProtocolVersion,

@@ -400,7 +400,6 @@ describe('activation hands the host the schedule', () => {
 			expect(registers).toEqual([
 				{
 					_tag: 'Register',
-					leaseId: activation.id,
 					releaseId: activation.scope.releaseId,
 					command: 'integrations.pull'
 				}

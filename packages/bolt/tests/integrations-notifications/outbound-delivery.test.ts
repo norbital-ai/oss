@@ -924,7 +924,6 @@ describe('a write queues the drain that will deliver it', () => {
 			).toEqual([
 				{
 					_tag: 'Register',
-					leaseId: activation.id,
 					releaseId: activation.scope.releaseId,
 					command: 'integrations.flush'
 				}

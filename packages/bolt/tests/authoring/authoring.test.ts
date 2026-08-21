@@ -5,7 +5,6 @@ import {
 	defineAgentTool,
 	defineCommandHandler,
 	defineConnection,
-	defineEnvVars,
 	defineMcpServer,
 	hexToBinaryEmbedding,
 	vector
@@ -36,7 +35,7 @@ describe('Bolt authoring contracts', () => {
 		expect(() => hexToBinaryEmbedding('xyz')).toThrow();
 	});
 
-	it('preserves command, connection, and environment declaration inference', () => {
+	it('preserves command and connection declaration inference', () => {
 		const command = defineCommandHandler({
 			description: 'Returns the input.',
 			schema: Schema.Struct({ id: Schema.String }),
@@ -46,10 +45,8 @@ describe('Bolt authoring contracts', () => {
 			baseUrl: 'https://example.test',
 			authentication: { type: 'bearer', token: { env: 'TOKEN' } }
 		});
-		const variables = defineEnvVars({ TOKEN: { description: 'Connector token' } });
 		expect(command.kind).toBe('command');
 		expect(connection.authentication.token.env).toBe('TOKEN');
-		expect(variables.TOKEN.description).toBe('Connector token');
 	});
 
 	it('declares a workspace agent tool with a non-empty description', () => {

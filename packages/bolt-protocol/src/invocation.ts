@@ -1,12 +1,5 @@
 import { Schema } from 'effect';
-import {
-	EnvironmentName,
-	InvocationId,
-	PROTOCOL_VERSION,
-	ProtocolVersion,
-	ReleaseId,
-	TenantId
-} from './wire.js';
+import { EnvironmentName, InvocationId, ProtocolVersion, ReleaseId, TenantId } from './wire.js';
 
 export const InvocationScope = Schema.Struct({
 	tenantId: TenantId,
@@ -89,7 +82,3 @@ export const Activation = Schema.Struct({
 	reason: Schema.Literals(['deploy', 'restart', 'repair'])
 }).annotate({ identifier: 'BoltActivation' });
 export interface Activation extends Schema.Schema.Type<typeof Activation> {}
-
-/** Exposes the invocation protocol marker as a callable for hosts that negotiate bundle versions lazily. */
-const InvocationProtocol = { current: (): typeof PROTOCOL_VERSION => PROTOCOL_VERSION };
-export const invocationProtocolVersion = InvocationProtocol.current;

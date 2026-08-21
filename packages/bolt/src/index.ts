@@ -13,7 +13,6 @@ export {
 	defineCommandHandler,
 	defineConnection,
 	defineCustomType,
-	defineEnvVars,
 	defineMcpServer,
 	defineModel,
 	defineQueryHandler,
@@ -70,7 +69,6 @@ export {
 	downloadCollectionExport,
 	getPlatformStateContext,
 	importCollectionRecords,
-	Replica,
 	setPlatformStateContext
 } from './client.js';
 export type { BoltClient, BoltTransport } from './client.js';

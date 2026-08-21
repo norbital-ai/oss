@@ -63,7 +63,6 @@ export const syncClient = ClientFactories.sync;
  * What is left is the seam: mount a workspace, build the transport and file store it will run on,
  * and the two constants a host needs to route to it.
  */
-export { Replica } from './client/replica/replica.js';
 /**
  * The mount seam itself is `@norbital-ai/bolt/client/workspace`, not this barrel.
  *
