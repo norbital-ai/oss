@@ -15,11 +15,11 @@ import { Schema } from 'effect';
  * matches on `verified === true` alone, so an unproven claim sits inert.
  *
  * **Holding one of these confers nothing.** It answers "is this sender someone we know" and stops
- * there. What a turn may then read or write comes from the channel's declared `policy`, always, for
+ * there. What a turn may then read or write comes from the envoy's declared `policies`, always, for
  * a linked sender exactly as for an anonymous one.
  */
 export const TransportIdentity = Schema.Struct({
-	/** The transport this address is on, matching a channel's declared `transport`. */
+	/** The transport this address is on, matching an envoy's declared `transport`. */
 	type: Schema.NonEmptyString,
 	/** The address itself, as the transport spells it. Canonicalised on comparison, not on storage. */
 	address: Schema.NonEmptyString,
@@ -85,8 +85,8 @@ export const identityMatches = (
  *
  * The column is `jsonb` and nothing constrains what a hand-written row may put there, so a malformed
  * entry drops out rather than failing the read. A sender is then simply unrecognised — which on an
- * `authenticated` channel means a registration prompt, the same safe answer an unknown number gets.
- * The alternative, failing the whole lookup, would take a channel down over one bad row.
+ * `authenticated` envoy means a registration prompt, the same safe answer an unknown number gets.
+ * The alternative, failing the whole lookup, would take an envoy down over one bad row.
  */
 export const identitiesOf = (value: unknown): ReadonlyArray<TransportIdentity> => {
 	if (!Array.isArray(value)) return [];

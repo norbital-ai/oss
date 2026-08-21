@@ -129,17 +129,17 @@ const hrWorkspace = workspace({
 		app({ name: 'hr_controller/payroll', label: 'Payroll' })
 	],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] }),
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } }),
 		policy({
 			name: 'Employee',
 			effect: 'allow',
-			apps: ['hr_employee'],
+			capabilities: { apps: ['hr_employee'] },
 			grants: [{ collection: 'notices', action: 'read' }]
 		}),
 		policy({
 			name: 'HR',
 			effect: 'allow',
-			apps: ['hr_controller'],
+			capabilities: { apps: ['hr_controller'] },
 			grants: [
 				{ collection: 'notices', action: 'read' },
 				{ collection: 'payslips', action: 'read' }
@@ -151,10 +151,12 @@ const hrWorkspace = workspace({
 		Employee: ['Employee'],
 		HR: ['HR']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: []
 });
 
@@ -195,7 +197,7 @@ describe('team impersonation', () => {
 	 * which refuses everything, including what an employee is plainly entitled to, and would make
 	 * "an employee cannot see the HR app" true for the wrong reason. It is also why the picker lists
 	 * the workspace's policies rather than the approver teams its grants name: a subject carrying
-	 * `teamPath: ['L1 Manager']` matches no policy, so this read would fail too.
+	 * `teamPath: ['L1 Manager'], policies: []` matches no policy, so this read would fail too.
 	 */
 	it('still serves what the previewed team is granted', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
@@ -346,7 +348,7 @@ describe('team impersonation', () => {
 		expect(audit).toHaveLength(1);
 		// The path is the team row's own name, not a policy's — `Employee` seeded above does not
 		// inherit, so it resolves to itself and the recorded path is exactly one name long.
-		expect(audit[0]).toMatchObject({ payload: { team: 'Employee', teamPath: ['Employee'] } });
+		expect(audit[0]).toMatchObject({ payload: { team: 'Employee', teamPath: ['Employee'], policies: [] } });
 	});
 
 	/**

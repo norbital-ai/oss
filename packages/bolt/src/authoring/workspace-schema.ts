@@ -3,7 +3,7 @@ import { Schema, type Effect } from 'effect';
 import type { AutomationDeclaration } from './automations-schema.js';
 import type {
 	BeforeApi,
-	ChannelDefinition,
+	EnvoyDefinition,
 	PullCursorSpec,
 	PullPagesSpec,
 	PullRecordsSpec,
@@ -231,36 +231,57 @@ export const collection = <
 };
 
 /**
- * A channel in the workspace definition: exactly what the author wrote in `+<name>.channel.ts`,
- * plus the two facts the module cannot state about itself — the file's name and the agent bound to
- * answer on it.
+ * An envoy in the workspace definition: exactly what the author wrote in `src/envoys/+<name>.ts`,
+ * plus the one fact the module cannot state about itself — the file's name.
  *
  * It extends the authored definition rather than restating a field list, because restating one is
  * how the two drifted apart. This declaration used to ask `audience: 'direct' | 'group' | 'both'`
  * while the authored definition asked `audience: 'public' | 'authenticated'`, and those are not the
- * same question: the first is what shape of conversation a channel carries, the second is who may
- * reach it. Reach is the one that survives, on two grounds. It is the axis the only consumer tests
- * — `conversation-selector.ts` routes a public channel's threads to the admin inbox and keeps them
- * off every member's — and the shape question is already asked, more precisely, by `groupMessages`,
- * which also says how a group message triggers the agent. `both` could not express that.
+ * same question: the first is what shape of conversation is carried, the second is who may reach it.
+ * Reach is the one that survives, on two grounds. It is the axis the only consumer tests —
+ * `conversation-selector.ts` routes a public envoy's threads to the admin inbox and keeps them off
+ * every member's — and the shape question is already asked, more precisely, by `groupMessages`,
+ * which also says how a group message triggers a turn. `both` could not express that.
+ *
+ * There is no `agent` field. It used to carry a back-pointer whose value was always the one agent
+ * the compiler synthesized; an envoy *is* the agent now, so there is nothing left to point at.
  */
-export interface ChannelDeclaration extends ChannelDefinition {
+export interface EnvoyDeclaration extends EnvoyDefinition {
 	readonly name: string;
-	readonly agent: string;
 }
-/** Owns channel behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-export const channel = (declaration: ChannelDeclaration): ChannelDeclaration => {
-	if (declaration.name.trim() === '') throw new TypeError('Channel name cannot be empty.');
-	if (declaration.transport.trim() === '')
-		throw new TypeError(`Channel ${declaration.name} requires a transport.`);
-	if (declaration.agent.trim() === '')
-		throw new TypeError(`Channel ${declaration.name} requires an agent.`);
-	if (!['public', 'authenticated'].includes(declaration.audience)) {
-		throw new TypeError(`Channel ${declaration.name} has an unsupported audience.`);
+/**
+ * The reserved name, refused at authoring time rather than dropped at render time.
+ *
+ * `conversation-selector.ts` uses `web` as the selector's own entry for the web agent's threads, so
+ * an envoy called `web` would be silently swallowed by the tab that is already there. Refusing it
+ * here is the difference between a build error naming the file and a channel that never appears.
+ */
+export const WEB_AGENT_NAME = 'web';
+/** Owns envoy behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
+export const envoy = (declaration: EnvoyDeclaration): EnvoyDeclaration => {
+	const name = declaration.name.trim();
+	if (name === '') throw new TypeError('Envoy name cannot be empty.');
+	if (name === WEB_AGENT_NAME) {
+		throw new TypeError(
+			`Envoy "${WEB_AGENT_NAME}" is reserved: the web agent already occupies that name in the conversation selector, so an envoy called "${WEB_AGENT_NAME}" would never be reachable. Name it after what it is for.`
+		);
 	}
+	if (declaration.transport.trim() === '')
+		throw new TypeError(`Envoy ${name} requires a transport.`);
+	if (!['public', 'authenticated'].includes(declaration.audience)) {
+		throw new TypeError(`Envoy ${name} has an unsupported audience.`);
+	}
+	if (declaration.policies.length === 0) {
+		throw new TypeError(
+			`Envoy ${name} names no policies, so every turn on it would hold no authority at all. Name the policies it may act under.`
+		);
+	}
+	if (declaration.task.trim() === '') throw new TypeError(`Envoy ${name} requires a task.`);
 	return Object.freeze({
 		...declaration,
-		name: declaration.name.trim()
+		name,
+		task: declaration.task.trim(),
+		policies: Object.freeze([...declaration.policies])
 	});
 };
 /**
@@ -638,40 +659,6 @@ export interface ToolDeclaration {
 	readonly description: string;
 	readonly command: string;
 }
-/**
- * The workspace agent, as the runtime reads it.
- *
- * `name`, `tools` and `skills` are the compiler's to supply — a workspace has one agent, its tools
- * are the `+<name>.tool.ts` files and its skills are the `.agents/skills/` directories, none of
- * which the authored module can state about itself. Everything below it is `src/+agent.ts`'s, and
- * every one of those fields used to be discarded: the compiler synthesized a placeholder
- * declaration, never discovered `+agent.ts` at all, and the agent ran with the prompt
- * "You are the <workspace> workspace agent." unscoped over every collection.
- */
-export interface AgentDeclaration {
-	readonly name: string;
-	readonly prompt: string;
-	readonly tools: ReadonlyArray<ToolDeclaration>;
-	readonly skills: ReadonlyArray<string>;
-	/** What this agent is for, as the manifest and the studio report it. */
-	readonly description?: string;
-	/** The standing task, appended to the prompt so a turn opens knowing what it is here to do. */
-	readonly task?: string;
-	/** The model each turn is made against. Absent means the host's default. */
-	readonly model?: string;
-	/** The output budget of one provider call, which is per call and not per turn. */
-	readonly maxTokens?: number;
-	/** `read` withholds `write_collection` entirely; `write` offers it. Absent reads as `read`. */
-	readonly access?: 'read' | 'write';
-	/** The collections `read_collection` and `write_collection` may reach. Absent means every one. */
-	readonly collections?: ReadonlyArray<string>;
-	/** Platform or workspace tools withheld from this agent. It cannot withhold a bound sandbox. */
-	readonly denyTools?: ReadonlyArray<string>;
-	/** The MCP servers whose tools this agent may call. Absent leaves the connector facility the gate. */
-	readonly mcpServers?: ReadonlyArray<string>;
-	/** Non-sandbox host tools this agent opts into, routed through the host-tools facility. */
-	readonly hostTools?: ReadonlyArray<string>;
-}
 /** Owns tool behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const tool = (declaration: ToolDeclaration): ToolDeclaration => {
 	if (!/^[a-z][a-z0-9_.-]*$/.test(declaration.name)) {
@@ -687,37 +674,6 @@ export const tool = (declaration: ToolDeclaration): ToolDeclaration => {
 		command: declaration.command.trim()
 	});
 };
-/** Owns agent behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-export const agent = (declaration: AgentDeclaration): AgentDeclaration => {
-	if (!/^[a-z][a-z0-9_.-]*$/.test(declaration.name))
-		throw new TypeError(`Agent name "${declaration.name}" is invalid.`);
-	if (declaration.prompt.trim() === '')
-		throw new TypeError(`Agent ${declaration.name} requires a prompt.`);
-	const toolNames = declaration.tools.map(({ name }) => name);
-	if (new Set(toolNames).size !== toolNames.length)
-		throw new TypeError(`Agent ${declaration.name} contains duplicate tools.`);
-	if (new Set(declaration.skills).size !== declaration.skills.length)
-		throw new TypeError(`Agent ${declaration.name} contains duplicate skills.`);
-	if (
-		declaration.maxTokens !== undefined &&
-		(!Number.isInteger(declaration.maxTokens) || declaration.maxTokens <= 0)
-	) {
-		throw new TypeError(`Agent ${declaration.name} maxTokens must be a positive integer.`);
-	}
-	if (
-		declaration.access !== undefined &&
-		declaration.access !== 'read' &&
-		declaration.access !== 'write'
-	) {
-		throw new TypeError(`Agent ${declaration.name} has an unsupported access level.`);
-	}
-	return Object.freeze({
-		...declaration,
-		prompt: declaration.prompt.trim(),
-		tools: Object.freeze([...declaration.tools]),
-		skills: Object.freeze([...declaration.skills])
-	});
-};
 export interface RuntimePolicyGrant {
 	readonly collection: string;
 	readonly action: 'read' | 'create' | 'update' | 'delete' | 'history';
@@ -725,6 +681,19 @@ export interface RuntimePolicyGrant {
 	readonly fields?: ReadonlyArray<string>;
 	readonly approval?: unknown;
 }
+
+/**
+ * A policy as the runtime reads it: the authored file, plus the name its filename gave it.
+ *
+ * `name` is here and not on `PolicyDefinition`, and the asymmetry is the whole fix. The authored
+ * file states no name at all — the compiler reads it off the filename and attaches it here — so
+ * there is no second spelling to drift. A display-cased `name:` used to compile and match nothing at
+ * run time, in five of six workspaces.
+ *
+ * `capabilities` and `limits` arrive normalized: `describePolicy` fills the four capability lists
+ * and folds a policy's own rate rules into one map, so every consumer reads one shape rather than
+ * guessing at absence.
+ */
 export interface PolicyDeclaration {
 	readonly name: string;
 	readonly description?: string;
@@ -738,33 +707,49 @@ export interface PolicyDeclaration {
 	 * string `colony-system`: forgeable by any row that spelled it, and guarded only by a filter that
 	 * stripped the string back out of every projected subject.
 	 *
-	 * A policy is otherwise selected by its own `name`, matched against the policies the subject's
-	 * team declares in `+teams.ts`. There is no second way to name one.
+	 * A policy is otherwise selected by its own `name`, matched against the policies its holders
+	 * name — a team in `+teams.ts`, an envoy declaration, an automation declaration. There is no
+	 * second way to name one.
 	 */
 	readonly system?: boolean;
 	/**
 	 * Selects every subject that signed in, and nothing an author writes should carry it either.
 	 *
-	 * `PolicyDefinition` — the type a `+*.policy.ts` is checked against — exposes neither this nor
-	 * `system`, so the only declarations that can carry one are the runtime's own in
+	 * `PolicyDefinition` — the type an `access/policies/+<name>.ts` is checked against — exposes
+	 * neither this nor `system`, so the only declarations that can carry one are the runtime's own in
 	 * `BUILT_IN_POLICIES`. It exists because `SYSTEM_READ_POLICY` grants what a workspace's queries
-	 * need of the runtime's own collections, and there is no team for it to be held by: a policy
-	 * name only reaches a subject through `+teams.ts`, and asking twenty templates to each declare a
-	 * team naming `bolt.system-collections` would make a promise the runtime makes depend on every
-	 * workspace remembering to opt into it. Merged and unreachable, it granted nobody: an ordinary
-	 * member reading `bolt_auth_user` for a display name was refused, and only the administrator
-	 * short-circuit made those collections readable at all.
+	 * need of the runtime's own collections, and there is no holder for it: a policy name only
+	 * reaches a subject through a team, an envoy or an automation, and asking twenty templates to
+	 * each declare a team naming `bolt.system-collections` would make a promise the runtime makes
+	 * depend on every workspace remembering to opt into it.
 	 *
 	 * It is deliberately *not* "every subject". The host principal carries `system: true` and holds
-	 * the two grants `COLONY_SYSTEM_POLICY` enumerates and nothing else — it can migrate a workspace
-	 * and admit its founder, and cannot open a record in it — so `subjectHasPolicy` excludes it here
-	 * rather than quietly widening it by one collection at a time.
+	 * the two grants `COLONY_SYSTEM_POLICY` enumerates and nothing else, so `subjectHasPolicy`
+	 * excludes it here rather than quietly widening it by one collection at a time.
 	 */
 	readonly authenticated?: boolean;
-	readonly apps?: ReadonlyArray<string>;
+	/** Apps, tools, MCP servers and skills this policy grants. The only place capability is declared. */
+	readonly capabilities?: import('./contracts-schema.js').PolicyCapabilities;
+	/**
+	 * This policy's own rate rules, keyed by command pattern, with every `key` resolved.
+	 *
+	 * `PolicyLimits` — the authored shape — lets `key` be omitted and read as `subject`.
+	 * `describePolicy` fills it, so everything downstream reads one shape rather than deciding for
+	 * itself what an absent key meant.
+	 */
+	readonly limits?: Readonly<
+		Record<string, ReadonlyArray<import('./rate-limits-schema.js').RateLimitRule>>
+	>;
 	readonly grants?: ReadonlyArray<RuntimePolicyGrant>;
 }
-/** Owns policy behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
+/**
+ * Owns policy behavior at the authoring boundary so validation and typed semantics stay consistent
+ * for every caller.
+ *
+ * Only the runtime's own `BUILT_IN_POLICIES` call this. An authored policy is a plain object checked
+ * against `PolicyDefinition` and named by its file, so there is no factory for it to forget to call
+ * and no name for it to restate.
+ */
 export const policy = (declaration: PolicyDeclaration): PolicyDeclaration => {
 	if (declaration.name.trim() === '') throw new TypeError('Policy name cannot be empty.');
 	if ((declaration.actions?.length ?? 0) === 0 && (declaration.grants?.length ?? 0) === 0) {
@@ -911,9 +896,30 @@ export interface WorkspaceDefinition {
 	 * membership, which is the correct answer for a workspace that has not said otherwise.
 	 */
 	readonly teams?: TeamsDeclaration;
-	readonly agents: ReadonlyArray<AgentDeclaration>;
+	/**
+	 * The workspace's shared system prompt — the whole of `src/+agents.md`.
+	 *
+	 * It is the system message of *every* agent turn, web and envoy alike: what the collections mean,
+	 * what the company does, house rules for tone and escalation. An envoy's `task` is its own standing
+	 * instruction on top of it. Workspace context is shared; purpose is per-envoy.
+	 *
+	 * It replaces `src/+agent.ts`, which was the only place a workspace could say any of this and which
+	 * five of six workspaces did not have — so every externally reachable agent in the realm ran the
+	 * synthesized placeholder "You are the <name> workspace agent.", unscoped.
+	 */
+	readonly prompt: string;
+	/**
+	 * Every tool this workspace authored, as `src/capabilities/tools/+<name>.ts` files.
+	 *
+	 * Authoring one offers it to nobody. A tool reaches a turn only when a policy the subject holds
+	 * names it under `capabilities.tools`, which is what makes adding a tool file a change that
+	 * widens no existing holder.
+	 */
+	readonly tools: ReadonlyArray<ToolDeclaration>;
+	/** Every skill directory under `src/capabilities/skills/`. Granted the same way tools are. */
+	readonly skills: ReadonlyArray<string>;
 	readonly automations: ReadonlyArray<AutomationDeclaration>;
-	readonly channels: ReadonlyArray<ChannelDeclaration>;
+	readonly envoys: ReadonlyArray<EnvoyDeclaration>;
 	readonly integrations: ReadonlyArray<IntegrationDeclaration>;
 	readonly requiredFacilities: ReadonlyArray<FacilityName>;
 	/**
@@ -941,9 +947,8 @@ export const workspace = (definition: WorkspaceDraft): WorkspaceDefinition => {
 		definition.collections,
 		definition.apps,
 		definition.policies,
-		definition.agents,
 		definition.automations,
-		definition.channels,
+		definition.envoys,
 		definition.integrations
 	];
 	for (const registry of registries) {

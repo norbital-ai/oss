@@ -84,10 +84,12 @@ const definition = workspace({
 		})
 	],
 	teams: { 'Payroll Officer': ['Payroll Officer'], Employee: ['Employee'] },
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: []
 });
 

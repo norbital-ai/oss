@@ -7,7 +7,6 @@ import { build } from 'vite';
 import { Effect, Schema } from 'effect';
 import { PROTOCOL_VERSION } from '@norbital-ai/bolt-protocol';
 import type { RelationDefinition, WorkspaceMigrationEntry } from '../authoring/workspace-schema.js';
-import { workspaceAgentNameFromPackage } from './agent-name.js';
 import {
 	BOLT_TENANT_REQUEST_PREFIX,
 	BOLT_TENANT_STATIC_PREFIX,
@@ -34,7 +33,7 @@ export type SyncResult = Readonly<{
 	readonly collectionNames: ReadonlyArray<string>;
 	readonly appNames: ReadonlyArray<string>;
 	readonly toolNames: ReadonlyArray<string>;
-	readonly channelNames: ReadonlyArray<string>;
+	readonly envoyNames: ReadonlyArray<string>;
 	readonly automationNames: ReadonlyArray<string>;
 	readonly mcpServerNames: ReadonlyArray<string>;
 	readonly artifactPath: string;
@@ -74,9 +73,9 @@ type EmbeddedAsset = Readonly<{
  * workspace shaped for the one thing it asserts about, and every role it does not care about used
  * to be a bare `[]` in a run of twelve indistinguishable ones.
  *
- * The four optional fields are the four discovered files a workspace may simply not have. They are
- * optional rather than defaulted-positional so that omitting one still reads as "this workspace has
- * no agent" at the call site, instead of as a gap somebody has to count.
+ * The optional fields are the discovered files a workspace may simply not have. They are optional
+ * rather than defaulted-positional so that omitting one still reads as "this workspace declares no
+ * teams" at the call site, instead of as a gap somebody has to count.
  */
 export type RenderArtifactInput = Readonly<{
 	readonly metadata: PackageMetadata;
@@ -102,14 +101,22 @@ export type RenderArtifactInput = Readonly<{
 		readonly thumbnail?: string;
 	}>;
 	readonly policies: ReadonlyArray<string>;
-	readonly remotes: ReadonlyArray<string>;
+	readonly functions: ReadonlyArray<string>;
 	readonly toolFiles: ReadonlyArray<string>;
-	readonly channelFiles: ReadonlyArray<string>;
+	readonly envoyFiles: ReadonlyArray<string>;
 	readonly automations: ReadonlyArray<string>;
 	readonly automationFiles: ReadonlyArray<string>;
 	readonly pipelineFiles: ReadonlyArray<string>;
 	readonly skills: ReadonlyArray<string>;
-	readonly agentName: string;
+	/**
+	 * `src/+agents.md` — the system message of every agent turn in this workspace.
+	 *
+	 * Required, and the compiler refuses a workspace without one. There is no placeholder to fall
+	 * back to: the placeholder was the defect. `sync.ts` used to synthesize
+	 * `"You are the <name> workspace agent."` and five of six workspaces shipped it, including both
+	 * of the two whose agents were reachable from outside.
+	 */
+	readonly prompt: string;
 	readonly root: string;
 	readonly assets: ReadonlyArray<EmbeddedAsset>;
 	readonly customTypeDefinitions: ReadonlyArray<string>;
@@ -118,12 +125,10 @@ export type RenderArtifactInput = Readonly<{
 	readonly integrationFiles?: ReadonlyArray<string>;
 	/** `+env.ts` at the workspace root, when the workspace declares an environment. */
 	readonly environmentFile: string | undefined;
-	/** `src/+ratelimits.ts`, when the workspace states its own rate policy. */
-	readonly rateLimitFile?: string | undefined;
-	/** `src/+teams.ts`, when the workspace declares which policies each named team holds. */
+	/** `src/access/+anonymous_limits.ts`, when the workspace bounds its pre-sign-in surface. */
+	readonly anonymousLimitFile?: string | undefined;
+	/** `src/access/+teams.ts`, when the workspace declares which policies each named team holds. */
 	readonly teamsFile?: string | undefined;
-	/** `src/+agent.ts`, when the workspace configures its agent rather than taking the defaults. */
-	readonly agentFile?: string | undefined;
 }>;
 
 /** Owns compiler discovery, rendering, and artifact emission as one cohesive stateless namespace. */
@@ -204,17 +209,57 @@ class WorkspaceCompiler {
 		return `import type { CustomTypeOutput } from '@norbital-ai/bolt/authoring';\n${WorkspaceCompiler.importLines(definitions, root, 'definition')}\n\nexport const customTypes = {\n${entries}\n} as const;\nexport type CustomKind = keyof typeof customTypes;\nexport type CustomValue<K extends CustomKind> = CustomTypeOutput<(typeof customTypes)[K]>;\n`;
 	};
 
-	/** Owns render authoring types behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
-	static readonly renderAuthoringTypes = (
-		collections: ReadonlyArray<string>,
-		apps: ReadonlyArray<string>,
-		policies: ReadonlyArray<string>,
-		remotes: ReadonlyArray<string>,
-		tools: ReadonlyArray<string>,
-		channels: ReadonlyArray<string>,
-		mcpServers: ReadonlyArray<string>
-	): string =>
-		`export type CollectionName = ${WorkspaceCompiler.quotedUnion(collections)};\nexport type AgentToolName = ${WorkspaceCompiler.quotedUnion(tools)};\nexport type PolicyName = ${WorkspaceCompiler.quotedUnion(policies)};\nexport type AppName = ${WorkspaceCompiler.quotedUnion(apps)};\nexport type ChannelName = ${WorkspaceCompiler.quotedUnion(channels)};\nexport type McpServerName = ${WorkspaceCompiler.quotedUnion(mcpServers)};\nexport type RemoteName = ${WorkspaceCompiler.quotedUnion(remotes)};\n`;
+	/**
+	 * Every name one declaration in this workspace may use to reach another, as a union.
+	 *
+	 * Eleven of them, and eleven is the point. Seven were generated before this and exactly one —
+	 * `PolicyName` — had a resolver in `contracts-schema.ts`, so `AgentToolName`, `McpServerName`,
+	 * `AppName`, `ChannelName` and `RemoteName` were emitted, declared, and read by nobody. Four more
+	 * did not exist at all, and the most expensive of those absences was `TeamName`: `approvers:
+	 * ['HR Manger']` compiled and produced an approval nobody could ever decide.
+	 *
+	 * The rule is now uniform, so an author never has to know which names are checked: **if one
+	 * declaration names another, that name is a generated union and a rename fails the build.**
+	 *
+	 * `TeamName` is derived from the teams module's own keys rather than from a quoted list, because
+	 * the compiler does not evaluate `+teams.ts` — it discovers it. `keyof typeof` reads the keys the
+	 * type checker sees, which includes any a scan of the source text would miss. A workspace with no
+	 * teams file gets `never`, which is correct: with no team declared, there is no valid approver.
+	 */
+	static readonly renderAuthoringTypes = (input: {
+		readonly collections: ReadonlyArray<string>;
+		readonly apps: ReadonlyArray<string>;
+		readonly policies: ReadonlyArray<string>;
+		readonly functions: ReadonlyArray<string>;
+		readonly tools: ReadonlyArray<string>;
+		readonly envoys: ReadonlyArray<string>;
+		readonly mcpServers: ReadonlyArray<string>;
+		readonly skills: ReadonlyArray<string>;
+		readonly datatypes: ReadonlyArray<string>;
+		readonly automations: ReadonlyArray<string>;
+		/** The import specifier for `src/access/+teams.ts`, relative to `.norbital/generated/`. */
+		readonly teamsImport: string | undefined;
+	}): string => {
+		const union = WorkspaceCompiler.quotedUnion;
+		const teams =
+			input.teamsImport === undefined
+				? 'export type TeamName = never;'
+				: `import type declaredTeams from ${JSON.stringify(input.teamsImport)};\nexport type TeamName = Extract<keyof typeof declaredTeams, string>;`;
+		return [
+			teams,
+			`export type CollectionName = ${union(input.collections)};`,
+			`export type PolicyName = ${union(input.policies)};`,
+			`export type AppName = ${union(input.apps)};`,
+			`export type ToolName = ${union(input.tools)};`,
+			`export type McpServerName = ${union(input.mcpServers)};`,
+			`export type SkillName = ${union(input.skills)};`,
+			`export type EnvoyName = ${union(input.envoys)};`,
+			`export type AutomationName = ${union(input.automations)};`,
+			`export type FunctionName = ${union(input.functions)};`,
+			`export type DatatypeName = ${union(input.datatypes)};`,
+			''
+		].join('\n');
+	};
 
 	/** Owns render i18n keys behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderI18nKeys = (messages: Readonly<Record<string, string>>): string => {
@@ -336,17 +381,27 @@ class WorkspaceCompiler {
 	static readonly renderRelationshipTypes = (): string =>
 		`import type { PlatformRelationshipsFor } from '@norbital-ai/bolt/authoring/internals';\nimport type { Models } from '../../generated/models.js';\nexport type Relationships = PlatformRelationshipsFor<Models>;\n`;
 
-	/** Owns render policy types behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
+	/**
+	 * `src/access/policies/$types.d.ts` — what a policy file is checked against.
+	 *
+	 * Three levels up rather than two, because policies moved a directory deeper: `access/policies/`
+	 * rather than `policies/`. `TeamName` is re-exported because an approval step's `approvers` names
+	 * teams and an author writing one wants the union in hand.
+	 */
 	static readonly renderPolicyTypes = (): string =>
-		`import type { PolicyDefinition } from '@norbital-ai/bolt/authoring';\nimport type { WorkspaceSchema } from '../../generated/types.js';\nexport type { AppName, CollectionName, PolicyName } from '../../generated/authoring-types.js';\nexport type Policy = PolicyDefinition<WorkspaceSchema>;\n`;
+		`import type { PolicyDefinition } from '@norbital-ai/bolt/authoring';\nimport type { WorkspaceSchema } from '../../../generated/types.js';\nexport type { AppName, CollectionName, McpServerName, PolicyName, SkillName, TeamName, ToolName } from '../../../generated/authoring-types.js';\nexport type Policy = PolicyDefinition<WorkspaceSchema>;\n`;
 
-	/** Owns render channel types behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
-	static readonly renderChannelTypes = (): string =>
-		`import type { ChannelDefinition } from '@norbital-ai/bolt/authoring';\nexport type { ChannelName, PolicyName } from '../../generated/authoring-types.js';\nexport type Channel = ChannelDefinition;\n`;
+	/** `src/access/$types.d.ts` — the teams map and the pre-sign-in limits are checked against these. */
+	static readonly renderAccessTypes = (): string =>
+		`export type { PolicyName, TeamName } from '../../generated/authoring-types.js';\nimport type { Teams as TeamsDeclaration } from '@norbital-ai/bolt/authoring';\nexport type Teams = TeamsDeclaration;\n`;
 
-	/** Owns render role types behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
-	static readonly renderRoleTypes = (): string =>
-		`import type { AutomationContext, AutomationTrigger } from '@norbital-ai/bolt/authoring';\nimport type { WorkspaceSchema } from '../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../generated/types.js';\nexport type { AgentToolName, CollectionName } from '../../generated/authoring-types.js';\nexport type Trigger = AutomationTrigger<WorkspaceSchema>;\nexport type Scope<T extends Trigger> = AutomationContext<T, WorkspaceSchema>['scope'];\n`;
+	/** `src/envoys/$types.d.ts` — what an envoy file is checked against. */
+	static readonly renderEnvoyTypes = (): string =>
+		`import type { EnvoyDefinition } from '@norbital-ai/bolt/authoring';\nexport type { EnvoyName, PolicyName } from '../../generated/authoring-types.js';\nexport type Envoy = EnvoyDefinition;\n`;
+
+	/** `src/automations/$types.d.ts` and `src/functions/$types.d.ts` — the authored-handler surface. */
+	static readonly renderHandlerTypes = (): string =>
+		`import type { AutomationContext, AutomationTrigger } from '@norbital-ai/bolt/authoring';\nimport type { WorkspaceSchema } from '../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../generated/types.js';\nexport type { AutomationName, CollectionName, FunctionName, PolicyName, ToolName } from '../../generated/authoring-types.js';\nexport type Trigger = AutomationTrigger<WorkspaceSchema>;\nexport type Scope<T extends Trigger> = AutomationContext<T, WorkspaceSchema>['scope'];\n`;
 
 	/** Owns render custom type renderer behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderCustomTypeRenderer = (definition: string, root: string): string => {
@@ -357,9 +412,15 @@ class WorkspaceCompiler {
 		return `import type { CustomTypeOutput } from '@norbital-ai/bolt/authoring';\nimport type definition from ${JSON.stringify(definitionImport)};\nexport type CollectionField = { readonly name: string; readonly type: string };\nexport type Value = CustomTypeOutput<typeof definition>;\nexport type RendererProps =\n\t| { readonly mode: 'display'; readonly field: CollectionField; readonly value: Value | null }\n\t| { readonly mode: 'edit'; readonly field: CollectionField; readonly value: Value | null; readonly disabled: boolean; onValueChange(value: Value | null): void };\n`;
 	};
 
-	/** Owns render workspace authoring behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
+	/**
+	 * The augmentation that makes every generated union reachable from an authored file.
+	 *
+	 * All eleven, because a union that is generated and not resolved here is a union nothing checks —
+	 * which is what six of them were. `contracts-schema.ts` reads each of these keys through
+	 * `DeclaredName<'...'>`, so adding a union means adding a line in both places and nowhere else.
+	 */
 	static readonly renderWorkspaceAuthoring = (): string =>
-		`import type { AgentToolName, AppName, CollectionName, McpServerName, PolicyName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\ndeclare module '@norbital-ai/bolt/authoring' { interface WorkspaceAuthoringTypes { readonly schema: WorkspaceSchema; readonly collectionName: CollectionName; readonly agentToolName: AgentToolName; readonly policyName: PolicyName; readonly appName: AppName; readonly mcpServerName: McpServerName } }\nexport {};\n`;
+		`import type { AppName, AutomationName, CollectionName, DatatypeName, EnvoyName, FunctionName, McpServerName, PolicyName, SkillName, TeamName, ToolName } from '../generated/authoring-types.js';\nimport type { WorkspaceSchema } from '../generated/types.js';\ndeclare module '@norbital-ai/bolt/authoring' { interface WorkspaceAuthoringTypes { readonly schema: WorkspaceSchema; readonly collectionName: CollectionName; readonly policyName: PolicyName; readonly teamName: TeamName; readonly appName: AppName; readonly toolName: ToolName; readonly mcpServerName: McpServerName; readonly skillName: SkillName; readonly envoyName: EnvoyName; readonly automationName: AutomationName; readonly functionName: FunctionName; readonly datatypeName: DatatypeName } }\nexport {};\n`;
 
 	/** Owns render client runtime declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderClientRuntimeDeclaration = (): string =>
@@ -368,7 +429,7 @@ class WorkspaceCompiler {
 	/** Owns render client declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderClientDeclaration = (
 		hooks: ReadonlyArray<string>,
-		remotes: ReadonlyArray<string>,
+		functions: ReadonlyArray<string>,
 		root: string
 	): string => {
 		const hookEntries = hooks
@@ -377,13 +438,13 @@ class WorkspaceCompiler {
 					`\treadonly ${JSON.stringify(basename(dirname(path)))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
 			)
 			.join('\n');
-		const invokeEntries = remotes
+		const invokeEntries = functions
 			.map(
 				(path) =>
 					`\treadonly ${JSON.stringify(basename(path).slice(1, -3))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
 			)
 			.join('\n');
-		return `import type { CollectionRegistryFor, InvokeClientApi, PlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceSchema } from './types.js';\ntype CollectionHooks = {\n${hookEntries}\n};\ntype TenantCollections = CollectionRegistryFor<WorkspaceSchema, CollectionHooks>;\ntype Collections = TenantCollections & CollectionRegistryFor<PlatformSchema>;\ntype Invoke = {\n${invokeEntries}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceCreate<N extends keyof TenantCollections> = TenantCollections[N]['create'];\nexport type WorkspaceUpdate<N extends keyof TenantCollections> = TenantCollections[N]['update'];\nexport interface Client { readonly db: { findMany(collection: string, limit?: number): Promise<unknown> }; readonly invoke: InvokeClientApi<Invoke>; }\nexport declare const client: Client;\nexport declare const runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime;\nexport declare const changeAccessScope: (accessScope: string) => void;\nexport declare const startLocalReplica: (runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }) => Promise<{ readonly stop: () => void }>;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string }>>;\nexport declare const policyNames: ReadonlyArray<string>;\nexport declare const agentNames: ReadonlyArray<string>;\n`;
+		return `import type { CollectionRegistryFor, InvokeClientApi, PlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { WorkspaceSchema } from './types.js';\ntype CollectionHooks = {\n${hookEntries}\n};\ntype TenantCollections = CollectionRegistryFor<WorkspaceSchema, CollectionHooks>;\ntype Collections = TenantCollections & CollectionRegistryFor<PlatformSchema>;\ntype Invoke = {\n${invokeEntries}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceCreate<N extends keyof TenantCollections> = TenantCollections[N]['create'];\nexport type WorkspaceUpdate<N extends keyof TenantCollections> = TenantCollections[N]['update'];\nexport interface Client { readonly db: { findMany(collection: string, limit?: number): Promise<unknown> }; readonly invoke: InvokeClientApi<Invoke>; }\nexport declare const client: Client;\nexport declare const runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime;\nexport declare const changeAccessScope: (accessScope: string) => void;\nexport declare const startLocalReplica: (runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }) => Promise<{ readonly stop: () => void }>;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<unknown>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string }>>;\nexport declare const policyNames: ReadonlyArray<string>;\n`;
 	};
 
 	/** Owns render client runtime behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
@@ -409,7 +470,6 @@ class WorkspaceCompiler {
 			>
 		>,
 		policies: ReadonlyArray<string>,
-		agentNames: ReadonlyArray<string>,
 		root: string,
 		representations: ReadonlyArray<string>,
 		customRenderers: ReadonlyArray<string>
@@ -449,7 +509,7 @@ class WorkspaceCompiler {
 					})}`
 			)
 			.join(',\n');
-		return `import './app.css';\n// The workspace stylesheet rides this module, not the entry.\n//\n// Vite links an entry's CSS from the HTML document it generates, and this build generates no\n// document — so a sheet imported by the entry is emitted beside it and never loaded. A sheet\n// imported by a *dynamically* imported chunk is different: Vite's own preload helper inserts the\n// link before the chunk executes. This module is only ever reached through \`import('$bolt/client')\`\n// inside \`mountWorkspace\`, so the supported mechanism applies and nothing has to rewrite chunk\n// text to make the workspace render styled.\nimport { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startLocalReplica, switchWorkspaceAccessScope } from 'virtual:bolt/client-runtime';\nimport { collectionCatalog } from './collections.js';\nconst runtime = createBrowserWorkspaceRuntime();\nexport const client = createWorkspaceApiProxy(runtime, collectionCatalog);\n// The replica is started by whoever owns its lifetime, never by importing this module.\n//\n// It used to start here, at module scope. But this module is also what a host imports to read\n// \`appLoaders\` — so merely reaching for the app registry opened a database, and it opened one\n// before anybody had signed in: \`sync.provisioning\` answered 401 and the replica gave up on a\n// workspace it would have been allowed to read a moment later. A host that then started its own\n// replica after sign-in got a second engine for the same scope, because starting one is not\n// idempotent.\n//\n// \`startLocalReplica\` is re-exported instead, so the owner starts it once it has a session and can\n// stop it on teardown. PGlite is several megabytes of WebAssembly, so bringing it up after the page\n// is interactive — rather than before first paint — remains the point.\nexport const changeAccessScope = (accessScope) => switchWorkspaceAccessScope(runtime, accessScope);\nexport { runtime, startLocalReplica };\nexport const appLoaders = {\n${loaders}\n};\nexport const representationLoaders = {\n${representationLoaders}\n};\nexport const customTypeRendererLoaders = {\n${customRendererLoaders}\n};\nexport const appGroups = {\n${groupEntries}\n};\nexport const appMeta = ${JSON.stringify(appMeta)};\nexport const policyNames = ${JSON.stringify(policies)};\nexport const agentNames = ${JSON.stringify(agentNames)};\n`;
+		return `import './app.css';\n// The workspace stylesheet rides this module, not the entry.\n//\n// Vite links an entry's CSS from the HTML document it generates, and this build generates no\n// document — so a sheet imported by the entry is emitted beside it and never loaded. A sheet\n// imported by a *dynamically* imported chunk is different: Vite's own preload helper inserts the\n// link before the chunk executes. This module is only ever reached through \`import('$bolt/client')\`\n// inside \`mountWorkspace\`, so the supported mechanism applies and nothing has to rewrite chunk\n// text to make the workspace render styled.\nimport { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startLocalReplica, switchWorkspaceAccessScope } from 'virtual:bolt/client-runtime';\nimport { collectionCatalog } from './collections.js';\nconst runtime = createBrowserWorkspaceRuntime();\nexport const client = createWorkspaceApiProxy(runtime, collectionCatalog);\n// The replica is started by whoever owns its lifetime, never by importing this module.\n//\n// It used to start here, at module scope. But this module is also what a host imports to read\n// \`appLoaders\` — so merely reaching for the app registry opened a database, and it opened one\n// before anybody had signed in: \`sync.provisioning\` answered 401 and the replica gave up on a\n// workspace it would have been allowed to read a moment later. A host that then started its own\n// replica after sign-in got a second engine for the same scope, because starting one is not\n// idempotent.\n//\n// \`startLocalReplica\` is re-exported instead, so the owner starts it once it has a session and can\n// stop it on teardown. PGlite is several megabytes of WebAssembly, so bringing it up after the page\n// is interactive — rather than before first paint — remains the point.\nexport const changeAccessScope = (accessScope) => switchWorkspaceAccessScope(runtime, accessScope);\nexport { runtime, startLocalReplica };\nexport const appLoaders = {\n${loaders}\n};\nexport const representationLoaders = {\n${representationLoaders}\n};\nexport const customTypeRendererLoaders = {\n${customRendererLoaders}\n};\nexport const appGroups = {\n${groupEntries}\n};\nexport const appMeta = ${JSON.stringify(appMeta)};\nexport const policyNames = ${JSON.stringify(policies)};\n`;
 	};
 
 	/**
@@ -630,12 +690,13 @@ class WorkspaceCompiler {
 	 * consistent for every caller.
 	 *
 	 * **One options object, not a positional run.** This took twenty-one positional parameters,
-	 * twelve of which were consecutive `ReadonlyArray`s, and it has now silently mis-wired twice:
-	 * once when `+agent.ts` reached a compiler that discovered it by no glob at all, and again
-	 * when a `rateLimitFile` inserted ahead of `agentFile` shifted every later argument by one and
-	 * the agent file was read into the rate-limit slot. Both times the artifact still rendered,
-	 * still typechecked and still ran — a synthesized placeholder agent is a valid artifact — so
-	 * the only signal was a test asserting on content.
+	 * twelve of which were consecutive `ReadonlyArray`s, and it silently mis-wired twice: once when
+	 * `+agent.ts` reached a compiler that discovered it by no glob at all, and again when a
+	 * rate-limit file inserted ahead of an agent file shifted every later argument by one and the
+	 * agent file was read into the rate-limit slot. Both times the artifact still rendered, still
+	 * typechecked and still ran — a synthesized placeholder agent was a valid artifact — so the only
+	 * signal was a test asserting on content. There is no placeholder agent to synthesize any more,
+	 * which removes the shape of failure as well as the two instances of it.
 	 *
 	 * Twice makes it the signature's defect rather than either call site's. Named fields mean a
 	 * misplaced argument is a type error, a missing one is a type error, and adding a parameter
@@ -649,38 +710,38 @@ class WorkspaceCompiler {
 			relations,
 			apps,
 			policies,
-			remotes,
+			functions,
 			toolFiles,
-			channelFiles,
+			envoyFiles,
 			automations,
 			automationFiles,
 			pipelineFiles,
 			skills,
-			agentName,
+			prompt,
 			root,
 			assets,
 			customTypeDefinitions,
 			environmentFile,
 			migrations,
 			integrationFiles = [],
-			rateLimitFile,
-			teamsFile,
-			agentFile
+			anonymousLimitFile,
+			teamsFile
 		} = input;
-		const remoteNames = remotes.map((path) => basename(path).slice(1, -3));
-		const policyNames = policies.map((path) => basename(path).slice(1, -'.policy.ts'.length));
-		const tools = toolFiles.map((path) => basename(path).slice(1, -'.tool.ts'.length));
-		const channels = channelFiles.map((path) => basename(path).slice(1, -'.channel.ts'.length));
+		const functionNames = functions.map((path) => basename(path).slice(1, -3));
+		const policyNames = policies.map((path) => basename(path).slice(1, -3));
+		const tools = toolFiles.map((path) => basename(path).slice(1, -3));
+		const envoys = envoyFiles.map((path) => basename(path).slice(1, -3));
 		const fingerprint = createHash('sha256')
 			.update(
 				JSON.stringify({
 					collections: collections.map((collection) => collection.name),
 					apps: apps.map((app) => app.name),
 					policies: policyNames,
-					remotes: remoteNames,
+					functions: functionNames,
 					tools,
-					channels,
-					automations
+					envoys,
+					automations,
+					prompt
 				})
 			)
 			.digest('hex');
@@ -707,26 +768,27 @@ class WorkspaceCompiler {
 				...(app.thumbnail === undefined ? {} : { thumbnail: app.thumbnail })
 			})),
 			policies: [],
-			agents: [
-				{
-					name: agentName,
-					prompt: `You are the ${metadata.name} workspace agent.`,
-					tools: authoredTools,
-					skills
-				}
-			],
+			// `src/+agents.md`, verbatim. It is the system message of every agent turn in this
+			// workspace, web and envoy alike, and it replaces the one-line placeholder this literal
+			// used to carry for an agent nobody declared.
+			prompt,
+			tools: authoredTools,
+			skills,
+			// The name and the trigger only. `policies` and the handler come from the module itself,
+			// merged in below, because it is the module that knows — the cron here is a placeholder the
+			// artifact overwrites, exactly as it always was.
 			automations: automations.map((name) => ({
 				name,
 				trigger: { _tag: 'Schedule', cron: '0 * * * *' },
-				command: name
+				command: name,
+				policies: []
 			})),
-			// Only the two facts the authored module cannot state about itself. Everything else — the
-			// transport, the audience, the policy, the task — is merged in below from the module itself,
-			// because it is the module that knows. This descriptor used to carry `transport: 'agent'` and
-			// `audience: 'both'` as literals for every channel in every workspace, which is how a Telegram
-			// sales desk declared `audience: 'public'` and arrived at the runtime as an agent channel open
-			// to everyone.
-			channels: channels.map((name) => ({ name, agent: agentName })),
+			// Only the one fact the authored module cannot state about itself: its file's name.
+			// Everything else — the transport, the audience, the policies, the task — is merged in below
+			// from the module. This descriptor used to carry `transport: 'agent'` and `audience: 'both'`
+			// as literals for every channel in every workspace, which is how a Telegram sales desk
+			// declared `audience: 'public'` and arrived at the runtime open to everyone.
+			envoys: envoys.map((name) => ({ name })),
 			// Integrations are *not* listed here. They are computed in the emitted artifact from the live
 			// modules imported below and spliced into the definition beside `collections` and `channels`,
 			// because half of what a binding is — its record schema, its identity reader, its mapper — is a
@@ -787,10 +849,10 @@ class WorkspaceCompiler {
 					`import policy${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
 			)
 			.join('\n');
-		const remoteImports = remotes
+		const functionImports = functions
 			.map(
 				(path, index) =>
-					`import remote${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
+					`import fn${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
 			)
 			.join('\n');
 		const toolImports = toolFiles
@@ -823,21 +885,21 @@ class WorkspaceCompiler {
 		const automationEntries = automations
 			.map(
 				(name, index) =>
-					`{ name: ${JSON.stringify(name)}, trigger: 'schedule' in automation${index}.trigger ? { _tag: 'Schedule', cron: automation${index}.trigger.schedule } : { _tag: 'Change', collection: automation${index}.trigger.trigger.collection, event: automation${index}.trigger.trigger.event }, handler: automation${index}.spec.handler }`
+					`{ name: ${JSON.stringify(name)}, trigger: 'schedule' in automation${index}.trigger ? { _tag: 'Schedule', cron: automation${index}.trigger.schedule } : { _tag: 'Change', collection: automation${index}.trigger.trigger.collection, event: automation${index}.trigger.trigger.event }, policies: automation${index}.spec.policies, handler: automation${index}.spec.handler }`
 			)
 			.join(', ');
 		// Imported live, as models, policies and tools are, rather than being read out of the file's text.
-		// A channel module is a plain object literal today, but reading it as source is how the model
+		// An envoy module is a plain object literal today, but reading it as source is how the model
 		// scraper lost every generated column, and the import costs nothing the artifact was not already
 		// paying: the same file has to be bundled either way.
-		const channelImports = channelFiles
+		const envoyImports = envoyFiles
 			.map(
 				(path, index) =>
-					`import channel${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
+					`import envoy${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
 			)
 			.join('\n');
-		const channelEntries = channelFiles
-			.map((path, index) => `${JSON.stringify(channels[index])}: channel${index}`)
+		const envoyEntries = envoyFiles
+			.map((path, index) => `${JSON.stringify(envoys[index])}: envoy${index}`)
 			.join(', ');
 		// Custom-type definitions are imported live, exactly as models and hooks are. A schema is a live
 		// object and cannot survive `JSON.stringify`, so a serialised declaration would have carried the
@@ -864,10 +926,11 @@ class WorkspaceCompiler {
 		// Imported into the artifact — which only ever runs on a host — and never into the client entry.
 		// This is the declaration, not the values; the values are rows the vault reads at request time.
 		const rateLimitImport =
-			rateLimitFile === undefined
+			anonymousLimitFile === undefined
 				? ''
-				: `import declaredRateLimits from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, rateLimitFile))};`;
-		const rateLimitEntry = rateLimitFile === undefined ? '' : ', rateLimits: declaredRateLimits';
+				: `import declaredAnonymousLimits from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, anonymousLimitFile))};`;
+		const rateLimitEntry =
+			anonymousLimitFile === undefined ? '' : ', rateLimits: declaredAnonymousLimits';
 		// The team → policies map. It rides the definition rather than a facility because it is
 		// authority, and authority in this design is something a release states and a database row
 		// never asserts: a `bolt_team` row supplies only a name to look up here.
@@ -883,10 +946,6 @@ class WorkspaceCompiler {
 		// Imported live for the reason every other authored module is: reading the object out of the
 		// file's text is how the model scraper lost every generated column, and the file has to be
 		// bundled either way.
-		const agentImport =
-			agentFile === undefined
-				? ''
-				: `import declaredAgentSpec from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, agentFile))};`;
 		const automationDeclarationEntry =
 			', automations: Object.values(declaredAutomations).map(({ name, trigger }) => ({ name, trigger, command: name }))';
 		const environmentEntry =
@@ -895,11 +954,15 @@ class WorkspaceCompiler {
 		const customTypeEntries = customTypeDefinitions
 			.map((path, index) => `${JSON.stringify(basename(dirname(path)))}: customType${index}`)
 			.join(', ');
-		const policyEntries = policies.map((_, index) => `policy${index}`).join(', ');
-		const remoteEntries = remotes
+		// Keyed by the policy's file name, because the file name *is* the policy's name and the module
+		// no longer states one. The map is what `describePolicy` reads to attach it.
+		const policyEntries = policies
+			.map((_, index) => `${JSON.stringify(policyNames[index])}: policy${index}`)
+			.join(', ');
+		const functionEntries = functions
 			.map(
 				(path, index) =>
-					`${JSON.stringify(basename(path).slice(1, -3))}: async (input, api) => {\n\t\tconst result = await remote${index}.schema['~standard'].validate(input);\n\t\tif (result.issues !== undefined) throw new Error(result.issues.map((issue) => issue.message).join('; '));\n\t\treturn runAuthoredHandler(remote${index}.handler(result.value, api));\n\t}`
+					`${JSON.stringify(basename(path).slice(1, -3))}: async (input, api) => {\n\t\tconst result = await fn${index}.schema['~standard'].validate(input);\n\t\tif (result.issues !== undefined) throw new Error(result.issues.map((issue) => issue.message).join('; '));\n\t\treturn runAuthoredHandler(fn${index}.handler(result.value, api));\n\t}`
 			)
 			.join(',\n\t');
 		// Validated through `~standard`, exactly as a remote's input is on the line above. It used to call
@@ -908,10 +971,10 @@ class WorkspaceCompiler {
 		const toolEntries = toolFiles
 			.map(
 				(path, index) =>
-					`${JSON.stringify(basename(path).slice(1, -'.tool.ts'.length))}: async (input, api) => {\n\t\tconst result = await tool${index}.input['~standard'].validate(input);\n\t\tif (result.issues !== undefined) throw new Error(result.issues.map((issue) => issue.message).join('; '));\n\t\treturn runAuthoredHandler(tool${index}.run(api, result.value));\n\t}`
+					`${JSON.stringify(basename(path).slice(1, -3))}: async (input, api) => {\n\t\tconst result = await tool${index}.input['~standard'].validate(input);\n\t\tif (result.issues !== undefined) throw new Error(result.issues.map((issue) => issue.message).join('; '));\n\t\treturn runAuthoredHandler(tool${index}.run(api, result.value));\n\t}`
 			)
 			.join(',\n\t');
-		return `import { makeBundle, runAuthoredHandler } from '@norbital-ai/bolt/runtime';\nimport { describeAgent, describeHooks, describeIntegrations, describeModel, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';\n${modelImports}\n${hookImports}\n${policyImports}\n${remoteImports}\n${toolImports}\n${automationImports}\n${pipelineImports}\n${channelImports}\n${customTypeImports}\n${integrationImports}\n${environmentImport}\n${rateLimitImport}\n${teamsImport}\n${agentImport}\nconst authoredPolicies = [${policyEntries}];\n// Only what the workspace declares. Two synthetic policies used to be appended here and both were\n// mistakes of the same kind — authority modelled as a group.\n//\n// \`admin\` (roles: ['admin'], apps: ['*']) existed so a founder could see everything. Administration\n// is a status on the person now (\`bolt_auth_user.status\`), and \`AccessControl.decide\` short-circuits\n// on it before it reads a policy — so the synthetic policy grants nothing that is not already\n// granted, while \`impersonationTeams()\` lists every policy by name and therefore offered "admin" in\n// the team picker as though it were a body of staff.\n//\n// \`local-authoring\` (roles: []) was worse: \`subjectHasPolicy\` returns true for an empty role list, so\n// a workspace that authored no policies granted every action on every app to every authenticated\n// subject, and offered that as a team too. A workspace with no policies is now closed to ordinary\n// users and open to its administrators, which is the same answer the empty-policy case wants and the\n// only one that does not depend on nobody noticing.\nconst policies = authoredPolicies.map((policy) => ({ ...policy, effect: 'allow', actions: [...new Set((policy.grants ?? []).map(({ action }) => action))] }));\nconst declaredModels = {${modelEntries}};\nconst declaredHooks = {${hookEntriesByCollection}};\nconst collectionSourcePaths = {${sourcePaths}};\nconst declaredCustomTypes = {${customTypeEntries}};\nconst declaredChannels = {${channelEntries}};\nconst declaredPipelines = {${pipelineEntriesByCollection}};\nconst declaredIntegrationModules = {${integrationEntries}};\n// Split here, at artifact boot, because the two halves go to two different places: the declarations\n// join the workspace definition a host can read, and the live schemas and closures ride in the\n// authored runtime beside hooks and pipelines.\nconst describedIntegrations = describeIntegrations(declaredIntegrationModules);\nconst declaredAutomations = Object.fromEntries([${automationEntries}].map((automation) => [automation.name, automation]));\nconst declaredWorkspace = ${JSON.stringify(workspace, null, 2)};\n// The declaration is the authority: it carries generated expressions and enum members that\n// reading the source text cannot recover.\nconst collections = declaredWorkspace.collections.map((collection) => {\n\tconst described = describeModel(declaredModels[collection.name]);\n\tconst hooks = describeHooks(declaredHooks[collection.name]);\n\tconst sourcePath = collectionSourcePaths[collection.name];\n\t// Read straight off the declaration's metadata: an EXCLUDE constraint is not a column, so there is\n\t// nothing for \`describeModel\` to have recovered it from, and the schema plan is the only renderer.\n\tconst exclusions = declaredModels[collection.name]?.metadata?.exclusions ?? [];\n\t// The same lift, for the four that had nowhere to land. \`approvalLock\` already has a working\n\t// runtime — \`Collections\` intercepts a write on \`definition.approvalLock\` — so declaring it on\n\t// \`defineModel\` did nothing at all until it was carried here; \`description\` and \`icon\` are what a\n\t// host surface names the collection with. \`history\` gates the \`bolt_collection_history\` writes in\n\t// \`Collections\`, and the descriptor above hardcodes it true, so \`history: false\` was accepted and\n\t// dropped: the collection kept a full revision trail the author had opted out of.\n\tconst metadata = declaredModels[collection.name]?.metadata;\n\treturn {\n\t\t...collection,\n\t\t...(Object.keys(described).length === 0 ? {} : { fields: described }),\n\t\t...(hooks.length === 0 ? {} : { hooks }),\n\t\t...(exclusions.length === 0 ? {} : { exclusions }),\n\t\t...(metadata?.approvalLock === undefined ? {} : { approvalLock: metadata.approvalLock }),\n\t\t...(metadata?.history === undefined ? {} : { history: metadata.history }),\n\t\t...(metadata?.description === undefined ? {} : { description: metadata.description }),\n\t\t...(metadata?.icon === undefined ? {} : { icon: metadata.icon }),\n\t\t...(sourcePath === undefined ? {} : { sourcePath })\n\t};\n});\n// The authored module is the authority on every field but two. The descriptor above supplies the\n// name (which comes from the file) and the agent (which comes from the workspace), and is spread\n// last so neither can be overwritten by a module that declares them.\nconst channels = declaredWorkspace.channels.map((channel) => ({ ...declaredChannels[channel.name], ...channel }));\n// The descriptor above supplies the agent's name, tools and skills — the three facts the authored\n// module cannot state about itself — and \`+agent.ts\` supplies everything else.\nconst agents = declaredWorkspace.agents.map((agent) => describeAgent(agent, ${agentFile === undefined ? 'undefined' : 'declaredAgentSpec'}));\nconst workspace = { ...declaredWorkspace, collections, channels, agents, policies, customTypes: declaredCustomTypes, integrations: describedIntegrations.declarations${environmentEntry}${rateLimitEntry}${teamsEntry} };\nconst encodedAssets = ${JSON.stringify(assets)};\nconst staticAssets = encodedAssets.map(({ base64, ...asset }) => ({ ...asset, bytes: Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)) }));\n// Integrations are projected here rather than baked into the literal above, for the same reason\n// they are spliced into the workspace here: they only exist once the live modules have been\n// imported and split. The manifest literal is written at compile time and cannot hold them, which\n// is why \`buildManifest\` publishing them reached every test and no artifact.\nconst manifestValue = { ...${JSON.stringify(manifest, null, 2)}, staticAssets, integrations: manifestIntegrations(describedIntegrations.declarations) };\nconst remoteHandlers = {\n\t${remoteEntries}\n};\nconst toolHandlers = {\n\t${toolEntries}\n};\nconst authoredRuntime = { hooks: declaredHooks, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };
+		return `import { makeBundle, runAuthoredHandler } from '@norbital-ai/bolt/runtime';\nimport { describeEnvoy, describeHooks, describeIntegrations, describeModel, describePolicy, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';\n${modelImports}\n${hookImports}\n${policyImports}\n${functionImports}\n${toolImports}\n${automationImports}\n${pipelineImports}\n${envoyImports}\n${customTypeImports}\n${integrationImports}\n${environmentImport}\n${rateLimitImport}\n${teamsImport}\n// Keyed by file name, because a policy's name *is* its file and the module states none. Only what\n// the workspace declares reaches this map: two synthetic policies used to be appended and both were\n// mistakes of the same kind — authority modelled as a group. \`admin\` granted every action on every\n// app to a founder, which administration status already does; \`local-authoring\` granted the same to\n// every authenticated subject in any workspace that had authored no policies at all.\nconst authoredPolicies = {${policyEntries}};\n// A policy's name is its filename, attached here and stated nowhere else. \`describePolicy\` also\n// normalises the four capability lists, resolves every rate rule's key, and derives an approval's\n// identity from (policy, collection, action, step key) — so there is no authored id anywhere for a\n// copy-paste to duplicate and no \`name:\` field to disagree with the file it is in.\nconst policies = Object.entries(authoredPolicies).map(([name, declaration]) => describePolicy(name, declaration));\nconst declaredModels = {${modelEntries}};\nconst declaredHooks = {${hookEntriesByCollection}};\nconst collectionSourcePaths = {${sourcePaths}};\nconst declaredCustomTypes = {${customTypeEntries}};\nconst declaredEnvoys = {${envoyEntries}};\nconst declaredPipelines = {${pipelineEntriesByCollection}};\nconst declaredIntegrationModules = {${integrationEntries}};\n// Split here, at artifact boot, because the two halves go to two different places: the declarations\n// join the workspace definition a host can read, and the live schemas and closures ride in the\n// authored runtime beside hooks and pipelines.\nconst describedIntegrations = describeIntegrations(declaredIntegrationModules);\nconst declaredAutomations = Object.fromEntries([${automationEntries}].map((automation) => [automation.name, automation]));\nconst declaredWorkspace = ${JSON.stringify(workspace, null, 2)};\n// The declaration is the authority: it carries generated expressions and enum members that\n// reading the source text cannot recover.\nconst collections = declaredWorkspace.collections.map((collection) => {\n\tconst described = describeModel(declaredModels[collection.name]);\n\tconst hooks = describeHooks(declaredHooks[collection.name]);\n\tconst sourcePath = collectionSourcePaths[collection.name];\n\t// Read straight off the declaration's metadata: an EXCLUDE constraint is not a column, so there is\n\t// nothing for \`describeModel\` to have recovered it from, and the schema plan is the only renderer.\n\tconst exclusions = declaredModels[collection.name]?.metadata?.exclusions ?? [];\n\t// The same lift, for the four that had nowhere to land. \`approvalLock\` already has a working\n\t// runtime — \`Collections\` intercepts a write on \`definition.approvalLock\` — so declaring it on\n\t// \`defineModel\` did nothing at all until it was carried here; \`description\` and \`icon\` are what a\n\t// host surface names the collection with. \`history\` gates the \`bolt_collection_history\` writes in\n\t// \`Collections\`, and the descriptor above hardcodes it true, so \`history: false\` was accepted and\n\t// dropped: the collection kept a full revision trail the author had opted out of.\n\tconst metadata = declaredModels[collection.name]?.metadata;\n\treturn {\n\t\t...collection,\n\t\t...(Object.keys(described).length === 0 ? {} : { fields: described }),\n\t\t...(hooks.length === 0 ? {} : { hooks }),\n\t\t...(exclusions.length === 0 ? {} : { exclusions }),\n\t\t...(metadata?.approvalLock === undefined ? {} : { approvalLock: metadata.approvalLock }),\n\t\t...(metadata?.history === undefined ? {} : { history: metadata.history }),\n\t\t...(metadata?.description === undefined ? {} : { description: metadata.description }),\n\t\t...(metadata?.icon === undefined ? {} : { icon: metadata.icon }),\n\t\t...(sourcePath === undefined ? {} : { sourcePath })\n\t};\n});\n// The authored module is the authority on every field but its name, which comes from the file.\nconst envoys = declaredWorkspace.envoys.map(({ name }) => describeEnvoy(name, declaredEnvoys[name]));\n// An automation's declaration is the trigger and the name the descriptor carries, plus the policies\n// the module declares — its authority, which used to be whatever its trigger happened to hold.\nconst automations = declaredWorkspace.automations.map((automation) => ({ ...automation, ...(declaredAutomations[automation.name] === undefined ? {} : { trigger: declaredAutomations[automation.name].trigger, policies: declaredAutomations[automation.name].policies }) }));\nconst workspace = { ...declaredWorkspace, collections, envoys, automations, policies, customTypes: declaredCustomTypes, integrations: describedIntegrations.declarations${environmentEntry}${rateLimitEntry}${teamsEntry} };\nconst encodedAssets = ${JSON.stringify(assets)};\nconst staticAssets = encodedAssets.map(({ base64, ...asset }) => ({ ...asset, bytes: Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)) }));\n// Integrations are projected here rather than baked into the literal above, for the same reason\n// they are spliced into the workspace here: they only exist once the live modules have been\n// imported and split. The manifest literal is written at compile time and cannot hold them, which\n// is why \`buildManifest\` publishing them reached every test and no artifact.\nconst manifestValue = { ...${JSON.stringify(manifest, null, 2)}, staticAssets, integrations: manifestIntegrations(describedIntegrations.declarations) };\nconst remoteHandlers = {\n\t${functionEntries}\n};\nconst toolHandlers = {\n\t${toolEntries}\n};\nconst authoredRuntime = { hooks: declaredHooks, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };
 const bundle = makeBundle(workspace, manifestValue, remoteHandlers, toolHandlers, authoredRuntime);\nexport const protocolVersion = bundle.protocolVersion;\nexport const manifest = bundle.manifest;\nexport const dispatch = bundle.dispatch;\nexport const activate = bundle.activate;\nexport default bundle;\n`;
 	};
 
@@ -983,29 +1046,34 @@ export type AuthoredSource = Readonly<{
 	readonly root: string;
 	readonly models: ReadonlyArray<string>;
 	readonly definitions: ReadonlyArray<string>;
+	readonly datatypeNames: ReadonlyArray<string>;
 	readonly appFiles: ReadonlyArray<string>;
 	readonly appNames: ReadonlyArray<string>;
 	readonly collectionNames: ReadonlyArray<string>;
 	readonly policyFiles: ReadonlyArray<string>;
 	readonly policies: ReadonlyArray<string>;
-	readonly remoteFiles: ReadonlyArray<string>;
-	readonly remotes: ReadonlyArray<string>;
+	readonly functionFiles: ReadonlyArray<string>;
+	readonly functions: ReadonlyArray<string>;
 	readonly hookFiles: ReadonlyArray<string>;
 	readonly pipelineFiles: ReadonlyArray<string>;
 	readonly integrationFiles: ReadonlyArray<string>;
 	readonly representationFiles: ReadonlyArray<string>;
 	readonly customRendererFiles: ReadonlyArray<string>;
 	readonly environmentFile: string | undefined;
-	/** `src/+ratelimits.ts` when the workspace states its own rate policy, absent when it states none. */
-	readonly rateLimitFile: string | undefined;
-	/** `src/+teams.ts` when the workspace declares its teams, absent when it declares none. */
+	/** `src/access/+anonymous_limits.ts` when the workspace bounds its pre-sign-in surface. */
+	readonly anonymousLimitFile: string | undefined;
+	/** `src/access/+teams.ts` when the workspace declares its teams, absent when it declares none. */
 	readonly teamsFile: string | undefined;
+	/** `src/+agents.md`, which every workspace must have — discovery refuses one that does not. */
+	readonly promptFile: string;
+	/** Its contents, read once here so nothing downstream reaches the filesystem a second time. */
+	readonly prompt: string;
 	readonly toolFiles: ReadonlyArray<string>;
 	readonly toolNames: ReadonlyArray<string>;
-	/** `src/+agent.ts` when the workspace configures its agent, absent when it takes the defaults. */
-	readonly agentFile: string | undefined;
-	readonly channelFiles: ReadonlyArray<string>;
-	readonly channelNames: ReadonlyArray<string>;
+	readonly mcpFiles: ReadonlyArray<string>;
+	readonly envoyFiles: ReadonlyArray<string>;
+	readonly envoyNames: ReadonlyArray<string>;
+	readonly automationFiles: ReadonlyArray<string>;
 	readonly automationNames: ReadonlyArray<string>;
 	readonly mcpServerNames: ReadonlyArray<string>;
 	readonly skillNames: ReadonlyArray<string>;
@@ -1023,12 +1091,51 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 		const models = files.filter((path) => basename(path) === '+model.ts').sort();
 		if (models.length === 0)
 			throw new Error('Bolt sync found no src/collections/*/+model.ts declarations');
+		/**
+		 * Every authored kind, discovered by the directory it lives in and by nothing else.
+		 *
+		 * The rule is one shape: `src/<what kind>/+<which one>.<ext>`. The kind is the directory, the
+		 * name is the file, and a `+` prefix means the compiler reads this file while no prefix means
+		 * it is the author's own. Nothing is discovered by suffix from anywhere any more — a policy
+		 * used to be `/\+[^/]+\.policy\.ts$/` matched at any depth, which meant the file could sit
+		 * anywhere and the suffix carried the kind, so a name was spelled twice and a kind twice.
+		 */
+		const inDirectory = (path: string, directory: string): boolean =>
+			compiler.posix(dirname(path)) === compiler.posix(join(sourceRoot, directory));
+		const declaredIn = (directory: string, extension = '.ts'): ReadonlyArray<string> =>
+			files
+				.filter(
+					(path) =>
+						inDirectory(path, directory) &&
+						basename(path).startsWith('+') &&
+						path.endsWith(extension)
+				)
+				.sort();
+		const namesOf = (paths: ReadonlyArray<string>, extension = '.ts'): ReadonlyArray<string> =>
+			paths.map((path) => basename(path).slice(1, -extension.length));
+
+		/**
+		 * The workspace's own field types, one file each.
+		 *
+		 * `datatypes/`, a sibling of `collections/` rather than a child of it, because
+		 * `collections/quotes/` and `collections/custom_datatypes/` would sit at the same level while
+		 * being different *kinds* of thing — one an instance, one a category. It is also literally
+		 * true: a datatype is not a collection. The word *custom* is dropped along the way; everything
+		 * under `src/` is the author's, so there is no non-custom counterpart to distinguish from.
+		 *
+		 * A directory, like a collection, because a datatype has two authored artifacts: the schema and
+		 * the renderer that reads a value of it. The alternative — `+money.ts` beside `+money.svelte` —
+		 * would make the *extension* carry which artifact it is, which is a third naming convention
+		 * where the directory rule already answers the question.
+		 */
 		const definitions = files
 			.filter(
 				(path) =>
-					basename(path) === '+definition.ts' && compiler.posix(path).includes('/custom-types/')
+					basename(path) === '+definition.ts' &&
+					compiler.posix(dirname(dirname(path))) === compiler.posix(join(sourceRoot, 'datatypes'))
 			)
 			.sort();
+		const datatypeNames = definitions.map((path) => basename(dirname(path)));
 		const appFiles = files
 			.filter(
 				(path) =>
@@ -1044,20 +1151,10 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 				.replace(/\.svelte$/, '')
 		);
 		const collectionNames = models.map((path) => basename(dirname(path)));
-		const policies = files
-			.filter((path) => /\/\+[^/]+\.policy\.ts$/.test(compiler.posix(path)))
-			.map((path) => basename(path).slice(1, -'.policy.ts'.length))
-			.sort();
-		const policyFiles = files
-			.filter((path) => /\/\+[^/]+\.policy\.ts$/.test(compiler.posix(path)))
-			.sort();
-		const remotes = files
-			.filter((path) => compiler.posix(path).includes('/remotes/+') && path.endsWith('.ts'))
-			.map((path) => basename(path).slice(1, -3))
-			.sort();
-		const remoteFiles = files
-			.filter((path) => compiler.posix(path).includes('/remotes/+') && path.endsWith('.ts'))
-			.sort();
+		const policyFiles = declaredIn('access/policies');
+		const policies = namesOf(policyFiles);
+		const functionFiles = declaredIn('functions');
+		const functions = namesOf(functionFiles);
 		/**
 		 * A collection's authored record surface.
 		 *
@@ -1080,10 +1177,18 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 		 * the component that reads it. Without these a `custom()` field falls through to the JSON dump,
 		 * which is what "What happened" was showing.
 		 */
+		/**
+		 * A datatype's own renderer, beside its definition in the same directory.
+		 *
+		 * `custom('leave_event')` is a jsonb column whose shape only its author knows, so the type
+		 * ships the component that reads it. Without one a `custom()` field falls through to a raw JSON
+		 * dump, which is what "What happened" was showing before these were compiled at all.
+		 */
 		const customRendererFiles = files
 			.filter(
 				(path) =>
-					basename(path) === '+renderer.svelte' && compiler.posix(path).includes('/custom-types/')
+					basename(path) === '+renderer.svelte' &&
+					compiler.posix(dirname(dirname(path))) === compiler.posix(join(sourceRoot, 'datatypes'))
 			)
 			.sort();
 		/**
@@ -1100,36 +1205,44 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 			(path) => basename(path) === '+env.ts' && dirname(path) === root
 		);
 		/**
-		 * `src/+agent.ts`, the one place a workspace configures its agent.
+		 * `src/+agents.md` — the system message of every agent turn in this workspace.
 		 *
-		 * Discovered by nothing until this line: `renderArtifact` synthesized a placeholder agent and
-		 * no glob matched the filename, so `hr-payroll`'s authored `systemPrompt`, `collections`,
-		 * `access` and `maxTokens` compiled, typechecked, and reached a runtime that had never been
-		 * given them.
+		 * **Required.** There is no synthesized fallback, because the fallback was the defect: the
+		 * compiler wrote `"You are the <name> workspace agent."` and five of six workspaces shipped
+		 * it, including both of the two whose agents were reachable from outside.
+		 *
+		 * It is `+agents.md` and not `AGENTS.md`, and the difference is load-bearing. `AGENTS.md` is
+		 * the standard filename for instructions to *coding* agents, and `templates/AGENTS.md` already
+		 * exists for that — so a coding agent working in a workspace would read a product prompt as
+		 * instructions, and, worse in reverse, anything written for a coding agent that landed there
+		 * ("run pnpm test before committing") would become part of a customer-facing agent's system
+		 * prompt. The `+` marks it as a file the compiler reads, and coding agents look for `AGENTS.md`,
+		 * which this is not. Neither can be mistaken for the other.
 		 */
-		const agentFile = files.find(
-			(path) => basename(path) === '+agent.ts' && dirname(path) === sourceRoot
+		const promptFile = files.find(
+			(path) => basename(path) === '+agents.md' && dirname(path) === sourceRoot
 		);
 		/**
-		 * `src/+ratelimits.ts`, the workspace's own rate policy.
+		 * `src/access/+anonymous_limits.ts` — what a caller may do before they have signed in.
 		 *
-		 * Under `src/` rather than at the root, unlike `+env.ts`, because it is about this workspace's
-		 * own commands — the collections and agents declared beside it — rather than about the
-		 * environment it is deployed into. It is declared where the things it protects are declared.
+		 * The only rate-limit file left, and separate for a structural reason rather than a stylistic
+		 * one: before sign-in there is no subject, so there is no policy to hang a limit on. Everything
+		 * with a holder is declared by that holder.
 		 */
-		const rateLimitFile = files.find(
-			(path) => basename(path) === '+ratelimits.ts' && dirname(path) === sourceRoot
+		const anonymousLimitFile = files.find(
+			(path) => basename(path) === '+anonymous_limits.ts' && inDirectory(path, 'access')
 		);
 		/**
-		 * `src/+teams.ts` — which policies each named team holds.
+		 * `src/access/+teams.ts` — which policies each named team holds.
 		 *
-		 * Beside `+ratelimits.ts` and for the same reason: it is a statement about the policies
-		 * declared next to it, not about the environment the workspace is deployed into. Optional —
-		 * a workspace that declares no teams grants nothing through membership, which is the right
-		 * answer for one that has not said otherwise.
+		 * Beside the policies it hands out and the limits that apply before anybody holds one, because
+		 * all three are statements about authority. Optional — a workspace that declares no teams
+		 * grants nothing through membership, which is the right answer for one that has not said
+		 * otherwise — but a workspace with no teams also has no valid approver, because `TeamName` is
+		 * generated from this file's own keys.
 		 */
 		const teamsFile = files.find(
-			(path) => basename(path) === '+teams.ts' && dirname(path) === sourceRoot
+			(path) => basename(path) === '+teams.ts' && inDirectory(path, 'access')
 		);
 		const hookFiles = files.filter((path) => basename(path) === '+hooks.ts').sort();
 		const pipelineFiles = files.filter((path) => basename(path) === '+pipelines.ts').sort();
@@ -1147,26 +1260,34 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 					basename(path) === '+integrations.ts' && compiler.posix(path).includes('/collections/')
 			)
 			.sort();
-		const toolFiles = files
-			.filter((path) => /\/\+[^/]+\.tool\.ts$/.test(compiler.posix(path)))
+		/**
+		 * What a policy may grant beyond data, filed under `capabilities/` and not under `agent/`.
+		 *
+		 * They are granted by **policies**, not owned by agents — a sales rep and a controller reach
+		 * different tools through the same web agent — so filing them beside an agent would teach a
+		 * new author the opposite of the model on their first day. `capabilities/` is named for the
+		 * field that grants them.
+		 */
+		const toolFiles = declaredIn('capabilities/tools');
+		const toolNames = namesOf(toolFiles);
+		const mcpFiles = declaredIn('capabilities/mcp');
+		const mcpServerNames = namesOf(mcpFiles);
+		const envoyFiles = declaredIn('envoys');
+		const envoyNames = namesOf(envoyFiles);
+		const automationFiles = declaredIn('automations');
+		const automationNames = namesOf(automationFiles);
+		/**
+		 * A skill: the one thing besides a collection that earns a directory, because its content is
+		 * the artifact and a directory is what lets it carry more than one file.
+		 */
+		const skillFiles = files
+			.filter(
+				(path) =>
+					basename(path) === '+skill.md' &&
+					compiler.posix(dirname(dirname(path))) ===
+						compiler.posix(join(sourceRoot, 'capabilities', 'skills'))
+			)
 			.sort();
-		const toolNames = toolFiles.map((path) => basename(path).slice(1, -'.tool.ts'.length));
-		const channelFiles = files
-			.filter((path) => /\/\+[^/]+\.channel\.ts$/.test(compiler.posix(path)))
-			.sort();
-		const channelNames = channelFiles.map((path) => basename(path).slice(1, -'.channel.ts'.length));
-		const automationFiles = files
-			.filter((path) => compiler.posix(path).includes('/automation/+') && path.endsWith('.ts'))
-			.sort();
-		const automationNames = automationFiles.map((path) => basename(path).slice(1, -3));
-		const mcpFiles = files
-			.filter((path) => /\/\+[^/]+\.mcp\.ts$/.test(compiler.posix(path)))
-			.sort();
-		const mcpServerNames = mcpFiles.map((path) => basename(path).slice(1, -'.mcp.ts'.length));
-		const skillRoot = join(root, '.agents', 'skills');
-		const skillFiles = (yield* compiler.filesUnder(skillRoot)).filter(
-			(path) => basename(path) === 'SKILL.md'
-		);
 		const skillNames = skillFiles.map((path) => basename(dirname(path))).sort();
 		const groupFiles = files
 			.filter((path) => basename(path) === '+group.ts' && compiler.posix(path).includes('/apps/'))
@@ -1174,29 +1295,102 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 		const groupNames = groupFiles.map((path) =>
 			compiler.posix(relative(join(sourceRoot, 'apps'), dirname(path)))
 		);
+		/**
+		 * A `+`-prefixed file the compiler has no rule for, which is an authoring mistake and not a
+		 * silent no-op.
+		 *
+		 * The `+` prefix means "the compiler reads this", so a file that carries one and is reached by
+		 * nothing is a promise the tree does not keep. That is the exact failure this whole layout
+		 * replaces: `+agent.ts` sat in five workspaces matching no glob, `+integrations.ts` sat in
+		 * four, and both compiled and typechecked and reached nothing. Refusing here means a
+		 * misfiled `+qualify_lead.ts` is a build error naming where it belongs, rather than a tool
+		 * nobody can call.
+		 */
+		const discovered = new Set<string>([
+			...models,
+			...definitions,
+			...customRendererFiles,
+			...appFiles,
+			...policyFiles,
+			...functionFiles,
+			...hookFiles,
+			...pipelineFiles,
+			...integrationFiles,
+			...representationFiles,
+			...toolFiles,
+			...mcpFiles,
+			...envoyFiles,
+			...automationFiles,
+			...skillFiles,
+			...groupFiles,
+			...(promptFile === undefined ? [] : [promptFile]),
+			...(anonymousLimitFile === undefined ? [] : [anonymousLimitFile]),
+			...(teamsFile === undefined ? [] : [teamsFile])
+		]);
+		const RELATIONSHIP_FILE = compiler.posix(join(sourceRoot, 'collections', '+relationship.ts'));
+		const stray = files
+			.filter((path) => basename(path).startsWith('+') && !discovered.has(path))
+			.filter((path) => compiler.posix(path) !== RELATIONSHIP_FILE)
+			.map((path) => compiler.posix(relative(root, path)))
+			.toSorted();
+		if (stray.length > 0) {
+			throw new Error(
+				[
+					`Bolt sync found ${stray.length} authored file${stray.length === 1 ? '' : 's'} the compiler has no rule for:`,
+					...stray.map((path) => `  - ${path}`),
+					'',
+					'A "+" prefix means the compiler reads this file, so one it cannot place is a promise the tree does not keep. Every authored path is src/<kind>/+<name>.<ext>:',
+					'  a table                       collections/<name>/+model.ts',
+					'  a field type                  datatypes/+<name>.ts',
+					'  a permission                  access/policies/+<name>.ts',
+					'  a team                        access/+teams.ts',
+					'  pre-sign-in limits            access/+anonymous_limits.ts',
+					'  a tool, server or skill       capabilities/tools|mcp|skills/',
+					'  an agent on a transport       envoys/+<name>.ts',
+					'  something on a schedule       automations/+<name>.ts',
+					'  something a page calls        functions/+<name>.ts',
+					'  a page                        apps/+<name>.svelte',
+					'  the shared system prompt      +agents.md',
+					'',
+					'A helper the compiler must ignore is any file without a "+".'
+				].join('\n')
+			);
+		}
+		if (promptFile === undefined) {
+			throw new Error(
+				'Bolt sync found no src/+agents.md. It is the system message of every agent turn in this workspace — what the collections mean, what the business does, house rules for tone and escalation. There is no default: the default was "You are the <name> workspace agent.", and five of six workspaces shipped it.'
+			);
+		}
+		const prompt = yield* Effect.tryPromise(() => readFile(promptFile, 'utf8'));
+		if (prompt.trim() === '') {
+			throw new Error('src/+agents.md is empty. Describe the business this agent is standing in.');
+		}
 		return {
 			root,
 			models,
 			definitions,
+			datatypeNames,
 			appFiles,
 			appNames,
 			collectionNames,
 			policyFiles,
 			policies,
-			remoteFiles,
-			remotes,
+			functionFiles,
+			functions,
 			hookFiles,
 			integrationFiles,
 			representationFiles,
 			customRendererFiles,
 			environmentFile,
-			rateLimitFile,
+			anonymousLimitFile,
 			teamsFile,
+			promptFile,
+			prompt,
 			toolFiles,
 			toolNames,
-			agentFile,
-			channelFiles,
-			channelNames,
+			mcpFiles,
+			envoyFiles,
+			envoyNames,
 			automationNames,
 			automationFiles,
 			pipelineFiles,
@@ -1222,20 +1416,21 @@ const WorkspaceSynchronization = {
 				collectionNames,
 				policyFiles,
 				policies,
-				remoteFiles,
-				remotes,
+				functionFiles,
+				functions,
 				hookFiles,
 				integrationFiles,
 				representationFiles,
 				customRendererFiles,
+				datatypeNames,
 				environmentFile,
-				rateLimitFile,
+				anonymousLimitFile,
 				teamsFile,
+				prompt,
 				toolFiles,
 				toolNames,
-				agentFile,
-				channelFiles,
-				channelNames,
+				envoyFiles,
+				envoyNames,
 				automationNames,
 				automationFiles,
 				pipelineFiles,
@@ -1244,8 +1439,6 @@ const WorkspaceSynchronization = {
 				groupFiles
 			} = yield* discoverAuthoredSource(workspaceRoot);
 			const metadata = yield* compiler.readPackageMetadata(root);
-			const agentName = workspaceAgentNameFromPackage(metadata.name);
-			const agentNames = [agentName];
 			const i18nMessages = yield* compiler.readI18nMessages(root);
 			const generated = join(root, '.norbital', 'generated');
 			const types = join(root, '.norbital', 'types');
@@ -1320,15 +1513,23 @@ const WorkspaceSynchronization = {
 					),
 					compiler.write(
 						join(generated, 'authoring-types.ts'),
-						compiler.renderAuthoringTypes(
-							collectionNames,
-							appNames,
+						compiler.renderAuthoringTypes({
+							collections: collectionNames,
+							apps: appNames,
 							policies,
-							remotes,
-							toolNames,
-							channelNames,
-							mcpServerNames
-						)
+							functions,
+							tools: toolNames,
+							envoys: envoyNames,
+							mcpServers: mcpServerNames,
+							skills: skillNames,
+							datatypes: datatypeNames,
+							automations: automationNames,
+							// Relative to `.norbital/generated/`, which is where this module is written.
+							teamsImport:
+								teamsFile === undefined
+									? undefined
+									: `../../${compiler.posix(relative(root, teamsFile)).replace(/\.ts$/, '.js')}`
+						})
 					),
 					compiler.write(join(generated, 'i18n-keys.ts'), compiler.renderI18nKeys(i18nMessages.en)),
 					compiler.write(
@@ -1351,7 +1552,7 @@ const WorkspaceSynchronization = {
 					compiler.write(join(generated, 'types.ts'), compiler.renderTypes(relations)),
 					compiler.write(
 						join(generated, 'client.d.ts'),
-						compiler.renderClientDeclaration(hookFiles, remoteFiles, root)
+						compiler.renderClientDeclaration(hookFiles, functionFiles, root)
 					),
 					compiler.write(
 						join(generated, 'client.js'),
@@ -1360,7 +1561,6 @@ const WorkspaceSynchronization = {
 							groupEntries,
 							appMeta,
 							policies,
-							agentNames,
 							root,
 							representationFiles,
 							customRendererFiles
@@ -1382,10 +1582,17 @@ const WorkspaceSynchronization = {
 						join(types, 'collections', '$types.d.ts'),
 						compiler.renderRelationshipTypes()
 					),
-					compiler.write(join(types, 'policies', '$types.d.ts'), compiler.renderPolicyTypes()),
-					compiler.write(join(types, 'channels', '$types.d.ts'), compiler.renderChannelTypes()),
-					compiler.write(join(types, 'remotes', '$types.d.ts'), compiler.renderRoleTypes()),
-					compiler.write(join(types, 'automation', '$types.d.ts'), compiler.renderRoleTypes()),
+					compiler.write(
+						join(types, 'access', 'policies', '$types.d.ts'),
+						compiler.renderPolicyTypes()
+					),
+					compiler.write(join(types, 'access', '$types.d.ts'), compiler.renderAccessTypes()),
+					compiler.write(join(types, 'envoys', '$types.d.ts'), compiler.renderEnvoyTypes()),
+					compiler.write(join(types, 'functions', '$types.d.ts'), compiler.renderHandlerTypes()),
+					compiler.write(
+						join(types, 'automations', '$types.d.ts'),
+						compiler.renderHandlerTypes()
+					),
 					compiler.write(join(root, '.norbital', 'tsconfig.json'), compiler.renderTsconfig()),
 					...collectionNames.map((name) =>
 						compiler.write(
@@ -1395,7 +1602,7 @@ const WorkspaceSynchronization = {
 					),
 					...definitions.map((path) =>
 						compiler.write(
-							join(types, 'custom-types', basename(dirname(path)), '$types.d.ts'),
+							join(types, 'datatypes', basename(dirname(path)), '$types.d.ts'),
 							compiler.renderCustomTypeRenderer(path, root)
 						)
 					)
@@ -1493,23 +1700,22 @@ const WorkspaceSynchronization = {
 					relations,
 					apps: appDescriptors,
 					policies: policyFiles,
-					remotes: remoteFiles,
+					functions: functionFiles,
 					toolFiles,
-					channelFiles,
+					envoyFiles,
 					automations: automationNames,
 					automationFiles,
 					pipelineFiles,
 					skills: skillNames,
-					agentName,
+					prompt,
 					root,
 					assets,
 					customTypeDefinitions: definitions,
 					environmentFile,
 					migrations: yield* readWorkspaceMigrations(root),
 					integrationFiles,
-					rateLimitFile,
-					teamsFile,
-					agentFile
+					anonymousLimitFile,
+					teamsFile
 				})
 			);
 			yield* Effect.promise(() =>
@@ -1580,7 +1786,7 @@ const WorkspaceSynchronization = {
 				collectionNames,
 				appNames,
 				toolNames,
-				channelNames,
+				envoyNames,
 				automationNames,
 				mcpServerNames,
 				artifactPath,

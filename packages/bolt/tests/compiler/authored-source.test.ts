@@ -42,7 +42,7 @@ describe('Bolt authored source discovery', () => {
 		expect(discovered.appNames).toEqual(['desk']);
 		expect(discovered.groupNames).toEqual(['desk']);
 		expect(discovered.toolNames).toEqual(['summarize']);
-		expect(discovered.channelNames).toEqual(['inbox']);
+		expect(discovered.envoyNames).toEqual(['inbox']);
 		expect(discovered.automationNames).toEqual(['ticket-opened']);
 		expect(discovered.mcpServerNames).toEqual(['search']);
 		expect(discovered.skillNames).toEqual(['triage']);

@@ -23,7 +23,8 @@
 		releaseControls,
 		studioEnvironments,
 		unavailableFacilities,
-		workspaceAgents,
+		workspaceEnvoys,
+		workspaceTools,
 		type AuthoringView,
 		type EnvironmentVariable,
 		type StudioReviewTab,
@@ -153,7 +154,8 @@
 			Object.entries(sourceFiles).map(([path, contents]) => [path, contents.length])
 		)
 	);
-	const agents = $derived(workspaceAgents(workspace.manifest, files));
+	const envoys = $derived(workspaceEnvoys(workspace.manifest, files));
+	const tools = $derived(workspaceTools(files));
 	const environments = $derived(studioEnvironments(snapshot?.entries ?? []));
 	const activeEnvironment = $derived(
 		environments.find((candidate) => candidate.id === view.environmentId) ?? environments[0]
@@ -470,7 +472,8 @@
 					<ManifestPane
 						manifest={workspace.manifest}
 						{sections}
-						{agents}
+						{envoys}
+						{tools}
 						{client}
 						{files}
 						{command}

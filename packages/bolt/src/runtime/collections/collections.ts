@@ -1132,7 +1132,7 @@ export const layer = Layer.effect(
 			runAutomation: (name, input, options) =>
 				Effect.gen(function* () {
 					const after = options?.after;
-					const taskId = yield* automations.start(effectId, subject, name, input, {
+					const taskId = yield* automations.start(effectId, name, input, {
 						// The same duration vocabulary as everything else here — `'1 hour'`, `'30 seconds'`,
 						// or milliseconds — rather than a second one invented for this field.
 						...(after === undefined ? {} : { afterMillis: afterMillisOf(after) })

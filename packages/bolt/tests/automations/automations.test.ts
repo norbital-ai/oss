@@ -7,8 +7,9 @@ import { Database } from '../../src/runtime/facilities/database.js';
 import { TaskQueue } from '../../src/runtime/tasks/tasks.js';
 import { Workspace } from '../../src/runtime/workspace.js';
 import { InvocationBudget } from '../../src/runtime/budget.js';
+import { TenantScope } from '../../src/runtime/tenant.js';
 import { automation, workspace } from '../../src/authoring/index.js';
-import { adminSubject, testCallContext } from '../support/bolt-test-layer.js';
+import { testCallContext } from '../support/bolt-test-layer.js';
 
 describe('Automations owner', () => {
 	it('enqueues a stable authored command', async () => {
@@ -41,16 +42,19 @@ describe('Automations owner', () => {
 				collections: [],
 				apps: [],
 				policies: [],
-				agents: [],
 				automations: [
 					automation({
 						name: 'daily',
 						trigger: { _tag: 'Schedule', cron: '* * * * *' },
-						command: 'daily'
+						command: 'daily',
+						policies: ['admin']
 					})
 				],
-				channels: [],
 				integrations: [],
+				prompt: 'You are the test workspace agent.',
+				tools: [],
+				skills: [],
+				envoys: [],
 				requiredFacilities: []
 			})
 		);
@@ -62,13 +66,19 @@ describe('Automations owner', () => {
 			Layer.provide(Layer.merge(database, tasks))
 		);
 		const layer = Automations.layer.pipe(
-			Layer.provide(Layer.mergeAll(taskQueue, registry, InvocationBudget.layer(0)))
+			Layer.provide(
+				Layer.mergeAll(
+					taskQueue,
+					registry,
+					InvocationBudget.layer(0),
+					TenantScope.layer('test-tenant')
+				)
+			)
 		);
 		const taskId = await Effect.runPromise(
 			Effect.gen(function* () {
 				return yield* (yield* Automations.Service).start(
 					EffectId.make('e1'),
-					adminSubject,
 					'daily',
 					{}
 				);
@@ -87,7 +97,21 @@ describe('Automations owner', () => {
 		// service and never read from what the caller passed. Without it a chain of automations that
 		// each write has nothing counting it: every link is a fresh invocation with a fresh
 		// deadline, so no wall-clock bound can see the chain at all.
-		expect(insert?.parameters[1]).toMatchObject({ bolt_run_as: adminSubject, bolt_depth: 1 });
+		//
+		// `bolt_run_as` is the *automation's own* subject, minted here from what it declares. It is not
+		// the caller's, and there is no longer a caller's to be: `start` takes no subject at all. The
+		// same automation used to run as an administrator whenever an administrator happened to trip
+		// it, over every row in the workspace, on a schedule.
+		expect(insert?.parameters[1]).toMatchObject({
+			bolt_run_as: {
+				userId: 'automation:daily',
+				tenantId: 'test-tenant',
+				teamPath: [],
+				policies: ['admin'],
+				admin: false
+			},
+			bolt_depth: 1
+		});
 	});
 
 	it('refuses to enqueue past the nesting limit, before it writes a run row', async () => {
@@ -118,16 +142,19 @@ describe('Automations owner', () => {
 				collections: [],
 				apps: [],
 				policies: [],
-				agents: [],
 				automations: [
 					automation({
 						name: 'daily',
 						trigger: { _tag: 'Schedule', cron: '* * * * *' },
-						command: 'daily'
+						command: 'daily',
+						policies: ['admin']
 					})
 				],
-				channels: [],
 				integrations: [],
+				prompt: 'You are the test workspace agent.',
+				tools: [],
+				skills: [],
+				envoys: [],
 				requiredFacilities: []
 			})
 		);
@@ -140,7 +167,8 @@ describe('Automations owner', () => {
 				Layer.mergeAll(
 					taskQueue,
 					registry,
-					InvocationBudget.layer(InvocationBudget.DEFAULT_NESTING_LIMIT)
+					InvocationBudget.layer(InvocationBudget.DEFAULT_NESTING_LIMIT),
+					TenantScope.layer('test-tenant')
 				)
 			)
 		);
@@ -148,7 +176,6 @@ describe('Automations owner', () => {
 			Effect.gen(function* () {
 				return yield* (yield* Automations.Service).start(
 					EffectId.make('e1'),
-					adminSubject,
 					'daily',
 					{}
 				);

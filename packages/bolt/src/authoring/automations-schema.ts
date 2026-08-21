@@ -2,6 +2,7 @@ import { Effect } from 'effect';
 import type {
 	AnySchema,
 	BeforeApi,
+	PolicyName,
 	DefaultWorkspaceSchema,
 	SchemaRow,
 	TableName
@@ -17,45 +18,14 @@ export interface AutomationDeclaration {
 				readonly event: 'created' | 'updated' | 'deleted';
 		  };
 	readonly command: string;
-}
-
-/**
- * `src/+agent.ts`: how a workspace configures the agent Bolt runs inside it.
- *
- * Every field below reaches the runtime. That is worth stating because for a long time none of them
- * did: the compiler discovered no `+agent.ts` and synthesized `{ name, prompt: 'You are the <name>
- * workspace agent.', tools, skills }` instead, so a workspace declaring a scoped, write-capable
- * agent with a real operating prompt and a raised token budget shipped an unscoped one that had read
- * none of it.
- *
- * A `tools` allowlist used to sit beside `denyTools` and was honoured by neither. It is gone rather
- * than implemented, because the workspace's tools are its `+<name>.tool.ts` files — authoring one is
- * already the act of offering it — and `denyTools` is the one direction that says something the
- * filesystem does not.
- */
-export interface AgentAutomationSpec {
-	/** What this agent is for, as the manifest and the studio report it. */
-	readonly description: string;
-	/** Self-identification. `defineAutomation` bodies never carry this; only `+agent.ts` does. */
-	readonly kind: 'agent';
-	/** The standing task, joined onto `systemPrompt` so a turn opens knowing what it is here to do. */
-	readonly task: string;
-	/** How the agent should behave, as the first message of every turn. */
-	readonly systemPrompt: string;
-	/** The collections `read_collection` and `write_collection` may reach. Absent means every one. */
-	readonly collections?: ReadonlyArray<string>;
-	/** Platform or workspace tools withheld from the funnel. It cannot withhold a bound sandbox. */
-	readonly denyTools?: ReadonlyArray<string>;
-	/** The MCP servers whose tools this agent may call. Absent leaves the connector facility the gate. */
-	readonly mcpServers?: ReadonlyArray<string>;
-	/** Non-sandbox host tools to opt into. Sandbox tools arrive with the sandbox and are not listed. */
-	readonly hostTools?: ReadonlyArray<string>;
-	/** The model each turn is made against. Absent means the host's default. */
-	readonly model?: string;
-	/** `read` withholds `write_collection` entirely; `write` offers it. Absent reads as `read`. */
-	readonly access?: 'read' | 'write';
-	/** The output budget of one provider call — per call, not per turn. */
-	readonly maxTokens?: number;
+	/**
+	 * The policies every run of this automation acts under.
+	 *
+	 * An automation's authority is a property of the automation, not of whoever tripped it. It used
+	 * to inherit the caller's subject, so the same automation ran with different authority depending
+	 * on who that was — and when an administrator tripped it, it ran as an administrator.
+	 */
+	readonly policies: ReadonlyArray<string>;
 }
 
 export type AutomationTrigger<S extends AnySchema = AnySchema> =
@@ -81,6 +51,14 @@ export interface AutomationDefinition<
 	readonly trigger: T;
 	readonly spec: {
 		readonly description: string;
+		/**
+		 * The policies this automation runs under — its authority *and* its toolset.
+		 *
+		 * Required, and required for the reason `envoy()` requires them: an automation that names none
+		 * would hold nothing, and the shape that let it hold whatever its trigger held is exactly what
+		 * this replaces.
+		 */
+		readonly policies: ReadonlyArray<PolicyName>;
 		readonly handler: (
 			api: BeforeApi<S>,
 			context: AutomationContext<T, S>
@@ -114,6 +92,11 @@ const AutomationAuthoring: {
 	declaration: (declaration) => declaration,
 	definition: (trigger, spec) => {
 		if (spec.description.trim() === '') throw new Error('Automation description cannot be empty');
+		if (spec.policies.length === 0) {
+			throw new Error(
+				'An automation names the policies it runs under. Declaring none would leave every run with no authority at all, which is never what an automation is for.'
+			);
+		}
 		return { trigger, spec };
 	}
 };

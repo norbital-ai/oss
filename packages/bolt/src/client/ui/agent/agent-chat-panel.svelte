@@ -29,11 +29,11 @@
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
 	import {
-		WEB_CHANNEL_ID,
+		WEB_AGENT_ID,
 		buildConversationSelector,
-		listAccessibleChannels,
-		publicChannelNames,
-		sessionChannelId,
+		listAccessibleEnvoys,
+		publicEnvoyNames,
+		sessionEnvoyId,
 		sessionVisibleInScope
 	} from './conversation-selector.js';
 	import { writeAgentSurface } from './agent-activity-state.svelte.js';
@@ -106,10 +106,10 @@
 	/**
 	 * The shell's live platform state, or nothing when the panel is mounted bare.
 	 *
-	 * Read as a getter rather than snapshotted: the shell fills its channel list from
+	 * Read as a getter rather than snapshotted: the shell fills its envoy list from
 	 * `workspace.manifest` after mount, and a snapshot taken here would be the empty list forever.
 	 * A component test or a host surface that never provided the context throws on the read, and the
-	 * channel-derived features are then simply absent rather than half-alive.
+	 * envoy-derived features are then simply absent rather than half-alive.
 	 */
 	const readPlatformState = (() => {
 		try {
@@ -118,7 +118,7 @@
 			return null;
 		}
 	})();
-	const declaredChannels = $derived(readPlatformState?.().channels ?? []);
+	const declaredEnvoys = $derived(readPlatformState?.().envoys ?? []);
 
 	// ── "@" mentions ────────────────────────────────────────────────────────────────────────────
 	// The draft stays plain text; chips are tracked ranges beside it. The menu never takes focus —
@@ -377,18 +377,17 @@
 	const isAdmin = $derived(readPlatformState?.().user.admin === true);
 	const currentUserId = $derived(readPlatformState?.().user.norbital_id ?? null);
 	let scopeUserId = $state<string | null>(null);
-	let selectedChannel = $state<string | null>(null);
+	let selectedEnvoy = $state<string | null>(null);
 	const resolvedScopeUserId = $derived(scopeUserId ?? currentUserId);
 	const usersQuery = $derived.by(() => {
 		if (!isAdmin) return undefined;
 		try {
 			// `bolt_auth_user` is the only description of a person the runtime has, and the system read
 			// grant masks it down to `norbital_id` and `name` — which is exactly what a picker needs.
-			// `kind` distinguishes a person from a host provisioner's service row and defaults to
-			// `'person'`; the operand has to be an operator object, because a bare value fails the
-			// where compiler and takes the whole query with it.
+			// There is no `kind` filter: it distinguished a person from a host provisioner's service
+			// row, and a static identity is minted in memory now and never written here, so every row
+			// this reaches is a person.
 			return getInitializedWorkspaceClient().db.bolt_auth_user.findMany({
-				where: { kind: { eq: 'person' } },
 				orderBy: { name: 'asc' },
 				limit: 500
 			});
@@ -410,57 +409,57 @@
 	});
 	const selectorLabels = $derived.by(
 		(): Parameters<typeof buildConversationSelector>[0]['labels'] => ({
-			web: t('bolt.agent.webChannel'),
+			web: t('bolt.agent.webAgent'),
 			users: t('bolt.agent.users'),
 			groups: t('bolt.agent.groups'),
-			channelFallback: t('bolt.agent.channelAgent')
+			envoyFallback: t('bolt.agent.envoy')
 		})
 	);
 	const selectorSessions = $derived(sessions);
-	const publicChannelKeys = $derived(publicChannelNames(declaredChannels));
+	const publicEnvoyKeys = $derived(publicEnvoyNames(declaredEnvoys));
 	const conversationScope = $derived({
 		scopeUserId: resolvedScopeUserId,
 		currentUserId,
 		isAdmin,
-		publicChannelKeys
+		publicEnvoyKeys
 	});
 	const scopedSelectorSessions = $derived(
 		selectorSessions.filter((row) => sessionVisibleInScope(row, conversationScope))
 	);
-	const accessibleChannels = $derived(
-		listAccessibleChannels({
+	const accessibleEnvoys = $derived(
+		listAccessibleEnvoys({
 			sessions: scopedSelectorSessions,
 			labels: selectorLabels,
-			declaredChannels,
+			declaredEnvoys,
 			scope: conversationScope
 		})
 	);
-	const resolvedChannel = $derived.by(() => {
-		if (selectedChannel && accessibleChannels.some((channel) => channel.id === selectedChannel)) {
-			return selectedChannel;
+	const resolvedEnvoy = $derived.by(() => {
+		if (selectedEnvoy && accessibleEnvoys.some((envoy) => envoy.id === selectedEnvoy)) {
+			return selectedEnvoy;
 		}
 		const open = session.chatId
 			? selectorSessions.find((row) => row.norbital_id === session.chatId)
 			: undefined;
-		if (open) return sessionChannelId(open, selectorLabels);
-		return accessibleChannels[0]?.id ?? WEB_CHANNEL_ID;
+		if (open) return sessionEnvoyId(open, selectorLabels);
+		return accessibleEnvoys[0]?.id ?? WEB_AGENT_ID;
 	});
-	const channelSelectorSessions = $derived(
+	const envoySelectorSessions = $derived(
 		scopedSelectorSessions.filter(
-			(row) => sessionChannelId(row, selectorLabels) === resolvedChannel
+			(row) => sessionEnvoyId(row, selectorLabels) === resolvedEnvoy
 		)
 	);
-	const showChannelPicker = $derived(accessibleChannels.length > 1);
-	const channelOptions = $derived(
-		accessibleChannels.map((channel) => ({
-			id: channel.id,
-			label: channel.label,
-			icon: channel.icon
+	const showEnvoyPicker = $derived(accessibleEnvoys.length > 1);
+	const envoyOptions = $derived(
+		accessibleEnvoys.map((envoy) => ({
+			id: envoy.id,
+			label: envoy.label,
+			icon: envoy.icon
 		}))
 	);
 	const conversationSelector = $derived(
 		buildConversationSelector({
-			sessions: channelSelectorSessions,
+			sessions: envoySelectorSessions,
 			labels: selectorLabels
 		})
 	);
@@ -485,9 +484,9 @@
 	 */
 	const activeChatId = $derived(
 		session.chatId ??
-			(session.composingNew || channelSelectorSessions.length === 0
+			(session.composingNew || envoySelectorSessions.length === 0
 				? undefined
-				: channelSelectorSessions[0].norbital_id)
+				: envoySelectorSessions[0].norbital_id)
 	);
 	const activeRunId = $derived.by(() => {
 		if (!activeChatId) return session.runId;
@@ -500,8 +499,8 @@
 	const activeSession = $derived(sessions.find((row) => row.norbital_id === activeChatId));
 	const activeMessages = $derived(activeSession?.messages ?? []);
 	const activeTurns = $derived(activeSession?.turns ?? []);
-	const activeSessionIsChannel = $derived(
-		activeSession?.visibility.startsWith('channel_') ?? false
+	const activeSessionIsEnvoy = $derived(
+		activeSession?.visibility.startsWith('envoy_') ?? false
 	);
 	const activeSessionIsOtherUsersPersonal = $derived(
 		isAdmin &&
@@ -510,7 +509,7 @@
 			resolvedScopeUserId !== currentUserId
 	);
 	const activeSessionIsReadOnly = $derived(
-		activeSessionIsChannel || activeSessionIsOtherUsersPersonal
+		activeSessionIsEnvoy || activeSessionIsOtherUsersPersonal
 	);
 	const stored = $derived(toPanelMessages(activeMessages, activeTurns));
 	const messages = $derived(withPendingEcho(stored, session.echo));
@@ -744,7 +743,7 @@
 		session.echo = null;
 		session.sendFailure = null;
 		session.waitedTooLong = false;
-		selectedChannel = sessionChannelId(row, selectorLabels);
+		selectedEnvoy = sessionEnvoyId(row, selectorLabels);
 		syncAgentSurface();
 	}
 
@@ -760,24 +759,24 @@
 					scopeUserId: userId,
 					currentUserId,
 					isAdmin,
-					publicChannelKeys
+					publicEnvoyKeys
 				})
 			) {
 				session.chatId = undefined;
 				session.runId = undefined;
 				session.composingNew = false;
-				selectedChannel = null;
+				selectedEnvoy = null;
 			}
 		}
 		syncAgentSurface();
 	}
 
-	/** Switches the header channel and clears a thread outside that channel. */
-	function selectChannel(channelId: string): void {
-		selectedChannel = channelId;
+	/** Switches the header tab and clears a thread outside that envoy. */
+	function selectEnvoy(envoyId: string): void {
+		selectedEnvoy = envoyId;
 		if (session.chatId) {
 			const current = sessions.find((row) => row.norbital_id === session.chatId);
-			if (current && sessionChannelId(current, selectorLabels) !== channelId) {
+			if (current && sessionEnvoyId(current, selectorLabels) !== envoyId) {
 				session.chatId = undefined;
 				session.runId = undefined;
 				session.composingNew = false;
@@ -793,7 +792,7 @@
 	function startConversation(): void {
 		// stupidity:allow Q3 -- event handler
 		scopeUserId = currentUserId;
-		selectedChannel = WEB_CHANNEL_ID;
+		selectedEnvoy = WEB_AGENT_ID;
 		session.chatId = undefined;
 		session.runId = undefined;
 		session.composingNew = true;
@@ -916,13 +915,13 @@
 				class="w-44"
 			/>
 		{/if}
-		{#if showChannelPicker}
+		{#if showEnvoyPicker}
 			<ConversationScopePicker
-				value={resolvedChannel}
-				options={channelOptions}
-				searchPlaceholder={t('bolt.agent.searchChannels')}
-				ariaLabel={t('bolt.agent.conversationChannel')}
-				onValueChange={selectChannel}
+				value={resolvedEnvoy}
+				options={envoyOptions}
+				searchPlaceholder={t('bolt.agent.searchEnvoys')}
+				ariaLabel={t('bolt.agent.conversationEnvoy')}
+				onValueChange={selectEnvoy}
 				icon="lucide:hash"
 				class="w-36"
 			/>
@@ -1051,8 +1050,8 @@
 			>
 				<Icon icon="lucide:lock-keyhole" class="size-3.5 shrink-0" />
 				<span>
-					{activeSessionIsChannel
-						? t('bolt.agent.channelReadOnly')
+					{activeSessionIsEnvoy
+						? t('bolt.agent.envoyReadOnly')
 						: t('bolt.agent.adminConversationReadOnly')}
 				</span>
 			</Inline>

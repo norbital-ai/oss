@@ -62,14 +62,16 @@ const secretWorkspace = workspace({
 	// `nobody` is deliberately absent from the teams below: a team the release does not declare holds
 	// no policies at all and is refused by default, which is the session a payload claiming
 	// `teamPath: ['admin']` would try to widen.
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
 	teams: {
 		admin: ['admin']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
+	envoys: [],
 	integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
 	requiredFacilities: []
 });
 

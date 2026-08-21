@@ -131,6 +131,10 @@ const integrationSubject = (name: string): Identity.Subject => ({
 	userId: `integration:${name}`,
 	tenantId: 'system',
 	teamPath: [],
+	// A static identity, so no team and no directly-named policies. Its authority is the `admin`
+	// status below and nothing a name can reach — which also means it can decide no approval, because
+	// eligibility is matched against the subject's own team and it has none.
+	policies: [],
 	admin: true
 });
 

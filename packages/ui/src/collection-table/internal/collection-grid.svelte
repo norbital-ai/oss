@@ -79,7 +79,7 @@
 
 		getRowHasChildren?: (row: TData) => boolean;
 
-		getRowLeadingAccent?: (row: TData) => { borderClass: string; tooltip: string } | null;
+		getRowLeadingAccent?: (row: TData) => { markerClass: string; tooltip: string } | null;
 
 		/** Record id currently open in the detail stack; drives the row active indicator. */
 		activeRecordId?: string | null;
@@ -829,10 +829,7 @@
 											{#if rowLeadingAccent}
 												<span
 													role="img"
-													class={cn(
-														'absolute inset-y-0 left-0 z-50 border-l-2',
-														rowLeadingAccent.borderClass
-													)}
+													class={cn('absolute inset-y-0 left-0 z-50', rowLeadingAccent.markerClass)}
 													title={rowLeadingAccent.tooltip}
 													aria-label={rowLeadingAccent.tooltip}
 												></span>

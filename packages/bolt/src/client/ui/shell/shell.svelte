@@ -28,7 +28,7 @@
 	} from './app-header-actions.svelte.js';
 	import {
 		setPlatformStateContext,
-		type PlatformChannel,
+		type PlatformEnvoy,
 		type PlatformState
 	} from '../state/platform.js';
 	import { CollectionTableNavigationSurface } from '@norbital-ai/ui/collection-table';
@@ -208,11 +208,11 @@
 			admin: impersonation?.isAdmin === true && !(impersonation?.isActive ?? false)
 		},
 		apps: visibleApps.map(({ name }) => name),
-		channels: declaredChannels
+		envoys: declaredEnvoys
 	}));
 
 	// Loaded after mount, which is why the context above is a getter over this rather than a snapshot.
-	let declaredChannels = $state<ReadonlyArray<PlatformChannel>>([]);
+	let declaredEnvoys = $state<ReadonlyArray<PlatformEnvoy>>([]);
 
 	const { t, has } = useI18n();
 
@@ -369,15 +369,15 @@
 	};
 
 	/**
-	 * The channels out of `workspace.manifest`, dropped rather than defaulted when a field is missing.
+	 * The envoys out of `workspace.manifest`, dropped rather than defaulted when a field is missing.
 	 *
-	 * A channel whose `audience` did not arrive is not a private channel, and guessing one would put
+	 * An envoy whose `audience` did not arrive is not a private one, and guessing would put
 	 * an outsider's thread into every member's conversation list. The manifest always carries all
 	 * three, so an entry missing one is a projection that changed underneath this reader.
 	 */
-	const parseDeclaredChannels = (value: unknown): ReadonlyArray<PlatformChannel> => {
+	const parseDeclaredEnvoys = (value: unknown): ReadonlyArray<PlatformEnvoy> => {
 		if (!Array.isArray(value)) return [];
-		const declared: Array<PlatformChannel> = [];
+		const declared: Array<PlatformEnvoy> = [];
 		for (const entry of value) {
 			if (!isRecord(entry)) continue;
 			const name = stringField(entry, 'name');
@@ -389,16 +389,16 @@
 		return declared;
 	};
 
-	const loadDeclaredChannels = async (): Promise<void> => {
+	const loadDeclaredEnvoys = async (): Promise<void> => {
 		const runtime = getAgentRuntime();
 		if (runtime === undefined) return;
 		try {
 			const summary = await runtime.transport.command('workspace.manifest', {});
-			declaredChannels = parseDeclaredChannels(isRecord(summary) ? summary.channels : undefined);
+			declaredEnvoys = parseDeclaredEnvoys(isRecord(summary) ? summary.envoys : undefined);
 		} catch {
-			// An unread channel list is an absent one. The conversation selector then offers only the
-			// threads that exist, which is what it did before any channel was published at all.
-			declaredChannels = [];
+			// An unread envoy list is an absent one. The conversation selector then offers only the
+			// threads that exist, which is what it did before any envoy was published at all.
+			declaredEnvoys = [];
 		}
 	};
 
@@ -472,7 +472,7 @@
 		shortcutModifier = detectShortcutModifier();
 		void loadNotifications();
 		void loadFinderCollections();
-		void loadDeclaredChannels();
+		void loadDeclaredEnvoys();
 	});
 
 	$effect(() => {

@@ -333,7 +333,7 @@ export const layer = Layer.effect(
 				) {
 					// The policies this subject's team declares, resolved the one way any policy is
 					// selected — by name, against the team map the release carries.
-					const held = AccessControl.policiesHeldByTeam(workspace.definition, subject);
+					const held = AccessControl.policiesHeld(workspace.definition, subject);
 					const configuration = workspace.definition.policies
 						.filter((policy) => held.has(policy.name.toLocaleLowerCase()))
 						.flatMap((policy) => policy.grants ?? [])
@@ -399,11 +399,15 @@ export const layer = Layer.effect(
 					const step = configuration.steps[current._tag === 'Pending' ? current.step : 0];
 					const eligible =
 						step !== undefined &&
-						// One team, matched folded — the same rule the policy side uses. It used to be an
-						// array compared case-sensitively, which is how `approvers: ['HR Manger']` produced an
-						// approval nobody could ever decide.
+						// One team, matched folded — the same rule the policy side uses, read from the one
+						// place the subject's own team lives. It used to be an array compared
+						// case-sensitively, which is how `approvers: ['HR Manger']` produced an approval
+						// nobody could ever decide; folding closed the casing half of that and left the
+						// typo half open, which is why `approvers` is now a generated union and a
+						// misspelling fails the build instead.
 						step.approvers.some(
-							(team: string) => team.toLocaleLowerCase() === subject.team?.toLocaleLowerCase()
+							(team: string) =>
+								team.toLocaleLowerCase() === subject.teamPath[0]?.toLocaleLowerCase()
 						);
 					if (!eligible)
 						return yield* new AccessControl.AccessDenied({

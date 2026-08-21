@@ -8,9 +8,7 @@ import {
 
 describe('Agents tools and MCP owners', () => {
 	it('enforces the authored tool allowlist', () =>
-		expect(
-			resolveTool({ name: 'a', prompt: 'p', tools: [], skills: [] }, 'missing')
-		).toBeInstanceOf(ToolNotAllowed));
+		expect(resolveTool([], 'web', 'missing')).toBeInstanceOf(ToolNotAllowed));
 	it('round trips neutral MCP tool names', () =>
 		expect(parseMcpToolName(mcpToolName('crm', 'search'))).toEqual({
 			server: 'crm',

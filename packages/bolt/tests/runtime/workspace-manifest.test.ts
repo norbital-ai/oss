@@ -8,7 +8,8 @@ import {
 	ReleaseId,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
-import { channel, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import { envoy, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import { automation } from '../../src/authoring/automations-schema.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	makeBoltTestRuntime,
@@ -88,40 +89,51 @@ describe('workspace.manifest command', () => {
 	});
 
 	/**
-	 * A channel is the one declaration a studio cannot use from its name alone: the Agents page has to
-	 * say which agent answers on it. The projection named `name` and dropped every other field
-	 * `ChannelDeclaration` carries, so the page had nothing to attribute a channel with.
+	 * An envoy is the one declaration a studio cannot use from its name alone: the Envoys page has to
+	 * say where it is reached and who may reach it. The projection named `name` and dropped every
+	 * other field the declaration carries, so the page had nothing to attribute an envoy with.
 	 *
-	 * `policy` and `task` are asserted absent rather than left unmentioned. `task` is the channel's
-	 * system prompt and `policy` names the grants its runs are ceilinged by; `workspace.manifest`
+	 * `policies` and `task` are asserted absent rather than left unmentioned. `task` is the envoy's
+	 * standing instruction and `policies` names everything its runs may do; `workspace.manifest`
 	 * answers any authenticated caller, so publishing either would be a disclosure and not a feature.
+	 *
+	 * There is no `agent` key, and its absence is asserted by the exact-equality below. It used to be
+	 * a back-pointer whose value was the one synthesized agent, in every workspace, always.
 	 */
-	it('attributes a channel to its agent, transport and audience', async () => {
+	it('attributes an envoy to its transport and audience', async () => {
 		harness = await makeBoltTestRuntime(
 			workspace({
-				name: 'channelled',
+				name: 'envoyed',
 				version: '1',
 				collections: [],
 				apps: [],
-				policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+				policies: [
+					policy({
+						name: 'admin',
+						effect: 'allow',
+						actions: ['*'],
+						capabilities: { apps: ['*'] }
+					}),
+					policy({ name: 'member', effect: 'allow', actions: ['read'] })
+				],
 				teams: {
 					admin: ['admin']
 				},
-				agents: [],
 				automations: [],
-				channels: [
-					channel({
+				envoys: [
+					envoy({
 						name: 'support',
 						transport: 'whatsapp',
-						agent: 'helper',
 						audience: 'public',
-						policy: 'member',
-						description: 'Member support over WhatsApp',
+						policies: ['member'],
 						groupMessages: 'mention_or_reply',
 						task: 'Answer support questions for this member.'
 					})
 				],
 				integrations: [],
+				prompt: 'You are the test workspace agent.',
+				tools: [],
+				skills: [],
 				requiredFacilities: []
 			})
 		);
@@ -129,15 +141,74 @@ describe('workspace.manifest command', () => {
 		const response = await harness.runtime.runPromise(
 			dispatchInvocation(manifestInvocation('admin-token'))
 		);
-		expect(value(response)['channels']).toEqual([
+		expect(value(response)['envoys']).toEqual([
 			{
 				name: 'support',
-				agent: 'helper',
 				transport: 'whatsapp',
 				audience: 'public',
-				description: 'Member support over WhatsApp',
 				groupMessages: 'mention_or_reply'
 			}
+		]);
+	});
+
+	/**
+	 * Every static identity this release can mint, with a label to render it as.
+	 *
+	 * `bolt_audit.subject_id` and `bolt_collection_history.subject_id` are plain `text` with no
+	 * foreign key, which is what lets `envoy:sales_desk` and `automation:payroll_close` be valid
+	 * values with no shadow user table. What was missing was the label: a client holding
+	 * `envoy:support` had nothing to render but the id, which is why seeded data shows no creator.
+	 */
+	it('publishes a label for every static identity it can mint', async () => {
+		harness = await makeBoltTestRuntime(
+			workspace({
+				name: 'envoyed',
+				version: '1',
+				collections: [],
+				apps: [],
+				policies: [
+					policy({
+						name: 'admin',
+						effect: 'allow',
+						actions: ['*'],
+						capabilities: { apps: ['*'] }
+					}),
+					policy({ name: 'member', effect: 'allow', actions: ['read'] })
+				],
+				teams: { admin: ['admin'] },
+				automations: [
+					automation({
+						name: 'nightly',
+						trigger: { _tag: 'Schedule', cron: '0 0 * * *' },
+						command: 'automations.nightly',
+						policies: ['member']
+					})
+				],
+				envoys: [
+					envoy({
+						name: 'support',
+						transport: 'whatsapp',
+						audience: 'public',
+						policies: ['member'],
+						task: 'Answer support questions for this member.'
+					})
+				],
+				integrations: [],
+				prompt: 'You are the test workspace agent.',
+				tools: [],
+				skills: [],
+				requiredFacilities: []
+			})
+		);
+		await seedAdmin(harness);
+		const response = await harness.runtime.runPromise(
+			dispatchInvocation(manifestInvocation('admin-token'))
+		);
+		expect(value(response)['principals']).toEqual([
+			{ id: 'colony-system', label: 'Colony', kind: 'host', policies: [] },
+			{ id: 'colony-seed', label: 'Sample data', kind: 'seed', policies: [] },
+			{ id: 'envoy:support', label: 'support', kind: 'envoy', policies: ['member'] },
+			{ id: 'automation:nightly', label: 'nightly', kind: 'automation', policies: ['member'] }
 		]);
 	});
 
@@ -296,7 +367,7 @@ describe('workspace.manifest command', () => {
 					{ name: 'salaries', fields: { amount: field.number() } }
 				],
 				policies: [
-					policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] }),
+					policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } }),
 					policy({
 						name: 'viewer',
 						effect: 'allow',

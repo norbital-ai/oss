@@ -19,7 +19,7 @@ import { Approvals } from './approvals/approvals.js';
 import { Automations } from './automations/automations.js';
 import { TaskQueue } from './tasks/tasks.js';
 import type { Declaration } from './tasks/queue.js';
-import { Channels } from './channels/channels.js';
+import { Envoys } from './envoys/envoys.js';
 import { Collections } from './collections/collections.js';
 import {
 	AuthoredRuntimeService,
@@ -43,8 +43,8 @@ import { Tasks } from './facilities/services.js';
 import { Transport } from './facilities/services.js';
 import { Identity } from './identity/identity.js';
 import { reconcileApproverTeams } from './identity/approver-teams.js';
+import { automationSubject } from './identity/static-identity.js';
 import { approvalRefusal } from '../compiler/approval-checks.js';
-import { reconcileChannelPrincipals } from './channels/channel-principal.js';
 import { Integrations } from './integrations/integrations.js';
 import { Notifications } from './notifications/notifications.js';
 import {
@@ -62,6 +62,7 @@ import { SyncWake } from './sync/wake.js';
 import { Workspace } from './workspace.js';
 import { InvocationBudget } from './budget.js';
 import { RateLimits } from './rate-limits.js';
+import { TenantScope } from './tenant.js';
 import { AuthoredRefusal, refusalOf } from '../authoring/refusal.js';
 
 /** Owns invocation layer behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
@@ -92,9 +93,12 @@ const InvocationLayers = {
 				? hostConfigFromProcessEnv()
 				: hostConfigFromFacility(facilities.config);
 		const budget = InvocationBudget.layer(depth);
-		// Built from the workspace's own `src/+ratelimits.ts`, so the policy travels with the bundle
-		// and applies identically under Colony, under bolt-server, and in a test.
+		// Built from the workspace's own `src/access/+anonymous_limits.ts`, so the policy travels with
+		// the bundle and applies identically under Colony, under bolt-server, and in a test. Everything
+		// with a holder — a person's budget, an envoy's — is declared on the policies that hold it and
+		// resolved per subject; this layer carries only the rules that apply before there is one.
 		const rateLimits = RateLimits.layer(workspace.rateLimits);
+		const tenantScope = TenantScope.layer(context.tenantId);
 		const database = Database.layer(facilities.database, context);
 		const files = Files.layer(facilities.files, context);
 		const ai = AI.layer(facilities.ai, context);
@@ -141,8 +145,10 @@ const InvocationLayers = {
 		 * Collections is now the consumer. Nothing was lost in the flip — the dependency was already
 		 * unused.
 		 */
+		// `tenantScope`, because an automation's subject is minted here from its declaration rather than
+		// inherited from whoever tripped it — and a minted subject needs a tenant that no row can supply.
 		const automations = Automations.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, database, taskQueue, budget))
+			Layer.provide(Layer.mergeAll(workspaceLayer, database, taskQueue, budget, tenantScope))
 		);
 		// The wake sits between Collections and the host's transport: Collections announces, the host fans
 		// out. It is its own layer rather than part of Sync because Sync depends on Collections, and the
@@ -212,8 +218,23 @@ const InvocationLayers = {
 		const personalSecrets = PersonalSecrets.layer.pipe(
 			Layer.provide(Layer.merge(database, secretCipher))
 		);
-		const channels = Channels.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, identity, agents, communication, database))
+		// `access` and `rateLimits`, because an envoy's own ceiling is now the `limits` of the policies
+		// it declares — resolved for its minted subject rather than counted in SQL against a per-envoy
+		// column that only ever said the same thing twice. `tenantScope`, because a static identity is
+		// minted with a tenant and has no row to read one off.
+		const envoys = Envoys.layer.pipe(
+			Layer.provide(
+				Layer.mergeAll(
+					workspaceLayer,
+					identity,
+					agents,
+					communication,
+					database,
+					access,
+					rateLimits,
+					tenantScope
+				)
+			)
 		);
 		// Secrets, because a connection's credential is an `{ env }` reference the vault resolves; AI and
 		// Files, because a pull may route a record through the collection's authored `import` pipeline and
@@ -250,7 +271,7 @@ const InvocationLayers = {
 			secrets,
 			personalSecrets,
 			automations,
-			channels,
+			envoys,
 			integrations,
 			notifications,
 			database,
@@ -267,7 +288,8 @@ const InvocationLayers = {
 			authoredLayer,
 			hostConfig,
 			budget,
-			rateLimits
+			rateLimits,
+			tenantScope
 		);
 	}
 };
@@ -315,7 +337,7 @@ export const ActivationCommands = {
 			'notifications.drain',
 			'integrations.pull',
 			'integrations.flush',
-			'channels.receive',
+			'envoys.receive',
 			// The tick, which is the one command a host's timer ever sends. A host that cannot route it
 			// still holds correct data — rows commit, schedules advance, retries are scheduled — it just
 			// loses punctuality, because nothing fires until somebody invokes this.
@@ -337,7 +359,7 @@ export const ActivationCommands = {
 	 * enqueued by the write that caused it, in that write's own transaction, and a delivery that backs
 	 * off schedules its own return. Nothing needs to come and look.
 	 */
-	schedulesFor: (workspace: WorkspaceDefinition): ReadonlyArray<Declaration> =>
+	schedulesFor: (workspace: WorkspaceDefinition, tenantId: string): ReadonlyArray<Declaration> =>
 		[
 			...workspace.automations.flatMap((automation) =>
 				automation.trigger._tag === 'Schedule'
@@ -348,7 +370,19 @@ export const ActivationCommands = {
 								crontab: automation.trigger.cron,
 								// No `bolt_run_as`: a scheduled automation has no person behind it, and stamping a
 								// fabricated subject here is how work with no author comes to look authored.
-								input: { args: {}, scope: {} } as Schema.Json
+								// The automation's own subject, stamped here exactly as `Automations.start` stamps
+								// one at the other enqueue point. The comment this replaces said a scheduled
+								// automation has no person behind it and refused to fabricate one — which was
+								// right about the person and wrong about the conclusion: `AutomationTaskInput`
+								// requires `bolt_run_as`, so every cron automation in every template failed to
+								// decode, and `schedule-parity.test.ts` asserts the schedule rows without ever
+								// dispatching one. There is no person; there is a static identity, and it is the
+								// automation's own declared authority.
+								input: {
+									args: {},
+									scope: {},
+									bolt_run_as: automationSubject(automation, tenantId)
+								} as unknown as Schema.Json
 							}
 						]
 					: []
@@ -378,7 +412,8 @@ export const ActivationCommands = {
 const activationContext = (activation: Activation): CallContext => ({
 	invocationId: activation.id,
 	deadlineEpochMs: activation.deadlineEpochMs,
-	environment: String(activation.scope.environment)
+	environment: String(activation.scope.environment),
+	tenantId: String(activation.scope.tenantId)
 });
 
 /**
@@ -480,22 +515,6 @@ const BundleActivation = {
 								EffectId.make(`${activation.id}:approver-teams`),
 								workspace
 							);
-							/**
-							 * The account each declared channel answers as, reconciled here for the same reasons
-							 * and with the same temperament as the teams above.
-							 *
-							 * It has to be activation and not first message. A channel's principal is the only
-							 * thing that gives its turns any authority at all, and the moment it is first needed
-							 * is a message already arriving — resolving it lazily would make the first
-							 * contractor to write in the person who discovers the workspace never declared a team
-							 * for the channel. Here it is a line in a deploy log, which is where a release's
-							 * unmet expectations belong.
-							 */
-							yield* reconcileChannelPrincipals(
-								EffectId.make(`${activation.id}:channel-principals`),
-								workspace,
-								activation.scope.tenantId
-							);
 							const keyed = ActivationCommands.forWorkspace(workspace);
 							const registrations = keyed.map(({ registration }) => registration);
 							const service = yield* Tasks.Service;
@@ -521,7 +540,7 @@ const BundleActivation = {
 							 */
 							const declared = yield* (yield* TaskQueue.Service).declare(
 								EffectId.make(`${activation.id}:schedules`),
-								ActivationCommands.schedulesFor(workspace),
+								ActivationCommands.schedulesFor(workspace, activation.scope.tenantId),
 								Date.now()
 							);
 							for (const rejection of declared.rejections) {
@@ -596,7 +615,8 @@ const BundleDispatch = {
 		const context: CallContext = {
 			invocationId: invocation.id,
 			deadlineEpochMs: invocation.deadlineEpochMs,
-			environment: String(invocation.scope.environment)
+			environment: String(invocation.scope.environment),
+			tenantId: String(invocation.scope.tenantId)
 		};
 		const effect = dispatchInvocation(invocation).pipe(
 			Effect.provide(

@@ -13,10 +13,12 @@ describe('compiler template generation', () => {
 			],
 			apps: [app({ name: 'z-app', label: 'Z' }), app({ name: 'a-app', label: 'A' })],
 			policies: [],
-			agents: [],
 			automations: [],
-			channels: [],
+			envoys: [],
 			integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
 			requiredFacilities: []
 		});
 		const output = generateWorkspaceTypes(definition);

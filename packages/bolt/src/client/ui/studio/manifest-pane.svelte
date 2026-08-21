@@ -109,7 +109,7 @@
 
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import AgentsPanel from './agents-panel.svelte';
+	import EnvoysPanel from './envoys-panel.svelte';
 	import CollectionDetail from './collection-detail.svelte';
 	import EnvironmentPane from './environment-pane.svelte';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
@@ -122,7 +122,8 @@
 	import type {
 		EnvironmentVariable,
 		ManifestSection,
-		StudioAgent,
+		StudioEnvoy,
+		StudioTool,
 		WorkspaceManifest
 	} from './studio-state.js';
 
@@ -130,7 +131,7 @@
 	 * The Manifest view's right-hand pane: one branch of the workspace, or one collection of it.
 	 *
 	 * Each kind is read in the shape that suits it rather than in one generic card grid — a
-	 * collection is a thing you scan a wall of, a policy is a row you read a sentence of, an agent is
+	 * collection is a thing you scan a wall of, a policy is a row you read a sentence of, an envoy is
 	 * a page. The pane never invents a landing page: selecting "Apps" shows the apps.
 	 */
 	let {
@@ -139,7 +140,8 @@
 		selected = 'collections',
 		client,
 		files = [],
-		agents = [],
+		envoys = [],
+		tools = [],
 		environment = [],
 		environmentError,
 		command,
@@ -149,9 +151,10 @@
 		sections?: ReadonlyArray<ManifestSection>;
 		selected?: string;
 		client?: WorkspaceClient | undefined;
-		/** Authored source paths; the agent's tool names are only legible from their filenames. */
+		/** Authored source paths; a tool's name is only legible from its filename. */
 		files?: ReadonlyArray<string>;
-		agents?: ReadonlyArray<StudioAgent>;
+		envoys?: ReadonlyArray<StudioEnvoy>;
+		tools?: ReadonlyArray<StudioTool>;
 		environment?: ReadonlyArray<EnvironmentVariable>;
 		environmentError?: string | undefined;
 		command: (name: string, input: Readonly<Record<string, string>>) => Promise<unknown>;
@@ -514,8 +517,8 @@
 		<p class="text-sm font-medium text-foreground">Nothing selected</p>
 		<p class="max-w-sm text-center text-xs leading-relaxed">Choose a branch on the left.</p>
 	</Stack>
-{:else if kind === 'agents'}
-	<AgentsPanel {agents} {command} {onopenSource} />
+{:else if kind === 'envoys'}
+	<EnvoysPanel {envoys} {tools} {command} {onopenSource} />
 {:else if kind === 'environment'}
 	<EnvironmentPane {section} entries={environment} failure={environmentError} />
 {:else if kind === 'apps'}

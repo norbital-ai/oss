@@ -44,10 +44,12 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 			],
 			apps: [],
 			policies: [],
-			agents: [],
 			automations: [],
-			channels: [],
 			integrations: [],
+			prompt: 'You are the test workspace agent.',
+			tools: [],
+			skills: [],
+			envoys: [],
 			requiredFacilities: []
 		});
 		// The full provisioning sequence a database actually gets: plan foundation, then the drizzle
@@ -107,10 +109,12 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 			],
 			apps: [],
 			policies: [],
-			agents: [],
 			automations: [],
-			channels: [],
 			integrations: [],
+			prompt: 'You are the test workspace agent.',
+			tools: [],
+			skills: [],
+			envoys: [],
 			requiredFacilities: []
 		});
 		// The full provisioning sequence a database actually gets: plan foundation, then the drizzle
@@ -206,10 +210,12 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 			],
 			apps: [],
 			policies: [],
-			agents: [],
 			automations: [],
-			channels: [],
 			integrations: [],
+			prompt: 'You are the test workspace agent.',
+			tools: [],
+			skills: [],
+			envoys: [],
 			requiredFacilities: []
 		});
 		// The full provisioning sequence a database actually gets: plan foundation, then the drizzle

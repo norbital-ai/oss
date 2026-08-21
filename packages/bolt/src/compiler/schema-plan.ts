@@ -312,57 +312,82 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 			id: 'bolt:audit',
 			sql: 'create table if not exists bolt_audit (sequence bigint generated always as identity primary key, kind text not null, subject_id text not null, payload jsonb not null, created_at timestamptz not null default now())'
 		},
-		// The two tables `channels.ts` reads and writes. They were absent from this plan entirely and
-		// no DDL for either existed anywhere in the repo, so `channels.status` — the only reader —
-		// failed on a missing relation the moment any workspace declared a channel. It stayed
-		// invisible because the one template exercised end to end, `hr-payroll`, declares none.
-		//
-		// Columns are exactly the ones `register`, `receive`, `reply` and `status` name, and nothing
-		// else. In particular there is deliberately no `tenant_id`: every statement in `channels.ts` is
-		// tenant-blind, so a `not null` tenant column would fail every insert rather than scope
-		// anything. That is a real multi-tenancy gap, but it is a gap in the runtime's statements —
-		// inventing the column here would only hide it behind a table that no longer matches its only
-		// caller.
-		//
-		// `channel_name` is the primary key rather than a plain column because `register` relies on
-		// `on conflict do nothing` for idempotency: with no unique constraint that clause has nothing
-		// to conflict against, so re-registering a channel would append a duplicate row forever.
+		/**
+		 * The three tables `envoys.ts` reads and writes, renamed from `bolt_channel_*` in place.
+		 *
+		 * **A clean cut is `alter table … rename`, not create-and-backfill.** There is no window in
+		 * which both names exist, so there is no moment when a write could land in the old table and a
+		 * read miss it. The rename is guarded rather than bare because this plan is applied to fresh
+		 * databases as well as existing ones, and to a browser replica that has never seen either name:
+		 * it fires only where the old table is present and the new one is not, and is a no-op everywhere
+		 * else.
+		 *
+		 * The id sorts first among the `bolt:envoy-*` steps — `0000` before `inbound`, `receipts`,
+		 * `registrations` — because the `create table if not exists` steps below must not win the race
+		 * and leave an existing deployment with a renamed-away table beside an empty new one. Step ids
+		 * encode dependency order and the plan applies in id order; that is load-bearing here.
+		 *
+		 * Columns are exactly the ones `register`, `receive`, `reply` and `status` name, and nothing
+		 * else. In particular there is deliberately no `tenant_id`: every statement in `envoys.ts` is
+		 * tenant-blind, so a `not null` tenant column would fail every insert rather than scope
+		 * anything. That is a real multi-tenancy gap, but it is a gap in the runtime's statements —
+		 * inventing the column here would only hide it behind a table that no longer matches its only
+		 * caller.
+		 */
 		{
-			id: 'bolt:channel-registrations',
-			sql: 'create table if not exists bolt_channel_registrations (channel_name text primary key, created_at timestamptz not null default now())'
+			id: 'bolt:envoy-0000-rename-from-channel',
+			sql: `do $$
+			      begin
+			        if to_regclass('bolt_channel_registrations') is not null and to_regclass('bolt_envoy_registrations') is null then
+			          alter table bolt_channel_registrations rename to bolt_envoy_registrations;
+			          alter table bolt_envoy_registrations rename column channel_name to envoy_name;
+			        end if;
+			        if to_regclass('bolt_channel_receipts') is not null and to_regclass('bolt_envoy_receipts') is null then
+			          alter table bolt_channel_receipts rename to bolt_envoy_receipts;
+			          alter table bolt_envoy_receipts rename column channel_name to envoy_name;
+			          alter index if exists bolt_channel_receipts_window rename to bolt_envoy_receipts_window;
+			        end if;
+			        if to_regclass('bolt_channel_inbound') is not null and to_regclass('bolt_envoy_inbound') is null then
+			          alter table bolt_channel_inbound rename to bolt_envoy_inbound;
+			          alter table bolt_envoy_inbound rename column channel_name to envoy_name;
+			        end if;
+			      end $$`
+		},
+		// `envoy_name` is the primary key rather than a plain column because `register` relies on
+		// `on conflict do nothing` for idempotency: with no unique constraint that clause has nothing
+		// to conflict against, so re-registering an envoy would append a duplicate row forever.
+		{
+			id: 'bolt:envoy-registrations',
+			sql: 'create table if not exists bolt_envoy_registrations (envoy_name text primary key, created_at timestamptz not null default now())'
 		},
 		// An append-only ledger, so it takes the same identity primary key `bolt_audit` and
 		// `bolt_collection_history` use: `receive` and `reply` only ever insert, and `status` aggregates
 		// with `count(*) filter (...)`, so a receipt row is never addressed individually.
 		{
-			id: 'bolt:channel-receipts',
-			sql: 'create table if not exists bolt_channel_receipts (sequence bigint generated always as identity primary key, channel_name text not null, conversation_id text not null, direction text not null, created_at timestamptz not null default now())'
+			id: 'bolt:envoy-receipts',
+			sql: 'create table if not exists bolt_envoy_receipts (sequence bigint generated always as identity primary key, envoy_name text not null, conversation_id text not null, direction text not null, sender_id text, created_at timestamptz not null default now())'
 		},
-		// Who sent an inbound message, which is what `rateLimits.perSenderPerMinute` counts. A
-		// conversation id cannot answer it: the host chooses one, and nothing makes it per-sender, so a
-		// per-sender cap measured over conversations would throttle a busy thread and let a flood in
-		// over fresh ones. Nullable, because an outbound receipt has no sender and a row written before
-		// this column existed has no answer to give.
+		// Separately, for a database provisioned before the column existed: `create table if not
+		// exists` is a no-op against a table that is already there, so it can never add one.
 		{
-			id: 'bolt:channel-receipts-sender',
-			sql: 'alter table bolt_channel_receipts add column if not exists sender_id text'
+			id: 'bolt:envoy-receipts-sender',
+			sql: 'alter table bolt_envoy_receipts add column if not exists sender_id text'
 		},
-		// The window the limiter reads is always `(channel_name, direction, created_at)` over the last
-		// minute, so a channel with a long ledger does not scan all of it to admit one message.
+		// The window a reader scans is always `(envoy_name, direction, created_at)` over a recent
+		// interval, so an envoy with a long ledger does not scan all of it to answer `status`.
 		{
-			id: 'bolt:channel-receipts-window',
-			sql: 'create index if not exists bolt_channel_receipts_window on bolt_channel_receipts (channel_name, direction, created_at desc)'
+			id: 'bolt:envoy-receipts-window',
+			sql: 'create index if not exists bolt_envoy_receipts_window on bolt_envoy_receipts (envoy_name, direction, created_at desc)'
 		},
 		// The claim ledger that makes a redelivery cost one failed insert instead of one agent run.
 		//
-		// `receipt_key` is `(channel, conversation, provider message id)` and is unique, so
+		// `receipt_key` is `(envoy, conversation, provider message id)` and is unique, so
 		// `on conflict do nothing` returning no row *is* the duplicate answer. Separate from
-		// `bolt_channel_receipts`, which counts traffic for the rate limiter and deliberately admits
-		// many rows per conversation — one table cannot both count every message and refuse the second
-		// copy of one.
+		// `bolt_envoy_receipts`, which counts traffic and deliberately admits many rows per
+		// conversation — one table cannot both count every message and refuse the second copy of one.
 		{
-			id: 'bolt:channel-inbound',
-			sql: 'create table if not exists bolt_channel_inbound (norbital_id uuid primary key default gen_random_uuid(), channel_name text not null, conversation_id uuid not null, external_conversation_id text not null, external_message_id text not null, receipt_key text not null unique, sender_external_id text, sender_display_name text, status text not null, answered_at timestamptz, created_at timestamptz not null default now())'
+			id: 'bolt:envoy-inbound',
+			sql: 'create table if not exists bolt_envoy_inbound (norbital_id uuid primary key default gen_random_uuid(), envoy_name text not null, conversation_id uuid not null, external_conversation_id text not null, external_message_id text not null, receipt_key text not null unique, sender_external_id text, sender_display_name text, status text not null, answered_at timestamptz, created_at timestamptz not null default now())'
 		},
 		/**
 		 * The messaging identities column on `bolt_auth_user`.
@@ -383,6 +408,35 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 		{
 			id: 'collection:bolt_auth_user:column:channels',
 			sql: 'alter table bolt_auth_user add column if not exists channels jsonb'
+		},
+		/**
+		 * The column that said whether a row was a person or a service, dropped.
+		 *
+		 * Every row in `bolt_auth_user` is a person. A static identity — an envoy, an automation, the
+		 * host, the seeder — is minted in memory from a declaration and never written here, so the only
+		 * writer of a non-default value was the channel-principal reconciler this cutover deletes.
+		 * What was left was a column holding the same word in every row, `required` on the collection
+		 * and therefore projected to every client that reads a person.
+		 */
+		{
+			id: 'collection:bolt_auth_user:column:kind:drop',
+			sql: 'alter table bolt_auth_user drop column if exists kind'
+		},
+		/**
+		 * The flag that used to gate descent through the team hierarchy, dropped.
+		 *
+		 * Descent is unconditional: a subject holds its team's policies plus every team beneath it,
+		 * because somebody above sees what somebody below can see and that is what being above means.
+		 * The flag made it a property each row remembered to have, it defaulted to off, and its only
+		 * writer was the channel-principal reconciler this cutover deletes. Nothing reads it.
+		 *
+		 * `if exists`, because the column was never in this plan — it only ever existed on databases
+		 * provisioned by an older path, which is also why `channel-principal.ts` inserting into it
+		 * would have failed outright against a freshly planned one.
+		 */
+		{
+			id: 'collection:bolt_team:column:inherits:drop',
+			sql: 'alter table bolt_team drop column if exists inherits'
 		},
 		// The integrations tables, in the same condition the channels ones were: `integrations.ts` has
 		// always read and written all three and the plan created none of them, so every command on the
@@ -501,6 +555,26 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 			sql: 'alter table bolt_conversations add column if not exists parent_id text, add column if not exists usage_cost_usd double precision not null default 0, add column if not exists usage_cost_micro_units bigint not null default 0, add column if not exists usage_cost_currency text, add column if not exists usage_total_tokens bigint not null default 0, add column if not exists usage_turns_counted integer not null default 0, add column if not exists usage_turns_unreported integer not null default 0'
 		},
 		// The lineage walk `history` and the usage roll-up both make: children of one session.
+		/**
+		 * What kind of thread a conversation is, and which envoy it arrived on.
+		 *
+		 * **`conversation-selector.ts` read both of these and neither existed.** It buckets on
+		 * `visibility ∈ {personal, envoy_dm, envoy_group}` and routes a public envoy's threads to the
+		 * admin inbox using `envoy_key` — so `visibility` was always `undefined`, the group bucket was
+		 * permanently empty, and public-thread routing never fired once.
+		 *
+		 * `visibility` takes a default because every existing conversation is a web-agent one, which is
+		 * exactly what `personal` means — so the backfill *is* the default and there is nothing to
+		 * migrate. `envoy_key` is nullable because a web-agent conversation has no envoy.
+		 */
+		{
+			id: 'bolt:agent-conversations-visibility',
+			sql: "alter table bolt_conversations add column if not exists visibility text not null default 'personal', add column if not exists envoy_key text"
+		},
+		{
+			id: 'bolt:agent-conversations-visibility-envoy',
+			sql: 'create index if not exists bolt_conversations_envoy on bolt_conversations (envoy_key)'
+		},
 		{
 			id: 'bolt:agent-conversations-usage-parent',
 			sql: 'create index if not exists bolt_conversations_parent on bolt_conversations (parent_id)'

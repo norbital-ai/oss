@@ -1,41 +1,45 @@
 import { Effect, Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { channel, integration, workspace } from '../../src/authoring/index.js';
+import { envoy, integration, policy, workspace } from '../../src/authoring/index.js';
 import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
-import { Channels } from '../../src/runtime/channels/channels.js';
+import { Envoys } from '../../src/runtime/envoys/envoys.js';
 import { Database } from '../../src/runtime/facilities/database.js';
 import { Notification } from '../../src/runtime/notifications/notifications.js';
 import { makeBoltTestRuntime } from '../support/bolt-test-layer.js';
 
-const supportChannel = () =>
-	channel({
+const supportEnvoy = () =>
+	envoy({
 		name: 'support',
 		transport: 'whatsapp',
-		agent: 'helper',
 		audience: 'authenticated',
-		policy: 'member',
-		description: 'Member support over WhatsApp',
+		policies: ['member'],
 		task: 'Answer support questions for this member.'
 	});
 
-/** A workspace whose only distinguishing feature is that it declares a channel at all. */
-const channelledWorkspace = () =>
+/** A workspace whose only distinguishing feature is that it declares an envoy at all. */
+const envoyedWorkspace = () =>
 	workspace({
-		name: 'channelled',
+		name: 'envoyed',
 		version: '1',
 		collections: [],
 		apps: [],
-		policies: [],
-		agents: [],
+		policies: [policy({ name: 'member', effect: 'allow', actions: ['read'] })],
 		automations: [],
-		channels: [supportChannel()],
+		envoys: [supportEnvoy()],
 		integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
 		requiredFacilities: []
 	});
 
-describe('Channels, Integrations, and Notifications owners', () => {
-	it('preserves transport-neutral channel routing declarations', () =>
-		expect(supportChannel()).toMatchObject({ agent: 'helper', audience: 'authenticated' }));
+describe('Envoys, Integrations, and Notifications owners', () => {
+	it('preserves transport-neutral envoy routing declarations', () =>
+		expect(supportEnvoy()).toMatchObject({
+			transport: 'whatsapp',
+			audience: 'authenticated',
+			policies: ['member']
+		}));
 	/**
 	 * The declaration used to carry `connector` and `conflict` — a host-side registry key no host had
 	 * an entry in, and a three-valued merge policy nothing read. What it carries now is what a pull
@@ -69,7 +73,7 @@ describe('Channels, Integrations, and Notifications owners', () => {
 	 * from whichever query happened to run first.
 	 */
 	it('plans the channel tables the channels runtime reads and writes', () => {
-		const ids = buildSchemaPlan(channelledWorkspace()).steps.map(({ id }) => id);
+		const ids = buildSchemaPlan(envoyedWorkspace()).steps.map(({ id }) => id);
 		expect(ids).toContain('bolt:channel-registrations');
 		expect(ids).toContain('bolt:channel-receipts');
 	});
@@ -79,36 +83,37 @@ describe('Channels, Integrations, and Notifications owners', () => {
 	 *
 	 * This runs against a real database rather than a stub because the defect was never in the
 	 * TypeScript: `status` typechecked perfectly and failed on `relation "bolt_channel_receipts" does
-	 * not exist`. Only executing the statement can tell the two apart.
+	 * not exist`. Only executing the statement can tell the two apart — which is also why this is the
+	 * test that proves the table rename actually reached a provisioned database.
 	 */
-	it('answers channel status against a freshly provisioned database', async () => {
-		const harness = await makeBoltTestRuntime(channelledWorkspace());
+	it('answers envoy status against a freshly provisioned database', async () => {
+		const harness = await makeBoltTestRuntime(envoyedWorkspace());
 		try {
 			const status = (effectId: string) =>
 				harness.runtime.runPromise(
-					Effect.flatMap(Channels.Service, (channels) =>
-						channels.status(harness.effectId(effectId), 'support')
+					Effect.flatMap(Envoys.Service, (envoys) =>
+						envoys.status(harness.effectId(effectId), 'support')
 					)
 				);
 			expect(await status('status:before')).toEqual({
-				channel: 'support',
+				envoy: 'support',
 				registered: false,
 				received: 0,
 				replied: 0
 			});
 			// Twice, because `register` leans on `on conflict do nothing` for idempotency and that clause
-			// is a no-op unless `channel_name` actually carries a unique constraint. A second row would
+			// is a no-op unless `envoy_name` actually carries a unique constraint. A second row would
 			// not change `exists(...)`, so only counting rows can catch a registrations table planned
 			// without its primary key.
 			for (const attempt of ['register:first', 'register:second']) {
 				await harness.runtime.runPromise(
-					Effect.flatMap(Channels.Service, (channels) =>
-						channels.register(harness.effectId(attempt), 'support')
+					Effect.flatMap(Envoys.Service, (envoys) =>
+						envoys.register(harness.effectId(attempt), 'support')
 					)
 				);
 			}
 			expect(await status('status:after')).toEqual({
-				channel: 'support',
+				envoy: 'support',
 				registered: true,
 				received: 0,
 				replied: 0
@@ -117,7 +122,7 @@ describe('Channels, Integrations, and Notifications owners', () => {
 				Effect.flatMap(Database.Service, (database) =>
 					database.execute(harness.effectId('count'), {
 						_tag: 'Query',
-						sql: 'select count(*)::int as registrations from bolt_channel_registrations',
+						sql: 'select count(*)::int as registrations from bolt_envoy_registrations',
 						parameters: []
 					})
 				)

@@ -202,7 +202,7 @@ describe('Sync engine over SQL', () => {
 	it('refuses a mutation the subject may not perform, and writes nothing', async () => {
 		harness = await makeBoltTestRuntime();
 		const { runtime, effectId, database } = harness;
-		const outsider = { userId: 'guest-1', tenantId: 'test-tenant', teamPath: ['guest'] };
+		const outsider = { userId: 'guest-1', tenantId: 'test-tenant', teamPath: ['guest'], policies: [] };
 
 		const outcome = await runtime.runPromise(
 			Effect.gen(function* () {
@@ -371,7 +371,7 @@ describe('Sync engine over SQL', () => {
 	it('replicates only the collections the subject may read', async () => {
 		harness = await makeBoltTestRuntime();
 		const { runtime, effectId } = harness;
-		const outsider = { userId: 'guest-1', tenantId: 'test-tenant', teamPath: ['guest'] };
+		const outsider = { userId: 'guest-1', tenantId: 'test-tenant', teamPath: ['guest'], policies: [] };
 		await runtime.runPromise(
 			Effect.gen(function* () {
 				return yield* (yield* Collections.Service).create(effectId('c1'), adminSubject, {
@@ -458,7 +458,7 @@ describe('Sync engine over SQL', () => {
 					policy({
 						name: 'contractor',
 						effect: 'allow',
-						apps: ['*'],
+						capabilities: { apps: ['*'] },
 						grants: [
 							{ collection: 'people', action: 'read' },
 							{
@@ -491,8 +491,7 @@ describe('Sync engine over SQL', () => {
 		const member = (user: string, team: string): Identity.Subject => ({
 			userId: fixtureUserId(user),
 			tenantId: 'test-tenant',
-			team,
-			teamPath: [team]
+			teamPath: [team], policies: []
 		});
 		const party = member('party', CONTRACTOR_TEAM);
 		await runtime.runPromise(

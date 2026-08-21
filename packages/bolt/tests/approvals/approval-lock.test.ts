@@ -14,6 +14,7 @@ import {
 } from '../../src/runtime/collections/authored.js';
 import { Database } from '../../src/runtime/facilities/database.js';
 import { AI, Files, Tasks, Transport } from '../../src/runtime/facilities/services.js';
+import { TenantScope } from '../../src/runtime/tenant.js';
 import { InvocationBudget } from '../../src/runtime/budget.js';
 import { Subject } from '../../src/runtime/identity/identity.js';
 import { TaskQueue } from '../../src/runtime/tasks/tasks.js';
@@ -76,7 +77,7 @@ const definition = workspace({
 			name: 'admin-approval',
 			effect: 'allow',
 			actions: ['approve'],
-			apps: ['approvals']
+			capabilities: { apps: ['approvals'] }
 		})
 	],
 	teams: {
@@ -84,10 +85,12 @@ const definition = workspace({
 		'admin-approval': ['admin-approval'],
 		admin: ['admin-data', 'admin-approval']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: ['database', 'tasks']
 });
 
@@ -95,7 +98,7 @@ const subject = Subject.make({
 	userId: 'admin-1',
 	tenantId: 'tenant-1',
 	teamPath: ['admin'],
-	team: 'approvers'
+	policies: []
 });
 
 type Row = Record<string, Schema.Json>;
@@ -351,7 +354,14 @@ const testLayer = (recorded: Array<string> = []) => {
 	const database = memoryDatabaseLayer(recorded);
 	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(database, tasks)));
 	const automations = Automations.layer.pipe(
-		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, InvocationBudget.layer(0)))
+		Layer.provide(
+			Layer.mergeAll(
+				workspaceLayer,
+				taskQueue,
+				InvocationBudget.layer(0),
+				TenantScope.layer(context.tenantId)
+			)
+		)
 	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
 	const approvalsLayer = Approvals.layer.pipe(

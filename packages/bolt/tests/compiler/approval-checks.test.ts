@@ -22,9 +22,8 @@ const workspace = (
 		relations: [],
 		policies,
 		teams,
-		agents: [],
 		automations: [],
-		channels: [],
+		envoys: [],
 		apps: []
 	}) as unknown as WorkspaceDefinition;
 

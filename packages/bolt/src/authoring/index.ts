@@ -1,6 +1,5 @@
 export { automation, defineAutomation } from './automations-schema.js';
 export type {
-	AgentAutomationSpec,
 	AutomationContext,
 	AutomationDeclaration,
 	AutomationDefinition,
@@ -10,47 +9,62 @@ export type {
 export type {
 	AfterHookApi,
 	AnySchema,
+	AppName,
 	ApprovalRequestQuery,
 	ApprovalRequestRow,
+	AutomationName,
 	BeforeApi,
-	ChannelDefinition,
 	CollectionHooks,
 	CollectionIntegrations,
+	CollectionName,
 	CollectionPipelines,
 	CollectionPullBinding,
+	CollectionQuery,
 	CollectionReceiveBinding,
 	CollectionWebhookBinding,
-	SendRequestSpec,
+	DatatypeName,
+	DeclaredSkillName,
+	DeclaredToolName,
+	DefaultWorkspaceSchema,
+	ElevatedMutationPayload,
+	EnvoyDefinition,
+	EnvoyName,
+	FunctionName,
+	HookApi,
+	InputValuesForTables,
+	McpServerDefinition,
+	McpServerName,
+	MutationInsertFor,
+	MutationUpdateFor,
+	NearestQueryConfig,
+	PolicyApproval,
+	PolicyApprovalStep,
+	PolicyCapabilities,
+	PolicyDefinition,
+	PolicyLimits,
+	PolicyName,
 	PullCursorSpec,
 	PullIdentitySpec,
 	PullPagesSpec,
 	PullRecordsSpec,
 	PullRequestSpec,
 	PullRetrySpec,
-	WebhookRequestSpec,
-	WebhookSignatureSpec,
-	CollectionQuery,
-	DefaultWorkspaceSchema,
-	ElevatedMutationPayload,
-	HookApi,
-	InputValuesForTables,
-	McpServerDefinition,
-	NearestQueryConfig,
-	MutationInsertFor,
-	MutationUpdateFor,
-	PolicyDefinition,
 	SchemaFieldFilter,
 	SchemaQueryConfig,
 	SchemaQueryRow,
 	SchemaRawOperators,
 	SchemaRow,
 	SchemaWhere,
-	SystemRow,
+	SendRequestSpec,
 	StructuredInferenceInput,
+	SystemRow,
 	TableName,
 	TablesForModels,
 	TableShape,
+	TeamName,
 	Teams,
+	WebhookRequestSpec,
+	WebhookSignatureSpec,
 	WorkspaceAuthoringTypes
 } from './contracts-schema.js';
 
@@ -97,7 +111,7 @@ export {
 	vector
 } from './models-schema.js';
 export { AuthoredRefusal } from './refusal.js';
-export { defineRateLimits } from './rate-limits-schema.js';
+export { anonymousLimits } from './rate-limits-schema.js';
 export type { RateLimitKey, RateLimitRule, RateLimitSpec } from './rate-limits-schema.js';
 export type {
 	BoltGroupDefinition,
@@ -114,15 +128,14 @@ export type {
 } from './models-schema.js';
 
 export {
-	agent,
 	app,
-	channel,
 	collection,
 	defineConnection,
 	defineEnvVars,
 	definePull,
 	defineSend,
 	defineWebhook,
+	envoy,
 	environment,
 	field,
 	integration,
@@ -131,11 +144,10 @@ export {
 	workspace
 } from './workspace-schema.js';
 export type {
-	AgentDeclaration,
 	AppDeclaration,
-	ChannelDeclaration,
 	CollectionDefinition,
 	EnvironmentDeclaration,
+	EnvoyDeclaration,
 	EnvVarConfig,
 	FieldDefinition,
 	HttpConnection,

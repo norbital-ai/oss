@@ -94,17 +94,12 @@ const authUser = collection({
 		emailVerified: field.boolean({ required: true, sqlDefault: 'false' }),
 		image: field.string(),
 		/**
-		 * What kind of subject this is. A host provisioner is not a person, and the design this
-		 * replaced gave it one: a row called `admin-1` carrying a real employee's address.
-		 */
-		kind: field.string({ required: true, sqlDefault: "'person'" }),
-		/**
 		 * Whether this person administers the workspace. `normal` or `admin`, and nothing else.
 		 *
-		 * Deliberately *not* a role and deliberately not folded into `kind`. `kind` answers "is this a
-		 * person or a service", which stays true independently of authority — a service row is not an
-		 * administrator and an administrator is still a person, so one column cannot carry both without
-		 * losing one of the two answers.
+		 * Deliberately *not* a role. It used to sit beside a `kind` column that answered "is this a
+		 * person or a service"; every row in this table is a person now — a static identity is minted
+		 * in memory and never written here — so that column had one possible value and no reader, and
+		 * it is gone.
 		 *
 		 * It is not a role because `subjectHasPolicy` matches a subject to a policy by role, and there
 		 * is no policy called `admin` in any workspace, and a team that named one would confer
@@ -294,10 +289,10 @@ const RAISED_BY_SUBJECT =
  * the scalar subquery is then `null`, `lower(...) = null` is `null`, and the approver leg below
  * matches nothing. Absence narrows, which is the only safe direction for it to go.
  *
- * The subject's own team and not `teamPath`. `Approvals.decide` matches `step.approvers` against
- * `subject.team` alone, so anything wider here would show a member approvals they are not eligible
- * to decide — and `teamPath` runs *downward* through the hierarchy unconditionally, which is
- * the opposite of "their higher ups".
+ * The subject's own team and not the whole of `teamPath`. `Approvals.decide` matches
+ * `step.approvers` against `teamPath[0]` — the subject's own team — so anything wider here would
+ * show a member approvals they are not eligible to decide, and `teamPath` runs *downward* through
+ * the hierarchy unconditionally, which is the opposite of "their higher ups".
  */
 const SUBJECT_TEAM_NAME =
 	'select lower(subject_team."name") from bolt_auth_user subject_user ' +
@@ -392,7 +387,7 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 	/**
 	 * What makes the sentence above true, and it was missing.
 	 *
-	 * A policy is otherwise selected by name, against the set `policiesHeldByTeam` builds from
+	 * A policy is otherwise selected by name, against the set `policiesHeld` builds from
 	 * `+teams.ts` — and no template declares a team holding `bolt.system-collections`, because the
 	 * whole reason this policy is merged rather than authored is that a workspace should not have to
 	 * declare it. So it matched nobody: `subjectHasPolicy` fell through to `held.has(...)` on a set

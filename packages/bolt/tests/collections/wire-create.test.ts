@@ -60,10 +60,12 @@ const definition = workspace({
 	],
 	apps: [app({ name: 'wire', label: 'Wire' })],
 	teams: { admin: ['admin-data'] },
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: [],
 	policies: [
 		policy({

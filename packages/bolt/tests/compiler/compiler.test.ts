@@ -18,10 +18,12 @@ const fixture = workspace({
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [app({ name: 'people', label: 'People' })],
 	policies: [],
-	agents: [],
 	automations: [],
-	channels: [],
+	envoys: [],
 	integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
 	requiredFacilities: ['database']
 });
 
@@ -56,10 +58,12 @@ const effectiveDated = workspace({
 	],
 	apps: [],
 	policies: [],
-	agents: [],
-	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	automations: [],
+	envoys: [],
 	requiredFacilities: ['database']
 });
 

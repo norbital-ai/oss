@@ -66,12 +66,14 @@ const peopleWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [policy({ name: 'Employee', effect: 'allow', actions: ['read'], apps: ['people'] })],
+	policies: [policy({ name: 'Employee', effect: 'allow', actions: ['read'], capabilities: { apps: ['people'] } })],
 	teams: { Employee: ['Employee'] },
-	agents: [],
 	automations: [],
-	channels: [],
+	envoys: [],
 	integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
 	requiredFacilities: []
 });
 
@@ -351,7 +353,7 @@ describe('which workspace a founder lands in', () => {
 			asPerson('identity.bootstrapFounder', 'no-such-token', {
 				email: 'victim@example.com',
 				claimId: 'claim-x',
-				subject: { userId: 'colony-system', tenantId: 'test-tenant', system: true, teamPath: [] }
+				subject: { userId: 'colony-system', tenantId: 'test-tenant', system: true, policies: [], teamPath: [] }
 			})
 		);
 		expect(read(failure, 'code') ?? read(failure, '_tag')).toBeTruthy();

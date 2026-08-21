@@ -46,14 +46,16 @@ const people = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
 	teams: {
 		admin: ['admin']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: []
 });
 

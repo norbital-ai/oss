@@ -90,14 +90,16 @@ const peopleWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
 	teams: {
 		admin: ['admin']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
+	envoys: [],
 	integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
 	requiredFacilities: []
 });
 
@@ -113,14 +115,16 @@ const gatedWorkspace = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
 	teams: {
 		admin: ['admin']
 	},
-	agents: [],
-	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	automations: [],
+	envoys: [],
 	requiredFacilities: []
 });
 
@@ -178,7 +182,7 @@ describe('the subject a facility call carries', () => {
 			dispatchInvocation(
 				command('collections.findMany', 'admin-token', {
 					collection: 'people',
-					subject: { userId: 'user-victim', tenantId: 'test-tenant', teamPath: ['admin'] }
+					subject: { userId: 'user-victim', tenantId: 'test-tenant', policies: [], teamPath: ['admin'],  }
 				})
 			)
 		);

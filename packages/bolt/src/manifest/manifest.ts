@@ -34,9 +34,14 @@ export const buildManifest = (
 	const schemaFingerprint = fingerprint({
 		collections: workspace.collections,
 		policies: workspace.policies,
-		agents: workspace.agents.map(({ name, tools, skills }) => ({ name, tools, skills })),
+		// The workspace's tools and skills, which used to be hashed as a property of the one
+		// synthesized agent. They are the workspace's — a policy decides who reaches them — so they are
+		// hashed as the workspace's.
+		tools: workspace.tools.map(({ name }) => name),
+		skills: [...workspace.skills],
+		prompt: workspace.prompt,
 		automations: workspace.automations,
-		channels: workspace.channels,
+		envoys: workspace.envoys,
 		integrations: workspace.integrations
 	});
 	return BundleManifest.make({

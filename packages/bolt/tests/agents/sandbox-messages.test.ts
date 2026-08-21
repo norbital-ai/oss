@@ -13,7 +13,7 @@ import {
 	type TaskResponse
 } from '@norbital-ai/bolt-protocol';
 import { EnvironmentName, InvocationId, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
-import { agent, app, collection, field, policy, workspace } from '../../src/authoring/index.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
 import { parseAgentMessage } from '../../src/runtime/agents/agent-message.js';
@@ -35,22 +35,24 @@ const definition = workspace({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			apps: ['helper']
+			capabilities: { apps: ['helper'] }
 		})
 	],
 	teams: {
 		'admin-agent': ['admin-agent'],
 		admin: ['admin-agent']
 	},
-	agents: [agent({ name: 'helper', prompt: 'Help the HR team.', tools: [], skills: [] })],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: ['database', 'ai', 'tasks']
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-sandbox-messages' });
 const bundle = makeBundle(definition, manifest, {});
-const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'] };
+const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'], policies: [] };
 const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
 	call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } })
 };

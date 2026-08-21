@@ -600,7 +600,7 @@ export const makeBoundAuthoringOps = (
 		runAutomation: (name, input, options) =>
 			Effect.gen(function* () {
 				const after = options?.after;
-				const taskId = yield* automations.start(effectId, subject, name, input, {
+				const taskId = yield* automations.start(effectId, name, input, {
 					// `Duration.toMillis` accepts `'1 hour'`, `'30 seconds'` and a bare number of millis
 					// alike, so an author writes a delay the way durations are written everywhere else in
 					// this codebase rather than learning a second vocabulary for one field.

@@ -8,7 +8,7 @@ import {
 import { encodeAgentMessage } from '../../src/runtime/agents/agent-message.js';
 import { toPanelMessages } from '../../src/client/ui/agent/transcript.js';
 
-const subject = { userId: 'admin-1', tenantId: 'tenant', teamPath: ['admin'] };
+const subject = { userId: 'admin-1', tenantId: 'tenant', teamPath: ['admin'], policies: [] };
 const conversationId = 'conversation-inbox';
 
 const sender = {

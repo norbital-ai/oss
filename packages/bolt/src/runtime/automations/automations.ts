@@ -1,7 +1,8 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import { Database } from '../facilities/database.js';
-import type { Subject } from '../identity/identity.js';
+import { automationSubject } from '../identity/static-identity.js';
+import { TenantScope } from '../tenant.js';
 import { TaskQueue } from '../tasks/tasks.js';
 import { Workspace } from '../workspace.js';
 import { InvocationBudget } from '../budget.js';
@@ -18,9 +19,17 @@ import { InvocationBudget } from '../budget.js';
 
 export type Interface = Readonly<{
 	readonly register: (name: string) => Effect.Effect<void, Workspace.WorkspaceLookupError>;
+	/**
+	 * Queue one run of a named automation.
+	 *
+	 * It takes no `Subject`, and that absence is the change. It used to take the caller's — so the
+	 * same automation ran with whatever authority whoever tripped it happened to hold, and when an
+	 * administrator tripped it, it ran as an administrator over every row in the workspace. An
+	 * automation's authority is a property of the automation: the policies its declaration names,
+	 * minted here, at the runtime's own enqueue point.
+	 */
 	readonly start: (
 		effectId: EffectIdType,
-		subject: Subject,
 		name: string,
 		input: Schema.Json,
 		/** How long to wait before it becomes due. Absent means as soon as a tick can take it. */
@@ -53,14 +62,15 @@ export const layer = Layer.effect(
 		const queue = yield* TaskQueue.Service;
 		const workspace = yield* Workspace.Service;
 		const budget = yield* InvocationBudget.Service;
+		const tenant = yield* TenantScope.Service;
 		const start = Effect.fn('Automations.start')(function* (
 			effectId: EffectIdType,
-			subject: Subject,
 			name: string,
 			input: Schema.Json,
 			options?: Readonly<{ readonly afterMillis?: number }>
 		) {
-			yield* workspace.automation(name);
+			const declaration = yield* workspace.automation(name);
+			const subject = automationSubject(declaration, tenant.tenantId);
 			// Checked before anything is written, so a chain that has gone too deep leaves no queued row
 			// behind that nothing will ever move off `pending`.
 			//
@@ -72,7 +82,8 @@ export const layer = Layer.effect(
 			const depth = yield* budget.nest(`automation ${name}`);
 			// `bolt_run_as` is stamped here, at the runtime's own enqueue point, so the task the handler
 			// later sees was written by this service — a caller's own `bolt_run_as` claim is overwritten,
-			// never forwarded. `bolt_depth` rides the same payload, which is why the queue needs no depth
+			// never forwarded, and what it is overwritten *with* is the automation's own declared
+			// authority rather than whoever's finger was on the trigger. `bolt_depth` rides the same payload, which is why the queue needs no depth
 			// column: the bound travels with the work rather than with the row.
 			const enqueued: Schema.Json = InvocationBudget.stampDepth(
 				typeof input === 'object' && input !== null && !Array.isArray(input)

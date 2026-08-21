@@ -158,20 +158,23 @@ const gatedWorkspace = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
 	teams: {
 		admin: ['admin']
 	},
-	agents: [],
 	automations: [
 		automation({
 			name: 'nightly',
 			trigger: { _tag: 'Schedule', cron: '0 0 * * *' },
-			command: 'automations.nightly'
+			command: 'automations.nightly',
+			policies: ['admin']
 		})
 	],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: []
 });
 

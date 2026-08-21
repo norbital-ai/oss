@@ -26,6 +26,8 @@
 		ListCard,
 		emptyPlaceholder,
 		rowActions,
+		isRowLocked,
+		rowLockReason,
 		recordTitle,
 		recordHref,
 		onOpen,
@@ -40,12 +42,41 @@
 		ListCard: Snippet<[TRow]>;
 		emptyPlaceholder?: Snippet;
 		rowActions?: readonly Snippet<[CollectionTableRowActionContext<TRow>]>[];
+		isRowLocked?: (row: TRow) => boolean;
+		rowLockReason?: (row: TRow) => string | null;
 		recordTitle(record: TRow): string;
 		recordHref(record: TRow): string | undefined;
 		onOpen(record: TRow): void;
 		/** Record id currently open in the detail stack; drives the row active indicator. */
 		activeRecordId?: string | null;
 	} = $props();
+
+	type LockPresentation = {
+		readonly label: string;
+		readonly tooltip: string;
+		readonly icon: string;
+		readonly className: string;
+	};
+
+	function lockPresentation(record: TRow): LockPresentation | null {
+		if (typeof Reflect.get(record, 'norbital_approval_id') === 'string') {
+			return {
+				label: t('table.systemLock'),
+				tooltip: t('table.systemLockPendingApproval'),
+				icon: 'lucide:shield-check',
+				className: 'border-brand/25 bg-brand/10 text-brand'
+			};
+		}
+		if (isRowLocked?.(record) === true) {
+			return {
+				label: t('table.applicationLock'),
+				tooltip: rowLockReason?.(record) ?? t('table.recordLocked'),
+				icon: 'lucide:lock-keyhole',
+				className: 'border-border bg-muted text-muted-foreground'
+			};
+		}
+		return null;
+	}
 </script>
 
 <!--
@@ -88,6 +119,7 @@
 			<div class="divide-y" role="list">
 				{#each rows as row (row.id)}
 					{@const isDetailActive = activeRecordId != null && activeRecordId === row.id}
+					{@const lock = lockPresentation(row.record)}
 					<Inline
 						gap="none"
 						align="stretch"
@@ -129,6 +161,19 @@
 						>
 							{@render ListCard(row.record)}
 						</a>
+						{#if lock}
+							<span
+								class={cn(
+									'my-auto mr-2 inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-1 text-micro font-medium',
+									lock.className
+								)}
+								title={lock.tooltip}
+								aria-label={lock.tooltip}
+							>
+								<Icon icon={lock.icon} class="size-3" aria-hidden="true" />
+								<span>{lock.label}</span>
+							</span>
+						{/if}
 						{#if rowActions?.length}
 							<Inline gap="xs" class="pr-1">
 								{#each rowActions as action}

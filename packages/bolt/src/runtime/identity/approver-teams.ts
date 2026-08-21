@@ -12,7 +12,13 @@ import { Database } from '../facilities/database.js';
  * field was missing would leave exactly the approval nobody can decide that this exists to prevent.
  */
 const ApproverSteps = Schema.Struct({
-	steps: Schema.Array(Schema.Struct({ approvers: Schema.Array(Schema.NonEmptyString) }))
+	steps: Schema.Array(
+		Schema.Struct({
+			/** Present after `describePolicy`, derived from the author's `key`. Absent before it. */
+			id: Schema.optionalKey(Schema.String),
+			approvers: Schema.Array(Schema.NonEmptyString)
+		})
+	)
 });
 
 /**
@@ -21,7 +27,7 @@ const ApproverSteps = Schema.Struct({
  * `step.approvers` and `bolt_team.name` are the same string — that is the whole binding, and it is
  * the reason a typo in one is invisible until somebody tries to decide an approval and finds that
  * nobody is eligible. Folding is how the rest of the runtime compares team names (`TEAM_LOOKUP_SQL`
- * resolves with `lower("name") = lower($1)`, `policiesHeldByTeam` folds both sides), so two steps
+ * resolves with `lower("name") = lower($1)`, `policiesHeld` folds both sides), so two steps
  * spelling one team differently ask for one row, not two.
  *
  * The *authored* spelling is what survives deduplication, because that is what an operator reading
@@ -35,6 +41,14 @@ export type ApprovalStep = Readonly<{
 	readonly action: string;
 	/** Position within the grant's `steps`, which is what an operator sees in the approval UI. */
 	readonly index: number;
+	/**
+	 * The step's derived id, `<policy>:<collection>:<action>:<key>`, when the policy has been
+	 * described. Absent while the grant is still the raw authored shape.
+	 *
+	 * It is here so a diagnostic can name the step the way a log line and an approval row do, rather
+	 * than by an index that means nothing outside the array it came from.
+	 */
+	readonly id?: string;
 	readonly approvers: ReadonlyArray<string>;
 }>;
 
@@ -58,6 +72,7 @@ export const approvalSteps = (definition: WorkspaceDefinition): ReadonlyArray<Ap
 					collection: grant.collection,
 					action: grant.action,
 					index,
+					...(step.id === undefined ? {} : { id: step.id }),
 					approvers: step.approvers
 				});
 			});

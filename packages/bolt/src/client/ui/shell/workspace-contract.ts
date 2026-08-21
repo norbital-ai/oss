@@ -109,7 +109,6 @@ export type CompiledWorkspace = Readonly<{
 	readonly representationLoaders: Readonly<Record<string, () => Promise<unknown>>>;
 	readonly customTypeRendererLoaders: Readonly<Record<string, () => Promise<unknown>>>;
 	readonly policyNames: ReadonlyArray<string>;
-	readonly agentNames: ReadonlyArray<string>;
 	readonly tenantMessages: TenantMessageCatalogs;
 	/** The workspace's own collection client, for Studio's Data tab. */
 	readonly client: WorkspaceClient;

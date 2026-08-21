@@ -214,14 +214,16 @@ const definition = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
 	teams: {
 		admin: ['admin']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: described.declarations,
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: ['database', 'connector'],
 	// The vault refuses to read a name `+env.ts` never declared, and a connection's `{ env }` reference
 	// is not that declaration — so an integration's credential needs saying twice, in two files, and

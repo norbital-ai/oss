@@ -29,7 +29,7 @@ import { seedSession } from '../support/fixture-identity.js';
  * and then wrote over the payload's own. A `Task` carries no credential, and a non-data-browser
  * `Plugin` is an unauthenticated `POST /_bolt/plugin/<anything>/<command>` — both hand their input
  * to the switch untouched. So on those two tags `subject` is a claim, and a claim that says
- * `teamPath: ['admin']` used to pass `authorize(subject, 'manage', 'secrets')` and open the vault.
+ * `teamPath: ['admin'], policies: []` used to pass `authorize(subject, 'manage', 'secrets')` and open the vault.
  *
  * The refusal is one gate where identity is minted rather than a check per case, so these tests
  * hold the whole list of exposed commands against it instead of the two the issue named.
@@ -51,7 +51,7 @@ const scope = {
 const forgedSubject = {
 	userId: 'user-forged',
 	tenantId: 'test-tenant',
-	teamPath: ['admin']
+	teamPath: ['admin'], policies: []
 };
 
 const command = (name: string, credential: string, input: unknown = null) =>
@@ -161,7 +161,7 @@ const vaultWorkspace = workspace({
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] }),
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } }),
 		policy({
 			name: 'employee',
 			effect: 'allow',
@@ -172,10 +172,12 @@ const vaultWorkspace = workspace({
 		admin: ['admin', 'employee'],
 		employee: ['employee']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: [],
 	environment: defineEnvironment({ GEOCODING_API_KEY: { label: 'Geocoding key' } })
 });
@@ -192,14 +194,16 @@ const gatedWorkspace = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
 	teams: {
 		admin: ['admin']
 	},
-	agents: [],
-	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	automations: [],
+	envoys: [],
 	requiredFacilities: []
 });
 

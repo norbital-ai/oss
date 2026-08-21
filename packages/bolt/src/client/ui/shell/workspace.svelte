@@ -21,12 +21,12 @@
 	} from './workspace-navigation.js';
 	import WorkspaceMembers from '../settings/workspace.svelte';
 	import { EMPTY_WORKSPACE_ACCESS, type WorkspaceAccess } from '../settings/access.js';
-	import AgentsSettings from '../org/agents-settings.svelte';
+	import EnvoysSettings from '../org/envoys-settings.svelte';
 	import OrganizationSettings from '../org/organization-settings.svelte';
 	import SecretsSettings from '../org/secrets-settings.svelte';
 	import StudioShell from '../studio/studio-shell.svelte';
 	import { configureAgentRuntime } from '../agent/client.js';
-	import { resolveWorkspaceAgentName } from '../agent/agent-name.js';
+	import { WEB_AGENT_ID } from '../agent/conversation-selector.js';
 	import { setWorkspaceRemoteTransport } from '../agent/remote-transport.js';
 	import { WorkspaceUploadClient } from '../state/file-upload-client.svelte.js';
 	import { workspaceSession } from '../../session.js';
@@ -174,33 +174,33 @@
 	const subject = $derived({
 		userId: view.user.id,
 		tenantId: view.organization.id,
-		...(view.user.team === undefined ? {} : { team: view.user.team }),
 		teamPath: [...view.user.teamPath],
+		// Empty, and empty for a person always: a person holds policies through their one team, and
+		// this array is what a *static* identity carries. It is a `MINTED_IDENTITY` field, so the
+		// boundary would refuse a payload that claimed one anyway — sending `[]` is the honest shape
+		// rather than a claim the server has to strip.
+		policies: [],
 		...(view.user.admin ? { admin: true } : {}),
 		...(view.user.email === '' ? {} : { email: view.user.email })
 	});
 
-	const configureResolvedAgent = (names: ReadonlyArray<string>, selected?: string): void => {
-		const agentName = resolveWorkspaceAgentName(names, selected);
-		if (agentName === undefined) return;
+	/**
+	 * This panel is the web agent, always, and there is nothing to resolve.
+	 *
+	 * It used to pick a name out of `workspace.agentNames` and then re-pick it from a
+	 * `workspace.agents` round trip, because the compiler synthesized one agent per workspace and
+	 * named it after the package — so the panel could not know what it was talking to without asking.
+	 * The web agent has no declaration and no name of its own beyond this one; every *other* agent is
+	 * an envoy, reached on a transport rather than here.
+	 */
+	$effect(() => {
 		configureAgentRuntime({
 			transport: session.transport,
 			subject,
-			agentName,
+			agentName: WEB_AGENT_ID,
 			userId: subject.userId
 		});
-	};
-	configureResolvedAgent(workspace.agentNames);
-	void session.transport
-		.command('workspace.agents', {})
-		.then((value) => {
-			if (!Array.isArray(value)) return;
-			const names = value.filter(
-				(entry): entry is string => typeof entry === 'string' && entry.length > 0
-			);
-			configureResolvedAgent(names, resolveWorkspaceAgentName(workspace.agentNames));
-		})
-		.catch(() => undefined);
+	});
 	setWorkspaceRemoteTransport({
 		// Host catalog is optional until Identity publishes one; a missing command and an invalid
 		// response shape both fall back to the same default catalog.
@@ -664,8 +664,8 @@
 		<StudioShell client={workspace.client} />
 	{:else if hostPlugin === 'organization'}
 		<OrganizationSettings tenantId={view.organization.id} />
-	{:else if hostPlugin === 'agent'}
-		<AgentsSettings />
+	{:else if hostPlugin === 'envoys'}
+		<EnvoysSettings />
 	{:else if hostPlugin === 'environment_secrets'}
 		<SecretsSettings />
 	{:else if hostPlugin !== null}

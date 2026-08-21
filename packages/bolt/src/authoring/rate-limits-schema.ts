@@ -1,12 +1,23 @@
 /**
  * What a workspace will admit, and how often.
  *
- * `src/+ratelimits.ts` is where a workspace states its own rate policy, beside the collections and
- * policies it protects rather than in whichever host happens to be serving it. That placement is the
- * point. The limiter used to live in Colony alone, keyed on `getClientAddress()`, which behind a
- * reverse proxy is *the proxy* — so every visitor to the host shared one bucket and the whole
- * deployment got twenty sign-in codes an hour between them. Bolt had none at all, so a self-hosted
- * workspace had none at all.
+ * A rate limit is always the same shape — a command class, a window, a count, and a key — and the
+ * key is the only thing that varies. It decides who shares a bucket with whom, and therefore where
+ * the rule is declared:
+ *
+ * | question | key | declared in |
+ * | --- | --- | --- |
+ * | How much may an authenticated person do? | `subject` | the policies they hold |
+ * | How many messages may an outside sender push at an envoy? | `sender` | the policies the envoy holds |
+ * | How much may a caller at the sign-in surface do? | `address` | `src/access/+anonymous_limits.ts` |
+ *
+ * **Everything with a holder is declared by that holder.** There is no workspace-wide rate file any
+ * more: `src/+ratelimits.ts` mixed `identity.*` — which has no subject yet — with `collections.*` and
+ * `agents.turn`, which have one, and stating the second kind in one place for everybody meant a
+ * contractor and a controller could not be given different budgets for the same command.
+ *
+ * The one genuinely separate file is `+anonymous_limits.ts`, and it is separate structurally rather
+ * than stylistically: before sign-in there is no subject, so there is no policy to hang a limit on.
  *
  * Three layers, each doing only what it can see:
  *
@@ -14,20 +25,17 @@
  * Traefik   per-IP anti-flood ceiling, high enough no real user meets it
  *    │      (also: must give the app a trustworthy client IP)
  *    ▼
- * Bolt      the real policy — knows command, subject, tenant
- *    │      buckets keyed (tenant, subject, command-class), in memory
+ * Bolt      the real policy — knows command, subject, tenant, and who holds what
+ *    │      buckets keyed (tenant, command-class, identity), in memory
  *    ▼
  * Colony    inherits; does not reimplement
  * ```
  *
  * This file is the middle one. It knows what the edge cannot — which command was called, which
- * tenant it belongs to, and which person is behind it — and those are the facts a real policy is
- * written in terms of.
- *
- * Classes are declared separately because their economics differ, not for tidiness. An OTP send is
- * anonymous and costs an email; a sign-in is semi-anonymous; an ordinary invocation is
- * authenticated and nearly free; an agent turn is authenticated and costs money at a provider.
- * One number cannot be right for all four.
+ * tenant it belongs to, which person is behind it, and which policies that person holds — and those
+ * are the facts a real policy is written in terms of. The limiter used to live in Colony alone,
+ * keyed on `getClientAddress()`, which behind a reverse proxy is *the proxy*: every visitor to the
+ * host shared one bucket and the whole deployment got twenty sign-in codes an hour between them.
  */
 
 /** How a bucket is keyed, which decides who shares a limit with whom. */
@@ -40,8 +48,21 @@ export type RateLimitKey =
 	 * anything on the person they are naming.
 	 */
 	| 'address'
-	/** The authenticated person. Meaningless before sign-in, exact after it. */
+	/**
+	 * The authenticated person — and, for an envoy, the envoy itself.
+	 *
+	 * An envoy is one subject, so its senders share one bucket by construction. That is what the
+	 * envoy declaration's `totalPerMinute` used to say, in a second place, in its own vocabulary.
+	 */
 	| 'subject'
+	/**
+	 * One outside sender on an inbound envoy message, by the transport's own address for them.
+	 *
+	 * The other half of what an envoy used to declare: `perSenderPerMinute`. It is meaningless for a
+	 * human holder of the same policy, in exactly the way `address` is meaningless after sign-in, and
+	 * like `address` it simply never matches rather than needing a rule about it.
+	 */
+	| 'sender'
 	/** Everyone in this workspace together, for a resource the workspace as a whole pays for. */
 	| 'tenant';
 
@@ -53,12 +74,53 @@ export interface RateLimitRule {
 	readonly key: RateLimitKey;
 }
 
+/**
+ * A policy's own rate rules, resolved: the optional `key` filled in.
+ *
+ * A rule declared on a policy may omit `key`, because `subject` is the only sensible default for a
+ * rule declared on the thing that has a holder. `describePolicy` fills it, so nothing downstream has
+ * to decide what an absent key meant.
+ */
+type AuthoredRule = {
+	readonly window: string;
+	readonly limit: number;
+	readonly key?: RateLimitKey;
+};
+export const resolvePolicyLimits = (
+	limits: Readonly<Record<string, AuthoredRule | ReadonlyArray<AuthoredRule>>> | undefined
+): Readonly<Record<string, ReadonlyArray<RateLimitRule>>> =>
+	Object.fromEntries(
+		Object.entries(limits ?? {}).map(([pattern, declared]) => [
+			pattern,
+			(Array.isArray(declared) ? declared : [declared as AuthoredRule]).map((rule) => ({
+				window: rule.window,
+				limit: rule.limit,
+				key: rule.key ?? 'subject'
+			}))
+		])
+	);
+
+/**
+ * What one command pattern admits: a rule, or several keyed differently.
+ *
+ * Several, because one command can genuinely need two buckets. `envoys.receive` is the case that
+ * forced it: a public envoy wants a per-sender cap *and* a cap on the surface as a whole, and those
+ * are the same command counted against two different keys. A map of pattern → single rule could hold
+ * one of them, and the other would have to be said somewhere else — which is exactly the second
+ * spelling this whole layer exists to remove.
+ *
+ * Every rule at the winning pattern is applied, so a caller must be inside all of them. That is the
+ * only composition that means anything for a ceiling: passing one bucket and failing another is not
+ * admission.
+ */
+export type RateLimitRules = RateLimitRule | ReadonlyArray<RateLimitRule>;
+
 export interface RateLimitSpec {
 	/**
-	 * Command pattern → rule. A pattern is an exact command name or a `prefix.*` wildcard; the most
-	 * specific match wins, so `collections.create` overrides `collections.*`.
+	 * Command pattern → rule, or rules. A pattern is an exact command name or a `prefix.*` wildcard;
+	 * the most specific match wins, so `collections.create` overrides `collections.*`.
 	 */
-	readonly rules: Readonly<Record<string, RateLimitRule>>;
+	readonly rules: Readonly<Record<string, RateLimitRules>>;
 }
 
 /** `'1 hour'`, `'15 min'`, `'30 s'`, `'1 day'` — and nothing else, so a typo is a build failure. */
@@ -104,58 +166,112 @@ export const rateLimitWindowMillis = (window: string): number | undefined => {
 
 const PATTERN = /^[a-z][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)*(\.\*)?$/;
 
+/** Every rule in one map, validated the same way whoever declared it. */
+const validateRules = (rules: Readonly<Record<string, RateLimitRules>>, where: string): void => {
+	for (const [pattern, declared] of Object.entries(rules)) {
+		for (const rule of Array.isArray(declared) ? declared : [declared as RateLimitRule]) {
+			if (!PATTERN.test(pattern)) {
+				throw new TypeError(
+					`${where} declares "${pattern}", which is not a command pattern. Use a command name such as "identity.sendCode", or a prefix wildcard such as "collections.*".`
+				);
+			}
+			if (rateLimitWindowMillis(rule.window) === undefined) {
+				throw new TypeError(
+					`${where} declares the window "${rule.window}" for "${pattern}", which is not a duration. Write it as "1 hour", "15 min" or "30 s".`
+				);
+			}
+			if (!Number.isInteger(rule.limit) || rule.limit <= 0) {
+				throw new TypeError(
+					`${where} declares a limit of ${String(rule.limit)} for "${pattern}". A limit is a whole number of admissions per window, and a limit of zero is a closed door written as a rate — refuse it in a policy instead.`
+				);
+			}
+		}
+	}
+};
+
+/** Every rule at one pattern, whether it was declared as one or as several. */
+const rulesOf = (declared: RateLimitRules): ReadonlyArray<RateLimitRule> =>
+	Array.isArray(declared) ? declared : [declared as RateLimitRule];
+
 /**
- * Declares this workspace's rate limits.
+ * Declares the limits that apply before there is a subject to hang one on.
+ *
+ * `src/access/+anonymous_limits.ts` is the only rate-limit file left, and it is separate for a
+ * structural reason rather than a stylistic one: before sign-in there is no subject, so there is no
+ * policy to declare the rule. Everything with a holder is declared by that holder — a person's
+ * limits live in the policies their team holds, an envoy's in the policies the envoy names.
+ *
+ * Every rule here must be keyed by `address`, and that is enforced rather than assumed. `subject`
+ * and `sender` name things that do not exist yet at this surface, so a rule keyed by one of them
+ * would collapse every anonymous caller into a single bucket — which is the exact defect this whole
+ * layer replaced, where every visitor behind one reverse proxy shared one limit.
  *
  * Validated here rather than at admission time, for the reason `defineEnvironment` validates there:
  * a rule that never matches anything is indistinguishable, at run time, from a rule that is simply
  * not being hit — so a typo in a command name reads as "the limit is working" right up until
  * somebody tests it.
  */
-export const defineRateLimits = <const T extends Readonly<Record<string, RateLimitRule>>>(
+export const anonymousLimits = <const T extends Readonly<Record<string, RateLimitRules>>>(
 	rules: T
 ): RateLimitSpec & { readonly rules: T } => {
-	for (const [pattern, rule] of Object.entries(rules)) {
-		if (!PATTERN.test(pattern)) {
+	validateRules(rules, '+anonymous_limits.ts');
+	for (const [pattern, declared] of Object.entries(rules)) {
+		for (const rule of rulesOf(declared)) {
+			if (rule.key === 'address') continue;
 			throw new TypeError(
-				`Rate limit "${pattern}" is not a command pattern. Use a command name such as "identity.sendCode", or a prefix wildcard such as "collections.*".`
-			);
-		}
-		if (rateLimitWindowMillis(rule.window) === undefined) {
-			throw new TypeError(
-				`Rate limit "${pattern}" declares the window "${rule.window}", which is not a duration. Write it as "1 hour", "15 min" or "30 s".`
-			);
-		}
-		if (!Number.isInteger(rule.limit) || rule.limit <= 0) {
-			throw new TypeError(
-				`Rate limit "${pattern}" declares a limit of ${String(rule.limit)}. A limit is a whole number of admissions per window, and a limit of zero is a closed door written as a rate — refuse it in a policy instead.`
+				`+anonymous_limits.ts keys "${pattern}" by "${rule.key}". A caller at this surface has not signed in, so there is no subject and no sender to count against — key it by "address", or declare it on the policy whose holders it bounds.`
 			);
 		}
 	}
 	return Object.freeze({ rules });
 };
 
+/** Checks a policy's own limits at the point the compiler assembles it. */
+export const validatePolicyLimits = (
+	policyName: string,
+	rules: Readonly<Record<string, RateLimitRules>>
+): void => {
+	validateRules(rules, `Policy ${policyName}`);
+	for (const [pattern, declared] of Object.entries(rules)) {
+		const keys = rulesOf(declared).map(({ key }) => key);
+		if (new Set(keys).size !== keys.length) {
+			throw new TypeError(
+				`Policy ${policyName} declares two rules for "${pattern}" with the same key. Two buckets keyed the same way are one bucket with two numbers — write the tighter one.`
+			);
+		}
+		for (const rule of rulesOf(declared)) {
+			if (rule.key !== 'address') continue;
+			throw new TypeError(
+				`Policy ${policyName} keys "${pattern}" by "address". An address is what a caller names before signing in, and this policy only ever applies to somebody who already has — declare it in +anonymous_limits.ts instead.`
+			);
+		}
+	}
+};
+
 /**
- * The rule that governs one command, or `undefined` when none does.
+ * The rules that govern one command, empty when none does.
  *
  * Most specific wins, measured by pattern length: an exact `collections.create` beats
  * `collections.*`, and a workspace can therefore tighten one command without restating the class it
  * belongs to. An unmatched command is unlimited by this layer — the edge ceiling still applies, and
  * inventing a default here would silently throttle every command a workspace never thought about.
+ *
+ * Every rule at the winning pattern is returned, not merely the first: a pattern may declare several
+ * keyed differently, and a caller has to be inside all of them.
  */
 export const rateLimitFor = (
 	spec: RateLimitSpec | undefined,
 	command: string
-): RateLimitRule | undefined => {
-	if (spec === undefined) return undefined;
-	let matched: RateLimitRule | undefined;
+): ReadonlyArray<RateLimitRule> => {
+	if (spec === undefined) return [];
+	let matched: ReadonlyArray<RateLimitRule> = [];
 	let matchedLength = -1;
-	for (const [pattern, rule] of Object.entries(spec.rules)) {
+	for (const [pattern, declared] of Object.entries(spec.rules)) {
 		const wildcard = pattern.endsWith('.*');
 		const prefix = wildcard ? pattern.slice(0, -1) : pattern;
 		const hit = wildcard ? command.startsWith(prefix) : command === pattern;
 		if (!hit || pattern.length <= matchedLength) continue;
-		matched = rule;
+		matched = rulesOf(declared);
 		matchedLength = pattern.length;
 	}
 	return matched;

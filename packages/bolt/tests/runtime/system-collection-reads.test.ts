@@ -110,7 +110,7 @@ const fieldOpsWorkspace = workspace({
 		policy({
 			name: 'field_ops_controller',
 			effect: 'allow',
-			apps: ['field_ops_controller'],
+			capabilities: { apps: ['field_ops_controller'] },
 			grants: [
 				{ collection: 'jobs', action: 'read' },
 				{ collection: 'jobs', action: 'create' },
@@ -129,7 +129,7 @@ const fieldOpsWorkspace = workspace({
 		policy({
 			name: 'field_ops_contractor',
 			effect: 'allow',
-			apps: ['field_ops_contractor'],
+			capabilities: { apps: ['field_ops_contractor'] },
 			grants: [
 				{ collection: 'jobs', action: 'read' },
 				{ collection: 'jobs', action: 'create', approval: jobApproval }
@@ -140,10 +140,12 @@ const fieldOpsWorkspace = workspace({
 		[CONTROLLER_TEAM]: ['field_ops_controller'],
 		[CONTRACTOR_TEAM]: ['field_ops_contractor']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: []
 });
 
@@ -188,8 +190,7 @@ const seedBystander = async (runtime: BoltTestRuntime) => {
 const contractorSubject: Identity.Subject = {
 	userId: fixtureUserId('user-contractor'),
 	tenantId: 'test-tenant',
-	team: CONTRACTOR_TEAM,
-	teamPath: [CONTRACTOR_TEAM]
+	teamPath: [CONTRACTOR_TEAM], policies: []
 };
 
 const REQUEST_ID = '019f6f10-0002-7000-8000-000000000001';

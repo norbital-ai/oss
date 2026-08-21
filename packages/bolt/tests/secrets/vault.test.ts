@@ -25,14 +25,16 @@ const withEnvironment = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
 	teams: {
 		admin: ['admin']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
+	envoys: [],
 	integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
 	requiredFacilities: [],
 	environment: defineEnvironment({
 		GEOCODING_API_KEY: { label: 'Geocoding key' },

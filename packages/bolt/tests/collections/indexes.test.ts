@@ -29,10 +29,12 @@ const indexed = workspace({
 	],
 	apps: [],
 	policies: [],
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: []
 });
 

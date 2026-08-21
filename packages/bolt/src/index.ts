@@ -1,9 +1,8 @@
 export {
-	agent,
+	anonymousLimits,
 	app,
 	automation,
 	cascade,
-	channel,
 	clockTime,
 	collection,
 	custom,
@@ -21,6 +20,7 @@ export {
 	defineAgentTool,
 	enums,
 	environment,
+	envoy,
 	field,
 	file,
 	geolocation,
@@ -40,13 +40,12 @@ export {
 export { defineBoltHost } from './host.js';
 export type { BoltHostConfig, ColonyBoltHostConfig, SelfHostedBoltHostConfig } from './host.js';
 export type {
-	AgentAutomationSpec,
 	AutomationContext,
 	AutomationDeclaration,
 	AutomationDefinition,
 	AutomationTrigger,
 	BoltGroupDefinition,
-	ChannelDefinition,
+	EnvoyDefinition,
 	CollectionHooks,
 	CollectionIntegrations,
 	CollectionPipelines,
@@ -82,7 +81,7 @@ export { Agents } from './runtime/agents/agents.js';
 export { makeBundle } from './runtime/app.js';
 export { Approvals } from './runtime/approvals/approvals.js';
 export { Automations } from './runtime/automations/automations.js';
-export { Channels } from './runtime/channels/channels.js';
+export { Envoys } from './runtime/envoys/envoys.js';
 export { Collections } from './runtime/collections/collections.js';
 export { Identity } from './runtime/identity/identity.js';
 /**

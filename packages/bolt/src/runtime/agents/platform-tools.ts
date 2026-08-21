@@ -63,27 +63,15 @@ export type ToolExecutionContext = Readonly<{
 	readonly effectId: EffectIdType;
 	readonly subject: Identity.Subject;
 	readonly agentName: string;
+	/** The skills this subject's policies grant. */
 	readonly skills: ReadonlyArray<string>;
+	/** The tools this turn was offered, so `describe_workspace` reports what is actually reachable. */
+	readonly toolNames: ReadonlyArray<string>;
 	readonly workspace: Workspace.Interface;
 	readonly collections: Collections.Interface;
 	readonly hostTools: HostTools.Interface;
 	readonly files: Files.Interface;
-	/**
-	 * The collections `src/+agent.ts` put in reach, when it named any.
-	 *
-	 * A second ceiling under the policy, not a replacement for one: the subject's grants still decide
-	 * what a read returns. This is the author saying which part of their own workspace this agent is
-	 * for, and it was declared and discarded — a workspace scoped to one collection had an agent that
-	 * could read and write every one of them.
-	 */
-	readonly allowedCollections?: ReadonlyArray<string>;
 }>;
-
-/** Refuses a collection the agent was not scoped to, naming the tool rather than the collection. */
-const requireCollection = (context: ToolExecutionContext, tool: string, collection: string) =>
-	context.allowedCollections === undefined || context.allowedCollections.includes(collection)
-		? Effect.void
-		: Effect.fail(new ToolNotAllowed({ agent: context.agentName, tool }));
 
 const decode = <S extends Schema.Top>(schema: S, input: unknown) =>
 	Schema.decodeUnknownEffect(schema)(input).pipe(
@@ -104,13 +92,13 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 				version: definition.version,
 				collections: definition.collections.map((collection) => collection.name),
 				apps: definition.apps.map((app) => app.name),
-				agents: definition.agents.map((agent) => ({
-					name: agent.name,
-					tools: agent.tools.map((tool) => tool.name),
-					skills: agent.skills
-				})),
+				// What *this* subject may call, not what the workspace declares. Two people asking the
+				// same web agent to describe the workspace get different answers, because they hold
+				// different policies — which is the honest reading of "what can I do here".
+				tools: context.toolNames,
+				skills: context.skills,
 				automations: definition.automations.map((automation) => automation.name),
-				channels: definition.channels.map((channel) => channel.name),
+				envoys: definition.envoys.map((envoy) => envoy.name),
 				integrations: definition.integrations.map((integration) => integration.name)
 			};
 		}
@@ -132,7 +120,10 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 		}
 		case 'read_collection': {
 			const parsed = yield* decode(CollectionReadInput, input);
-			yield* requireCollection(context, name, parsed.collection);
+			// No second ceiling. `src/+agent.ts` could name a `collections` allowlist that sat under the
+			// policy and duplicated it, so a workspace had two places to say what an agent may reach and
+			// two ways for them to disagree. `findMany` applies the subject's grants, which is the one
+			// answer — a collection no policy grants returns nothing whether or not a list named it.
 			return yield* context.collections.findMany(context.effectId, context.subject, {
 				collection: parsed.collection,
 				limit: parsed.limit ?? 50
@@ -140,7 +131,6 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 		}
 		case 'write_collection': {
 			const parsed = yield* decode(CollectionWriteInput, input);
-			yield* requireCollection(context, name, parsed.collection);
 			switch (parsed.operation) {
 				case 'create':
 					yield* context.collections.create(context.effectId, context.subject, {

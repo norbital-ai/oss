@@ -37,16 +37,19 @@ export type PlatformUser = Readonly<{
  * surface that renders it, not to the context authored queries key on.
  */
 /**
- * A channel as `workspace.manifest` publishes it — the authored declaration minus what only the
+ * An envoy as `workspace.manifest` publishes it — the authored declaration minus what only the
  * runtime needs.
  *
- * `audience` is `'public' | 'authenticated'`: who may reach the channel. It is typed as `string`
+ * `audience` is `'public' | 'authenticated'`: who may reach the envoy. It is typed as `string`
  * because this value crosses the wire as JSON from a workspace the client did not compile, and
  * narrowing it here would be a claim about a payload nothing validated. The consumers compare
  * against `'public'` and treat everything else as reachable only by members, which is the safe
  * reading of an unrecognised value.
+ *
+ * There is no `agent` field. An envoy *is* an agent; the back-pointer this carried had the same
+ * value for every envoy in every workspace, because there was only ever one agent to point at.
  */
-export type PlatformChannel = Readonly<{
+export type PlatformEnvoy = Readonly<{
 	readonly name: string;
 	readonly transport: string;
 	readonly audience: string;
@@ -54,7 +57,7 @@ export type PlatformChannel = Readonly<{
 export type PlatformState = Readonly<{
 	readonly user: PlatformUser;
 	readonly apps: ReadonlyArray<string>;
-	readonly channels: ReadonlyArray<PlatformChannel>;
+	readonly envoys: ReadonlyArray<PlatformEnvoy>;
 }>;
 export type ChatMessage = Readonly<{
 	readonly id: string;

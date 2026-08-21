@@ -168,7 +168,7 @@ const oldSchedules = (workspace: WorkspaceDefinition): ReadonlyMap<string, strin
 /** What the new activation writes into `bolt_schedule`, keyed the same way. */
 const newSchedules = (workspace: WorkspaceDefinition): ReadonlyMap<string, string> =>
 	new Map(
-		ActivationCommands.schedulesFor(workspace).map((declaration) => [
+		ActivationCommands.schedulesFor(workspace, 'test-tenant').map((declaration) => [
 			declaration.key,
 			declaration.crontab
 		])

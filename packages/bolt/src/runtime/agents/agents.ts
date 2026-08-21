@@ -16,7 +16,47 @@ import type { Identity } from '../identity/identity.js';
 import { RemoteRegistry } from '../remotes.js';
 import type { WhereCompileError } from '../collections/where.js';
 import { DispatchError, Workspace, WorkspaceLookupError } from '../workspace.js';
-import type { AgentDeclaration, ToolDeclaration } from '../../authoring/workspace-schema.js';
+import type { ToolDeclaration } from '../../authoring/workspace-schema.js';
+import { WEB_AGENT_NAME } from '../../authoring/workspace-schema.js';
+
+/**
+ * The agent one turn runs as: the web agent, or one envoy.
+ *
+ * There is no declaration behind either. The web agent is defined entirely by *who is using it* —
+ * it runs as the signed-in person, so their policies decide its tools, its collections and its
+ * limits — and an envoy adds exactly one thing a policy cannot state, which is what it is for.
+ *
+ * `src/+agent.ts` used to sit here, carrying `tools`, `mcpServers`, `denyTools`, `hostTools`,
+ * `collections`, `access`, `model` and `maxTokens`. Every one of those either duplicated a policy or
+ * was a host default, and while it existed two people in one workspace were offered the same tools
+ * however differently they were authorised.
+ */
+type ResolvedAgent = Readonly<{
+	readonly name: string;
+	/** The envoy's standing instruction, absent for the web agent. */
+	readonly task?: string;
+	/** `public` on an envoy anyone can message; absent for the web agent, which is never public. */
+	readonly audience?: 'public' | 'authenticated';
+}>;
+
+/**
+ * Which sandbox this turn works in — the tenant plane's counterpart to §10's personal plane.
+ *
+ * A person gets one tree, keyed by who they are. An envoy gets its own, keyed by the principal its
+ * declaration mints. A **public** envoy gets one per conversation, and that partition is the whole
+ * of §10.2: an envoy is one principal, so without it every sender on a public surface would share a
+ * tree and a document a stranger uploaded would sit where the next stranger could read it.
+ *
+ * On an `authenticated` envoy the subject's `userId` has already narrowed to the matched member, so
+ * the key is that member's and their sandbox is the one they have on the web — which is correct: it
+ * is the same person, reached down a different wire.
+ */
+const sandboxKeyFor = (
+	subject: Identity.Subject,
+	agent: ResolvedAgent,
+	conversationId: string
+): string =>
+	agent.audience === 'public' ? `${subject.userId}#${conversationId}` : subject.userId;
 import { SkillError, ToolNotAllowed } from './agent-errors.js';
 import {
 	executeHostTool,
@@ -45,9 +85,13 @@ export const readSkill = Effect.fn('Agents.readSkill')(function* (
 
 /** Owns resolve tool behavior at the agents boundary so validation and typed semantics stay consistent for every caller. */
 const AgentTools = {
-	resolve: (agent: AgentDeclaration, name: string): ToolDeclaration | ToolNotAllowed =>
-		agent.tools.find((tool) => tool.name === name) ??
-		new ToolNotAllowed({ agent: agent.name, tool: name }),
+	resolve: (
+		offered: ReadonlyArray<ToolDeclaration>,
+		agentName: string,
+		name: string
+	): ToolDeclaration | ToolNotAllowed =>
+		offered.find((tool) => tool.name === name) ??
+		new ToolNotAllowed({ agent: agentName, tool: name }),
 	mcpName: (server: string, tool: string): string =>
 		`${server.replaceAll(':', '_')}:${tool.replaceAll(':', '_')}`,
 	parseMcpName: (name: string): { readonly server: string; readonly tool: string } | undefined => {
@@ -338,9 +382,13 @@ export type Interface = Readonly<{
 		}>,
 		Database.FacilityError | AccessControl.AccessDenied
 	>;
-	readonly listSkills: (
-		agentName: string
-	) => Effect.Effect<ReadonlyArray<string>, Workspace.WorkspaceLookupError>;
+	/**
+	 * The skills this subject may load — its policies', not an agent declaration's.
+	 *
+	 * It takes a subject rather than an agent name because a skill is capability: two people on the
+	 * same web agent are offered different skills, and asking by agent name could not express that.
+	 */
+	readonly listSkills: (subject: Identity.Subject) => ReadonlyArray<string>;
 	readonly readSkill: (effectId: EffectIdType, name: string) => ReturnType<typeof readSkill>;
 }>;
 /** Identifies the agents service in Effect's context so dependency wiring remains explicit and type checked. */
@@ -362,65 +410,147 @@ export const layer = Layer.effect(
 		const remotes = yield* RemoteRegistry;
 
 		/**
-		 * The tools one turn is offered, after `src/+agent.ts` has had its say.
+		 * The tools one turn is offered, decided by the subject's policies and nothing else.
 		 *
-		 * Every clause here was declared on `AgentAutomationSpec` and enforced by nothing: the funnel
-		 * returned the platform set, the sandbox set and the workspace's tools unconditionally, so a
-		 * workspace that declared `access: 'read'` shipped an agent holding `write_collection` and one
-		 * that named `denyTools` shipped an agent holding all of them.
+		 * This is the whole of §5 in one function: two people in one workspace get different tools on
+		 * the *same* web agent because they hold different policies, and an envoy gets what its
+		 * declared policies name. Adding a `capabilities/tools/+<name>.ts` file widens **nobody** until
+		 * a policy names it.
 		 *
-		 * `denyTools` cannot withhold a bound sandbox, which is what the authoring skill says of it: the
-		 * sandbox set is the host's, and an agent that could hide its own siblings could hide what it did
-		 * with them. `hostTools` is the opposite direction — nothing non-sandbox is offered unless the
-		 * workspace opted into it by name.
+		 * It replaces four fields on a declaration none of which were enforced. The funnel returned the
+		 * platform set, the sandbox set and every workspace tool unconditionally, so a workspace that
+		 * declared `access: 'read'` shipped an agent holding `write_collection` and one that named
+		 * `denyTools` shipped an agent holding all of them.
+		 *
+		 * `write_collection` follows the grants, which is the honest reading of "may this subject
+		 * write": a policy that grants no `create`, `update` or `delete` on anything has said the
+		 * holder does not write, and offering the tool anyway only moves the refusal later. `access:
+		 * 'read' | 'write'` was a second, coarser way of saying the same thing, in a place a reviewer
+		 * comparing it against the grants would not look.
+		 *
+		 * Sandbox tools are offered unconditionally and deliberately. A sandbox is per-principal and
+		 * holds no workspace data (§10), so reaching one grants nothing; withholding it was what
+		 * `denyTools` claimed to do and could not, because an agent that could hide its own siblings
+		 * could hide what it did with them.
 		 */
-		const allowedTools = (agent: AgentDeclaration): ReadonlyArray<ToolDeclaration> => {
-			const authored = new Map(agent.tools.map((tool) => [tool.name, tool]));
-			const denied = new Set(agent.denyTools ?? []);
+		const allowedTools = (subject: Identity.Subject): ReadonlyArray<ToolDeclaration> => {
+			const granted = access.capabilities(subject);
+			const mayWrite = writesForSubject(subject);
+			const authored = workspace.definition.tools.filter((tool) => granted.tools.has(tool.name));
+			const authoredNames = new Set(authored.map(({ name }) => name));
 			const platform = platformToolSpecs
-				.filter((tool) => !authored.has(tool.name) && !denied.has(tool.name))
-				.filter((tool) => tool.name !== 'write_collection' || agent.access === 'write');
-			const host = (agent.hostTools ?? [])
-				.filter((name) => !authored.has(name) && !denied.has(name) && !isSandboxTool(name))
-				.map((name) => ({ name, description: `Host tool ${name}`, command: `host:${name}` }));
+				.filter((tool) => !authoredNames.has(tool.name))
+				.filter((tool) => tool.name !== 'write_collection' || mayWrite);
 			return [
 				...platform,
-				...sandboxToolSpecs.filter((tool) => !authored.has(tool.name)),
-				...host,
-				...agent.tools.filter((tool) => !denied.has(tool.name))
+				...sandboxToolSpecs.filter((tool) => !authoredNames.has(tool.name)),
+				...authored
 			];
 		};
 
 		/**
-		 * Whether an MCP tool name reaches a server this agent may call.
+		 * Whether any policy this subject holds grants a write on anything at all.
 		 *
-		 * Declaring `mcpServers` narrows the agent to those; declaring none leaves the connector facility
-		 * as the only gate, which is what it has always been — a name it has no connector for fails there.
-		 * Absent does not mean "none", because a workspace that declares `src/mcp/+<name>.mcp.ts` and no
-		 * `+agent.ts` would otherwise lose every server it authored to a field it never wrote.
+		 * The gate on `write_collection`, read off the grants rather than off a separate `access`
+		 * field. A subject with no write grant anywhere cannot succeed at a write, so offering the tool
+		 * would only teach the model to try.
 		 */
-		const mcpAllowed = (agent: AgentDeclaration, server: string): boolean =>
-			agent.mcpServers === undefined || agent.mcpServers.includes(server);
+		const writesForSubject = (subject: Identity.Subject): boolean =>
+			workspace.definition.collections.some((collection) =>
+				(['create', 'update', 'delete'] as const).some(
+					(action) => access.explain(subject, action, collection.name).allowed
+				)
+			);
+
+		/**
+		 * Whether an MCP tool name reaches a server this subject may call.
+		 *
+		 * An allowlist, with no "absent means every server" arm. That arm existed because a workspace
+		 * declaring `+<name>.mcp.ts` files and no `+agent.ts` would otherwise lose every server it
+		 * authored to a field it never wrote — which was a symptom of capability living somewhere a
+		 * workspace could forget to fill in. A policy is the only place capability is declared now, so
+		 * an unnamed server is a server nobody granted.
+		 */
+		const mcpAllowed = (subject: Identity.Subject, server: string): boolean =>
+			access.capabilities(subject).mcp.has(server);
+
+		/**
+		 * The agent a turn is for: the web agent, or one declared envoy.
+		 *
+		 * `web` is reserved at authoring time (`envoy()` refuses it) so this cannot be shadowed, and it
+		 * needs no declaration to resolve because there is nothing in one. Anything else must be a
+		 * declared envoy — a name that is neither is a refusal, reported as an access denial rather
+		 * than a lookup failure because from the caller's side "no such agent" and "not yours" are the
+		 * same answer and the difference is worth not disclosing.
+		 */
+		const resolveAgent = Effect.fn('Agents.resolveAgent')(function* (agentName: string) {
+			if (agentName === WEB_AGENT_NAME) return { name: WEB_AGENT_NAME } satisfies ResolvedAgent;
+			const envoy = workspace.definition.envoys.find(({ name }) => name === agentName);
+			if (envoy === undefined) {
+				return yield* new AccessControl.AccessDenied({
+					action: 'agent',
+					resource: agentName,
+					reason: 'unknown agent'
+				});
+			}
+			return {
+				name: envoy.name,
+				task: envoy.task,
+				audience: envoy.audience
+			} satisfies ResolvedAgent;
+		});
+
+		/**
+		 * The conversation row a turn writes into, carrying what kind of thread it is.
+		 *
+		 * `visibility` and `envoy_key` were read by `conversation-selector.ts` and written by nothing:
+		 * neither column existed, so `visibility` was always `undefined`, the group bucket was
+		 * permanently empty, and a public envoy's threads never reached the admin inbox they were
+		 * routed to. Both are populated here, at the one place a conversation is opened.
+		 *
+		 * `user_id` is the sandbox key rather than the raw subject id, so a public envoy's per-sender
+		 * partition is a property of the row rather than a rule every reader has to remember.
+		 */
+		const openConversation = Effect.fn('Agents.openConversation')(function* (
+			effectId: EffectIdType,
+			agent: ResolvedAgent,
+			subject: Identity.Subject,
+			conversationId: string
+		) {
+			const group = conversationId.includes(':group:');
+			yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: 'insert into bolt_conversations (id, agent_name, user_id, visibility, envoy_key) values ($1, $2, $3, $4, $5) on conflict do nothing',
+				parameters: [
+					conversationId,
+					agent.name,
+					sandboxKeyFor(subject, agent, conversationId),
+					agent.name === WEB_AGENT_NAME ? 'personal' : group ? 'envoy_group' : 'envoy_dm',
+					agent.name === WEB_AGENT_NAME ? null : agent.name
+				]
+			});
+		});
 
 		const executeTool = Effect.fn('Agents.executeTool')(function* (
-			agent: AgentDeclaration,
+			agent: ResolvedAgent,
 			name: string,
 			input: Schema.Json,
 			effectId: EffectIdType,
 			subject: Identity.Subject,
 			conversationId: string
 		) {
-			const allowlist = allowedTools(agent);
+			const sandboxKey = sandboxKeyFor(subject, agent, conversationId);
+			const allowlist = allowedTools(subject);
 			const mcp = AgentTools.parseMcpName(name);
 			const offered = allowlist.some((tool) => tool.name === name);
 			// A platform or sandbox name was admitted on the strength of being one, which made `denyTools`
 			// and `access` advisory: an agent that was never offered `write_collection` could still call
 			// it by name. The allowlist is the answer for every kind now, and an MCP call is admitted only
-			// when the workspace named that server.
+			// when a policy this subject holds named that server.
 			if (
 				!offered &&
 				!isSandboxTool(name) &&
-				!(mcp !== undefined && mcpAllowed(agent, mcp.server))
+				!(mcp !== undefined && mcpAllowed(subject, mcp.server))
 			) {
 				return yield* new ToolNotAllowed({ agent: agent.name, tool: name });
 			}
@@ -428,18 +558,21 @@ export const layer = Layer.effect(
 				effectId,
 				subject,
 				agentName: agent.name,
-				skills: agent.skills,
+				// The skills this subject's policies grant, not a list an agent declaration carried. A
+				// skill is capability, so it is granted where every other capability is.
+				skills: [...access.capabilities(subject).skills],
+				toolNames: allowlist.map(({ name: tool }) => tool),
 				workspace,
 				collections,
 				hostTools,
-				files,
-				...(agent.collections === undefined ? {} : { allowedCollections: agent.collections })
+				files
 			};
 			if (isPlatformTool(name)) return yield* executePlatformTool(name, input, context);
 			if (isSandboxTool(name)) {
 				return yield* executeSandboxTool(name, input, {
 					effectId,
 					subject,
+					sandboxKey,
 					agentName: agent.name,
 					conversationId,
 					database,
@@ -468,9 +601,10 @@ export const layer = Layer.effect(
 				)
 			);
 			if (authored._tag === 'hit') return authored.value;
-			// A `hostTools` opt-in lands here: the funnel gives each named tool a `host:` command, and this
-			// is the branch that routes one. The opt-in reached nothing before, because nothing put a
-			// `host:` tool in the allowlist for it to find.
+			// The host-tools funnel, reached by a name the allowlist offered and nothing else resolved.
+			// `hostTools` — an opt-in list on the agent declaration, declared by no workspace and read by
+			// nothing until it was wired up — is gone with the declaration; a host tool is admitted here
+			// because a policy named it, like everything else.
 			const declared = allowlist.find((tool) => tool.name === name);
 			if (name.startsWith('sandbox_') || declared?.command.startsWith('host:') === true) {
 				return yield* executeHostTool(name, input, context);
@@ -480,69 +614,70 @@ export const layer = Layer.effect(
 
 		return Service.of({
 			start: Effect.fn('Agents.start')(function* (effectId, subject, agentName, conversationId) {
-				yield* workspace.agent(agentName).pipe(
-					Effect.catch((error) =>
-						error instanceof WorkspaceLookupError
-							? Effect.fail(
-									new AccessControl.AccessDenied({
-										action: 'agent',
-										resource: agentName,
-										reason: 'unknown agent'
-									})
-								)
-							: Effect.fail(error)
-					)
-				);
+				const agent = yield* resolveAgent(agentName);
 				yield* access.authorize(subject, 'agent', agentName);
-				yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'insert into bolt_conversations (id, agent_name, user_id) values ($1, $2, $3) on conflict do nothing',
-					parameters: [conversationId, agentName, subject.userId]
-				});
+				yield* openConversation(effectId, agent, subject, conversationId);
 			}),
 			// stupidity:allow Q3 -- the tool loop and the records it writes are one unit of meaning
 			turn: Effect.fn('Agents.turn')(
 				function* (effectId, subject, agentName, conversationId, message, senderContext) {
-					const agent = yield* workspace.agent(agentName).pipe(
-						Effect.catch((error) =>
-							error instanceof WorkspaceLookupError
-								? Effect.fail(
-										new AccessControl.AccessDenied({
-											action: 'agent',
-											resource: agentName,
-											reason: 'unknown agent'
-										})
-									)
-								: Effect.fail(error)
-						)
-					);
+					const agent = yield* resolveAgent(agentName);
 					yield* access.authorize(subject, 'agent', agentName);
-					yield* database.execute(EffectId.make(`${effectId}:ensure-conversation`), {
-						_tag: 'Query',
-						sql: 'insert into bolt_conversations (id, agent_name, user_id) values ($1, $2, $3) on conflict do nothing',
-						parameters: [conversationId, agentName, subject.userId]
-					});
+					yield* openConversation(
+						EffectId.make(`${effectId}:ensure-conversation`),
+						agent,
+						subject,
+						conversationId
+					);
 					const transcript = yield* database.execute(EffectId.make(`${effectId}:read`), {
 						_tag: 'Query',
 						sql: 'select role, content from bolt_agent_messages where conversation_id = $1 order by sequence',
 						parameters: [conversationId]
 					});
-					const tools = allowedTools(agent).map(({ name, description, command }) => ({
-						name,
-						description:
-							(name === 'read_collection' || name === 'write_collection') &&
-							agent.collections !== undefined
-								? // The ceiling declared in `src/+agent.ts`, stated where the model can see it
-									// before it guesses. Without this the model is offered `read_collection` with
-									// no way to know the agent is scoped, and the first call to a collection
-									// outside the scope is a refusal it could have avoided.
-									`${description} Allowed collections: ${agent.collections.join(', ')}.`
-								: description,
-						command
-					}));
+					/**
+					 * The collections this subject may actually reach, stated where the model can see them
+					 * before it guesses.
+					 *
+					 * Derived from the grants rather than from a declared list, which is the whole point of
+					 * §5: the ceiling is not a field somebody remembered to write, it is what the policies
+					 * already say. Without this the model is offered `read_collection` with no way to know
+					 * it is scoped, and the first call outside the scope is a refusal it could have avoided.
+					 */
+					const reachable = (action: 'read' | 'write'): ReadonlyArray<string> =>
+						workspace.definition.collections
+							.filter(({ name }) =>
+								action === 'read'
+									? access.explain(subject, 'read', name).allowed
+									: (['create', 'update', 'delete'] as const).some(
+											(write) => access.explain(subject, write, name).allowed
+										)
+							)
+							.map(({ name }) => name);
+					const tools = allowedTools(subject).map(({ name, description, command }) => {
+						if (name !== 'read_collection' && name !== 'write_collection')
+							return { name, description, command };
+						const allowed = reachable(name === 'read_collection' ? 'read' : 'write');
+						return {
+							name,
+							description:
+								allowed.length === 0
+									? description
+									: `${description} Allowed collections: ${allowed.join(', ')}.`,
+							command
+						};
+					});
 					const messages: Array<Schema.Json> = [
-						{ role: 'system', content: agent.prompt },
-						// Second and separate, so the agent's standing instruction stays the thing the author
+						// `src/+agents.md`, the system message of every turn — web and envoy alike. It
+						// describes the business the agent is standing in: what the collections mean, what
+						// the company does, house rules for tone and escalation.
+						{ role: 'system', content: workspace.definition.prompt },
+						// The envoy's own standing instruction, on top of the shared one. Workspace context
+						// is shared; purpose is per-envoy, and the web agent has none because its purpose is
+						// whatever the person in front of it asks for.
+						...(agent.task === undefined
+							? []
+							: [{ role: 'system', content: agent.task } as Schema.Json]),
+						// Third and separate, so the standing instruction stays the thing the author
 						// wrote and this stays the runtime's own statement about who it is talking to.
 						...(senderContext === undefined
 							? []
@@ -674,13 +809,14 @@ export const layer = Layer.effect(
 						for (let round = 0; round < maxToolRounds; round += 1) {
 							const response = yield* ai.execute(EffectId.make(`${effectId}:ai:${round}`), {
 								_tag: 'Turn',
-								// Both were literals, so `src/+agent.ts` naming a model and a budget changed nothing:
-								// a workspace that raised `maxTokens` because a reasoning model spends real tokens
-								// between tool calls still got 2048 and still ran out on the third call.
-								model: agent.model ?? 'default',
+								// The host's defaults, and deliberately not a workspace's. Which model a turn runs
+								// against is a cost question, and cost questions are `limits` — declared by the
+								// policy whose holders pay for them, not by a per-agent field that let one
+								// workspace raise a budget for everybody who ever spoke to it.
+								model: 'default',
 								messages,
 								tools,
-								maxOutputTokens: agent.maxTokens ?? 2048
+								maxOutputTokens: 2048
 							});
 							output = response.output;
 							// Folded in before anything can fail below: a round that answered and then threw is a
@@ -896,9 +1032,10 @@ export const layer = Layer.effect(
 					usage: conversationUsage(owned.rows[0])
 				};
 			}),
-			listSkills: Effect.fn('Agents.listSkills')(function* (agentName) {
-				return (yield* workspace.agent(agentName)).skills;
-			}),
+			listSkills: (subject) =>
+				workspace.definition.skills.filter((name) =>
+					access.capabilities(subject).skills.has(name)
+				),
 			readSkill
 		});
 	})

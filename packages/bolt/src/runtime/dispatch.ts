@@ -7,12 +7,18 @@ import {
 	type Invocation
 } from '@norbital-ai/bolt-protocol';
 import { AccessControl } from './access/access-control.js';
+import { WEB_AGENT_NAME } from '../authoring/workspace-schema.js';
 import { SystemPrincipal } from './access/system-principal.js';
 import { Agents } from './agents/agents.js';
 import { AI, Files } from './facilities/services.js';
 import { Approvals, ApprovalState } from './approvals/approvals.js';
 import { Automations } from './automations/automations.js';
-import { ChannelDelivery, Channels } from './channels/channels.js';
+import { EnvoyDelivery, Envoys } from './envoys/envoys.js';
+import {
+	automationPrincipalId,
+	envoyPrincipalId,
+	SEED_PRINCIPAL_ID
+} from './identity/static-identity.js';
 import { Collections } from './collections/collections.js';
 import { compileOrderTerms, makeWhereContext } from './collections/where.js';
 import { Integrations } from './integrations/integrations.js';
@@ -196,8 +202,15 @@ const AutomationHistoryInput = Schema.Struct({
 	limit: Schema.optionalKey(Schema.Number)
 });
 
+/**
+ * What a caller may say when starting an automation: which one, and what to hand it.
+ *
+ * No `subject`, and its absence is the point. It used to carry one — so the automation ran with
+ * whatever authority the caller held, and an administrator tripping a nightly close ran it as an
+ * administrator. An automation's authority is the policies its own declaration names, minted at the
+ * enqueue point by `Automations.start`.
+ */
 const AutomationStartInput = Schema.Struct({
-	subject: Subject,
 	name: Schema.NonEmptyString,
 	input: Schema.Json
 });
@@ -205,15 +218,15 @@ const AutomationStartInput = Schema.Struct({
  * What a host may say about a message it took off a transport.
  *
  * `subject` is gone from this input and its absence is the point. It was a `Subject` the caller
- * supplied, which made the identity of a channel turn something outside the runtime decided — and on
+ * supplied, which made the identity of an envoy turn something outside the runtime decided — and on
  * a `Command` the boundary overwrites `subject` from the credential anyway, so a host relaying a
- * WhatsApp message could only ever have run the turn as *itself*, an administrator. `Channels.receive`
- * resolves the requestor from the release's own declarations now; the host supplies the wire's facts
- * and nothing about authority.
+ * WhatsApp message could only ever have run the turn as *itself*, an administrator. `Envoys.receive`
+ * mints the subject from the release's own declarations now; the host supplies the wire's facts and
+ * nothing about authority.
  */
-const ChannelReceiveInput = Schema.Struct({
-	channel: Schema.NonEmptyString,
-	delivery: ChannelDelivery
+const EnvoyReceiveInput = Schema.Struct({
+	envoy: Schema.NonEmptyString,
+	delivery: EnvoyDelivery
 });
 /**
  * `binding` is what a scheduled pull carries and an enqueued one does not.
@@ -256,8 +269,15 @@ const AgentHistoryInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString
 });
 const AgentListConversationsInput = Schema.Struct({ subject: Subject });
+/**
+ * Which skill, and for whom.
+ *
+ * `agent` is gone. A skill is capability, granted by a policy, so the answer to "which skills are
+ * available" depends on the subject asking and not on which agent they are talking to — two people
+ * on the same web agent are offered different skills, and an agent name could not express that.
+ */
 const SkillInput = Schema.Struct({
-	agent: Schema.optionalKey(Schema.NonEmptyString),
+	subject: Subject,
 	name: Schema.optionalKey(Schema.NonEmptyString)
 });
 const ApprovalStatusInput = Schema.Struct({ requestId: Schema.NonEmptyString });
@@ -282,9 +302,9 @@ const SyncMutateInput = Schema.Struct({
 		})
 	)
 });
-const ChannelNameInput = Schema.Struct({ channel: Schema.NonEmptyString });
-const ChannelReplyInput = Schema.Struct({
-	channel: Schema.NonEmptyString,
+const EnvoyNameInput = Schema.Struct({ envoy: Schema.NonEmptyString });
+const EnvoyReplyInput = Schema.Struct({
+	envoy: Schema.NonEmptyString,
 	recipient: Schema.NonEmptyString,
 	payload: Schema.Json
 });
@@ -717,22 +737,21 @@ const authorizeMembershipCommand = Effect.fn('Bolt.authorizeMembershipCommand')(
 const SYSTEM_ONLY_COMMANDS: ReadonlySet<string> = new Set([
 	'identity.bootstrapFounder',
 	/**
-	 * The inbound channel port, which would otherwise be the widest hole in this runtime.
+	 * The inbound envoy port, which would otherwise be the widest hole in this runtime.
 	 *
-	 * `channels.receive` no longer decodes a `Subject` — it resolves the requestor itself from the
-	 * channel's declared policy — and that removal is exactly what makes this entry necessary. A
-	 * command that names no identity is a command the credential path admits without one, so without
-	 * this line anybody who could reach the port could post a JSON body and make a workspace's agent
-	 * run a turn, as that workspace's channel principal, against that workspace's data. The sender
-	 * address in the payload is attacker-chosen, so they could also choose *whose* assignments the
-	 * turn narrowed to.
+	 * `envoys.receive` decodes no `Subject` — it mints one from the envoy's declared policies — and
+	 * that is exactly what makes this entry necessary. A command that names no identity is a command
+	 * the credential path admits without one, so without this line anybody who could reach the port
+	 * could post a JSON body and make a workspace's agent run a turn, under that envoy's authority,
+	 * against that workspace's data. The sender address in the payload is attacker-chosen, so they
+	 * could also choose *whose* assignments the turn narrowed to.
 	 *
-	 * Gating it on the gateway signature is the honest expression of what a channel message is: proof
+	 * Gating it on the gateway signature is the honest expression of what an envoy message is: proof
 	 * that a message came from WhatsApp requires WhatsApp's credential, which the tenant does not
 	 * hold, so the host authenticates the wire and says so with a signature over the timestamp, the
 	 * command, the tenant and the arguments. Nothing else can assert that a message arrived.
 	 */
-	'channels.receive'
+	'envoys.receive'
 ]);
 
 /** The prefix a spent founder claim is filed under, so it cannot collide with a sign-in code's row. */
@@ -857,7 +876,7 @@ const TASK_RUNNABLE_COMMANDS: ReadonlySet<string> = new Set(
  * handed their input to the switch untouched, so the switch was a second, unauthenticated command
  * port: every case that does not happen to decode a `Subject` — `identity.endSession` revoking any
  * session by bare token, `notifications.list`/`markRead` over any recipient, every
- * `automations.*`, `integrations.install`/`disable`/`receive`, `channels.register`/`reply`,
+ * `automations.*`, `integrations.install`/`disable`/`receive`, `envoys.register`/`reply`,
  * `approvals.status`/`timeline`, `agents.title`/`cancel`/`updateVerifier` — ran for anyone who could
  * reach the port. The `MINTED_IDENTITY` refusal below closed only the cases that name an identity to
  * forge, which is why the remainder outnumbered it.
@@ -929,7 +948,17 @@ const MINTED_IDENTITY = [
 	'userId',
 	'tenantId',
 	'invitedBy',
-	'impersonatedTeam'
+	'impersonatedTeam',
+	/**
+	 * The policies a subject holds directly, which only a *declaration* may name.
+	 *
+	 * It is here for the same reason `system` is refused on `Subject` itself: a static identity's
+	 * authority is the policies its declaration named, and if a payload could carry the field then the
+	 * answer to "what can a stranger do to my database?" would stop being "read the envoy declaration"
+	 * and start being "whatever they typed". There is no row that produces one either, so a subject
+	 * holding policies directly is one this runtime minted and nothing else.
+	 */
+	'policies'
 ] as const;
 
 /**
@@ -1326,13 +1355,22 @@ export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocati
 	 * every other anonymous caller; before the command body, so a refusal costs a map lookup rather
 	 * than the work it was protecting.
 	 */
-	yield* (yield* RateLimits.Service).admit(invocation.command, {
-		tenantId: String(invocation.scope.tenantId),
-		...(authenticated.subject === undefined ? {} : { userId: authenticated.subject.userId }),
-		...(rateLimitAddress(invocation.input) === undefined
-			? {}
-			: { address: rateLimitAddress(invocation.input) as string })
-	});
+	yield* (yield* RateLimits.Service).admit(
+		invocation.command,
+		{
+			tenantId: String(invocation.scope.tenantId),
+			...(authenticated.subject === undefined ? {} : { userId: authenticated.subject.userId }),
+			...(rateLimitAddress(invocation.input) === undefined
+				? {}
+				: { address: rateLimitAddress(invocation.input) as string })
+		},
+		// The holder's own budget, resolved from the policies they hold. It is passed in rather than
+		// looked up inside the limiter for the reason the limiter states: it counts, and something
+		// that already knows who holds what decides which rule to count against.
+		authenticated.subject === undefined
+			? undefined
+			: (yield* AccessControl.Service).limits(authenticated.subject)
+	);
 	const invoked =
 		invocation.command === TICK_COMMAND
 			? runTick(effectId)
@@ -2032,12 +2070,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		}
 		case 'agents.listSkills': {
 			const input = yield* decode(SkillInput, commandInput);
-			if (input.agent === undefined)
-				return yield* new DispatchError({
-					code: 'invalid_input',
-					message: 'Agent name is required'
-				});
-			return json(yield* (yield* Agents.Service).listSkills(input.agent));
+			return json((yield* Agents.Service).listSkills(input.subject));
 		}
 		case 'agents.readSkill': {
 			const input = yield* decode(SkillInput, commandInput);
@@ -2054,8 +2087,17 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const ai = yield* AI.Service;
 			return json((yield* ai.execute(effectId, { _tag: 'Models' })).output);
 		}
+		/**
+		 * Every agent a caller can open a conversation with: the web agent, plus one per envoy.
+		 *
+		 * `web` is a literal rather than a declaration, because the web agent has none — it is defined
+		 * entirely by who is using it. This used to answer `definition.agents`, an array that had
+		 * exactly one element in every workspace that ever existed: the placeholder the compiler
+		 * synthesized.
+		 */
 		case 'workspace.agents': {
-			return json((yield* Workspace.Service).definition.agents.map(({ name }) => name));
+			const definition = (yield* Workspace.Service).definition;
+			return json([WEB_AGENT_NAME, ...definition.envoys.map(({ name }) => name)]);
 		}
 		// The Studio and Data Browser are host surfaces: they read workspace structure through this
 		// command and never touch tenant SQL. What a subject may see is still an access decision, so
@@ -2109,27 +2151,50 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					name: policy.name,
 					grants: policy.grants?.length ?? 0
 				})),
-				agents: definition.agents.map(({ name }) => ({ name })),
 				automations: definition.automations.map(({ name }) => ({ name })),
-				// What identifies a channel and what shape of traffic it carries, for the same reason the
-				// field projection above stopped naming four keys: a studio that is told only a channel's
-				// name cannot attribute it to the agent that answers on it, cannot say which transport it
-				// arrives over, and cannot tell a public channel from one only members reach.
+				// What identifies an envoy and what shape of traffic it carries, for the same reason the
+				// field projection above stopped naming four keys: a studio that is told only an envoy's
+				// name cannot say which transport it arrives over, and cannot tell a public envoy from one
+				// only members reach.
 				//
-				// `policy`, `task` and `rateLimits` are declared and deliberately not published. `task` is
-				// the channel's system prompt and `policy` names the grants its runs are ceilinged by;
-				// `workspace.manifest` answers any authenticated caller, and neither is something a caller
-				// needs in order to render a channel.
-				channels: definition.channels.map(
-					({ name, agent, transport, audience, description, groupMessages }) => ({
-						name,
-						agent,
-						transport,
-						audience,
-						description,
-						...(groupMessages === undefined ? {} : { groupMessages })
-					})
-				),
+				// `policies` and `task` are declared and deliberately not published. `task` is the envoy's
+				// standing instruction and `policies` names everything its runs may do; `workspace.manifest`
+				// answers any authenticated caller, and neither is something a caller needs in order to
+				// render an envoy.
+				//
+				// There is no `agent` key, because there is no agent to point at. An envoy *is* one, and
+				// the back-pointer this used to publish had the same value for every envoy in every
+				// workspace: the single synthesized agent the compiler invented.
+				envoys: definition.envoys.map(({ name, transport, audience, groupMessages }) => ({
+					name,
+					transport,
+					audience,
+					...(groupMessages === undefined ? {} : { groupMessages })
+				})),
+				/**
+				 * Every static identity this release can mint, with the label a surface renders it as.
+				 *
+				 * `bolt_audit.subject_id` and `bolt_collection_history.subject_id` are plain `text` with no
+				 * foreign key, which is what lets `envoy:sales_desk` and `automation:payroll_close` be
+				 * valid values with no shadow user table. What was missing was the *label*: a client
+				 * holding `envoy:sales_desk` had nothing to render but the id.
+				 */
+				principals: [
+					{ id: SystemPrincipal.SYSTEM_PRINCIPAL_ID, label: 'Colony', kind: 'host', policies: [] },
+					{ id: SEED_PRINCIPAL_ID, label: 'Sample data', kind: 'seed', policies: [] },
+					...definition.envoys.map((envoy) => ({
+						id: envoyPrincipalId(envoy.name),
+						label: envoy.name,
+						kind: 'envoy',
+						policies: [...envoy.policies]
+					})),
+					...definition.automations.map((automation) => ({
+						id: automationPrincipalId(automation.name),
+						label: automation.name,
+						kind: 'automation',
+						policies: [...automation.policies]
+					}))
+				],
 				integrations: definition.integrations.map(({ name }) => ({ name })),
 				requiredFacilities: [...definition.requiredFacilities]
 			});
@@ -2341,7 +2406,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const input = yield* decode(AutomationStartInput, commandInput);
 			const automations = yield* Automations.Service;
 			return json({
-				taskId: yield* automations.start(effectId, input.subject, input.name, input.input)
+				taskId: yield* automations.start(effectId, input.name, input.input)
 			});
 		}
 		case 'automations.register': {
@@ -2352,12 +2417,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		case 'automations.runStep': {
 			const input = yield* decode(AutomationStartInput, commandInput);
 			return json({
-				taskId: yield* (yield* Automations.Service).runStep(
-					effectId,
-					input.subject,
-					input.name,
-					input.input
-				)
+				taskId: yield* (yield* Automations.Service).runStep(effectId, input.name, input.input)
 			});
 		}
 		case 'automations.history': {
@@ -2375,29 +2435,24 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			yield* (yield* Automations.Service).cancel(effectId, input.taskId);
 			return json({ cancelled: true });
 		}
-		case 'channels.receive': {
-			const input = yield* decode(ChannelReceiveInput, commandInput);
-			const channels = yield* Channels.Service;
-			return json(yield* channels.receive(effectId, input.channel, input.delivery));
+		case 'envoys.receive': {
+			const input = yield* decode(EnvoyReceiveInput, commandInput);
+			const envoys = yield* Envoys.Service;
+			return json(yield* envoys.receive(effectId, input.envoy, input.delivery));
 		}
-		case 'channels.register': {
-			const input = yield* decode(ChannelNameInput, commandInput);
-			yield* (yield* Channels.Service).register(effectId, input.channel);
+		case 'envoys.register': {
+			const input = yield* decode(EnvoyNameInput, commandInput);
+			yield* (yield* Envoys.Service).register(effectId, input.envoy);
 			return json({ registered: true });
 		}
-		case 'channels.reply': {
-			const input = yield* decode(ChannelReplyInput, commandInput);
-			yield* (yield* Channels.Service).reply(
-				effectId,
-				input.channel,
-				input.recipient,
-				input.payload
-			);
+		case 'envoys.reply': {
+			const input = yield* decode(EnvoyReplyInput, commandInput);
+			yield* (yield* Envoys.Service).reply(effectId, input.envoy, input.recipient, input.payload);
 			return json({ replied: true });
 		}
-		case 'channels.status': {
-			const input = yield* decode(ChannelNameInput, commandInput);
-			return json(yield* (yield* Channels.Service).status(effectId, input.channel));
+		case 'envoys.status': {
+			const input = yield* decode(EnvoyNameInput, commandInput);
+			return json(yield* (yield* Envoys.Service).status(effectId, input.envoy));
 		}
 		case 'integrations.pull': {
 			const input = yield* decode(IntegrationPullInput, commandInput);

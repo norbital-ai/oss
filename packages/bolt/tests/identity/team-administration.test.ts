@@ -56,12 +56,14 @@ const peopleWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [policy({ name: 'Employee', effect: 'allow', actions: ['read'], apps: ['people'] })],
+	policies: [policy({ name: 'Employee', effect: 'allow', actions: ['read'], capabilities: { apps: ['people'] } })],
 	teams: { Employee: ['Employee'] },
-	agents: [],
 	automations: [],
-	channels: [],
+	envoys: [],
 	integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
 	requiredFacilities: []
 });
 
@@ -289,7 +291,7 @@ describe('teams.assign', () => {
 				);
 			})
 		);
-		expect(subject.team).toBe('Approvers');
+		expect(subject.teamPath[0]).toBe('Approvers');
 		expect(subject.teamPath).toEqual(['Approvers']);
 		expect(
 			(await access(harness)).members.find(({ id }) => id === fixtureUserId('grace'))?.team

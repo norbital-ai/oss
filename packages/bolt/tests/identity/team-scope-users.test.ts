@@ -72,7 +72,7 @@ const scopedWorkspace = workspace({
 		policy({
 			name: 'own_or_below',
 			effect: 'allow',
-			apps: ['sales'],
+			capabilities: { apps: ['sales'] },
 			grants: [
 				{
 					collection: 'deals',
@@ -88,10 +88,12 @@ const scopedWorkspace = workspace({
 		Salesperson: ['own_or_below'],
 		Support: ['own_or_below']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: [],
 	relations: []
 });

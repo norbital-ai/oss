@@ -81,10 +81,12 @@ describe('schema plan scope', () => {
 			],
 			apps: [],
 			policies: [],
-			agents: [],
 			automations: [],
-			channels: [],
 			integrations: [],
+			prompt: 'You are the test workspace agent.',
+			tools: [],
+			skills: [],
+			envoys: [],
 			requiredFacilities: []
 		});
 		return buildSchemaPlan(definition).steps.map(({ id }) => id);

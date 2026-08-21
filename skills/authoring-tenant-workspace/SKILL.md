@@ -49,7 +49,7 @@ then edit its SQL before deploying through Colony.
 
 | Task                                                                    | Reference                                                             |
 | ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| Collections, relationships, hooks, values                               | [collections-and-modeling.md](references/collections-and-modeling.md) |
+| **Built-in column types — read before using `custom()`**, collections, relationships, hooks, values | [collections-and-modeling.md](references/collections-and-modeling.md) |
 | Dates, clock times, timestamps, filters                                 | [dates-and-time.md](references/dates-and-time.md)                     |
 | Queries: `$derived`, no N+1, batching                                   | [data-access.md](references/data-access.md)                           |
 | Apps, client, automation, remotes, seed                                 | [apps-and-server-roles.md](references/apps-and-server-roles.md)       |

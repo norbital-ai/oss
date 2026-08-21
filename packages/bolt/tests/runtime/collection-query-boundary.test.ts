@@ -8,7 +8,7 @@ import { collectionQuery } from '../../src/runtime/dispatch.js';
  * were lost, and then `with` — a table asked for its relations and rendered raw uuids instead.
  */
 describe('collection query boundary', () => {
-	const subject = { userId: 'u1', tenantId: 't1', teamPath: ['admin'] };
+	const subject = { userId: 'u1', tenantId: 't1', teamPath: ['admin'], policies: [] };
 
 	it('carries every query field across', () => {
 		const query = collectionQuery({

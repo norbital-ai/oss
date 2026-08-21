@@ -23,12 +23,12 @@
 		ariaLabel: string;
 		emptyLabel: string;
 		onValueChange: (id: string) => void;
-		/** Marks what this picker selects, the way the person and channel pickers beside it do. */
+		/** Marks what this picker selects, the way the person and envoy pickers beside it do. */
 		icon?: string;
 	} = $props();
 
 	const options = $derived.by(() => {
-		const rows = model.channels.flatMap((channel) => model.rowsByChannel[channel.id] ?? []);
+		const rows = model.envoys.flatMap((envoy) => model.rowsByEnvoy[envoy.id] ?? []);
 		const groupLabel = new Map<string, string>();
 		for (const row of rows) {
 			if (row.kind !== 'heading') continue;

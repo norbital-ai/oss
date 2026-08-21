@@ -38,10 +38,12 @@ const definition = workspace({
 	],
 	apps: [app({ name: 'batching', label: 'Batching' })],
 	teams: { admin: ['admin-data'] },
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: [],
 	policies: [
 		policy({

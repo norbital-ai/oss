@@ -61,7 +61,7 @@ export const COLONY_SYSTEM_POLICY: PolicyDeclaration = Object.freeze<PolicyDecla
 	 */
 	system: true,
 	actions: ['manage'],
-	apps: ['schema', 'identity']
+	capabilities: { apps: ['schema', 'identity'] }
 });
 
 /** The subject id a system invocation runs under, so a log line names the actor rather than a uuid. */
@@ -348,6 +348,7 @@ export type SystemSubject = Readonly<{
 	/** What selects `COLONY_SYSTEM_POLICY`, and the only key that does. */
 	readonly system: true;
 	readonly teamPath: ReadonlyArray<string>;
+	readonly policies: ReadonlyArray<string>;
 }>;
 
 /**
@@ -366,9 +367,13 @@ export const systemSubject = (tenantId: string): SystemSubject =>
 		tenantId,
 		system: true,
 		// No team, because a system principal approves nothing: `approvals.decide` matches a step's
-		// approvers against `subject.team`, and inventing a membership would hand the host an approval
-		// eligibility no workspace granted it.
-		teamPath: []
+		// approvers against the subject's own team, and inventing a membership would hand the host an
+		// approval eligibility no workspace granted it.
+		teamPath: [],
+		// And no directly-named policies either. The host's authority is `COLONY_SYSTEM_POLICY`, which
+		// is selected by the `system` flag above and by nothing a name can reach — so this array being
+		// empty is what says the two routes to authority are genuinely separate.
+		policies: []
 	});
 
 export * as SystemPrincipal from './system-principal.js';

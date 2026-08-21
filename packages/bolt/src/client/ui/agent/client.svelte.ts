@@ -27,7 +27,7 @@ type ChatSessionRow = {
 	readonly user_id: string;
 	readonly visibility: string;
 	readonly platform?: string | null;
-	readonly channel_key?: string | null;
+	readonly envoy_key?: string | null;
 	readonly external_thread_id?: string | null;
 	readonly messages: Array<Record<string, unknown>>;
 	readonly turns: Array<Record<string, unknown>>;
@@ -49,8 +49,10 @@ type ChatSessionRow = {
 type AgentSubject = Readonly<{
 	readonly userId: string;
 	readonly tenantId: string;
-	readonly team?: string;
+	/** Its own team first, then the teams beneath it. `teamPath[0]` *is* the subject's own team. */
 	readonly teamPath: ReadonlyArray<string>;
+	/** Empty for a person: a person holds policies through a team, never directly. */
+	readonly policies: ReadonlyArray<string>;
 	readonly email?: string;
 }>;
 
@@ -167,9 +169,9 @@ const userQuery: UserQuery = {
  * empty list: every conversation scoped to another member rendered as "unknown member" and the admin
  * scope picker had nothing to pick.
  *
- * `kind` separates a person from a host provisioner's service row and defaults to `'person'`. The
- * operand is an operator object because a bare value fails the where compiler and takes the whole
- * query with it — which is the second way this query returned nothing.
+ * There is no `kind` filter, and there is nothing left for one to exclude. It separated a person
+ * from a host provisioner's service row; a static identity is minted in memory now and never written
+ * to `bolt_auth_user`, so every row here is a person and the column is gone.
  *
  * Answered by the server rather than out of the replica: identity is excluded from `Sync.shape` and
  * from the change stream, so the membership table is never mirrored into a browser.
@@ -184,7 +186,6 @@ const loadWorkspaceUsers = async (): Promise<void> => {
 		// overload belongs to `BoltClient`.
 		const rows = await active.transport.command('collections.findMany', {
 			collection: 'bolt_auth_user',
-			where: { kind: { eq: 'person' } },
 			orderBy: { name: 'asc' },
 			limit: 500
 		});

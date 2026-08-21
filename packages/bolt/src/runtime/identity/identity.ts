@@ -3,19 +3,11 @@ import { EffectId } from '@norbital-ai/bolt-protocol';
 import { Communication, IdentityHooks } from '../facilities/services.js';
 import { Database } from '../facilities/database.js';
 import { AUTH_MODELS, makeAuth } from './auth.js';
-import { identitiesOf, identityMatches } from '../channels/transport-identity.js';
+import { identitiesOf, identityMatches } from '../envoys/transport-identity.js';
 
 export const Subject = Schema.Struct({
 	userId: Schema.NonEmptyString,
 	tenantId: Schema.NonEmptyString,
-	/**
-	 * The one team this subject belongs to, by name, or absent when nobody has placed them.
-	 *
-	 * This is what an approval step matches: `step.approvers` names teams, and a subject is eligible
-	 * when its team is among them. One team, not a set — every combination of authority anybody
-	 * actually holds is a named team in `+teams.ts` rather than an emergent union nobody wrote down.
-	 */
-	team: Schema.optionalKey(Schema.NonEmptyString),
 	/**
 	 * The team names whose declared policies this subject holds: its own team first, then the teams
 	 * beneath it in the hierarchy.
@@ -23,8 +15,26 @@ export const Subject = Schema.Struct({
 	 * Names, not policies. The mapping from a team name to the policies it holds is authored — it
 	 * lives in the compiled release, not in a row — so only `AccessControl` resolves it, and identity
 	 * stays ignorant of what any policy grants.
+	 *
+	 * The subject's own team is `teamPath[0]`, and there is deliberately no second field carrying it.
+	 * There used to be: the SQL computed `team` as `tree.depth = 1` and `teamPath` as the same tree
+	 * ordered by depth, so the two could never disagree — but two fields carrying one fact are two
+	 * places to read it from, and `approvals.decide` and `AccessControl` read different ones.
 	 */
 	teamPath: Schema.Array(Schema.NonEmptyString),
+	/**
+	 * The policies this subject holds directly, named by a declaration rather than through a team.
+	 *
+	 * Empty for a person: a person belongs to one team, and the team names what it holds. Non-empty
+	 * for a static identity — an envoy, an automation — which has no team at all and carries the
+	 * policies its declaration named.
+	 *
+	 * It is a `MINTED_IDENTITY` field, refused when it arrives in a payload exactly as `system` is,
+	 * and no database column produces it. That is what makes "the sender cannot widen it" a
+	 * structural fact rather than a review comment: there is no string a sender can send that adds a
+	 * policy, and no row that confers one.
+	 */
+	policies: Schema.Array(Schema.NonEmptyString),
 	/**
 	 * Whether this is the host acting under a verified gateway signature rather than a person.
 	 *
@@ -118,13 +128,14 @@ export type SubjectStatus = typeof ADMIN_STATUS | typeof NORMAL_STATUS;
 const subjectFromRow = (row: unknown): Record<string, unknown> => {
 	const email = IdentityRows.text(row, 'email');
 	const impersonatedBy = IdentityRows.text(row, 'impersonatedBy');
-	const team = IdentityRows.text(row, 'team');
 	const teamPath = IdentityRows.strings(row, 'teamPath');
 	return {
 		userId: IdentityRows.text(row, 'userId'),
 		tenantId: IdentityRows.text(row, 'tenantId'),
 		teamPath,
-		...(team === undefined ? {} : { team }),
+		// Empty, always. A person holds policies through their team and never directly; the array is
+		// what a *static* identity carries, and no row projects one.
+		policies: [],
 		// Exactly one spelling counts. A column that is null, absent, misspelled or holding anything
 		// else at all is an ordinary user, so a projection that forgets to select `status` cannot
 		// promote everybody it returns.
@@ -174,10 +185,11 @@ const TEAM_TREE_SQL = `, tree as (
  * The projection every subject read ends in: the row, its team's name, and the resolved path.
  *
  * `teamPath` is ordered by depth so the subject's own team is first — the order a diagnostic reads
- * best in, and the order `AccessControl` reports when it explains why something was allowed.
+ * best in, the order `AccessControl` reports when it explains why something was allowed, and the
+ * reason there is no separate `team` column here. The subject's own team *is* `teamPath[0]`, and
+ * projecting it twice is how two readers came to disagree about which one meant "the team".
  */
 const SUBJECT_TAIL_SQL = `select subject.*,
-	(select tree.name from tree where tree.depth = 1) as "team",
 	coalesce((select json_agg(tree.name order by tree.depth) from tree), '[]'::json) as "teamPath"
 	from subject`;
 
@@ -195,28 +207,6 @@ const AUTHENTICATE_SQL = `with recursive subject as (
 	 where s."token" = $1 and s."expiresAt" > now()
 )${TEAM_TREE_SQL} ${SUBJECT_TAIL_SQL}`;
 
-/**
- * One account by address, through the same team join a session goes through.
- *
- * It exists for channel principals, which are rows identified by an undeliverable address rather
- * than by a credential — there is no session to authenticate and no external provider to resolve,
- * so neither query above reaches them. Everything downstream of the projection is identical, which
- * is the point: a principal's `teamPath` is resolved by the same recursive walk as a person's, so
- * `AccessControl` cannot tell the two apart and a channel is held to the same policy resolution
- * every request is.
- *
- * **No credential is checked, because there is none.** This is a lookup, not an authentication, and
- * it is not reachable from a command: it has no case in `dispatch.ts` and is called only by
- * `Channels.receive`, which reaches it with a name the *release* supplied — a channel's own
- * principal address — never with anything from a message. An address from a payload must never
- * arrive here; that would be a way to become anybody by naming them.
- */
-const SUBJECT_BY_EMAIL_SQL = `with recursive subject as (
-	select u."norbital_id" as "userId", u."tenantId" as "tenantId",
-	       u."email" as "email", u."status" as "status", u."team_id" as "team_id"
-	  from ${AUTH_MODELS.user} u
-	 where u."email" = $1 and u."status" <> 'disabled'
-)${TEAM_TREE_SQL} ${SUBJECT_TAIL_SQL}`;
 
 /** Carries authentication error through the typed identity failure channel without losing diagnostic context. */
 export class AuthenticationError extends Schema.TaggedError<AuthenticationError>()(
@@ -292,25 +282,16 @@ export type Interface = Readonly<{
 		externalId: string
 	) => Effect.Effect<Subject, AuthenticationError | Database.FacilityError>;
 	/**
-	 * One account by address, for a subject that has no credential to present — a channel principal.
-	 *
-	 * The address must come from the release, never from a payload. See `SUBJECT_BY_EMAIL_SQL`.
-	 */
-	readonly subjectByEmail: (
-		effectId: EffectId,
-		email: string
-	) => Effect.Effect<Subject, AuthenticationError | Database.FacilityError>;
-	/**
 	 * The account that has proven ownership of this address on this transport, or nothing.
 	 *
-	 * Answers `userId` and `email` and deliberately not a `Subject`. A subject carries a `teamPath`,
-	 * and this person's team is exactly what an inbound channel message must *not* inherit: their
-	 * authority on a channel is the channel's declared policy, held through the channel's own
-	 * principal, whatever they hold in the web app. Returning half an identity is what makes that
-	 * impossible to get wrong by accident downstream.
+	 * Answers `userId` and `email` and deliberately not a `Subject`. A subject carries a `teamPath`
+	 * and a policy set, and this person's are exactly what an inbound envoy message must *not*
+	 * inherit: their authority on an envoy is the envoy's declared policies, whatever they hold in
+	 * the web app. Returning half an identity is what makes that impossible to get wrong by accident
+	 * downstream.
 	 *
 	 * Nothing, rather than a failure, when no account matches: an unrecognised sender is an ordinary
-	 * and expected state on a channel anyone can message, not a fault.
+	 * and expected state on an envoy anyone can message, not a fault.
 	 */
 	readonly accountByTransportIdentity: (
 		effectId: EffectId,
@@ -623,9 +604,6 @@ export const layerWith = (canDeliver: boolean) =>
 				resolveSubject: Effect.fn('Identity.resolveSubject')((effectId, provider, externalId) =>
 					readSubject(effectId, EXTERNAL_SUBJECT_SQL, [provider, externalId])
 				),
-				subjectByEmail: Effect.fn('Identity.subjectByEmail')((effectId, email) =>
-					readSubject(effectId, SUBJECT_BY_EMAIL_SQL, [email])
-				),
 				/**
 				 * The account holding a verified identity for this sender, matched in two stages.
 				 *
@@ -636,10 +614,11 @@ export const layerWith = (canDeliver: boolean) =>
 				 * address, and expressing that as SQL would put the rule in two places where it must be
 				 * one. The prefilter is what keeps the loop small.
 				 *
-				 * `kind <> 'service'` keeps channel principals out of the candidate set. A principal has
-				 * no transport identities to match, so it can only be reached by a bug — and the shape of
-				 * that bug would be a sender resolving to the very account whose authority the channel
-				 * runs under, which is worth one predicate to make impossible.
+				 * There is no `kind <> 'service'` filter, and there is nothing left for one to exclude. It
+				 * existed to keep channel principals — rows minted for a machine — out of the candidate
+				 * set. A static identity is minted in memory now and never written to `bolt_auth_user`, so
+				 * every row this reaches is a person, and the predicate would have been a filter over an
+				 * empty set that read as a safety property.
 				 */
 				accountByTransportIdentity: Effect.fn('Identity.accountByTransportIdentity')(
 					function* (effectId, transport, senderAddress) {
@@ -647,8 +626,7 @@ export const layerWith = (canDeliver: boolean) =>
 							_tag: 'Query',
 							sql: `select u."norbital_id" as "userId", u."email" as "email", u."channels" as "channels"
 						        from ${AUTH_MODELS.user} u
-						       where u."kind" <> 'service'
-						         and u."channels" @> $1::jsonb`,
+						       where u."channels" @> $1::jsonb`,
 							parameters: [JSON.stringify([{ type: transport, verified: true }])]
 						});
 						for (const row of result.rows) {
@@ -760,8 +738,8 @@ export const layerWith = (canDeliver: boolean) =>
 				admit: Effect.fn('Identity.admit')(function* (effectId, tenantId, email, teamId, status) {
 					const admitted = yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: `insert into ${AUTH_MODELS.user} ("norbital_id", "name", "email", "emailVerified", "kind", "status", "tenantId", "team_id")
-					      values (gen_random_uuid(), $1, $1, true, 'person', $4, $2, $3)
+						sql: `insert into ${AUTH_MODELS.user} ("norbital_id", "name", "email", "emailVerified", "status", "tenantId", "team_id")
+					      values (gen_random_uuid(), $1, $1, true, $4, $2, $3)
 					      on conflict ("email") do update set
 					        "tenantId" = excluded."tenantId",
 					        "team_id" = excluded."team_id",
@@ -879,7 +857,7 @@ export const layerWith = (canDeliver: boolean) =>
 							-- Cast to text so the union matches: identity is keyed by \`norbital_id uuid\`, while an
 							-- external subject's id is whatever its provider calls it, and both are only ever
 							-- read back out of this projection as a string.
-							select "norbital_id"::text as user_id, "email", "team_id", "status" from ${AUTH_MODELS.user} where "tenantId" = $1 and "kind" = 'person'
+							select "norbital_id"::text as user_id, "email", "team_id", "status" from ${AUTH_MODELS.user} where "tenantId" = $1
 							union all
 							-- An external subject is authenticated somewhere else and \`bolt_external_subjects\`
 							-- carries no status column, so it can only ever be an ordinary member — the same
@@ -1182,7 +1160,7 @@ export const layerWith = (canDeliver: boolean) =>
 						const moved = yield* database.execute(EffectId.make(`${effectId}:team-assign`), {
 							_tag: 'Query',
 							sql: `update ${AUTH_MODELS.user} set "team_id" = $2::uuid, "norbital_updated_at" = now()
-						       where "norbital_id" = $1::uuid and "tenantId" = $3::text and "kind" = 'person'
+						       where "norbital_id" = $1::uuid and "tenantId" = $3::text
 						   returning "norbital_id"::text as "id", "email"`,
 							parameters: [memberId, team?.id ?? null, tenantId]
 						});

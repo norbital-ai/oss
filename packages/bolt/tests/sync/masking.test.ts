@@ -45,12 +45,12 @@ const restrictedWorkspace = () =>
 		],
 		apps: [],
 		policies: [
-			policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] }),
+			policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } }),
 			policy({
 				name: 'viewer',
 				effect: 'allow',
 				actions: ['read'],
-				apps: ['*'],
+				capabilities: { apps: ['*'] },
 				grants: [{ collection: 'people', action: 'read', fields: ['norbital_id', 'name'] }]
 			})
 		],
@@ -62,17 +62,19 @@ const restrictedWorkspace = () =>
 			admin: ['admin'],
 			viewer: ['viewer']
 		},
-		agents: [],
 		automations: [],
-		channels: [],
 		integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
+		envoys: [],
 		requiredFacilities: []
 	});
 
 const viewerSubject: Identity.Subject = {
 	userId: 'viewer-1',
 	tenantId: 'test-tenant',
-	teamPath: ['viewer']
+	teamPath: ['viewer'], policies: []
 };
 
 let harness: BoltTestRuntime | undefined;

@@ -113,14 +113,16 @@ const definition = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
 	teams: {
 		admin: ['admin']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: described.declarations,
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: ['database', 'connector']
 });
 
@@ -205,14 +207,14 @@ describe('a host can read an integration out of the manifest', () => {
 			relations: [],
 			apps: [],
 			policies: [],
-			remotes: [],
+			functions: [],
 			toolFiles: [],
-			channelFiles: [],
+			envoyFiles: [],
 			automations: [],
 			automationFiles: [],
 			pipelineFiles: [],
 			skills: [],
-			agentName: 'fixture-agent',
+			prompt: 'You are the test workspace agent.',
 			root: '/workspace',
 			assets: [],
 			customTypeDefinitions: [],

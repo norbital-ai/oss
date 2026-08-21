@@ -170,6 +170,8 @@
 		cursors: [undefined]
 	});
 	const configuredColumns = new Map<object, ColumnConfig>();
+	const hasSystemApprovalLock = (record: Row): boolean =>
+		typeof Reflect.get(record, 'norbital_approval_id') === 'string';
 
 	const activeColumns = $derived(registeredColumns);
 
@@ -184,7 +186,10 @@
 		conditionDefault: undefined,
 		parseCondition: (condition) => condition
 	});
-	tableApi.rowLocked = (row) => isRowLocked?.(row.record) === true;
+	// System approval locks and application locks both prevent bulk mutation, but they remain
+	// separate states everywhere the UI explains or draws them.
+	tableApi.rowLocked = (row) =>
+		hasSystemApprovalLock(row.record) || isRowLocked?.(row.record) === true;
 	/**
 	 * The one search + filter + page model this table runs on.
 	 *
@@ -556,13 +561,12 @@
 	}
 
 	/**
-	 * The leading edge of a row says one thing: this record is not settled.
+	 * The leading marker classifies why a record cannot be treated as final.
 	 *
-	 * Approval already spoke that way — a leading border with a title and aria-label, so the state
-	 * survives colour blindness and a screen reader — and a write still waiting in the sync outbox
-	 * is the same kind of fact about a row, so it reuses the same affordance rather than inventing a
-	 * second vocabulary for "not final". Only the colour and the sentence differ: warning amber for
-	 * a write that has not reached the server, brand for one that has and is awaiting a human.
+	 * A pending approval is a platform-owned SYSTEM lock, drawn as a strong rounded brand rail. An
+	 * application lock is authored by the tenant's domain and stays a thin neutral line. They share
+	 * no label or visual token. A write waiting in the sync outbox is a third transport state, shown
+	 * in warning amber.
 	 *
 	 * Unsynced outranks awaiting-approval, because it is the more consequential of the two: an
 	 * approval is a record the server already holds, an unsynced row is one it does not.
@@ -570,16 +574,19 @@
 	 * A *rejected* write is never in this state — the mutation is rolled back, so the row either
 	 * reverts or disappears, and the failure is reported where it was made.
 	 */
-	function rowLeadingAccent(row: GridRow): { borderClass: string; tooltip: string } | null {
+	function rowLeadingAccent(row: GridRow): { markerClass: string; tooltip: string } | null {
 		if (Reflect.get(row.record, 'norbital_pending_sync') === true) {
-			return { borderClass: 'border-warning', tooltip: t('table.pendingSync') };
+			return { markerClass: 'w-1 bg-warning', tooltip: t('table.pendingSync') };
 		}
-		if (typeof Reflect.get(row.record, 'norbital_approval_id') === 'string') {
-			return { borderClass: 'border-brand', tooltip: t('table.pendingApproval') };
+		if (hasSystemApprovalLock(row.record)) {
+			return {
+				markerClass: 'inset-y-1 w-1 rounded-r-full bg-brand',
+				tooltip: t('table.systemLockPendingApproval')
+			};
 		}
 		if (isRowLocked?.(row.record) === true) {
 			return {
-				borderClass: 'border-muted-foreground',
+				markerClass: 'w-px bg-muted-foreground',
 				tooltip: rowLockReason?.(row.record) ?? t('table.recordLocked')
 			};
 		}
@@ -871,6 +878,8 @@
 			ListCard={ListCard ?? autoListCard}
 			{emptyPlaceholder}
 			{rowActions}
+			{isRowLocked}
+			{rowLockReason}
 			{recordTitle}
 			{activeRecordId}
 			recordHref={(record) =>

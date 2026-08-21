@@ -50,10 +50,12 @@ const workspaceWith = (integrations: WorkspaceDefinition['integrations']): Works
 		],
 		apps: [app({ name: 'refused', label: 'Refused' })],
 		teams: { writers: ['note-quota'] },
-		agents: [],
 		automations: [],
-		channels: [],
 		integrations,
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
+		envoys: [],
 		requiredFacilities: [],
 		policies: [
 			policy({
@@ -75,7 +77,7 @@ const workspaceWith = (integrations: WorkspaceDefinition['integrations']): Works
 const definition = workspaceWith([]);
 
 /** A member of `writers`, and deliberately not an administrator: an admin bypasses the predicate. */
-const writer = { userId: 'writer-1', tenantId: 'test-tenant', teamPath: ['writers'] };
+const writer = { userId: 'writer-1', tenantId: 'test-tenant', policies: [], teamPath: ['writers'] };
 
 /** Every record an `after` hook was handed, in the order the hooks happened to finish. */
 const afterRecords: Array<Readonly<Record<string, unknown>> | undefined> = [];

@@ -1,0 +1,531 @@
+<script lang="ts">
+	import { onDestroy, onMount } from 'svelte';
+	import { Bound, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
+	import { workspaceSession } from '../../session.js';
+
+	/**
+	 * The Envoys surface: every agent this workspace exposes on a transport, and how each is doing.
+	 *
+	 * An envoy is an agent that is not the web agent — it has its own identity, its own declared
+	 * policies, and one transport it answers on. It is not a collection's integration, which syncs
+	 * records for one collection and lives under that collection's own tab in Workspace Studio. The
+	 * two were previously shown together and read as one thing; keeping them on separate surfaces is
+	 * what stops that.
+	 *
+	 * **One envoy is one row, and there is no grouping above it.** This page used to draw an agent
+	 * card and nest the channels under it, because a channel pointed at an agent — a back-pointer
+	 * whose value was the single synthesized agent, in every workspace, always. So every reader paid
+	 * for a level of hierarchy that had exactly one node. An envoy *is* the agent; the card is the
+	 * envoy.
+	 *
+	 * Pairing is folded in here too, for the same reason. It was a separate component because it
+	 * looked like a separate object; it is a *state* of an envoy — whether the host is holding an open
+	 * socket for it — and it belongs on the envoy's own card beside the traffic the runtime reports.
+	 *
+	 * Every state on this page is one somebody actually published. `workspace.manifest` names the
+	 * envoys, `envoys.status` reports registration and traffic, the host answers for the connection,
+	 * and where a command answers with neither — a failure, or a field the projection never carried —
+	 * the page says so rather than filling the gap with a default that would read as "connected".
+	 */
+
+	/**
+	 * The transport is the session's, named rather than reached for.
+	 *
+	 * It used to arrive as a `command` prop the host shell threaded down, which was correct while the
+	 * host owned the shell. The workspace client owns it now, and one declared session is what every
+	 * surface reads — a second channel handed down beside it would be two ways to say the same thing.
+	 */
+	const { transport, operations } = workspaceSession();
+
+	/**
+	 * Exactly the projection `workspace.manifest` publishes for an envoy.
+	 *
+	 * No `agent`. The manifest stopped carrying one because there is nothing to point at.
+	 */
+	type DeclaredEnvoy = {
+		readonly name: string;
+		readonly transport: string;
+		readonly audience: string;
+	};
+	/** Exactly what `envoys.status` returns. */
+	type EnvoyStatus = {
+		readonly envoy: string;
+		readonly registered: boolean;
+		readonly received: number;
+		readonly replied: number;
+	};
+	/** Exactly the projection the host's `transport` operation answers with. */
+	type Connection = {
+		readonly envoy: string;
+		readonly provider: string;
+		readonly state: 'disconnected' | 'connecting' | 'pairing' | 'connected' | 'error';
+		readonly pairedAs?: string;
+		readonly pairing?: string;
+		readonly pairingExpiresAt?: number;
+		readonly error?: string;
+		readonly stored: boolean;
+	};
+
+	let envoys = $state<ReadonlyArray<DeclaredEnvoy>>([]);
+	let statuses = $state<Record<string, EnvoyStatus>>({});
+	// Kept beside the statuses rather than folded into them: an envoy whose status could not be read
+	// has no registration state at all, and a record that can hold both would let the page render a
+	// `registered: false` it never received.
+	let statusErrors = $state<Record<string, string>>({});
+	let connections = $state<Record<string, Connection>>({});
+	let connectionErrors = $state<Record<string, string>>({});
+	let qrCodes = $state<Record<string, string>>({});
+	let pairingBusy = $state<Record<string, boolean>>({});
+	let loading = $state(true);
+	let error = $state<string | null>(null);
+
+	/**
+	 * How long one status read may take before this page says so.
+	 *
+	 * Not a preference, and not defensive decoration. `transport.command` is a bare `fetch` with no
+	 * timeout of its own (`browser-transport.ts`), and the reads below were awaited with no signal —
+	 * so a command that never settled left its card reading "Checking" indefinitely, reporting
+	 * neither a status nor a failure. That is the one outcome this surface's whole premise forbids:
+	 * a state the runtime never published, rendered as though it had. A bound does not fix whatever
+	 * stalled upstream; it makes the stall say its own name instead of impersonating a slow page.
+	 */
+	const STATUS_DEADLINE_MS = 15_000;
+
+	/**
+	 * The transport rotates its pairing code every twenty seconds and there is nothing to push it
+	 * here, so the page asks. Polling stops the moment an envoy is connected or errors — a page left
+	 * open on a paired envoy should not keep a timer alive for the rest of the session.
+	 */
+	const POLL_MS = 3_000;
+	const polls = new Map<string, ReturnType<typeof setInterval>>();
+	const stopPolling = (envoy?: string): void => {
+		for (const [name, handle] of polls) {
+			if (envoy !== undefined && name !== envoy) continue;
+			clearInterval(handle);
+			polls.delete(name);
+		}
+	};
+	onDestroy(() => stopPolling());
+
+	/** One array off an untyped command response, or nothing when the key is absent or not a list. */
+	const rowsOf = (value: unknown, key: string): ReadonlyArray<unknown> => {
+		if (value === null || typeof value !== 'object') return [];
+		const rows = Reflect.get(value, key);
+		return Array.isArray(rows) ? rows : [];
+	};
+
+	/** One string field off an untyped row, or nothing when it is absent or not a string. */
+	const stringOf = (value: unknown, key: string): string | undefined => {
+		if (value === null || typeof value !== 'object') return undefined;
+		const field = Reflect.get(value, key);
+		return typeof field === 'string' && field.length > 0 ? field : undefined;
+	};
+
+	/**
+	 * Reads the workspace's envoys, then each one's traffic and connection.
+	 *
+	 * The manifest is read field by field rather than asserted with a cast. `command` answers
+	 * `unknown`, and the envoy projection is a hand-built object literal in `dispatch.ts` rather than
+	 * a schema the wire enforces — so a cast would let a projection that stopped carrying `transport`
+	 * or `audience` render the word "undefined" onto a page whose whole premise is that it states
+	 * only what was actually published. An envoy missing a field is dropped.
+	 *
+	 * The reads are fanned out rather than run in sequence: they are independent, and one slow envoy
+	 * should not hold up the rest of the list. Each writes its own key, so a failure lands against
+	 * the envoy it belongs to instead of failing the page.
+	 */
+	const load = async (): Promise<void> => {
+		loading = true;
+		error = null;
+		try {
+			const summary = await transport.command('workspace.manifest', {});
+			envoys = rowsOf(summary, 'envoys').flatMap((entry) => {
+				const name = stringOf(entry, 'name');
+				const wire = stringOf(entry, 'transport');
+				const audience = stringOf(entry, 'audience');
+				return name === undefined || wire === undefined || audience === undefined
+					? []
+					: [{ name, transport: wire, audience }];
+			});
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : 'Unable to read the workspace manifest.';
+			loading = false;
+			return;
+		}
+		loading = false;
+		await Promise.all(
+			envoys.flatMap((envoy) => [
+				readStatus(envoy.name),
+				runPairing(envoy.name, envoy.transport, 'status')
+			])
+		);
+	};
+
+	/**
+	 * One envoy's traffic, or the reason there is none, inside the deadline.
+	 *
+	 * The signal is handed to the command rather than raced beside it, so a read this page has
+	 * stopped waiting for also stops costing a request — a race would leave the fetch running
+	 * unobserved behind a card that already reported it as unanswered.
+	 *
+	 * A timeout is reported as a timeout and not as whatever `AbortSignal` happens to name its
+	 * reason. The distinction matters to whoever reads the card: "the runtime did not answer" is a
+	 * fact about this workspace's runtime, while `signal timed out` is a fact about the browser and
+	 * tells an operator nothing they can act on.
+	 */
+	const readStatus = async (envoy: string): Promise<void> => {
+		const deadline = AbortSignal.timeout(STATUS_DEADLINE_MS);
+		try {
+			statuses[envoy] = (await transport.command(
+				'envoys.status',
+				{ envoy },
+				deadline
+			)) as EnvoyStatus;
+		} catch (cause) {
+			statusErrors[envoy] = deadline.aborted
+				? `The runtime did not answer within ${Math.round(STATUS_DEADLINE_MS / 1000)}s.`
+				: cause instanceof Error
+					? cause.message
+					: 'The runtime did not report this envoy.';
+		}
+	};
+
+	/** Renders the transport's pairing payload as a QR the phone's camera can read. */
+	const renderQr = async (envoy: string, payload: string | undefined): Promise<void> => {
+		if (payload === undefined) {
+			delete qrCodes[envoy];
+			return;
+		}
+		const { toDataURL } = await import('qrcode');
+		// Fixed colours rather than the theme's: a QR is read by a camera, not by a person, and a
+		// low-contrast pairing code in dark mode is one that simply does not scan.
+		qrCodes[envoy] = await toDataURL(payload, {
+			margin: 2,
+			width: 240,
+			color: { dark: '#000000', light: '#ffffff' }
+		});
+	};
+
+	/**
+	 * Pairing, which is host-owned and asked through `operations` rather than through the runtime.
+	 *
+	 * The workspace declares the envoy and its policies; the host holds the credential and the
+	 * socket — so "is this connected" is a question only the host can answer. `envoys.status` answers
+	 * a deliberately different one (whether anything ever registered, and how many messages have
+	 * passed) and is rendered separately for that reason.
+	 *
+	 * `action: 'transport'`, not `'envoy'`. Colony supplies the wire and never sees a policy, so its
+	 * half of this is named for the wire.
+	 */
+	const runPairing = async (
+		envoy: string,
+		provider: string,
+		operation: 'pair' | 'status' | 'unpair'
+	): Promise<void> => {
+		if (pairingBusy[envoy] === true && operation !== 'status') return;
+		if (operation !== 'status') pairingBusy[envoy] = true;
+		try {
+			const answer = (await operations.run({
+				action: 'transport',
+				operation,
+				envoy,
+				provider
+			})) as { readonly connection?: Connection };
+			const next = answer.connection;
+			if (next === undefined) throw new Error('The host did not report this envoy.');
+			connections[envoy] = next;
+			delete connectionErrors[envoy];
+			await renderQr(envoy, next.pairing);
+			if (next.state === 'connected' || next.state === 'error') stopPolling(envoy);
+			else if (!polls.has(envoy) && next.state !== 'disconnected') {
+				polls.set(
+					envoy,
+					setInterval(() => void runPairing(envoy, provider, 'status'), POLL_MS)
+				);
+			}
+		} catch (cause) {
+			// Shown verbatim. The refusals this host produces name what is wrong and what to do — no
+			// transport for this provider, no secret key to seal a credential with, two envoys open on
+			// one transport — and replacing them with "pairing failed" throws all of that away.
+			connectionErrors[envoy] =
+				cause instanceof Error ? cause.message : 'The host refused this operation.';
+			stopPolling(envoy);
+		} finally {
+			if (operation !== 'status') pairingBusy[envoy] = false;
+		}
+	};
+
+	const connectionLabel = (envoy: string): string => {
+		const connection = connections[envoy];
+		if (connection === undefined) return 'Reading…';
+		switch (connection.state) {
+			case 'connected':
+				return 'Connected';
+			case 'pairing':
+				return 'Scan to pair';
+			case 'connecting':
+				return 'Connecting';
+			case 'error':
+				return 'Needs attention';
+			default:
+				return connection.stored ? 'Paired, not connected' : 'Not paired';
+		}
+	};
+
+	// The read is the browser's, as it is in `studio/envoys-panel.svelte`: server rendering must not
+	// issue a Bolt command, and a reader who opens Envoys has already asked the question it answers.
+	// It ran at component init here, which happens on the server too under any host that renders this
+	// surface — `workspaceSession()` throws there rather than returning a session to command with.
+	onMount(() => {
+		void load();
+	});
+</script>
+
+{#snippet pairingPanel(envoy: DeclaredEnvoy)}
+	{@const connection = connections[envoy.name]}
+	{@const failure = connectionErrors[envoy.name]}
+	{@const qr = qrCodes[envoy.name]}
+	<Stack as="section" gap="sm" class="border-t pt-4">
+		<Inline align="center" justify="between" gap="md">
+			<div>
+				<h5 class="text-sm font-medium">Transport connection</h5>
+				<p class="text-meta">
+					{#if connection === undefined && failure === undefined}
+						Asking the host…
+					{:else if connection?.state === 'connected'}
+						{connection.pairedAs === undefined
+							? 'This host holds an open session for this envoy.'
+							: `Paired to ${connection.pairedAs}.`}
+					{:else if connection?.state === 'pairing'}
+						Open WhatsApp on the phone this envoy should answer as, then Linked devices → Link a
+						device.
+					{:else if connection?.stored === true}
+						A credential is stored, but this host has no open session for it.
+					{:else}
+						No credential is stored for this envoy yet.
+					{/if}
+				</p>
+			</div>
+			<span class="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-meta">
+				{connectionLabel(envoy.name)}
+			</span>
+		</Inline>
+
+		{#if failure !== undefined}
+			<p class="text-xs text-destructive" role="alert">{failure}</p>
+		{/if}
+
+		{#if connection?.error !== undefined}
+			<p class="text-xs text-destructive" role="alert">{connection.error}</p>
+		{/if}
+
+		{#if qr !== undefined && connection?.state === 'pairing'}
+			<Stack gap="sm" class="items-center">
+				<!--
+					Sized, on a white plate.
+
+					White regardless of theme for the same reason the code itself is drawn in fixed colours:
+					the quiet zone around a QR has to be light or a camera cannot find its edges.
+
+					The size cap is the part that was missing. `toDataURL` renders 240px and the image had
+					no width, so it stretched to whatever the column gave it — on a wide settings pane that
+					is a QR most of a screen tall, which pushed everything under it out of a pane that could
+					not scroll. A phone camera reads 240px from arm's length; larger is not more scannable.
+				-->
+				<img
+					src={qr}
+					alt="Pairing code for {envoy.name}"
+					width="240"
+					height="240"
+					class="size-60 max-w-full rounded-md bg-white p-2"
+				/>
+				<p class="max-w-sm text-center text-meta">
+					The code changes every few seconds; this refreshes on its own.
+				</p>
+			</Stack>
+		{/if}
+
+		<Inline gap="sm" align="center">
+			<button
+				type="button"
+				class="rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-50"
+				disabled={pairingBusy[envoy.name] === true}
+				onclick={() => void runPairing(envoy.name, envoy.transport, 'pair')}
+			>
+				{connection?.stored === true ? 'Reconnect' : 'Pair this envoy'}
+			</button>
+			{#if connection?.stored === true}
+				<button
+					type="button"
+					class="rounded-md border px-2.5 py-1 text-xs font-medium text-destructive disabled:opacity-50"
+					disabled={pairingBusy[envoy.name] === true}
+					onclick={() => void runPairing(envoy.name, envoy.transport, 'unpair')}
+				>
+					Unpair
+				</button>
+			{/if}
+		</Inline>
+
+		<!--
+			Said where the person scanning can see it, which is the only place saying it is any use.
+			Pairing a real account with an unofficial client is against WhatsApp's terms and accounts do
+			get banned for it. Someone about to link their own number is entitled to know that before they
+			do, not from a commit message afterwards.
+		-->
+		{#if envoy.transport === 'whatsapp'}
+			<p class="text-meta">
+				This links a real WhatsApp account through an unofficial client. That is against WhatsApp's
+				terms of service and accounts are sometimes banned for it — use a number the business owns
+				and can afford to lose, not a personal one.
+			</p>
+			<!--
+				Two operational facts stated before somebody pairs, not after they notice.
+
+				A paired session is a socket held in one host process, and neither of these is something
+				the person clicking this button can see from here: a redeploy drops it, and a host running
+				more than one instance has two of them fighting over one account. Both surface as an envoy
+				that answered yesterday and does not today, which is the hardest kind of fault to
+				attribute — so the warning is worth more here, before the first pairing, than in any
+				runbook.
+			-->
+			<p class="text-meta">
+				A paired session lives in this host's memory. It does not survive a redeploy — reconnect
+				here afterwards — and the host must run a single instance, or two of them will fight over
+				the same account.
+			</p>
+		{/if}
+	</Stack>
+{/snippet}
+
+{#snippet envoyCard(declared: DeclaredEnvoy)}
+	{@const status = statuses[declared.name]}
+	{@const failure = statusErrors[declared.name]}
+	<!--
+		The same card the Workspace Studio manifest draws, at the same density. The name is mono
+		because it is an identifier the workspace source declares, not a title somebody chose.
+	-->
+	<Stack as="section" gap="sm" class="rounded-lg border border-border bg-card p-4 shadow-card">
+		<Inline gap="sm" align="start" class="min-w-0">
+			<div
+				class="flex size-6 shrink-0 items-center justify-center rounded-md border border-border/60"
+			>
+				<IconWrapper name="lucide:bot" class="size-3.5 text-muted-foreground" />
+			</div>
+			<div class="min-w-0">
+				<p class="truncate font-mono text-sm font-semibold text-foreground">{declared.name}</p>
+				<p class="text-meta">Declared in the workspace source.</p>
+			</div>
+		</Inline>
+		<!-- Outside the status block on purpose. The transport and the audience are declared in the
+		     workspace source, so they are known whether or not `envoys.status` answered; folding them
+		     in would hide what the envoy *is* behind a failure to read how it is *doing*. -->
+		<Grid as="dl" gap="sm" minimum="compact" class="border-t pt-4 text-xs">
+			<Stack gap="xs">
+				<dt class="font-medium text-foreground">Transport</dt>
+				<dd class="text-muted-foreground">{declared.transport}</dd>
+			</Stack>
+			<Stack gap="xs">
+				<dt class="font-medium text-foreground">Audience</dt>
+				<dd class="text-muted-foreground">
+					{declared.audience === 'public'
+						? 'Public — anyone who can reach the transport.'
+						: declared.audience === 'authenticated'
+							? 'Authenticated — senders matched to a workspace account.'
+							: declared.audience}
+				</dd>
+			</Stack>
+		</Grid>
+		<!--
+			Whether this envoy is connected is the *host's* answer, and it is the only one shown.
+
+			There used to be a second status here, taken from `envoys.status.registered`, and the two
+			would have contradicted each other on every card: that flag means "something once called
+			register", nothing ever does, so it read "Not registered" beside a live paired session.
+			Worse, the honest fix is not to start writing it — a connection is host state, and a marker
+			row in the tenant database recording that a socket was once up would be exactly the state
+			this design keeps out of the tenant, and would stay true after an unpair.
+
+			So the runtime is asked what only it knows — how much traffic this envoy carried — and the
+			host is asked what only it knows. Neither answers for the other.
+		-->
+		{@render pairingPanel(declared)}
+		{#if failure !== undefined}
+			<!-- The message is shown verbatim: an operator who sees a blank card concludes the envoy is
+			     idle, when the runtime in fact refused to answer for it. -->
+			<p class="border-t pt-4 text-xs text-destructive">{failure}</p>
+		{:else if status !== undefined}
+			<Grid as="dl" gap="sm" minimum="compact" class="border-t pt-4 text-xs">
+				<Stack gap="xs">
+					<dt class="font-medium text-foreground">Messages received</dt>
+					<dd class="text-muted-foreground">{status.received}</dd>
+				</Stack>
+				<Stack gap="xs">
+					<dt class="font-medium text-foreground">Replies sent</dt>
+					<dd class="text-muted-foreground">{status.replied}</dd>
+				</Stack>
+			</Grid>
+		{:else}
+			<p class="border-t pt-4 text-meta">Reading this envoy's traffic…</p>
+		{/if}
+	</Stack>
+{/snippet}
+
+<!-- Root navigation follows the product's page-heading rhythm, as Workspace Studio does: title, one
+     line of what the page is for, then the body. The header sits on the background, not in a card.
+
+     There is no tab strip. It carried exactly one tab, "Channels", under a heading that already said
+     the same word — a rail with one rung, kept against the day an agent grew other facets. Those
+     facets are policies now, and they are not configured here. -->
+<Cover class="relative bg-background" gap="none">
+	{#snippet top()}
+		<Stack gap="lg" shrink={false} class="bg-background px-4 pt-4 sm:px-6 sm:pt-6">
+			<Stack as="header" gap="xs">
+				<h1 class="text-heading">Envoys</h1>
+				<p class="max-w-2xl text-meta">
+					The agents this workspace exposes on a transport, and how each one is reachable. What an
+					envoy may <em>do</em> is the policies it declares, in the workspace source. A collection's
+					own record sync is not configured here — it belongs to the collection, under its tab in
+					Workspace Studio.
+				</p>
+			</Stack>
+		</Stack>
+	{/snippet}
+
+	<!-- One page gutter for the whole body, matching the header's own left/right padding, so the
+	     content lines up with the title on every axis. -->
+	<Inline align="stretch" gap="none" fill class="px-4 pt-4 pb-4 sm:px-6 sm:pt-6 sm:pb-6">
+		<Bound size="full" grow clip class="relative min-w-0 bg-background font-sans">
+			<!--
+				The panel owns its scroll, because the frame around it does not.
+
+				`Bound … clip` clips what overflows and scrolls nothing, so a workspace with more than a
+				screenful of envoys — or one showing a pairing code, which is tall — had content that could
+				not be reached at all. `organization-general` already wraps its pane this way; this one was
+				the outlier, and the symptom was a page that looked complete and would not move.
+			-->
+			<Scroll name="Envoys">
+				<Stack gap="md" class="min-h-0">
+					{#if loading}
+						<p class="text-sm text-muted-foreground">Reading the workspace manifest…</p>
+					{:else if error !== null}
+						<p class="text-sm text-destructive" role="alert">{error}</p>
+					{:else if envoys.length === 0}
+						<div
+							class="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground"
+						>
+							No envoys declared. Author one in <code>src/envoys/</code> to put this workspace's agent
+							on a transport.
+						</div>
+					{:else}
+						<Stack gap="md">
+							{#each envoys as declared (declared.name)}
+								{@render envoyCard(declared)}
+							{/each}
+						</Stack>
+					{/if}
+				</Stack>
+			</Scroll>
+		</Bound>
+	</Inline>
+</Cover>

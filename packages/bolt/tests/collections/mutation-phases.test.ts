@@ -31,10 +31,12 @@ const definition = workspace({
 	collections: [collection({ name: 'notes', fields: { body: field.string({ required: true }) } })],
 	apps: [app({ name: 'phases', label: 'Phases' })],
 	teams: { admin: ['admin-data'] },
-	agents: [],
 	automations: [],
-	channels: [],
+	envoys: [],
 	integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
 	requiredFacilities: [],
 	policies: [
 		policy({

@@ -63,7 +63,7 @@ const placeAndAuthenticate = async (options: { readonly teamId: string | null })
 describe('team resolution during authentication', () => {
 	it('walks the whole subtree, depth-first ordered', async () => {
 		const subject = await placeAndAuthenticate({ teamId: TEAM.senior });
-		expect(subject.team).toBe('Senior Management');
+		expect(subject.teamPath[0]).toBe('Senior Management');
 		// Ordered by depth, so the subject's own team is first — the order a diagnostic reads best in.
 		//
 		// Descent is unconditional. A `bolt_team.inherits` flag used to gate it, defaulting to off, and
@@ -77,7 +77,7 @@ describe('team resolution during authentication', () => {
 		const subject = await placeAndAuthenticate({ teamId: TEAM.supervisor });
 		// Composition runs downward and never upward, which is the half that did not change: standing
 		// under a team does not hand a supervisor the manager's policies.
-		expect(subject.team).toBe('Supervisor');
+		expect(subject.teamPath[0]).toBe('Supervisor');
 		expect(subject.teamPath).toEqual(['Supervisor']);
 	});
 
@@ -129,7 +129,7 @@ describe('team resolution during authentication', () => {
 				return yield* identity.authenticate(EffectId.make('auth-1'), credential);
 			})
 		);
-		expect(subject.team).toBe('Senior Management');
+		expect(subject.teamPath[0]).toBe('Senior Management');
 		// Eight levels, then it stops. The names repeat because the walk goes round the loop; what
 		// matters is that it ends, and that the policies it resolves are a set.
 		expect(subject.teamPath?.length).toBe(8);
@@ -142,7 +142,7 @@ describe('team resolution during authentication', () => {
 		const subject = await placeAndAuthenticate({ teamId: null });
 		// A founder admitted into an empty workspace is exactly this. It must authenticate — it simply
 		// holds no policies through membership.
-		expect(subject.team).toBeUndefined();
+		expect(subject.teamPath[0]).toBeUndefined();
 		// Empty, not absent. `SUBJECT_TAIL_SQL` coalesces the walk to `'[]'::json`, so every subject
 		// carries a path — `policiesHeldByTeam` reads it on each decision, and one that could be
 		// missing would move that check into every caller.

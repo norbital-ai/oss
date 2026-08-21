@@ -91,7 +91,7 @@ const reviewWorkspace = workspace({
 		policy({
 			name: 'raiser',
 			effect: 'allow',
-			apps: ['work'],
+			capabilities: { apps: ['work'] },
 			grants: [
 				{ collection: 'jobs', action: 'read', where: ownRowsOnly },
 				{ collection: 'jobs', action: 'create', approval: jobApproval }
@@ -100,15 +100,17 @@ const reviewWorkspace = workspace({
 		policy({
 			name: 'reviewer',
 			effect: 'allow',
-			apps: ['work'],
+			capabilities: { apps: ['work'] },
 			grants: [{ collection: 'jobs', action: 'read', where: ownRowsOnly }]
 		})
 	],
 	teams: { Raisers: ['raiser'], [REVIEWERS]: ['reviewer'], Bystanders: ['reviewer'] },
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: [],
 	relations: []
 });
@@ -116,8 +118,7 @@ const reviewWorkspace = workspace({
 const raiserSubject: Identity.Subject = {
 	userId: fixtureUserId('raiser'),
 	tenantId: 'test-tenant',
-	team: 'Raisers',
-	teamPath: ['Raisers']
+	teamPath: ['Raisers'], policies: []
 };
 
 const titlesVisibleTo = async (runtime: BoltTestRuntime, credential: string) => {

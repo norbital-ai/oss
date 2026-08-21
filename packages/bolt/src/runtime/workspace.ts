@@ -9,9 +9,8 @@ export class WorkspaceLookupError extends Schema.TaggedError<WorkspaceLookupErro
 		kind: Schema.Literals([
 			'collection',
 			'app',
-			'agent',
 			'automation',
-			'channel',
+			'envoy',
 			'integration',
 			'policy'
 		]),
@@ -71,15 +70,12 @@ export type Interface = Readonly<{
 	readonly app: (
 		name: string
 	) => Effect.Effect<WorkspaceDefinition['apps'][number], WorkspaceLookupError>;
-	readonly agent: (
-		name: string
-	) => Effect.Effect<WorkspaceDefinition['agents'][number], WorkspaceLookupError>;
 	readonly automation: (
 		name: string
 	) => Effect.Effect<WorkspaceDefinition['automations'][number], WorkspaceLookupError>;
-	readonly channel: (
+	readonly envoy: (
 		name: string
-	) => Effect.Effect<WorkspaceDefinition['channels'][number], WorkspaceLookupError>;
+	) => Effect.Effect<WorkspaceDefinition['envoys'][number], WorkspaceLookupError>;
 	readonly integration: (
 		name: string
 	) => Effect.Effect<WorkspaceDefinition['integrations'][number], WorkspaceLookupError>;
@@ -119,9 +115,8 @@ export const layer = (authored: WorkspaceDefinition) =>
 			definition,
 			collection: lookup('collection', definition.collections, ({ name }) => name),
 			app: lookup('app', definition.apps, ({ name }) => name),
-			agent: lookup('agent', definition.agents, ({ name }) => name),
 			automation: lookup('automation', definition.automations, ({ name }) => name),
-			channel: lookup('channel', definition.channels, ({ name }) => name),
+			envoy: lookup('envoy', definition.envoys, ({ name }) => name),
 			integration: lookup('integration', definition.integrations, ({ name }) => name),
 			policy: lookup('policy', definition.policies, ({ name }) => name),
 			capabilities: () => [...definition.requiredFacilities]

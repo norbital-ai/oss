@@ -27,14 +27,33 @@ export class RateLimited extends Schema.TaggedError<RateLimited>()('Bolt.RateLim
 
 export type RateLimitSubject = Readonly<{
 	readonly tenantId: string;
-	/** The signed-in person, when there is one. */
+	/** The signed-in person, or the static identity acting — an envoy, an automation. */
 	readonly userId?: string;
 	/** The address a request names, such as the email an OTP would be sent to. */
 	readonly address?: string;
+	/**
+	 * The transport's own address for an outside sender, on an inbound envoy message.
+	 *
+	 * The one thing an envoy knows that a policy cannot: which stranger this message is from. A
+	 * `sender`-keyed rule counts against it, and never matches a human holder of the same policy.
+	 */
+	readonly sender?: string;
 }>;
 
 export type Interface = Readonly<{
-	readonly admit: (command: string, subject: RateLimitSubject) => Effect.Effect<void, RateLimited>;
+	/**
+	 * Admit one command, against the workspace's pre-sign-in rules plus this holder's own.
+	 *
+	 * `held` is the merged `limits` of the policies this subject holds, resolved by `AccessControl`
+	 * and passed in rather than looked up here. That direction is what keeps the limiter ignorant of
+	 * teams, policies and declarations: it counts, and something that already knows who holds what
+	 * decides which rule to count against.
+	 */
+	readonly admit: (
+		command: string,
+		subject: RateLimitSubject,
+		held?: Readonly<Record<string, ReadonlyArray<RateLimitRule>>>
+	) => Effect.Effect<void, RateLimited>;
 }>;
 
 /** Identifies the rate limiter in Effect's context so policy is injected rather than ambient. */
@@ -94,7 +113,13 @@ const keyFor = (
 ): Effect.Effect<string> =>
 	bucketKey(
 		[subject.tenantId, command, rule.key],
-		rule.key === 'subject' ? subject.userId : rule.key === 'address' ? subject.address : 'tenant'
+		rule.key === 'subject'
+			? subject.userId
+			: rule.key === 'address'
+				? subject.address
+				: rule.key === 'sender'
+					? subject.sender
+					: 'tenant'
 	);
 
 /**
@@ -105,36 +130,56 @@ const keyFor = (
  * thought about, at a number nobody chose.
  */
 export const make = (spec: RateLimitSpec | undefined): Interface => ({
-	admit: Effect.fn('RateLimits.admit')(function* (command: string, subject: RateLimitSubject) {
-		const rule = rateLimitFor(spec, command);
-		if (rule === undefined) return;
-		const windowMillis = rateLimitWindowMillis(rule.window);
-		// `defineRateLimits` refuses an unparseable window at build time, so reaching this means the
-		// declaration was assembled some other way. Admitting is the right direction for a policy that
-		// cannot be read: failing closed on malformed configuration takes the workspace down in order
-		// to enforce a rule nobody can state.
-		if (windowMillis === undefined) return;
-		const nowMillis = yield* Clock.currentTimeMillis;
-		// An `Effect`, because the digest is `crypto.subtle` and that is async. Free here: this is
-		// already a generator, and the alternative — a synchronous non-cryptographic hash — would
-		// make the address recoverable by enumeration, which is the whole point of hashing it.
-		const key = yield* keyFor(command, rule, subject);
-		const [admitted, next] = countAttempt(
-			buckets.get(key),
-			{ limit: rule.limit, windowMillis },
-			nowMillis
-		);
-		buckets.set(key, next);
-		sweep(nowMillis);
-		if (admitted) return;
-		const retryAfter = retryAfterSeconds(next, { limit: rule.limit, windowMillis }, nowMillis);
-		return yield* new RateLimited({
-			command,
-			limit: rule.limit,
-			windowMillis,
-			retryAfterSeconds: retryAfter,
-			message: `${command} is limited to ${rule.limit} per ${rule.window} per ${rule.key}. Try again in ${retryAfter}s.`
-		});
+	admit: Effect.fn('RateLimits.admit')(function* (
+		command: string,
+		subject: RateLimitSubject,
+		held?: Readonly<Record<string, ReadonlyArray<RateLimitRule>>>
+	) {
+		// The holder's own rules first, then the pre-sign-in ones. They cannot collide in practice —
+		// `+anonymous_limits.ts` refuses anything not keyed by `address`, and a policy refuses anything
+		// that is — so the order states an intent rather than resolving a conflict: a rule declared by
+		// the holder governs the holder.
+		const held_ = held === undefined ? [] : rateLimitFor({ rules: held }, command);
+		const rules = held_.length > 0 ? held_ : rateLimitFor(spec, command);
+		// Every rule at the winning pattern, because one command can carry two buckets keyed
+		// differently — a public envoy caps each sender *and* the surface as a whole — and being inside
+		// one of two ceilings is not admission.
+		for (const rule of rules) {
+			// A rule that names a key this caller has no value for counts nothing. A `sender`-keyed rule
+			// reaching an authenticated person, or an `address`-keyed one reaching a signed-in session,
+			// is not a misconfiguration to refuse — it is the ordinary case of a rule that is about a
+			// different kind of caller, and refusing on absence would close the door on everybody.
+			if (rule.key === 'subject' && subject.userId === undefined) continue;
+			if (rule.key === 'address' && subject.address === undefined) continue;
+			if (rule.key === 'sender' && subject.sender === undefined) continue;
+			const windowMillis = rateLimitWindowMillis(rule.window);
+			// `anonymousLimits` refuses an unparseable window at build time, so reaching this means the
+			// declaration was assembled some other way. Admitting is the right direction for a policy
+			// that cannot be read: failing closed on malformed configuration takes the workspace down in
+			// order to enforce a rule nobody can state.
+			if (windowMillis === undefined) continue;
+			const nowMillis = yield* Clock.currentTimeMillis;
+			// An `Effect`, because the digest is `crypto.subtle` and that is async. Free here: this is
+			// already a generator, and the alternative — a synchronous non-cryptographic hash — would
+			// make the address recoverable by enumeration, which is the whole point of hashing it.
+			const key = yield* keyFor(command, rule, subject);
+			const [admitted, next] = countAttempt(
+				buckets.get(key),
+				{ limit: rule.limit, windowMillis },
+				nowMillis
+			);
+			buckets.set(key, next);
+			sweep(nowMillis);
+			if (admitted) continue;
+			const retryAfter = retryAfterSeconds(next, { limit: rule.limit, windowMillis }, nowMillis);
+			return yield* new RateLimited({
+				command,
+				limit: rule.limit,
+				windowMillis,
+				retryAfterSeconds: retryAfter,
+				message: `${command} is limited to ${rule.limit} per ${rule.window} per ${rule.key}. Try again in ${retryAfter}s.`
+			});
+		}
 	})
 });
 

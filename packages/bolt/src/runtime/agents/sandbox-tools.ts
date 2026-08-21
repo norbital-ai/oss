@@ -30,7 +30,7 @@ export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'list_sandbox_agents',
 		description:
-			'List other agent sessions in this sandbox. A sandbox is the same person on web, or the same channel profile.',
+			'List other agent sessions in this sandbox. A sandbox is one principal: the same person on web, one envoy, or one conversation with a public envoy.',
 		command: 'platform:list_sandbox_agents'
 	},
 	{
@@ -53,6 +53,21 @@ export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 export type SandboxContext = Readonly<{
 	readonly effectId: EffectId;
 	readonly subject: Identity.Subject;
+	/**
+	 * Which sandbox this turn is in — one tree per principal, and the only thing that scopes one.
+	 *
+	 * **Isolation is structural, not an authorization check.** No tool below accepts a principal id,
+	 * so there is no call that could name somebody else's tree; every one of them takes a session id
+	 * and is answered only if that session is in *this* key. An administrator cannot read a person's
+	 * sandbox by being an administrator, for the same reason `bolt_personal_secrets` exists: bolting
+	 * a `user_id` column onto a shared store would have kept the access rule and lost the isolation.
+	 *
+	 * For a person it is their `norbital_id`. For an envoy it is the envoy's own principal id — and
+	 * on a **public** envoy it is that plus the conversation, because an envoy is one principal and
+	 * without the partition every stranger who ever messaged it would share one tree, with a document
+	 * one uploaded sitting where the next could read it.
+	 */
+	readonly sandboxKey: string;
 	readonly agentName: string;
 	readonly conversationId: string;
 	readonly database: Database.Interface;
@@ -112,7 +127,7 @@ const sameSandbox = Effect.fn('Agents.sameSandbox')(function* (
 			title: Schema.optionalKey(NullableString)
 		})
 	)(row);
-	if (decoded._tag === 'None' || decoded.value.user_id !== context.subject.userId) {
+	if (decoded._tag === 'None' || decoded.value.user_id !== context.sandboxKey) {
 		return yield* new ToolNotAllowed({ agent: context.agentName, tool: 'sandbox-scope' });
 	}
 	return {
@@ -159,7 +174,7 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 				parameters: [
 					conversationId,
 					context.agentName,
-					context.subject.userId,
+					context.sandboxKey,
 					parsed.task,
 					context.conversationId
 				]
@@ -186,7 +201,7 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 			const result = yield* context.database.execute(context.effectId, {
 				_tag: 'Query',
 				sql: 'select id, agent_name, title from bolt_conversations where user_id = $1',
-				parameters: [context.subject.userId]
+				parameters: [context.sandboxKey]
 			});
 			return {
 				sessions: result.rows.flatMap((row) => {

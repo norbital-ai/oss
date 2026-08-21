@@ -109,8 +109,9 @@
 				<p class="max-w-2xl text-xs leading-relaxed text-muted-foreground">
 					A workbench is a sandbox tree this tenant's agent work runs in. A session opens it, and
 					its tree stays on disk after the session closes — a restart keeps the trees and loses the
-					sessions, so both halves are listed. This host binds workbenches to the workspace, not to
-					a user.
+					sessions, so both halves are listed. A tree belongs to one principal: a person, an envoy,
+					or one conversation with a public envoy. No tool takes a principal id, so nobody reads
+					anybody else's — not even an administrator.
 				</p>
 			</Stack>
 			{#if (snapshot?.workbenches ?? []).length === 0}

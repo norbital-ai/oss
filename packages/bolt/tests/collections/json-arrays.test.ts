@@ -18,6 +18,7 @@ import { TaskQueue } from '../../src/runtime/tasks/tasks.js';
 import { Automations } from '../../src/runtime/automations/automations.js';
 import { InvocationBudget } from '../../src/runtime/budget.js';
 import { testCallContext } from '../support/bolt-test-layer.js';
+import { TenantScope } from '../../src/runtime/tenant.js';
 
 /**
  * A JSON column holding a list has to reach Postgres as JSON.
@@ -63,17 +64,19 @@ const definition = workspace({
 		'admin-data': ['admin-data'],
 		admin: ['admin-data']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: ['database']
 });
 
 const subject: Identity.Subject = {
 	userId: 'admin-1',
 	tenantId: 'tenant-json',
-	teamPath: ['admin']
+	teamPath: ['admin'], policies: []
 };
 
 const RECORD_ID = '11111111-2222-4333-8444-555555555555';
@@ -105,7 +108,14 @@ const testLayer = (seen: Array<DatabaseRequest>) => {
 	const workspaceLayer = Workspace.layer(definition);
 	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(database, tasks)));
 	const automations = Automations.layer.pipe(
-		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, InvocationBudget.layer(0)))
+		Layer.provide(
+		Layer.mergeAll(
+			workspaceLayer,
+			taskQueue,
+			InvocationBudget.layer(0),
+			TenantScope.layer('tenant-json')
+		)
+	)
 	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
 	const approvals = Approvals.layer.pipe(

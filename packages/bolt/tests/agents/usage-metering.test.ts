@@ -14,7 +14,7 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { EnvironmentName, InvocationId, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import { Effect, Schema } from 'effect';
-import { agent, app, collection, field, policy, workspace } from '../../src/authoring/index.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
 
@@ -36,17 +36,19 @@ const definition = workspace({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			apps: ['helper']
+			capabilities: { apps: ['helper'] }
 		})
 	],
 	teams: {
 		'admin-agent': ['admin-agent'],
 		admin: ['admin-agent']
 	},
-	agents: [agent({ name: 'helper', prompt: 'Help the HR team.', tools: [], skills: [] })],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: ['database', 'ai', 'tasks']
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-usage' });
@@ -81,7 +83,7 @@ const twiceInferringBundle = makeBundle(definition, manifest, {
 		return { first: await run('first'), second: await run('second') };
 	}
 });
-const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'] };
+const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'], policies: [] };
 
 type Statement = { readonly sql: string; readonly parameters: ReadonlyArray<unknown> };
 

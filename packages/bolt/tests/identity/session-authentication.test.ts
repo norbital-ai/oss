@@ -43,7 +43,7 @@ describe('session authentication', () => {
 		// Nobody put this person in a team, so `team_id` is null and the recursive walk starts nowhere.
 		// An empty path rather than an absent one: `policiesHeldByTeam` reads it on every decision and
 		// a subject that could be missing it would move that check into every caller.
-		expect(subject.team).toBeUndefined();
+		expect(subject.teamPath[0]).toBeUndefined();
 		expect(subject.teamPath).toEqual([]);
 		expect(subject.email).toBeUndefined();
 	});
@@ -71,7 +71,7 @@ describe('session authentication', () => {
 		);
 
 		expect(subject.userId).toBe('u2');
-		expect(subject.team).toBe('Platform');
+		expect(subject.teamPath[0]).toBe('Platform');
 		expect(subject.teamPath).toEqual(['Platform']);
 		expect(subject.email).toBeUndefined();
 	});

@@ -15,7 +15,6 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { EnvironmentName, InvocationId, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import {
-	agent,
 	app,
 	collection,
 	field,
@@ -43,13 +42,13 @@ const definition = workspace({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			apps: ['helper']
+			capabilities: { apps: ['helper'] }
 		}),
 		policy({
 			name: 'admin-data',
 			effect: 'allow',
 			actions: ['read', 'create', 'update', 'delete'],
-			apps: ['employees']
+			capabilities: { apps: ['employees'] }
 		})
 	],
 	teams: {
@@ -57,33 +56,17 @@ const definition = workspace({
 		'admin-data': ['admin-data'],
 		admin: ['admin-agent', 'admin-data']
 	},
-	agents: [
-		agent({
-			name: 'helper',
-			prompt: 'Help the HR team.',
-			tools: [
-				tool({
-					name: 'sandbox_ls',
-					description: 'List workbench files',
-					command: 'host:sandbox_ls'
-				}),
-				tool({
-					name: 'summarize',
-					description: 'Summarize records',
-					command: 'workspace:summarize'
-				})
-			],
-			skills: []
-		})
-	],
 	automations: [],
-	channels: [],
+	envoys: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
 	requiredFacilities: ['database', 'ai', 'tasks', 'hostTools']
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-tools' });
 const bundle = makeBundle(definition, manifest, {});
-const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'] };
+const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'], policies: [] };
 const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 	call: (_metadata, request) => {
 		// Authentication reads Better Auth's session joined to its user table. Matching on

@@ -1,5 +1,44 @@
 # Collections and Modeling
 
+## Column types the platform owns
+
+**Read this table before you reach for `custom()`. If a type is here, the platform owns it — do not
+hand-write a schema or a renderer for it.** Everything below is a named export of
+`@norbital-ai/bolt/authoring`, and every one renders natively with its own display and input.
+
+| import | stores | notes |
+| --- | --- | --- |
+| `text()` | text | `{ search: true }` puts it in the search index |
+| `numeric()` | exact decimal | never `number` for anything you do arithmetic on |
+| `integer()` | integer | |
+| `boolean()` | boolean | |
+| `uuid()` | uuid | foreign keys and ids |
+| `date()` | date | no time component |
+| `timestamp()` | timestamptz | an instant |
+| `clockTime()` | wall-clock time | a time of day with no date |
+| `dateRange()` | a start/end pair | one value, so the ends cannot separate |
+| `enums([...])` | a closed set | the members reach the manifest |
+| `money()` | amount + currency | **one value.** Never `numeric()` beside an `enums()` currency |
+| `file()` | a file | the column carries the file |
+| `geolocation()` | a point | picker and map come with it |
+| `phone()` | a phone number | |
+| `vector({ dimensions })` | an embedding | |
+| `jsonb()` | opaque JSON | last resort; nothing can query or render it meaningfully |
+
+`custom('<name>')` is the escape hatch for a shape **none of the above covers** — `payslip_source`,
+`leave_event`, `work_pattern`. It is not a way to add flavour to a type that already exists.
+
+> **The rule: never hand-write something the platform owns.** A workspace that declares its own
+> `money` type ends up with a schema that can drift from `std/finance`'s arithmetic, and a renderer
+> that forwards to the platform's own. Four workspaces did exactly that, and a fifth modelled money
+> as `numeric()` beside `enums([...currency])` — three spellings of one idea, free to disagree. If
+> you are about to write a schema for something that sounds universal, it is in the table above or
+> it belongs there; ask before you declare it.
+
+`std/finance/money.ts` is a **separate concern**: it manipulates money *values* — `addAmount`,
+`assertSameCurrency`, `toMinorUnits`. `money()` declares a money *column*. One defines the shape, the
+other does arithmetic on it. Never fold one into the other.
+
 ## Collection model
 
 `src/collections/sites/+model.ts`:
@@ -262,11 +301,16 @@ An owned structured value lives in `custom-types/<name>/` with exactly a `+defin
 required and reaches the manifest, because a `custom('settlement_policy')` column says nothing about what
 it holds. Models reference it through
 `custom('<name>')`. A typed schema factory may accept a second options argument; for example,
-`custom('money', { allowedCurrencies: ['MYR'] })`. The definition owns its schema and inferred value type,
+`custom('work_pattern', { cycle: 'fortnightly' })`. The definition owns its schema and inferred value type,
 and named custom values use JSONB storage. Collection helpers import that definition; a custom-type
 definition must never import or re-export its schema from a collection. Keep scalar references as scalar columns plus relationships.
 The compiler discovers the renderer statically; manual imports, registration calls, and runtime renderer
-registries do not exist. `money` follows this same filesystem contract; it is not a built-in exception.
+registries do not exist.
+
+**`money` is not one of these.** It is a built-in column type — `money()` — with its own renderer and
+input, and a workspace must never declare it. The same goes for every row of the table at the top of
+this file. This paragraph previously said the opposite, and every workspace that read it hand-wrote a
+money type as instructed.
 
 Custom-type schemas are **Effect Schema**, never zod. Compose with `Schema.Struct`, `Schema.Union`,
 `Schema.Literals`, and `Schema.NullOr` from `effect`, and export the value type as

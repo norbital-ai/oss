@@ -218,14 +218,16 @@ const definitionFor = (integrations: WorkspaceDefinition['integrations']): Works
 			})
 		],
 		apps: [],
-		policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+		policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
 		teams: {
 			admin: ['admin']
 		},
-		agents: [],
 		automations: [],
-		channels: [],
 		integrations,
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
+		envoys: [],
 		requiredFacilities: ['database', 'connector'],
 		environment: { variables: { PARTNER_TOKEN: { label: 'Partner API token', secret: true } } }
 	});
@@ -454,7 +456,7 @@ describe('a write queues a delivery and does not wait for it', () => {
 			{
 				userId: 'integration:orders.partner',
 				tenantId: 'system',
-				teamPath: ['admin']
+				teamPath: ['admin'], policies: []
 			}
 		);
 		expect(await outbox()).toEqual([]);

@@ -65,10 +65,9 @@
 		return typeof value === 'string' && value.length > 0 ? value : approvalId;
 	};
 
-	const recordLocked = (record: Row | null): boolean => {
+	const recordApplicationLocked = (record: Row | null): boolean => {
 		if (locked) return true;
 		if (record === null) return false;
-		if (readApprovalId(record) !== null) return true;
 		return Reflect.get(record, 'approvalLock') === true;
 	};
 
@@ -177,7 +176,7 @@
 				record={selected}
 				timeline={loadedTimeline}
 				approvalId={readApprovalId(selected)}
-				locked={recordLocked(selected)}
+				locked={recordApplicationLocked(selected)}
 				{onapprove}
 				{onreject}
 				{onwithdraw}

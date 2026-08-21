@@ -4,6 +4,20 @@ import type { PolicyDeclaration, WorkspaceDefinition } from '../../authoring/wor
 import { Database } from '../facilities/database.js';
 import { Workspace } from '../workspace.js';
 import type { Identity } from '../identity/identity.js';
+import { rateLimitWindowMillis, type RateLimitRule } from '../../authoring/rate-limits-schema.js';
+
+/**
+ * Everything a subject may call, as opposed to everything it may read.
+ *
+ * Four lists rather than one, because the admission rules differ: a tool name is matched exactly, an
+ * MCP call is matched by its server prefix, a skill is loaded by name, and an app is a route.
+ */
+export type SubjectCapabilities = Readonly<{
+	readonly apps: ReadonlySet<string>;
+	readonly tools: ReadonlySet<string>;
+	readonly mcp: ReadonlySet<string>;
+	readonly skills: ReadonlySet<string>;
+}>;
 
 export type Decision = Readonly<{
 	readonly allowed: boolean;
@@ -67,8 +81,16 @@ export const isAdministrator = (subject: Identity.Subject): boolean => subject.a
 const reportedStalePolicies = new Set<string>();
 
 /**
- * The policies a subject holds through its team, resolved against what the release actually
- * declares.
+ * Every policy this subject holds, resolved against what the release actually declares.
+ *
+ * Two sources, one union, and one rule: **a holder names an array of policies; a subject's authority
+ * is the union of what its holders name.** A person's holder is their team, walked down the
+ * hierarchy through `teamPath`. A static identity — an envoy, an automation — has no team at all and
+ * names its policies directly in its declaration, which arrives here as `subject.policies`.
+ *
+ * The two cannot be confused for one another, because `policies` is a `MINTED_IDENTITY` field: no
+ * row projects one and no payload may claim one, so the only way a subject carries policies directly
+ * is that this runtime minted it from a declaration.
  *
  * **A team naming a policy that does not exist is inert, never fatal.** The two sides are bound by
  * name and they move independently: the team is a row an operator edits, the policy is a file that
@@ -80,13 +102,12 @@ const reportedStalePolicies = new Set<string>();
  * The warning is `console.warn` rather than an Effect log because this is a synchronous predicate on
  * the authorization path. It reaches an operator: the isolate forwards guest output to the host.
  */
-export const policiesHeldByTeam = (
+export const policiesHeld = (
 	definition: WorkspaceDefinition,
 	subject: Identity.Subject
 ): ReadonlySet<string> => {
 	const held = new Set<string>();
 	const path = subject.teamPath ?? [];
-	if (path.length === 0) return held;
 	const declaredTeams = definition.teams ?? {};
 	// Folded on both sides, once, rather than at each comparison — team names are matched
 	// case-insensitively everywhere, which is the single rule replacing the two this design had.
@@ -96,6 +117,22 @@ export const policiesHeldByTeam = (
 	const declaredPolicies = new Set(
 		definition.policies.map((policy) => policy.name.toLocaleLowerCase())
 	);
+	// A declaration's own policies, before any team is walked. A name the release does not declare is
+	// dropped here as it is for a team — an envoy that outlived the policy it named answers with less
+	// authority rather than with none of the runtime.
+	for (const policyName of subject.policies ?? []) {
+		const folded = policyName.toLocaleLowerCase();
+		if (declaredPolicies.has(folded)) {
+			held.add(folded);
+			continue;
+		}
+		const key = `declaration:${policyName}`;
+		if (reportedStalePolicies.has(key)) continue;
+		reportedStalePolicies.add(key);
+		console.warn(
+			`[bolt.access] subject "${subject.userId}" names policy "${policyName}" directly, which this release does not declare — ignoring it.`
+		);
+	}
 	for (const teamName of path) {
 		const policies = teamsByFoldedName.get(teamName.toLocaleLowerCase());
 		// A team row whose name the release does not declare holds nothing. That is the ordinary case
@@ -154,13 +191,14 @@ const PolicyEvaluation = {
 	): boolean => {
 		if (!PolicyEvaluation.subjectHasPolicy(policy, subject, held)) return false;
 		const grants = policy.grants ?? [];
-		if (grants.length > 0 && action === 'agent') return (policy.apps ?? []).length > 0;
+		if (grants.length > 0 && action === 'agent') return (policy.capabilities?.apps ?? []).length > 0;
 		if (grants.length > 0)
 			return grants.some((grant) => grant.collection === resource && grant.action === action);
 		const actions = policy.actions ?? [];
 		return (
 			(actions.includes(action) || actions.includes('*')) &&
-			((policy.apps ?? []).includes(resource) || (policy.apps ?? []).includes('*'))
+			((policy.capabilities?.apps ?? []).includes(resource) ||
+				(policy.capabilities?.apps ?? []).includes('*'))
 		);
 	},
 	subjectValue: (subject: Identity.Subject, path: string): Schema.Json | undefined => {
@@ -488,6 +526,25 @@ export type Interface = Readonly<{
 		app: string
 	) => Effect.Effect<void, AccessDenied>;
 	readonly visibleApps: (subject: Identity.Subject) => ReadonlyArray<string>;
+	/**
+	 * The tools, MCP servers and skills this subject may reach — the union over the policies it holds.
+	 *
+	 * The whole of what an agent is offered, and the reason there is no agent declaration left to
+	 * consult. Two people in one workspace get different tools on the *same* web agent because they
+	 * hold different policies, and an envoy gets what its declared policies name. Adding a tool file
+	 * widens nobody until a policy names it.
+	 */
+	readonly capabilities: (subject: Identity.Subject) => SubjectCapabilities;
+	/**
+	 * This subject's own rate rules, merged over the policies it holds.
+	 *
+	 * Per-holder rather than per-workspace, which is the point: a contractor and a controller can be
+	 * given different budgets for the same command without either of them being the workspace's
+	 * default.
+	 */
+	readonly limits: (
+		subject: Identity.Subject
+	) => Readonly<Record<string, ReadonlyArray<RateLimitRule>>>;
 	readonly impersonate: (
 		actor: Identity.Subject,
 		target: Identity.Subject
@@ -554,7 +611,7 @@ export const layer = Layer.effect(
 		 * this whole seam exists to prevent.
 		 */
 		const held = (subject: Identity.Subject): ReadonlySet<string> =>
-			policiesHeldByTeam(workspace.definition, subject);
+			policiesHeld(workspace.definition, subject);
 		const authorize = Effect.fn('AccessControl.authorize')(function* (
 			subject: Identity.Subject,
 			action: string,
@@ -651,8 +708,10 @@ export const layer = Layer.effect(
 				 * membership decides: which policies apply, and which approvals the subject may decide.
 				 * It used to substitute a *policy* name into `roles` and blank `teams` — so a preview
 				 * could see a screen it could never have approved on, which is not a preview of anybody.
+				 *
+				 * One field, not two. `teamPath[0]` is the previewed team, and approval eligibility reads
+				 * it from there — the same place `AccessControl` reads authority from.
 				 */
-				team: matched.name,
 				teamPath: matched.path,
 				// Dropped explicitly, and this is the line that makes the preview mean anything. The
 				// spread carries the actor's own `admin: true`, and every short-circuit above is guarded
@@ -666,10 +725,10 @@ export const layer = Layer.effect(
 		});
 		return Service.of({
 			authorize,
-			resolveScope: ({ tenantId, userId, team, teamPath }) => ({
+			resolveScope: ({ tenantId, userId, teamPath }) => ({
 				tenantId,
 				userId,
-				...(team === undefined ? {} : { team }),
+				...(teamPath[0] === undefined ? {} : { team: teamPath[0] }),
 				teamPath
 			}),
 			predicate: (subject, action, resource) =>
@@ -690,6 +749,55 @@ export const layer = Layer.effect(
 			},
 			explain: (subject, action, resource) =>
 				decide(workspace.definition.policies, subject, action, resource, held(subject)),
+			capabilities: (subject) => {
+				const holds = held(subject);
+				const apps = new Set<string>();
+				const tools = new Set<string>();
+				const mcp = new Set<string>();
+				const skills = new Set<string>();
+				for (const policy of workspace.definition.policies) {
+					if (!PolicyEvaluation.subjectHasPolicy(policy, subject, holds)) continue;
+					for (const name of policy.capabilities?.apps ?? []) apps.add(name);
+					for (const name of policy.capabilities?.tools ?? []) tools.add(name);
+					for (const name of policy.capabilities?.mcp ?? []) mcp.add(name);
+					for (const name of policy.capabilities?.skills ?? []) skills.add(name);
+				}
+				return { apps, tools, mcp, skills };
+			},
+			/**
+			 * The merged rate rules for one subject.
+			 *
+			 * Most specific pattern wins, exactly as `rateLimitFor` decides between patterns. Where two
+			 * policies declare the *same* pattern, the more permissive rule wins — measured as
+			 * admissions per millisecond, so a comparison between different windows is still a
+			 * comparison of the same quantity. That direction is deliberate and matches how grants
+			 * compose: holding a second policy is holding more, never less, so adding one can widen a
+			 * budget and can never quietly shrink it under somebody who was already working.
+			 */
+			limits: (subject) => {
+				const holds = held(subject);
+				const merged = new Map<string, Map<string, RateLimitRule>>();
+				const rate = (rule: RateLimitRule): number => {
+					const windowMillis = rateLimitWindowMillis(rule.window);
+					return windowMillis === undefined ? 0 : rule.limit / windowMillis;
+				};
+				for (const policy of workspace.definition.policies) {
+					if (!PolicyEvaluation.subjectHasPolicy(policy, subject, holds)) continue;
+					for (const [pattern, rules] of Object.entries(policy.limits ?? {})) {
+						const byKey = merged.get(pattern) ?? new Map<string, RateLimitRule>();
+						// Keyed by the bucket's key, so two policies naming `envoys.receive` — one per
+						// sender, one per subject — compose into both rather than one winning.
+						for (const rule of rules) {
+							const existing = byKey.get(rule.key);
+							if (existing === undefined || rate(rule) > rate(existing)) byKey.set(rule.key, rule);
+						}
+						merged.set(pattern, byKey);
+					}
+				}
+				return Object.fromEntries(
+					[...merged].map(([pattern, byKey]) => [pattern, [...byKey.values()]])
+				);
+			},
 			visibleApps: (subject) => {
 				// An administrator is shown the registry whole rather than the union of what the policies
 				// happen to name. Filtering them through the ladder is what produced an empty sidebar for
@@ -702,7 +810,7 @@ export const layer = Layer.effect(
 							policy.grants === undefined
 								? PolicyEvaluation.matches(policy, subject, 'view', name, holds)
 								: PolicyEvaluation.subjectHasPolicy(policy, subject, holds) &&
-									(policy.apps ?? []).some(
+									(policy.capabilities?.apps ?? []).some(
 										(app) => app === '*' || app === name || name.startsWith(`${app}/`)
 									)
 						)

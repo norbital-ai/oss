@@ -35,7 +35,7 @@
 	} = $props();
 
 	let entries = $derived(record === null ? [] : Object.entries(record));
-	let showApproval = $derived(locked || Boolean(approvalId));
+	let showApproval = $derived(Boolean(approvalId));
 	let approvalEvents = $derived(
 		timeline.map((event, index) => ({
 			key: event.id ?? `${event.kind}:${event.subjectId ?? ''}:${event.at ?? index}`,
@@ -101,9 +101,13 @@
 			</dl>
 		{/if}
 
+		{#if locked}
+			<p class="application-lock" role="status">Application lock · This record cannot be changed</p>
+		{/if}
+
 		{#if showApproval}
 			<Stack gap="sm">
-				<p role="status">Locked pending approval</p>
+				<p class="system-lock" role="status">System lock · Pending approval</p>
 				{#if onapprove !== undefined || onreject !== undefined || onwithdraw !== undefined}
 					<Inline gap="sm">
 						{#if onapprove !== undefined}
@@ -172,5 +176,22 @@
 		list-style: none;
 		display: grid;
 		gap: 0.25rem;
+	}
+	.system-lock,
+	.application-lock {
+		width: fit-content;
+		margin: 0;
+		border-radius: 9999px;
+		padding: 0.25rem 0.625rem;
+		font-size: 0.75rem;
+		font-weight: 600;
+	}
+	.system-lock {
+		background: color-mix(in oklab, var(--brand) 12%, transparent);
+		color: var(--brand);
+	}
+	.application-lock {
+		background: var(--muted);
+		color: var(--muted-foreground);
 	}
 </style>

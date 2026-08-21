@@ -59,10 +59,12 @@ const definition = workspace({
 	apps: [app({ name: 'budget', label: 'Budget' })],
 	// A team name maps to the policy names its members hold; `teamPath` on the subject names teams.
 	teams: { admin: ['admin-data'] },
-	agents: [],
 	automations: [],
-	channels: [],
+	envoys: [],
 	integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
 	requiredFacilities: [],
 	policies: [
 		policy({

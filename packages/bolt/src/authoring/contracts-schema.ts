@@ -3,7 +3,7 @@ import type { AnyPgColumnBuilder } from 'drizzle-orm/pg-core';
 import type { SystemColumnName } from '../compiler/schema-plan.js';
 import type { TExportManifest } from './handlers-schema.js';
 import type { FileRef, ModelDeclaration } from './models-schema.js';
-// Type-only, and therefore erased: `workspace-schema.ts` already imports `ChannelDefinition` from
+// Type-only, and therefore erased: `workspace-schema.ts` already imports `EnvoyDefinition` from
 // here, so a value import in this direction would be a real cycle.
 import type { HttpConnection, PrivateEnvReference } from './workspace-schema.js';
 
@@ -95,34 +95,80 @@ export type DefaultWorkspaceSchema = WorkspaceAuthoringTypes extends {
 	: AnySchema;
 
 /**
- * A policy, named the way every other authored thing in a workspace is named: by its file.
+ * One generated union, read off the augmentation the compiler writes.
  *
- * `PolicyName` is generated from the `src/policies/+*.policy.ts` filenames, so this union is
- * `'employee' | 'supervisor' | …` — the file keys, folded nowhere and spelled exactly once. A
- * workspace that has not been synced has no augmentation and falls back to `string`, which is also
- * what Bolt's own sources see.
+ * Every name one declaration uses to reach another is one of these. `sync.ts` generates the union
+ * from the filenames it discovered and `workspace-authoring.d.ts` augments `WorkspaceAuthoringTypes`
+ * with it, so a rename fails the build at the reference rather than emptying an authority at run
+ * time. A workspace that has not been synced has no augmentation and falls back to `string`, which
+ * is also what Bolt's own sources see.
  *
- * Everything that binds to a policy uses this one type: the policy's own `name`, a team's holdings
- * in `+teams.ts`, and a channel's ceiling. That is the whole of the fix for a defect that survived
- * five workspaces — the runtime resolves a policy by its declared `name`
- * (`policiesHeldByTeam`, `Workspace.policy`), the compiler generates `PolicyName` from the filename,
- * and nothing made the two agree. A file that declared `name: 'Sales representative'` compiled, and
- * every team and channel that named it silently held nothing.
+ * Written once as a helper rather than eleven times as a conditional, because eleven copies is how
+ * six of them came to be generated, declared, and read by nobody: `AgentToolName`, `McpServerName`,
+ * `AppName`, `RemoteName` and `ChannelName` were all emitted by the compiler and only
+ * `DeclaredPolicyName` ever had a resolver here.
  */
-type DeclaredPolicyName = WorkspaceAuthoringTypes extends {
-	readonly policyName: infer P extends string;
+type DeclaredName<Field extends string> = WorkspaceAuthoringTypes extends {
+	readonly [K in Field]: infer Name extends string;
 }
-	? P
+	? Name
 	: string;
 
 /**
- * The shape of `src/+teams.ts`: which policies each named team holds.
+ * A policy, named the way every other authored thing in a workspace is named: by its file.
+ *
+ * `PolicyName` is generated from the `src/access/policies/+*.ts` filenames, so this union is
+ * `'employee' | 'supervisor' | …` — the file keys, folded nowhere and spelled exactly once.
+ *
+ * Everything that binds to a policy uses this one type: a team's holdings in `+teams.ts`, an envoy's
+ * ceiling, an automation's authority. The policy no longer restates its own name — there is no
+ * `name:` field left to disagree with the filename, which is the defect this union was introduced
+ * to catch and the file field was the reason it existed at all.
+ */
+type DeclaredPolicyName = DeclaredName<'policyName'>;
+/** The same union, exported for the declarations that name a policy: envoys, automations, teams. */
+export type PolicyName = DeclaredPolicyName;
+
+/**
+ * A team, by the name `src/access/+teams.ts` gives it, and the only thing an approver may be.
+ *
+ * `approvers: ['HR Manger']` shipped, and produced an approval nobody could ever decide: a bare
+ * string compared against `bolt_team.name` matches nothing when it is misspelled, and nothing says
+ * so. Case-folding closed the casing half and left the typo half open. This closes it: a step names
+ * a key of `+teams.ts` or the build fails.
+ *
+ * The union is derived from the teams module's own keys rather than from a scan of its text, so a
+ * team declared behind a spread or a computed key is still in it.
+ */
+export type TeamName = DeclaredName<'teamName'>;
+
+/** A collection, by its `src/collections/<name>/` directory. */
+export type CollectionName = DeclaredName<'collectionName'>;
+/** An app, by its `src/apps/+<name>.svelte` file. */
+export type AppName = DeclaredName<'appName'>;
+/** A workspace tool, by its `src/capabilities/tools/+<name>.ts` file. */
+export type DeclaredToolName = DeclaredName<'toolName'>;
+/** An MCP server, by its `src/capabilities/mcp/+<name>.ts` file. */
+export type McpServerName = DeclaredName<'mcpServerName'>;
+/** A skill, by its `src/capabilities/skills/<name>/` directory. */
+export type DeclaredSkillName = DeclaredName<'skillName'>;
+/** An envoy, by its `src/envoys/+<name>.ts` file. */
+export type EnvoyName = DeclaredName<'envoyName'>;
+/** An automation, by its `src/automations/+<name>.ts` file. */
+export type AutomationName = DeclaredName<'automationName'>;
+/** A called function, by its `src/functions/+<name>.ts` file. */
+export type FunctionName = DeclaredName<'functionName'>;
+/** A field type, by its `src/datatypes/+<name>.ts` file. */
+export type DatatypeName = DeclaredName<'datatypeName'>;
+
+/**
+ * The shape of `src/access/+teams.ts`: which policies each named team holds.
  *
  * Keys are team names, matched case-insensitively against `bolt_team.name`, and free strings on
  * purpose — a team is a row an operator creates from a dashboard, so no compiled union can enumerate
- * them. Values are narrowed to *this* workspace's declared policy names through the same
- * augmentation `PolicyDefinition` uses, so renaming or deleting a policy breaks the build here, in
- * the map that hands it to people, instead of quietly emptying somebody's authority at run time.
+ * them, and this file is where the enumeration comes from. Values are narrowed to *this* workspace's
+ * declared policy names, so renaming or deleting a policy breaks the build here, in the map that
+ * hands it to people, instead of quietly emptying somebody's authority at run time.
  *
  * The runtime is deliberately more forgiving than this type: a team naming a policy the release does
  * not declare has that name dropped and warned about, never refused, because a row and a release
@@ -968,63 +1014,148 @@ export type CollectionIntegrations<S extends AnySchema, N extends TableName<S>> 
 	>
 >;
 
-export interface ChannelDefinition {
+/**
+ * One step of an approval, declared on the grant it gates.
+ *
+ * There is no `id` and no `name` here, and their absence is what makes this safe. A request's
+ * identity derives from `(policy, collection, action, key)`, so two grants are never the same
+ * approval and there is no authored identifier to collide, to copy-paste, or to renumber. The
+ * templates carried hand-written UUID pairs — `variationApproval('019f6f10-…-003', '019f6f10-…-103')`
+ * — which is the only part of an approval anybody could get wrong, and it is gone.
+ *
+ * `key` is required and is what the id derives from, so reordering a policy's steps cannot silently
+ * rebind an approval that is already in flight. Order carries no meaning; the key does.
+ */
+export type PolicyApprovalStep = {
+	/** Stable within the grant, and what the request id derives from. Never an index. */
+	readonly key: string;
+	/**
+	 * The teams that may decide this step, as keys of `src/access/+teams.ts`.
+	 *
+	 * `TeamName`, not `string`. `approvals.decide` matches these against the subject's team by name,
+	 * so a misspelling produces an approval nobody can ever decide and nothing raises — which is what
+	 * `approvers: ['HR Manger']` did. A typo is a compile error now.
+	 */
+	readonly approvers: ReadonlyArray<TeamName>;
+	readonly description?: string;
+};
+
+/**
+ * The approval on one grant.
+ *
+ * A field on the grant rather than a thing declared elsewhere and referenced, and that is a safety
+ * property rather than a brevity one. A separate `approvals/` category would invent two failure
+ * modes to solve none: a grant naming a workflow that does not exist, and a workflow that exists
+ * which no grant binds. Inline has neither, because there is no reference. Two grants that want the
+ * same steps share an ordinary `const`, which is TypeScript rather than a framework concept.
+ */
+export type PolicyApproval = { readonly steps: ReadonlyArray<PolicyApprovalStep> };
+
+/**
+ * An envoy: an agent that is not the web agent, with its own identity and one transport.
+ *
+ * Five fields, and each answers a question no policy can be asked. Everything a policy *can* answer
+ * is deliberately absent — `tools`, `mcp`, `skills`, `collections`, `access`, `rateLimits`, `model`,
+ * `maxTokens`, `description` and `prompt` were all on the shape this replaces, and every one of them
+ * was a second place to say something the model already says once. A field that can be said twice is
+ * a field that can disagree with itself, and on a public surface the disagreement is a security bug.
+ *
+ * There is no `agent` back-pointer either. An envoy *is* the agent.
+ */
+export interface EnvoyDefinition {
+	/** How it is reached: `telegram`, `whatsapp`. Not what it may do. */
 	readonly transport: string;
 	/**
-	 * The capability ceiling every run on this channel is evaluated against.
+	 * Who may reach it. `public` is anyone who can message the transport; `authenticated` is a member
+	 * who has proved the address is theirs.
 	 *
-	 * Resolved by `Workspace.policy`, which matches a policy's declared `name` — so this is the
-	 * policy's file key, and typing it as the generated union is the only thing that says so at
-	 * authoring time. It was `string` while the runtime matched a display-cased name, which is how
-	 * field-operations shipped a WhatsApp channel pointed at `field_ops_contractor`, a policy that
-	 * existed, under a name nothing answered to.
+	 * It is reach and not conversation shape, which `groupMessages` answers more precisely.
 	 */
-	readonly policy: DeclaredPolicyName;
-	readonly description: string;
 	readonly audience: 'public' | 'authenticated';
-	readonly groupMessages?: 'disabled' | 'mention_or_reply' | 'all';
 	/**
-	 * Per-minute caps on inbound messages, enforced in `runtime/channels/channels.ts`.
+	 * Everything this envoy MAY DO — tools, MCP servers, skills, apps, grants and rate limits alike.
 	 *
-	 * Both are counted over the last minute of inbound receipts and checked in the same statement
-	 * that writes the receipt, so a simultaneous burst cannot all read the count from before any of
-	 * them was recorded. A message past either cap is refused with a `ChannelError` rather than
-	 * queued: the sender resends, the host does not retry.
+	 * Choosing these *is* choosing what the public may do, which is why "what can a stranger do to my
+	 * database?" has a written answer: read the policies named here. That is the whole attack surface.
 	 *
-	 * Omitting this leaves a channel uncapped. That is only reasonable for an `authenticated`
-	 * audience — a `public` channel is reachable by anyone who can message the transport, and the cap
-	 * is the only thing between that and an unbounded number of agent turns billed to the workspace.
+	 * An array, and safe as one only because the compiler refuses a holder that names an
+	 * unconditional grant beside a narrowed one on the same collection — `rowPredicate` unions the
+	 * `where` of every matching grant, so that combination collapses the predicate to `true`.
 	 */
-	readonly rateLimits?: { readonly perSenderPerMinute: number; readonly totalPerMinute: number };
+	readonly policies: ReadonlyArray<DeclaredPolicyName>;
+	/** The standing instruction for this envoy's turns, on top of the workspace's `+agents.md`. */
 	readonly task: string;
+	readonly groupMessages?: 'disabled' | 'mention_or_reply' | 'all';
 }
 type PolicyGrant<S extends AnySchema> = {
 	readonly [N in TableName<S>]: {
 		readonly collection: N;
 		readonly action: 'read' | 'create' | 'update' | 'delete' | 'history';
 		readonly where?: SchemaWhere<SchemaRow<S, N>>;
-		readonly approval?: unknown;
+		readonly approval?: PolicyApproval;
 	};
 }[TableName<S>];
+
+/**
+ * What a policy grants beyond data: the tools, servers, skills and apps its holders may reach.
+ *
+ * It lives on the policy and nowhere else, because tool access *is* authority. Different classes of
+ * person hold different policies and some may author code while others may not — that is a
+ * capability question, and capability questions have exactly one home. Filing these under an agent
+ * would teach a new author the opposite of the model on their first day, and would not survive the
+ * fact that a sales rep and a controller reach different tools through the same web agent.
+ *
+ * Every list is a generated union, so a renamed tool or a deleted skill fails the build here.
+ */
+export interface PolicyCapabilities {
+	readonly apps?: ReadonlyArray<AppName>;
+	readonly tools?: ReadonlyArray<DeclaredToolName>;
+	readonly mcp?: ReadonlyArray<McpServerName>;
+	readonly skills?: ReadonlyArray<DeclaredSkillName>;
+}
+
+/**
+ * How much a policy's holders may do, keyed by what shares a bucket with what.
+ *
+ * `subject` bounds an authenticated person — and bounds an envoy as a whole, because an envoy is one
+ * subject and its senders therefore share one bucket by construction. `sender` bounds each external
+ * sender separately, which is the per-sender cap the envoy declaration used to carry. Neither key
+ * needs a rule about the other: a `sender`-keyed rule simply never matches a human holder, exactly
+ * as `address` stops matching after sign-in.
+ *
+ * `key` is optional and reads as `subject`, which is the only sensible default for a rule declared
+ * on the thing that has a holder.
+ *
+ * One command may carry several rules keyed differently, and `envoys.receive` is why: a public envoy
+ * caps each outside sender *and* the surface as a whole, and those are the same command counted two
+ * ways. A caller has to be inside all of them — being under one of two ceilings is not admission.
+ */
+type PolicyLimitRule = {
+	readonly window: string;
+	readonly limit: number;
+	readonly key?: 'subject' | 'sender' | 'tenant';
+};
+export type PolicyLimits = Readonly<
+	Record<string, PolicyLimitRule | ReadonlyArray<PolicyLimitRule>>
+>;
+
+/**
+ * A policy: the complete statement of what its holder may do.
+ *
+ * Four keys, and every one answers a question about *this policy's holders* — whether that holder is
+ * a person through a team, an envoy, or an automation. `grants` is what they may touch,
+ * `capabilities` is what they may call, `limits` is how much, and the approval on a grant is who has
+ * to agree first. Nothing else in the system grants capability.
+ *
+ * There is no `name`. The filename is the name, exactly as it is for a collection, an app and an
+ * envoy, and a restated `name:` is precisely what let five workspaces ship a display-cased string
+ * that compiled and matched nothing. There is no field left to disagree with the file.
+ */
 export interface PolicyDefinition<S extends AnySchema = DefaultWorkspaceSchema> {
-	/**
-	 * The policy's own file key, and the only name anything binds to.
-	 *
-	 * `+sales_rep.policy.ts` declares `name: 'sales_rep'`. This looks like a redundant restatement of
-	 * the filename and is not: the runtime resolves a policy by this field —
-	 * `policiesHeldByTeam` folds it to match a team's holdings, `Workspace.policy` looks a channel's
-	 * ceiling up by it — while the compiler generates `PolicyName` from the filename. Typing it as
-	 * the generated union is what makes the two the same string. A display-cased `name` used to
-	 * compile here and match nothing at run time, in five of six workspaces.
-	 *
-	 * A policy has no separate label, deliberately. The prose that describes it to a person is
-	 * `description`, which is what the studio renders beside the name; adding a second human-facing
-	 * spelling is how the drift started.
-	 */
-	readonly name: DeclaredPolicyName;
 	readonly description: string;
-	readonly apps?: ReadonlyArray<string>;
 	readonly grants: ReadonlyArray<PolicyGrant<S>>;
+	readonly capabilities?: PolicyCapabilities;
+	readonly limits?: PolicyLimits;
 }
 export interface McpServerDefinition {
 	readonly url: string;

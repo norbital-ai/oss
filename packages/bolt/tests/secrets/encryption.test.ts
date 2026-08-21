@@ -47,14 +47,16 @@ const vaultWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })],
+	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
 	teams: {
 		admin: ['admin']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
+	envoys: [],
 	integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
 	requiredFacilities: [],
 	environment: defineEnvironment({ [SECRET_NAME]: { label: 'Geocoding key' } })
 });
@@ -62,12 +64,12 @@ const vaultWorkspace = workspace({
 const userA: Identity.Subject = {
 	userId: 'user-a',
 	tenantId: 'test-tenant',
-	teamPath: ['employee']
+	policies: [], teamPath: ['employee']
 };
 const userB: Identity.Subject = {
 	userId: 'user-b',
 	tenantId: 'test-tenant',
-	teamPath: ['employee']
+	policies: [], teamPath: ['employee']
 };
 
 const writePersonal = (

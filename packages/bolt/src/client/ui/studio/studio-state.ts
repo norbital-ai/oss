@@ -322,9 +322,21 @@ export const ManifestSchema = Schema.Struct({
 	),
 	apps: Schema.Array(Schema.Struct({ name: Schema.String, label: Schema.String })),
 	policies: Schema.Array(Schema.Struct({ name: Schema.String, grants: Schema.Number })),
-	agents: Schema.Array(Schema.Struct({ name: Schema.String })),
 	automations: Schema.Array(Schema.Struct({ name: Schema.String })),
-	channels: Schema.Array(Schema.Struct({ name: Schema.String })),
+	/**
+	 * Every envoy, with what it is and where it is reached — not a bare name.
+	 *
+	 * The manifest used to project a channel as `{ name }` alone, so nothing downstream could say
+	 * which transport it spoke to or who could reach it, and the Studio had to write a paragraph
+	 * explaining that it could not know. It carries `transport` and `audience` now, so it can.
+	 */
+	envoys: Schema.Array(
+		Schema.Struct({
+			name: Schema.String,
+			transport: Schema.String,
+			audience: Schema.String
+		})
+	),
 	integrations: Schema.Array(Schema.Struct({ name: Schema.String })),
 	requiredFacilities: Schema.Array(Schema.String)
 });
@@ -389,9 +401,8 @@ const plural = (count: number, noun: string): string => `${count} ${noun}${count
  * are constant and only their counts move.
  *
  * Integrations are deliberately absent: an integration binds to one collection, so it belongs
- * under that collection's own Integrations tab rather than in a flat list beside it. Channels are
- * absent for the same reason in the other direction — a channel is how one agent is reached, so it
- * is read inside Agents rather than as a sibling branch of it. Environment is the workspace's
+ * under that collection's own Integrations tab rather than in a flat list beside it. Environment is
+ * the workspace's
  * declared `+env.ts` names, which arrive from `secrets.status` rather than the manifest — the vault
  * is the only thing that knows which of them are actually set.
  */
@@ -438,13 +449,15 @@ export const manifestSections = (
 		}))
 	},
 	{
-		id: 'agents',
-		label: 'Agents',
+		id: 'envoys',
+		label: 'Envoys',
 		icon: 'agent',
-		summary:
-			'The agents this workspace declares, the channels each one is reached on, and the tools it may call.',
+		summary: 'The agents this workspace exposes on a transport, and what each one is reached on.',
 		expandable: false,
-		entries: (manifest?.agents ?? []).map(({ name }) => ({ name }))
+		entries: (manifest?.envoys ?? []).map(({ name, transport, audience }) => ({
+			name,
+			detail: `${transport} · ${audience}`
+		}))
 	},
 	{
 		id: 'automations',
@@ -477,92 +490,89 @@ export const manifestSections = (
 ];
 
 /**
- * What `channels.status` answers, and the whole of what it answers.
+ * What `envoys.status` answers, and the whole of what it answers.
  *
- * `registered` is not connectivity. It is `exists(select 1 from bolt_channel_registrations …)` —
- * whether anything ever called `channels.register` for this name — and it stays true after the
+ * `registered` is not connectivity. It is `exists(select 1 from bolt_envoy_registrations …)` —
+ * whether anything ever called `envoys.register` for this name — and it stays true after the
  * transport behind it dies. `received` and `replied` are cumulative receipt counts with no time
  * dimension. Decoding the shape here is what stops the surface from inventing a field the runtime
  * never sends.
  */
-export const ChannelStatusSchema = Schema.Struct({
-	channel: Schema.String,
+export const EnvoyStatusSchema = Schema.Struct({
+	envoy: Schema.String,
 	registered: Schema.Boolean,
 	received: Schema.Number,
 	replied: Schema.Number
 });
-export type ChannelStatus = typeof ChannelStatusSchema.Type;
+export type EnvoyStatus = typeof EnvoyStatusSchema.Type;
 
 /**
- * Why no channel row can show a green "connected" light.
+ * Why no envoy row can show a green "connected" light *from the runtime*.
  *
- * Across the whole runtime there is no command, facility tag or type that reports a channel's
- * transport state: `Communication` is `VerifyInbound`/`Send`/`Notify`/`Wake` with no probe, and
- * `channels.status` never touches it. A reachable and an unreachable channel therefore read
- * identically, and the surface says that rather than dressing `registered` up as a connection.
+ * Across the whole runtime there is no command, facility tag or type that reports a transport's
+ * state: `Communication` is `VerifyInbound`/`Send`/`Notify`/`Wake` with no probe, and
+ * `envoys.status` never touches it. A reachable and an unreachable envoy therefore read identically
+ * here, and the surface says that rather than dressing `registered` up as a connection. The host
+ * *does* know — it holds the socket — and the Envoys settings page asks it; that answer is host
+ * state and deliberately does not come back into the tenant.
  */
-export const CHANNEL_CONNECTION_UNREPORTABLE =
-	'No command reports whether a channel’s transport is connected. `channels.status` answers with `registered` — whether the channel was ever registered with this runtime — and its receipt counts. Nothing probes the provider, so a live and a dead transport read the same here.';
+export const ENVOY_CONNECTION_UNREPORTABLE =
+	'No runtime command reports whether an envoy’s transport is connected. `envoys.status` answers with `registered` — whether the envoy was ever registered with this runtime — and its receipt counts. Nothing here probes the provider, so a live and a dead transport read the same; the host holds the socket and answers that question on the Envoys settings page.';
 
-/**
- * Why every channel and tool hangs off the one agent.
- *
- * The compiler synthesises exactly one agent per workspace, names it after the package, and binds
- * every declared channel to it. The binding is real, but `workspace.manifest` projects a channel as
- * a bare name, so the Studio can only present it as the agent's when the workspace has exactly one
- * agent to be unambiguous about.
- */
-export const AGENT_BINDING_NOTE =
-	'This runtime compiles one workspace agent and binds every declared channel to it. `workspace.manifest` projects a channel as a bare name — the authored transport, policy and task are dropped before the manifest is built — so nothing here can name the provider a channel speaks to.';
-
-/** One tool an agent may call, and the file whose name declared it. */
+/** One tool a policy may grant, and the file whose name declared it. */
 export type StudioTool = Readonly<{ readonly name: string; readonly sourcePath: string }>;
 
-/** One agent, with everything reached through it gathered underneath. */
-export type StudioAgent = Readonly<{
+/** One envoy, as the Studio renders it: what the manifest says, plus the file that declared it. */
+export type StudioEnvoy = Readonly<{
 	readonly name: string;
-	readonly channels: ReadonlyArray<ManifestEntry>;
-	readonly tools: ReadonlyArray<StudioTool>;
+	readonly transport: string;
+	readonly audience: string;
+	readonly sourcePath?: string;
 }>;
 
-/** `src/…/+<name>.tool.ts` — the filename *is* the tool name; the compiler reads nothing else. */
-const TOOL_FILE = /(?:^|\/)\+([^/]+)\.tool\.ts$/;
-/** `src/channels/+<name>.channel.ts` — likewise the only part of the file that survives. */
-const CHANNEL_FILE = /(?:^|\/)\+([^/]+)\.channel\.ts$/;
+/** `src/capabilities/tools/+<name>.ts` — the filename *is* the tool name. */
+const TOOL_FILE = /(?:^|\/)capabilities\/tools\/\+([^/]+)\.ts$/;
+/** `src/envoys/+<name>.ts` — likewise the only part of the file that survives. */
+const ENVOY_FILE = /(?:^|\/)envoys\/\+([^/]+)\.ts$/;
 
 /**
- * The agents this workspace declares, with their channels and custom tools gathered under each.
+ * The envoys this workspace declares, each with the file that declared it.
  *
- * The manifest gives names and nothing else, so the authored source is the only place the tools are
- * legible: the compiler derives an agent's tool list from `+<name>.tool.ts` filenames and discards
- * the file's own declared description, which makes the filename the honest answer rather than a
- * lossy one. Channels attach to the single agent the compiler synthesises; a workspace that somehow
- * declares several gets them back as unattributed, because guessing which agent owns which channel
- * is exactly the kind of plausible answer nobody can check.
+ * There is no grouping under an agent, because there is no agent to group under: an envoy *is* one.
+ * This used to return `StudioAgent` — one node per synthesized agent, with every channel and every
+ * tool hung beneath it — and the synthesis meant the tree always had exactly one node above the
+ * things anybody wanted to read.
+ *
+ * The manifest now carries `transport` and `audience`, so the note that used to explain what the
+ * Studio could not know is gone with the projection that made it true.
  */
-export const workspaceAgents = (
+export const workspaceEnvoys = (
 	manifest: WorkspaceManifest | undefined,
 	files: ReadonlyArray<string> = []
-): ReadonlyArray<StudioAgent> => {
-	const agents = manifest?.agents ?? [];
-	const channelSource = new Map(
+): ReadonlyArray<StudioEnvoy> => {
+	const source = new Map(
 		files.flatMap((path) => {
-			const name = CHANNEL_FILE.exec(path)?.[1];
+			const name = ENVOY_FILE.exec(path)?.[1];
 			return name === undefined ? [] : [[name, path] as const];
 		})
 	);
-	const channels: ReadonlyArray<ManifestEntry> = (manifest?.channels ?? []).map(({ name }) => {
-		const sourcePath = channelSource.get(name);
-		return { name, ...(sourcePath === undefined ? {} : { sourcePath }) };
+	return (manifest?.envoys ?? []).map(({ name, transport, audience }) => {
+		const sourcePath = source.get(name);
+		return { name, transport, audience, ...(sourcePath === undefined ? {} : { sourcePath }) };
 	});
-	const tools: ReadonlyArray<StudioTool> = files.flatMap((path) => {
+};
+
+/**
+ * Every tool this workspace authored, by the file that declared it.
+ *
+ * A flat list, not an agent's. A tool reaches a turn when a policy the subject holds names it, so
+ * "whose tool is this" has no single answer — and hanging them under an agent asserted one.
+ */
+export const workspaceTools = (files: ReadonlyArray<string> = []): ReadonlyArray<StudioTool> =>
+	files.flatMap((path) => {
 		const name = TOOL_FILE.exec(path)?.[1];
 		return name === undefined ? [] : [{ name, sourcePath: path }];
 	});
-	return agents.map(({ name }) =>
-		agents.length === 1 ? { name, channels, tools } : { name, channels: [], tools: [] }
-	);
-};
 
 export type StudioMetric = Readonly<{
 	readonly id: string;

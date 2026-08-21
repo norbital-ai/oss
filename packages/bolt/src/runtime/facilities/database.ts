@@ -32,6 +32,15 @@ export type CallContext = Readonly<{
 	 * rather than inventing its own notion of a mode.
 	 */
 	readonly environment: string;
+	/**
+	 * Which tenant this invocation is for, as the host scoped it — never as a payload claimed it.
+	 *
+	 * Carried here because it is the one fact a *static* identity has to be minted with and has no row
+	 * to read off: a person's subject gets its tenant from the credential that authenticated them, and
+	 * an envoy or an automation is declared in source. `TenantScope` publishes it as a service so the
+	 * services that mint those subjects read it from the invocation rather than from a workspace name.
+	 */
+	readonly tenantId: string;
 }>;
 
 /** Owns invoke binding behavior at the facilities boundary so validation and typed semantics stay consistent for every caller. */
@@ -67,8 +76,11 @@ export const invokeBinding = <Input, Output>(
 						subject: {
 							userId: subject.value.userId,
 							// The team, not a role list. What it entitles them to is the release's business,
-							// not something a facility binding needs told.
-							...(subject.value.team === undefined ? {} : { team: subject.value.team })
+							// not something a facility binding needs told. `teamPath[0]` *is* the subject's own
+							// team — there is no second field carrying it, so there is nothing to disagree.
+							...(subject.value.teamPath[0] === undefined
+								? {}
+								: { team: subject.value.teamPath[0] })
 						}
 					}
 				: {})

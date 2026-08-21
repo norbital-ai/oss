@@ -1,5 +1,5 @@
 import { boolean, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import type { TransportIdentity } from '../channels/transport-identity.js';
+import type { TransportIdentity } from '../envoys/transport-identity.js';
 
 /**
  * Better Auth's view of identity's tables.
@@ -31,7 +31,6 @@ export const boltAuthUser = pgTable('bolt_auth_user', {
 	emailVerified: boolean('emailVerified').notNull(),
 	image: text('image'),
 	/** A host provisioner is not a person; `service` with a null email says so rather than pretending. */
-	kind: text('kind').notNull(),
 	/**
 	 * Whether this person administers the workspace — `normal` or `admin`. Bolt's concept, which
 	 * Better Auth never reads, and mapped here for the same reason `kind`, `tenantId` and `team_id`

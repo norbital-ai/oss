@@ -15,7 +15,7 @@ import {
 	type TaskResponse
 } from '@norbital-ai/bolt-protocol';
 import { EnvironmentName, InvocationId, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
-import { app, agent, collection, field, policy, workspace } from '../../src/authoring/index.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
 
@@ -36,31 +36,31 @@ const definition = workspace({
 			name: 'employee-app',
 			effect: 'allow',
 			actions: ['view'],
-			apps: ['hr']
+			capabilities: { apps: ['hr'] }
 		}),
 		policy({
 			name: 'admin-approval',
 			effect: 'allow',
 			actions: ['approve'],
-			apps: ['approvals']
+			capabilities: { apps: ['approvals'] }
 		}),
 		policy({
 			name: 'admin-sync',
 			effect: 'allow',
 			actions: ['sync'],
-			apps: ['*']
+			capabilities: { apps: ['*'] }
 		}),
 		policy({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			apps: ['helper']
+			capabilities: { apps: ['helper'] }
 		}),
 		policy({
 			name: 'admin-data',
 			effect: 'allow',
 			actions: ['read', 'create', 'update', 'delete'],
-			apps: ['employees']
+			capabilities: { apps: ['employees'] }
 		})
 	],
 	teams: {
@@ -71,10 +71,12 @@ const definition = workspace({
 		'admin-data': ['admin-data'],
 		admin: ['employee-app', 'admin-approval', 'admin-sync', 'admin-agent', 'admin-data']
 	},
-	agents: [agent({ name: 'helper', prompt: 'Help the HR team.', tools: [], skills: [] })],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: ['database', 'ai', 'tasks']
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-fixture' });
@@ -161,7 +163,7 @@ const facilities: FacilityBindings = { scope, database, ai, tasks };
  *
  * Administration is `bolt_auth_user.status` and nothing else — `subjectFromRow` reads
  * `text(row, 'status') === ADMIN_STATUS` and consults no other column. This fixture used to carry
- * `admin: true` and `teamPath: ['admin', 'impersonator']`, neither of which that projection looks at,
+ * `admin: true` and `teamPath: ['admin', 'impersonator'], policies: []`, neither of which that projection looks at,
  * so every case below named for an administrator authenticated as an ordinary user with no matching
  * policy and was refused.
  *
@@ -173,7 +175,7 @@ const subject = {
 	userId: 'admin-1',
 	tenantId: 'tenant-1',
 	status: 'admin',
-	teamPath: []
+	teamPath: [], policies: []
 };
 /**
  * Placed in `employee-app`, which is a team this workspace declares.
@@ -182,7 +184,7 @@ const subject = {
  * declares resolves to no policies at all, and the subject then sees an empty app list — which
  * reads exactly like an authorization refusal and is not one.
  */
-const employee = { userId: 'employee-1', tenantId: 'tenant-1', teamPath: ['employee-app'] };
+const employee = { userId: 'employee-1', tenantId: 'tenant-1', teamPath: ['employee-app'], policies: [] };
 
 const invoke = async (command: string, input: Schema.Json): Promise<BundleResult> => {
 	const invocation: Invocation = {
@@ -391,7 +393,7 @@ describe('runnable Bolt vertical slice', () => {
 
 	/**
 	 * These three assertions used to read the other way round: the plugin minted a subject out of
-	 * `trustedContext.roles`, so `{ teamPath: ['admin'] }` on an unauthenticated POST was an admin. The
+	 * `trustedContext.roles`, so `{ teamPath: ['admin'], policies: [] }` on an unauthenticated POST was an admin. The
 	 * roles now come from the session the credential names, which makes the payload's copy inert — and
 	 * with no credential at all there is nothing to run as, so the read is refused rather than answered
 	 * with the empty page an inert role set would have produced.
@@ -400,7 +402,7 @@ describe('runnable Bolt vertical slice', () => {
 		const forged = await invokePlugin(
 			'query',
 			{ collection: 'employees', input: { limit: 20 } },
-			{ teamPath: ['admin'], subject: 'admin-external' },
+			{ teamPath: ['admin'], policies: [], subject: 'admin-external' },
 			null
 		);
 		expect(forged).toMatchObject({
@@ -415,7 +417,7 @@ describe('runnable Bolt vertical slice', () => {
 		const claimed = await invokePlugin(
 			'query',
 			{ collection: 'employees' },
-			{ teamPath: ['forged-role'] }
+			{ teamPath: ['forged-role'], policies: [] }
 		);
 		expect(claimed).toMatchObject({ _tag: 'Success', response: { value: [] } });
 	});

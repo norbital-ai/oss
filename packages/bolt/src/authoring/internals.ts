@@ -1,10 +1,11 @@
 import type { ModelDeclaration } from './models-schema.js';
+export { describeHooks, describeModel, describeModelColumns } from './model-introspection.js';
 export {
-	describeAgent,
-	describeHooks,
-	describeModel,
-	describeModelColumns
-} from './model-introspection.js';
+	approvalConfigurationId,
+	approvalStepId,
+	describeEnvoy,
+	describePolicy
+} from './policy-introspection.js';
 export { describeIntegrations, manifestIntegrations } from './integration-introspection.js';
 export type {
 	AuthoredIntegrationBinding,

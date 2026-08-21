@@ -20,10 +20,12 @@ describe('WorkspaceSchema owner', () => {
 			],
 			apps: [],
 			policies: [],
-			agents: [],
 			automations: [],
-			channels: [],
+			envoys: [],
 			integrations: [],
+		prompt: 'You are the test workspace agent.',
+		tools: [],
+		skills: [],
 			requiredFacilities: []
 		});
 		const plan = buildSchemaPlan(definition);

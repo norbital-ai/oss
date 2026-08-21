@@ -137,7 +137,7 @@ export const provisioningStatements = async (
 import { AccessControl } from '../../src/runtime/access/access-control.js';
 import * as Agents from '../../src/runtime/agents/agents.js';
 import { Automations } from '../../src/runtime/automations/automations.js';
-import { Channels } from '../../src/runtime/channels/channels.js';
+import { Envoys } from '../../src/runtime/envoys/envoys.js';
 import { Integrations } from '../../src/runtime/integrations/integrations.js';
 import { Notifications } from '../../src/runtime/notifications/notifications.js';
 import { WorkspaceSchema } from '../../src/runtime/schema/workspace-schema.js';
@@ -164,6 +164,7 @@ import { Identity } from '../../src/runtime/identity/identity.js';
 import { remoteRegistryLayer } from '../../src/runtime/remotes.js';
 import { InvocationBudget } from '../../src/runtime/budget.js';
 import { RateLimits } from '../../src/runtime/rate-limits.js';
+import { TenantScope } from '../../src/runtime/tenant.js';
 import { Secrets } from '../../src/runtime/secrets/secrets.js';
 import { PersonalSecrets } from '../../src/runtime/secrets/personal-secrets.js';
 import { SECRET_KEY_VARIABLE, SecretCipher } from '@norbital-ai/std/secret';
@@ -191,11 +192,14 @@ import { Workspace } from '../../src/runtime/workspace.js';
  * wants the development path has to name it, which `testCallContext` lets it do.
  */
 export const TEST_ENVIRONMENT = 'test';
+/** The tenant every fixture is scoped to, named once so a minted subject and a subject fixture agree. */
+export const TEST_TENANT = 'test-tenant';
 
 const context: CallContext = {
 	invocationId: InvocationId.make('test-invocation'),
 	deadlineEpochMs: Number.MAX_SAFE_INTEGER,
-	environment: TEST_ENVIRONMENT
+	environment: TEST_ENVIRONMENT,
+	tenantId: TEST_TENANT
 };
 
 /**
@@ -211,11 +215,13 @@ export const testCallContext = (
 	options: {
 		readonly deadlineEpochMs?: number;
 		readonly environment?: string;
+		readonly tenantId?: string;
 	} = {}
 ): CallContext => ({
 	invocationId: InvocationId.make(invocationId),
 	deadlineEpochMs: options.deadlineEpochMs ?? Date.now() + 10_000,
-	environment: options.environment ?? TEST_ENVIRONMENT
+	environment: options.environment ?? TEST_ENVIRONMENT,
+	tenantId: options.tenantId ?? TEST_TENANT
 });
 
 /**
@@ -334,6 +340,13 @@ export type TestWorkspaceInput = Readonly<{
 	}>;
 	readonly policies?: ReadonlyArray<PolicyDeclaration>;
 	readonly teams?: Readonly<Record<string, ReadonlyArray<string>>>;
+	/** `src/+agents.md`, when a test cares what the system message says. */
+	readonly prompt?: string;
+	/** The workspace's authored tools; a policy still has to name one for anybody to reach it. */
+	readonly tools?: WorkspaceDefinition['tools'];
+	readonly skills?: ReadonlyArray<string>;
+	readonly envoys?: WorkspaceDefinition['envoys'];
+	readonly automations?: WorkspaceDefinition['automations'];
 	/** The `.norbital/migrations` lineage the artifact would have carried, oldest first. */
 	readonly migrations?: ReadonlyArray<WorkspaceMigrationEntry>;
 }>;
@@ -350,7 +363,12 @@ export const testWorkspace = (input: TestWorkspaceInput = {}): WorkspaceDefiniti
 		).map((entry) => collection(entry)),
 		apps: [],
 		policies: input.policies ?? [
-			policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] })
+			policy({
+				name: 'admin',
+				effect: 'allow',
+				actions: ['*'],
+				capabilities: { apps: ['*'] }
+			})
 		],
 		/**
 		 * One team per declared policy, named after it.
@@ -373,9 +391,13 @@ export const testWorkspace = (input: TestWorkspaceInput = {}): WorkspaceDefiniti
 					admin: declared.map(({ name }) => name)
 				};
 			})(),
-		agents: [],
-		automations: [],
-		channels: [],
+		// A workspace's shared system prompt. Required of a real workspace — the compiler refuses one
+		// without `src/+agents.md` — so the fixture states one rather than leaving it absent.
+		prompt: input.prompt ?? 'You are the test workspace agent.',
+		tools: input.tools ?? [],
+		skills: input.skills ?? [],
+		automations: input.automations ?? [],
+		envoys: input.envoys ?? [],
 		integrations: [],
 		requiredFacilities: [],
 		...(input.migrations === undefined ? {} : { migrations: input.migrations })
@@ -498,12 +520,21 @@ export const makeBoltTestRuntime = async (
 	// than through a task the runtime itself enqueued — which is the only thing that produces a
 	// non-zero one. Provided rather than defaulted so a service that starts consulting it fails here
 	// instead of silently reading a stand-in.
+	// The workspace's pre-sign-in rate policy, or none. A test workspace declares none, so every
+	// anonymous command is admitted uncounted — which is what a suite about anything else needs, and
+	// what a suite about the limiter overrides by building its own. A *holder's* limits are resolved
+	// per subject from the policies they hold and never come from here.
+	const rateLimits = RateLimits.layer(definition.rateLimits);
 	const budget = InvocationBudget.layer(0);
+	// Which tenant this runtime is for. It is provided rather than defaulted because a *static*
+	// identity — an envoy, an automation — is minted with a tenant and has no row to read one off, so
+	// a service that reached for it and found nothing would mint a subject scoped to nowhere.
+	const tenantScope = TenantScope.layer(context.tenantId);
 	// Automations sits above Collections rather than below it: starting one is a declaration check, a
 	// nesting check, and a row on the queue, and the authored api Collections hands a hook carries
 	// `automations.run`, so Collections is the consumer.
 	const automations = Automations.layer.pipe(
-		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, budget))
+		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, budget, tenantScope))
 	);
 	const data = Layer.provideMerge(Approvals.layer, Layer.mergeAll(foundation, taskQueue));
 	// Collections announces every committed write on the sync topic, so the wake has to be present for
@@ -543,16 +574,12 @@ export const makeBoltTestRuntime = async (
 		Layer.merge(agents, cipher)
 	);
 	const surfaces = Layer.provideMerge(
-		Layer.mergeAll(Channels.layer, Integrations.layer, Notifications.layer, WorkspaceSchema.layer),
-		Layer.mergeAll(vault, authoredLayer, budget, taskQueue, automations)
+		Layer.mergeAll(Envoys.layer, Integrations.layer, Notifications.layer, WorkspaceSchema.layer),
+		Layer.mergeAll(vault, authoredLayer, budget, taskQueue, automations, rateLimits, tenantScope)
 	);
-	// The workspace's own declared rate policy, or none. A test workspace declares none, so every
-	// command is admitted uncounted — which is what a suite about anything else needs, and what a
-	// suite about the limiter overrides by building its own.
-	const rateLimits = RateLimits.layer(definition.rateLimits);
 	const complete = Layer.provideMerge(
 		Sync.layer,
-		Layer.mergeAll(surfaces, authoredLayer, budget, rateLimits)
+		Layer.mergeAll(surfaces, authoredLayer, budget, rateLimits, tenantScope)
 	);
 
 	const runtime = ManagedRuntime.make(complete);
@@ -571,8 +598,11 @@ export const makeBoltTestRuntime = async (
 /** The admin subject every data test acts as unless it is specifically testing refusal. */
 export const adminSubject: Identity.Subject = {
 	userId: 'admin-1',
-	tenantId: 'test-tenant',
+	tenantId: TEST_TENANT,
 	teamPath: ['admin'],
+	// A person holds policies through their team, never directly. The array is what a *static*
+	// identity carries, and this fixture is a person.
+	policies: [],
 	/**
 	 * What makes the name true, and it was missing.
 	 *

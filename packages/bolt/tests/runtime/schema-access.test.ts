@@ -90,12 +90,12 @@ const schemaWorkspace = () =>
 	testWorkspace({
 		collections: [{ name: 'people', fields: { name: field.string({ required: true }) } }],
 		policies: [
-			policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] }),
+			policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } }),
 			policy({
 				name: 'inspector',
 				effect: 'allow',
 				actions: ['read'],
-				apps: ['schema']
+				capabilities: { apps: ['schema'] }
 			}),
 			policy({
 				name: 'employee',
@@ -155,7 +155,7 @@ describe('schema.* access control', () => {
 	it('refuses a schema command arriving as a task, however the payload names its subject', async () => {
 		harness = await makeBoltTestRuntime(schemaWorkspace());
 		const forged = {
-			subject: { userId: 'user-forged', tenantId: 'test-tenant', teamPath: ['admin'] }
+			subject: { userId: 'user-forged', tenantId: 'test-tenant', policies: [], teamPath: ['admin'] }
 		};
 		for (const input of [null, forged]) {
 			const failure = await failureOf(harness, task('schema.migrate', input));

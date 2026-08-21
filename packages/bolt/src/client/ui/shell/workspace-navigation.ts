@@ -75,21 +75,22 @@ export const WORKSPACE_HOST_PLUGINS: ReadonlyArray<HostPlugin> = [
 		adminOnly: true
 	},
 	{
-		// The surface configures the channels an agent is reachable on, so it is named for the agent
-		// rather than for the plumbing underneath it.
-		key: 'agent',
-		label: 'Agents',
+		// Named for the thing it configures. It used to be "Agents", which was a level of hierarchy
+		// with one node — every channel pointed at the single synthesized agent — so the page listed
+		// one card whose only content was the channels beneath it. An envoy *is* an agent on a
+		// transport, and the row is the envoy.
+		key: 'envoys',
+		label: 'Envoys',
 		icon: 'lucide:bot',
-		entry: hostPluginSurfaceHref('agent'),
+		entry: hostPluginSurfaceHref('envoys'),
 		placement: 'settings',
 		adminOnly: true
 	},
 	{
-		// Split from the agent channels: a channel is a transport a workspace talks over, a secret is a
-		// value it needs to talk at all. Putting both behind one label meant neither had a form — one
-		// page cannot be driven by declared channels and declared environment at once. "Environment
-		// secrets" is the name the vault has: it is backed by the workspace's own reserved root
-		// `+env.ts`.
+		// Split from the envoys: a transport is how a workspace talks, a secret is a value it needs to
+		// talk at all. Putting both behind one label meant neither had a form — one page cannot be
+		// driven by declared envoys and declared environment at once. "Environment secrets" is the
+		// name the vault has: it is backed by the workspace's own reserved root `+env.ts`.
 		key: 'environment_secrets',
 		label: 'Environment secrets',
 		icon: 'lucide:key-round',

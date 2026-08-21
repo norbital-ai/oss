@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { decide } from '../../src/runtime/access/access-control.js';
 
-const subject = { userId: 'u1', tenantId: 't1', teamPath: ['member'] };
+const subject = { userId: 'u1', tenantId: 't1', policies: [], teamPath: ['member'] };
 
 /**
  * The policies the subject's team declares, which `decide` now takes rather than derives.
@@ -46,7 +46,7 @@ describe('Identity and AccessControl owners', () => {
 		});
 	});
 	it('refuses an unknown agent name and allows a declared workspace agent', () => {
-		const admin = { userId: 'u1', tenantId: 't1', teamPath: ['admin'] };
+		const admin = { userId: 'u1', tenantId: 't1', policies: [], teamPath: ['admin'] };
 		const policies = [
 			{ name: 'admin-agent', effect: 'allow' as const, actions: ['agent'], apps: ['helper'] }
 		];

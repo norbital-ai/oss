@@ -72,8 +72,7 @@ const task = (name: string, input: unknown = {}) =>
 const subjectFor = (userId: string, team: string): Identity.Subject => ({
 	userId: fixtureUserId(userId),
 	tenantId: 'test-tenant',
-	team,
-	teamPath: [team]
+	teamPath: [team], policies: []
 });
 
 const userA = subjectFor('user-a', 'employee');
@@ -132,7 +131,7 @@ const vaultWorkspace = workspace({
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], apps: ['*'] }),
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } }),
 		policy({
 			name: 'employee',
 			effect: 'allow',
@@ -143,10 +142,12 @@ const vaultWorkspace = workspace({
 		admin: ['admin', 'employee'],
 		employee: ['employee']
 	},
-	agents: [],
 	automations: [],
-	channels: [],
 	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
 	requiredFacilities: [],
 	environment: defineEnvironment({ GEOCODING_API_KEY: { label: 'Geocoding key' } })
 });
@@ -270,7 +271,7 @@ describe('personal secrets', () => {
 					// owner field the boundary does not mint and so never overwrites.
 					userId: 'user-b',
 					owner: 'user-b',
-					subject: { userId: 'user-b', tenantId: 'test-tenant', teamPath: ['admin'] }
+					subject: { userId: 'user-b', tenantId: 'test-tenant', policies: [], teamPath: ['admin'],  }
 				})
 			)
 		);
