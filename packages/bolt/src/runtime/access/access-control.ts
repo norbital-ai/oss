@@ -248,6 +248,62 @@ const SCOPE_FRAGMENTS: Readonly<Record<string, string>> = {
 	)`
 };
 
+/**
+ * The record a subject has been asked to approve, readable because they were asked.
+ *
+ * Being named on an open approval step is what entitles somebody to see the thing they are deciding
+ * about. Nothing else can supply that: an approver's authored grants describe their ordinary work,
+ * and the record under review is by definition one somebody *else* raised — so a reviewer whose row
+ * scope is their own team, or their own records, is exactly the reviewer a narrowing excludes.
+ *
+ * This is a **union** branch, never a replacement. It widens a predicate by precisely the rows under
+ * an open approval this subject's team may decide, and by nothing else. When the approval closes,
+ * `closed_at` stops being null and the row leaves the branch on the next request — the entitlement
+ * lasts exactly as long as the reason for it.
+ *
+ * Deliberately not applied when the subject has *no* grant on the collection at all. That case would
+ * mean flipping `allowed` from false to true, and `allowed` is also what `Sync.shape` reads to
+ * decide which collections replicate — so every collection would enter every subject's replica for
+ * the sake of rows they usually do not have. An approver who cannot reach the collection is a
+ * workspace that has asked somebody to review a surface they were never given; that is an authoring
+ * problem, and widening the sync shape is the wrong place to answer it.
+ *
+ * The approver leg reads `bolt_approvals`, not `approval_request.steps`, for the same reason its
+ * sibling in `system-collections.ts` does: `steps` is a cursor — `[{"step":0}]` — and a containment
+ * test over it compiles, runs, and matches nothing.
+ */
+const approvalReadTerm = (
+	resource: string,
+	subject: Identity.Subject,
+	firstParameterIndex: number
+): Readonly<{ sql: string; parameters: ReadonlyArray<Schema.Json> }> | undefined => {
+	const id = PolicyEvaluation.subjectValue(subject, 'requestor.norbital_id');
+	if (id === undefined) return undefined;
+	const collectionParameter = `$${firstParameterIndex}`;
+	const subjectParameter = `$${firstParameterIndex + 1}`;
+	const sql =
+		'"norbital_id"::text in (' +
+		'select approved."record_id" from approval_request approved ' +
+		`where approved."collection_name" = ${collectionParameter} ` +
+		'and approved."closed_at" is null ' +
+		'and approved."norbital_id"::text in (' +
+		'select approval.request_id from bolt_approvals approval ' +
+		'cross join lateral jsonb_array_elements(' +
+		"case when jsonb_typeof(approval.state #> '{operation,approval,steps}') = 'array' " +
+		"then approval.state #> '{operation,approval,steps}' else '[]'::jsonb end" +
+		') as approval_step(step_value) ' +
+		'cross join lateral jsonb_array_elements_text(' +
+		"case when jsonb_typeof(step_value->'approvers') = 'array' " +
+		"then step_value->'approvers' else '[]'::jsonb end" +
+		') as approver(team_name) ' +
+		'where lower(team_name) = (' +
+		'select lower(subject_team."name") from bolt_auth_user subject_user ' +
+		'join bolt_team subject_team on subject_team."norbital_id" = subject_user."team_id" ' +
+		`where subject_user."norbital_id"::text = ${subjectParameter}` +
+		')))';
+	return { sql, parameters: [resource, id] };
+};
+
 /** Compiles trusted authored row scope into parameterized SQL while binding every identity value separately. */
 const compileWhereOwner = {
 	compile: (
@@ -339,13 +395,21 @@ const rowPredicate = (
 		};
 	}
 	const parameters: Array<Schema.Json> = [];
-	const sql = compiled
-		.map(({ predicate }) => {
-			const offset = parameters.length;
-			parameters.push(...predicate.parameters);
-			return `(${predicate.sql.replaceAll(/\$(\d+)/g, (_token, index: string) => `$${Number(index) + offset}`)})`;
-		})
-		.join(' or ');
+	const branches = compiled.map(({ predicate }) => {
+		const offset = parameters.length;
+		parameters.push(...predicate.parameters);
+		return `(${predicate.sql.replaceAll(/\$(\d+)/g, (_token, index: string) => `$${Number(index) + offset}`)})`;
+	});
+	// Being asked to approve a record is its own entitlement to read it, unioned on top of whatever
+	// the authored grants narrow to. Reads only: approving something does not license editing it.
+	if (action === 'read') {
+		const approvalBranch = approvalReadTerm(resource, subject, parameters.length + 1);
+		if (approvalBranch !== undefined) {
+			parameters.push(...approvalBranch.parameters);
+			branches.push(`(${approvalBranch.sql})`);
+		}
+	}
+	const sql = branches.join(' or ');
 	const fields = compiled.flatMap(({ grant }) => grant.fields ?? []);
 	const approval = compiled.find(({ grant }) => grant.approval !== undefined)?.grant.approval;
 	return {
