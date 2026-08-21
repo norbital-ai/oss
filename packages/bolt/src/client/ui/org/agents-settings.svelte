@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Bound, Cluster, Cover, Grid, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Cluster, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { workspaceSession } from '../../session.js';
 	import ChannelPairing from './channel-pairing.svelte';
@@ -240,62 +241,91 @@
 {/snippet}
 
 {#snippet channelsPanel()}
-	<Stack gap="md" class="h-full min-h-0">
-		{#if loading}
-			<p class="text-sm text-muted-foreground">Reading the workspace manifest…</p>
-		{:else if error !== null}
-			<p class="text-sm text-destructive" role="alert">{error}</p>
-		{:else if agents.length === 0}
-			<div class="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-				This workspace declares no agents.
-			</div>
-		{:else if channels.length === 0}
-			<!-- An empty channel list is not a broken agent list: nothing is declared yet, so the
+	<!--
+		The panel owns its scroll, because the frame around it does not.
+
+		`Bound … clip` clips what overflows and scrolls nothing, so a workspace with more than a
+		screenful of channels — or one showing a pairing code, which is tall — had content that could
+		not be reached at all. `organization-general` already wraps its pane this way; this one was the
+		outlier, and the symptom was a page that looked complete and would not move.
+	-->
+	<Scroll name="Agent channels">
+		<Stack gap="md" class="min-h-0">
+			{#if loading}
+				<p class="text-sm text-muted-foreground">Reading the workspace manifest…</p>
+			{:else if error !== null}
+				<p class="text-sm text-destructive" role="alert">{error}</p>
+			{:else if agents.length === 0}
+				<div class="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+					This workspace declares no agents.
+				</div>
+			{:else if channels.length === 0}
+				<!-- An empty channel list is not a broken agent list: nothing is declared yet, so the
 			     agent cards (which exist to carry their channels) would only echo the workspace name
 			     back with nothing under it. A dotted placeholder says what is missing instead. -->
-			<div class="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-				No channels declared. Author a channel in the workspace source to open one.
-			</div>
-		{:else}
-			<Stack gap="md">
-				{#each [...channelsByAgent] as [agent, agentChannels] (agent)}
-					<Stack as="section" gap="md" class="rounded-lg border border-border bg-card p-4 sm:p-6">
-						<Inline align="start" justify="between" gap="md">
-							<div>
-								<h3 class="font-medium">{agent}</h3>
-								<p class="text-meta">
-									{#if agentChannels.length === 0}
-										No channels declared
-									{:else if agentChannels.length === 1}
-										Reachable on 1 channel
-									{:else}
-										Reachable on {agentChannels.length} channels
-									{/if}
+				<div class="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+					No channels declared. Author a channel in the workspace source to open one.
+				</div>
+			{:else}
+				<Stack gap="md">
+					{#each [...channelsByAgent] as [agent, agentChannels] (agent)}
+						<!--
+							The same card the Workspace Studio manifest draws, at the same density.
+
+							This was `p-4 sm:p-6` with a plain heading, while the manifest's automation and
+							agent entries are `p-4` with a `size-6` icon plate and a mono name — two card
+							vocabularies for one kind of thing, so moving between the two surfaces meant
+							re-reading a layout that should already have been familiar. The name is mono
+							because it is an identifier the workspace source declares, not a title somebody
+							chose.
+						-->
+						<Stack
+							as="section"
+							gap="sm"
+							class="rounded-lg border border-border bg-card p-4 shadow-card"
+						>
+							<Inline gap="sm" align="start" class="min-w-0">
+								<div
+									class="flex size-6 shrink-0 items-center justify-center rounded-md border border-border/60"
+								>
+									<IconWrapper name="lucide:bot" class="size-3.5 text-muted-foreground" />
+								</div>
+								<div class="min-w-0">
+									<p class="truncate font-mono text-sm font-semibold text-foreground">{agent}</p>
+									<p class="text-meta">
+										{#if agentChannels.length === 0}
+											No channels declared
+										{:else if agentChannels.length === 1}
+											Reachable on 1 channel
+										{:else}
+											Reachable on {agentChannels.length} channels
+										{/if}
+									</p>
+								</div>
+							</Inline>
+							{#if agentChannels.length === 0}
+								<p class="border-t pt-4 text-meta">
+									Nothing can reach this agent yet. Author a channel in the workspace to open one.
 								</p>
-							</div>
-						</Inline>
-						{#if agentChannels.length === 0}
-							<p class="border-t pt-4 text-meta">
-								Nothing can reach this agent yet. Author a channel in the workspace to open one.
-							</p>
-						{:else}
-							<!-- One rule between channels rather than a nested card each: a bordered box
+							{:else}
+								<!-- One rule between channels rather than a nested card each: a bordered box
 										     inside a bordered box reads as two levels of nesting where there is only
 										     one. The first channel needs none — the wrapper's own rule already
 										     divides it from the agent's name. -->
-							<Stack gap="md" class="border-t pt-4">
-								{#each agentChannels as declared, index (declared.name)}
-									<div class={index === 0 ? '' : 'border-t pt-4'}>
-										{@render channelEntry(declared)}
-									</div>
-								{/each}
-							</Stack>
-						{/if}
-					</Stack>
-				{/each}
-			</Stack>
-		{/if}
-	</Stack>
+								<Stack gap="md" class="border-t pt-4">
+									{#each agentChannels as declared, index (declared.name)}
+										<div class={index === 0 ? '' : 'border-t pt-4'}>
+											{@render channelEntry(declared)}
+										</div>
+									{/each}
+								</Stack>
+							{/if}
+						</Stack>
+					{/each}
+				</Stack>
+			{/if}
+		</Stack>
+	</Scroll>
 {/snippet}
 
 <!-- Root navigation follows the product's page-heading rhythm, as Workspace Studio does: title, one

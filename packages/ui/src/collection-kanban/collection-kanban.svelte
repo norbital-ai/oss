@@ -434,7 +434,6 @@
 	{/if}
 {/snippet}
 
-
 {#snippet kanbanToolbar()}
 	<Stack gap="xs">
 		<CollectionActionToolbar

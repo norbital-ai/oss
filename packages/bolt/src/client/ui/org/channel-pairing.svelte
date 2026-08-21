@@ -150,9 +150,24 @@
 
 	{#if qr !== undefined && connection?.state === 'pairing'}
 		<Stack gap="sm" class="items-center">
-			<!-- On a white plate regardless of theme, for the same reason the code itself is: the
-			     quiet zone around a QR has to be light or the camera cannot find its edges. -->
-			<img src={qr} alt="Pairing code for {channel}" class="rounded-md bg-white p-2" />
+			<!--
+				Sized, on a white plate.
+
+				White regardless of theme for the same reason the code itself is drawn in fixed colours:
+				the quiet zone around a QR has to be light or a camera cannot find its edges.
+
+				The size cap is the part that was missing. `toDataURL` renders 240px and the image had no
+				width, so it stretched to whatever the column gave it — on a wide settings pane that is a
+				QR most of a screen tall, which pushed everything under it out of a pane that could not
+				scroll. A phone camera reads 240px from arm's length; larger is not more scannable.
+			-->
+			<img
+				src={qr}
+				alt="Pairing code for {channel}"
+				width="240"
+				height="240"
+				class="size-60 max-w-full rounded-md bg-white p-2"
+			/>
 			<p class="max-w-sm text-center text-meta">
 				The code changes every few seconds; this refreshes on its own.
 			</p>

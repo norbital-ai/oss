@@ -827,8 +827,6 @@
 	{@render columns({ Column: CollectionTablePart })}
 </div>
 
-
-
 <!-- stupidity:allow UI10 -- collection surfaces need a natural minimum height (header + a few rows); no Bound size expresses it -->
 <!-- stupidity:allow UI15 -- the table keeps a usable empty/loading viewport before rows establish intrinsic height -->
 <Bound
