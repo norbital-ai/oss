@@ -952,11 +952,8 @@ class WorkspaceCompiler {
 		// Imported live for the reason every other authored module is: reading the object out of the
 		// file's text is how the model scraper lost every generated column, and the file has to be
 		// bundled either way.
-		const automationDeclarationEntry =
-			', automations: Object.values(declaredAutomations).map(({ name, trigger }) => ({ name, trigger, command: name }))';
 		const environmentEntry =
-			(environmentFile === undefined ? '' : ', environment: declaredEnvironment') +
-			automationDeclarationEntry;
+			environmentFile === undefined ? '' : ', environment: declaredEnvironment';
 		const customTypeEntries = customTypeDefinitions
 			.map((path, index) => `${JSON.stringify(basename(dirname(path)))}: customType${index}`)
 			.join(', ');

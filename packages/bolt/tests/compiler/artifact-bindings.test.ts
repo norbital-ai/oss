@@ -79,6 +79,50 @@ describe('emitted artifact bindings', () => {
 		expect(artifact).toContain('cron: automation0.trigger.schedule');
 		expect(artifact).toContain('collection: automation0.trigger.trigger.collection');
 		expect(artifact).toContain('event: automation0.trigger.trigger.event');
-		expect(artifact).toContain('automations: Object.values(declaredAutomations)');
+		expect(artifact).toContain('const automations = declaredWorkspace.automations.map(');
+		expect(artifact).toContain('policies: declaredAutomations[automation.name].policies');
+	});
+
+	it('boots one automation descriptor with its declared policies intact', () => {
+		const artifact = artifactWithEverything();
+		const start = artifact.indexOf('const automations = declaredWorkspace.automations.map(');
+		const end = artifact.indexOf('\nconst encodedAssets =', start);
+		if (start < 0 || end < 0) {
+			throw new Error('the artifact no longer builds its runtime workspace in one emitted block');
+		}
+
+		const workspace = new Function(
+			'declaredWorkspace',
+			'declaredAutomations',
+			'collections',
+			'envoys',
+			'policies',
+			'declaredCustomTypes',
+			'describedIntegrations',
+			`${artifact.slice(start, end)}\nreturn workspace;`
+		)(
+			{
+				automations: [{ name: 'nightly', trigger: { _tag: 'Schedule', cron: '0 0 * * *' } }],
+				collections: [],
+				envoys: []
+			},
+			{
+				nightly: {
+					name: 'nightly',
+					trigger: { _tag: 'Schedule', cron: '0 0 * * *' },
+					policies: ['operations']
+				}
+			},
+			[],
+			[],
+			[],
+			{},
+			{ declarations: [] }
+		) as { readonly automations: ReadonlyArray<{ readonly policies: ReadonlyArray<string> }> };
+
+		// Activation mints each automation principal by spreading this exact array. The duplicate
+		// projection this guards against overwrote the descriptor with { name, trigger, command }, so
+		// the first real boot failed here with "automation.policies is not iterable".
+		expect([...workspace.automations[0]!.policies]).toEqual(['operations']);
 	});
 });
