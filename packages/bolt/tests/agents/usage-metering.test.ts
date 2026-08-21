@@ -191,7 +191,7 @@ describe('agent turn usage', () => {
 		const rollup = usageWrite(statements);
 		expect(rollup).toBeDefined();
 		// Provider charge, host charge, its currency, tokens, and nothing unreported — this turn is priced.
-		expect(rollup?.parameters).toEqual(['conversation-usage', 0.007, 18_200, 'SGD', 2_700, 0]);
+		expect(rollup?.parameters).toEqual(['conversation-usage', 0.007, 18_200, 'SGD', 2_700, 1, 0]);
 		// Walked up `parent_id` rather than written to one row, so a delegated session's spend reaches
 		// the conversation the person is looking at however deep it happened.
 		expect(rollup?.sql).toContain('with recursive lineage');
@@ -217,7 +217,15 @@ describe('agent turn usage', () => {
 		// The last parameter is the unreported count. Reporting zero here would let a conversation
 		// nobody could price read as a cheap one, and the null currency leaves whatever the running
 		// total is already denominated in untouched.
-		expect(usageWrite(statements)?.parameters).toEqual(['conversation-unpriced', 0, 0, null, 0, 1]);
+		expect(usageWrite(statements)?.parameters).toEqual([
+			'conversation-unpriced',
+			0,
+			0,
+			null,
+			0,
+			1,
+			1
+		]);
 	});
 
 	it('names a delegated session as the call that spawned it so its spend can be traced back', async () => {

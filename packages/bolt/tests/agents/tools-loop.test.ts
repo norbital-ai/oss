@@ -349,7 +349,7 @@ describe('Bolt agent tool loop', () => {
 		expect(settled.parts[2].id).toBe(settled.parts[1].id);
 		expect(settled.parts[4].id).toBe(settled.parts[3].id);
 		// Grew a part at a time rather than arriving whole — the reader can watch each one land.
-		expect(rewrites.map((turn) => turn.parts.length)).toEqual([2, 3, 4, 5, 6, 6]);
+		expect(rewrites.map((turn) => turn.parts.length)).toEqual([1, 2, 3, 4, 5, 6, 6]);
 	});
 
 	it('executes MCP tools through the connector facility', async () => {
@@ -404,15 +404,31 @@ describe('Bolt agent tool loop', () => {
 		expect(connectorCalls).toEqual([{ connector: 'search', operation: 'lookup' }]);
 	});
 
-	it('spawns an in-session subagent and parks the parent turn', async () => {
+	it('spawns an in-session subagent and parks only at the explicit await', async () => {
+		let turns = 0;
+		const targetSessionId = 'subagent:agent-spawn:tool:0:0';
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: () =>
-				Promise.resolve({
+			call: () => {
+				turns += 1;
+				return Promise.resolve({
 					_tag: 'Success',
 					value: {
-						output: { toolCalls: [{ name: 'spawn_subagent', input: { task: 'Draft the offer' } }] }
+						output:
+							turns === 1
+								? {
+										toolCalls: [{ name: 'spawn_subagent', input: { task: 'Draft the offer' } }]
+									}
+								: {
+										toolCalls: [
+											{
+												name: 'await_sandbox_agent',
+												input: { sessionId: targetSessionId }
+											}
+										]
+									}
 					}
-				})
+				});
+			}
 		};
 		// The spawn is a `bolt_task` row now, written through the database facility, and the host is
 		// told about it with a `Wake` through the tasks facility — so both are observed where they
@@ -426,6 +442,26 @@ describe('Bolt agent tool loop', () => {
 		};
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			call: (metadata, request, signal) => {
+				if (
+					request._tag === 'Query' &&
+					request.sql.includes('from bolt_conversations') &&
+					request.parameters[0] === targetSessionId
+				) {
+					return Promise.resolve({
+						_tag: 'Success',
+						value: {
+							rows: [
+								{
+									id: targetSessionId,
+									user_id: subject.userId,
+									agent_name: 'web',
+									title: 'Draft the offer'
+								}
+							],
+							affectedRows: 0
+						}
+					});
+				}
 				if (request._tag === 'Query' && request.sql.includes('bolt_task')) {
 					enqueued.push(String(request.parameters[0]));
 				}
@@ -454,6 +490,7 @@ describe('Bolt agent tool loop', () => {
 			response: { value: { status: 'waiting', output: { waiting: true } } }
 		});
 		expect(enqueued).toContain('agents.turn');
+		expect(turns).toBe(2);
 		// And the host is told to come back — the row is durable, and something has to pick it up.
 		expect(enqueued).toContain('wake');
 	});

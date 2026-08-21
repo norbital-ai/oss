@@ -195,7 +195,7 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 					effectId: spawnTaskId
 				}
 			]);
-			return { waiting: true, conversationId };
+			return { spawned: true, conversationId };
 		}
 		case 'list_sandbox_agents': {
 			const result = yield* context.database.execute(context.effectId, {
@@ -252,17 +252,8 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 		case 'await_sandbox_agent': {
 			const parsed = yield* decode(SessionInput, input);
 			const target = yield* sameSandbox(context, parsed.sessionId);
-			const awaitTaskId = `${context.effectId}:await`;
-			yield* context.tasks.enqueue(EffectId.make(awaitTaskId), [
-				{
-					command: 'agents.resume',
-					input: {
-						conversationId: context.conversationId,
-						targetSessionId: parsed.sessionId
-					},
-					effectId: awaitTaskId
-				}
-			]);
+			// The target's settlement enqueues the continuation. Enqueueing here races the target and
+			// makes a task retry stand in for the event the database already records durably.
 			return {
 				waiting: true,
 				targetSessionId: parsed.sessionId,

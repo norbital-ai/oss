@@ -1,9 +1,9 @@
-import { Context, Effect, Layer, Schema } from 'effect';
+import { Context, Effect, Layer, Ref, Schema } from 'effect';
 import {
 	addAIUsage,
+	AIUsage,
 	EffectId,
 	readAIUsage,
-	type AIUsage,
 	type EffectId as EffectIdType
 } from '@norbital-ai/bolt-protocol';
 import { AccessControl } from '../access/access-control.js';
@@ -12,7 +12,7 @@ import { Collections, PendingApproval } from '../collections/collections.js';
 import { AI, Connector, Files, HostTools } from '../facilities/services.js';
 import { TaskQueue } from '../tasks/tasks.js';
 import { Database } from '../facilities/database.js';
-import type { Identity } from '../identity/identity.js';
+import { Identity } from '../identity/identity.js';
 import { RemoteRegistry } from '../remotes.js';
 import type { WhereCompileError } from '../collections/where.js';
 import { DispatchError, Workspace, WorkspaceLookupError } from '../workspace.js';
@@ -55,8 +55,7 @@ const sandboxKeyFor = (
 	subject: Identity.Subject,
 	agent: ResolvedAgent,
 	conversationId: string
-): string =>
-	agent.audience === 'public' ? `${subject.userId}#${conversationId}` : subject.userId;
+): string => (agent.audience === 'public' ? `${subject.userId}#${conversationId}` : subject.userId);
 import { SkillError, ToolNotAllowed } from './agent-errors.js';
 import {
 	executeHostTool,
@@ -140,6 +139,46 @@ const TurnPart = Schema.Union([
 ]);
 type TurnPart = Schema.Schema.Type<typeof TurnPart>;
 
+const TurnStatus = Schema.Literals(['running', 'completed', 'failed', 'cancelled']);
+type TurnStatus = Schema.Schema.Type<typeof TurnStatus>;
+
+/**
+ * Everything a parked turn needs in order to continue under the authority that started it.
+ *
+ * The subject is a snapshot, deliberately. A task invocation carries no credential, and rebuilding a
+ * subject from `bolt_conversations.user_id` would be both incomplete (there is no team path there)
+ * and wrong for envoys (their policies are static authority, not the linked person's authority).
+ */
+const StoredTurn = Schema.Struct({
+	id: Schema.NonEmptyString,
+	status: TurnStatus,
+	subagent_id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
+	parts: Schema.Array(TurnPart),
+	resumed: Schema.optionalKey(
+		Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+	),
+	subject: Schema.optionalKey(Identity.Subject),
+	agent_name: Schema.optionalKey(Schema.NonEmptyString),
+	sender_context: Schema.optionalKey(Schema.String),
+	usage: Schema.optionalKey(AIUsage),
+	usage_unreported: Schema.optionalKey(Schema.Boolean)
+});
+type StoredTurn = Schema.Schema.Type<typeof StoredTurn>;
+
+const StoredTurnRow = Schema.Struct({ content: StoredTurn });
+const AwaitInput = Schema.Struct({ sessionId: Schema.NonEmptyString });
+const WaitingAnswer = Schema.Struct({ waiting: Schema.Literal(true) });
+
+/** A completed delegated turn, returned to the parent as the answer to its await tool call. */
+const SettledTarget = Schema.Struct({
+	id: Schema.NonEmptyString,
+	status: Schema.Literals(['completed', 'failed', 'cancelled']),
+	parts: Schema.Array(TurnPart)
+});
+const SettledTargetRow = Schema.Struct({ content: SettledTarget });
+
+const maxResumes = 4;
+
 /**
  * Expands one stored turn back into the alternating messages a provider accepts.
  *
@@ -181,7 +220,7 @@ const replayTurn = (parts: ReadonlyArray<TurnPart>): ReadonlyArray<Schema.Json> 
 export const TurnResult = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
 	output: Schema.Json,
-	status: Schema.Literals(['completed', 'waiting'])
+	status: Schema.Literals(['completed', 'waiting', 'failed'])
 });
 export interface TurnResult extends Schema.Schema.Type<typeof TurnResult> {}
 
@@ -339,9 +378,21 @@ export type Interface = Readonly<{
 	>;
 	readonly resume: (
 		effectId: EffectIdType,
-		taskId: string,
-		conversationId: string
-	) => Effect.Effect<void, Database.FacilityError>;
+		conversationId: string,
+		targetSessionId: string
+	) => Effect.Effect<
+		void,
+		| Workspace.WorkspaceLookupError
+		| AccessControl.AccessDenied
+		| Database.FacilityError
+		| SkillError
+		| ToolNotAllowed
+		| ApprovalConflict
+		| PendingApproval
+		| WhereCompileError
+		| AuthoredRefusal
+		| InvocationBudget.NestingLimitExceeded
+	>;
 	readonly cancel: (
 		effectId: EffectIdType,
 		taskId: string
@@ -612,6 +663,251 @@ export const layer = Layer.effect(
 			return yield* new ToolNotAllowed({ agent: agent.name, tool: name });
 		});
 
+		/** The exact tool offer a turn presents, including the collections its grants can reach. */
+		const toolsFor = (subject: Identity.Subject): ReadonlyArray<Schema.Json> => {
+			const reachable = (action: 'read' | 'write'): ReadonlyArray<string> =>
+				workspace.definition.collections
+					.filter(({ name }) =>
+						action === 'read'
+							? access.explain(subject, 'read', name).allowed
+							: (['create', 'update', 'delete'] as const).some(
+									(write) => access.explain(subject, write, name).allowed
+								)
+					)
+					.map(({ name }) => name);
+			return allowedTools(subject).map(({ name, description, command }) => {
+				if (name !== 'read_collection' && name !== 'write_collection')
+					return { name, description, command };
+				const allowed = reachable(name === 'read_collection' ? 'read' : 'write');
+				return {
+					name,
+					description:
+						allowed.length === 0
+							? description
+							: `${description} Allowed collections: ${allowed.join(', ')}.`,
+					command
+				};
+			});
+		};
+
+		/** Replays stored rows into the provider prompt used by both a new and a resumed turn. */
+		const promptFor = (
+			agent: ResolvedAgent,
+			rows: ReadonlyArray<unknown>,
+			senderContext?: string
+		): Array<Schema.Json> => [
+			{ role: 'system', content: workspace.definition.prompt },
+			...(agent.task === undefined ? [] : [{ role: 'system', content: agent.task } as Schema.Json]),
+			...(senderContext === undefined
+				? []
+				: [{ role: 'system', content: senderContext } as Schema.Json]),
+			...rows.flatMap((row): ReadonlyArray<Schema.Json> => {
+				const decoded = Schema.decodeUnknownOption(MessageRow)(row);
+				if (decoded._tag === 'None') return [];
+				const relayed = parseAgentMessage(decoded.value.content);
+				if (relayed !== null) return [{ role: 'user', content: agentMessageForModel(relayed) }];
+				const whole = Schema.decodeUnknownOption(Schema.Struct({ parts: Schema.Array(TurnPart) }))(
+					decoded.value.content
+				);
+				return whole._tag === 'Some' ? replayTurn(whole.value.parts) : [decoded.value];
+			})
+		];
+
+		/** Adds one usage delta to this session and every parent session above it. */
+		const recordUsage = Effect.fn('Agents.recordUsage')(function* (
+			effectId: EffectIdType,
+			conversationId: string,
+			usage: AIUsage | undefined,
+			turnsCounted: number,
+			turnsUnreported: number
+		) {
+			yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: `with recursive lineage as (
+					select id, parent_id, 0 as depth from bolt_conversations where id = $1
+					union all
+					select above.id, above.parent_id, lineage.depth + 1 from bolt_conversations above
+						join lineage on above.id = lineage.parent_id
+						where lineage.depth < ${maxDelegationDepth}
+				)
+				update bolt_conversations set
+					usage_cost_usd = usage_cost_usd + $2,
+					usage_cost_micro_units = usage_cost_micro_units + $3,
+					usage_cost_currency = coalesce($4::text, usage_cost_currency),
+					usage_total_tokens = usage_total_tokens + $5,
+					usage_turns_counted = usage_turns_counted + $6,
+					usage_turns_unreported = usage_turns_unreported + $7
+				where id in (select id from lineage)`,
+				parameters: [
+					conversationId,
+					usage?.costUsd ?? 0,
+					Math.round(usage?.costMicroUnits ?? 0),
+					usage?.costCurrency ?? null,
+					Math.round(usage?.totalTokens ?? 0),
+					turnsCounted,
+					turnsUnreported
+				]
+			});
+		});
+
+		/**
+		 * Enqueues the parent continuation only after this delegated session has durably settled.
+		 *
+		 * Enqueueing from `await_sandbox_agent` races the child: the queue can run the continuation while
+		 * the child is still `running`. Settlement is the event that makes the input actionable, and the
+		 * key makes a replay of that settlement one enqueue.
+		 */
+		const resumeParent = Effect.fn('Agents.resumeParent')(function* (
+			effectId: EffectIdType,
+			conversationId: string
+		) {
+			const parent = yield* database.execute(EffectId.make(`${effectId}:read-parent`), {
+				_tag: 'Query',
+				sql: 'select parent_id from bolt_conversations where id = $1',
+				parameters: [conversationId]
+			});
+			const decoded = Schema.decodeUnknownOption(
+				Schema.Struct({ parent_id: Schema.Union([Schema.String, Schema.Null]) })
+			)(parent.rows[0]);
+			const parentId = decoded._tag === 'Some' ? decoded.value.parent_id : null;
+			if (parentId === null) return;
+			const enqueueId = EffectId.make(`${effectId}:resume-parent`);
+			yield* queue.enqueue(enqueueId, [
+				{
+					command: 'agents.resume',
+					input: { conversationId: parentId, targetSessionId: conversationId },
+					effectId: enqueueId
+				}
+			]);
+		});
+
+		type CommitTurn = (
+			status: TurnStatus,
+			usage: AIUsage | undefined,
+			usageUnreported: boolean
+		) => Effect.Effect<unknown, Database.FacilityError>;
+		type SettleUsage = (
+			usage: AIUsage | undefined,
+			newlyUnreported: boolean
+		) => Effect.Effect<unknown, Database.FacilityError>;
+
+		/** Runs one bounded segment of a turn, shared by its first invocation and every continuation. */
+		const continueToolLoop = Effect.fn('Agents.continueToolLoop')(function* (
+			namespace: EffectIdType,
+			agent: ResolvedAgent,
+			subject: Identity.Subject,
+			conversationId: string,
+			messages: Array<Schema.Json>,
+			tools: ReadonlyArray<Schema.Json>,
+			parts: Array<TurnPart>,
+			initialUsage: AIUsage | undefined,
+			initialUsageUnreported: boolean,
+			commit: CommitTurn,
+			settleUsage: SettleUsage
+		) {
+			const usage = yield* Ref.make({
+				cumulative: initialUsage,
+				segment: undefined as AIUsage | undefined,
+				unreported: initialUsageUnreported
+			});
+			const run = Effect.gen(function* () {
+				let output: Schema.Json = null;
+				// Exhausting the bound is a terminal failure, never another unowned parked turn.
+				let status: 'completed' | 'waiting' | 'failed' = 'failed';
+				for (let round = 0; round < maxToolRounds; round += 1) {
+					const response = yield* ai.execute(EffectId.make(`${namespace}:ai:${round}`), {
+						_tag: 'Turn',
+						model: 'default',
+						messages,
+						tools,
+						maxOutputTokens: 2048
+					});
+					output = response.output;
+					const reported = readAIUsage(response.usage);
+					yield* Ref.update(usage, (current) => ({
+						cumulative: addAIUsage(current.cumulative, reported),
+						segment: addAIUsage(current.segment, reported),
+						unreported: current.unreported || reported === undefined
+					}));
+					const decoded = Schema.decodeUnknownOption(TurnOutput)(response.output);
+					const toolCalls = decoded._tag === 'Some' ? (decoded.value.toolCalls ?? []) : [];
+					const text = decoded._tag === 'Some' ? decoded.value.text : undefined;
+					if (toolCalls.length === 0) {
+						status = 'completed';
+						parts.push({ kind: 'text', text: text ?? '' });
+						const current = yield* Ref.get(usage);
+						yield* commit('running', current.cumulative, current.unreported);
+						break;
+					}
+					const calls = toolCalls.map((call, index) => ({
+						id: `${namespace}:tool:${round}:${index}`,
+						name: call.name,
+						input: call.input ?? null
+					}));
+					if (text !== undefined && text.trim().length > 0) {
+						parts.push({ kind: 'text', text });
+						const current = yield* Ref.get(usage);
+						yield* commit('running', current.cumulative, current.unreported);
+					}
+					messages.push({ role: 'assistant', content: response.output });
+					let parked = false;
+					for (const call of calls) {
+						parts.push({ kind: 'tool', id: call.id, name: call.name, input: call.input });
+						const beforeCall = yield* Ref.get(usage);
+						yield* commit('running', beforeCall.cumulative, beforeCall.unreported);
+						const result = yield* executeTool(
+							agent,
+							call.name,
+							call.input,
+							EffectId.make(call.id),
+							subject,
+							conversationId
+						).pipe(
+							Effect.catch((failure) =>
+								failure instanceof ToolNotAllowed || failure instanceof SkillError
+									? Effect.succeed({ error: failure.message })
+									: Effect.fail(failure)
+							)
+						);
+						const encoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
+							JSON.stringify(result)
+						).pipe(Effect.catch(() => Effect.succeed({ error: 'invalid-tool-result' })));
+						parts.push({ kind: 'tool-result', id: call.id, name: call.name, output: encoded });
+						const afterCall = yield* Ref.get(usage);
+						yield* commit('running', afterCall.cumulative, afterCall.unreported);
+						messages.push({
+							role: 'tool',
+							name: call.name,
+							content: JSON.stringify(encoded)
+						});
+						const waiting = Schema.decodeUnknownOption(WaitingAnswer)(encoded);
+						// `spawn_subagent` starts work; only the explicit join point parks its caller.
+						if (call.name === 'await_sandbox_agent' && waiting._tag === 'Some') {
+							output = encoded;
+							status = 'waiting';
+							parked = true;
+							break;
+						}
+					}
+					if (parked) break;
+				}
+				const current = yield* Ref.get(usage);
+				return { output, status, ...current };
+			});
+
+			return yield* run.pipe(
+				Effect.onError(() =>
+					Effect.gen(function* () {
+						const current = yield* Ref.get(usage);
+						yield* Effect.ignore(commit('failed', current.cumulative, current.unreported));
+						yield* Effect.ignore(
+							settleUsage(current.segment, current.unreported && !initialUsageUnreported)
+						);
+					})
+				)
+			);
+		});
+
 		return Service.of({
 			start: Effect.fn('Agents.start')(function* (effectId, subject, agentName, conversationId) {
 				const agent = yield* resolveAgent(agentName);
@@ -634,69 +930,9 @@ export const layer = Layer.effect(
 						sql: 'select role, content from bolt_agent_messages where conversation_id = $1 order by sequence',
 						parameters: [conversationId]
 					});
-					/**
-					 * The collections this subject may actually reach, stated where the model can see them
-					 * before it guesses.
-					 *
-					 * Derived from the grants rather than from a declared list, which is the whole point of
-					 * §5: the ceiling is not a field somebody remembered to write, it is what the policies
-					 * already say. Without this the model is offered `read_collection` with no way to know
-					 * it is scoped, and the first call outside the scope is a refusal it could have avoided.
-					 */
-					const reachable = (action: 'read' | 'write'): ReadonlyArray<string> =>
-						workspace.definition.collections
-							.filter(({ name }) =>
-								action === 'read'
-									? access.explain(subject, 'read', name).allowed
-									: (['create', 'update', 'delete'] as const).some(
-											(write) => access.explain(subject, write, name).allowed
-										)
-							)
-							.map(({ name }) => name);
-					const tools = allowedTools(subject).map(({ name, description, command }) => {
-						if (name !== 'read_collection' && name !== 'write_collection')
-							return { name, description, command };
-						const allowed = reachable(name === 'read_collection' ? 'read' : 'write');
-						return {
-							name,
-							description:
-								allowed.length === 0
-									? description
-									: `${description} Allowed collections: ${allowed.join(', ')}.`,
-							command
-						};
-					});
+					const tools = toolsFor(subject);
 					const messages: Array<Schema.Json> = [
-						// `src/+agents.md`, the system message of every turn — web and envoy alike. It
-						// describes the business the agent is standing in: what the collections mean, what
-						// the company does, house rules for tone and escalation.
-						{ role: 'system', content: workspace.definition.prompt },
-						// The envoy's own standing instruction, on top of the shared one. Workspace context
-						// is shared; purpose is per-envoy, and the web agent has none because its purpose is
-						// whatever the person in front of it asks for.
-						...(agent.task === undefined
-							? []
-							: [{ role: 'system', content: agent.task } as Schema.Json]),
-						// Third and separate, so the standing instruction stays the thing the author
-						// wrote and this stays the runtime's own statement about who it is talking to.
-						...(senderContext === undefined
-							? []
-							: [{ role: 'system', content: senderContext } as Schema.Json]),
-						...transcript.rows.flatMap((row): ReadonlyArray<Schema.Json> => {
-							const decoded = Schema.decodeUnknownOption(MessageRow)(row);
-							if (decoded._tag === 'None') return [];
-							// A sibling agent's message is stored with its sender so the prompt can attribute it. Handed
-							// on as the stored record it would reach the provider as an object where a string belongs,
-							// and unattributed it would read as something the person asked for.
-							const relayed = parseAgentMessage(decoded.value.content);
-							if (relayed !== null)
-								return [{ role: 'user', content: agentMessageForModel(relayed) }];
-							const whole = Schema.decodeUnknownOption(
-								Schema.Struct({ parts: Schema.Array(TurnPart) })
-							)(decoded.value.content);
-							// An assistant row is a whole turn; anything else is already one provider message.
-							return whole._tag === 'Some' ? replayTurn(whole.value.parts) : [decoded.value];
-						}),
+						...promptFor(agent, transcript.rows, senderContext),
 						{ role: 'user', content: message }
 					];
 					let written = 0;
@@ -717,14 +953,6 @@ export const layer = Layer.effect(
 					 */
 					const delegatedBy = conversationId.startsWith('subagent:') ? conversationId : null;
 					/**
-					 * What this turn's model calls cost, folded across its rounds.
-					 *
-					 * A turn is one message however many times the loop had to go back to the model, so its
-					 * spend is one figure too — a per-round breakdown would report eight charges for something
-					 * the reader asked once.
-					 */
-					let turnUsage: AIUsage | undefined;
-					/**
 					 * The turn's own message, rewritten as each step lands.
 					 *
 					 * One agent turn is one assistant message, so the turn's lifecycle is a field of that message
@@ -735,7 +963,7 @@ export const layer = Layer.effect(
 					 */
 					const parts: Array<TurnPart> = [];
 					let committed = 0;
-					const commit = (status: 'running' | 'completed' | 'failed') =>
+					const commit: CommitTurn = (status, usage, usageUnreported) =>
 						database.execute(EffectId.make(`${effectId}:turn:${(committed += 1)}`), {
 							_tag: 'Query',
 							sql: "update bolt_agent_messages set content = $3::jsonb where conversation_id = $1 and content->>'id' = $2",
@@ -747,7 +975,12 @@ export const layer = Layer.effect(
 									status,
 									subagent_id: delegatedBy,
 									parts,
-									...(turnUsage === undefined ? {} : { usage: turnUsage })
+									resumed: 0,
+									subject,
+									agent_name: agent.name,
+									...(senderContext === undefined ? {} : { sender_context: senderContext }),
+									...(usage === undefined ? {} : { usage }),
+									usage_unreported: usageUnreported
 								})
 							]
 						});
@@ -758,199 +991,218 @@ export const layer = Layer.effect(
 						id: effectId,
 						status: 'running',
 						subagent_id: delegatedBy,
-						parts: []
+						parts: [],
+						resumed: 0,
+						subject,
+						agent_name: agent.name,
+						...(senderContext === undefined ? {} : { sender_context: senderContext }),
+						usage_unreported: false
 					});
-					/**
-					 * Adds this turn to the running totals of its session and of every session above it.
-					 *
-					 * The walk is up the `parent_id` chain rather than one hop, because the figure the reader is
-					 * shown belongs to the conversation they are looking at — and what a delegated agent spent
-					 * was spent on their behalf, however many levels down it happened. Counting only the session
-					 * that made the call would report a conversation which delegated all its work as free.
-					 *
-					 * The counters are incremented in the database rather than read, added and written back: two
-					 * delegated sessions settling at once would otherwise each write a total computed before the
-					 * other's, and one of the two turns would vanish from the bill.
-					 */
-					const recordTurnUsage = Effect.fn('Agents.recordTurnUsage')(function* () {
-						const reported = turnUsage?.costUsd !== undefined;
-						yield* database.execute(EffectId.make(`${effectId}:usage`), {
-							_tag: 'Query',
-							sql: `with recursive lineage as (
-							select id, parent_id, 0 as depth from bolt_conversations where id = $1
-							union all
-							select above.id, above.parent_id, lineage.depth + 1 from bolt_conversations above
-								join lineage on above.id = lineage.parent_id
-								where lineage.depth < ${maxDelegationDepth}
-						)
-						update bolt_conversations set
-							usage_cost_usd = usage_cost_usd + $2,
-							usage_cost_micro_units = usage_cost_micro_units + $3,
-							usage_cost_currency = coalesce($4::text, usage_cost_currency),
-							usage_total_tokens = usage_total_tokens + $5,
-							usage_turns_counted = usage_turns_counted + 1,
-							usage_turns_unreported = usage_turns_unreported + $6
-						where id in (select id from lineage)`,
-							parameters: [
-								conversationId,
-								turnUsage?.costUsd ?? 0,
-								Math.round(turnUsage?.costMicroUnits ?? 0),
-								// `coalesce` rather than an overwrite: a turn the host did not price must not blank
-								// the currency the conversation's running total is already denominated in.
-								turnUsage?.costCurrency ?? null,
-								Math.round(turnUsage?.totalTokens ?? 0),
-								reported ? 0 : 1
-							]
-						});
-					});
-					const settled = yield* Effect.gen(function* () {
-						let output: Schema.Json = null;
-						let status: TurnResult['status'] = 'completed';
-						for (let round = 0; round < maxToolRounds; round += 1) {
-							const response = yield* ai.execute(EffectId.make(`${effectId}:ai:${round}`), {
-								_tag: 'Turn',
-								// The host's defaults, and deliberately not a workspace's. Which model a turn runs
-								// against is a cost question, and cost questions are `limits` — declared by the
-								// policy whose holders pay for them, not by a per-agent field that let one
-								// workspace raise a budget for everybody who ever spoke to it.
-								model: 'default',
-								messages,
-								tools,
-								maxOutputTokens: 2048
-							});
-							output = response.output;
-							// Folded in before anything can fail below: a round that answered and then threw is a
-							// round the provider charged for, and dropping its usage would bill the tenant for a
-							// turn the ledger says was free.
-							turnUsage = addAIUsage(turnUsage, readAIUsage(response.usage));
-							const decoded = Schema.decodeUnknownOption(TurnOutput)(response.output);
-							const toolCalls = decoded._tag === 'Some' ? (decoded.value.toolCalls ?? []) : [];
-							const text = decoded._tag === 'Some' ? decoded.value.text : undefined;
-							if (toolCalls.length === 0) {
-								status = 'completed';
-								parts.push({ kind: 'text', text: text ?? '' });
-								yield* commit('running');
-								break;
-							}
-							status = 'waiting';
-							// The provider names no call ids, so the loop assigns them. A stored answer has to name
-							// the call it answers or the two cannot be paired, and two calls to one tool in a round
-							// would otherwise collide on both that name and the effect id derived from it.
-							const calls = toolCalls.map((call, index) => ({
-								id: `${effectId}:tool:${round}:${index}`,
-								name: call.name,
-								input: call.input ?? null
-							}));
-							// A round contributes parts to the turn it belongs to. It used to open a message of its own,
-							// which is why one turn rendered as several separate agent blocks.
-							if (text !== undefined && text.trim().length > 0) parts.push({ kind: 'text', text });
-							for (const call of calls)
-								parts.push({ kind: 'tool', id: call.id, name: call.name, input: call.input });
-							// Committed before the calls run, so a call the reader can see is one that has been made.
-							yield* commit('running');
-							messages.push({ role: 'assistant', content: response.output });
-							let parked = false;
-							for (const call of calls) {
-								/**
-								 * A refusal is a tool result, not a dead turn.
-								 *
-								 * The model chooses tools from the offer it was shown; a collection-scoped agent
-								 * (`collections: ['companies']`) is offered `read_collection` with no way to know
-								 * the ceiling applies, so it is going to name the wrong collection sometimes. When
-								 * it does, `requireCollection` answers `ToolNotAllowed` — and an agent-domain
-								 * refusal like that is exactly the event the loop should hand back to the model
-								 * ("that tool is not allowed, here is why"), so it can adapt its next move. Every
-								 * other failure still aborts: a facility that broke is not something a second
-								 * question can fix, and telling the model it happened would start a retry loop
-								 * the tenant is paying for.
-								 */
-								const result = yield* executeTool(
-									agent,
-									call.name,
-									call.input,
-									EffectId.make(call.id),
-									subject,
-									conversationId
-								).pipe(
-									Effect.catch((failure) =>
-										failure instanceof ToolNotAllowed || failure instanceof SkillError
-											? Effect.succeed({ error: failure.message })
-											: Effect.fail(failure)
-									)
-								);
-								const encoded = yield* Schema.decodeUnknownEffect(
-									Schema.fromJsonString(Schema.Json)
-								)(JSON.stringify(result)).pipe(
-									Effect.catch(() => Effect.succeed({ error: 'invalid-tool-result' }))
-								);
-								// The answer lands the moment the call returns, so a call still without one reads as
-								// running rather than as a call that was never made.
-								parts.push({ kind: 'tool-result', id: call.id, name: call.name, output: encoded });
-								yield* commit('running');
-								messages.push({
-									role: 'tool',
-									name: call.name,
-									content: JSON.stringify(encoded)
-								});
-								const waiting = Schema.decodeUnknownOption(
-									Schema.Struct({ waiting: Schema.Literal(true) })
-								)(encoded);
-								if (waiting._tag === 'Some') {
-									output = encoded;
-									parked = true;
-									break;
-								}
-							}
-							if (parked) break;
-						}
-						return { output, status };
-					}).pipe(
-						// Ignored rather than propagated: a lifecycle write that fails must not replace the failure
-						// the caller is waiting to be told about. The usage write joins it for the same reason it
-						// runs below — a turn that failed after the model answered was still charged for.
-						Effect.onError(() =>
-							Effect.ignore(commit('failed').pipe(Effect.andThen(recordTurnUsage())))
-						)
+					const settleUsage: SettleUsage = (usage, newlyUnreported) =>
+						recordUsage(
+							EffectId.make(`${effectId}:usage`),
+							conversationId,
+							usage,
+							1,
+							newlyUnreported ? 1 : 0
+						);
+					const settled = yield* continueToolLoop(
+						effectId,
+						agent,
+						subject,
+						conversationId,
+						messages,
+						tools,
+						parts,
+						undefined,
+						false,
+						commit,
+						settleUsage
 					);
-					// A parked turn is still running — it resumes when the subagent answers — so only a turn that
-					// reached an answer settles here.
-					if (settled.status === 'completed') yield* commit('completed');
-					yield* Effect.ignore(recordTurnUsage());
-					// There is deliberately no continuation enqueued here.
-					//
-					// Every turn used to end by enqueueing `agents.resume { conversationId }`, into a facility
-					// nothing executed. Made real, it would fire on two paths rather than one: a turn that
-					// parked on a subagent, and a turn that exhausted `maxToolRounds` without an answer — and
-					// the second continues, exhausts, continues, with nothing bounding it. That is a runaway
-					// agent bill wearing a scheduler's clothes.
-					//
-					// It was also a duplicate carrying less information. `sandbox-tools.ts`'s
-					// `await_sandbox_agent` already enqueues a resume for the parent, with the
-					// `targetSessionId` that makes it actionable; this one named only the conversation. One
-					// resume enqueue, one meaning.
+					if (settled.status !== 'waiting') {
+						yield* commit(settled.status, settled.cumulative, settled.unreported);
+					}
+					yield* Effect.ignore(settleUsage(settled.segment, settled.unreported));
+					if (settled.status !== 'waiting') {
+						yield* resumeParent(effectId, conversationId);
+					}
 					return { conversationId, output: settled.output, status: settled.status };
 				}
 			),
-			/**
-			 * Continuing a conversation that is waiting on a delegated subagent — the gap, stated.
-			 *
-			 * This did one thing and that thing no longer exists: it delivered a `Signal` to a parked task
-			 * through a facility that never executed one. So a delegated turn parked and never woke, and
-			 * the code read as though something was arranging otherwise.
-			 *
-			 * Making it real needs two things that are agent-domain changes rather than queue ones, and
-			 * guessing at either would be worse than the gap. `turn` requires a `message`, and a
-			 * continuation has none — passing an empty one appends an empty user message to the transcript
-			 * that is the checkpoint for every future replay, which is a corruption and not a shortcut. And
-			 * continuation has to be bounded, or a turn that ran out of tool rounds continues forever.
-			 *
-			 * Until both are answered this is honestly nothing, rather than dishonestly something.
-			 */
-			resume: Effect.fn('Agents.resume')(function* (_effectId, _taskId, _conversationId) {
-				yield* Effect.void;
+			resume: Effect.fn('Agents.resume')(function* (effectId, conversationId, targetSessionId) {
+				/**
+				 * Authority is structural first: the target must be this conversation's child and both rows
+				 * must belong to the same sandbox. A task carries no credential, so accepting either id by
+				 * itself would make the internal command a cross-conversation transcript reader.
+				 */
+				const relationship = yield* database.execute(EffectId.make(`${effectId}:authorize`), {
+					_tag: 'Query',
+					sql: `select target.parent_id, target.user_id as target_user_id,
+							parent.user_id as parent_user_id
+						from bolt_conversations target
+						join bolt_conversations parent on parent.id = $1
+						where target.id = $2 and target.parent_id = parent.id
+							and target.user_id = parent.user_id`,
+					parameters: [conversationId, targetSessionId]
+				});
+				const authorized = Schema.decodeUnknownOption(
+					Schema.Struct({
+						parent_id: Schema.String,
+						target_user_id: Schema.String,
+						parent_user_id: Schema.String
+					})
+				)(relationship.rows[0]);
+				if (
+					authorized._tag === 'None' ||
+					authorized.value.parent_id !== conversationId ||
+					authorized.value.target_user_id !== authorized.value.parent_user_id
+				) {
+					return yield* new AccessControl.AccessDenied({
+						action: 'agent',
+						resource: targetSessionId,
+						reason: 'target is not a delegated session of this conversation'
+					});
+				}
+
+				const targetResult = yield* database.execute(EffectId.make(`${effectId}:target`), {
+					_tag: 'Query',
+					sql: `select content from bolt_agent_messages
+						where conversation_id = $1 and role = 'assistant'
+							and content->>'status' in ('completed', 'failed', 'cancelled')
+						order by sequence desc limit 1`,
+					parameters: [targetSessionId]
+				});
+				const target = Schema.decodeUnknownOption(SettledTargetRow)(targetResult.rows[0]);
+				if (target._tag === 'None') {
+					return yield* new AccessControl.AccessDenied({
+						action: 'agent',
+						resource: targetSessionId,
+						reason: 'target session has not settled'
+					});
+				}
+
+				const parkedResult = yield* database.execute(EffectId.make(`${effectId}:parked`), {
+					_tag: 'Query',
+					sql: `select content from bolt_agent_messages
+						where conversation_id = $1 and role = 'assistant'
+							and content->>'status' = 'running'
+						order by sequence desc limit 1`,
+					parameters: [conversationId]
+				});
+				const parked = Schema.decodeUnknownOption(StoredTurnRow)(parkedResult.rows[0]);
+				// A replay after the parent settled is an idempotent no-op.
+				if (parked._tag === 'None') return;
+				const stored = parked.value.content;
+				if (stored.subject === undefined || stored.agent_name === undefined) {
+					return yield* new AccessControl.AccessDenied({
+						action: 'agent',
+						resource: conversationId,
+						reason: 'parked turn has no continuation authority'
+					});
+				}
+				const agent = yield* resolveAgent(stored.agent_name);
+				yield* access.authorize(stored.subject, 'agent', stored.agent_name);
+
+				const parts = [...stored.parts];
+				let answerIndex = -1;
+				let waiting = false;
+				for (let index = parts.length - 1; index >= 0; index -= 1) {
+					const answer = parts[index];
+					if (answer?.kind !== 'tool-result' || answer.name !== 'await_sandbox_agent') continue;
+					const call = parts.find(
+						(part) => part.kind === 'tool' && part.id === answer.id && part.name === answer.name
+					);
+					if (call?.kind !== 'tool') continue;
+					const input = Schema.decodeUnknownOption(AwaitInput)(call.input);
+					if (input._tag === 'None' || input.value.sessionId !== targetSessionId) continue;
+					answerIndex = index;
+					waiting = Schema.decodeUnknownOption(WaitingAnswer)(answer.output)._tag === 'Some';
+					break;
+				}
+				// A stale settlement for a different child cannot wake whichever child is currently awaited.
+				if (answerIndex < 0) return;
+				const alreadyResumed = stored.resumed ?? 0;
+				const resumed = alreadyResumed + (waiting && alreadyResumed < maxResumes ? 1 : 0);
+				const namespace = EffectId.make(`${stored.id}:resume:${resumed}`);
+				let committed = 0;
+				const commit: CommitTurn = (status, usage, usageUnreported) =>
+					database.execute(EffectId.make(`${effectId}:turn:${(committed += 1)}`), {
+						_tag: 'Query',
+						sql: "update bolt_agent_messages set content = $3::jsonb where conversation_id = $1 and content->>'id' = $2 and content->>'status' = 'running'",
+						parameters: [
+							conversationId,
+							stored.id,
+							JSON.stringify({
+								...stored,
+								status,
+								parts,
+								resumed,
+								...(usage === undefined ? {} : { usage }),
+								usage_unreported: usageUnreported
+							})
+						]
+					});
+
+				if (waiting && alreadyResumed >= maxResumes) {
+					yield* commit('failed', stored.usage, stored.usage_unreported ?? false);
+					yield* resumeParent(namespace, conversationId);
+					return;
+				}
+				if (waiting) {
+					const previous = parts[answerIndex];
+					if (previous?.kind !== 'tool-result') return;
+					parts[answerIndex] = {
+						...previous,
+						output: { waiting: false, output: target.value.content }
+					};
+					yield* commit('running', stored.usage, stored.usage_unreported ?? false);
+				}
+
+				const transcript = yield* database.execute(EffectId.make(`${effectId}:read`), {
+					_tag: 'Query',
+					sql: 'select role, content from bolt_agent_messages where conversation_id = $1 order by sequence',
+					parameters: [conversationId]
+				});
+				const settleUsage: SettleUsage = (usage, newlyUnreported) =>
+					recordUsage(
+						EffectId.make(`${namespace}:usage`),
+						conversationId,
+						usage,
+						0,
+						newlyUnreported ? 1 : 0
+					);
+				const settled = yield* continueToolLoop(
+					namespace,
+					agent,
+					stored.subject,
+					conversationId,
+					promptFor(agent, transcript.rows, stored.sender_context),
+					toolsFor(stored.subject),
+					parts,
+					stored.usage,
+					stored.usage_unreported ?? false,
+					commit,
+					settleUsage
+				);
+				if (settled.status !== 'waiting') {
+					yield* commit(settled.status, settled.cumulative, settled.unreported);
+				}
+				yield* Effect.ignore(
+					settleUsage(settled.segment, settled.unreported && !(stored.usage_unreported ?? false))
+				);
+				if (settled.status !== 'waiting') {
+					yield* resumeParent(namespace, conversationId);
+				}
 			}),
 			cancel: Effect.fn('Agents.cancel')(function* (effectId, taskId) {
-				yield* queue.cancel(effectId, taskId);
+				yield* queue.cancel(EffectId.make(`${effectId}:task`), taskId);
+				yield* database.execute(EffectId.make(`${effectId}:turn`), {
+					_tag: 'Query',
+					sql: `update bolt_agent_messages
+						set content = jsonb_set(content, '{status}', '"cancelled"'::jsonb, true)
+						where content->>'id' = $1 and content->>'status' = 'running'`,
+					parameters: [taskId]
+				});
 			}),
 			updateVerifier: Effect.fn('Agents.updateVerifier')(
 				function* (effectId, conversationId, verifier) {
@@ -1033,9 +1285,7 @@ export const layer = Layer.effect(
 				};
 			}),
 			listSkills: (subject) =>
-				workspace.definition.skills.filter((name) =>
-					access.capabilities(subject).skills.has(name)
-				),
+				workspace.definition.skills.filter((name) => access.capabilities(subject).skills.has(name)),
 			readSkill
 		});
 	})

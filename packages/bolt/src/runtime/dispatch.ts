@@ -257,8 +257,8 @@ const AgentStartInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString
 });
 const AgentResumeInput = Schema.Struct({
-	taskId: Schema.NonEmptyString,
-	conversationId: Schema.NonEmptyString
+	conversationId: Schema.NonEmptyString,
+	targetSessionId: Schema.NonEmptyString
 });
 const AgentVerifierInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
@@ -2045,7 +2045,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		}
 		case 'agents.resume': {
 			const input = yield* decode(AgentResumeInput, commandInput);
-			yield* (yield* Agents.Service).resume(effectId, input.taskId, input.conversationId);
+			yield* (yield* Agents.Service).resume(effectId, input.conversationId, input.targetSessionId);
 			return json({ resumed: true });
 		}
 		case 'agents.cancel': {
