@@ -2,9 +2,9 @@
 	import { cn } from '#lib/utils';
 	import { useResizeObserver, watch } from 'runed';
 	import type { Snippet } from 'svelte';
-	import { computeDocTocTrackBounds } from './anchor-observer';
+	import { computeDocTocTrackBounds } from '#lib/doc-toc/anchor-observer';
 	import { getDocTocState } from './context.svelte';
-	import { measureDocTocItemPositions, type DocTocPosition } from './measure-positions';
+	import { measureDocTocItemPositions, type DocTocPosition } from '#lib/doc-toc/measure-positions';
 
 	let {
 		class: className,

@@ -5,16 +5,13 @@
  * The composer shows the same verifier prompt the end-action will read. Plan folds
  * through the same `kind: 'summary'` checkpoint the model already sees after compaction.
  */
-export const AGENT_INTENTS = ['do', 'plan'] as const;
-export type AgentIntent = (typeof AGENT_INTENTS)[number];
+const AGENT_INTENTS = ['do', 'plan'] as const;
+type AgentIntent = (typeof AGENT_INTENTS)[number];
 
-export const DEFAULT_VERIFIER_PROMPTS = {
+const DEFAULT_VERIFIER_PROMPTS = {
 	do: "Was the person's request actually completed? Prefer tool results, record identifiers, and concrete outcomes over the agent's own claims. A sentence that says the work is done is not evidence. If the transcript does not show the work, it is not done.",
 	plan: 'Is this plan complete and executable? It must cover the original request, name concrete next steps a later turn can follow, and not leave the reader needing another planning pass. Research-only — do not require that the work already happened.'
 } as const satisfies Record<AgentIntent, string>;
-
-export const PLAN_FOLD_INSTRUCTIONS =
-	'Keep the executable plan as the recap. Preserve decisions, constraints, ordered next steps, collections or files involved, risks, and how to verify. Planning chatter and exploratory reads can go.';
 
 const PLAN_SUMMARY_OPEN = '<plan-summary>';
 const PLAN_SUMMARY_CLOSE = '</plan-summary>';
@@ -49,8 +46,6 @@ export function resolveAgentIntent(input: {
 		verifierPrompt
 	};
 }
-export type ResolvedAgentIntent = ReturnType<typeof resolveAgentIntent>;
-
 function hasTaskSignal(message: string): boolean {
 	const text = message.trim();
 	if (text.length === 0) return false;
@@ -59,10 +54,6 @@ function hasTaskSignal(message: string): boolean {
 	const words = text.split(/\s+/).length;
 	if (words <= 16 && CHITCHAT.test(text)) return false;
 	return words > 6 && text.includes('?');
-}
-
-export function wrapPlanSummary(text: string): string {
-	return `${PLAN_SUMMARY_OPEN}\n${text}\n${PLAN_SUMMARY_CLOSE}`;
 }
 
 export function parseStoredSummary(content: string): {
@@ -83,10 +74,4 @@ export function parseStoredSummary(content: string): {
 		};
 	}
 	return { fold: 'compact', text: content };
-}
-
-export function windowContentFromStoredSummary(content: string): string {
-	const parsed = parseStoredSummary(content);
-	const tag = parsed.fold === 'plan' ? 'plan-summary' : 'conversation-summary';
-	return `<${tag}>\n${parsed.text}\n</${tag}>`;
 }

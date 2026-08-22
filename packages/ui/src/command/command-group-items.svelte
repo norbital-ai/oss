@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { getCommandState } from './command-state.svelte.js';
-	import type { CommandGroupItemsProps } from './types.js';
+	import type { CommandGroupItemsProps } from '#lib/command/types';
 
 	let {
 		ref = $bindable(null),

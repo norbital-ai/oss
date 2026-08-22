@@ -10,10 +10,12 @@ import {
 	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { AccessControl, decide } from '../../src/runtime/access/access-control.js';
+import * as AccessControl from '../../src/runtime/access/access-control.js';
+import { decide } from '../../src/runtime/access/access-control.js';
 import { systemSubject } from '../../src/runtime/access/system-principal.js';
-import { ADMIN_STATUS, type Identity } from '../../src/runtime/identity/identity.js';
-import { Approvals } from '../../src/runtime/approvals/approvals.js';
+import * as Identity from '../../src/runtime/identity/identity.js';
+import { ADMIN_STATUS } from '../../src/runtime/identity/identity.js';
+import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	SYSTEM_READ_POLICY,
@@ -36,7 +38,7 @@ import { fixtureUserId, seedSession, seedTeam } from '../support/fixture-identit
  * The workspace below is shaped like `templates/field-operations`: a `field_ops_controller` policy
  * granting every action on the collections the app authors and nothing on `bolt_auth_user`, held by
  * a team whose seeded members are ordinary people. That template's controller app runs
- * `client.db.bolt_auth_user.findMany({ columns: { norbital_id: true, name: true } })` to label the
+ * `client.db.bolt_auth_user.findMany({ columns: { id: true, name: true } })` to label the
  * `user_id` column on its Contractors tab, which is exactly the directory read the masked grant
  * exists to serve.
  *
@@ -190,7 +192,8 @@ const seedBystander = async (runtime: BoltTestRuntime) => {
 const contractorSubject: Identity.Subject = {
 	userId: fixtureUserId('user-contractor'),
 	tenantId: 'test-tenant',
-	teamPath: [CONTRACTOR_TEAM], policies: []
+	teamPath: [CONTRACTOR_TEAM],
+	policies: []
 };
 
 const REQUEST_ID = '019f6f10-0002-7000-8000-000000000001';
@@ -221,12 +224,12 @@ const raiseApproval = (harness: BoltTestRuntime, requestId = REQUEST_ID) =>
 		})
 	);
 
-/** The `norbital_id`s a subject actually gets back, which is where a narrowing shows and a grant does not. */
+/** The `id`s a subject actually gets back, which is where a narrowing shows and a grant does not. */
 const readIds = async (
 	harness: BoltTestRuntime,
 	credential: string,
 	collectionName: string,
-	key = 'norbital_id'
+	key = 'id'
 ): Promise<ReadonlyArray<unknown>> => {
 	const outcome = await readAs(harness, credential, collectionName);
 	if (outcome._tag !== 'Success')
@@ -254,7 +257,15 @@ const readAs = (runtime: BoltTestRuntime, credential: string, collectionName: st
 	);
 
 /** The runtime's own collections that `SYSTEM_READ_POLICY` grants `read` on. */
-const RUNTIME_OWNED = ['approval_request', 'requestor', 'bolt_auth_user'];
+const RUNTIME_OWNED = [
+	'approval_request',
+	'requestor',
+	'bolt_auth_user',
+	'bolt_team',
+	'chat_session',
+	'chat_message',
+	'bolt_notifications'
+];
 
 /**
  * Reaching a collection and reading its rows are two different questions, and this suite asks both.
@@ -307,22 +318,25 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 
 	/**
 	 * The mask is the other half of the directory grant, and it has to survive whatever admits the
-	 * read: `bolt_auth_user` holds an address, and the grant allows `norbital_id` and `name` only.
+	 * read: `bolt_auth_user` holds an address, and the grant allows `id` and `name` only.
 	 */
-	it('masks the identity directory down to id and name for a member', async () => {
-		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
-		await seedController(harness);
+	it.each(['bolt_auth_user', 'bolt_team'])(
+		'masks the %s directory down to id and name for a member',
+		async (collectionName) => {
+			harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+			await seedController(harness);
 
-		const outcome = await readAs(harness, 'controller-token', 'bolt_auth_user');
-		if (outcome._tag !== 'Success')
-			throw new Error(`expected the directory read to be served, got ${JSON.stringify(outcome)}`);
-		const rows = Reflect.get(outcome.success.value as object, 'rows');
-		expect(Array.isArray(rows)).toBe(true);
-		expect((rows as ReadonlyArray<object>).length).toBeGreaterThan(0);
-		for (const row of rows as ReadonlyArray<Record<string, unknown>>) {
-			expect(Object.keys(row).toSorted()).toEqual(['name', 'norbital_id']);
+			const outcome = await readAs(harness, 'controller-token', collectionName);
+			if (outcome._tag !== 'Success')
+				throw new Error(`expected the directory read to be served, got ${JSON.stringify(outcome)}`);
+			const rows = Reflect.get(outcome.success.value as object, 'rows');
+			expect(Array.isArray(rows)).toBe(true);
+			expect((rows as ReadonlyArray<object>).length).toBeGreaterThan(0);
+			for (const row of rows as ReadonlyArray<Record<string, unknown>>) {
+				expect(Object.keys(row).toSorted()).toEqual(['id', 'name']);
+			}
 		}
-	});
+	);
 
 	/**
 	 * The host principal is not "an authenticated subject", and the flag that fixes the case above is
@@ -348,6 +362,69 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 			allowed: true,
 			reason: 'explicit allow'
 		});
+	});
+});
+
+describe('notifications are live system collections scoped to their recipient', () => {
+	it('reads only the subject notifications and permits only their read flag to change', async () => {
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		await seedController(harness);
+		await seedBystander(harness);
+		const ownId = '019f6f10-0004-7000-8000-000000000001';
+		const otherId = '019f6f10-0004-7000-8000-000000000002';
+		await harness.database.query(
+			'insert into bolt_notifications (id, recipient, payload, read) values ($1, $2, $3::jsonb, false), ($4, $5, $6::jsonb, false)',
+			[
+				ownId,
+				fixtureUserId('user-controller'),
+				JSON.stringify({ text: 'Mine' }),
+				otherId,
+				fixtureUserId('user-bystander'),
+				JSON.stringify({ text: 'Theirs' })
+			]
+		);
+
+		expect(await readIds(harness, 'controller-token', 'bolt_notifications')).toEqual([ownId]);
+
+		const markOwn = await harness.runtime.runPromise(
+			dispatchInvocation(
+				command('collections.update', 'controller-token', {
+					collection: 'bolt_notifications',
+					id: ownId,
+					values: { read: true }
+				})
+			).pipe(Effect.result)
+		);
+		expect(markOwn._tag).toBe('Success');
+
+		await harness.runtime.runPromise(
+			dispatchInvocation(
+				command('collections.update', 'controller-token', {
+					collection: 'bolt_notifications',
+					id: otherId,
+					values: { read: true }
+				})
+			)
+		);
+		const refusedField = await harness.runtime.runPromise(
+			dispatchInvocation(
+				command('collections.update', 'controller-token', {
+					collection: 'bolt_notifications',
+					id: ownId,
+					values: { payload: { text: 'Rewritten' } }
+				})
+			).pipe(Effect.result)
+		);
+		expect(refusedField._tag).toBe('Failure');
+
+		expect(
+			await harness.database.query(
+				'select id, payload, read from bolt_notifications order by id'
+			)
+		).toEqual([
+			{ id: ownId, payload: { text: 'Mine' }, read: true },
+			{ id: otherId, payload: { text: 'Theirs' }, read: false }
+		]);
 	});
 });
 

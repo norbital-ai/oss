@@ -1,9 +1,9 @@
 <script lang="ts" module>
 	import type { Dialog, WithoutChildrenOrChild } from 'bits-ui';
 	import type { Snippet } from 'svelte';
-	import type { Side } from './sheet-variants.js';
+	import type { Side } from '#lib/sheet/sheet-variants';
 
-	export interface SheetContentProps extends WithoutChildrenOrChild<Dialog.ContentProps> {
+	interface SheetContentProps extends WithoutChildrenOrChild<Dialog.ContentProps> {
 		side?: Side;
 		children: Snippet;
 		fullScreen?: boolean;
@@ -27,14 +27,18 @@
 	import { cn, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 	import { Dialog as BitsDialog } from 'bits-ui';
 	import { PersistedState } from 'runed';
+	import { Effect, Result } from 'effect';
 	import { onMount } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import SheetContentResize from './sheet-content-resize.svelte';
 
 	const { t } = useI18n<UiKeys>();
-	import { resolveSheetPortalTarget } from './sheet-portal-target.js';
-	import { sheetVariants } from './sheet-variants.js';
-	const SheetPortal = BitsDialog.Portal;
+	import { sheetVariants } from '#lib/sheet/sheet-variants';
+
+	function resolveSheetPortalTarget(target: string | undefined, root: ParentNode): Element | null {
+		if (target) return root.querySelector(target);
+		return root.querySelector('#app-body-root') ?? root.querySelector('body');
+	}
 
 	let {
 		ref = $bindable<HTMLElement | null>(null),
@@ -84,7 +88,7 @@
 	});
 
 	class MemoryState<T> {
-		current = $state() as T;
+		current = $state<T>(undefined as T);
 
 		constructor(initialValue: T) {
 			this.current = initialValue;
@@ -94,12 +98,9 @@
 	type WidthState = PersistedState<number | null> | { current: number | null };
 
 	function canUseSessionStorage(): boolean {
-		try {
-			void window.sessionStorage;
-			return true;
-		} catch {
-			return false;
-		}
+		return Result.isSuccess(
+			Effect.runSync(Effect.result(Effect.sync(() => window.sessionStorage)))
+		);
 	}
 
 	function createSheetWidthState(key: string): WidthState {
@@ -205,7 +206,7 @@
 </script>
 
 {#if mountedPortalTarget}
-	<SheetPortal to={mountedPortalTarget}>
+	<BitsDialog.Portal to={mountedPortalTarget}>
 		<BitsDialog.Content
 			preventScroll={mobileBottomSheet}
 			bind:ref
@@ -275,5 +276,5 @@
 				</BitsDialog.Close>
 			{/if}
 		</BitsDialog.Content>
-	</SheetPortal>
+	</BitsDialog.Portal>
 {/if}

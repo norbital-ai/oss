@@ -1,21 +1,38 @@
 import { collectionSearchTrigramIndexName } from '@norbital-ai/std/collection';
-import type { ModelExclusion } from '../authoring/models-schema.js';
-import { searchableColumns } from '../authoring/model-introspection.js';
+import type { ModelExclusion, ModelIndex } from '../authoring/models-schema.js';
+import {
+	compileModel,
+	describeModel,
+	searchableColumns
+} from '../authoring/model-introspection.js';
+import { INTERNAL_SYSTEM_MODELS, SYSTEM_MODELS } from '../authoring/system-models.js';
+import { defineSystemRowModel } from '../authoring/system-row-model.js';
 import type {
 	CollectionDefinition,
 	FieldDefinition,
 	WorkspaceDefinition
 } from '../authoring/workspace-schema.js';
+import { collection } from '../authoring/workspace-schema.js';
 import {
 	IDENTITY_COLLECTIONS,
-	SYSTEM_COLLECTION_NAMES,
 	withSystemCollections
 } from '../runtime/schema/system-collections.js';
 
-export type SchemaStep = Readonly<{
+type SchemaStep = Readonly<{
 	readonly id: string;
 	readonly sql: string;
 }>;
+
+/** Fingerprints the exact ordered DDL a database or replica will apply. */
+export const fingerprintSchemaSteps = (steps: ReadonlyArray<SchemaStep>): string => {
+	const source = JSON.stringify(steps);
+	let hash = 2_166_136_261;
+	for (let index = 0; index < source.length; index += 1) {
+		hash ^= source.charCodeAt(index);
+		hash = Math.imul(hash, 16_777_619);
+	}
+	return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+};
 
 export type SchemaPlan = Readonly<{
 	readonly fingerprint: string;
@@ -23,8 +40,7 @@ export type SchemaPlan = Readonly<{
 }>;
 
 /** Quotes a PostgreSQL identifier. Shared so plan DDL and migration DDL cannot quote differently. */
-export const quoteIdentifier = (identifier: string): string =>
-	`"${identifier.replaceAll('"', '""')}"`;
+const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
 
 /**
  * The tables the plan's steps create, read back out of the DDL this module rendered.
@@ -36,7 +52,7 @@ export const quoteIdentifier = (identifier: string): string =>
  *
  * `verify` needs this because it only ever compared authored collections. A `bolt_*` table the plan
  * declares could therefore be missing while `migrate` still reported success — which is exactly how
- * `agents.*` answered `relation "bolt_conversations" does not exist` against a database whose
+ * `agents.*` answered `relation "chat_session" does not exist` against a database whose
  * migration had just answered `migrated: true`. A plan step that did not take effect is a failed
  * migration, and nothing was asking.
  */
@@ -75,7 +91,7 @@ const SchemaPlanValues = {
 		field.sqlType ?? SchemaPlanValues.sqlType(field.type),
 	sqlType: (type: string): string => {
 		switch (type) {
-			// The same type `norbital_id` is, because that is what these columns reference. Planning a
+			// The same type `id` is, because that is what these columns reference. Planning a
 			// foreign key as `text` left the plan unable to render the join its own where compiler
 			// emits, so every relation filter against a Bolt-provisioned database failed on
 			// `operator does not exist: text = uuid`.
@@ -93,63 +109,30 @@ const SchemaPlanValues = {
 				return 'text';
 		}
 	},
-	quoteIdentifier,
-	fingerprint: (steps: ReadonlyArray<SchemaStep>): string => {
-		const source = JSON.stringify(steps);
-		let hash = 2_166_136_261;
-		for (let index = 0; index < source.length; index += 1) {
-			hash ^= source.charCodeAt(index);
-			hash = Math.imul(hash, 16_777_619);
-		}
-		return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, '0')}`;
-	}
+	quoteIdentifier
 };
 
-/**
- * The columns the platform owns on every collection row, exactly as the migration lineage defines
- * them.
- *
- * Bolt previously invented its own shape — `id text primary key` with `norbital_id` generated from
- * it, and no `norbital_sys_period` at all. That made a Bolt-provisioned database structurally
- * incompatible with every existing one: `collections.ts` inserts into `id`, a column deployed tables
- * do not have, so the runtime could not write to a real workspace. Nothing caught it, because local
- * development provisions from this very plan — Bolt only ever met the schema it invented.
- *
- * The lineage wins because it is what deployed workspaces already hold, and rebasing them onto a new
- * shape would mean restructuring live payroll data.
- */
-const SYSTEM_COLUMN_DEFINITIONS = {
-	norbital_id: 'uuid primary key default gen_random_uuid()',
-	norbital_created_at: 'timestamptz default now()',
-	norbital_updated_at: 'timestamptz default now()',
-	// Half-open, so the current row's period is open-ended and successive versions abut without
-	// overlapping — the same `[)` convention `norbital_daterange` uses for authored ranges.
-	norbital_sys_period: "tstzrange not null default tstzrange(current_timestamp, null, '[)')",
-	norbital_row_version: 'integer default 1',
-	norbital_approval_id: 'uuid'
-} as const;
+const systemRowFields = describeModel(defineSystemRowModel());
+const systemTableNames: ReadonlySet<string> = new Set(Object.keys(SYSTEM_MODELS));
+const internalSystemTables: ReadonlyArray<
+	CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
+> = Object.entries(INTERNAL_SYSTEM_MODELS).map(([name, declaration]) =>
+	compileModel(collection({ name, fields: {} }), declaration)
+);
 
-/**
- * The names alone, for the callers that police the columns rather than create them.
- *
- * Keyed off the DDL above rather than restated, because a guard that names five of six columns
- * fails open on the sixth and nothing says so — the guard stays green while the rule it enforces
- * has a hole in it.
- */
-export const SYSTEM_COLUMN_NAMES: ReadonlyArray<string> = Object.keys(SYSTEM_COLUMN_DEFINITIONS);
+const renderColumn = (name: string, field: FieldDefinition): string => {
+	const column = `${SchemaPlanValues.quoteIdentifier(name)} ${SchemaPlanValues.columnType(field)}`;
+	if (field.generated !== undefined)
+		return `${column} generated always as (${field.generated}) stored`;
+	if (field.primaryKey)
+		return `${column} primary key${field.sqlDefault === undefined ? '' : ` default ${field.sqlDefault}`}`;
+	const defaulted =
+		field.sqlDefault === undefined ? column : `${column} default ${field.sqlDefault}`;
+	return `${defaulted}${field.required ? ' not null' : ''}`;
+};
 
-/**
- * The same names as a type, for `SystemRow` — the shape authored code sees on every row.
- *
- * `SystemRow` used to restate the list and named five of the six, so authored row types denied that
- * `norbital_sys_period` exists at all while every table has it. Keying the type off this map instead
- * means the row type cannot fall behind the DDL: adding a seventh column here is a compile error
- * until its value type is declared, rather than a column the authoring surface silently omits.
- */
-export type SystemColumnName = keyof typeof SYSTEM_COLUMN_DEFINITIONS;
-
-const SYSTEM_COLUMNS = Object.entries(SYSTEM_COLUMN_DEFINITIONS)
-	.map(([name, definition]) => `${name} ${definition}`)
+const SYSTEM_COLUMNS = Object.entries(systemRowFields)
+	.map(([name, field]) => renderColumn(name, field))
 	.join(', ');
 
 /**
@@ -190,7 +173,9 @@ const declaredIndexSteps = (
 	collection: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
 ): ReadonlyArray<SchemaStep> =>
 	Object.entries(collection.fields)
-		.filter(([, field]) => field.indexed)
+		// Primary-key and unique constraints already own an index. Emitting another named btree over
+		// the same column adds write cost and disk without serving a different query.
+		.filter(([, field]) => field.indexed && field.primaryKey !== true && field.unique !== true)
 		.map(([column, field]) => ({ column, unique: field.unique === true }))
 		.toSorted((left, right) => left.column.localeCompare(right.column))
 		.map(({ column, unique }) => ({
@@ -198,6 +183,31 @@ const declaredIndexSteps = (
 			id: `collection:${collection.name}:index:${column}`,
 			sql: `create ${unique ? 'unique ' : ''}index if not exists ${quoteIdentifier(collectionIndexName(collection.name, column))} on ${quoteIdentifier(collection.name)} (${quoteIdentifier(column)})`
 		}));
+
+const modelIndexSteps = (
+	collection: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
+): ReadonlyArray<SchemaStep> =>
+	(collection.indexes ?? []).map((declaration: ModelIndex) => {
+		if (declaration.columns.length === 0)
+			throw new TypeError(`Collection ${collection.name} declares an index with no columns.`);
+		const columnNames = declaration.columns.map((column) =>
+			typeof column === 'string' ? column : column.expr
+		);
+		const derivedName = columnNames.join('_').replaceAll(/[^a-zA-Z0-9_]/g, '_');
+		const name =
+			declaration.name ?? collectionIndexName(collection.name, derivedName || 'expression');
+		const columns = declaration.columns
+			.map((column) => {
+				if (typeof column !== 'string') return `(${column.expr})`;
+				const opclass = declaration.opclass?.[column];
+				return `${quoteIdentifier(column)}${opclass === undefined ? '' : ` ${opclass}`}`;
+			})
+			.join(', ');
+		return {
+			id: `collection:${collection.name}:index:${name}`,
+			sql: `create ${declaration.unique === true ? 'unique ' : ''}index if not exists ${quoteIdentifier(name)} on ${quoteIdentifier(collection.name)}${declaration.method === undefined ? '' : ` using ${declaration.method}`} (${columns})${declaration.where === undefined ? '' : ` where ${declaration.where}`}`
+		};
+	});
 
 /**
  * A collection's trigram index steps, one per column the author opted into free-text search.
@@ -292,480 +302,13 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 			// so this wrapper is honestly immutable. Empty or absent projects NULL, which is what a
 			// union arm that does not carry the field needs.
 			id: 'bolt:function-date',
-			sql: "create or replace function norbital_date(value text) returns date language sql immutable parallel safe as $norbital_date$ select nullif(value, '')::date $norbital_date$"
+			sql: "create or replace function bolt_date(value text) returns date language sql immutable parallel safe as $bolt_date$ select nullif(value, '')::date $bolt_date$"
 		},
 		{
 			// Half-open [start, end): adjacent periods touch without overlapping, and a missing bound
 			// is unbounded.
 			id: 'bolt:function-daterange',
-			sql: "create or replace function norbital_daterange(payload jsonb) returns daterange language sql immutable parallel safe as $norbital_daterange$ select daterange(nullif(payload->>'start', '')::date, nullif(payload->>'end', '')::date, '[)') $norbital_daterange$"
-		},
-		{
-			id: 'bolt:approvals',
-			sql: 'create table if not exists bolt_approvals (request_id text primary key, tenant_id text not null, state jsonb not null, created_at timestamptz not null default now())'
-		},
-		{
-			id: 'bolt:automation-runs',
-			sql: 'create table if not exists bolt_automation_runs (effect_id text primary key, automation_name text not null, task_id text, state text not null, input jsonb not null, created_at timestamptz not null default now())'
-		},
-		{
-			id: 'bolt:audit',
-			sql: 'create table if not exists bolt_audit (sequence bigint generated always as identity primary key, kind text not null, subject_id text not null, payload jsonb not null, created_at timestamptz not null default now())'
-		},
-		/**
-		 * The three tables `envoys.ts` reads and writes, renamed from `bolt_channel_*` in place.
-		 *
-		 * **A clean cut is `alter table … rename`, not create-and-backfill.** There is no window in
-		 * which both names exist, so there is no moment when a write could land in the old table and a
-		 * read miss it. The rename is guarded rather than bare because this plan is applied to fresh
-		 * databases as well as existing ones, and to a browser replica that has never seen either name:
-		 * it fires only where the old table is present and the new one is not, and is a no-op everywhere
-		 * else.
-		 *
-		 * The id sorts first among the `bolt:envoy-*` steps — `0000` before `inbound`, `receipts`,
-		 * `registrations` — because the `create table if not exists` steps below must not win the race
-		 * and leave an existing deployment with a renamed-away table beside an empty new one. Step ids
-		 * encode dependency order and the plan applies in id order; that is load-bearing here.
-		 *
-		 * Columns are exactly the ones `register`, `receive`, `reply` and `status` name, and nothing
-		 * else. In particular there is deliberately no `tenant_id`: every statement in `envoys.ts` is
-		 * tenant-blind, so a `not null` tenant column would fail every insert rather than scope
-		 * anything. That is a real multi-tenancy gap, but it is a gap in the runtime's statements —
-		 * inventing the column here would only hide it behind a table that no longer matches its only
-		 * caller.
-		 */
-		{
-			id: 'bolt:envoy-0000-rename-from-channel',
-			sql: `do $$
-			      begin
-			        if to_regclass('bolt_channel_registrations') is not null and to_regclass('bolt_envoy_registrations') is null then
-			          alter table bolt_channel_registrations rename to bolt_envoy_registrations;
-			          alter table bolt_envoy_registrations rename column channel_name to envoy_name;
-			        end if;
-			        if to_regclass('bolt_channel_receipts') is not null and to_regclass('bolt_envoy_receipts') is null then
-			          alter table bolt_channel_receipts rename to bolt_envoy_receipts;
-			          alter table bolt_envoy_receipts rename column channel_name to envoy_name;
-			          alter index if exists bolt_channel_receipts_window rename to bolt_envoy_receipts_window;
-			        end if;
-			        if to_regclass('bolt_channel_inbound') is not null and to_regclass('bolt_envoy_inbound') is null then
-			          alter table bolt_channel_inbound rename to bolt_envoy_inbound;
-			          alter table bolt_envoy_inbound rename column channel_name to envoy_name;
-			        end if;
-			      end $$`
-		},
-		// `envoy_name` is the primary key rather than a plain column because `register` relies on
-		// `on conflict do nothing` for idempotency: with no unique constraint that clause has nothing
-		// to conflict against, so re-registering an envoy would append a duplicate row forever.
-		{
-			id: 'bolt:envoy-registrations',
-			sql: 'create table if not exists bolt_envoy_registrations (envoy_name text primary key, created_at timestamptz not null default now())'
-		},
-		// An append-only ledger, so it takes the same identity primary key `bolt_audit` and
-		// `bolt_collection_history` use: `receive` and `reply` only ever insert, and `status` aggregates
-		// with `count(*) filter (...)`, so a receipt row is never addressed individually.
-		{
-			id: 'bolt:envoy-receipts',
-			sql: 'create table if not exists bolt_envoy_receipts (sequence bigint generated always as identity primary key, envoy_name text not null, conversation_id text not null, direction text not null, sender_id text, created_at timestamptz not null default now())'
-		},
-		// Separately, for a database provisioned before the column existed: `create table if not
-		// exists` is a no-op against a table that is already there, so it can never add one.
-		{
-			id: 'bolt:envoy-receipts-sender',
-			sql: 'alter table bolt_envoy_receipts add column if not exists sender_id text'
-		},
-		// The window a reader scans is always `(envoy_name, direction, created_at)` over a recent
-		// interval, so an envoy with a long ledger does not scan all of it to answer `status`.
-		{
-			id: 'bolt:envoy-receipts-window',
-			sql: 'create index if not exists bolt_envoy_receipts_window on bolt_envoy_receipts (envoy_name, direction, created_at desc)'
-		},
-		// The claim ledger that makes a redelivery cost one failed insert instead of one agent run.
-		//
-		// `receipt_key` is `(envoy, conversation, provider message id)` and is unique, so
-		// `on conflict do nothing` returning no row *is* the duplicate answer. Separate from
-		// `bolt_envoy_receipts`, which counts traffic and deliberately admits many rows per
-		// conversation — one table cannot both count every message and refuse the second copy of one.
-		{
-			id: 'bolt:envoy-inbound',
-			sql: 'create table if not exists bolt_envoy_inbound (norbital_id uuid primary key default gen_random_uuid(), envoy_name text not null, conversation_id uuid not null, external_conversation_id text not null, external_message_id text not null, receipt_key text not null unique, sender_external_id text, sender_display_name text, status text not null, answered_at timestamptz, created_at timestamptz not null default now())'
-		},
-		/**
-		 * The messaging identities column on `bolt_auth_user`.
-		 *
-		 * The id is `collection:…` and not `bolt:…`, and that is load-bearing rather than cosmetic.
-		 * Every step in this plan is applied in lexical id order (`buildSchemaPlan` sorts them), so a
-		 * `bolt:` id would place this ALTER ahead of `collection:bolt_auth_user` — the step that
-		 * creates the table — and a fresh provision would fail on a relation that does not exist yet.
-		 * Prefixing the table's own step id sorts it immediately after, beside `:index:` and `:search:`
-		 * which sort later still and depend on this column existing.
-		 *
-		 * Declared here as well as in `system-collections.ts` because the two answer different
-		 * databases: the collection declaration renders the column into `create table if not exists`,
-		 * which does nothing for a workspace that already has the table, and this ALTER is the only
-		 * thing that reaches one. `jsonb` matches what `SchemaPlanValues.sqlType` renders for
-		 * `field.json`, so a database provisioned either way ends up with the same column.
-		 */
-		{
-			id: 'collection:bolt_auth_user:column:channels',
-			sql: 'alter table bolt_auth_user add column if not exists channels jsonb'
-		},
-		/**
-		 * The column that said whether a row was a person or a service, dropped.
-		 *
-		 * Every row in `bolt_auth_user` is a person. A static identity — an envoy, an automation, the
-		 * host, the seeder — is minted in memory from a declaration and never written here, so the only
-		 * writer of a non-default value was the channel-principal reconciler this cutover deletes.
-		 * What was left was a column holding the same word in every row, `required` on the collection
-		 * and therefore projected to every client that reads a person.
-		 */
-		{
-			id: 'collection:bolt_auth_user:column:kind:drop',
-			sql: 'alter table bolt_auth_user drop column if exists kind'
-		},
-		/**
-		 * The flag that used to gate descent through the team hierarchy, dropped.
-		 *
-		 * Descent is unconditional: a subject holds its team's policies plus every team beneath it,
-		 * because somebody above sees what somebody below can see and that is what being above means.
-		 * The flag made it a property each row remembered to have, it defaulted to off, and its only
-		 * writer was the channel-principal reconciler this cutover deletes. Nothing reads it.
-		 *
-		 * `if exists`, because the column was never in this plan — it only ever existed on databases
-		 * provisioned by an older path, which is also why `channel-principal.ts` inserting into it
-		 * would have failed outright against a freshly planned one.
-		 */
-		{
-			id: 'collection:bolt_team:column:inherits:drop',
-			sql: 'alter table bolt_team drop column if exists inherits'
-		},
-		// The integrations tables, in the same condition the channels ones were: `integrations.ts` has
-		// always read and written all three and the plan created none of them, so every command on the
-		// service failed on a missing relation the moment anything called one. Nothing did, which is why
-		// it went unnoticed — until `+integrations.ts` started reaching the runtime.
-		//
-		// `cursor` is a jsonb object keyed by binding name rather than a single value, because one
-		// integration declares several receive bindings and they advance independently: a vendors feed
-		// that stalls must not drag the customers feed back with it.
-		//
-		// `lease_until` is what makes a *scheduled* pull safe. A cron fires on its own clock, so a run
-		// that outlives its interval and the next tick exist at the same time; both would read the same
-		// cursor and the second would persist one computed from a window the first had already passed.
-		// A run claims the row by writing a future `lease_until` and only proceeds if the claim took, so
-		// the overlap becomes a skipped tick instead of a cursor that walks backwards. It is a timestamp
-		// rather than a boolean so a run that dies without releasing costs one cycle, not the schedule.
-		{
-			id: 'bolt:integrations',
-			sql: 'create table if not exists bolt_integrations (name text primary key, enabled boolean not null default true, cursor jsonb, lease_until timestamptz, updated_at timestamptz not null default now())'
-		},
-		// Separately, for a database provisioned before the column existed: `create table if not exists`
-		// is a no-op against a table that is already there, so it can never add one.
-		{
-			id: 'bolt:integrations-lease',
-			sql: 'alter table bolt_integrations add column if not exists lease_until timestamptz'
-		},
-		// `(integration_name, receipt_id)` is the key rather than a surrogate, because `receive` leans on
-		// `on conflict do nothing` to make a re-delivered webhook a no-op — with nothing unique to
-		// conflict against, the same delivery would append a row every time the sender retried.
-		{
-			id: 'bolt:integration-inbox',
-			sql: 'create table if not exists bolt_integration_inbox (integration_name text not null, receipt_id text not null, payload jsonb not null, received_at timestamptz not null default now(), primary key (integration_name, receipt_id))'
-		},
-		// The ledger only became a ledger when something read it. It had one writer and no reader: a
-		// delivery was inserted and nothing ever looked, so `on conflict do nothing` deduplicated rows
-		// in a table whose rows decided nothing.
-		//
-		// `status` is what a webhook delivery now consults before it absorbs anything, and it has to be
-		// three-valued rather than a boolean. `absorbed` is a delivery whose rows are down, and a
-		// redelivery of it is skipped. `pending` is a delivery that was recorded and then did not
-		// finish — the process died between the insert and the writes — and a redelivery of *that* must
-		// be absorbed, not skipped, or a crash halfway through a batch becomes permanent loss. A boolean
-		// cannot tell those apart from outside the transaction that was running.
-		//
-		// Added as separate statements because the `create table if not exists` above does nothing to a
-		// database that already has the table, so a column appended to that string would exist only on
-		// installations provisioned after this change — the same divergence between a plan-provisioned
-		// and a lineage-provisioned database that the `numeric`/`uuid` faults came from.
-		{
-			id: 'bolt:integration-inbox-binding',
-			sql: 'alter table bolt_integration_inbox add column if not exists binding_name text'
-		},
-		{
-			id: 'bolt:integration-inbox-status',
-			sql: "alter table bolt_integration_inbox add column if not exists status text not null default 'pending'"
-		},
-		{
-			id: 'bolt:integration-inbox-processed',
-			sql: 'alter table bolt_integration_inbox add column if not exists processed_at timestamptz'
-		},
-		// The outbound ledger, which is the inbox's mirror image and exists for the same reason: a
-		// delivery nobody can find is a delivery that did not happen and nobody knows it.
-		//
-		// It is a queue and a record at once, and the columns divide along that line. `payload` and
-		// `idempotency_key` are what gets sent — the payload is built at the moment of the event and
-		// stored, so a row updated twice sends two bodies rather than the same current state twice, and
-		// the key is derived from `sequence` so every retry of one delivery carries the identical key
-		// for a receiver to collapse on. `status`, `attempts` and `next_attempt_at` are what decides
-		// when: `pending` is due at `next_attempt_at`, `inflight` is claimed by a drain, `delivered` is
-		// done, and `failed` is the dead letter. `last_status` and `last_error` are why, and they are
-		// deliberately a status code and a short reason — never a body and never a header, because a
-		// request header is where the credential is and a response body is where a partner's data is.
-		//
-		// `sequence` being an identity column is the ordering guarantee: deliveries for one record are
-		// drained in the order the writes happened, because the drain only ever claims the lowest
-		// pending sequence per record.
-		{
-			id: 'bolt:integration-outbox',
-			sql: "create table if not exists bolt_integration_outbox (sequence bigint generated always as identity primary key, integration_name text not null, binding_name text not null, collection_name text not null, record_id text not null, operation text not null, path text, payload jsonb, status text not null default 'pending', attempts integer not null default 0, next_attempt_at timestamptz not null default now(), last_status integer, last_error text, created_at timestamptz not null default now(), updated_at timestamptz not null default now(), delivered_at timestamptz)"
-		},
-		// The drain reads by status and due time and by nothing else, so that is the index. Without it
-		// every tick of the outbox cron is a sequential scan of every delivery ever made.
-		{
-			id: 'bolt:integration-outbox-due',
-			sql: 'create index if not exists bolt_integration_outbox_due on bolt_integration_outbox (integration_name, status, next_attempt_at)'
-		},
-		// And the per-record ordering read: the lowest pending sequence for each record.
-		{
-			id: 'bolt:integration-outbox-record',
-			sql: 'create index if not exists bolt_integration_outbox_record on bolt_integration_outbox (collection_name, record_id, sequence)'
-		},
-		// The agent's own tables, which the plan did not create — so every `agents.*` command answered
-		// `relation "bolt_conversations" does not exist` against a workspace provisioned from it. Their
-		// only DDL lived in Colony's dev launcher, which is why local development worked and nothing
-		// else did: the dev script created them out of band and the plan never learned to.
-		{
-			id: 'bolt:agent-conversations',
-			sql: 'create table if not exists bolt_conversations (id text primary key, agent_name text not null, user_id text not null, title text, verifier jsonb)'
-		},
-		/**
-		 * What a session delegated to, and what the whole tree beneath it has spent.
-		 *
-		 * `parent_id` is what makes the accounting depth-agnostic: a subagent session is a session, so
-		 * its spend has to reach the conversation the person is actually looking at without the roll-up
-		 * knowing how many levels lie between. Added as an `alter` rather than folded into the `create`
-		 * above because `create table if not exists` is a no-op against every database that already has
-		 * the table — the columns would exist only on workspaces provisioned after this line.
-		 *
-		 * The counters are cumulative and never recomputed from the transcript: they have to survive
-		 * the messages that produced them being compacted away, which is the whole reason they are
-		 * columns rather than a sum taken at read time. `usage_turns_unreported` counts the turns whose
-		 * host reported no cost, so a total can say it is a floor instead of quietly reading as exact.
-		 */
-		{
-			id: 'bolt:agent-conversations-usage',
-			sql: 'alter table bolt_conversations add column if not exists parent_id text, add column if not exists usage_cost_usd double precision not null default 0, add column if not exists usage_cost_micro_units bigint not null default 0, add column if not exists usage_cost_currency text, add column if not exists usage_total_tokens bigint not null default 0, add column if not exists usage_turns_counted integer not null default 0, add column if not exists usage_turns_unreported integer not null default 0'
-		},
-		// The lineage walk `history` and the usage roll-up both make: children of one session.
-		/**
-		 * What kind of thread a conversation is, and which envoy it arrived on.
-		 *
-		 * **`conversation-selector.ts` read both of these and neither existed.** It buckets on
-		 * `visibility ∈ {personal, envoy_dm, envoy_group}` and routes a public envoy's threads to the
-		 * admin inbox using `envoy_key` — so `visibility` was always `undefined`, the group bucket was
-		 * permanently empty, and public-thread routing never fired once.
-		 *
-		 * `visibility` takes a default because every existing conversation is a web-agent one, which is
-		 * exactly what `personal` means — so the backfill *is* the default and there is nothing to
-		 * migrate. `envoy_key` is nullable because a web-agent conversation has no envoy.
-		 */
-		{
-			id: 'bolt:agent-conversations-visibility',
-			sql: "alter table bolt_conversations add column if not exists visibility text not null default 'personal', add column if not exists envoy_key text"
-		},
-		{
-			id: 'bolt:agent-conversations-visibility-envoy',
-			sql: 'create index if not exists bolt_conversations_envoy on bolt_conversations (envoy_key)'
-		},
-		{
-			id: 'bolt:agent-conversations-usage-parent',
-			sql: 'create index if not exists bolt_conversations_parent on bolt_conversations (parent_id)'
-		},
-		// `sequence` is the read order — `history` and the panel projection both rely on it — and it is
-		// an identity column because a turn appends rows without knowing how many precede it.
-		{
-			id: 'bolt:agent-messages',
-			sql: 'create table if not exists bolt_agent_messages (sequence bigint generated always as identity primary key, conversation_id text not null, role text not null, content jsonb not null)'
-		},
-		/**
-		 * Which turn a row belongs to.
-		 *
-		 * The panel groups a delegated session's rows under the call that started it, and a row alone
-		 * cannot say which turn produced it — the join used to be guessed from ordering, which is why a
-		 * subagent's messages interleaved into its parent by sequence and its task prompt rendered as
-		 * something the person had typed.
-		 */
-		{
-			id: 'bolt:agent-messages-turn',
-			sql: 'alter table bolt_agent_messages add column if not exists turn_id text'
-		},
-		{
-			id: 'bolt:collection-history',
-			sql: 'create table if not exists bolt_collection_history (sequence bigint generated always as identity primary key, collection_name text not null, record_id text not null, operation text not null, subject_id text not null, snapshot jsonb, created_at timestamptz not null default now())'
-		},
-		{
-			id: 'bolt:external-subjects',
-			sql: 'create table if not exists bolt_external_subjects (provider text not null, external_id text not null, user_id text not null, tenant_id text not null, team_id uuid, email text, primary key (provider, external_id, tenant_id))'
-		},
-		{
-			id: 'bolt:invitations',
-			sql: 'create table if not exists bolt_invitations (invitation_id text primary key, tenant_id text not null, email text not null, invited_by text not null, accepted_by text, status text not null, created_at timestamptz not null default now())'
-		},
-		{
-			id: 'bolt:notifications',
-			sql: 'create table if not exists bolt_notifications (id text primary key, recipient text not null, payload jsonb not null, read boolean not null default false, delivered_at timestamptz, created_at timestamptz not null default now())'
-		},
-		/**
-		 * What should happen, and when next — the whole of cron, as six columns.
-		 *
-		 * There is deliberately no `active` flag. Activation upserts the keys the release declares and
-		 * deletes the ones it does not, so "not declared" and "not active" have no way to disagree.
-		 */
-		{
-			id: 'bolt:schedule',
-			sql: 'create table if not exists bolt_schedule (key text primary key, command text not null, crontab text not null, input jsonb not null, next_run_at timestamptz not null, last_fired_at timestamptz)'
-		},
-		{
-			id: 'bolt:schedule-due',
-			sql: 'create index if not exists bolt_schedule_due on bolt_schedule (next_run_at)'
-		},
-		{
-			id: 'bolt:schema-state',
-			sql: 'create table if not exists bolt_schema_state (fingerprint text not null, applied_at timestamptz not null default now())'
-		},
-		// The migration ledger: which lineage entries this database has been brought through.
-		//
-		// Named for the lineage format rather than for Bolt, because that is what it indexes — the
-		// `<tag>/migration.sql` + `snapshot.json` entries this compiler generates through
-		// `drizzle-kit/api-postgres`. It is the one table here without a `bolt_` prefix, which is a
-		// real inconsistency and the reason to leave it alone: renaming it is a boot-path change that
-		// buys a naming convention, and a database carrying the old table would meet an empty new one
-		// and replay its whole lineage.
-		//
-		// `tag` carries the UNIQUE that makes exactly-once a database guarantee rather than a
-		// read-then-write race between two hosts booting at the same time. It once also carried a
-		// `sql_hash` column, which Bolt never wrote and only Pod's applier read.
-		{
-			id: 'bolt:schema-migrations',
-			sql: 'create table if not exists __drizzle_migrations (id serial primary key, tag text not null unique, created_at timestamptz not null default now())'
-		},
-		// Identity's own tables, declared where identity declares them rather than restated here.
-		// Bolt owns its schema; the plan only has to apply it.
-		/**
-		 * The sync log every replica reads.
-		 *
-		 * `xid` is `pg_current_xact_id()` widened to `bigint`, not `txid_current() % 2147483647`. The
-		 * modulo wrapped: past 2.1 billion transactions the column restarts near zero, every stored
-		 * cursor is permanently ahead of every new row, and sync stops with no error. `pg_current_xact_id`
-		 * is the non-wrapping 64-bit counter, and `bigint` keeps the cursor an ordinary JSON number and
-		 * the `(xid, sequence)` comparison an ordinary index range scan.
-		 *
-		 * Ordering by `(xid, sequence)` is insert order. Commit order is what a reader needs, and the two
-		 * differ: a transaction that starts earlier and commits later carries a *lower* xid than rows a
-		 * client has already read. `Sync.diff` closes that with a watermark rather than the schema — see
-		 * the `pg_snapshot_xmin` horizon there — but the index below is what makes serving under a
-		 * horizon cheap.
-		 */
-		/**
-		 * One thing that should happen once — the other half of scheduled work, and the only queue.
-		 *
-		 * `run_at` does double duty, which is the simplification the whole design rests on: it says
-		 * when a task is due, and taking a task pushes it into the future, which is what "hidden while
-		 * it runs" means. So there is no lease column, no `locked_by`, and no `running` status — a task
-		 * that was taken and never finished simply becomes due again when the hide expires, and crash
-		 * recovery needs no reaper.
-		 *
-		 * `effect_id` carries the UNIQUE that makes it the one idempotency mechanism. An ordinary
-		 * enqueue keys off the caller's `EffectId`; a cron occurrence keys off `schedule:<key>@<slot>`,
-		 * so exactly-once cron falls out of the constraint rather than out of leader election — two
-		 * hosts that both notice the 06:00 slot both insert, and the loser's insert is a no-op. It is a
-		 * named constraint rather than an inline `unique` so the object has the same name here as in
-		 * the Drizzle declaration the runner composes against.
-		 */
-		{
-			id: 'bolt:task',
-			sql: "create table if not exists bolt_task (id uuid primary key default gen_random_uuid(), command text not null, input jsonb not null, status text not null default 'pending', run_at timestamptz not null default now(), attempts integer not null default 0, max_attempts integer not null default 12, effect_id text not null constraint bolt_task_effect_id unique, result jsonb, error text, created_at timestamptz not null default now(), updated_at timestamptz not null default now())"
-		},
-		/**
-		 * The only read `take` makes, and the only one it should be able to make.
-		 *
-		 * Partial on purpose: a table that has drained a year of work is almost entirely `done` and
-		 * `failed`, and a full index over `run_at` would have every tick walking that history to find
-		 * the handful of rows that are actually pending.
-		 */
-		{
-			id: 'bolt:task-due',
-			sql: "create index if not exists bolt_task_due on bolt_task (run_at) where status = 'pending'"
-		},
-		{
-			id: 'bolt:sync-outbox',
-			sql: 'create table if not exists bolt_sync_outbox (xid bigint not null default (pg_current_xact_id()::text::bigint), sequence bigint generated always as identity, collection_name text not null, record_id text not null, operation text not null, record jsonb, created_at timestamptz not null default now(), primary key (xid, sequence))'
-		},
-		/**
-		 * Widens an outbox created before the wraparound was found. `create table if not exists` above
-		 * cannot change a column, so a database provisioned by an earlier plan keeps `integer` and the
-		 * `pg_current_xact_id` default never fits. Guarded on the current type so it is a no-op on every
-		 * run after the first.
-		 */
-		{
-			id: 'bolt:sync-outbox-widen',
-			sql: "do $$ begin if exists (select 1 from information_schema.columns where table_schema = current_schema() and table_name = 'bolt_sync_outbox' and column_name = 'xid' and data_type <> 'bigint') then alter table bolt_sync_outbox alter column xid type bigint, alter column xid set default (pg_current_xact_id()::text::bigint); end if; end $$"
-		},
-		/** Compaction reads by record identity; the primary key orders by cursor and cannot serve that. */
-		{
-			id: 'bolt:sync-outbox-record',
-			sql: 'create index if not exists bolt_sync_outbox_record_idx on bolt_sync_outbox (collection_name, record_id, xid, sequence)'
-		},
-		/**
-		 * The point below which the log is no longer complete.
-		 *
-		 * Reset used to be inferred from the oldest surviving outbox row, which could never fire: nothing
-		 * pruned the outbox, so no cursor could ever be older than its first row and the one safety valve
-		 * in the design was unreachable. Retention is the only thing that may strand a client — dropping a
-		 * record's newest row means a replica below that point can never learn the record exists — so
-		 * retention records where it cut, and `diff` answers a cursor below the mark with a rebuild.
-		 *
-		 * Compaction deliberately does not move this. Collapsing superseded versions of a record leaves
-		 * its final state in the log, which is all a replica needs to converge, so it is safe at any cursor.
-		 */
-		{
-			id: 'bolt:sync-horizon',
-			sql: 'create table if not exists bolt_sync_horizon (id boolean primary key default true check (id), xid bigint not null default 0, sequence bigint not null default 0)'
-		},
-		{
-			id: 'bolt:sync-horizon-seed',
-			sql: 'insert into bolt_sync_horizon (id) values (true) on conflict (id) do nothing'
-		},
-		// The Secrets vault. Values are rows in the system database, never in the artifact and never in
-		// the client bundle: a secret that ships with the code is a secret in everyone's browser cache.
-		//
-		// `value` stays `text` and holds a `v1.<nonce>.<ciphertext>.<tag>` AES-256-GCM envelope, not the
-		// credential — see `@norbital-ai/std/secret` for the encoding and why it is one column.
-		// The key is the host's and is never a row in this database; a key stored beside its own
-		// ciphertext protects against nothing. Both vaults below share that envelope and that key.
-		{
-			id: 'bolt:secrets',
-			sql: 'create table if not exists bolt_secrets (tenant_id text not null, name text not null, value text not null, updated_at timestamptz not null default now(), updated_by text, primary key (tenant_id, name))'
-		},
-		// Personal secrets: the same idea keyed by a person instead of a workspace, and a separate table
-		// rather than a `user_id` column on the one above because the *access rule* is what differs.
-		// A `bolt_secrets` row is workspace configuration, reachable by anyone with `manage secrets`; a
-		// row here is somebody's own signed-in session, reachable only by them — an admin reading a
-		// colleague's LinkedIn cookie is not workspace administration. One table cannot hold both rules
-		// without every reader remembering which kind of row it is looking at, so there are two.
-		//
-		// `user_id` is part of the key, so a personal entry and a workspace entry may share a name
-		// without colliding, and no `updated_by`: the only person who can write a row is the person the
-		// row is keyed by, so the column would only ever repeat `user_id`.
-		//
-		// The same encrypted envelope as above, additionally bound to `(tenant_id, user_id, name)`, so
-		// an envelope lifted out of one row and pasted into another fails to decrypt instead of turning
-		// one person's session into somebody else's.
-		{
-			id: 'bolt:personal-secrets',
-			sql: 'create table if not exists bolt_personal_secrets (tenant_id text not null, user_id text not null, name text not null, value text not null, updated_at timestamptz not null default now(), primary key (tenant_id, user_id, name))'
-		},
-		{
-			id: 'bolt:workspace-settings',
-			sql: "create table if not exists bolt_workspace_identity_settings (tenant_id text primary key, settings jsonb not null default '{}')"
+			sql: "create or replace function bolt_daterange(payload jsonb) returns daterange language sql immutable parallel safe as $bolt_daterange$ select daterange(nullif(payload->>'start', '')::date, nullif(payload->>'end', '')::date, '[)') $bolt_daterange$"
 		}
 	];
 	/**
@@ -784,29 +327,29 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 	 *   - Bolt's own system collections, which belong to no workspace and appear in no workspace
 	 *     lineage, so only the plan can create them.
 	 */
-	const collections = workspace.collections
+	const collections = [...workspace.collections, ...internalSystemTables]
 		.flatMap((collection) => {
 			const exclusions = (collection.exclusions ?? []).map((exclusion) =>
 				exclusionStep(collection.name, exclusion)
 			);
-			if (!SYSTEM_COLLECTION_NAMES.has(collection.name)) return exclusions;
+			if (!systemTableNames.has(collection.name)) return exclusions;
 			const fields = Object.entries(collection.fields)
 				.sort(([left], [right]) => left.localeCompare(right))
-				.map(([name, field]) => {
-					const column = `${SchemaPlanValues.quoteIdentifier(name)} ${SchemaPlanValues.columnType(field)}`;
-					if (field.generated !== undefined)
-						return `${column} generated always as (${field.generated}) stored`;
-					// DEFAULT before NOT NULL, the order the lineage's DDL uses, so the two renderings of the
-					// same column are the same text and not merely equivalent.
-					const defaulted =
-						field.sqlDefault === undefined ? column : `${column} default ${field.sqlDefault}`;
-					return `${defaulted}${field.required ? ' not null' : ''}`;
-				});
+				.map(([name, field]) => renderColumn(name, field));
 			const sql = `create table if not exists ${SchemaPlanValues.quoteIdentifier(collection.name)} (${SYSTEM_COLUMNS}${fields.length === 0 ? '' : `, ${fields.join(', ')}`})`;
 			return [
 				{ id: `collection:${collection.name}`, sql },
 				...declaredIndexSteps(collection),
+				...modelIndexSteps(collection),
 				...searchIndexSteps(collection),
+				...(collection.name === 'bolt_sync_horizon'
+					? [
+							{
+								id: 'collection:bolt_sync_horizon:seed',
+								sql: 'insert into bolt_sync_horizon (singleton) values (true) on conflict (singleton) do nothing'
+							}
+						]
+					: []),
 				...exclusions
 			];
 		})
@@ -814,7 +357,7 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 	const steps = [...foundation, ...collections].toSorted((left, right) =>
 		left.id.localeCompare(right.id)
 	);
-	return { fingerprint: SchemaPlanValues.fingerprint(steps), steps };
+	return { fingerprint: fingerprintSchemaSteps(steps), steps };
 };
 
 /**
@@ -834,16 +377,27 @@ const IDENTITY_COLLECTION_NAMES: ReadonlyArray<string> = IDENTITY_COLLECTIONS.ma
 export const identitySchemaSteps = (): ReadonlyArray<SchemaStep> =>
 	buildSchemaPlan({
 		name: 'identity',
+		version: '0.0.1',
 		collections: IDENTITY_COLLECTIONS,
 		customTypes: {},
+		apps: [],
 		policies: [],
-		relations: []
-	} as unknown as WorkspaceDefinition).steps.filter((step) =>
-		// Derived from the declaration rather than from a name prefix. `bolt_team` is an identity
-		// collection — resolving a subject joins it — and it does not begin with `bolt_auth_`, so a
-		// prefix test would have silently left every host that applies these steps unable to
-		// authenticate anybody.
-		IDENTITY_COLLECTION_NAMES.some(
-			(name) => step.id === `collection:${name}` || step.id.startsWith(`collection:${name}:`)
-		)
+		relations: [],
+		prompt: '',
+		tools: [],
+		skills: [],
+		automations: [],
+		envoys: [],
+		integrations: [],
+		requiredFacilities: []
+	}).steps.filter(
+		(step) =>
+			!step.id.includes(':search:') &&
+			// Derived from the declaration rather than from a name prefix. `bolt_team` is an identity
+			// collection — resolving a subject joins it — and it does not begin with `bolt_auth_`, so a
+			// prefix test would have silently left every host that applies these steps unable to
+			// authenticate anybody.
+			IDENTITY_COLLECTION_NAMES.some(
+				(name) => step.id === `collection:${name}` || step.id.startsWith(`collection:${name}:`)
+			)
 	);

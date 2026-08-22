@@ -1,17 +1,45 @@
 <script lang="ts">
+	import { Effect, Schema } from 'effect';
 	import type { CollectionField, CollectionRecordHistoryEntry } from '@norbital-ai/std/collection';
 	import Icon from '@iconify/svelte';
-	import {
-		formatDataValue,
-		formatStructuredValue,
-		type Translate
-	} from '../data-renderer/index.js';
+	import { formatDataValue, formatStructuredValue, type Translate } from '#lib/data-renderer';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Label } from '#lib/label';
 	import { Inline, Scroll } from '#lib/layout';
 	import { Tooltip } from '#lib/tooltip';
 	import { formatUtcInstantLocal } from '#lib/utils';
-	import { collectionFieldHistory } from './collection-form-history.js';
+	import { isEqual } from 'es-toolkit/predicate';
+
+	/** One revision of a single field, as the history tooltip renders it. */
+	const collectionFieldHistoryEntrySchema = Schema.Struct({
+		value: Schema.Unknown,
+		validFrom: Schema.String,
+		validTo: Schema.NullOr(Schema.String),
+		version: Schema.Number
+	});
+	type CollectionFieldHistoryEntry = typeof collectionFieldHistoryEntrySchema.Type;
+
+	function collectionFieldHistory(
+		history: readonly CollectionRecordHistoryEntry[],
+		fieldName: string
+	): readonly CollectionFieldHistoryEntry[] {
+		const changes: CollectionFieldHistoryEntry[] = [];
+		for (const snapshot of [...history].sort((left, right) => left.version - right.version)) {
+			const value = snapshot.values[fieldName];
+			const previous = changes.at(-1);
+			if (!previous || !isEqual(previous.value, value)) {
+				changes.push({
+					value,
+					validFrom: snapshot.validFrom,
+					validTo: snapshot.validTo,
+					version: snapshot.version
+				});
+				continue;
+			}
+			changes[changes.length - 1] = { ...previous, validTo: snapshot.validTo };
+		}
+		return changes.reverse();
+	}
 
 	interface Props {
 		field: CollectionField;
@@ -52,18 +80,23 @@
 	 * throws on anything that is not a UTC ISO instant, so never feed it a calendar day.
 	 */
 	function formatRevisionInstant(instant: string): string {
-		try {
-			return formatUtcInstantLocal(instant, {
-				locale: localeEffective,
-				day: '2-digit',
-				month: 'short',
-				year: 'numeric',
-				hour: '2-digit',
-				minute: '2-digit'
-			});
-		} catch {
-			return instant;
-		}
+		return Effect.runSync(
+			Effect.try(() =>
+				formatUtcInstantLocal(instant, {
+					locale: localeEffective,
+					day: '2-digit',
+					month: 'short',
+					year: 'numeric',
+					hour: '2-digit',
+					minute: '2-digit'
+				})
+			).pipe(
+				Effect.match({
+					onFailure: () => instant,
+					onSuccess: (formatted) => formatted
+				})
+			)
+		);
 	}
 
 	/** One revision reads as one line, so structured values collapse to a single-line summary. */

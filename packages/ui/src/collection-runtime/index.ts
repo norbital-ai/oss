@@ -7,10 +7,8 @@ const COLLECTION_RECORD_SCOPE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-r
 
 type CollectionClientGetter = () => CollectionClient<ErasedCollectionRegistry>;
 
-export type CollectionRepresentationSurface = Component;
-
 export interface CollectionSurface {
-	readonly representation?: CollectionRepresentationSurface;
+	readonly representation?: Component;
 	/** Static `bolt:banner` URL declared on the collection's `+representation.svelte`, if any. */
 	readonly banner?: string | null;
 }
@@ -82,7 +80,7 @@ export function getCollectionSurfaceRuntime(): CollectionSurfaceRuntime | undefi
  * A table nested inside a `+representation.svelte` shows one record's children, so its saved
  * columns/filters/sort must be keyed per parent record — otherwise every employee shares one
  * "employments" view. Authored source used to build that key by interpolating the parent's
- * `norbital_id`, which is exactly the system column authored code must not reach into. The
+ * `id`, which is exactly the system column authored code must not reach into. The
  * surface that mounts the representation already knows the id, so it publishes it here and
  * `view` stays a readable, stable name the author chose.
  *

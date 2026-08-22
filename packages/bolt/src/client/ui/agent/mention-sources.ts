@@ -3,17 +3,18 @@
  *
  * Bolt ships a minimal mention source adapter; hosts wire search through their transport later.
  */
-import { rowsFrom } from '../../runtime.js';
-import { getAgentRuntime } from './client.svelte.js';
+import { Effect, Result, Schema } from 'effect';
+import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 
-export const COMMAND_PREFIX = {
+export const COMMAND_SCOPES = ['record', 'plan', 'app', 'command'] as const;
+export type CommandScope = (typeof COMMAND_SCOPES)[number];
+
+const COMMAND_PREFIX: Readonly<Record<CommandScope, string>> = {
 	record: '#',
 	plan: '!',
 	app: '/',
 	command: '>'
-} as const;
-
-export type CommandScope = keyof typeof COMMAND_PREFIX;
+};
 export type MentionCommand = Extract<CommandScope, 'record' | 'plan' | 'app'>;
 
 const PREFIX_BY_CHAR: Readonly<Record<string, CommandScope>> = {
@@ -29,11 +30,11 @@ export type MentionRecordHit = {
 	readonly label: string;
 };
 
-export type MentionAppHit = {
+type MentionAppHit = {
 	readonly key: string;
 	readonly label: string;
-	readonly href?: string;
-	readonly description?: string | null;
+	readonly href?: string | undefined;
+	readonly description?: string | null | undefined;
 };
 
 /** Returns the trigger character for a command scope. */
@@ -66,10 +67,7 @@ export function filterCollections(
 }
 
 /** Narrows workspace apps by key or label. */
-export function filterApps(
-	token: string,
-	apps: readonly MentionAppHit[]
-): readonly MentionAppHit[] {
+function filterApps(token: string, apps: readonly MentionAppHit[]): readonly MentionAppHit[] {
 	const needle = token.trim().toLowerCase();
 	if (!needle) return apps;
 	return apps.filter(
@@ -179,22 +177,41 @@ export function buildMentionMenuEntries(
 export type MentionSources = {
 	collections(): readonly string[];
 	apps(): readonly MentionAppHit[];
-	search(query: string, scope: string | null): Promise<readonly MentionRecordHit[]>;
+	search(query: string, scope: string | null): Effect.Effect<readonly MentionRecordHit[]>;
 };
 
-export type MentionSourcesOptions = {
+type MentionSourcesOptions = {
 	readonly hitsPerSource?: number;
 	readonly getCollections?: () => readonly string[];
 	readonly getApps?: () => readonly MentionAppHit[];
+	readonly findRecords?: WorkspaceClient['records']['findMany'];
 };
 
-function readRecordLabel(collection: string, row: Record<string, unknown>): string {
-	const candidates = ['name', 'title', 'label', 'email'];
+/**
+ * The slice of a searchable row the mention menu reads, decoded once at the command boundary.
+ *
+ * The candidates are nullable because an authored collection routinely has `name: null` for an
+ * auto-created row — the decode must not drop a record just because its display field is empty; the
+ * label fallback exists for exactly that row.
+ */
+const MentionRecordRow = Schema.Struct({
+	id: Schema.optionalKey(Schema.NullishOr(Schema.String)),
+	name: Schema.optionalKey(Schema.NullishOr(Schema.String)),
+	title: Schema.optionalKey(Schema.NullishOr(Schema.String)),
+	label: Schema.optionalKey(Schema.NullishOr(Schema.String)),
+	email: Schema.optionalKey(Schema.NullishOr(Schema.String))
+});
+
+function readRecordLabel(
+	collection: string,
+	row: Schema.Schema.Type<typeof MentionRecordRow>
+): string {
+	const candidates = ['name', 'title', 'label', 'email'] as const;
 	for (const key of candidates) {
 		const value = row[key];
 		if (typeof value === 'string' && value.trim()) return value.trim();
 	}
-	const id = row.norbital_id ?? row.id;
+	const id = row.id;
 	if (typeof id === 'string' && id.length > 0) return id;
 	return collection;
 }
@@ -202,55 +219,52 @@ function readRecordLabel(collection: string, row: Record<string, unknown>): stri
 /** Builds the collection, app, and record search surface for the mention menu. */
 export function createMentionSources(options: MentionSourcesOptions = {}): MentionSources {
 	const hitsPerSource = options.hitsPerSource ?? 8;
+	// The decoder is a pure function of nothing — built once for every record rather than per row.
+	const decodeMentionRow = Schema.decodeUnknownResult(MentionRecordRow);
 	return {
 		collections() {
-			if (!options.getCollections) return [];
-			try {
-				return [...options.getCollections()].sort((left, right) => left.localeCompare(right));
-			} catch {
-				return [];
-			}
+			const getCollections = options.getCollections;
+			if (getCollections === undefined) return [];
+			return Effect.runSync(
+				Effect.try(() =>
+					[...getCollections()].sort((left, right) => left.localeCompare(right))
+				).pipe(Effect.catch(() => Effect.succeed<readonly string[]>([])))
+			);
 		},
 		apps() {
-			if (!options.getApps) return [];
-			try {
-				return [...options.getApps()].sort((left, right) => left.label.localeCompare(right.label));
-			} catch {
-				return [];
-			}
+			const getApps = options.getApps;
+			if (getApps === undefined) return [];
+			return Effect.runSync(
+				Effect.try(() =>
+					[...getApps()].sort((left, right) => left.label.localeCompare(right.label))
+				).pipe(Effect.catch(() => Effect.succeed<readonly MentionAppHit[]>([])))
+			);
 		},
-		async search(query, collection) {
-			if (!collection || query.trim().length === 0) return [];
-			const runtime = getAgentRuntime();
-			if (!runtime) return [];
-			try {
-				const rows = await runtime.transport.command('collections.findMany', {
-					subject: runtime.subject,
-					collection,
-					search: query.trim(),
+		search(query, collection) {
+			if (!collection || query.trim().length === 0) return Effect.succeed([]);
+			const findRecords = options.findRecords;
+			if (findRecords === undefined) return Effect.succeed([]);
+			const text = query.trim();
+			return Effect.gen(function* () {
+				const result = findRecords(collection, {
+					search: text,
 					limit: hitsPerSource
 				});
-				return (rowsFrom(rows) ?? []).flatMap((entry): readonly MentionRecordHit[] => {
-					if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return [];
-					const record = entry as Record<string, unknown>;
-					const recordId =
-						(typeof record.norbital_id === 'string' && record.norbital_id) ||
-						(typeof record.id === 'string' && record.id) ||
-						'';
+				const rows = yield* Effect.tryPromise(() => result);
+				return rows.flatMap((entry): readonly MentionRecordHit[] => {
+					const row = Result.getOrElse(decodeMentionRow(entry), () => undefined);
+					if (row === undefined) return [];
+					const recordId = row.id ?? '';
 					if (!recordId) return [];
 					return [
 						{
 							collection,
 							recordId,
-							label: readRecordLabel(collection, record)
+							label: readRecordLabel(collection, row)
 						}
 					];
 				});
-			} catch {
-				return [];
-			}
+			}).pipe(Effect.catch(() => Effect.succeed<readonly MentionRecordHit[]>([])));
 		}
 	};
 }
-
-export { decodeMessageText } from './message-text.js';

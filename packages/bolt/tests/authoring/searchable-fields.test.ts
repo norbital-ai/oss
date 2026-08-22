@@ -1,13 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { isSearchableCollectionField } from '@norbital-ai/std/collection';
-import {
-	collection,
-	defineModel,
-	enums,
-	phone,
-	text,
-	workspace
-} from '../../src/authoring/index.js';
+import { defineModel, enums, phone, text } from '../../src/authoring/index.js';
+import { collection, workspace } from '../../src/authoring/workspace-schema.js';
 import { describeModel } from '../../src/authoring/model-introspection.js';
 import { extractCollectionCatalog } from '../../src/compiler/model-fields.js';
 import { Effect } from 'effect';

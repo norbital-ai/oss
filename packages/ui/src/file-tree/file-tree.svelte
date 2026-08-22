@@ -4,7 +4,7 @@
 		FileTreeEntryBadge,
 		FileTreePresencePeer,
 		FileTreeProps
-	} from './file-tree.types';
+	} from '#lib/file-tree/file-tree.types';
 </script>
 
 <script lang="ts">
@@ -16,8 +16,8 @@
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
 	import FileTreeNode from './file-tree-node.svelte';
-	import type { FileTreeProps } from './file-tree.types';
-	import { findVisibleFileTreeIndicatorTarget } from './selection-target';
+	import type { FileTreeProps } from '#lib/file-tree/file-tree.types';
+	import { findVisibleFileTreeIndicatorTarget } from '#lib/file-tree/selection-target';
 
 	let {
 		entries,

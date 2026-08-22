@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { isCalendarDate, isClockTime, isUtcIsoInstant, parseUtcInstant } from '../src/date/wire.ts';
+import { Schema } from 'effect';
+import {
+	isCalendarDate,
+	isClockTime,
+	isUtcIsoInstant,
+	parseUtcInstant
+} from '../src/date/index.ts';
 import { getErrorMessage } from '../src/error/index.ts';
-import { currencyFractionDigits, ISO_CURRENCY } from '../src/finance/currency.ts';
+import { currencyFractionDigits, ISO_CURRENCY, MoneyValueSchema } from '../src/finance/currency.ts';
 import { safeParse } from '../src/json/index.ts';
+import { hashDefinition, sha256Json } from '../src/reckon/hash.ts';
 import { humanize, textSearchMatches } from '../src/string/index.ts';
 import { treeFind, treeFlatten } from '../src/tree/index.ts';
 
@@ -27,6 +34,22 @@ describe('retained core utilities', () => {
 		assert.equal(
 			ISO_CURRENCY.some(({ code }) => code === 'USD'),
 			true
+		);
+	});
+
+	it('owns the finite ISO money contract once', () => {
+		assert.deepEqual(
+			Schema.decodeUnknownSync(MoneyValueSchema)({ value: 12.5, currency: ' SGD ' }),
+			{
+				value: 12.5,
+				currency: 'SGD'
+			}
+		);
+		assert.throws(() =>
+			Schema.decodeUnknownSync(MoneyValueSchema)({
+				value: Number.POSITIVE_INFINITY,
+				currency: 'USD'
+			})
 		);
 	});
 
@@ -60,5 +83,22 @@ describe('retained core utilities', () => {
 		assert.equal(isClockTime('24:00'), false);
 		assert.equal(isUtcIsoInstant(instant), true);
 		assert.equal(parseUtcInstant(instant).toISOString(), instant);
+	});
+
+	it('preserves the synchronous portable SHA-256 bytes', () => {
+		assert.equal(
+			sha256Json({}),
+			'44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a'
+		);
+		assert.equal(
+			hashDefinition({
+				id: 'compatibility',
+				tables: {},
+				exprs: { result: 'amount * 2' },
+				outputs: ['result'],
+				dependsOn: []
+			}),
+			'82c5f4246ab6421aaf99a9c90c79302b073f2976f96907ec82e4efc1d4c24cf1'
+		);
 	});
 });

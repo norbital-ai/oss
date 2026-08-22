@@ -3,7 +3,8 @@
 	import { Button } from '#lib/button';
 	import { Tooltip } from '#lib/tooltip';
 	import { cn } from '#lib/utils';
-	import type { CollectionToolbarActionProps } from './collection-toolbar.types.js';
+	import type { CollectionToolbarActionProps } from '#lib/collection-toolbar/collection-toolbar.types';
+	import { Effect } from 'effect';
 
 	let {
 		label,
@@ -20,7 +21,8 @@
 
 	function run(): void {
 		if (blocked || pending) return;
-		void onRun();
+		const action = onRun();
+		if (action) Effect.runFork(action);
 	}
 </script>
 

@@ -12,7 +12,7 @@ import {
 } from '../../src/authoring/workspace-schema.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import { makeHttpConnectorBinding } from '../../src/runtime/integrations/http-connector.js';
-import { Integrations } from '../../src/runtime/integrations/integrations.js';
+import * as Integrations from '../../src/runtime/integrations/integrations.js';
 import { Secrets } from '../../src/runtime/secrets/secrets.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 
@@ -214,7 +214,9 @@ const definition = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+	],
 	teams: {
 		admin: ['admin']
 	},

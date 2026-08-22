@@ -1,6 +1,20 @@
 import { Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { defineCustomType, type CustomTypeOutput } from '../../src/authoring/index.js';
+import {
+	custom,
+	defineCustomType,
+	defineModel,
+	type CustomTypeOutput
+} from '../../src/authoring/index.js';
+import type { TablesForModels } from '../../src/authoring/internals.js';
+
+declare module '../../src/authoring/index.js' {
+	interface WorkspaceAuthoringTypes {
+		readonly customTypeValues: {
+			readonly money: { readonly value: number; readonly currency: string };
+		};
+	}
+}
 
 /**
  * The value type a generated custom-type renderer states for its props.
@@ -51,6 +65,12 @@ exact<
 		CustomTypeOutput<typeof factory>,
 		{ readonly currency: string; readonly rate: number; readonly allowed: number }
 	>
+>(true);
+
+const priced = defineModel({ amount: custom('money') });
+type PricedRow = TablesForModels<{ readonly priced: typeof priced }>['priced']['$inferSelect'];
+exact<
+	Exact<PricedRow['amount'], { readonly value: number; readonly currency: string } | null>
 >(true);
 
 describe('custom type renderer value types', () => {

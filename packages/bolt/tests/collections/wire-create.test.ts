@@ -9,7 +9,7 @@ import {
 	storedRecordsOf,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
-import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
@@ -55,7 +55,7 @@ const definition = workspace({
 			target: 'order_lines',
 			cardinality: 'many',
 			from: { collection: 'order_lines', column: 'order_id' },
-			to: { collection: 'orders', column: 'norbital_id' }
+			to: { collection: 'orders', column: 'id' }
 		}
 	],
 	apps: [app({ name: 'wire', label: 'Wire' })],
@@ -147,12 +147,10 @@ describe('collections.create over the wire', () => {
 			values: { reference: 'ORD-1' }
 		});
 
-		const rows = await harness.database.query('select norbital_id from orders');
+		const rows = await harness.database.query('select id from orders');
 		expect(rows).toHaveLength(1);
 		// The body carried no id at all, so this one can only have come from the server.
-		expect((response.value as { readonly norbital_id: unknown }).norbital_id).toBe(
-			rows[0]?.['norbital_id']
-		);
+		expect((response.value as { readonly id: unknown }).id).toBe(rows[0]?.['id']);
 	});
 
 	it('assigns a distinct id per create', async () => {
@@ -167,8 +165,8 @@ describe('collections.create over the wire', () => {
 			values: { reference: 'ORD-2' }
 		});
 
-		const rows = await harness.database.query('select norbital_id from orders');
-		expect(new Set(rows.map((row) => row['norbital_id'])).size).toBe(2);
+		const rows = await harness.database.query('select id from orders');
+		expect(new Set(rows.map((row) => row['id'])).size).toBe(2);
 	});
 
 	it('answers with the row as stored, not with the values that were posted', async () => {
@@ -186,8 +184,8 @@ describe('collections.create over the wire', () => {
 		// caller's own submission, could not have contained.
 		expect(record['status']).toBe('accepted');
 		// And a column only the database can fill: its default, applied at insert.
-		expect(record['norbital_row_version']).toBe(1);
-		expect(record['norbital_created_at']).toBeDefined();
+		expect(record['row_version']).toBe(1);
+		expect(record['created_at']).toBeDefined();
 	});
 
 	it('writes a graph posted in one body as one parent and its children', async () => {
@@ -201,7 +199,7 @@ describe('collections.create over the wire', () => {
 			}
 		});
 
-		const orders = await harness.database.query('select norbital_id from orders');
+		const orders = await harness.database.query('select id from orders');
 		const lines = await harness.database.query(
 			'select order_id, sku from order_lines order by sku'
 		);
@@ -209,16 +207,13 @@ describe('collections.create over the wire', () => {
 		expect(lines.map((row) => row['sku'])).toEqual(['a-1', 'a-2']);
 		// The foreign key nobody wrote: filled from the id the server assigned the parent, which is
 		// the reason a client could not have minted it.
-		expect(lines.map((row) => row['order_id'])).toEqual([
-			orders[0]?.['norbital_id'],
-			orders[0]?.['norbital_id']
-		]);
+		expect(lines.map((row) => row['order_id'])).toEqual([orders[0]?.['id'], orders[0]?.['id']]);
 		// The children are not read back — that would cost a query per child collection — so the
 		// answer is the parent, and it does not pretend otherwise.
 		expect(storedRecordsOf(response.value)).toHaveLength(1);
 	});
 
-	it('refuses a norbital_id smuggled in through the values', async () => {
+	it('refuses a id smuggled in through the values', async () => {
 		harness = await open();
 
 		// Dropping `id` from the create body leaves exactly one way back in, so it is closed here:
@@ -229,14 +224,14 @@ describe('collections.create over the wire', () => {
 				dispatchInvocation(
 					command('collections.create', {
 						collection: 'orders',
-						values: { norbital_id: '0f5f0f6e-2c2e-4f3f-9b3a-9b9c9d9e9f00', reference: 'ORD-1' }
+						values: { id: '0f5f0f6e-2c2e-4f3f-9b3a-9b9c9d9e9f00', reference: 'ORD-1' }
 					})
 				)
 			)
 		);
 
 		expect(outcome._tag).toBe('Failure');
-		expect(await harness.database.query('select norbital_id from orders')).toHaveLength(0);
+		expect(await harness.database.query('select id from orders')).toHaveLength(0);
 	});
 
 	it('checks a child of the graph the same way it checks the parent', async () => {
@@ -262,7 +257,7 @@ describe('collections.create over the wire', () => {
 
 		expect(outcome._tag).toBe('Failure');
 		expect(JSON.stringify(outcome)).toContain('label');
-		expect(await harness.database.query('select norbital_id from orders')).toHaveLength(0);
+		expect(await harness.database.query('select id from orders')).toHaveLength(0);
 	});
 
 	it('refuses a key that is neither a column nor a declared relation, and writes nothing', async () => {
@@ -280,8 +275,8 @@ describe('collections.create over the wire', () => {
 		);
 
 		expect(outcome._tag).toBe('Failure');
-		expect(await harness.database.query('select norbital_id from orders')).toHaveLength(0);
-		expect(await harness.database.query('select norbital_id from order_lines')).toHaveLength(0);
+		expect(await harness.database.query('select id from orders')).toHaveLength(0);
+		expect(await harness.database.query('select id from order_lines')).toHaveLength(0);
 	});
 });
 
@@ -293,7 +288,7 @@ describe('collections.update over the wire', () => {
 			collection: 'orders',
 			values: { reference: 'ORD-1' }
 		});
-		const id = (created.value as { readonly norbital_id: string }).norbital_id;
+		const id = (created.value as { readonly id: string }).id;
 
 		const updated = await post(harness, 'collections.update', {
 			collection: 'orders',
@@ -302,8 +297,8 @@ describe('collections.update over the wire', () => {
 		});
 
 		const record = storedRecordsOf(updated.value)?.[0] ?? {};
-		expect(record['norbital_id']).toBe(id);
+		expect(record['id']).toBe(id);
 		expect(record['reference']).toBe('ORD-1-revised');
-		expect(record['norbital_row_version']).toBe(2);
+		expect(record['row_version']).toBe(2);
 	});
 });

@@ -1,22 +1,23 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { Button } from '../../../button/index.js';
+	import { Button } from '#lib/button';
 	import {
 		type IFileUploadClient,
 		type UploadStage,
 		isActiveUploadStage,
 		UPLOAD_STAGE_MESSAGES
-	} from '../../../file-upload/index.js';
-	import * as Popover from '../../../popover/index.js';
-	import { useI18n, type UiKeys } from '../../../i18n/index.js';
-	import { ScrollArea } from '../../../scroll-area/index.js';
-	import { Tooltip } from '../../../tooltip/index.js';
-	import { cn } from '../../../utils/index.js';
+	} from '#lib/file-upload';
+	import * as Popover from '#lib/popover';
+	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { ScrollArea } from '#lib/scroll-area';
+	import { Tooltip } from '#lib/tooltip';
+	import { cn } from '#lib/utils';
 	import type { Editor, NodeViewRendererProps } from '@tiptap/core';
 	import { marked } from 'marked';
 	import Papa from 'papaparse';
 	import { type Snippet } from 'svelte';
 	import { toast } from 'svelte-sonner';
+	import { Effect } from 'effect';
 	import AttachmentPreviewImage from './attachment-preview-image.svelte';
 	import AttachmentPreviewPdf from './attachment-preview-pdf.svelte';
 	import AttachmentPreviewCsv from './attachment-preview-csv.svelte';
@@ -107,14 +108,14 @@
 	function removeFile(event?: MouseEvent) {
 		event?.stopPropagation();
 		const url = fileUrl as string | null | undefined;
-		if (url) {
-			void getUploadClient()
-				?.delete(url)
-				.catch(() => {});
+		const client = url ? getUploadClient() : undefined;
+		if (client && url) {
+			Effect.runFork(client.delete(url).pipe(Effect.ignore));
 		}
 		cancelUpload();
 		const pos = getPos();
-		editor.commands.deleteRange({ from: pos!, to: pos! + node.nodeSize });
+		if (typeof pos !== 'number') return;
+		editor.commands.deleteRange({ from: pos, to: pos + node.nodeSize });
 	}
 
 	function cancelUpload() {
@@ -122,74 +123,86 @@
 		getUploadClient()?.cancel(uploadId);
 	}
 
-	async function fetchFileAsBlob(url: string): Promise<Blob> {
-		const response = await fetch(url);
-		if (!response.ok) {
-			toast.error(t('misc.failedToFetchFile'));
-		}
-		const contentType =
-			response.headers.get('Content-Type') || fileType || 'application/octet-stream';
-		const arrayBuffer = await response.arrayBuffer();
-		return new Blob([arrayBuffer], { type: contentType });
-	}
-
-	async function fetchText(url: string): Promise<string> {
-		const blob = await fetchFileAsBlob(url);
-		return blob.text();
-	}
-
-	async function loadPdfPreview(url: string): Promise<PreviewContent> {
-		const response = await fetch(url);
-		if (!response.ok) {
-			toast.error(t('misc.failedToLoadPdf'));
-		}
-		const arrayBuffer = await response.arrayBuffer();
-		const base64 = btoa(
-			new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-		);
-		return { type: 'pdf', dataUrl: `data:application/pdf;base64,${base64}` };
-	}
-
-	async function loadCsvPreview(url: string): Promise<PreviewContent> {
-		const text = await fetchText(url);
-		const result = Papa.parse<Record<string, unknown>>(text, {
-			header: true,
-			skipEmptyLines: true,
-			dynamicTyping: true,
-			delimitersToGuess: [',', '\t', '|', ';'],
-			...(fileType === 'text/tab-separated-values' ? { delimiter: '\t' } : {})
+	function fetchFileAsBlob(url: string): Effect.Effect<Blob> {
+		return Effect.gen(function* () {
+			const response = yield* Effect.promise(() => fetch(url));
+			if (!response.ok) {
+				yield* Effect.sync(() => toast.error(t('misc.failedToFetchFile')));
+			}
+			const contentType =
+				response.headers.get('Content-Type') || fileType || 'application/octet-stream';
+			const arrayBuffer = yield* Effect.promise(() => response.arrayBuffer());
+			return new Blob([arrayBuffer], { type: contentType });
 		});
-		if (result.errors.length > 0) {
-			console.warn('CSV parsing errors:', result.errors);
-		}
-		return {
-			type: 'csv',
-			data: result.data,
-			headers: result.meta.fields || [],
-			totalRows: result.data.length,
-			errors: result.errors
-		};
 	}
 
-	async function loadMarkdownPreview(url: string): Promise<PreviewContent> {
-		const text = await fetchText(url);
-		return { type: 'markdown', renderedHtml: marked.parse(text, { async: false }) };
+	function fetchText(url: string): Effect.Effect<string> {
+		return Effect.gen(function* () {
+			const blob = yield* fetchFileAsBlob(url);
+			return yield* Effect.promise(() => blob.text());
+		});
 	}
 
-	async function loadTextPreview(url: string): Promise<PreviewContent> {
-		const text = await fetchText(url);
-		return { type: 'text', content: text };
+	function loadPdfPreview(url: string): Effect.Effect<PreviewContent> {
+		return Effect.gen(function* () {
+			const response = yield* Effect.promise(() => fetch(url));
+			if (!response.ok) {
+				yield* Effect.sync(() => toast.error(t('misc.failedToLoadPdf')));
+			}
+			const arrayBuffer = yield* Effect.promise(() => response.arrayBuffer());
+			const base64 = btoa(
+				new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+			);
+			return { type: 'pdf', dataUrl: `data:application/pdf;base64,${base64}` };
+		});
 	}
 
-	const previewLoaders: Record<PreviewKind, (url: string) => Promise<PreviewContent>> = {
-		image: async () => ({ type: 'image' }),
+	function loadCsvPreview(url: string): Effect.Effect<PreviewContent> {
+		return Effect.gen(function* () {
+			const text = yield* fetchText(url);
+			const result = Papa.parse<Record<string, unknown>>(text, {
+				header: true,
+				skipEmptyLines: true,
+				dynamicTyping: true,
+				delimitersToGuess: [',', '\t', '|', ';'],
+				...(fileType === 'text/tab-separated-values' ? { delimiter: '\t' } : {})
+			});
+			if (result.errors.length > 0) {
+				yield* Effect.logWarning('CSV parsing errors:', result.errors);
+			}
+			return {
+				type: 'csv',
+				data: result.data,
+				headers: result.meta.fields || [],
+				totalRows: result.data.length,
+				errors: result.errors
+			};
+		});
+	}
+
+	function loadMarkdownPreview(url: string): Effect.Effect<PreviewContent> {
+		return Effect.gen(function* () {
+			const text = yield* fetchText(url);
+			return { type: 'markdown', renderedHtml: marked.parse(text, { async: false }) };
+		});
+	}
+
+	function loadTextPreview(url: string): Effect.Effect<PreviewContent> {
+		return Effect.gen(function* () {
+			const text = yield* fetchText(url);
+			return { type: 'text', content: text };
+		});
+	}
+
+	const previewLoaders: Record<PreviewKind, (url: string) => Effect.Effect<PreviewContent>> = {
+		image: () => Effect.succeed({ type: 'image' }),
 		pdf: loadPdfPreview,
 		csv: loadCsvPreview,
 		markdown: loadMarkdownPreview,
 		text: loadTextPreview
 	};
 
-	async function togglePreview() {
+	function togglePreview() {
 		if (preview.open) {
 			preview.open = false;
 			return;
@@ -199,13 +212,20 @@
 		preview.open = true;
 		preview.loading = true;
 		preview.error = null;
-		try {
-			preview.content = await previewLoaders[kind](fileUrl);
-		} catch {
-			preview.error = t('misc.previewLoadError');
-		} finally {
-			preview.loading = false;
-		}
+		void Effect.runPromise(
+			previewLoaders[kind](fileUrl).pipe(
+				Effect.match({
+					onSuccess: (content) => {
+						preview.content = content;
+						preview.loading = false;
+					},
+					onFailure: () => {
+						preview.error = t('misc.previewLoadError');
+						preview.loading = false;
+					}
+				})
+			)
+		);
 	}
 </script>
 

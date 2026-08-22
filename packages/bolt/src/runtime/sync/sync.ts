@@ -1,16 +1,23 @@
-import { Context, Effect, Layer, Schema } from 'effect';
-import { IDENTITY_COLLECTIONS } from '../schema/system-collections.js';
+import { Context, Effect, Layer, Number as ENumber, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { AccessControl } from '../access/access-control.js';
-import { Collections, PendingApproval } from '../collections/collections.js';
-import { ApprovalConflict } from '../approvals/approvals.js';
-import { Database } from '../facilities/database.js';
-import type { Identity } from '../identity/identity.js';
-import { Workspace } from '../workspace.js';
-import { AuthoredRefusal } from '../../authoring/refusal.js';
-import { InvocationBudget } from '../budget.js';
+import * as AccessControl from '#lib/runtime/access/access-control.js';
+import * as Collections from '#lib/runtime/collections/collections.js';
+import { PendingApproval } from '#lib/runtime/collections/collections.js';
+import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import type * as Identity from '#lib/runtime/identity/identity.js';
+import * as Workspace from '#lib/runtime/workspace.js';
+import { AuthoredRefusal } from '#lib/authoring/refusal.js';
+import * as InvocationBudget from '#lib/runtime/budget.js';
+import { decodeReferenceRow } from '#lib/runtime/collections/references.js';
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
+
+/** The `Schema.Json` predicate, built once: it is consulted for every value crossing the facility seam. */
+const isJson = Schema.is(Schema.Json);
+const isJsonObject = Schema.is(JsonObject);
+
+/** Identity collections by name, for the membership checks the change stream and shape both perform. */
 
 /**
  * The newest transaction id that is guaranteed to have no earlier writer still running.
@@ -50,7 +57,7 @@ export interface SyncChange extends Schema.Schema.Type<typeof SyncChange> {}
  * replica applies rows as upserts. At-least-once is the achievable guarantee; exactly-once across a
  * paged read and a live log is not, and pretending otherwise is how rows go missing.
  */
-export const SyncSnapshotPage = Schema.Struct({
+const SyncSnapshotPage = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	rows: Schema.Array(Schema.Json),
 	cursor: SyncCursor,
@@ -60,12 +67,9 @@ export const SyncSnapshotPage = Schema.Struct({
 export interface SyncSnapshotPage extends Schema.Schema.Type<typeof SyncSnapshotPage> {}
 
 /** Carries sync decode error through the typed sync failure channel without losing diagnostic context. */
-export class SyncDecodeError extends Schema.TaggedError<SyncDecodeError>()(
-	'Bolt.Sync.DecodeError',
-	{
-		message: Schema.NonEmptyString
-	}
-) {
+class SyncDecodeError extends Schema.TaggedError<SyncDecodeError>()('Bolt.Sync.DecodeError', {
+	message: Schema.NonEmptyString
+}) {
 	readonly category = 'sync-decode' as const;
 	readonly retryable = false;
 	readonly phase = 'decode' as const;
@@ -147,6 +151,7 @@ export const layer = Layer.effect(
 	Effect.gen(function* () {
 		const database = yield* Database.Service;
 		const access = yield* AccessControl.Service;
+		const workspace = yield* Workspace.Service;
 		/**
 		 * Applies column masking to a record on its way out of the sync engine.
 		 *
@@ -158,16 +163,19 @@ export const layer = Layer.effect(
 			subject: Identity.Subject,
 			collection: string,
 			record: Schema.Json
-		): Schema.Json =>
-			record !== null && typeof record === 'object' && !Array.isArray(record)
-				? (access.mask(
-						subject,
-						'read',
-						collection,
-						record as Readonly<Record<string, Schema.Json>>
-					) as Schema.Json)
-				: record;
-		const workspace = yield* Workspace.Service;
+		): Schema.Json => {
+			if (!isJsonObject(record)) return record;
+			const fields = workspace.definition.collections.find(
+				(entry) => entry.name === collection
+			)?.fields;
+			const logical = fields === undefined ? record : decodeReferenceRow(record, fields);
+			return access.mask(
+				subject,
+				'read',
+				collection,
+				logical as Readonly<Record<string, Schema.Json>>
+			) as Schema.Json;
+		};
 		const collections = yield* Collections.Service;
 		return Service.of({
 			head: Effect.fn('Sync.head')(function* (effectId) {
@@ -192,7 +200,7 @@ export const layer = Layer.effect(
 				// served the whole log, or a snapshot.
 				const marked = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: 'select xid, sequence from bolt_sync_horizon where id',
+					sql: 'select xid, sequence from bolt_sync_horizon where singleton',
 					parameters: []
 				});
 				const incompleteBelow =
@@ -215,21 +223,11 @@ export const layer = Layer.effect(
 						}
 					];
 				}
-				/**
-				 * Identity never replicates, whatever the subject may read.
-				 *
-				 * A replica is a copy of the workspace in somebody's browser, and `bolt_auth_user` holds
-				 * every person in the workspace with their roles, teams and address — so an administrator,
-				 * who may legitimately read it, would have the entire membership written to local storage on
-				 * whatever machine they signed in from, and the session and verification tables with it.
-				 * Excluded here rather than by withholding a grant, because the grant is what makes
-				 * `workspaceAccess` and the runtime's own reads work; it is replication that is wrong, not
-				 * reading.
-				 */
-				const readable = workspace.definition.collections
-					.filter(({ name }) => !IDENTITY_COLLECTIONS.some((identity) => identity.name === name))
-					.map(({ name }) => ({ name, predicate: access.predicate(subject, 'read', name) }))
-					.filter(({ predicate }) => predicate.allowed);
+				const readable = workspace.definition.collections.flatMap((collection) => {
+					if (collection.sync === false) return [];
+					const predicate = access.predicate(subject, 'read', collection.name);
+					return predicate.allowed ? [{ name: collection.name, predicate }] : [];
+				});
 				if (readable.length === 0) return [];
 				const visibilityParameters: Array<Schema.Json> = [];
 				const visibilitySql = readable
@@ -242,7 +240,7 @@ export const layer = Layer.effect(
 							(_token, index: string) => `$${Number(index) + predicateOffset + 3}`
 						);
 						const table = `"${name.replaceAll('"', '""')}"`;
-						return `(o.collection_name = $${collectionIndex + 3} and (o.operation = 'delete' or exists (select 1 from ${table} visible where visible.norbital_id::text = o.record_id and (${sql}))))`;
+						return `(o.collection_name = $${collectionIndex + 3} and (o.operation = 'delete' or exists (select 1 from ${table} visible where visible.id::text = o.record_id and (${sql}))))`;
 					})
 					.join(' or ');
 				const result = yield* database.execute(effectId, {
@@ -259,7 +257,7 @@ export const layer = Layer.effect(
 					parameters: [
 						cursor.xid,
 						cursor.sequence,
-						Math.max(1, Math.min(limit, 500)),
+						ENumber.clamp({ minimum: 1, maximum: 500 })(limit),
 						...visibilityParameters
 					]
 				});
@@ -277,12 +275,14 @@ export const layer = Layer.effect(
 				);
 			}),
 			shape: Effect.fn('Sync.shape')(function* (subject) {
-				// Identity is excluded for the same reason it is excluded from the change stream: a replica
-				// is a copy in somebody's browser, and the membership table does not belong in one.
 				return workspace.definition.collections
-					.filter(({ name }) => !IDENTITY_COLLECTIONS.some((identity) => identity.name === name))
-					.map(({ name }) => name)
-					.filter((name) => access.predicate(subject, 'read', name).allowed)
+					.flatMap((collection) =>
+						collection.sync === false
+							? []
+							: access.predicate(subject, 'read', collection.name).allowed
+								? [collection.name]
+								: []
+					)
 					.toSorted();
 			}),
 			snapshot: Effect.fn('Sync.snapshot')(function* (effectId, subject, collection, after, limit) {
@@ -294,14 +294,14 @@ export const layer = Layer.effect(
 						reason: 'the subject may not read this collection'
 					});
 				}
-				const size = Math.max(1, Math.min(limit, 500));
+				const size = ENumber.clamp({ minimum: 1, maximum: 500 })(limit);
 				const table = `"${collection.replaceAll('"', '""')}"`;
 				// Keyset paging on the primary key, not offset: a snapshot of a live table is paged while it
 				// is being written, and `offset` re-reads shifted rows — skipping some and repeating others.
-				// Ordering by `norbital_id` also makes `after` a position rather than a count.
+				// Ordering by `id` also makes `after` a position rather than a count.
 				const parameters: Array<Schema.Json> = [];
 				const afterClause =
-					after === undefined ? 'true' : `r.norbital_id > $${parameters.push(after)}::uuid`;
+					after === undefined ? 'true' : `r.id > $${parameters.push(after)}::uuid`;
 				const predicateOffset = parameters.length;
 				parameters.push(...predicate.parameters);
 				const visibility = predicate.sql.replaceAll(
@@ -313,7 +313,7 @@ export const layer = Layer.effect(
 				// consistent with rather than a moment before or after them.
 				const result = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: `select (select coalesce(${COMMIT_HORIZON}, 0)) as "snapshotXid", to_jsonb(r) as record, r.norbital_id::text as id from ${table} r where ${afterClause} and (${visibility}) order by r.norbital_id limit $${pageSize}`,
+					sql: `select (select coalesce(${COMMIT_HORIZON}, 0)) as "snapshotXid", to_jsonb(r) as record, r.id::text as id from ${table} r where ${afterClause} and (${visibility}) order by r.id limit $${pageSize}`,
 					parameters
 				});
 				const rows = result.rows.slice(0, size);
@@ -328,9 +328,10 @@ export const layer = Layer.effect(
 					// Masked for the same reason the diff is: a snapshot is the bulk half of the same
 					// delivery, and a column the subject may not read must not reach the browser through
 					// either half.
-					rows: rows.map((row) =>
-						maskRecord(subject, collection, (read(row, 'record') ?? null) as Schema.Json)
-					),
+					rows: rows.map((row) => {
+						const record = read(row, 'record');
+						return maskRecord(subject, collection, isJson(record) ? record : null);
+					}),
 					// `sequence: 0` with the horizon's xid: the client streams from strictly below the first
 					// transaction that could still have been open, so nothing committed after this read is
 					// assumed to be already present.
@@ -374,7 +375,7 @@ export const layer = Layer.effect(
 						_tag: 'Query',
 						// `greatest` because a later compaction must never move the mark backwards: that would
 						// re-admit cursors already declared stranded.
-						sql: 'update bolt_sync_horizon set xid = greatest(xid, $1), sequence = case when $1 > xid then $2 else greatest(sequence, $2) end where id',
+						sql: 'update bolt_sync_horizon set xid = greatest(xid, $1), sequence = case when $1 > xid then $2 else greatest(sequence, $2) end where singleton',
 						parameters: [highest.xid, highest.sequence]
 					});
 				}
@@ -413,5 +414,3 @@ export const layer = Layer.effect(
 		});
 	})
 );
-
-export * as Sync from './sync.js';

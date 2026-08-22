@@ -140,16 +140,16 @@ describe('published surface', () => {
  */
 describe('retired public surfaces', () => {
 	it('keeps the duplicate environment helper and Replica service out of the package', async () => {
-		const [authoring, root, client, replica] = await Promise.all([
+		const [authoring, root, client, localSql] = await Promise.all([
 			readFile(new URL('../../src/authoring/index.ts', import.meta.url), 'utf8'),
 			readFile(new URL('../../src/index.ts', import.meta.url), 'utf8'),
 			readFile(new URL('../../src/client.ts', import.meta.url), 'utf8'),
-			readFile(new URL('../../src/client/replica/replica.ts', import.meta.url), 'utf8')
+			readFile(new URL('../../src/client/replica/pglite-sql.ts', import.meta.url), 'utf8')
 		]);
 		expect(authoring).toContain('defineEnvironment');
-		expect(replica).toContain('export type LocalSql');
+		expect(localSql).toContain('export type LocalSql');
 		expect([authoring, root, client].join('\n')).not.toMatch(/defineEnvVars|\bReplica\b/);
-		expect(replica).not.toMatch(
+		expect(localSql).not.toMatch(
 			/settleOptimistic|ReplicaError|Context\.Service|export \* as Replica/
 		);
 	});

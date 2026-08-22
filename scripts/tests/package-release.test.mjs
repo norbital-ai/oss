@@ -36,6 +36,16 @@ const entries = [
 ];
 
 describe('published package identity', () => {
+	it('keeps every public package on the workspace release version', () => {
+		const releaseVersion = JSON.parse(
+			readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8')
+		).version;
+		assert.deepEqual(
+			[...new Set(readPublicPackageEntries(repositoryRoot).map(({ version }) => version))],
+			[releaseVersion]
+		);
+	});
+
 	it('emits and verifies exact sha512 SRI', () => {
 		const bytes = Buffer.from('published archive bytes');
 		const integrity = sha512Integrity(bytes);

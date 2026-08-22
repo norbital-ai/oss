@@ -1,4 +1,4 @@
-import { Schema } from 'effect';
+import { Number as ENumber, Schema } from 'effect';
 
 /**
  * The one connector operation an integration performs, and its two message shapes.
@@ -71,7 +71,8 @@ export const retryDelayMs = (
 		if (Number.isFinite(seconds) && seconds >= 0)
 			return Math.min(seconds * 1000, options.maxDelayMs);
 		const at = Date.parse(retryAfter);
-		if (Number.isFinite(at)) return Math.min(Math.max(at - nowEpochMs, 0), options.maxDelayMs);
+		if (Number.isFinite(at))
+			return ENumber.clamp({ minimum: 0, maximum: options.maxDelayMs })(at - nowEpochMs);
 	}
 	return Math.min(options.initialDelayMs * 2 ** attempt, options.maxDelayMs);
 };

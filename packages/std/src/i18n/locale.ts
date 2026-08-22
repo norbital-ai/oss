@@ -41,10 +41,6 @@ export function intlLocale(locale: Locale): string {
 /** Browser/localStorage key under which a viewer's locale choice is persisted. */
 export const STORED_LOCALE_KEY = 'norbital.locale';
 
-export function isLocale(value: unknown): value is Locale {
-	return typeof value === 'string' && value.length > 0;
-}
-
 /**
  * Parse a BCP-47 tag into an application locale, or null.
  *
@@ -55,7 +51,7 @@ export function isLocale(value: unknown): value is Locale {
 export function parseLocale(value: string | null | undefined): Locale | null {
 	if (value == null) return null;
 	const primary = value.trim().split(/[-_]/)[0]?.toLowerCase();
-	return isLocale(primary) ? primary : null;
+	return primary === undefined || primary.length === 0 ? null : primary;
 }
 
 /**

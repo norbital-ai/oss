@@ -2,12 +2,13 @@ import { safeParse } from '@norbital-ai/std';
 import { getContext, setContext } from 'svelte';
 import { Schema } from 'effect';
 
-export interface CollectionTableNavigationTarget {
-	collectionName: string;
-	recordId: string;
-	routeKey: string;
-	parentRouteKey?: string;
-}
+const collectionTableNavigationTargetSchema = Schema.Struct({
+	collectionName: Schema.String,
+	recordId: Schema.String,
+	routeKey: Schema.String,
+	parentRouteKey: Schema.optionalKey(Schema.String)
+});
+export type CollectionTableNavigationTarget = typeof collectionTableNavigationTargetSchema.Type;
 
 export interface CollectionTableNavigation {
 	readonly current: CollectionTableNavigationTarget | null;

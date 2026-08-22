@@ -3,7 +3,7 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Tooltip } from '#lib/tooltip';
 	import { Stack } from '#lib/layout';
-	import type { FileMetadata } from './file-value.types.js';
+	import type { FileMetadata } from '#lib/file-value/file-value.types';
 
 	let {
 		metadata,

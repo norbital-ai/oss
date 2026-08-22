@@ -19,6 +19,7 @@ import type { Node as ProsemirrorNode } from 'prosemirror-model';
 import { mount } from 'svelte';
 import type { Instance } from 'tippy.js';
 import * as TippyModule from 'tippy.js';
+import { Schema } from 'effect';
 import MentionTagView from './mention-tag-view.svelte';
 
 const tippy = TippyModule.default;
@@ -43,15 +44,27 @@ declare module '@tiptap/core' {
 	}
 }
 
-export interface MentionItem {
-	id: string;
-	type: 'collection' | 'column' | 'route' | 'template' | 'workspace' | 'folder' | 'file' | 'user';
-	label: string;
-	description: string;
-	icon: string;
-	metadata?: Record<string, unknown>;
-	parentId?: string;
-}
+const MentionItemSchema = Schema.Struct({
+	id: Schema.mutableKey(Schema.String),
+	type: Schema.mutableKey(
+		Schema.Literals([
+			'collection',
+			'column',
+			'route',
+			'template',
+			'workspace',
+			'folder',
+			'file',
+			'user'
+		])
+	),
+	label: Schema.mutableKey(Schema.String),
+	description: Schema.mutableKey(Schema.String),
+	icon: Schema.mutableKey(Schema.String),
+	metadata: Schema.mutableKey(Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown))),
+	parentId: Schema.mutableKey(Schema.optionalKey(Schema.String))
+});
+export type MentionItem = typeof MentionItemSchema.Type;
 
 interface ConfiguredMentionOptions {
 	/** Callback when a mention is deleted */
@@ -91,6 +104,163 @@ type ExtendedMentionOptions = MentionOptions & ConfiguredMentionOptions;
 export const ConfiguredMention = Mention.extend<ExtendedMentionOptions>({
 	addOptions(): ExtendedMentionOptions {
 		const parentOptions = this.parent?.() as ExtendedMentionOptions | undefined;
+		const suggestionConfig: Partial<SuggestionOptions<MentionItem>> = {
+			char: '@',
+			pluginKey: new PluginKey('mention'),
+			allowSpaces: true,
+			command: ({ editor, range, props: item }) => {
+				// Insert the mention node inline at the exact position
+				editor
+					.chain()
+					.focus()
+					.insertContentAt(range, [
+						{
+							type: 'mention',
+							attrs: {
+								id: item.id,
+								label: item.label,
+								description: item.description,
+								icon: item.icon,
+								metadata: item.metadata,
+								itemType: item.type
+							}
+						},
+						{
+							type: 'text',
+							text: ' '
+						}
+					])
+					.run();
+			},
+			allow: ({ state, range }) => {
+				const from = state.doc.resolve(range.from);
+				const type = state.schema.nodes[from.parent.type.name];
+				const isTextNode = !!type && !!type.contentMatch.matchType(state.schema.nodes.text);
+
+				if (!isTextNode) {
+					return false;
+				}
+
+				// Check for double spaces
+				const text = state.doc.textBetween(range.from, range.to, '\0', '\0');
+				const query = text.substring(1);
+				if (query.includes('  ') || query.includes('\u200B')) {
+					return false;
+				}
+
+				return true;
+			},
+			render: () => {
+				let popup: Instance | null = null;
+				let dummy: HTMLElement;
+				let currentEditor: Editor | null = null;
+				const notifyCommandReady = (
+					props: MentionCommandContext,
+					opts: ExtendedMentionOptions | undefined
+				) => {
+					opts?.onCommandReady?.((item) => {
+						props.command({ editor: props.editor, range: props.range, props: item });
+					});
+				};
+
+				// Helper to get options from the editor at runtime
+				const getOptions = (editor: Editor): ExtendedMentionOptions | undefined => {
+					const mentionExtension = editor.extensionManager.extensions.find(
+						(ext: AnyExtension) => ext.name === 'mention'
+					);
+					return mentionExtension?.options as ExtendedMentionOptions | undefined;
+				};
+
+				return {
+					onStart: (props) => {
+						currentEditor = props.editor;
+						const opts = getOptions(props.editor);
+						const menuElement = opts?.menuElement;
+						if (!menuElement) {
+							return;
+						}
+
+						notifyCommandReady(props, opts);
+
+						menuElement.style.display = 'block';
+
+						// Notify that menu is now visible
+						opts?.onMenuVisibilityChange?.(true);
+
+						// Initialize with empty query
+						opts?.onQueryChange?.('');
+
+						// Create dummy element for tippy positioning
+						dummy = document.createElement('div');
+						document.body.appendChild(dummy);
+
+						popup = tippy(dummy, {
+							getReferenceClientRect: () => props.clientRect?.() ?? new DOMRect(),
+							appendTo: document.body,
+							content: menuElement,
+							showOnCreate: true,
+							interactive: true,
+							trigger: 'manual',
+							placement: 'bottom-start',
+							maxWidth: 400
+						});
+
+						popup.show();
+					},
+
+					onUpdate: (props) => {
+						const opts = getOptions(props.editor);
+
+						notifyCommandReady(props, opts);
+
+						// Update query for filtering
+						opts?.onQueryChange?.(props.query);
+
+						popup?.setProps({
+							getReferenceClientRect: () => props.clientRect?.() ?? new DOMRect()
+						});
+					},
+
+					onKeyDown: (props) => {
+						if (!currentEditor) return false;
+						const opts = getOptions(currentEditor);
+						const { key } = props.event;
+
+						// Handle Escape to close the menu
+						if (key === 'Escape') {
+							return true;
+						}
+
+						// Handle navigation keys - delegate to the tree menu via callback
+						if (['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(key)) {
+							// Call the onKeyDown callback if provided
+							const handled = opts?.onKeyDown?.(key) ?? false;
+							if (handled) {
+								props.event.preventDefault();
+								props.event.stopPropagation();
+								return true;
+							}
+						}
+
+						return false;
+					},
+
+					onExit: () => {
+						if (!currentEditor) return;
+						const opts = getOptions(currentEditor);
+						const menuElement = opts?.menuElement;
+						if (!menuElement) return;
+
+						popup?.destroy();
+						dummy?.remove();
+						menuElement.style.display = 'none';
+
+						// Notify that menu is now hidden
+						opts?.onMenuVisibilityChange?.(false);
+					}
+				};
+			}
+		};
 		return {
 			...parentOptions,
 			HTMLAttributes: {},
@@ -112,170 +282,7 @@ export const ConfiguredMention = Mention.extend<ExtendedMentionOptions>({
 			onMentionDelete: undefined as ConfiguredMentionOptions['onMentionDelete'],
 			menuElement: null as ConfiguredMentionOptions['menuElement'],
 			onQueryChange: undefined as ConfiguredMentionOptions['onQueryChange'],
-			suggestion: {
-				char: '@',
-				pluginKey: new PluginKey('mention'),
-				allowSpaces: true,
-				command: ({ editor, range, props }) => {
-					// Extract the actual item - it could be directly in props or nested
-					const item = (
-						typeof props === 'object' && props !== null && 'props' in props
-							? (props as { props: MentionItem }).props
-							: props
-					) as MentionItem;
-
-					// Insert the mention node inline at the exact position
-					editor
-						.chain()
-						.focus()
-						.insertContentAt(range, [
-							{
-								type: 'mention',
-								attrs: {
-									id: item.id,
-									label: item.label,
-									description: item.description,
-									icon: item.icon,
-									metadata: item.metadata,
-									itemType: item.type
-								}
-							},
-							{
-								type: 'text',
-								text: ' '
-							}
-						])
-						.run();
-				},
-				allow: ({ state, range }) => {
-					const from = state.doc.resolve(range.from);
-					const type = state.schema.nodes[from.parent.type.name];
-					const isTextNode = !!type && !!type.contentMatch.matchType(state.schema.nodes.text);
-
-					if (!isTextNode) {
-						return false;
-					}
-
-					// Check for double spaces
-					const text = state.doc.textBetween(range.from, range.to, '\0', '\0');
-					const query = text.substring(1);
-					if (query.includes('  ') || query.includes('\u200B')) {
-						return false;
-					}
-
-					return true;
-				},
-				render: () => {
-					let popup: Instance | null = null;
-					let dummy: HTMLElement;
-					let currentEditor: Editor | null = null;
-					const notifyCommandReady = (
-						props: MentionCommandContext,
-						opts: ExtendedMentionOptions | undefined
-					) => {
-						opts?.onCommandReady?.((item) => {
-							props.command({ editor: props.editor, range: props.range, props: item });
-						});
-					};
-
-					// Helper to get options from the editor at runtime
-					const getOptions = (editor: Editor): ExtendedMentionOptions | undefined => {
-						const mentionExtension = editor.extensionManager.extensions.find(
-							(ext: AnyExtension) => ext.name === 'mention'
-						);
-						return mentionExtension?.options as ExtendedMentionOptions | undefined;
-					};
-
-					return {
-						onStart: (props) => {
-							currentEditor = props.editor;
-							const opts = getOptions(props.editor);
-							const menuElement = opts?.menuElement;
-							if (!menuElement) {
-								return;
-							}
-
-							notifyCommandReady(props, opts);
-
-							menuElement.style.display = 'block';
-
-							// Notify that menu is now visible
-							opts?.onMenuVisibilityChange?.(true);
-
-							// Initialize with empty query
-							opts?.onQueryChange?.('');
-
-							// Create dummy element for tippy positioning
-							dummy = document.createElement('div');
-							document.body.appendChild(dummy);
-
-							popup = tippy(dummy, {
-								getReferenceClientRect: () => props.clientRect?.() ?? new DOMRect(),
-								appendTo: document.body,
-								content: menuElement,
-								showOnCreate: true,
-								interactive: true,
-								trigger: 'manual',
-								placement: 'bottom-start',
-								maxWidth: 400
-							});
-
-							popup.show();
-						},
-
-						onUpdate: (props) => {
-							const opts = getOptions(props.editor);
-
-							notifyCommandReady(props, opts);
-
-							// Update query for filtering
-							opts?.onQueryChange?.(props.query);
-
-							popup?.setProps({
-								getReferenceClientRect: () => props.clientRect?.() ?? new DOMRect()
-							});
-						},
-
-						onKeyDown: (props) => {
-							if (!currentEditor) return false;
-							const opts = getOptions(currentEditor);
-							const { key } = props.event;
-
-							// Handle Escape to close the menu
-							if (key === 'Escape') {
-								return true;
-							}
-
-							// Handle navigation keys - delegate to the tree menu via callback
-							if (['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(key)) {
-								// Call the onKeyDown callback if provided
-								const handled = opts?.onKeyDown?.(key) ?? false;
-								if (handled) {
-									props.event.preventDefault();
-									props.event.stopPropagation();
-									return true;
-								}
-							}
-
-							return false;
-						},
-
-						onExit: () => {
-							if (!currentEditor) return;
-							const opts = getOptions(currentEditor);
-							const menuElement = opts?.menuElement;
-							if (!menuElement) return;
-
-							popup?.destroy();
-							dummy?.remove();
-							menuElement.style.display = 'none';
-
-							// Notify that menu is now hidden
-							opts?.onMenuVisibilityChange?.(false);
-						}
-					};
-				}
-			} as Partial<SuggestionOptions<MentionItem>>
+			suggestion: suggestionConfig
 		} as ExtendedMentionOptions;
 	},
 
@@ -316,7 +323,7 @@ export const ConfiguredMention = Mention.extend<ExtendedMentionOptions>({
 			dom.style.display = 'inline-block';
 			dom.style.verticalAlign = 'middle';
 
-			const opts = this.options as ExtendedMentionOptions;
+			const opts = this.options;
 			const componentProps = $state({
 				editor: props.editor,
 				node: props.node,
@@ -431,7 +438,7 @@ export const ConfiguredMention = Mention.extend<ExtendedMentionOptions>({
 					const mentionId = nodeBeforeCursor.attrs.id;
 
 					// Call the onDelete callback
-					const opts = this.options as ExtendedMentionOptions;
+					const opts = this.options;
 					if (opts.onMentionDelete && mentionId) {
 						opts.onMentionDelete(mentionId);
 					}
@@ -454,7 +461,7 @@ export const ConfiguredMention = Mention.extend<ExtendedMentionOptions>({
 					const mentionId = nodeAfterCursor.attrs.id;
 
 					// Call the onDelete callback
-					const opts = this.options as ExtendedMentionOptions;
+					const opts = this.options;
 					if (opts.onMentionDelete && mentionId) {
 						opts.onMentionDelete(mentionId);
 					}

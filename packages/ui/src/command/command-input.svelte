@@ -2,7 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { cn } from '#lib/utils';
 	import { getCommandState } from './command-state.svelte.js';
-	import type { CommandInputProps } from './types.js';
+	import type { CommandInputProps } from '#lib/command/types';
 
 	let {
 		ref = $bindable(null),

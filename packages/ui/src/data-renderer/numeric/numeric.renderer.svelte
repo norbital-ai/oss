@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { NumericRendererVariant } from '@norbital-ai/std/collection';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import type { DataRendererProps } from '../data-renderer.types.js';
+	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 	import NumberView from './views/number.view.svelte';
 	import ProgressView from './views/progress.view.svelte';
 	import StarRatingView from './views/star_rating.view.svelte';

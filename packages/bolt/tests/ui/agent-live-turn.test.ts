@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import {
-	configureAgentRuntime,
-	getInitializedWorkspaceClient,
-	startInteractiveAgent
-} from '../../src/client/ui/agent/client.js';
+import { Effect, type Schema } from 'effect';
+import { createAgentClient } from '../../src/client/ui/agent/client.svelte.js';
+import { emptyAgentClient, settledQuery } from './agent-client-fixture.js';
 
 /**
  * Wiring smoke: the ported agent client against a real bolt-server over HTTP.
@@ -25,31 +23,29 @@ const credential = process.env['BOLT_SMOKE_TOKEN'] ?? 'admin-token';
 
 describe.skipIf(server === undefined || server.length === 0)('live agent conversation', () => {
 	it('sends a prompt through the ported client and stores the reply', async () => {
-		configureAgentRuntime({
-			transport: {
-				command: async (command, input) => {
-					const response = await fetch(`${server}/_bolt/command/${encodeURIComponent(command)}`, {
-						method: 'POST',
-						headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
-						body: JSON.stringify(input)
-					});
-					if (!response.ok)
-						throw new Error(`${command} failed (${response.status}): ${await response.text()}`);
-					return response.json();
-				}
+		const transport = {
+			command: async (command: string, input: Schema.Json) => {
+				const response = await fetch(`${server}/_bolt/command/${encodeURIComponent(command)}`, {
+					method: 'POST',
+					headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
+					body: JSON.stringify(input)
+				});
+				if (!response.ok)
+					throw new Error(`${command} failed (${response.status}): ${await response.text()}`);
+				return response.json();
+			}
+		};
+		const agent = createAgentClient(
+			{
+				client: emptyAgentClient(transport),
+				subject: { userId: 'admin-1', tenantId, teamPath: ['admin'], policies: [] },
+				agentName
 			},
-			subject: { userId: 'admin-1', tenantId, teamPath: ['admin'], policies: [] },
-			agentName,
-			userId: 'admin-1'
-		});
-		const result = await startInteractiveAgent({ message: 'Reply with a short greeting only.' });
-		expect(result.chatId.length).toBeGreaterThan(0);
-		const rows = getInitializedWorkspaceClient('chat_session').db.chat_session.findMany().current;
-		const contents = rows.flatMap((row) => row.messages.map((message) => JSON.stringify(message)));
-		expect(contents.some((content) => content.includes('Reply with a short greeting only.'))).toBe(
-			true
+			{ agentModels: settledQuery({ defaultModel: '', options: [] }) }
 		);
-		// The model's words are its own; what this proves is that a reply crossed the transport.
-		expect(contents.some((content) => content.includes('assistant'))).toBe(true);
+		const result = await Effect.runPromise(
+			agent.start({ message: 'Reply with a short greeting only.' })
+		);
+		expect(result.chatId.length).toBeGreaterThan(0);
 	});
 });

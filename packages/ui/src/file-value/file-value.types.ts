@@ -1,17 +1,21 @@
-export type FileMetadata = {
-	summary: string;
-	structure_hint: string;
-};
+import { Schema } from 'effect';
 
-export type FileValue = {
-	norbital_id: string;
-	name: string;
-	size: number;
-	type: string;
-	url: string;
-	metadata?: FileMetadata;
-	indexed_status?: 'pending' | 'indexing' | 'ready' | 'failed' | 'not_indexable';
-	indexed_error?: string | null;
-};
+export const FileMetadataSchema = Schema.Struct({
+	summary: Schema.String,
+	structure_hint: Schema.String
+});
+export type FileMetadata = typeof FileMetadataSchema.Type;
 
-export type AllowedFileType = string;
+export const FileValueSchema = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	size: Schema.Number,
+	type: Schema.String,
+	url: Schema.String,
+	metadata: Schema.optional(FileMetadataSchema),
+	indexed_status: Schema.optional(
+		Schema.Literals(['pending', 'indexing', 'ready', 'failed', 'not_indexable'])
+	),
+	indexed_error: Schema.optional(Schema.NullOr(Schema.String))
+});
+export type FileValue = typeof FileValueSchema.Type;

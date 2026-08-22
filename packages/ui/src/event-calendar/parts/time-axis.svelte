@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import { generateTimeSlots } from '../utils.js';
+	import { generateTimeSlots } from '#lib/event-calendar/utils';
 
 	let {
 		startHour = 0,

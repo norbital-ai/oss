@@ -2,7 +2,7 @@ import { type LocaleCatalogs, type KeysOf, type MessageVars, translate } from '.
 import { type Locale, DEFAULT_LOCALE, intlLocale as intlLocaleFor } from './locale.js';
 
 export type { LocaleCatalogs, MessageCatalog, MessageVars, KeysOf } from './catalog.js';
-export { defineMessages, translate, interpolate, hasKey } from './catalog.js';
+export { defineMessages, translate, interpolate } from './catalog.js';
 export type { Locale } from './locale.js';
 export {
 	SUPPORTED_LOCALES,
@@ -10,7 +10,6 @@ export {
 	INTL_LOCALES,
 	intlLocale,
 	STORED_LOCALE_KEY,
-	isLocale,
 	parseLocale,
 	pickLocale,
 	storedLocale,

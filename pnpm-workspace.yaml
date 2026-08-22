@@ -7,7 +7,7 @@ catalog:
   drizzle-kit: 1.0.0-rc.4
   drizzle-orm: 1.0.0-rc.4
   runed: ^0.37.1
-  rolldown: ^1.2.1
+  rolldown: ^1.2.5
   svelte: ^5.56.10
   # TS 7 breaks svelte2tsx / @sveltejs/package (fileExists). Stay on latest 6.x.
   #
@@ -17,7 +17,7 @@ catalog:
   # this line to 7.0.2 while the override below held the install at 6.0.3, so the catalog and the
   # installed version disagreed and this comment described a pin that was no longer here.
   typescript: 6.0.3
-  vite: ^8.2.1
+  vite: ^8.2.2
   zod: ^4.4.3
 
 # Migrated from .npmrc / package.json#pnpm for pnpm 11.

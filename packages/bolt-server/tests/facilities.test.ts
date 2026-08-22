@@ -17,7 +17,7 @@ import { ConfigProvider, Effect } from 'effect';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { makeAiBinding, makeAiBindingFromConfig } from '../src/facilities/ai.js';
+import { makeAiBinding, makeAiBindingFromConfig } from '../src/facilities/providers.js';
 import {
 	makeCommunicationBinding,
 	makeCommunicationBindingFromConfig
@@ -25,15 +25,11 @@ import {
 import {
 	makeConnectorBinding,
 	makeConnectorBindingFromConfig
-} from '../src/facilities/connector.js';
+} from '../src/facilities/providers.js';
 import { makeDatabaseFromConfig, makeLocalDatabase } from '../src/facilities/database.js';
 import { makeFilesBindingFromConfig, makeLocalFilesBinding } from '../src/facilities/files.js';
-import {
-	makeHostToolBinding,
-	makeHostToolBindingFromConfig
-} from '../src/facilities/host-tools.js';
-import { makeTaskBinding } from '../src/facilities/tasks.js';
-import { makeScheduler } from '../src/scheduler.js';
+import { makeHostToolBinding, makeHostToolBindingFromConfig } from '../src/facilities/providers.js';
+import { makeScheduler, makeTaskBinding } from '../src/scheduler.js';
 import { makeMemoryTransport } from '../src/facilities/transport.js';
 
 const metadata = {
@@ -360,7 +356,7 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 		const registered: Array<string> = [];
 		const tasks = makeTaskBinding(
 			makeScheduler({
-				tick: async () => null,
+				tick: () => Effect.succeed(null),
 				onFailure: () => {}
 			}),
 			(command) => registered.push(command)
@@ -444,7 +440,7 @@ it.effect('constructs each extension provider selected by Effect Config', () =>
 		// The task facility has no provider left to configure — the host owns the timer itself.
 		const tasks = makeTaskBinding(
 			makeScheduler({
-				tick: async () => null,
+				tick: () => Effect.succeed(null),
 				onFailure: () => {}
 			})
 		);

@@ -3,9 +3,9 @@ import { EffectId } from '@norbital-ai/bolt-protocol';
 import {
 	describeEnvironment,
 	type EnvironmentVariableView
-} from '../../authoring/environment-schema.js';
-import { Database } from '../facilities/database.js';
-import { Workspace } from '../workspace.js';
+} from '#lib/authoring/environment-schema.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import * as Workspace from '#lib/runtime/workspace.js';
 import {
 	SecretCipher,
 	bind,
@@ -51,7 +51,7 @@ const workspaceBinding = (name: string): string => bind('bolt_secrets', name);
  * authorization check at all — backups, replicas, a snapshot on somebody's laptop.
  */
 
-export class SecretNotDeclared extends Schema.TaggedError<SecretNotDeclared>()(
+class SecretNotDeclared extends Schema.TaggedError<SecretNotDeclared>()(
 	'Bolt.Secrets.NotDeclared',
 	{ name: Schema.NonEmptyString }
 ) {
@@ -61,7 +61,7 @@ export class SecretNotDeclared extends Schema.TaggedError<SecretNotDeclared>()(
 }
 
 /** What a client may know about one entry: its declaration, plus whether a value exists. */
-export type SecretStatus = EnvironmentVariableView & {
+type SecretStatus = EnvironmentVariableView & {
 	readonly configured: boolean;
 	readonly updatedAt?: string;
 };
@@ -104,9 +104,9 @@ export type Interface = Readonly<{
 	) => Effect.Effect<void, SecretNotDeclared | Database.FacilityError | SecretKeyUnavailable>;
 }>;
 
-export const Service = Context.Service<Interface>('@norbital-ai/bolt/Secrets');
+const Service = Context.Service<Interface>('@norbital-ai/bolt/Secrets');
 
-export const layer = Layer.effect(
+const layer = Layer.effect(
 	Service,
 	Effect.gen(function* () {
 		const database = yield* Database.Service;

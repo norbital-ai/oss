@@ -3,7 +3,7 @@
 	import { Button } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
-	import type { DataRendererProps } from '../data-renderer.types.js';
+	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 	import PhoneInput from './phone_number.input.svelte';
 
 	const { t } = useI18n<UiKeys>();

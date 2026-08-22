@@ -6,7 +6,7 @@ export type FileTreeEntry = {
 	writable?: boolean;
 };
 
-export type FileTreeIconContext = {
+type FileTreeIconContext = {
 	open: boolean;
 };
 
@@ -22,7 +22,7 @@ export type FileTreeEntryBadge = {
 
 export type FileTreeProps = {
 	entries: FileTreeEntry[];
-	onToggle?: (path: string) => Promise<FileTreeEntry[]>;
+	onToggle?: (path: string) => Effect.Effect<FileTreeEntry[], unknown>;
 	onSelect?: (path: string, entry: FileTreeEntry) => void;
 	canDelete?: (path: string, entry: FileTreeEntry) => boolean;
 	onDelete?: (path: string, entry: FileTreeEntry) => void;
@@ -36,3 +36,4 @@ export type FileTreeProps = {
 	variant?: 'default' | 'dark';
 	class?: string;
 };
+import type { Effect } from 'effect';

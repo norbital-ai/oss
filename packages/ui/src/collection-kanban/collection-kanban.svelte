@@ -17,14 +17,17 @@
 	import { Cover, Grid, Inline, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { type Translate } from '../data-renderer/index.js';
+	import { type Translate } from '#lib/data-renderer';
 	import { onMount } from 'svelte';
+	import { Effect } from 'effect';
 	import {
+		getCollectionClientForSurface,
 		getCollectionRecordScope,
 		getCollectionSurfaceRuntime,
-		resolveCollectionViewKey
+		resolveCollectionViewKey,
+		setCollectionClientContext
 	} from '#lib/collection-runtime';
-	import { badgeColorClass } from '../collection-table/collection-card-colors.js';
+	import { badgeColorClass } from '#lib/collection-table/collection-card-colors';
 	import {
 		createCollectionTableRouteKey,
 		getCollectionTableNavigationContext
@@ -39,25 +42,44 @@
 		formatAutoCardSubtitle,
 		mergeAuthoredLanes,
 		parseAuthoredLaneValues,
+		resolvedRecordMetadataFor,
 		type AutoCardModel
-	} from '../collection-table/collection-card-derivation.js';
+	} from '#lib/collection-table/collection-card-derivation';
 	import CollectionKanbanSkeleton from './collection-kanban-skeleton.svelte';
 	import CollectionKanbanLane from './collection-kanban-lane.svelte';
 	import { CollectionQueryState } from '#lib/collection-query';
 	import { CollectionActionToolbar } from '#lib/collection-toolbar';
-	import { laneMoveUpdate, runOptimisticKanbanMove } from './collection-kanban-move.js';
 	import {
 		CollectionRecordMetadataView,
 		collectionRecordMutationReason,
-		resolveCollectionRecordMetadata,
 		type CollectionRecordMutation,
 		type ResolvedCollectionRecordMetadata
-	} from '../collection-record-metadata/index.js';
-	import type { CollectionKanbanName, CollectionKanbanProps } from './collection-kanban.types.js';
-	import {
-		getCollectionClientForSurface,
-		setCollectionClientContext
-	} from '#lib/collection-runtime';
+	} from '#lib/collection-record-metadata';
+	import type {
+		CollectionKanbanName,
+		CollectionKanbanProps
+	} from '#lib/collection-kanban/collection-kanban.types';
+
+	interface OptimisticKanbanMove {
+		apply: () => void;
+		commit: () => Effect.Effect<void, Error>;
+		refresh: () => Effect.Effect<void, Error>;
+		rollback: () => void;
+	}
+
+	/**
+	 * Keeps the visual move immediate while preserving the query as the source of truth.
+	 * A failed mutation or refresh restores the record to its server-backed lane.
+	 */
+	function runOptimisticKanbanMove(move: OptimisticKanbanMove): Effect.Effect<void, Error> {
+		return Effect.sync(move.apply).pipe(
+			Effect.flatMap(() => move.commit()),
+			Effect.flatMap(() => move.refresh()),
+			Effect.catch((cause) =>
+				Effect.sync(move.rollback).pipe(Effect.flatMap(() => Effect.fail(cause)))
+			)
+		);
+	}
 
 	type Row = CollectionRow<TCollections[TName]>;
 	interface BoardResultState {
@@ -88,12 +110,6 @@
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionKanban');
 	setCollectionClientContext(() => workspaceClient);
 	const { t } = useI18n<UiKeys>();
-	function resolvedRecordMetadata(record: Row): readonly ResolvedCollectionRecordMetadata[] {
-		return resolveCollectionRecordMetadata(record, recordMetadata?.(record), {
-			pendingApprovalLabel: t('recordMetadata.pendingApproval'),
-			pendingApprovalReason: t('recordMetadata.pendingApprovalReason')
-		});
-	}
 	const surfaceRuntime = getCollectionSurfaceRuntime();
 	const recordScope = getCollectionRecordScope();
 	const resolvedView = $derived(
@@ -108,7 +124,7 @@
 		workspaceClient.collections[String(collection)] as CollectionDefinition<TCollections[TName]> // stupidity: boundary-cast — the generated client and runtime manifest share collection keys.
 	);
 	const operations = $derived(client.db[collection]);
-	const recordIdField = 'norbital_id';
+	const recordIdField = 'id';
 	const effectiveSelectable = $derived(
 		selectable ||
 			exportPipelines.some((pipeline) => pipeline.requiresSelection) ||
@@ -133,9 +149,6 @@
 			? parseAuthoredLaneValues(lanes)
 			: derivedLanes.map((lane) => lane.value)
 	);
-	function laneLabel(lane: string): string {
-		return laneMeta.get(lane)?.label ?? humanize(lane);
-	}
 
 	// Query inputs are pure derived data. Creating the stateful RemoteQuery belongs in the watcher
 	// callback so query resource writes never occur inside a derived computation.
@@ -193,7 +206,7 @@
 	const metadataById = $derived.by(() => {
 		const metadata = new Map<string, readonly ResolvedCollectionRecordMetadata[]>();
 		for (const [recordId, record] of recordById) {
-			metadata.set(recordId, resolvedRecordMetadata(record));
+			metadata.set(recordId, resolvedRecordMetadataFor(record, recordMetadata, t as Translate));
 		}
 		return metadata;
 	});
@@ -205,23 +218,33 @@
 		}
 		return reasons;
 	});
-	const updateRestrictedRecordIds = $derived(
-		new Set(updateRestrictionReasonById.keys()) as ReadonlySet<string>
-	);
-	const groups = $derived.by((): Array<[string, Row[]]> => {
+	const updateRestrictedRecordIds = $derived(new Set(updateRestrictionReasonById.keys()));
+	const groups = $derived.by((): Array<[string, Row[], string[]]> => {
 		const laneKeys =
 			resolvedLaneValues.length > 0 ? resolvedLaneValues : Object.keys(boardQuery.result);
-		const grouped = new Map(laneKeys.map((lane) => [lane, [] as Row[]]));
+		const grouped = new Map(
+			laneKeys.map((lane) => [lane, { records: [] as Row[], recordIds: [] as string[] }])
+		);
 		for (const [serverLane, records] of Object.entries(boardQuery.result)) {
 			for (const record of records) {
 				const id = Reflect.get(record, recordIdField);
-				const targetLane = id == null ? serverLane : (laneOverrides.get(String(id)) ?? serverLane);
-				const target = grouped.get(targetLane) ?? [];
-				target.push(record);
-				if (!grouped.has(targetLane)) grouped.set(targetLane, target);
+				const recordId = id == null ? undefined : String(id);
+				const targetLane =
+					recordId == null ? serverLane : (laneOverrides.get(recordId) ?? serverLane);
+				let target = grouped.get(targetLane);
+				if (target === undefined) {
+					target = { records: [], recordIds: [] };
+					grouped.set(targetLane, target);
+				}
+				target.records.push(record);
+				if (recordId != null) target.recordIds.push(recordId);
 			}
 		}
-		return [...grouped.entries()];
+		return [...grouped.entries()].map(([lane, { records, recordIds }]) => [
+			lane,
+			records,
+			recordIds
+		]);
 	});
 	const selectedRecords = $derived(
 		[...selectedRecordIds]
@@ -308,37 +331,55 @@
 		selectedRecordIds = allVisibleSelected ? new Set() : new Set(recordById.keys());
 	}
 
-	async function updateSelectedRecords(
+	function updateSelectedRecords(
 		fieldName: string,
 		value: unknown,
 		rows: readonly Row[]
-	): Promise<void> {
-		const unavailable = mutationReason(rows, 'update');
-		if (unavailable) {
-			throw new Error(t('recordMetadata.selectedUpdateRestricted', { reason: unavailable }));
-		}
-		const updateMany = operations.updateMany;
-		if (!updateMany) throw new Error('This collection does not allow bulk updates.');
-		await updateMany(
-			rows.map((record) => ({
-				recordId: collectionRecordId(record),
-				input: { [fieldName]: value } as CollectionUpdateInput<CollectionType<Row, object, object>> // stupidity: boundary-cast — schema-selected writable fields and DataRenderer constrain the dynamic patch.
-			}))
-		);
+	): Effect.Effect<void, unknown> {
+		return Effect.gen(function* () {
+				const unavailable = mutationReason(rows, 'update');
+				if (unavailable) {
+					return yield* Effect.fail(
+						new Error(t('recordMetadata.selectedUpdateRestricted', { reason: unavailable }))
+					);
+				}
+				const updateMany = operations.updateMany;
+				if (!updateMany)
+					return yield* Effect.fail(new Error('This collection does not allow bulk updates.'));
+				yield* Effect.tryPromise(() =>
+					updateMany(
+						rows.map((record) => ({
+							recordId: collectionRecordId(record),
+							input: { [fieldName]: value } as CollectionUpdateInput<
+								CollectionType<Row, object, object>
+							> // stupidity: boundary-cast — schema-selected writable fields and DataRenderer constrain the dynamic patch.
+						}))
+					)
+				);
+			});
 	}
 
-	async function deleteSelectedRecords(rows: readonly Row[]): Promise<void> {
-		const unavailable = mutationReason(rows, 'delete');
-		if (unavailable) {
-			throw new Error(t('recordMetadata.selectedDeleteRestricted', { reason: unavailable }));
-		}
-		const deleteRecord = operations.delete;
-		if (!deleteRecord) throw new Error('This collection does not allow deletion.');
-		await Promise.all(rows.map((record) => deleteRecord(collectionRecordId(record))));
+	function deleteSelectedRecords(rows: readonly Row[]): Effect.Effect<void, unknown> {
+		return Effect.gen(function* () {
+				const unavailable = mutationReason(rows, 'delete');
+				if (unavailable) {
+					return yield* Effect.fail(
+						new Error(t('recordMetadata.selectedDeleteRestricted', { reason: unavailable }))
+					);
+				}
+				const deleteRecord = operations.delete;
+				if (!deleteRecord)
+					return yield* Effect.fail(new Error('This collection does not allow deletion.'));
+				yield* Effect.all(
+					rows.map((record) => Effect.tryPromise(() => deleteRecord(collectionRecordId(record)))),
+					{ discard: true }
+				);
+			});
 	}
 
-	async function refresh(): Promise<void> {
-		await query?.refresh();
+	function refresh(): Effect.Effect<void, unknown> {
+		const currentQuery = query;
+		return currentQuery ? Effect.tryPromise(() => currentQuery.refresh()) : Effect.void;
 	}
 
 	function setRecordLane(recordId: string, lane: string | undefined): void {
@@ -391,24 +432,34 @@
 	// A move can commit whenever there is an authored handler or an updatable collection (RFC V.3c).
 	const canMove = $derived(onCardMove != null || operations.update != null);
 
-	async function commitCardMove(record: Row, fromLane: string, toLane: string): Promise<void> {
-		if (onCardMove) {
-			await onCardMove({ record, fromLane, toLane });
-			return;
+	function commitCardMove(
+		record: Row,
+		fromLane: string,
+		toLane: string
+	): Effect.Effect<void, Error> {
+		const authoredMove = onCardMove;
+		if (authoredMove) {
+			return authoredMove({ record, fromLane, toLane }).pipe(
+				Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause))))
+			);
 		}
 		// Default optimistic move: write `toLane` into the groupBy field.
-		if (!operations.update) throw new Error('This collection cannot be updated.');
-		const id = Reflect.get(record, recordIdField);
-		if (id == null) throw new Error(`Cannot move a record without ${recordIdField}.`);
-		await operations.update(
-			String(id),
-			laneMoveUpdate(String(groupBy), toLane) as Parameters<
-				NonNullable<typeof operations.update>
-			>[1] // stupidity: boundary-cast — the runtime groupBy key becomes a typed update payload.
-		);
+		return Effect.gen(function* () {
+			const update = operations.update;
+			if (!update) return yield* Effect.fail(new Error('This collection cannot be updated.'));
+			const id = Reflect.get(record, recordIdField);
+			if (id == null)
+				return yield* Effect.fail(new Error(`Cannot move a record without ${recordIdField}.`));
+			yield* Effect.tryPromise(() =>
+				update(
+					String(id),
+					{ [groupBy]: toLane } as Parameters<NonNullable<typeof update>>[1] // stupidity: boundary-cast — the runtime groupBy key becomes a typed update payload.
+				)
+			);
+		});
 	}
 
-	async function moveRecord({
+	function moveRecord({
 		recordId,
 		fromLane,
 		toLane
@@ -416,7 +467,7 @@
 		recordId: string;
 		fromLane: string;
 		toLane: string;
-	}): Promise<void> {
+	}): void {
 		if (
 			!canMove ||
 			fromLane === toLane ||
@@ -428,21 +479,29 @@
 		if (!record) return;
 		moveError = '';
 		setRecordPending(recordId, true);
-		try {
-			await runOptimisticKanbanMove({
+		void Effect.runPromise(
+			runOptimisticKanbanMove({
 				apply: () => setRecordLane(recordId, toLane),
 				commit: () => commitCardMove(record, fromLane, toLane),
 				refresh: () => {
-					if (!query) throw new Error('Kanban query is unavailable.');
-					return query.refresh();
+					const currentQuery = query;
+					if (!currentQuery) return Effect.fail(new Error('Kanban query is unavailable.'));
+					return Effect.tryPromise(() => currentQuery.refresh());
 				},
 				rollback: () => setRecordLane(recordId, undefined)
-			});
-		} catch (cause) {
-			moveError = cause instanceof Error ? cause.message : String(cause);
-		} finally {
-			setRecordPending(recordId, false);
-		}
+			}).pipe(
+				Effect.catch((cause) =>
+					Effect.sync(() => {
+						moveError = cause instanceof Error ? cause.message : String(cause);
+					})
+				),
+				Effect.onExit(() =>
+					Effect.sync(() => {
+						setRecordPending(recordId, false);
+					})
+				)
+			)
+		);
 	}
 
 	// Auto card (RFC V.3): identical derivation to the table's mobile card from field structure.
@@ -557,15 +616,12 @@
 				empty={groups.length === 0}
 				lanes={lanes?.length ?? 3}
 			/>
-			{#each groups as [lane, records], index (lane)}
+			{#each groups as [lane, records, recordIds], index (lane)}
 				<CollectionKanbanLane
 					{lane}
-					label={laneLabel(lane)}
+					label={laneMeta.get(lane)?.label ?? humanize(lane)}
 					color={laneMeta.get(lane)?.color}
-					recordIds={records
-						.map((record) => Reflect.get(record, recordIdField))
-						.filter((id) => id != null)
-						.map(String)}
+					{recordIds}
 					previousLane={groups[index - 1]?.[0]}
 					nextLane={groups[index + 1]?.[0]}
 					movable={canMove}

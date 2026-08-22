@@ -10,7 +10,8 @@
  * selection turned it into a tracked range. An `@anything` that never matched, or that the writer
  * edited through, is plain text — it goes to the agent verbatim and nowhere else.
  */
-import type { MentionRecordHit } from './mention-sources.js';
+import { Number } from 'effect';
+import type { MentionRecordHit } from '#lib/client/ui/agent/mention-sources.js';
 
 /** One chip in the draft: the `@label` span plus the record it stands for. */
 export type ComposerMention = MentionRecordHit & {
@@ -24,7 +25,7 @@ export type ComposerMention = MentionRecordHit & {
  * Longest query still read as a search. Past this the `@` is prose that happens to contain one —
  * an address, a handle — and keeping the menu open would only hide text the writer means literally.
  */
-export const MENTION_QUERY_LIMIT = 60;
+const MENTION_QUERY_LIMIT = 60;
 
 const WHITESPACE = /\s/;
 
@@ -36,7 +37,7 @@ const WORD_CHAR = /[\p{L}\p{N}]/u;
  * sentence; `@Acme Corporation` — a label the writer kept typing — is prose again, and must stop
  * resolving to the record.
  */
-// stupidity:allow Q4 -- named helper
+// repository-health:allow Q4 -- named helper
 function chipDelimited(draft: string, mention: ComposerMention): boolean {
 	const next = draft.slice(mention.end, mention.end + 1);
 	return next === '' || !WORD_CHAR.test(next);
@@ -59,7 +60,7 @@ export function findMentionTrigger(
 	caret: number,
 	mentions: readonly ComposerMention[]
 ) {
-	const position = Math.max(0, Math.min(caret, draft.length));
+	const position = Number.clamp({ minimum: 0, maximum: draft.length })(caret);
 	let atIndex = -1;
 	for (let index = position - 1; index >= 0; index -= 1) {
 		if (draft[index] === '@') {
@@ -72,10 +73,10 @@ export function findMentionTrigger(
 		if (position > mention.start && position <= mention.end) return null;
 		if (mention.start === atIndex && position > mention.end) return null;
 	}
-	if (atIndex > 0 && !WHITESPACE.test(draft[atIndex - 1])) return null;
+	if (atIndex > 0 && !WHITESPACE.test(draft.charAt(atIndex - 1))) return null;
 	const query = draft.slice(atIndex + 1, position);
 	if (query.length > MENTION_QUERY_LIMIT || query.includes('\n')) return null;
-	if (query.length > 0 && WHITESPACE.test(query[0])) return null;
+	if (query.length > 0 && WHITESPACE.test(query.charAt(0))) return null;
 	return { start: atIndex, query };
 }
 
@@ -83,13 +84,13 @@ export function findMentionTrigger(
 export type MentionTrigger = NonNullable<ReturnType<typeof findMentionTrigger>>;
 
 /** Shifts one chip's range after an edit that grew or shrank text before it. */
-// stupidity:allow Q4 -- named helper
+// repository-health:allow Q4 -- named helper
 function shiftMention(mention: ComposerMention, delta: number): ComposerMention {
 	return { ...mention, start: mention.start + delta, end: mention.end + delta };
 }
 
 /** Orders chips left-to-right so later edits can walk them without crossing. */
-// stupidity:allow Q4 -- named helper
+// repository-health:allow Q4 -- named helper
 function mentionsByStart(mentions: readonly ComposerMention[]): ComposerMention[] {
 	return [...mentions].sort((left, right) => left.start - right.start);
 }
@@ -109,11 +110,13 @@ export function insertMention(
 	reference: MentionRecordHit
 ): { draft: string; mentions: ComposerMention[]; caret: number } {
 	const label = reference.label.trim();
-	const replacedEnd = Math.max(trigger.start, Math.min(trigger.caret, draft.length));
+	const replacedEnd = Number.clamp({ minimum: trigger.start, maximum: draft.length })(
+		trigger.caret
+	);
 	const inserted = `@${label}`;
 	const before = draft.slice(0, trigger.start);
 	const after = draft.slice(replacedEnd);
-	const needsSpace = after.length > 0 && !WHITESPACE.test(after[0]);
+	const needsSpace = after.length > 0 && !WHITESPACE.test(after.charAt(0));
 	const nextDraft = `${before}${inserted}${needsSpace ? ' ' : ''}${after}`;
 	const end = trigger.start + inserted.length;
 	const delta = end - replacedEnd + (needsSpace ? 1 : 0);

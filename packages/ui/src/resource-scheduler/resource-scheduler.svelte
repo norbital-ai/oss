@@ -3,6 +3,7 @@
 	generics="TResource extends ResourceSchedulerResource, TItem extends ResourceSchedulerItem"
 >
 	import Icon from '@iconify/svelte';
+	import { Number as EffectNumber } from 'effect';
 	import { Checkbox } from '#lib/checkbox';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
@@ -194,9 +195,9 @@
 		if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
 			event.preventDefault();
 			const currentIndex = resources.findIndex((resource) => resource.id === item.resourceId);
-			const nextIndex = Math.max(
-				0,
-				Math.min(resources.length - 1, currentIndex + (event.key === 'ArrowUp' ? -1 : 1))
+			const nextIndex = EffectNumber.clamp(
+				currentIndex + (event.key === 'ArrowUp' ? -1 : 1),
+				{ minimum: 0, maximum: resources.length - 1 }
 			);
 			const resourceId = resources[nextIndex]?.id;
 			if (resourceId) commitMove(item, resourceId, 0, null);
@@ -262,12 +263,9 @@
 	function updateCreate(event: PointerEvent): void {
 		if (!drag || drag.kind !== 'create' || !(event.currentTarget instanceof HTMLElement)) return;
 		const rectangle = event.currentTarget.getBoundingClientRect();
-		const index = Math.max(
-			0,
-			Math.min(
-				days.length - 1,
-				Math.floor((event.clientX - rectangle.left - resourceWidth) / dayWidth)
-			)
+		const index = EffectNumber.clamp(
+			Math.floor((event.clientX - rectangle.left - resourceWidth) / dayWidth),
+			{ minimum: 0, maximum: days.length - 1 }
 		);
 		drag.endIndex = index;
 	}

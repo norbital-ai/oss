@@ -3,7 +3,12 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { ensurePureInstallation, managedPackages, stalePackages } from '../lib/yalc-consumers.mjs';
+import {
+	ensurePureInstallation,
+	linkConsumers,
+	managedPackages,
+	stalePackages
+} from '../lib/yalc-consumers.mjs';
 
 const fixture = () => mkdtempSync(path.join(tmpdir(), 'norbital-yalc-consumer-'));
 const writeJson = (file, value) => {
@@ -137,6 +142,46 @@ test('stalePackages compares the pushed and materialised signatures', () => {
 		assert.deepEqual(stalePackages(root, ['@norbital-ai/bolt', '@norbital-ai/ui']), [
 			'@norbital-ai/bolt'
 		]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('linkConsumers restores dependency files when installation fails', () => {
+	const root = fixture();
+	try {
+		const manifestPath = path.join(root, 'package.json');
+		writeJson(manifestPath, { dependencies: { '@norbital-ai/bolt': '0.0.12' } });
+		const original = readFileSync(manifestPath);
+		assert.throws(
+			() =>
+				linkConsumers({
+					consumers: [{ name: 'fixture', directory: root }],
+					yalcBin: '/fake/yalc',
+					run: (_command, args) => {
+						mkdirSync(path.join(root, '.yalc/@norbital-ai/bolt'), { recursive: true });
+						writeJson(manifestPath, {
+							dependencies: { '@norbital-ai/bolt': 'file:.yalc/@norbital-ai/bolt' }
+						});
+						writeJson(path.join(root, 'yalc.lock'), {
+							packages: {
+								'@norbital-ai/bolt': {
+									replaced: '0.0.12',
+									pure: args.includes('--pure')
+								}
+							}
+						});
+					},
+					install: () => {
+						writeFileSync(path.join(root, 'pnpm-lock.yaml'), 'linked\n');
+						throw new Error('install failed');
+					}
+				}),
+			/install failed/
+		);
+		assert.deepEqual(readFileSync(manifestPath), original);
+		assert.equal(existsSync(path.join(root, 'yalc.lock')), false);
+		assert.equal(existsSync(path.join(root, 'pnpm-lock.yaml')), false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

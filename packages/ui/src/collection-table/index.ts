@@ -25,7 +25,6 @@ export {
 	resolveCollectionSurface,
 	setCollectionClientContext,
 	setCollectionSurfaceRuntime,
-	type CollectionRepresentationSurface,
 	type CollectionSurface,
 	type CollectionSurfaceRegistry,
 	type CollectionSurfaceRuntime

@@ -1,24 +1,24 @@
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Layer, Ref } from 'effect';
 import { EffectId, type DatabaseRequest, type DatabaseResponse } from '@norbital-ai/bolt-protocol';
-import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
-import { AccessControl } from '../../src/runtime/access/access-control.js';
-import { Approvals } from '../../src/runtime/approvals/approvals.js';
-import { Collections } from '../../src/runtime/collections/collections.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import * as AccessControl from '../../src/runtime/access/access-control.js';
+import * as Approvals from '../../src/runtime/approvals/approvals.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
 import {
 	AuthoredRuntimeService,
 	emptyAuthoredRuntime
 } from '../../src/runtime/collections/authored.js';
-import { Database } from '../../src/runtime/facilities/database.js';
+import * as Database from '../../src/runtime/facilities/database.js';
 import { AI, Files, Tasks, Transport } from '../../src/runtime/facilities/services.js';
-import { SyncWake } from '../../src/runtime/sync/wake.js';
-import type { Identity } from '../../src/runtime/identity/identity.js';
-import { Workspace } from '../../src/runtime/workspace.js';
-import { TaskQueue } from '../../src/runtime/tasks/tasks.js';
-import { Automations } from '../../src/runtime/automations/automations.js';
-import { InvocationBudget } from '../../src/runtime/budget.js';
+import * as SyncWake from '../../src/runtime/sync/wake.js';
+import type * as Identity from '../../src/runtime/identity/identity.js';
+import * as Workspace from '../../src/runtime/workspace.js';
+import * as TaskQueue from '../../src/runtime/tasks/tasks.js';
+import * as Automations from '../../src/runtime/automations/automations.js';
+import * as InvocationBudget from '../../src/runtime/budget.js';
 import { testCallContext } from '../support/bolt-test-layer.js';
-import { TenantScope } from '../../src/runtime/tenant.js';
+import * as TenantScope from '../../src/runtime/tenant.js';
 
 /**
  * A JSON column holding a list has to reach Postgres as JSON.
@@ -76,7 +76,8 @@ const definition = workspace({
 const subject: Identity.Subject = {
 	userId: 'admin-1',
 	tenantId: 'tenant-json',
-	teamPath: ['admin'], policies: []
+	teamPath: ['admin'],
+	policies: []
 };
 
 const RECORD_ID = '11111111-2222-4333-8444-555555555555';
@@ -109,13 +110,13 @@ const testLayer = (seen: Array<DatabaseRequest>) => {
 	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(database, tasks)));
 	const automations = Automations.layer.pipe(
 		Layer.provide(
-		Layer.mergeAll(
-			workspaceLayer,
-			taskQueue,
-			InvocationBudget.layer(0),
-			TenantScope.layer('tenant-json')
+			Layer.mergeAll(
+				workspaceLayer,
+				taskQueue,
+				InvocationBudget.layer(0),
+				TenantScope.layer('tenant-json')
+			)
 		)
-	)
 	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
 	const approvals = Approvals.layer.pipe(

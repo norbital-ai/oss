@@ -2,10 +2,6 @@
 	type Entry<T> = { item: T; id: string; index: number };
 	type Layout<T> = { visible: Entry<T>[]; hidden: Entry<T>[] };
 
-	function availableWidth(node: HTMLElement): number {
-		return node.clientWidth;
-	}
-
 	function rowWidth(indices: number[], widths: number[], gap: number): number {
 		return indices.reduce(
 			(sum, index, position) => sum + widths[index] + (position > 0 ? gap : 0),
@@ -51,6 +47,7 @@
 <script lang="ts" generics="T extends { key?: string }">
 	import { cn } from '#lib/utils';
 	import { useResizeObserver, watch } from 'runed';
+	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
 	import { tick } from 'svelte';
 
@@ -92,47 +89,68 @@
 	const hiddenCount = $derived(enabled ? layout.hidden.length : 0);
 	const hiddenItems = $derived(layout.hidden.map((entry) => entry.item));
 
-	let layoutQueued = false;
+	let layoutQueued = $state(false);
 
-	async function updateLayout(attempt = 0) {
+	/**
+	 * Measures once and either packs the layout or flags that another frame is needed.
+	 * Fonts and offscreen clones can report 0 widths for a couple of frames after mount.
+	 */
+	function measureStep(): boolean {
 		if (!enabled) {
 			layout = { visible: entries, hidden: [] };
-			return;
+			return true;
 		}
+		if (!rootEl || !measureEl) return true;
 
-		if (!rootEl || !measureEl) return;
-
-		await tick();
-
-		const available = availableWidth(rootEl);
+		const available = rootEl.clientWidth;
 		const itemNodes = measureEl.querySelectorAll<HTMLElement>('[data-measure-item]');
 		const widths = [...itemNodes].map((node) => Math.ceil(node.getBoundingClientRect().width));
 		const ellipsisNode = measureEl.querySelector<HTMLElement>('[data-measure-ellipsis]');
 		const ellipsisWidth = Math.ceil(ellipsisNode?.getBoundingClientRect().width ?? 0);
 
+		const attempts = measureAttempts + 1;
+		measureAttempts = attempts;
 		const waiting =
-			attempt < 8 &&
+			attempts < 8 &&
 			entries.length > 0 &&
 			(available <= 0 ||
 				itemNodes.length < entries.length ||
 				widths.some((width) => width <= 0) ||
 				(entries.length > 1 && ellipsisWidth <= 0));
 
-		if (waiting) {
-			requestAnimationFrame(() => void updateLayout(attempt + 1));
-			return;
-		}
+		if (waiting) return false;
 
 		layout = packEntries(entries, widths, available, gap, ellipsisWidth);
+		return true;
+	}
+
+	let measureAttempts = $state(0);
+
+	/**
+	 * Measure + pack pipeline, sequenced after `tick` so the probe DOM and the rendered
+	 * strip share the frame Svelte just flushed.
+	 */
+	function updateLayout(): Effect.Effect<void> {
+		return Effect.gen(function* () {
+			while (!(yield* Effect.sync(() => measureStep()))) {
+				yield* Effect.callback<void>((resume) => {
+					requestAnimationFrame(() => resume(Effect.void));
+				});
+			}
+		});
 	}
 
 	function scheduleLayout() {
 		if (layoutQueued) return;
 		layoutQueued = true;
-		requestAnimationFrame(() => {
-			layoutQueued = false;
-			void updateLayout();
-		});
+		void Effect.runPromise(
+			Effect.gen(function* () {
+				yield* Effect.promise(() => tick());
+				measureAttempts = 0;
+				yield* updateLayout();
+				layoutQueued = false;
+			})
+		);
 	}
 
 	watch(

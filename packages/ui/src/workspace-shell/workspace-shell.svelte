@@ -1,6 +1,7 @@
 <script lang="ts">
 	import WorkspaceShellFrame from './workspace-shell-frame.svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
 	import { Cover, Inline } from '#lib/layout';
 	import { Spinner } from '#lib/spinner';
@@ -8,8 +9,9 @@
 		WorkspaceImpersonation,
 		WorkspaceNavigationModel,
 		WorkspaceOrganizationOption
-	} from './workspace-shell.types.js';
+	} from '#lib/workspace-shell/workspace-shell.types';
 	import WorkspaceSidebar from './workspace-sidebar.svelte';
+	import { setStorageScope } from '#lib/storage-scope';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -30,10 +32,12 @@
 		children
 	}: {
 		model: WorkspaceNavigationModel;
-		onNavigate?: (href: string) => void | undefined;
-		onPrefetch?: (href: string) => void | undefined;
-		onOrganizationChange?: (organizationId: string) => void | Promise<void>;
-		onSignOut?: () => void | Promise<void>;
+		onNavigate?: ((href: string) => void) | undefined;
+		onPrefetch?: ((href: string) => void) | undefined;
+		onOrganizationChange?:
+			| ((organizationId: string) => void | Effect.Effect<void, unknown>)
+			| undefined;
+		onSignOut?: (() => void | Effect.Effect<void, unknown>) | undefined;
 		/**
 		 * The account area's notification surface, rendered above the user menu.
 		 *
@@ -41,24 +45,25 @@
 		 * what marking it read costs, are questions only the runtime holding the sync engine can
 		 * answer. `expanded` mirrors the sidebar's own state so the surface can collapse with it.
 		 */
-		notifications?: Snippet<[{ expanded: boolean }]>;
+		notifications?: Snippet<[{ expanded: boolean }]> | undefined;
 		/**
 		 * Admin team impersonation state, when the host supplies it. Absent for
 		 * non-admins, so the account menu hides the picker rather than asking.
 		 */
 		impersonation?: WorkspaceImpersonation | null;
 		/** Switch the impersonation scope to a single team. */
-		onImpersonate?: (teamId: string) => void | Promise<void>;
+		onImpersonate?: ((teamId: string) => void | Effect.Effect<void, unknown>) | undefined;
 		/** Return to the requestor's own team scope. */
-		onStopImpersonating?: () => void | Promise<void>;
+		onStopImpersonating?: (() => void | Effect.Effect<void, unknown>) | undefined;
 		/** Host supplies the search gesture; shell only renders the affordance. */
-		onSearch?: () => void;
-		searchLabel?: string;
-		searchShortcut?: string;
+		onSearch?: (() => void) | undefined;
+		searchLabel?: string | undefined;
+		searchShortcut?: string | undefined;
 		/** The workspace agent's trigger, rendered at the top of the sidebar navigation. */
-		agent?: Snippet<[{ expanded: boolean }]>;
+		agent?: Snippet<[{ expanded: boolean }]> | undefined;
 		children: Snippet;
 	} = $props();
+	setStorageScope(() => model.activeOrganization.id);
 
 	const mobileTitle = $derived(
 		[...model.system, ...model.applications].find((item) => item.active)?.label ??
@@ -66,7 +71,7 @@
 	);
 	let switchingOrganization = $state<WorkspaceOrganizationOption | null>(null);
 
-	async function changeOrganization(organizationId: string): Promise<void> {
+	function changeOrganization(organizationId: string): void {
 		if (!onOrganizationChange || switchingOrganization) return;
 		const organization = model.organizations.find((entry) => entry.id === organizationId);
 		if (!organization || organization.id === model.activeOrganization.id) return;
@@ -75,12 +80,17 @@
 		// asking the host to select the next one so stale records cannot remain mounted or paint through
 		// a loader owned by a child sidebar.
 		switchingOrganization = organization;
-		try {
-			await onOrganizationChange(organizationId);
-		} catch (error) {
-			switchingOrganization = null;
-			throw error;
-		}
+		Effect.runFork(
+			Effect.ensuring(
+				Effect.gen(function* () {
+					const change = onOrganizationChange(organizationId);
+					if (change) yield* change;
+				}),
+				Effect.sync(() => {
+					switchingOrganization = null;
+				})
+			)
+		);
 	}
 </script>
 

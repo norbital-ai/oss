@@ -1,11 +1,9 @@
 // oxlint-disable no-explicit-any
 import { getLocalTimeZone, parseAbsolute, toCalendarDate } from '@internationalized/date';
-import { parseUtcInstant, formatDateRangeLocal } from '@norbital-ai/std/date';
+import { parseUtcInstant, formatDateRangeLocal, isUtcIsoInstant } from '@norbital-ai/std/date';
 import { type ClassValue, clsx } from 'clsx';
 import type { Component, ComponentProps, Snippet } from 'svelte';
 import { twMerge } from 'tailwind-merge';
-
-export { createInfiniteLoader, type InfiniteLoader } from './infinite_loader.svelte.js';
 
 export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
@@ -147,12 +145,8 @@ export function renderSnippet<TProps>(snippet: Snippet<[TProps]>, params: TProps
 
 /** Parses a stored UTC ISO instant for display in the local timezone. */
 export function parseServerTimestamp(input: string): Date | null {
-	if (!input) return null;
-	try {
-		return parseUtcInstant(input);
-	} catch {
-		return null;
-	}
+	if (!input || !isUtcIsoInstant(input)) return null;
+	return parseUtcInstant(input);
 }
 
 /** Parse a stored UTC ISO instant for calendar/time pickers (local timezone). */

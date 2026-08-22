@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { addDays, getColumnDate, isSameDay, isWeekend } from '../utils.js';
-	import type { CalendarView } from '../types.js';
+	import { addDays, isSameDay, isWeekend } from '#lib/event-calendar/utils';
+	import type { CalendarView } from '#lib/event-calendar/types';
 
 	let {
 		view,
@@ -24,10 +24,12 @@
 	const columns = $derived.by(() => {
 		const result: { date: Date; label: string; isToday: boolean; isWeekend: boolean }[] = [];
 		for (let i = 0; i < columnCount; i++) {
-			const colDate = getColumnDate(date, i);
+			const colDate = addDays(date, i);
 			result.push({
 				date: colDate,
-				label: view === 'month' ? '' : colDate.toLocaleDateString(intlLocale, { weekday: 'short' }),
+				label: colDate.toLocaleDateString(intlLocale, {
+					weekday: view === 'month' ? 'narrow' : 'short'
+				}),
 				isToday: isSameDay(colDate, today),
 				isWeekend: isWeekend(colDate)
 			});
@@ -36,12 +38,6 @@
 	});
 
 	const dayNumber = $derived(columns.map((c) => c.date.getDate()));
-
-	const dayLabels = $derived(
-		view === 'month'
-			? columns.map((c) => c.date.toLocaleDateString(intlLocale, { weekday: 'narrow' }))
-			: null
-	);
 </script>
 
 <div class={cn('sticky top-0 z-20 flex bg-card border-b border-border', className)}>
@@ -56,7 +52,7 @@
 		>
 			{#if view === 'month'}
 				<span class="text-overline">
-					{dayLabels![i]}
+					{col.label}
 				</span>
 			{:else}
 				<span

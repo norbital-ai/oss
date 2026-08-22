@@ -1,10 +1,9 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
 import type { Plugin, PluginOption } from 'vite';
-import { copyFile, mkdir } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { Effect } from 'effect';
+import { Effect, Result, Schema } from 'effect';
 import { auditAuthoredSystemColumns } from '../quality/audit.js';
 import { WORKSPACE_ENTRY_FILE_NAME } from './client-entry.js';
 
@@ -15,25 +14,30 @@ export type BoltPluginOptions = Readonly<{
 	readonly serverAssets?: ReadonlyArray<{ readonly source: string; readonly target: string }>;
 }>;
 
+const WorkspaceNameFileSchema = Schema.Struct({ name: Schema.optional(Schema.String) });
+
 /**
  * What the organization is called, from the workspace's own manifest.
  *
  * `norbital.template.json` carries a `name` written to be read — "HR & Payroll". The host used to
  * read this file itself, at *its* build time, for every workspace it had a checkout of; the name
  * belongs to the workspace, so it is baked into the workspace's own bundle and travels with it.
+ * Unreadable or nameless files fall through to `package.json`, then to the `Bolt` default.
  */
-const workspaceTitleOf = (root: string): string => {
-	const read = (file: string, field: string): string | undefined => {
-		try {
-			const value = JSON.parse(readFileSync(join(root, file), 'utf8')) as Record<string, unknown>;
-			const name = value[field];
-			return typeof name === 'string' && name.length > 0 ? name : undefined;
-		} catch {
-			return undefined;
+const workspaceTitleOf = (root: string): Effect.Effect<string> =>
+	Effect.gen(function* () {
+		for (const file of ['norbital.template.json', 'package.json']) {
+			const title = yield* Effect.tryPromise(() => readFile(join(root, file), 'utf8')).pipe(
+				Effect.flatMap((source) =>
+					Schema.decodeUnknownEffect(Schema.fromJsonString(WorkspaceNameFileSchema))(source)
+				),
+				Effect.map(({ name }) => name ?? ''),
+				Effect.result
+			);
+			if (Result.isSuccess(title) && title.success.length > 0) return title.success;
 		}
-	};
-	return read('norbital.template.json', 'name') ?? read('package.json', 'name') ?? 'Bolt';
-};
+		return 'Bolt';
+	});
 
 /** Owns the virtual client runtime/application modules and the emitted workspace client. */
 const VitePlugins = {
@@ -48,7 +52,7 @@ const VitePlugins = {
 			// position the moment the component is compiled.
 			enforce: 'pre',
 			/**
-			 * The `norbital_*` rule, as an authoring error rather than a lint anyone can skip.
+			 * The system-column rule, as an authoring error rather than a lint anyone can skip.
 			 *
 			 * Every workspace build passes each authored file through here, so there is no file the guard
 			 * can miss and no extension it can be dodged with — which is the failure mode of a scan that
@@ -109,54 +113,62 @@ const VitePlugins = {
 						? applicationId
 						: null,
 			load: (id) => {
-				// Every name the generated client imports must be re-exported here. `startBrowserReplica`
-				// was declared in the virtual module's .d.ts and imported by the generated client but
-				// never re-exported, so `vite build` failed for every template while `bolt sync` — which
-				// did not resolve this module — stayed green.
+				// Every generated-client import must be re-exported here. This virtual module is a separate
+				// resolution boundary: an omission survives `bolt sync` and fails only when Vite builds a
+				// tenant, which is how the old replica bootstrap remained broken unnoticed.
 				if (id === clientRuntimeId)
-					return `export { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startBrowserReplica, startLocalReplica, switchWorkspaceAccessScope } from '@norbital-ai/bolt/client-runtime';`;
-				if (id === applicationId)
-					return [
-						`import { mountWorkspace as mountBoltWorkspace } from '@norbital-ai/bolt/client/workspace';`,
-						`const title = ${JSON.stringify(workspaceTitleOf(workspaceRoot))};`,
-						``,
-						`/**`,
-						` * Mounts this workspace into an element the host owns.`,
-						` *`,
-						` * The only export, and the whole of what a host may do with an artifact's client. The`,
-						` * generated modules are imported *inside* the callback rather than at the top of this`,
-						` * file: importing the generated client builds the browser runtime, whose query cache is`,
-						` * namespaced by tenant and environment, and \`mountWorkspace\` declares the session`,
-						` * before it calls this. Statically importing them would build that cache from a session`,
-						` * that had not been declared yet.`,
-						` */`,
-						`export const mountWorkspace = (target, options) =>`,
-						`\tmountBoltWorkspace(target, {`,
-						`\t\t...options,`,
-						`\t\tloadWorkspace: async () => {`,
-						`\t\t\tconst [workspace, messages] = await Promise.all([`,
-						`\t\t\t\timport('$bolt/client'),`,
-						`\t\t\t\timport('$bolt/i18n-messages.js')`,
-						`\t\t\t]);`,
-						`\t\t\treturn {`,
-						`\t\t\t\ttitle,`,
-						`\t\t\t\tname: title,`,
-						`\t\t\t\tappLoaders: workspace.appLoaders,`,
-						`\t\t\t\tappGroups: workspace.appGroups,`,
-						`\t\t\t\tappMeta: workspace.appMeta,`,
-						`\t\t\t\trepresentationLoaders: workspace.representationLoaders,`,
-						`\t\t\t\tcustomTypeRendererLoaders: workspace.customTypeRendererLoaders,`,
-						`\t\t\t\tpolicyNames: workspace.policyNames,`,
-						`\t\t\t\tagentNames: workspace.agentNames,`,
-						`\t\t\t\ttenantMessages: messages.tenantMessages,`,
-						`\t\t\t\tclient: workspace.client,`,
-						`\t\t\t\tchangeAccessScope: workspace.changeAccessScope,`,
-						`\t\t\t\tstartLocalReplica: (accessScope) => workspace.startLocalReplica(workspace.runtime, undefined, { accessScope })`,
-						`\t\t\t};`,
-						`\t\t}`,
-						`\t});`,
-						``
-					].join('\n');
+					return `export { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startLocalReplica, switchWorkspaceAccessScope } from '@norbital-ai/bolt/client-runtime';`;
+				if (id === applicationId) {
+					return Effect.runPromise(
+						workspaceTitleOf(workspaceRoot).pipe(
+							Effect.map((title) =>
+								[
+									`import { mountWorkspace as mountBoltWorkspace } from '@norbital-ai/bolt/client/workspace';`,
+									`import { Effect } from 'effect';`,
+									`const title = ${JSON.stringify(title)};`,
+									``,
+									`/**`,
+									` * Mounts this workspace into an element the host owns.`,
+									` *`,
+									` * The only export, and the whole of what a host may do with an artifact's client. The`,
+									` * generated modules are imported *inside* the callback rather than at the top of this`,
+									` * file: importing the generated client builds the browser runtime, whose query cache is`,
+									` * namespaced by tenant and environment, and \`mountWorkspace\` declares the session`,
+									` * before it calls this. Statically importing them would build that cache from a session`,
+									` * that had not been declared yet.`,
+									` */`,
+									`export const mountWorkspace = (target, options) =>`,
+									`\tmountBoltWorkspace(target, {`,
+									`\t\t...options,`,
+									`\t\tloadWorkspace: () => Effect.runPromise(`,
+									`\t\t\tEffect.all({`,
+									`\t\t\t\tworkspace: Effect.promise(() => import('$bolt/client')),`,
+									`\t\t\t\tmessages: Effect.promise(() => import('$bolt/i18n-messages.js'))`,
+									`\t\t\t}, { concurrency: 'unbounded' }).pipe(`,
+									`\t\t\t\tEffect.map(({ workspace, messages }) => ({`,
+									`\t\t\t\ttitle,`,
+									`\t\t\t\tname: title,`,
+									`\t\t\t\tappLoaders: workspace.appLoaders,`,
+									`\t\t\t\tappGroups: workspace.appGroups,`,
+									`\t\t\t\tappMeta: workspace.appMeta,`,
+									`\t\t\t\trepresentationLoaders: workspace.representationLoaders,`,
+									`\t\t\t\tcustomTypeRendererLoaders: workspace.customTypeRendererLoaders,`,
+									`\t\t\t\tpolicyNames: workspace.policyNames,`,
+									`\t\t\t\tagentNames: workspace.agentNames,`,
+									`\t\t\t\ttenantMessages: messages.tenantMessages,`,
+									`\t\t\t\tclient: workspace.client,`,
+									`\t\t\t\tchangeAccessScope: workspace.changeAccessScope,`,
+									`\t\t\t\tstartLocalReplica: (accessScope) => workspace.startLocalReplica(workspace.runtime, undefined, { accessScope })`,
+									`\t\t\t\t}))`,
+									`\t\t\t)`,
+									`\t\t)`,
+									`\t});`,
+									``
+								].join('\n')
+							)
+						)
+					);
+				}
 				return null;
 			},
 			/**

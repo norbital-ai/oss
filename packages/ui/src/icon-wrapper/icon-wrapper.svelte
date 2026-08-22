@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { ProductIcon, productIconNameFromReference } from '#lib/product-icon';
-	import { resolveIcon } from './entity-icons';
+	import { resolveIcon } from '#lib/icon-wrapper/entity-icons';
 
 	let {
 		name,

@@ -19,8 +19,10 @@ export { makeHttpConnectorBinding } from './runtime/integrations/http-connector.
  * Exposed here rather than from the package root because a host runs under plain Node, and the root
  * export pulls the client's `.svelte` modules into the graph with it.
  */
-export { AUTH_MODELS, DEVELOPMENT_SIGN_IN_CODE } from './runtime/identity/auth.js';
+export { AUTH_MODELS } from './authoring/system-models.js';
+export { DEVELOPMENT_SIGN_IN_CODE } from './runtime/identity/auth.js';
 export { identitySchemaSteps } from './compiler/schema-plan.js';
+export { compileHostModelSchema } from './compiler/schema-migrations.js';
 /**
  * What a host needs to sign an invocation as `colony system`, exported rather than restated.
  *
@@ -37,9 +39,12 @@ export {
 	SIGNATURE_LIFETIME_MILLIS,
 	SYSTEM_SIGNATURE_HEADER,
 	SYSTEM_TIMESTAMP_HEADER,
-	systemSignature,
 	systemSignaturePayload
 } from './runtime/access/system-principal.js';
+
+/** Computes the host-side HMAC without pulling Node's crypto module into runtime/browser bundles. */
+export const systemSignature = (secret: string, payload: string): string =>
+	createHmac('sha256', secret).update(payload, 'utf8').digest('hex');
 export {
 	INTEGRATION_HTTP_OPERATION,
 	IntegrationHttpRequest,
@@ -62,3 +67,4 @@ export type BoltHostConfig = ColonyBoltHostConfig | SelfHostedBoltHostConfig;
 /** Identity helper so a workspace host file type-checks on write. */
 export const defineBoltHost = <const TConfig extends BoltHostConfig>(config: TConfig): TConfig =>
 	config;
+import { createHmac } from 'node:crypto';

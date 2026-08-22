@@ -1,8 +1,7 @@
-import { createHmac } from 'node:crypto';
-import { Config, Context, Effect, Option, Redacted } from 'effect';
-import { EffectId, FacilityCall, InvocationId } from '@norbital-ai/bolt-protocol';
-import type { ConfigResponse, FacilityBindings } from '@norbital-ai/bolt-protocol';
-import type { PolicyDeclaration } from '../../authoring/workspace-schema.js';
+import { Clock, Config, Context, Effect, Option, Redacted, Schema } from 'effect';
+import { ConfigResponse, EffectId, FacilityCall, InvocationId } from '@norbital-ai/bolt-protocol';
+import type { FacilityBindings } from '@norbital-ai/bolt-protocol';
+import type { PolicyDeclaration } from '#lib/authoring/workspace-schema.js';
 
 /**
  * The host's own authority inside a tenant, and why it is a policy rather than a bypass.
@@ -99,6 +98,15 @@ export const SYSTEM_TIMESTAMP_HEADER = 'x-colony-system-timestamp';
  */
 export const SIGNATURE_LIFETIME_MILLIS = 300_000;
 
+/** The four facts the host signs, in order. The schema owns the shape so signing and verifying cannot drift. */
+const SignaturePayload = Schema.Struct({
+	timestamp: Schema.Number,
+	command: Schema.NonEmptyString,
+	tenantId: Schema.NonEmptyString,
+	input: Schema.Unknown
+});
+type SignaturePayload = typeof SignaturePayload.Type;
+
 /**
  * The bytes the host signs, rendered identically on both sides.
  *
@@ -115,12 +123,7 @@ export const SIGNATURE_LIFETIME_MILLIS = 300_000;
  * which is the same property `/api/operations` gets by signing its raw request body, and the reason
  * a bearer token would not do.
  */
-export const systemSignaturePayload = (parameters: {
-	readonly timestamp: number;
-	readonly command: string;
-	readonly tenantId: string;
-	readonly input: unknown;
-}): string =>
+export const systemSignaturePayload = (parameters: SignaturePayload): string =>
 	[
 		String(parameters.timestamp),
 		parameters.command,
@@ -136,11 +139,11 @@ export const systemSignaturePayload = (parameters: {
  * bolt-server. Sorting the keys is what makes those two the same string. Anything that is not JSON
  * renders as `null`, which can only ever fail a comparison rather than pass one.
  */
-export const canonicalJson = (value: unknown): string => {
+const canonicalJson = (value: unknown): string => {
 	if (value === null || value === undefined) return 'null';
 	if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(',')}]`;
 	if (typeof value === 'object') {
-		const entries = Object.entries(value as Record<string, unknown>)
+		const entries = Object.entries(value)
 			.filter(([, entry]) => entry !== undefined)
 			.toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
 			.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`);
@@ -150,10 +153,6 @@ export const canonicalJson = (value: unknown): string => {
 	if (typeof value === 'number') return Number.isFinite(value) ? JSON.stringify(value) : 'null';
 	return 'null';
 };
-
-/** The digest a host computes over `systemSignaturePayload`, and the one this module recomputes. */
-export const systemSignature = (secret: string, payload: string): string =>
-	createHmac('sha256', secret).update(payload, 'utf8').digest('hex');
 
 /** Reads one header case-insensitively out of the protocol's multi-value shape. */
 const headerValue = (
@@ -219,24 +218,31 @@ export const hostConfigFromFacility = (
 	bindings: NonNullable<FacilityBindings['config']>
 ): HostConfigShape => ({
 	read: (key) =>
-		Effect.tryPromise(() =>
-			bindings.call(
-				FacilityCall.make({
-					invocationId: InvocationId.make(`config:${key}`),
-					effectId: EffectId.make(`config:${key}`),
-					deadlineEpochMs: Date.now() + 30_000,
-					idempotencyKey: `config:${key}`
-				}),
-				{ key },
-				new AbortController().signal
-			)
-		).pipe(
+		Effect.gen(function* () {
+			const deadlineEpochMs = (yield* Clock.currentTimeMillis) + 30_000;
+			return yield* Effect.tryPromise(() =>
+				bindings.call(
+					FacilityCall.make({
+						invocationId: InvocationId.make(`config:${key}`),
+						effectId: EffectId.make(`config:${key}`),
+						deadlineEpochMs,
+						idempotencyKey: `config:${key}`
+					}),
+					{ key },
+					new AbortController().signal
+				)
+			);
+		}).pipe(
 			Effect.mapError((cause) => `config facility failed: ${String(cause)}`),
 			Effect.flatMap((result) => {
 				if (result._tag !== 'Success') {
 					return Effect.fail(`config facility refused ${key}: ${result.error.message}`);
 				}
-				const response = result.value as ConfigResponse;
+				const decoded = Schema.decodeUnknownExit(ConfigResponse)(result.value);
+				if (decoded._tag === 'Failure') {
+					return Effect.fail(`config facility answered an unreadable response for ${key}`);
+				}
+				const response = decoded.value;
 				return Effect.succeed(
 					response.value === undefined || response.value.length === 0
 						? Option.none()
@@ -261,50 +267,52 @@ export const hostConfigFromFacility = (
  * own verifier uses `timingSafeEqual`: a byte-dependent shortcut leaks the expected digest one
  * measurement at a time, which is precisely what an HMAC exists to prevent.
  */
-export const verifySystemSignature = Effect.fn('Bolt.verifySystemSignature')(
-	function* (parameters: {
-		readonly headers: Readonly<Record<string, ReadonlyArray<string>>>;
-		readonly command: string;
-		readonly tenantId: string;
-		readonly input: unknown;
-		readonly now: number;
-	}) {
-		const provided = headerValue(parameters.headers, SYSTEM_SIGNATURE_HEADER);
-		const stamped = headerValue(parameters.headers, SYSTEM_TIMESTAMP_HEADER);
-		if (provided === undefined || stamped === undefined) return false;
-		const timestamp = Number(stamped);
-		if (!Number.isSafeInteger(timestamp)) return false;
-		if (Math.abs(parameters.now - timestamp) > SIGNATURE_LIFETIME_MILLIS) return false;
-		// A configuration *source* failure collapses to "no secret", which is the fail-closed direction:
-		// not being able to tell whether a secret exists means there is nothing to verify against, and an
-		// unverified request is an unsigned one.
-		//
-		// The secret is read through the invocation's `HostConfig` — the value the host supplied for this
-		// invocation, which is the only way a sandboxed runtime with no `process` can hold one. A bundle
-		// running in a plain process gets the process-env implementation; a caller that provided neither
-		// falls back to the ambient environment for the same reason.
-		const hostConfig = Option.getOrElse(yield* Effect.serviceOption(HostConfig), () =>
-			hostConfigFromProcessEnv()
-		);
-		const secret = yield* hostConfig
-			.read(GATEWAY_SECRET_VARIABLE)
-			.pipe(Effect.catch(() => Effect.succeed(Option.none<Redacted.Redacted<string>>())));
-		if (Option.isNone(secret)) return false;
-		const expected = yield* Effect.promise(() =>
-			hmacHex(
-				Redacted.value(secret.value),
-				systemSignaturePayload({
-					timestamp,
-					command: parameters.command,
-					tenantId: parameters.tenantId,
-					input: parameters.input
-				})
-			)
-		);
-		const actual = provided.replace(/^sha256=/, '');
-		return constantTimeEqual(expected, actual);
-	}
-);
+/** What the runtime verifies: the signed facts, plus the transport facts it checks them against. */
+const VerifySignatureInput = Schema.Struct({
+	headers: Schema.Record(Schema.String, Schema.Array(Schema.String)),
+	command: Schema.NonEmptyString,
+	tenantId: Schema.NonEmptyString,
+	input: Schema.Unknown,
+	now: Schema.Number
+});
+type VerifySignatureInput = typeof VerifySignatureInput.Type;
+
+export const verifySystemSignature = Effect.fn('Bolt.verifySystemSignature')(function* (
+	parameters: VerifySignatureInput
+) {
+	const provided = headerValue(parameters.headers, SYSTEM_SIGNATURE_HEADER);
+	const stamped = headerValue(parameters.headers, SYSTEM_TIMESTAMP_HEADER);
+	if (provided === undefined || stamped === undefined) return false;
+	const timestamp = Number(stamped);
+	if (!Number.isSafeInteger(timestamp)) return false;
+	if (Math.abs(parameters.now - timestamp) > SIGNATURE_LIFETIME_MILLIS) return false;
+	// A configuration *source* failure collapses to "no secret", which is the fail-closed direction:
+	// not being able to tell whether a secret exists means there is nothing to verify against, and an
+	// unverified request is an unsigned one.
+	//
+	// The secret is read through the invocation's `HostConfig` — the value the host supplied for this
+	// invocation, which is the only way a sandboxed runtime with no `process` can hold one. A bundle
+	// running in a plain process gets the process-env implementation; a caller that provided neither
+	// falls back to the ambient environment for the same reason.
+	const hostConfig = Option.getOrElse(yield* Effect.serviceOption(HostConfig), () =>
+		hostConfigFromProcessEnv()
+	);
+	const secret = yield* hostConfig
+		.read(GATEWAY_SECRET_VARIABLE)
+		.pipe(Effect.catch(() => Effect.succeed(Option.none<Redacted.Redacted<string>>())));
+	if (Option.isNone(secret)) return false;
+	const expected = yield* hmacHex(
+		Redacted.value(secret.value),
+		systemSignaturePayload({
+			timestamp,
+			command: parameters.command,
+			tenantId: parameters.tenantId,
+			input: parameters.input
+		})
+	);
+	const actual = provided.replace(/^sha256=/, '');
+	return constantTimeEqual(expected, actual);
+});
 
 /**
  * An HMAC-SHA256 digest as lowercase hex, through WebCrypto.
@@ -313,17 +321,23 @@ export const verifySystemSignature = Effect.fn('Bolt.verifySystemSignature')(
  * boundary can actually reach — the runtime's bundle cannot touch `node:crypto`, and the sandbox
  * context deliberately hands it WebCrypto rather than Node's modules.
  */
-const hmacHex = async (secret: string, payload: string): Promise<string> => {
-	const material = await crypto.subtle.importKey(
-		'raw',
-		new TextEncoder().encode(secret),
-		{ name: 'HMAC', hash: 'SHA-256' },
-		false,
-		['sign']
+const hmacHex = (secret: string, payload: string): Effect.Effect<string> =>
+	Effect.promise(() =>
+		crypto.subtle.importKey(
+			'raw',
+			new TextEncoder().encode(secret),
+			{ name: 'HMAC', hash: 'SHA-256' },
+			false,
+			['sign']
+		)
+	).pipe(
+		Effect.flatMap((material) =>
+			Effect.promise(() => crypto.subtle.sign('HMAC', material, new TextEncoder().encode(payload)))
+		),
+		Effect.map((digest) =>
+			[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+		)
 	);
-	const digest = await crypto.subtle.sign('HMAC', material, new TextEncoder().encode(payload));
-	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-};
 
 /**
  * Whether two equal-length strings are equal, without a byte-dependent early exit.
@@ -375,5 +389,3 @@ export const systemSubject = (tenantId: string): SystemSubject =>
 		// empty is what says the two routes to authority are genuinely separate.
 		policies: []
 	});
-
-export * as SystemPrincipal from './system-principal.js';

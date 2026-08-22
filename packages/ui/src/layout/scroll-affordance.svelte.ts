@@ -55,10 +55,6 @@ export function scrollAffordance(options?: { fade?: boolean }) {
 			}
 		};
 
-		const onScroll = () => {
-			syncOverflow();
-		};
-
 		// Content arriving or the pane resizing changes what overflows without any scroll
 		// event at all — a filtered list that drops below the fold is the common case.
 		const observer = new ResizeObserver(syncOverflow);
@@ -71,13 +67,13 @@ export function scrollAffordance(options?: { fade?: boolean }) {
 		});
 		mutations.observe(node, { childList: true, subtree: true, characterData: true });
 
-		node.addEventListener('scroll', onScroll, { passive: true });
+		node.addEventListener('scroll', syncOverflow, { passive: true });
 		syncOverflow();
 
 		return () => {
 			observer.disconnect();
 			mutations.disconnect();
-			node.removeEventListener('scroll', onScroll);
+			node.removeEventListener('scroll', syncOverflow);
 		};
 	};
 }

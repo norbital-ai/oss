@@ -38,82 +38,71 @@
  * host shared one bucket and the whole deployment got twenty sign-in codes an hour between them.
  */
 
-/** How a bucket is keyed, which decides who shares a limit with whom. */
-export type RateLimitKey =
-	/**
-	 * The address the request names — the email an OTP would go to.
-	 *
-	 * The only usable key for anonymous traffic, and the correct one: what is being protected is the
-	 * cost of sending to *that address*, and a stranger who can vary the address is not spending
-	 * anything on the person they are naming.
-	 */
-	| 'address'
-	/**
-	 * The authenticated person — and, for an envoy, the envoy itself.
-	 *
-	 * An envoy is one subject, so its senders share one bucket by construction. That is what the
-	 * envoy declaration's `totalPerMinute` used to say, in a second place, in its own vocabulary.
-	 */
-	| 'subject'
-	/**
-	 * One outside sender on an inbound envoy message, by the transport's own address for them.
-	 *
-	 * The other half of what an envoy used to declare: `perSenderPerMinute`. It is meaningless for a
-	 * human holder of the same policy, in exactly the way `address` is meaningless after sign-in, and
-	 * like `address` it simply never matches rather than needing a rule about it.
-	 */
-	| 'sender'
-	/** Everyone in this workspace together, for a resource the workspace as a whole pays for. */
-	| 'tenant';
+import { Schema } from 'effect';
 
-export interface RateLimitRule {
+/**
+ * How a bucket is keyed, which decides who shares a limit with whom.
+ *
+ * - `address` — the address the request names (the email an OTP would go to): the only usable key
+ *   for anonymous traffic, and the correct one, because what is protected is the cost of sending to
+ *   *that address* — a stranger who can vary the address spends nothing on the person named.
+ * - `subject` — the authenticated person, and for an envoy, the envoy itself: one subject, so its
+ *   senders share one bucket by construction (what `totalPerMinute` used to say, twice).
+ * - `sender` — one outside sender on an inbound envoy message, by the transport's address for them;
+ *   the other half of what an envoy used to declare (`perSenderPerMinute`), meaningless for a human
+ *   holder in the way `address` is meaningless after sign-in, and like `address` it simply never
+ *   matches rather than needing a rule about it.
+ * - `tenant` — everyone in this workspace together, for a resource the workspace as a whole pays for.
+ */
+const RateLimitKeySchema = Schema.Literals(['address', 'subject', 'sender', 'tenant']);
+
+export type RateLimitKey = Schema.Schema.Type<typeof RateLimitKeySchema>;
+
+/**
+ * One rate ceiling and the identity that shares its bucket.
+ *
+ * Policy declarations may omit `key` because `subject` is their only sensible default; resolved
+ * rules and anonymous declarations require it so runtime code never has to reinterpret absence.
+ */
+export type RateLimitRule<
+	Key extends RateLimitKey = RateLimitKey,
+	OptionalKey extends boolean = false
+> = Readonly<{
 	/** How long a bucket lasts: `'1 hour'`, `'15 min'`, `'30 s'`. */
 	readonly window: string;
 	/** How many admissions per window. */
 	readonly limit: number;
-	readonly key: RateLimitKey;
-}
+}> &
+	(OptionalKey extends true ? { readonly key?: Key } : { readonly key: Key });
 
 /**
- * A policy's own rate rules, resolved: the optional `key` filled in.
+ * One command pattern may apply one rule or several differently keyed rules.
  *
- * A rule declared on a policy may omit `key`, because `subject` is the only sensible default for a
- * rule declared on the thing that has a holder. `describePolicy` fills it, so nothing downstream has
- * to decide what an absent key meant.
+ * Several are real, not syntactic flexibility: `envoys.receive` needs both a per-sender ceiling and
+ * a ceiling for the envoy as a whole. Every rule at the winning pattern applies, because being under
+ * one of two ceilings is not admission.
  */
-type AuthoredRule = {
-	readonly window: string;
-	readonly limit: number;
-	readonly key?: RateLimitKey;
-};
+export type RateLimitRules<Rule = RateLimitRule> = Rule | ReadonlyArray<Rule>;
+
+const isRuleList = <Rule>(declared: RateLimitRules<Rule>): declared is ReadonlyArray<Rule> =>
+	Array.isArray(declared);
+
+const rulesOf = <Rule>(declared: RateLimitRules<Rule>): ReadonlyArray<Rule> =>
+	isRuleList(declared) ? declared : [declared];
+
 export const resolvePolicyLimits = (
-	limits: Readonly<Record<string, AuthoredRule | ReadonlyArray<AuthoredRule>>> | undefined
+	limits: Readonly<Record<string, RateLimitRules<RateLimitRule<RateLimitKey, true>>>> | undefined
 ): Readonly<Record<string, ReadonlyArray<RateLimitRule>>> =>
 	Object.fromEntries(
 		Object.entries(limits ?? {}).map(([pattern, declared]) => [
 			pattern,
-			(Array.isArray(declared) ? declared : [declared as AuthoredRule]).map((rule) => ({
+			rulesOf(declared).map((rule) => ({
 				window: rule.window,
 				limit: rule.limit,
 				key: rule.key ?? 'subject'
 			}))
 		])
 	);
-
-/**
- * What one command pattern admits: a rule, or several keyed differently.
- *
- * Several, because one command can genuinely need two buckets. `envoys.receive` is the case that
- * forced it: a public envoy wants a per-sender cap *and* a cap on the surface as a whole, and those
- * are the same command counted against two different keys. A map of pattern → single rule could hold
- * one of them, and the other would have to be said somewhere else — which is exactly the second
- * spelling this whole layer exists to remove.
- *
- * Every rule at the winning pattern is applied, so a caller must be inside all of them. That is the
- * only composition that means anything for a ceiling: passing one bucket and failing another is not
- * admission.
- */
-export type RateLimitRules = RateLimitRule | ReadonlyArray<RateLimitRule>;
 
 export interface RateLimitSpec {
 	/**
@@ -169,7 +158,7 @@ const PATTERN = /^[a-z][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)*(\.\*)?$/;
 /** Every rule in one map, validated the same way whoever declared it. */
 const validateRules = (rules: Readonly<Record<string, RateLimitRules>>, where: string): void => {
 	for (const [pattern, declared] of Object.entries(rules)) {
-		for (const rule of Array.isArray(declared) ? declared : [declared as RateLimitRule]) {
+		for (const rule of Array.isArray(declared) ? declared : [declared]) {
 			if (!PATTERN.test(pattern)) {
 				throw new TypeError(
 					`${where} declares "${pattern}", which is not a command pattern. Use a command name such as "identity.sendCode", or a prefix wildcard such as "collections.*".`
@@ -190,9 +179,6 @@ const validateRules = (rules: Readonly<Record<string, RateLimitRules>>, where: s
 };
 
 /** Every rule at one pattern, whether it was declared as one or as several. */
-const rulesOf = (declared: RateLimitRules): ReadonlyArray<RateLimitRule> =>
-	Array.isArray(declared) ? declared : [declared as RateLimitRule];
-
 /**
  * Declares the limits that apply before there is a subject to hang one on.
  *

@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { safeParse } from '@norbital-ai/std/json';
 
 const localProtocol = /^(?:workspace|catalog|file|link|portal):/;
 const sha512Pattern = /^sha512-[A-Za-z0-9+/]{86}==$/;
@@ -9,42 +10,59 @@ function fail(message) {
 	throw new Error(message);
 }
 
+function parseJsonFragment(text, label) {
+	const parsed = safeParse(text);
+	if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		fail(`${label} is not a JSON object.`);
+	}
+	return parsed;
+}
+
+const reportCandidateFilename = (output, start) => {
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let index = start; index < output.length; index += 1) {
+		const character = output[index];
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+			} else if (character === '\\') {
+				escaped = true;
+			} else if (character === '"') {
+				inString = false;
+			}
+			continue;
+		}
+		if (character === '"') {
+			inString = true;
+			continue;
+		}
+		if (character === '{' || character === '[') {
+			depth += 1;
+			continue;
+		}
+		if (character !== '}' && character !== ']') continue;
+		depth -= 1;
+		if (depth !== 0) continue;
+		try {
+			const result = safeParse(output.slice(start, index + 1));
+			const filename = Array.isArray(result) ? result[0]?.filename : result.filename;
+			return filename ?? undefined;
+		} catch {
+			// Lifecycle scripts may write JSON-like output before the pack report.
+			return undefined;
+		}
+	}
+	return undefined;
+};
+
 export function packedArchiveFilename(output, label = 'package pack') {
 	const candidatePattern = /^[\t ]*[\[{]/gm;
 	for (const candidate of output.matchAll(candidatePattern)) {
 		const start = candidate.index + candidate[0].search(/[\[{]/);
-		let depth = 0;
-		let inString = false;
-		let escaped = false;
-		for (let index = start; index < output.length; index += 1) {
-			const character = output[index];
-			if (inString) {
-				if (escaped) {
-					escaped = false;
-				} else if (character === '\\') {
-					escaped = true;
-				} else if (character === '"') {
-					inString = false;
-				}
-				continue;
-			}
-			if (character === '"') {
-				inString = true;
-			} else if (character === '{' || character === '[') {
-				depth += 1;
-			} else if (character === '}' || character === ']') {
-				depth -= 1;
-				if (depth !== 0) continue;
-				try {
-					const result = JSON.parse(output.slice(start, index + 1));
-					const filename = Array.isArray(result) ? result[0]?.filename : result.filename;
-					if (filename) return filename;
-				} catch {
-					// Lifecycle scripts may write JSON-like output before the pack report.
-				}
-				break;
-			}
-		}
+		const filename = reportCandidateFilename(output, start);
+		if (filename) return filename;
 	}
 	fail(`${label} did not report an archive filename.`);
 }
@@ -62,7 +80,7 @@ export function assertSha512Integrity(bytes, integrity, label = 'package archive
 	}
 }
 
-export function validatePublishedManifest(manifest, directory, expected = {}) {
+function validatePublishedManifest(manifest, directory, expected = {}) {
 	if (manifest.private) fail(`${manifest.name} is marked private.`);
 	if (manifest.name !== (expected.name ?? `@norbital-ai/${directory}`)) {
 		fail(`${directory} has unexpected package name ${manifest.name}.`);
@@ -117,7 +135,7 @@ export function inspectPackageArchive(
 	if (packagedLicense !== repositoryLicense) {
 		fail(`${directory} does not publish the repository license.`);
 	}
-	const manifest = JSON.parse(manifestText);
+	const manifest = parseJsonFragment(manifestText, `${directory} packed package manifest`);
 	validatePublishedManifest(manifest, directory, {
 		name: expectedName,
 		version: expectedVersion

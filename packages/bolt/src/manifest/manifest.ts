@@ -37,8 +37,8 @@ export const buildManifest = (
 		// The workspace's tools and skills, which used to be hashed as a property of the one
 		// synthesized agent. They are the workspace's — a policy decides who reaches them — so they are
 		// hashed as the workspace's.
-		tools: workspace.tools.map(({ name }) => name),
-		skills: [...workspace.skills],
+		tools: workspace.tools,
+		skills: workspace.skills,
 		prompt: workspace.prompt,
 		automations: workspace.automations,
 		envoys: workspace.envoys,

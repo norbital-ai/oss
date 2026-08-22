@@ -59,7 +59,7 @@ const harness = (answers: ReadonlyArray<Answer>) => {
 		// never reach this. A stub that quietly succeeded would hide the loop starting to call it.
 		resolve: () => Effect.fail({ message: 'this binding declares no resolve' }),
 		sleep: () => Effect.succeed(undefined),
-		now: () => 0
+		now: Effect.succeed(0)
 	};
 	return { dependencies, urls, written };
 };

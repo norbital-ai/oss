@@ -9,23 +9,29 @@
  */
 
 import { safeParse } from '@norbital-ai/std';
-import { Schema } from 'effect';
-import { scopedStorageKey } from '../../storage-scope/index.js';
+import { Cause, Effect, Schema } from 'effect';
+import { scopedStorageKey } from '#lib/storage-scope';
 import type { FormSchema } from '../form_state.svelte';
 
 /**
- * Draft data structure stored in localStorage
+ * The localStorage envelope a draft is persisted in. The inner `data` stays schemaless because it
+ * is arbitrary form state that cannot be runtime-validated here — the envelope is the boundary.
  */
-export interface DraftData<T = Record<string, unknown>> {
+const draftDataSchema = Schema.Struct({
+	data: Schema.Unknown,
+	lastModified: Schema.Finite,
+	schemaHash: Schema.String
+});
+
+/** Draft data structure stored in localStorage */
+type DraftData<T = Record<string, unknown>> = Omit<typeof draftDataSchema.Type, 'data'> & {
 	data: T;
-	lastModified: number;
-	schemaHash: string;
-}
+};
 
 /**
  * Configuration for creating a DraftStorage instance
  */
-export interface DraftStorageConfig {
+interface DraftStorageConfig {
 	keyParts: string[];
 	schema: FormSchema;
 	discriminator?: string;
@@ -34,18 +40,7 @@ export interface DraftStorageConfig {
 
 const DRAFT_PREFIX = 'draft_';
 
-/**
- * `Finite`, not `Number`: Effect's `Schema.Number` admits `NaN` and `Infinity` where the zod schema
- * this replaced did not, and `lastModified` is compared against a staleness window — a `NaN` there
- * makes every comparison false, so a draft would neither be used nor evicted.
- */
-const decodeDraftEnvelope = Schema.decodeUnknownResult(
-	Schema.Struct({
-		data: Schema.Unknown,
-		lastModified: Schema.Finite,
-		schemaHash: Schema.String
-	})
-);
+const decodeDraftEnvelope = Schema.decodeUnknownResult(draftDataSchema);
 
 /**
  * Validate the localStorage envelope (without trusting the inner `data`,
@@ -57,15 +52,16 @@ function parseDraftEnvelope(stored: string): DraftData<unknown> | null {
 	return result._tag === 'Success' ? result.success : null;
 }
 
-async function generateHash(str: string): Promise<string> {
-	const data = new TextEncoder().encode(str);
-	const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-	return Array.from(new Uint8Array(hashBuffer))
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('');
-}
+const generateHash = (str: string): Effect.Effect<string, Cause.UnknownError> =>
+	Effect.tryPromise(() => crypto.subtle.digest('SHA-256', new TextEncoder().encode(str))).pipe(
+		Effect.map((hashBuffer) =>
+			Array.from(new Uint8Array(hashBuffer))
+				.map((b) => b.toString(16).padStart(2, '0'))
+				.join('')
+		)
+	);
 
-async function hashSchema(schema: FormSchema): Promise<string> {
+const hashSchema = (schema: FormSchema): Effect.Effect<string, Cause.UnknownError> => {
 	const jsonSchema = schema['~standard'] as Record<string, unknown> & {
 		jsonSchema?: {
 			input: (options: { readonly target: string }) => Record<string, unknown>;
@@ -73,7 +69,7 @@ async function hashSchema(schema: FormSchema): Promise<string> {
 	};
 	const str = JSON.stringify(jsonSchema.jsonSchema?.input({ target: 'draft-2020-12' }) ?? {});
 	return generateHash(str);
-}
+};
 
 export class DraftStorage<T = Record<string, unknown>> {
 	readonly key: string;
@@ -96,14 +92,18 @@ export class DraftStorage<T = Record<string, unknown>> {
 		this.key = scopedStorageKey(DRAFT_PREFIX + keyParts.filter(Boolean).join('_'));
 		this.onSchemaMismatch = onSchemaMismatch;
 
-		hashSchema(schema)
-			.then((hash) => {
-				this.schemaHash = hash;
-				this.init();
+		const hashEffect = hashSchema(schema).pipe(
+			Effect.match({
+				onSuccess: (hash) => {
+					this.schemaHash = hash;
+					this.init();
+				},
+				onFailure: () => {
+					this.init();
+				}
 			})
-			.catch(() => {
-				this.init();
-			});
+		);
+		void Effect.runPromise(hashEffect);
 	}
 
 	private init(): void {
@@ -127,34 +127,44 @@ export class DraftStorage<T = Record<string, unknown>> {
 		if (typeof window === 'undefined') return;
 		if (!this.schemaHash) return;
 
-		try {
-			const stored = localStorage.getItem(this.key);
-			if (!stored) {
-				this.exists = false;
-				this.hadSchemaMismatch = false;
-				return;
-			}
-
-			const parsed = parseDraftEnvelope(stored);
-			if (!parsed) {
-				this.exists = false;
-				return;
-			}
-			const schemaMatches = parsed.schemaHash === this.schemaHash;
-
-			if (!schemaMatches) {
-				this.hadSchemaMismatch = true;
-				if (this.onSchemaMismatch === 'evict') {
-					console.warn(`[DraftStorage] Evicting stale draft (schema changed): ${this.key}`);
-					this.clear();
+		Effect.runSync(
+			Effect.try(() => {
+				const stored = localStorage.getItem(this.key);
+				if (!stored) {
+					this.exists = false;
+					this.hadSchemaMismatch = false;
 					return;
 				}
-			}
 
-			this.exists = true;
-		} catch {
-			this.exists = false;
-		}
+				const parsed = parseDraftEnvelope(stored);
+				if (!parsed) {
+					this.exists = false;
+					return;
+				}
+				const schemaMatches = parsed.schemaHash === this.schemaHash;
+
+				if (!schemaMatches) {
+					this.hadSchemaMismatch = true;
+					if (this.onSchemaMismatch === 'evict') {
+						// Eviction is a structured log, not a console side channel: the storage
+						// failure it reports belongs to the draft lifecycle, not to the browser.
+						Effect.runSync(
+							Effect.logWarning(`[DraftStorage] Evicting stale draft (schema changed): ${this.key}`)
+						);
+						this.clear();
+						return;
+					}
+				}
+
+				this.exists = true;
+			}).pipe(
+				Effect.catch(() =>
+					Effect.sync(() => {
+						this.exists = false;
+					})
+				)
+			)
+		);
 	}
 
 	save(data: T): void {
@@ -167,70 +177,86 @@ export class DraftStorage<T = Record<string, unknown>> {
 			schemaHash: this.schemaHash
 		};
 
-		try {
-			localStorage.setItem(this.key, JSON.stringify(draftData));
-			this.exists = true;
-			this.hadSchemaMismatch = false;
-		} catch (error) {
-			console.warn('[DraftStorage] Failed to save draft:', error);
-		}
+		Effect.runSync(
+			Effect.try(() => {
+				localStorage.setItem(this.key, JSON.stringify(draftData));
+				this.exists = true;
+				this.hadSchemaMismatch = false;
+			}).pipe(
+				Effect.catch((error) => Effect.logWarning('[DraftStorage] Failed to save draft:', error))
+			)
+		);
 	}
 
 	load(): T | null {
 		if (typeof window === 'undefined') return null;
 		if (!this.schemaHash) return null;
 
-		try {
-			const stored = localStorage.getItem(this.key);
-			if (!stored) return null;
+		return Effect.runSync(
+			Effect.try(() => {
+				const stored = localStorage.getItem(this.key);
+				if (!stored) return null;
 
-			const parsed = parseDraftEnvelope(stored);
-			if (!parsed) return null;
+				const parsed = parseDraftEnvelope(stored);
+				if (!parsed) return null;
 
-			if (parsed.schemaHash !== this.schemaHash) {
-				this.hadSchemaMismatch = true;
-				if (this.onSchemaMismatch === 'evict') {
-					this.clear();
-					return null;
+				if (parsed.schemaHash !== this.schemaHash) {
+					this.hadSchemaMismatch = true;
+					if (this.onSchemaMismatch === 'evict') {
+						this.clear();
+						return null;
+					}
 				}
-			}
 
-			return parsed.data as T;
-		} catch (error) {
-			console.warn('[DraftStorage] Failed to load draft:', error);
-			return null;
-		}
+				return parsed.data as T;
+			}).pipe(
+				Effect.match({
+					onFailure: (error) => {
+						Effect.runSync(Effect.logWarning('[DraftStorage] Failed to load draft:', error));
+						return null;
+					},
+					onSuccess: (draft) => draft
+				})
+			)
+		);
 	}
 
 	getMetadata(): { lastModified: number; schemaMatch: boolean } | null {
 		if (typeof window === 'undefined') return null;
 		if (!this.schemaHash) return null;
 
-		try {
-			const stored = localStorage.getItem(this.key);
-			if (!stored) return null;
+		return Effect.runSync(
+			Effect.try(() => {
+				const stored = localStorage.getItem(this.key);
+				if (!stored) return null;
 
-			const parsed = parseDraftEnvelope(stored);
-			if (!parsed) return null;
-			return {
-				lastModified: parsed.lastModified,
-				schemaMatch: parsed.schemaHash === this.schemaHash
-			};
-		} catch {
-			return null;
-		}
+				const parsed = parseDraftEnvelope(stored);
+				if (!parsed) return null;
+				return {
+					lastModified: parsed.lastModified,
+					schemaMatch: parsed.schemaHash === this.schemaHash
+				};
+			}).pipe(
+				Effect.match({
+					onFailure: () => null,
+					onSuccess: (metadata) => metadata
+				})
+			)
+		);
 	}
 
 	clear(): void {
 		if (typeof window === 'undefined') return;
 
-		try {
-			localStorage.removeItem(this.key);
-			this.exists = false;
-			this.hadSchemaMismatch = false;
-		} catch (error) {
-			console.warn('[DraftStorage] Failed to clear draft:', error);
-		}
+		Effect.runSync(
+			Effect.try(() => {
+				localStorage.removeItem(this.key);
+				this.exists = false;
+				this.hadSchemaMismatch = false;
+			}).pipe(
+				Effect.catch((error) => Effect.logWarning('[DraftStorage] Failed to clear draft:', error))
+			)
+		);
 	}
 
 	destroy(): void {

@@ -21,16 +21,21 @@ import { cloneDeep } from 'es-toolkit/object';
 import get from 'es-toolkit/compat/get';
 import merge from 'es-toolkit/compat/merge';
 import set from 'es-toolkit/compat/set';
+import { Cause, Effect, Predicate } from 'effect';
 import type { JsonPatchOperation } from '@norbital-ai/std/json';
 import type { MessageVars } from '@norbital-ai/std/i18n';
 import { toast } from 'svelte-sonner';
-import type { Get } from './path';
+import type { Get } from '#lib/form/path';
 import {
 	fieldAndFormErrorsFromStandardIssues,
 	type StandardSchemaIssue
-} from './standard_schema_form_errors';
-import { SubmissionHandledExternallyError } from './submission_handled_externally_error';
-import { compareWithIdentity, getChangesForPath, hasChangesForPath } from './utilities/diff_engine';
+} from '#lib/form/standard_schema_form_errors';
+import { SubmissionHandledExternallyError } from '#lib/form/submission_handled_externally_error';
+import {
+	compareWithIdentity,
+	getChangesForPath,
+	hasChangesForPath
+} from '#lib/form/utilities/diff_engine';
 import {
 	DraftStorage,
 	type DraftStorage as DraftStorageType
@@ -59,14 +64,15 @@ export type InferSchema<S extends FormSchema> = S extends {
 	? T
 	: object;
 
-function unwrapStandardSchemaSuccess<Schema extends FormSchema>(
-	result: unknown
-): InferSchema<Schema> {
-	if (result !== null && typeof result === 'object' && 'value' in result) {
-		return (result as { readonly value: InferSchema<Schema> }).value;
-	}
-	return result as InferSchema<Schema>;
-}
+/**
+ * The two shapes a `~standard.validate` answer takes: the issued failures, or the validated value.
+ *
+ * Narrowing happens once here, at the boundary where the adapter's `unknown` result enters the
+ * state class — everything below this line works with the discriminated shape, not with
+ * `Reflect.get` probes of a widened value.
+ */
+type StandardSchemaValidationResult =
+	{ readonly issues: readonly StandardSchemaIssue[] } | { readonly value: unknown };
 
 /**
  * Plain submit handler (sync or async). Framework-specific remote callables that
@@ -74,7 +80,7 @@ function unwrapStandardSchemaSuccess<Schema extends FormSchema>(
  */
 export type FormSubmitFn<Schema extends FormSchema, TReturn> = (
 	data: InferSchema<Schema>
-) => TReturn | Promise<TReturn>;
+) => Effect.Effect<TReturn, unknown>;
 
 type RemoteFnGetter<Schema extends FormSchema, TReturn> = () => FormSubmitFn<
 	Schema,
@@ -115,7 +121,7 @@ export type FormStateConfig<Schema extends FormSchema, TReturn> = {
 	remoteFn?: RemoteFnGetter<Schema, TReturn>;
 
 	/** Called after successful submission */
-	onSuccess?: (result: Awaited<TReturn> | null) => Promise<void> | void;
+	onSuccess?: (result: TReturn | null) => Effect.Effect<void, unknown> | void;
 
 	/**
 	 * Post-submit behavior after a successful submission.
@@ -227,10 +233,23 @@ function resolve<T>(v: MaybeGetter<T>): T {
 	return v as T;
 }
 
+/** Run a possibly-synchronous callback and await its result through Effect. */
+export function maybeAsync<A>(
+	evaluate: () => A
+): Effect.Effect<Awaited<A>, Cause.UnknownError> {
+	return Effect.try(() => evaluate()).pipe(
+		Effect.flatMap((value) =>
+			Predicate.isPromise(value)
+				? Effect.tryPromise(() => value)
+				: Effect.succeed(value)
+		)
+	) as Effect.Effect<Awaited<A>, Cause.UnknownError>;
+}
+
 type SubmissionState<TReturn> =
 	| { status: 'idle' }
 	| { status: 'submitting' }
-	| { status: 'success'; result: Awaited<TReturn> }
+	| { status: 'success'; result: TReturn }
 	| { status: 'error'; message: string };
 
 export class FormState<Schema extends FormSchema, TReturn = unknown> {
@@ -288,7 +307,7 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 	isSubmitting: boolean = $derived(this.submissionState.status === 'submitting');
 
 	/** Result from last successful submission */
-	lastResult: Awaited<TReturn> | undefined = $derived(
+	lastResult: TReturn | undefined = $derived(
 		this.submissionState.status === 'success' ? this.submissionState.result : undefined
 	);
 
@@ -332,7 +351,7 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 	private readonly _transformConfig?: MaybeGetter<
 		(data: InferSchema<Schema>) => InferSchema<Schema>
 	>;
-	private readonly onSuccess?: (result: Awaited<TReturn> | null) => Promise<void> | void;
+	private readonly onSuccess?: (result: TReturn | null) => Effect.Effect<void, unknown> | void;
 	private readonly description: MaybeGetter<string>;
 	private draftStorage: DraftStorageType<InferSchema<Schema>> | null = null;
 	private debouncedSaveDraft: (() => void) | null = null;
@@ -353,18 +372,25 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 	/**
 	 * Delta (Δ): RFC 6902 JSON Patch operations from baseline to working copy.
 	 * Represents the "distance traveled" from S (or D) to W.
-	 * Uses identity-aware comparison for arrays with 'id' or 'norbital_id' keys.
+	 * Uses identity-aware comparison for arrays with 'id' or 'id' keys.
 	 */
 	delta = $derived.by(() => {
-		try {
+		const snapshotEffect = Effect.try(() => {
 			const b = $state.snapshot(this.baseline);
 			const w = $state.snapshot(this._workingCopy);
-			const d = compareWithIdentity(b, w);
-			return d;
-		} catch (error) {
-			console.error('[FormState] Error calculating delta:', error);
-			return [] as JsonPatchOperation[];
-		}
+			return compareWithIdentity(b, w);
+		});
+		return Effect.runSync(
+			snapshotEffect.pipe(
+				Effect.match({
+					onFailure: (error) => {
+						Effect.runSync(Effect.logError('[FormState] Error calculating delta:', error));
+						return [] as JsonPatchOperation[];
+					},
+					onSuccess: (operations) => operations
+				})
+			)
+		);
 	});
 
 	/**
@@ -390,43 +416,27 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 	// ============================================================================
 
 	constructor(config: FormStateConfig<Schema, TReturn>) {
-		const {
-			schema,
-			defaultState,
-			serverState,
-			remoteFn,
-			onSuccess,
-			submitSuccessBehavior = 'none',
-			transform,
-			successMessage,
-			translate,
-			description = 'unnamed form',
-			disabled = false,
-			draftKey,
-			autoSubmit
-		} = config;
-
-		this._schemaConfig = schema;
-		this.onSuccess = onSuccess;
-		this._submitSuccessBehaviorConfig = submitSuccessBehavior;
-		this._transformConfig = transform;
-		this._translate = translate;
+		this._schemaConfig = config.schema;
+		this.onSuccess = config.onSuccess;
+		this._submitSuccessBehaviorConfig = config.submitSuccessBehavior ?? 'none';
+		this._transformConfig = config.transform;
+		this._translate = config.translate;
 		this._successMessageConfig =
-			successMessage !== undefined
-				? successMessage
-				: () => translate?.('form.savedSuccessfully') ?? 'Saved successfully';
-		this.description = description;
+			config.successMessage !== undefined
+				? config.successMessage
+				: () => config.translate?.('form.savedSuccessfully') ?? 'Saved successfully';
+		this.description = config.description ?? 'unnamed form';
 
 		// Store config as MaybeGetter (resolved reactively or at point of use)
-		this._disabledConfig = disabled ?? false;
-		this._remoteFnConfig = remoteFn ?? (() => null);
-		this._autoSubmitConfig = autoSubmit;
-		this._draftKeyConfig = draftKey;
-		this._serverStateConfig = serverState ?? null;
+		this._disabledConfig = config.disabled ?? false;
+		this._remoteFnConfig = config.remoteFn ?? (() => null);
+		this._autoSubmitConfig = config.autoSubmit;
+		this._draftKeyConfig = config.draftKey;
+		this._serverStateConfig = config.serverState ?? null;
 
 		// Read initial values
 		const initialServerState = resolve(this._serverStateConfig);
-		const initialDefaultState = resolve(defaultState as MaybeGetter<InferSchema<Schema>>);
+		const initialDefaultState = config.defaultState ? resolve(config.defaultState) : undefined;
 		const initialDraftKey = resolve(this._draftKeyConfig);
 		const initialAutoSubmit = resolve(this._autoSubmitConfig);
 
@@ -492,7 +502,7 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 		if (autoSubmit?.enabled) {
 			this.debouncedAutoSubmit = debounce(() => {
 				if (!this.disabled && this.isDirty && !this.isSubmitting) {
-					this.submit({ silent: autoSubmit.silent ?? false });
+					Effect.runFork(this.submit({ silent: autoSubmit.silent ?? false }));
 				}
 			}, autoSubmit.debounceMs ?? 500);
 		} else {
@@ -853,9 +863,9 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 	 *
 	 * @param options - { silent?: boolean } - If true, don't show success toast
 	 */
-	submit = async (options?: { silent?: boolean }): Promise<Awaited<TReturn> | null> => {
+	submit = (options?: { silent?: boolean }): Effect.Effect<TReturn | null, unknown> => {
 		if (this.disabled || this.isSubmitting) {
-			return null;
+			return Effect.succeed(null);
 		}
 
 		const silent = options?.silent ?? false;
@@ -863,91 +873,102 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 		this.submissionState = { status: 'submitting' };
 		this.clearErrors();
 
-		try {
-			const transformFn = this._transformConfig ? resolve(this._transformConfig) : undefined;
-			const payloadRaw = transformFn ? transformFn(this._workingCopy) : this._workingCopy;
+		return Effect.gen({ self: this }, function* () {
+				const transformFn = this._transformConfig ? resolve(this._transformConfig) : undefined;
+				const payloadRaw = transformFn ? transformFn(this._workingCopy) : this._workingCopy;
 
-			// Call before submit hook
-			this.hooks.onBeforeSubmit?.(payloadRaw);
+				// Call before submit hook
+				this.hooks.onBeforeSubmit?.(payloadRaw);
 
-			const result = await this.schema['~standard'].validate(payloadRaw);
-			const issues =
-				result !== null && typeof result === 'object' ? Reflect.get(result, 'issues') : undefined;
+				const rawResult = yield* maybeAsync(() => this.schema['~standard'].validate(payloadRaw));
+				const validation = rawResult as StandardSchemaValidationResult;
+				const issues = 'issues' in validation ? validation.issues : undefined;
 
-			if (Array.isArray(issues)) {
-				this.setValidationIssuesFromStandardSchema(issues);
-				this.submissionState = { status: 'idle' };
-				if (!silent) {
-					toast.error(this._translate?.('form.fixErrors') ?? 'Please fix the highlighted errors.');
-					console.error(issues);
+				if (Array.isArray(issues)) {
+					this.setValidationIssuesFromStandardSchema(issues);
+					this.submissionState = { status: 'idle' };
+					if (!silent) {
+						toast.error(
+							this._translate?.('form.fixErrors') ?? 'Please fix the highlighted errors.'
+						);
+						yield* Effect.logError('[FormState] Validation issues:', issues);
+					}
+					return null;
 				}
-				return null;
-			}
 
-			const validated = unwrapStandardSchemaSuccess<Schema>(result);
+				const validated = 'value' in validation
+					? (validation.value as InferSchema<Schema>)
+					: (validation as InferSchema<Schema>);
 
-			const remoteFn = this._remoteFnConfig();
+				const remoteFn = this._remoteFnConfig();
 
-			if (!remoteFn) {
+				if (!remoteFn) {
+					this.draftStorage?.clear();
+					this.hooks.onAfterSubmit?.(validated, null);
+					const success = this.onSuccess?.(null);
+					if (success) yield* success;
+					this.submissionState = { status: 'idle' };
+					return null;
+				}
+
+				const remoteReturn = yield* remoteFn(validated);
+				this.submissionState = {
+					status: 'success',
+					result: remoteReturn
+				};
+
 				this.draftStorage?.clear();
-				this.hooks.onAfterSubmit?.(validated, null);
-				await this.onSuccess?.(null);
-				this.submissionState = { status: 'idle' };
-				return null;
-			}
 
-			const remoteReturn = await remoteFn(validated);
-			this.submissionState = {
-				status: 'success',
-				result: remoteReturn as Awaited<TReturn>
-			};
+				switch (resolve(this._submitSuccessBehaviorConfig)) {
+					case 'commit':
+						this.commitSubmittedData(validated);
+						break;
+					case 'reset':
+						this.reset();
+						break;
+					case 'none':
+					default:
+						break;
+				}
 
-			this.draftStorage?.clear();
+				const successMessage = resolve(this._successMessageConfig);
+				if (successMessage !== null && !silent) {
+					toast.success(successMessage);
+				}
 
-			switch (resolve(this._submitSuccessBehaviorConfig)) {
-				case 'commit':
-					this.commitSubmittedData(validated);
-					break;
-				case 'reset':
-					this.reset();
-					break;
-				case 'none':
-				default:
-					break;
-			}
-
-			const successMessage = resolve(this._successMessageConfig);
-			if (successMessage !== null && !silent) {
-				toast.success(successMessage);
-			}
-
-			this.hooks.onAfterSubmit?.(validated, remoteReturn);
-			await this.onSuccess?.(remoteReturn);
-			return remoteReturn;
-		} catch (err) {
-			if (err instanceof SubmissionHandledExternallyError) {
-				this.submissionState = { status: 'idle' };
-				return null;
-			}
-			const message =
-				err instanceof Error && err.message.trim().length > 0
-					? err.message
-					: (this._translate?.('misc.toastError') ?? 'An error occurred');
-			this.submissionState = { status: 'error', message };
-			throw err;
-		} finally {
-			if (this.submissionState.status === 'submitting') {
-				this.submissionState = { status: 'idle' };
-			}
-		}
+				this.hooks.onAfterSubmit?.(validated, remoteReturn);
+				const success = this.onSuccess?.(remoteReturn);
+				if (success) yield* success;
+				return remoteReturn;
+			}).pipe(
+				Effect.catch((error) => {
+					if (error instanceof SubmissionHandledExternallyError) {
+						this.submissionState = { status: 'idle' };
+						return Effect.succeed(null);
+					}
+					const message =
+						error instanceof Error && error.message.trim().length > 0
+							? error.message
+							: (this._translate?.('misc.toastError') ?? 'An error occurred');
+					this.submissionState = { status: 'error', message };
+					return Effect.fail(error);
+				}),
+				Effect.onExit(() =>
+					Effect.sync(() => {
+						if (this.submissionState.status === 'submitting') {
+							this.submissionState = { status: 'idle' };
+						}
+					})
+				)
+			);
 	};
 
 	/**
 	 * Handle form submit event.
 	 */
-	handleSubmit = async (event: Event): Promise<void> => {
+	handleSubmit = (event: Event): void => {
 		event.preventDefault();
-		await this.submit();
+		Effect.runFork(this.submit());
 	};
 
 	// ============================================================================

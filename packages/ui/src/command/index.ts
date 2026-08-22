@@ -10,4 +10,23 @@ export { default as Separator } from './command-separator.svelte';
 export { default as Shortcut } from './command-shortcut.svelte';
 export { default as Root } from './command.svelte';
 export { buildCustomFilterFn } from './custom-filter.js';
-export type * from './types.js';
+export type {
+	CommandItemData,
+	FilterFunction,
+	CommandClientConfig,
+	CommandServerConfig,
+	CommandInfiniteLoadingConfig,
+	TInfiniteLoadingConfig,
+	CommandStateProps,
+	CommandRootProps,
+	CommandListProps,
+	CommandGroupProps,
+	CommandGroupHeadingProps,
+	CommandGroupItemsProps,
+	CommandInputProps,
+	CommandEmptyProps,
+	CommandSeparatorProps,
+	CommandLoadingProps,
+	CommandDialogProps,
+	CommandShortcutProps
+} from './types.js';

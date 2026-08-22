@@ -15,9 +15,9 @@
 	import { Inline } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import CollectionTableFilter from './collection-table-filter.svelte';
-	import type { FilterCollectionDefinition } from './collection-table-filter-fields.js';
-	import type { CollectionTableInitialFilter } from './collection-table.types.js';
-	import type { CollectionToolbarFilterDeclaration } from '../collection-toolbar/collection-toolbar.types.js';
+	import type { FilterCollectionDefinition } from '#lib/collection-table/collection-table-filter-fields';
+	import type { CollectionTableInitialFilter } from '#lib/collection-table/collection-table.types';
+	import type { CollectionToolbarFilterDeclaration } from '#lib/collection-toolbar/collection-toolbar.types';
 
 	const { t } = useI18n<UiKeys>();
 

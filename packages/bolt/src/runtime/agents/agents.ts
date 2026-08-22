@@ -6,18 +6,22 @@ import {
 	readAIUsage,
 	type EffectId as EffectIdType
 } from '@norbital-ai/bolt-protocol';
-import { AccessControl } from '../access/access-control.js';
-import { ApprovalConflict } from '../approvals/approvals.js';
-import { Collections, PendingApproval } from '../collections/collections.js';
-import { AI, Connector, Files, HostTools } from '../facilities/services.js';
-import { TaskQueue } from '../tasks/tasks.js';
-import { Database } from '../facilities/database.js';
-import { Identity } from '../identity/identity.js';
-import { RemoteRegistry } from '../remotes.js';
-import type { WhereCompileError } from '../collections/where.js';
-import { DispatchError, Workspace, WorkspaceLookupError } from '../workspace.js';
-import type { ToolDeclaration } from '../../authoring/workspace-schema.js';
-import { WEB_AGENT_NAME } from '../../authoring/workspace-schema.js';
+import * as AccessControl from '#lib/runtime/access/access-control.js';
+import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
+import * as Collections from '#lib/runtime/collections/collections.js';
+import { PendingApproval } from '#lib/runtime/collections/collections.js';
+import { AI, Connector, HostTools } from '#lib/runtime/facilities/services.js';
+import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import * as Identity from '#lib/runtime/identity/identity.js';
+import { TurnResult, type TurnResult as TurnResultValue } from './agent-schemas.js';
+export { TurnResult } from './agent-schemas.js';
+import { RemoteRegistry } from '#lib/runtime/remotes.js';
+import type { WhereCompileError } from '#lib/runtime/collections/where.js';
+import * as Workspace from '#lib/runtime/workspace.js';
+import { DispatchError, WorkspaceLookupError } from '#lib/runtime/workspace.js';
+import type { ToolDeclaration } from '#lib/authoring/workspace-schema.js';
+import { WEB_AGENT_NAME } from '#lib/authoring/workspace-schema.js';
 
 /**
  * The agent one turn runs as: the web agent, or one envoy.
@@ -56,31 +60,32 @@ const sandboxKeyFor = (
 	agent: ResolvedAgent,
 	conversationId: string
 ): string => (agent.audience === 'public' ? `${subject.userId}#${conversationId}` : subject.userId);
-import { SkillError, ToolNotAllowed } from './agent-errors.js';
+import { McpToolError, SkillError, ToolNotAllowed } from '#lib/runtime/agents/agent-errors.js';
 import {
 	executeHostTool,
 	executePlatformTool,
 	isPlatformTool,
-	platformToolSpecs
-} from './platform-tools.js';
-import { agentMessageForModel, parseAgentMessage } from './agent-message.js';
-import { executeSandboxTool, isSandboxTool, sandboxToolSpecs } from './sandbox-tools.js';
-import { InvocationBudget } from '../budget.js';
-import { AuthoredRefusal } from '../../authoring/refusal.js';
+	platformToolSpecs,
+	readSkillBody
+} from '#lib/runtime/agents/platform-tools.js';
+import { callMcpTool } from '#lib/runtime/agents/mcp.js';
+import { agentMessageForModel, parseAgentMessage } from '#lib/runtime/agents/agent-message.js';
+import {
+	executeSandboxTool,
+	isSandboxTool,
+	sandboxToolSpecs
+} from '#lib/runtime/agents/sandbox-tools.js';
+import * as InvocationBudget from '#lib/runtime/budget.js';
+import { AuthoredRefusal } from '#lib/authoring/refusal.js';
 
-export { SkillError, ToolNotAllowed } from './agent-errors.js';
-
-export const readSkill = Effect.fn('Agents.readSkill')(function* (
-	effectId: EffectIdType,
-	name: string
-) {
-	if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name))
-		return yield* new SkillError({ name, reason: 'invalid-name' });
-	const files = yield* Files.Service;
-	const response = yield* files.execute(effectId, { _tag: 'Read', key: `skills/${name}/SKILL.md` });
-	if (response.bytes === undefined) return yield* new SkillError({ name, reason: 'missing' });
-	return new TextDecoder().decode(response.bytes);
-});
+export { McpToolError, SkillError, ToolNotAllowed } from '#lib/runtime/agents/agent-errors.js';
+export {
+	MCP_PROTOCOL_VERSION,
+	McpCallToolRequest,
+	McpCallToolResponse,
+	McpCallToolResult,
+	McpRequestMeta
+} from '#lib/runtime/agents/mcp.js';
 
 /** Owns resolve tool behavior at the agents boundary so validation and typed semantics stay consistent for every caller. */
 const AgentTools = {
@@ -146,7 +151,7 @@ type TurnStatus = Schema.Schema.Type<typeof TurnStatus>;
  * Everything a parked turn needs in order to continue under the authority that started it.
  *
  * The subject is a snapshot, deliberately. A task invocation carries no credential, and rebuilding a
- * subject from `bolt_conversations.user_id` would be both incomplete (there is no team path there)
+ * subject from `chat_session.user_id` would be both incomplete (there is no team path there)
  * and wrong for envoys (their policies are static authority, not the linked person's authority).
  */
 const StoredTurn = Schema.Struct({
@@ -186,19 +191,29 @@ const maxResumes = 4;
  * assistant/tool alternation it emitted. Rebuilding it here is what lets the log hold the reader's
  * model without the prompt losing which answer belongs to which call.
  */
+/**
+ * A replay of a stored assistant turn: the text and the tool calls a provider needs, in the order
+ * they happened, with either half optional — the one shape a provider actually builds a prompt from.
+ */
+const ReplayContent = Schema.Struct({
+	text: Schema.optionalKey(Schema.String),
+	toolCalls: Schema.optionalKey(Schema.Array(Schema.Json))
+});
+type ReplayContent = typeof ReplayContent.Type;
+
 const replayTurn = (parts: ReadonlyArray<TurnPart>): ReadonlyArray<Schema.Json> => {
 	const replayed: Array<Schema.Json> = [];
 	let text: string | undefined;
 	let calls: Array<Schema.Json> = [];
 	const flush = () => {
 		if (text === undefined && calls.length === 0) return;
-		replayed.push({
-			role: 'assistant',
-			content: {
-				...(text === undefined ? {} : { text }),
-				...(calls.length === 0 ? {} : { toolCalls: calls })
-			}
-		});
+		const content: ReplayContent =
+			text === undefined
+				? { toolCalls: calls }
+				: calls.length === 0
+					? { text }
+					: { text, toolCalls: calls };
+		replayed.push({ role: 'assistant', content });
 		text = undefined;
 		calls = [];
 	};
@@ -217,13 +232,6 @@ const replayTurn = (parts: ReadonlyArray<TurnPart>): ReadonlyArray<Schema.Json> 
 	return replayed;
 };
 
-export const TurnResult = Schema.Struct({
-	conversationId: Schema.NonEmptyString,
-	output: Schema.Json,
-	status: Schema.Literals(['completed', 'waiting', 'failed'])
-});
-export interface TurnResult extends Schema.Schema.Type<typeof TurnResult> {}
-
 /**
  * What one conversation has cost, counting everything it delegated.
  *
@@ -234,7 +242,7 @@ export interface TurnResult extends Schema.Schema.Type<typeof TurnResult> {}
  * `turnsUnreported` is what stops a total reading as exact when it is a floor. A host that reports
  * no cost for a turn has not told us the turn was free.
  */
-export const ConversationUsage = Schema.Struct({
+const ConversationUsage = Schema.Struct({
 	/** The provider's own charge, kept as the audit figure behind the one below. */
 	costUsd: Schema.Number,
 	/**
@@ -285,6 +293,17 @@ const MessageRow = Schema.Struct({
 	 */
 	turn_id: Schema.optionalKey(NullableString)
 });
+
+/** The stored rows a replay reads; the decoder shapes are built beside the row schema, once. */
+const MessageContent = Schema.Struct({ parts: Schema.Array(TurnPart) });
+
+const decodeMessageRow = Schema.decodeUnknownOption(MessageRow);
+const decodeMessageContent = Schema.decodeUnknownOption(MessageContent);
+const decodeConversationRow = Schema.decodeUnknownOption(ConversationRow);
+
+/** The single column a conversation title lookup reads back. */
+const TitleRow = Schema.Struct({ title: Schema.optionalKey(Schema.String) });
+const decodeTitleRow = Schema.decodeUnknownOption(TitleRow);
 
 /** One conversation's stored usage counters, as the session row carries them. */
 const UsageRow = Schema.Struct({
@@ -364,7 +383,7 @@ export type Interface = Readonly<{
 		 */
 		senderContext?: string
 	) => Effect.Effect<
-		TurnResult,
+		TurnResultValue,
 		| Workspace.WorkspaceLookupError
 		| AccessControl.AccessDenied
 		| Database.FacilityError
@@ -444,7 +463,10 @@ export type Interface = Readonly<{
 	 * same web agent are offered different skills, and asking by agent name could not express that.
 	 */
 	readonly listSkills: (subject: Identity.Subject) => ReadonlyArray<string>;
-	readonly readSkill: (effectId: EffectIdType, name: string) => ReturnType<typeof readSkill>;
+	readonly readSkill: (
+		subject: Identity.Subject,
+		name: string
+	) => Effect.Effect<string, SkillError>;
 }>;
 /** Identifies the agents service in Effect's context so dependency wiring remains explicit and type checked. */
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Agents');
@@ -459,7 +481,6 @@ export const layer = Layer.effect(
 		const queue = yield* TaskQueue.Service;
 		const collections = yield* Collections.Service;
 		const hostTools = yield* HostTools.Service;
-		const files = yield* Files.Service;
 		const connector = yield* Connector.Service;
 		const budget = yield* InvocationBudget.Service;
 		const remotes = yield* RemoteRegistry;
@@ -482,19 +503,17 @@ export const layer = Layer.effect(
 					: [];
 			const owner = `conversation.user_id = $${firstParameter}`;
 			if (publicEnvoys.length === 0) {
-				return { sql: owner, parameters: [subject.userId] as ReadonlyArray<Schema.Json> };
+				return { sql: owner, parameters: [subject.userId] };
 			}
-			const names = publicEnvoys
-				.map((_, index) => `$${firstParameter + index + 1}`)
-				.join(', ');
+			const names = publicEnvoys.map((_, index) => `$${firstParameter + index + 1}`).join(', ');
 			return {
 				sql: `(${owner} or (
 					conversation.visibility in ('envoy_dm', 'envoy_group')
 					and conversation.envoy_key in (${names})
 					and conversation.agent_name = conversation.envoy_key
-					and conversation.user_id = 'envoy:' || conversation.envoy_key || '#' || conversation.id
+					and conversation.user_id = 'envoy:' || conversation.envoy_key || '#' || conversation.conversation_id
 				))`,
-				parameters: [subject.userId, ...publicEnvoys] as ReadonlyArray<Schema.Json>
+				parameters: [subject.userId, ...publicEnvoys]
 			};
 		};
 
@@ -525,7 +544,9 @@ export const layer = Layer.effect(
 		const allowedTools = (subject: Identity.Subject): ReadonlyArray<ToolDeclaration> => {
 			const granted = access.capabilities(subject);
 			const mayWrite = writesForSubject(subject);
-			const authored = workspace.definition.tools.filter((tool) => granted.tools.has(tool.name));
+			const authored = workspace.definition.tools.filter((tool) =>
+				tool.mcp === undefined ? granted.tools.has(tool.name) : granted.mcp.has(tool.mcp.server)
+			);
 			const authoredNames = new Set(authored.map(({ name }) => name));
 			const platform = platformToolSpecs
 				.filter((tool) => !authoredNames.has(tool.name))
@@ -536,6 +557,10 @@ export const layer = Layer.effect(
 				...authored
 			];
 		};
+		const allowedSkills = (subject: Identity.Subject) =>
+			workspace.definition.skills.filter(({ name }) =>
+				access.capabilities(subject).skills.has(name)
+			);
 
 		/**
 		 * Whether any policy this subject holds grants a write on anything at all.
@@ -550,18 +575,6 @@ export const layer = Layer.effect(
 					(action) => access.explain(subject, action, collection.name).allowed
 				)
 			);
-
-		/**
-		 * Whether an MCP tool name reaches a server this subject may call.
-		 *
-		 * An allowlist, with no "absent means every server" arm. That arm existed because a workspace
-		 * declaring `+<name>.mcp.ts` files and no `+agent.ts` would otherwise lose every server it
-		 * authored to a field it never wrote — which was a symptom of capability living somewhere a
-		 * workspace could forget to fill in. A policy is the only place capability is declared now, so
-		 * an unnamed server is a server nobody granted.
-		 */
-		const mcpAllowed = (subject: Identity.Subject, server: string): boolean =>
-			access.capabilities(subject).mcp.has(server);
 
 		/**
 		 * The agent a turn is for: the web agent, or one declared envoy.
@@ -609,7 +622,7 @@ export const layer = Layer.effect(
 			const group = conversationId.includes(':group:');
 			yield* database.execute(effectId, {
 				_tag: 'Query',
-				sql: 'insert into bolt_conversations (id, agent_name, user_id, visibility, envoy_key) values ($1, $2, $3, $4, $5) on conflict do nothing',
+				sql: 'insert into chat_session (conversation_id, agent_name, user_id, visibility, envoy_key) values ($1, $2, $3, $4, $5) on conflict do nothing',
 				parameters: [
 					conversationId,
 					agent.name,
@@ -630,17 +643,12 @@ export const layer = Layer.effect(
 		) {
 			const sandboxKey = sandboxKeyFor(subject, agent, conversationId);
 			const allowlist = allowedTools(subject);
-			const mcp = AgentTools.parseMcpName(name);
-			const offered = allowlist.some((tool) => tool.name === name);
+			const declared = allowlist.find((tool) => tool.name === name);
 			// A platform or sandbox name was admitted on the strength of being one, which made `denyTools`
 			// and `access` advisory: an agent that was never offered `write_collection` could still call
 			// it by name. The allowlist is the answer for every kind now, and an MCP call is admitted only
 			// when a policy this subject holds named that server.
-			if (
-				!offered &&
-				!isSandboxTool(name) &&
-				!(mcp !== undefined && mcpAllowed(subject, mcp.server))
-			) {
+			if (declared === undefined && !isSandboxTool(name)) {
 				return yield* new ToolNotAllowed({ agent: agent.name, tool: name });
 			}
 			const context = {
@@ -649,12 +657,11 @@ export const layer = Layer.effect(
 				agentName: agent.name,
 				// The skills this subject's policies grant, not a list an agent declaration carried. A
 				// skill is capability, so it is granted where every other capability is.
-				skills: [...access.capabilities(subject).skills],
+				skills: allowedSkills(subject),
 				toolNames: allowlist.map(({ name: tool }) => tool),
 				workspace,
 				collections,
-				hostTools,
-				files
+				hostTools
 			};
 			if (isPlatformTool(name)) return yield* executePlatformTool(name, input, context);
 			if (isSandboxTool(name)) {
@@ -669,15 +676,13 @@ export const layer = Layer.effect(
 					budget
 				});
 			}
-			if (mcp !== undefined) {
-				return (yield* connector.execute(effectId, {
-					connector: mcp.server,
-					operation: mcp.tool,
-					input
-				})).output;
-			}
-			type AuthoredLookup =
-				{ readonly _tag: 'hit'; readonly value: Schema.Json } | { readonly _tag: 'miss' };
+			if (declared?.mcp !== undefined)
+				return yield* callMcpTool(declared.mcp, input, effectId, connector);
+			const AuthoredLookup = Schema.Union([
+				Schema.Struct({ _tag: Schema.Literal('hit'), value: Schema.Json }),
+				Schema.Struct({ _tag: Schema.Literal('miss') })
+			]);
+			type AuthoredLookup = typeof AuthoredLookup.Type;
 			const authored = yield* remotes.invoke(name, input, subject, effectId).pipe(
 				Effect.map((value): AuthoredLookup => ({ _tag: 'hit', value })),
 				Effect.catch((error): Effect.Effect<AuthoredLookup> =>
@@ -694,7 +699,6 @@ export const layer = Layer.effect(
 			// `hostTools` — an opt-in list on the agent declaration, declared by no workspace and read by
 			// nothing until it was wired up — is gone with the declaration; a host tool is admitted here
 			// because a policy named it, like everything else.
-			const declared = allowlist.find((tool) => tool.name === name);
 			if (name.startsWith('sandbox_') || declared?.command.startsWith('host:') === true) {
 				return yield* executeHostTool(name, input, context);
 			}
@@ -713,9 +717,12 @@ export const layer = Layer.effect(
 								)
 					)
 					.map(({ name }) => name);
-			return allowedTools(subject).map(({ name, description, command }) => {
-				if (name !== 'read_collection' && name !== 'write_collection')
-					return { name, description, command };
+			return allowedTools(subject).map(({ name, description, command, inputSchema }) => {
+				if (name !== 'read_collection' && name !== 'write_collection') {
+					return inputSchema === undefined
+						? { name, description, command }
+						: { name, description, command, inputSchema };
+				}
 				const allowed = reachable(name === 'read_collection' ? 'read' : 'write');
 				return {
 					name,
@@ -735,18 +742,14 @@ export const layer = Layer.effect(
 			senderContext?: string
 		): Array<Schema.Json> => [
 			{ role: 'system', content: workspace.definition.prompt },
-			...(agent.task === undefined ? [] : [{ role: 'system', content: agent.task } as Schema.Json]),
-			...(senderContext === undefined
-				? []
-				: [{ role: 'system', content: senderContext } as Schema.Json]),
+			...(agent.task === undefined ? [] : [{ role: 'system', content: agent.task }]),
+			...(senderContext === undefined ? [] : [{ role: 'system', content: senderContext }]),
 			...rows.flatMap((row): ReadonlyArray<Schema.Json> => {
-				const decoded = Schema.decodeUnknownOption(MessageRow)(row);
+				const decoded = decodeMessageRow(row);
 				if (decoded._tag === 'None') return [];
 				const relayed = parseAgentMessage(decoded.value.content);
 				if (relayed !== null) return [{ role: 'user', content: agentMessageForModel(relayed) }];
-				const whole = Schema.decodeUnknownOption(Schema.Struct({ parts: Schema.Array(TurnPart) }))(
-					decoded.value.content
-				);
+				const whole = decodeMessageContent(decoded.value.content);
 				return whole._tag === 'Some' ? replayTurn(whole.value.parts) : [decoded.value];
 			})
 		];
@@ -762,20 +765,20 @@ export const layer = Layer.effect(
 			yield* database.execute(effectId, {
 				_tag: 'Query',
 				sql: `with recursive lineage as (
-					select id, parent_id, 0 as depth from bolt_conversations where id = $1
+					select conversation_id, parent_id, 0 as depth from chat_session where conversation_id = $1
 					union all
-					select above.id, above.parent_id, lineage.depth + 1 from bolt_conversations above
-						join lineage on above.id = lineage.parent_id
+					select above.conversation_id, above.parent_id, lineage.depth + 1 from chat_session above
+						join lineage on above.conversation_id = lineage.parent_id
 						where lineage.depth < ${maxDelegationDepth}
 				)
-				update bolt_conversations set
+				update chat_session set
 					usage_cost_usd = usage_cost_usd + $2,
 					usage_cost_micro_units = usage_cost_micro_units + $3,
 					usage_cost_currency = coalesce($4::text, usage_cost_currency),
 					usage_total_tokens = usage_total_tokens + $5,
 					usage_turns_counted = usage_turns_counted + $6,
 					usage_turns_unreported = usage_turns_unreported + $7
-				where id in (select id from lineage)`,
+				where conversation_id in (select conversation_id from lineage)`,
 				parameters: [
 					conversationId,
 					usage?.costUsd ?? 0,
@@ -801,7 +804,7 @@ export const layer = Layer.effect(
 		) {
 			const parent = yield* database.execute(EffectId.make(`${effectId}:read-parent`), {
 				_tag: 'Query',
-				sql: 'select parent_id from bolt_conversations where id = $1',
+				sql: 'select parent_id from chat_session where conversation_id = $1',
 				parameters: [conversationId]
 			});
 			const decoded = Schema.decodeUnknownOption(
@@ -902,7 +905,9 @@ export const layer = Layer.effect(
 							conversationId
 						).pipe(
 							Effect.catch((failure) =>
-								failure instanceof ToolNotAllowed || failure instanceof SkillError
+								failure instanceof ToolNotAllowed ||
+								failure instanceof SkillError ||
+								failure instanceof McpToolError
 									? Effect.succeed({ error: failure.message })
 									: Effect.fail(failure)
 							)
@@ -963,9 +968,23 @@ export const layer = Layer.effect(
 						subject,
 						conversationId
 					);
+					// The session row owns its label. Setting it once here keeps every reader — the live
+					// collection client, envoys, and server-side listings — on the same source of truth instead
+					// of making each client reconstruct a title from message history.
+					yield* database.execute(EffectId.make(`${effectId}:title`), {
+						_tag: 'Query',
+						sql: `update chat_session
+							set title = case
+									when title is null or btrim(title) = '' or title = 'New conversation' then $2
+									else title
+								end,
+								updated_at = now()
+							where conversation_id = $1`,
+						parameters: [conversationId, message.slice(0, 48)]
+					});
 					const transcript = yield* database.execute(EffectId.make(`${effectId}:read`), {
 						_tag: 'Query',
-						sql: 'select role, content from bolt_agent_messages where conversation_id = $1 order by sequence',
+						sql: 'select role, content from chat_message where conversation_id = $1 order by sequence',
 						parameters: [conversationId]
 					});
 					const tools = toolsFor(subject);
@@ -978,7 +997,7 @@ export const layer = Layer.effect(
 					const persist = (role: string, content: Schema.Json) =>
 						database.execute(EffectId.make(`${effectId}:persist:${(written += 1)}`), {
 							_tag: 'Query',
-							sql: 'insert into bolt_agent_messages (conversation_id, role, content, turn_id) values ($1, $2, $3::jsonb, $4)',
+							sql: 'insert into chat_message (conversation_id, role, content, turn_id) values ($1, $2, $3::jsonb, $4)',
 							parameters: [conversationId, role, JSON.stringify(content), effectId]
 						});
 					/**
@@ -1004,7 +1023,7 @@ export const layer = Layer.effect(
 					const commit: CommitTurn = (status, usage, usageUnreported) =>
 						database.execute(EffectId.make(`${effectId}:turn:${(committed += 1)}`), {
 							_tag: 'Query',
-							sql: "update bolt_agent_messages set content = $3::jsonb where conversation_id = $1 and content->>'id' = $2",
+							sql: "update chat_message set content = $3::jsonb where conversation_id = $1 and content->>'id' = $2",
 							parameters: [
 								conversationId,
 								effectId,
@@ -1016,8 +1035,8 @@ export const layer = Layer.effect(
 									resumed: 0,
 									subject,
 									agent_name: agent.name,
-									...(senderContext === undefined ? {} : { sender_context: senderContext }),
-									...(usage === undefined ? {} : { usage }),
+									sender_context: senderContext,
+									usage,
 									usage_unreported: usageUnreported
 								})
 							]
@@ -1077,9 +1096,9 @@ export const layer = Layer.effect(
 					_tag: 'Query',
 					sql: `select target.parent_id, target.user_id as target_user_id,
 							parent.user_id as parent_user_id
-						from bolt_conversations target
-						join bolt_conversations parent on parent.id = $1
-						where target.id = $2 and target.parent_id = parent.id
+						from chat_session target
+						join chat_session parent on parent.conversation_id = $1
+						where target.conversation_id = $2 and target.parent_id = parent.conversation_id
 							and target.user_id = parent.user_id`,
 					parameters: [conversationId, targetSessionId]
 				});
@@ -1104,7 +1123,7 @@ export const layer = Layer.effect(
 
 				const targetResult = yield* database.execute(EffectId.make(`${effectId}:target`), {
 					_tag: 'Query',
-					sql: `select content from bolt_agent_messages
+					sql: `select content from chat_message
 						where conversation_id = $1 and role = 'assistant'
 							and content->>'status' in ('completed', 'failed', 'cancelled')
 						order by sequence desc limit 1`,
@@ -1121,7 +1140,7 @@ export const layer = Layer.effect(
 
 				const parkedResult = yield* database.execute(EffectId.make(`${effectId}:parked`), {
 					_tag: 'Query',
-					sql: `select content from bolt_agent_messages
+					sql: `select content from chat_message
 						where conversation_id = $1 and role = 'assistant'
 							and content->>'status' = 'running'
 						order by sequence desc limit 1`,
@@ -1166,7 +1185,7 @@ export const layer = Layer.effect(
 				const commit: CommitTurn = (status, usage, usageUnreported) =>
 					database.execute(EffectId.make(`${effectId}:turn:${(committed += 1)}`), {
 						_tag: 'Query',
-						sql: "update bolt_agent_messages set content = $3::jsonb where conversation_id = $1 and content->>'id' = $2 and content->>'status' = 'running'",
+						sql: "update chat_message set content = $3::jsonb where conversation_id = $1 and content->>'id' = $2 and content->>'status' = 'running'",
 						parameters: [
 							conversationId,
 							stored.id,
@@ -1198,7 +1217,7 @@ export const layer = Layer.effect(
 
 				const transcript = yield* database.execute(EffectId.make(`${effectId}:read`), {
 					_tag: 'Query',
-					sql: 'select role, content from bolt_agent_messages where conversation_id = $1 order by sequence',
+					sql: 'select role, content from chat_message where conversation_id = $1 order by sequence',
 					parameters: [conversationId]
 				});
 				const settleUsage: SettleUsage = (usage, newlyUnreported) =>
@@ -1236,7 +1255,7 @@ export const layer = Layer.effect(
 				yield* queue.cancel(EffectId.make(`${effectId}:task`), taskId);
 				yield* database.execute(EffectId.make(`${effectId}:turn`), {
 					_tag: 'Query',
-					sql: `update bolt_agent_messages
+					sql: `update chat_message
 						set content = jsonb_set(content, '{status}', '"cancelled"'::jsonb, true)
 						where content->>'id' = $1 and content->>'status' = 'running'`,
 					parameters: [taskId]
@@ -1246,7 +1265,7 @@ export const layer = Layer.effect(
 				function* (effectId, conversationId, verifier) {
 					yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: 'update bolt_conversations set verifier = $2 where id = $1',
+						sql: 'update chat_session set verifier = $2 where conversation_id = $1',
 						parameters: [conversationId, verifier]
 					});
 				}
@@ -1254,13 +1273,11 @@ export const layer = Layer.effect(
 			title: Effect.fn('Agents.title')(function* (effectId, conversationId) {
 				const result = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: 'select title from bolt_conversations where id = $1',
+					sql: 'select title from chat_session where conversation_id = $1',
 					parameters: [conversationId]
 				});
 				const row = result.rows[0];
-				const decoded = Schema.decodeUnknownOption(
-					Schema.Struct({ title: Schema.optionalKey(Schema.String) })
-				)(row);
+				const decoded = decodeTitleRow(row);
 				if (decoded._tag === 'Some' && decoded.value.title) return decoded.value.title;
 				return 'New conversation';
 			}),
@@ -1271,17 +1288,17 @@ export const layer = Layer.effect(
 				const scope = conversationReadScope(subject, 1);
 				const result = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: `select conversation.id, conversation.agent_name, conversation.title,
+					sql: `select conversation.conversation_id as id, conversation.agent_name, conversation.title,
 						conversation.user_id, conversation.visibility, conversation.envoy_key
-					from bolt_conversations conversation
+					from chat_session conversation
 					where ${scope.sql}
 						and conversation.parent_id is null
-						and conversation.id not like 'subagent:%'
-					order by conversation.id desc`,
+						and conversation.conversation_id not like 'subagent:%'
+					order by conversation.conversation_id desc`,
 					parameters: scope.parameters
 				});
 				return result.rows.flatMap((row) => {
-					const decoded = Schema.decodeUnknownOption(ConversationRow)(row);
+					const decoded = decodeConversationRow(row);
 					return decoded._tag === 'Some' ? [decoded.value] : [];
 				});
 			}),
@@ -1289,16 +1306,16 @@ export const layer = Layer.effect(
 				const scope = conversationReadScope(subject, 2);
 				const owned = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: `select conversation.id, conversation.agent_name, conversation.title,
+					sql: `select conversation.conversation_id as id, conversation.agent_name, conversation.title,
 						conversation.user_id, conversation.visibility, conversation.envoy_key,
 						conversation.usage_cost_usd, conversation.usage_cost_micro_units,
 						conversation.usage_cost_currency, conversation.usage_total_tokens,
 						conversation.usage_turns_counted, conversation.usage_turns_unreported
-					from bolt_conversations conversation
-					where conversation.id = $1 and ${scope.sql}`,
+					from chat_session conversation
+					where conversation.conversation_id = $1 and ${scope.sql}`,
 					parameters: [conversationId, ...scope.parameters]
 				});
-				const conversation = Schema.decodeUnknownOption(ConversationRow)(owned.rows[0]);
+				const conversation = decodeConversationRow(owned.rows[0]);
 				if (conversation._tag === 'None') {
 					return yield* new AccessControl.AccessDenied({
 						action: 'read',
@@ -1312,15 +1329,15 @@ export const layer = Layer.effect(
 				const transcript = yield* database.execute(EffectId.make(`${effectId}:transcript`), {
 					_tag: 'Query',
 					sql: `with recursive tree as (
-						select id, 0 as depth from bolt_conversations where id = $1
+						select conversation_id, 0 as depth from chat_session where conversation_id = $1
 						union all
-						select below.id, tree.depth + 1 from bolt_conversations below
-							join tree on below.parent_id = tree.id
+						select below.conversation_id, tree.depth + 1 from chat_session below
+							join tree on below.parent_id = tree.conversation_id
 							where tree.depth < ${maxDelegationDepth}
 					)
 					select message.role, message.content, message.turn_id
-						from bolt_agent_messages message
-						join tree on tree.id = message.conversation_id
+						from chat_message message
+						join tree on tree.conversation_id = message.conversation_id
 						order by message.sequence`,
 					parameters: [conversationId]
 				});
@@ -1328,17 +1345,16 @@ export const layer = Layer.effect(
 					conversationId,
 					title: conversation.value.title ?? 'New conversation',
 					messages: transcript.rows.flatMap((row) => {
-						const decoded = Schema.decodeUnknownOption(MessageRow)(row);
+						const decoded = decodeMessageRow(row);
 						return decoded._tag === 'Some' ? [decoded.value] : [];
 					}),
 					usage: conversationUsage(owned.rows[0])
 				};
 			}),
-			listSkills: (subject) =>
-				workspace.definition.skills.filter((name) => access.capabilities(subject).skills.has(name)),
-			readSkill
+			listSkills: (subject) => allowedSkills(subject).map(({ name }) => name),
+			readSkill: Effect.fn('Agents.readSkill')((subject, name) =>
+				readSkillBody(allowedSkills(subject), name)
+			)
 		});
 	})
 );
-
-export * as Agents from './agents.js';

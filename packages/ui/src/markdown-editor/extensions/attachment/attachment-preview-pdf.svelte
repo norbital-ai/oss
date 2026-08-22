@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { Button } from '../../../button/index.js';
-	import { useI18n, type UiKeys } from '../../../i18n/index.js';
+	import { Button } from '#lib/button';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 
 	const { t } = useI18n<UiKeys>();
 

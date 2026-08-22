@@ -6,7 +6,7 @@ import type {
 } from './definition.js';
 import type { ReckonEnvironment, CustomOp } from './cel.server.js';
 import { createEnvironment, validateDefinition } from './cel.server.js';
-import { runComputationWithEnv } from './runtime.server.js';
+import { runComputation } from './runtime.server.js';
 import { replayManifest, type ReplayResult } from './replay.js';
 import { hashDefinition } from './hash.js';
 
@@ -63,10 +63,10 @@ export class ReckonEngine {
 	 */
 	runComputation<
 		TInput extends object = Record<string, unknown>,
-		TOutput = Record<string, unknown>
+		TOutput extends Record<string, unknown> = Record<string, unknown>
 	>(def: ComputationDefinition, input: TInput): ReckonResult<TOutput> {
 		const env = this.getOrCreateEnv(def);
-		return runComputationWithEnv<TInput, TOutput>(env, input);
+		return runComputation<TInput, TOutput>(def, input, env);
 	}
 
 	/** Replay a manifest to verify integrity against a stored definition. */

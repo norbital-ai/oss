@@ -1,13 +1,18 @@
 import { Effect, Schema } from 'effect';
-import type { AnyPgColumnBuilder } from 'drizzle-orm/pg-core';
-import type { SystemColumnName } from '../compiler/schema-plan.js';
+import type { SystemRowColumns } from './system-row-model.js';
 import type { TExportManifest } from './handlers-schema.js';
-import type { FileRef, ModelDeclaration } from './models-schema.js';
+import type {
+	AnyModelFieldBuilder,
+	FileRef,
+	ModelDeclaration,
+	ReferenceBuilder,
+	ReferenceTargets
+} from './models-schema.js';
+import type { RateLimitKey, RateLimitRule, RateLimitRules } from './rate-limits-schema.js';
 // Type-only, and therefore erased: `workspace-schema.ts` already imports `EnvoyDefinition` from
 // here, so a value import in this direction would be a real cycle.
 import type { HttpConnection, PrivateEnvReference } from './workspace-schema.js';
-
-export interface WorkspaceAuthoringTypes {}
+import type { WorkspaceAuthoringTypes, WorkspaceTeamAuthoringTypes } from './index.js';
 /**
  * The generated team union is kept on a separate augmentation graph.
  *
@@ -17,7 +22,6 @@ export interface WorkspaceAuthoringTypes {}
  * `TeamName` and the `+teams.ts` default export, producing a circular type. This separate interface
  * keeps both generated unions exact while making the dependency graph one-way.
  */
-export interface WorkspaceTeamAuthoringTypes {}
 
 type ApplyDimensions<Value, Dimensions, Depth extends ReadonlyArray<unknown> = readonly []> = [
 	Dimensions
@@ -43,57 +47,53 @@ type BuilderData<B> = B extends { readonly _: infer Config extends { readonly da
 		? BuilderValue<Config>
 		: BuilderValue<Config> | null
 	: never;
-/**
- * What each platform-owned column reads back as.
- *
- * Indexed by `SystemColumnName` below rather than being the row type itself, so the set of columns
- * comes from the DDL map in `schema-plan.ts` and only their value types are stated here. A column
- * added to that map without an entry here fails to compile; the previous hand-written list simply
- * omitted `norbital_sys_period` and nothing said so.
- *
- * `norbital_sys_period` is a `tstzrange`, which the driver hands back in Postgres' literal range
- * form (`["2026-01-01 00:00:00+00",)`) — a string, not a pair of dates.
- */
-interface SystemColumnValue {
-	readonly norbital_id: string;
-	readonly norbital_created_at: string;
-	readonly norbital_updated_at: string;
-	readonly norbital_sys_period: string;
-	readonly norbital_row_version: number;
-	readonly norbital_approval_id: string | null;
-}
-export type SystemRow = { readonly [K in SystemColumnName]: SystemColumnValue[K] };
-type SelectForColumns<C extends Readonly<Record<string, AnyPgColumnBuilder>>> = SystemRow & {
+/** The selected platform row, derived from the same builders used to create its table. */
+export type SystemRow = {
+	readonly [K in keyof SystemRowColumns]: BuilderData<SystemRowColumns[K]>;
+};
+type SelectForColumns<C extends Readonly<Record<string, AnyModelFieldBuilder>>> = SystemRow & {
 	readonly [K in keyof C]: BuilderData<C[K]>;
 };
-type RequiredInsertKeys<C extends Readonly<Record<string, AnyPgColumnBuilder>>> = {
+type RequiredInsertKeys<C extends Readonly<Record<string, AnyModelFieldBuilder>>> = {
 	[K in keyof C]: C[K] extends { readonly _: { readonly notNull: true } }
 		? C[K] extends { readonly _: { readonly hasDefault: true } }
 			? never
 			: K
 		: never;
 }[keyof C];
-type InsertForColumns<C extends Readonly<Record<string, AnyPgColumnBuilder>>> = {
+type InsertForColumns<C extends Readonly<Record<string, AnyModelFieldBuilder>>> = {
 	readonly [K in RequiredInsertKeys<C>]: BuilderData<C[K]>;
 } & {
 	readonly [K in Exclude<keyof C, RequiredInsertKeys<C>>]?: BuilderData<C[K]>;
 };
 type ColumnsOf<M extends ModelDeclaration> = M['columns'];
+type ReferencesForColumns<C extends Readonly<Record<string, AnyModelFieldBuilder>>> = {
+	readonly [
+		K in keyof C as C[K] extends ReferenceBuilder ? K : never
+	]: C[K] extends ReferenceBuilder<infer Targets, boolean, boolean> ? Targets : never;
+};
 
-export interface TableShape<Select, Insert = Partial<Select>> {
+export interface TableShape<
+	Select,
+	Insert = Partial<Select>,
+	References = Readonly<Record<never, never>>
+> {
 	readonly $inferSelect: Select;
 	readonly $inferInsert: Insert;
+	/** Type-only map used to infer discriminated polymorphic-reference hydration. */
+	readonly $references?: References;
 }
 
 export type TablesForModels<M extends Readonly<Record<string, ModelDeclaration>>> = {
 	readonly [K in keyof M]: TableShape<
 		SelectForColumns<ColumnsOf<M[K]>>,
-		InsertForColumns<ColumnsOf<M[K]>>
+		InsertForColumns<ColumnsOf<M[K]>>,
+		ReferencesForColumns<ColumnsOf<M[K]>>
 	>;
 };
 
 export interface AnySchema {
-	readonly tables: Readonly<Record<string, TableShape<object, object>>>;
+	readonly tables: Readonly<Record<string, TableShape<object, object, object>>>;
 	readonly relations: Readonly<Record<string, unknown>>;
 	readonly inputs: Readonly<Record<string, { readonly create: unknown; readonly update: unknown }>>;
 }
@@ -116,8 +116,8 @@ export type DefaultWorkspaceSchema = WorkspaceAuthoringTypes extends {
  *
  * Written once as a helper rather than ten times as a conditional, because repeated copies are how
  * six of them came to be generated, declared, and read by nobody: `AgentToolName`, `McpServerName`,
- * `AppName`, `RemoteName` and `ChannelName` were all emitted by the compiler and only
- * `DeclaredPolicyName` ever had a resolver here.
+ * `AppName`, `RemoteName` and `ChannelName` were all emitted by the compiler and only the
+ * policy-name union ever had a resolver here.
  */
 type DeclaredName<Field extends string> = WorkspaceAuthoringTypes extends {
 	readonly [K in Field]: infer Name extends string;
@@ -136,9 +136,7 @@ type DeclaredName<Field extends string> = WorkspaceAuthoringTypes extends {
  * `name:` field left to disagree with the filename, which is the defect this union was introduced
  * to catch and the file field was the reason it existed at all.
  */
-type DeclaredPolicyName = DeclaredName<'policyName'>;
-/** The same union, exported for the declarations that name a policy: envoys, automations, teams. */
-export type PolicyName = DeclaredPolicyName;
+export type PolicyName = DeclaredName<'policyName'>;
 
 /**
  * A team, by the name `src/access/+teams.ts` gives it, and the only thing an approver may be.
@@ -157,24 +155,14 @@ export type TeamName = WorkspaceTeamAuthoringTypes extends {
 	? Name
 	: string;
 
-/** A collection, by its `src/collections/<name>/` directory. */
-export type CollectionName = DeclaredName<'collectionName'>;
 /** An app, by its `src/apps/+<name>.svelte` file. */
 export type AppName = DeclaredName<'appName'>;
 /** A workspace tool, by its `src/capabilities/tools/+<name>.ts` file. */
-export type DeclaredToolName = DeclaredName<'toolName'>;
+type DeclaredToolName = DeclaredName<'toolName'>;
 /** An MCP server, by its `src/capabilities/mcp/+<name>.ts` file. */
-export type McpServerName = DeclaredName<'mcpServerName'>;
+type McpServerName = DeclaredName<'mcpServerName'>;
 /** A skill, by its `src/capabilities/skills/<name>/` directory. */
-export type DeclaredSkillName = DeclaredName<'skillName'>;
-/** An envoy, by its `src/envoys/+<name>.ts` file. */
-export type EnvoyName = DeclaredName<'envoyName'>;
-/** An automation, by its `src/automations/+<name>.ts` file. */
-export type AutomationName = DeclaredName<'automationName'>;
-/** A called function, by its `src/functions/+<name>.ts` file. */
-export type FunctionName = DeclaredName<'functionName'>;
-/** A field type, by its `src/datatypes/+<name>.ts` file. */
-export type DatatypeName = DeclaredName<'datatypeName'>;
+type DeclaredSkillName = DeclaredName<'skillName'>;
 
 /**
  * The shape of `src/access/+teams.ts`: which policies each named team holds.
@@ -190,13 +178,16 @@ export type DatatypeName = DeclaredName<'datatypeName'>;
  * move independently and a workspace must not fall over on a stale string. This check is what makes
  * that tolerance a safety net rather than the only line of defence.
  */
-export type Teams = Readonly<Record<string, ReadonlyArray<DeclaredPolicyName>>>;
+export type Teams = Readonly<Record<string, ReadonlyArray<PolicyName>>>;
 export type TableName<S extends AnySchema> = keyof S['tables'] & string;
 export type SchemaRow<S extends AnySchema, N extends TableName<S>> = S['tables'][N]['$inferSelect'];
+type SchemaReferences<S extends AnySchema, N extends TableName<S>> = NonNullable<
+	S['tables'][N]['$references']
+>;
 type QueryScalar = string | number | boolean | bigint | Date | null;
 type QueryOperand<Value> =
 	Exclude<Value, undefined> extends QueryScalar ? Exclude<Value, undefined> | Date : unknown;
-export type SchemaFieldFilter<Value> = {
+type SchemaFieldFilter<Value> = {
 	readonly eq?: QueryOperand<Value>;
 	readonly ne?: QueryOperand<Value>;
 	readonly gt?: QueryOperand<Value>;
@@ -212,15 +203,35 @@ export type SchemaFieldFilter<Value> = {
 	readonly isNull?: boolean;
 	readonly isNotNull?: boolean;
 };
+type ReferenceHandleKind<Value> =
+	Exclude<Value, null | undefined> extends {
+		readonly kind: infer Kind;
+	}
+		? Kind
+		: never;
+type SchemaReferenceFilter<Value> = {
+	readonly eq?: Exclude<Value, null | undefined>;
+	readonly ne?: Exclude<Value, null | undefined>;
+	readonly in?: ReadonlyArray<Exclude<Value, null | undefined>>;
+	readonly notIn?: ReadonlyArray<Exclude<Value, null | undefined>>;
+	readonly kind?: Readonly<{
+		readonly eq?: ReferenceHandleKind<Value>;
+		readonly ne?: ReferenceHandleKind<Value>;
+	}>;
+	readonly isNull?: boolean;
+	readonly isNotNull?: boolean;
+};
 export interface SchemaRawOperators {
 	readonly sql: (strings: TemplateStringsArray, ...values: ReadonlyArray<unknown>) => unknown;
 }
-export type SchemaWhere<Row extends object> = {
-	readonly [K in keyof Row]?: SchemaFieldFilter<Row[K]> | QueryOperand<Row[K]>;
+type SchemaWhere<Row extends object, References extends object = Readonly<Record<never, never>>> = {
+	readonly [K in keyof Row]?: K extends keyof References
+		? SchemaReferenceFilter<Row[K]>
+		: SchemaFieldFilter<Row[K]> | QueryOperand<Row[K]>;
 } & {
-	readonly AND?: ReadonlyArray<SchemaWhere<Row>>;
-	readonly OR?: ReadonlyArray<SchemaWhere<Row>>;
-	readonly NOT?: SchemaWhere<Row>;
+	readonly AND?: ReadonlyArray<SchemaWhere<Row, References>>;
+	readonly OR?: ReadonlyArray<SchemaWhere<Row, References>>;
+	readonly NOT?: SchemaWhere<Row, References>;
 	readonly RAW?: (
 		table: Readonly<Record<keyof Row, unknown>>,
 		operators: SchemaRawOperators
@@ -228,13 +239,37 @@ export type SchemaWhere<Row extends object> = {
 	readonly $sql?: string;
 };
 export interface SchemaQueryConfig<S extends AnySchema, N extends TableName<S>> {
-	readonly where?: SchemaWhere<SchemaRow<S, N>>;
+	readonly where?: SchemaWhere<SchemaRow<S, N>, SchemaReferences<S, N>>;
 	readonly columns?: Partial<Readonly<Record<keyof SchemaRow<S, N>, boolean>>>;
-	readonly orderBy?: Partial<Readonly<Record<keyof SchemaRow<S, N>, 'asc' | 'desc'>>>;
-	readonly with?: Readonly<Record<string, boolean | Readonly<Record<string, unknown>>>>;
+	readonly orderBy?: Partial<
+		Readonly<Record<Exclude<keyof SchemaRow<S, N>, keyof SchemaReferences<S, N>>, 'asc' | 'desc'>>
+	>;
+	readonly with?: Readonly<
+		Partial<{
+			readonly [K in keyof SchemaReferences<S, N>]: SchemaReferences<
+				S,
+				N
+			>[K] extends ReferenceTargets
+				? ReferenceQueryConfig<S, SchemaReferences<S, N>[K]>
+				: never;
+		}> &
+			Record<string, boolean | Readonly<Record<string, unknown>>>
+	>;
 	readonly limit?: number;
 	readonly offset?: number;
 }
+
+type ReferenceTargetName<
+	S extends AnySchema,
+	Targets extends ReferenceTargets,
+	Kind extends keyof Targets
+> = Extract<Targets[Kind], TableName<S>>;
+type ReferenceQueryConfig<S extends AnySchema, Targets extends ReferenceTargets> =
+	| true
+	| Readonly<{
+			readonly [Kind in keyof Targets]?:
+				true | SchemaQueryConfig<S, ReferenceTargetName<S, Targets, Kind>>;
+	  }>;
 
 type SelectedKeys<Row, Columns> = true extends Columns[keyof Columns]
 	? { [K in keyof Columns & keyof Row]: Columns[K] extends false ? never : K }[keyof Columns &
@@ -247,17 +282,49 @@ type SelectedKeys<Row, Columns> = true extends Columns[keyof Columns]
 type SelectColumns<Row, Config> = Config extends { readonly columns: infer Columns }
 	? Pick<Row, SelectedKeys<Row, Columns>>
 	: Row;
-type WithRows<Config> = Config extends { readonly with: infer W }
+type ReferenceTargetConfig<Spec, Kind> = Spec extends true
+	? undefined
+	: Spec extends Readonly<Record<PropertyKey, unknown>>
+		? Kind extends keyof Spec
+			? Spec[Kind] extends true
+				? undefined
+				: Spec[Kind]
+			: undefined
+		: undefined;
+type HydratedReference<S extends AnySchema, Targets extends ReferenceTargets, Spec> = {
+	readonly [Kind in keyof Targets & string]: Readonly<{
+		readonly kind: Kind;
+		readonly id: string;
+		readonly record: SchemaQueryRow<
+			S,
+			ReferenceTargetName<S, Targets, Kind>,
+			Extract<
+				ReferenceTargetConfig<Spec, Kind>,
+				SchemaQueryConfig<S, ReferenceTargetName<S, Targets, Kind>> | undefined
+			>
+		> | null;
+	}>;
+}[keyof Targets & string];
+type WithRows<S extends AnySchema, N extends TableName<S>, Config> = Config extends {
+	readonly with: infer W;
+}
 	? {
-			readonly [K in keyof W]:
-				Readonly<Record<string, unknown>> | ReadonlyArray<Readonly<Record<string, unknown>>> | null;
+			readonly [K in keyof W]: K extends keyof SchemaReferences<S, N>
+				? SchemaReferences<S, N>[K] extends ReferenceTargets
+					? | HydratedReference<S, SchemaReferences<S, N>[K], W[K]>
+						| (null extends SchemaRow<S, N>[K & keyof SchemaRow<S, N>] ? null : never)
+					: never
+				: | Readonly<Record<string, unknown>>
+					| ReadonlyArray<Readonly<Record<string, unknown>>>
+					| null;
 		}
 	: Readonly<Record<never, never>>;
 export type SchemaQueryRow<
 	S extends AnySchema,
 	N extends TableName<S>,
 	Config extends SchemaQueryConfig<S, N> | undefined = undefined
-> = SelectColumns<SchemaRow<S, N>, Config> & WithRows<Config>;
+> = Omit<SelectColumns<SchemaRow<S, N>, Config>, keyof WithRows<S, N, Config>> &
+	WithRows<S, N, Config>;
 
 export type MutationInsertFor<
 	S extends AnySchema,
@@ -286,7 +353,7 @@ export type InputValuesForTables<T extends Readonly<Record<string, TableShape<un
  * *negative* inner product, which is what makes ascending order mean "most similar" for all three,
  * so an `ip` `maxDistance` is compared against a negative number.
  */
-export interface NearestQueryConfig<Row> {
+interface NearestQueryConfig<Row> {
 	readonly column: keyof Row & string;
 	readonly probe: ReadonlyArray<number>;
 	readonly metric: 'cosine' | 'l2' | 'ip';
@@ -295,7 +362,7 @@ export interface NearestQueryConfig<Row> {
 	readonly excludeIds?: ReadonlyArray<string>;
 }
 
-export interface CollectionQuery<S extends AnySchema, N extends TableName<S>> {
+interface CollectionQuery<S extends AnySchema, N extends TableName<S>> {
 	findMany(): Effect.Effect<Array<SchemaRow<S, N> & Readonly<Record<string, unknown>>>>;
 	findMany<const Config extends SchemaQueryConfig<S, N>>(
 		config: Config
@@ -309,13 +376,13 @@ export interface CollectionQuery<S extends AnySchema, N extends TableName<S>> {
 		config: NearestQueryConfig<SchemaRow<S, N>>
 	) => Effect.Effect<Array<SchemaRow<S, N> & { readonly distance: number }>>;
 }
-export interface ApprovalRequestRow extends SystemRow {
+interface ApprovalRequestRow extends SystemRow {
 	readonly collection_name: string;
 	readonly status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
 	readonly closed_at: Date | null;
 	readonly locked_record_refs: unknown;
 }
-export interface ApprovalRequestQuery {
+interface ApprovalRequestQuery {
 	readonly findMany: <
 		const Config extends {
 			readonly where?: SchemaWhere<ApprovalRequestRow>;
@@ -349,7 +416,7 @@ export interface ApprovalRequestQuery {
  * reads the object it names, inlines the bytes on the turn, and refuses a non-image, more than
  * eight of them, or more than 20 MiB in total rather than dropping any silently.
  */
-export interface StructuredInferenceInput<Output> {
+interface StructuredInferenceInput<Output> {
 	readonly schema: Schema.Schema<Output>;
 	readonly prompt: string;
 	readonly model?: string;
@@ -406,8 +473,8 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 	}>;
 };
 export type HookApi<S extends AnySchema = DefaultWorkspaceSchema> = BeforeApi<S>;
-export type ElevatedMutationPayload<S extends AnySchema, N extends TableName<S>> =
-	MutationInsertFor<S, N> | ({ readonly norbital_id: string } & MutationUpdateFor<S, N>);
+type ElevatedMutationPayload<S extends AnySchema, N extends TableName<S>> =
+	MutationInsertFor<S, N> | ({ readonly id: string } & MutationUpdateFor<S, N>);
 /**
  * How a batched write wants to be cut up.
  *
@@ -420,7 +487,7 @@ export type ElevatedMutationPayload<S extends AnySchema, N extends TableName<S>>
  * would only ever describe how many facility calls may be outstanding at once, which is the
  * runtime's business and not a decision an author has the information to make.
  */
-export type MutateOptions = { readonly batchSize?: number };
+type MutateOptions = { readonly batchSize?: number };
 /**
  * The elevated writes, on the collection — one shape for reaching a collection, not two.
  *
@@ -570,8 +637,7 @@ type CreateBefore<S extends AnySchema, N extends TableName<S>, Prepared> = (cont
 	 */
 	readonly prepared: Prepared;
 	readonly api: HookApi<S>;
-}) =>
-	Effect.Effect<CreateGraph<S, N>, unknown, never> | Promise<CreateGraph<S, N>> | CreateGraph<S, N>;
+}) => Effect.Effect<CreateGraph<S, N>, unknown, never> | CreateGraph<S, N>;
 type CreateAfter<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
 	readonly record: SchemaRow<S, N>;
 	/**
@@ -583,7 +649,7 @@ type CreateAfter<S extends AnySchema, N extends TableName<S>, Prepared> = (conte
 	 */
 	readonly prepared: Prepared;
 	readonly api: AfterHookApi<S>;
-}) => Effect.Effect<void, unknown, never> | Promise<void> | void;
+}) => Effect.Effect<void, unknown, never> | void;
 
 /**
  * The reads a whole batch needs, done once.
@@ -610,7 +676,7 @@ type CreateAfter<S extends AnySchema, N extends TableName<S>, Prepared> = (conte
 type CreatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
 	readonly inputs: ReadonlyArray<CreateInput<S, N>>;
 	readonly api: HookApi<S>;
-}) => Effect.Effect<Prepared, unknown, never> | Promise<Prepared> | Prepared;
+}) => Effect.Effect<Prepared, unknown, never> | Prepared;
 
 /**
  * Everything a collection may say about a write, arranged by how often it runs.
@@ -653,16 +719,13 @@ export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepare
 					readonly input: MutationUpdateFor<S, N>;
 					readonly existing: SchemaRow<S, N>;
 					readonly api: HookApi<S>;
-				}) =>
-					| Effect.Effect<MutationUpdateFor<S, N>, unknown, never>
-					| Promise<MutationUpdateFor<S, N>>
-					| MutationUpdateFor<S, N>
+				}) => Effect.Effect<MutationUpdateFor<S, N>, unknown, never> | MutationUpdateFor<S, N>
 			>;
 			readonly after?: DescribedHook<
 				(context: {
 					readonly record: SchemaRow<S, N>;
 					readonly api: AfterHookApi<S>;
-				}) => Effect.Effect<void, unknown, never> | Promise<void> | void
+				}) => Effect.Effect<void, unknown, never> | void
 			>;
 		};
 	};
@@ -672,13 +735,13 @@ export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepare
 				(context: {
 					readonly existing: SchemaRow<S, N>;
 					readonly api: HookApi<S>;
-				}) => Effect.Effect<void, unknown, never> | Promise<void> | void
+				}) => Effect.Effect<void, unknown, never> | void
 			>;
 			readonly after?: DescribedHook<
 				(context: {
 					readonly record: SchemaRow<S, N>;
 					readonly api: AfterHookApi<S>;
-				}) => Effect.Effect<void, unknown, never> | Promise<void> | void
+				}) => Effect.Effect<void, unknown, never> | void
 			>;
 		};
 	};
@@ -690,8 +753,7 @@ export type CollectionPipelines<S extends AnySchema, N extends TableName<S>> = {
 		readonly handler: (
 			context: { readonly records: ReadonlyArray<SchemaRow<S, N>> },
 			api: BeforeApi<S>
-		) =>
-			Effect.Effect<TExportManifest, unknown, never> | Promise<TExportManifest> | TExportManifest;
+		) => Effect.Effect<TExportManifest, unknown, never> | TExportManifest;
 	};
 	readonly import?: {
 		readonly description: string;
@@ -701,7 +763,6 @@ export type CollectionPipelines<S extends AnySchema, N extends TableName<S>> = {
 			api: BeforeApi<S>
 		) =>
 			| Effect.Effect<ReadonlyArray<MutationInsertFor<S, N>>, unknown, never>
-			| Promise<ReadonlyArray<MutationInsertFor<S, N>>>
 			| ReadonlyArray<MutationInsertFor<S, N>>;
 	};
 };
@@ -856,7 +917,7 @@ export type PullRecordsSpec = { readonly field: string } | { readonly path: Read
  * inserting a second one — and the guarantee is visible in the schema (put a unique index on the
  * column) rather than buried in a handler.
  */
-export type PullIdentitySpec = {
+type PullIdentitySpec = {
 	readonly column: string;
 	readonly value: (record: never) => string;
 };
@@ -978,10 +1039,10 @@ type CollectionInboundBinding<S extends AnySchema, N extends TableName<S>> = {
 };
 
 /** One inbound binding driven by the platform's own scheduler. */
-export type CollectionPullBinding<
-	S extends AnySchema,
-	N extends TableName<S>
-> = CollectionInboundBinding<S, N> & {
+type CollectionPullBinding<S extends AnySchema, N extends TableName<S>> = CollectionInboundBinding<
+	S,
+	N
+> & {
 	readonly pull: PullRequestSpec;
 	readonly webhook?: never;
 };
@@ -996,7 +1057,7 @@ export type CollectionPullBinding<
  * and stamped into the identity column by the platform, never taken from whatever the record claims
  * its primary key is.
  */
-export type CollectionWebhookBinding<
+type CollectionWebhookBinding<
 	S extends AnySchema,
 	N extends TableName<S>
 > = CollectionInboundBinding<S, N> & {
@@ -1014,7 +1075,7 @@ export type CollectionWebhookBinding<
  * and the `never` on each side makes declaring both a compile error rather than a silent precedence
  * rule.
  */
-export type CollectionReceiveBinding<S extends AnySchema, N extends TableName<S>> =
+type CollectionReceiveBinding<S extends AnySchema, N extends TableName<S>> =
 	CollectionPullBinding<S, N> | CollectionWebhookBinding<S, N>;
 
 export type CollectionIntegrations<S extends AnySchema, N extends TableName<S>> = Readonly<
@@ -1041,7 +1102,7 @@ export type CollectionIntegrations<S extends AnySchema, N extends TableName<S>> 
  * `key` is required and is what the id derives from, so reordering a policy's steps cannot silently
  * rebind an approval that is already in flight. Order carries no meaning; the key does.
  */
-export type PolicyApprovalStep = {
+type PolicyApprovalStep = {
 	/** Stable within the grant, and what the request id derives from. Never an index. */
 	readonly key: string;
 	/**
@@ -1064,7 +1125,7 @@ export type PolicyApprovalStep = {
  * which no grant binds. Inline has neither, because there is no reference. Two grants that want the
  * same steps share an ordinary `const`, which is TypeScript rather than a framework concept.
  */
-export type PolicyApproval = { readonly steps: ReadonlyArray<PolicyApprovalStep> };
+type PolicyApproval = { readonly steps: ReadonlyArray<PolicyApprovalStep> };
 
 /**
  * An envoy: an agent that is not the web agent, with its own identity and one transport.
@@ -1097,7 +1158,7 @@ export interface EnvoyDefinition {
 	 * unconditional grant beside a narrowed one on the same collection — `rowPredicate` unions the
 	 * `where` of every matching grant, so that combination collapses the predicate to `true`.
 	 */
-	readonly policies: ReadonlyArray<DeclaredPolicyName>;
+	readonly policies: ReadonlyArray<PolicyName>;
 	/** The standing instruction for this envoy's turns, on top of the workspace's `+agents.md`. */
 	readonly task: string;
 	readonly groupMessages?: 'disabled' | 'mention_or_reply' | 'all';
@@ -1132,26 +1193,12 @@ export interface PolicyCapabilities {
 /**
  * How much a policy's holders may do, keyed by what shares a bucket with what.
  *
- * `subject` bounds an authenticated person — and bounds an envoy as a whole, because an envoy is one
- * subject and its senders therefore share one bucket by construction. `sender` bounds each external
- * sender separately, which is the per-sender cap the envoy declaration used to carry. Neither key
- * needs a rule about the other: a `sender`-keyed rule simply never matches a human holder, exactly
- * as `address` stops matching after sign-in.
- *
- * `key` is optional and reads as `subject`, which is the only sensible default for a rule declared
- * on the thing that has a holder.
- *
- * One command may carry several rules keyed differently, and `envoys.receive` is why: a public envoy
- * caps each outside sender *and* the surface as a whole, and those are the same command counted two
- * ways. A caller has to be inside all of them — being under one of two ceilings is not admission.
+ * `subject` bounds a person or an envoy as a whole; `sender` bounds each outside sender; `tenant`
+ * bounds the workspace surface. `address` is excluded because it exists only before sign-in.
+ * Omitted keys resolve to `subject`, and multiple differently keyed rules on one command all apply.
  */
-type PolicyLimitRule = {
-	readonly window: string;
-	readonly limit: number;
-	readonly key?: 'subject' | 'sender' | 'tenant';
-};
-export type PolicyLimits = Readonly<
-	Record<string, PolicyLimitRule | ReadonlyArray<PolicyLimitRule>>
+type PolicyLimits = Readonly<
+	Record<string, RateLimitRules<RateLimitRule<Exclude<RateLimitKey, 'address'>, true>>>
 >;
 
 /**
@@ -1171,8 +1218,4 @@ export interface PolicyDefinition<S extends AnySchema = DefaultWorkspaceSchema> 
 	readonly grants: ReadonlyArray<PolicyGrant<S>>;
 	readonly capabilities?: PolicyCapabilities;
 	readonly limits?: PolicyLimits;
-}
-export interface McpServerDefinition {
-	readonly url: string;
-	readonly tools?: ReadonlyArray<string>;
 }

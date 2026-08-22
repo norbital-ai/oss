@@ -2,7 +2,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { RatingGroup } from 'bits-ui';
-	import type { StarRatingRootProps } from './types.js';
+	import type { StarRatingRootProps } from '#lib/star-rating/types';
 
 	let {
 		value = $bindable(0),

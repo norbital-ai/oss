@@ -7,6 +7,7 @@
 	import { Combobox } from '#lib/combobox';
 	import * as DropdownMenu from '#lib/dropdown-menu';
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { Effect } from 'effect';
 	import { detectShortcutModifier, formatShortcut } from '#lib/keybindings';
 	import { Inline } from '#lib/layout';
 	import * as Sidebar from '#lib/sidebar';
@@ -18,7 +19,7 @@
 		type WorkspaceImpersonation,
 		type WorkspaceNavigationModel,
 		type WorkspaceOrganizationOption
-	} from './workspace-shell.types.js';
+	} from '#lib/workspace-shell/workspace-shell.types';
 	import WorkspaceSidebarNavigationSection from './workspace-sidebar-navigation-section.svelte';
 
 	const i18n = useI18n<UiKeys>();
@@ -42,12 +43,12 @@
 		model: WorkspaceNavigationModel;
 		onNavigate?: (href: string) => void | undefined;
 		onPrefetch?: (href: string) => void | undefined;
-		onOrganizationChange?: (organizationId: string) => void | Promise<void>;
-		onSignOut?: () => void | Promise<void>;
+		onOrganizationChange?: (organizationId: string) => void | Effect.Effect<void, unknown>;
+		onSignOut?: () => void | Effect.Effect<void, unknown>;
 		notifications?: Snippet<[{ expanded: boolean }]>;
 		impersonation?: WorkspaceImpersonation | null;
-		onImpersonate?: (teamId: string) => void | Promise<void>;
-		onStopImpersonating?: () => void | Promise<void>;
+		onImpersonate?: (teamId: string) => void | Effect.Effect<void, unknown>;
+		onStopImpersonating?: () => void | Effect.Effect<void, unknown>;
 		onSearch?: () => void;
 		searchLabel?: string;
 		searchShortcut?: string;
@@ -79,7 +80,7 @@
 		return organization.name.slice(0, 2).toUpperCase() || '?';
 	}
 
-	async function selectOrganization(organizationId: string): Promise<void> {
+	function selectOrganization(organizationId: string): void {
 		if (
 			organizationId === model.activeOrganization.id ||
 			!onOrganizationChange ||
@@ -88,21 +89,33 @@
 			return;
 		}
 		switchingOrganizationId = organizationId;
-		try {
-			await onOrganizationChange(organizationId);
-		} finally {
-			switchingOrganizationId = null;
-		}
+		Effect.runFork(
+			Effect.ensuring(
+				Effect.gen(function* () {
+					const change = onOrganizationChange(organizationId);
+					if (change) yield* change;
+				}),
+				Effect.sync(() => {
+					switchingOrganizationId = null;
+				})
+			)
+		);
 	}
 
-	async function signOut(): Promise<void> {
+	function signOut(): void {
 		if (!onSignOut || signOutPending) return;
 		signOutPending = true;
-		try {
-			await onSignOut();
-		} finally {
-			signOutPending = false;
-		}
+		Effect.runFork(
+			Effect.ensuring(
+				Effect.gen(function* () {
+					const action = onSignOut();
+					if (action) yield* action;
+				}),
+				Effect.sync(() => {
+					signOutPending = false;
+				})
+			)
+		);
 	}
 
 	const impersonationAvailable = $derived(
@@ -140,24 +153,36 @@
 	const withShortcut = (label: string, key: string | undefined): string =>
 		key ? `${label} · ${key}` : label;
 
-	async function selectImpersonationTeam(teamId: string): Promise<void> {
+	function selectImpersonationTeam(teamId: string): void {
 		if (impersonationBusy || teamId === impersonationActiveTeamId || !onImpersonate) return;
 		impersonationBusy = true;
-		try {
-			await onImpersonate(teamId);
-		} finally {
-			impersonationBusy = false;
-		}
+		Effect.runFork(
+			Effect.ensuring(
+				Effect.gen(function* () {
+					const action = onImpersonate(teamId);
+					if (action) yield* action;
+				}),
+				Effect.sync(() => {
+					impersonationBusy = false;
+				})
+			)
+		);
 	}
 
-	async function stopImpersonating(): Promise<void> {
+	function stopImpersonating(): void {
 		if (impersonationBusy || !onStopImpersonating) return;
 		impersonationBusy = true;
-		try {
-			await onStopImpersonating();
-		} finally {
-			impersonationBusy = false;
-		}
+		Effect.runFork(
+			Effect.ensuring(
+				Effect.gen(function* () {
+					const action = onStopImpersonating();
+					if (action) yield* action;
+				}),
+				Effect.sync(() => {
+					impersonationBusy = false;
+				})
+			)
+		);
 	}
 </script>
 

@@ -15,7 +15,6 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Inline, Scroll, Stack } from '#lib/layout';
 	import { Tooltip } from '#lib/tooltip';
-	import type { TypedCollectionFilter } from '#lib/collection-query';
 	import CollectionQueryControls from '../collection-table/collection-query-controls.svelte';
 	import CollectionTableOperations from '../collection-table/collection-table-operations.svelte';
 	import CollectionToolbarAction from './collection-toolbar-action.svelte';
@@ -27,7 +26,7 @@
 		CollectionToolbarFilterComponent,
 		CollectionToolbarFilterDeclaration,
 		CollectionToolbarName
-	} from './collection-toolbar.types.js';
+	} from '#lib/collection-toolbar/collection-toolbar.types';
 
 	let {
 		client,
@@ -84,11 +83,7 @@
 	);
 
 	function applyFilters(next: readonly CollectionFilter[]): void {
-		// The wire filter's `path` is a mutable `string[]`; the typed one is a readonly tuple checked
-		// against the row. They do not overlap enough for a direct assertion, so this goes through
-		// `unknown` — sound here because the builder's field picker is derived from the very
-		// definition that types `TRow`.
-		query.setFilters(next as unknown as readonly TypedCollectionFilter<TRow>[]); // stupidity: boundary-cast — the builder's field picker is derived from the same definition that types the row.
+		query.setFilters(next);
 	}
 </script>
 

@@ -1,4 +1,5 @@
 <script lang="ts" generics="TMulti extends boolean">
+	import { Clock, Effect } from 'effect';
 	import Icon from '@iconify/svelte';
 	import {
 		DateFormatter,
@@ -114,21 +115,29 @@
 	// Also update your formatting functions:
 	function formatDateForDisplay(dateStr: string): string {
 		if (variant === 'year' && /^\d{4}/.test(dateStr)) return dateStr.slice(0, 4);
-		try {
-			return df.format(parseUtcInstantZoned(dateStr).toDate());
-		} catch {
-			return dateStr;
-		}
+		return Effect.runSync(
+			Effect.try(() => df.format(parseUtcInstantZoned(dateStr).toDate())).pipe(
+				Effect.match({
+					onFailure: () => dateStr,
+					onSuccess: (formatted) => formatted
+				})
+			)
+		);
 	}
 
 	function formatDateRelative(dateStr: string): string {
-		try {
-			const date = parseUtcInstantZoned(dateStr).toDate();
-			const now = new Date();
-			return formatDistance(date, now, { addSuffix: true, locale: dateFnsLocale });
-		} catch {
-			return dateStr;
-		}
+		return Effect.runSync(
+			Effect.try(() => {
+				const date = parseUtcInstantZoned(dateStr).toDate();
+				const now = new Date(Effect.runSync(Clock.currentTimeMillis));
+				return formatDistance(date, now, { addSuffix: true, locale: dateFnsLocale });
+			}).pipe(
+				Effect.match({
+					onFailure: () => dateStr,
+					onSuccess: (formatted) => formatted
+				})
+			)
+		);
 	}
 	function getDisplayDate(dateStr: string): string {
 		return relativeTime ? formatDateRelative(dateStr) : formatDateForDisplay(dateStr);
@@ -146,7 +155,7 @@
 
 		const earliest = dates[0];
 		const latest = dates[dates.length - 1];
-		const now = new Date();
+		const now = new Date(Effect.runSync(Clock.currentTimeMillis));
 
 		if (dateStrings.length === 2) {
 			return t('dataRenderer.dateSummaryTwo', {

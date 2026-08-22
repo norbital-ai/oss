@@ -3,21 +3,12 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Scroll } from '#lib/layout';
 	import { pixelDrag } from '#lib/utils/pixel-drag';
-	import { assignLanes, dateToPixels, isMultiDayEvent, isSameDay } from '../utils.js';
-	import type { CalendarEvent, CalendarView, CreateSlot, EventRenderContext } from '../types.js';
+	import { assignLanes, dateToPixels, isMultiDayEvent, isSameDay } from '#lib/event-calendar/utils';
+	import type { CalendarEvent, CreateSlot, EventRenderContext } from '#lib/event-calendar/types';
 	import type { Snippet } from 'svelte';
 	import EventBox from '../parts/event-box.svelte';
 	import NowLine from '../parts/now-line.svelte';
-	import {
-		isDragging,
-		beginMove,
-		beginResize,
-		beginCreate,
-		updateDrag,
-		endDrag,
-		cancelDrag,
-		getOverlayRect
-	} from '../drag-state.svelte.js';
+	import { useDragState } from '../drag-state.svelte.js';
 
 	let {
 		date,
@@ -51,6 +42,8 @@
 
 	const { t } = useI18n<UiKeys>();
 
+	const drag = useDragState();
+
 	const totalHeight = $derived((endHour - startHour) * hourHeight);
 	const timedEvents = $derived(events.filter((e) => !e.allDay && isSameDay(e.start, e.end)));
 	const laneAssignments = $derived(assignLanes(timedEvents));
@@ -71,7 +64,7 @@
 	function getContext(event: CalendarEvent): EventRenderContext {
 		const a = assignedMap.get(event.id);
 		return {
-			view: 'day' as CalendarView,
+			view: 'day',
 			mode: 'box',
 			isMultiDay: isMultiDayEvent(event),
 			column: 0,
@@ -81,7 +74,7 @@
 	}
 
 	function commitDrop(): void {
-		const result = endDrag(date, hourHeight, startHour, snapMinutes);
+		const result = drag.endDrag(date, hourHeight, startHour, snapMinutes);
 		if (!result) return;
 		if (result.mode === 'create' && result.slot) {
 			oncreate?.(result.slot);
@@ -90,7 +83,7 @@
 		}
 	}
 
-	const overlay = $derived(getOverlayRect());
+	const overlay = $derived(drag.getOverlayRect());
 </script>
 
 <Scroll axis="y" name={t('misc.dayEvents')} class={cn('relative bg-background', className)}>
@@ -109,14 +102,14 @@
 				class="absolute inset-0"
 				use:pixelDrag={{
 					onStart: (event) => {
-						if (!isDragging() && event.currentTarget instanceof HTMLElement) {
+						if (!drag.isDragging() && event.currentTarget instanceof HTMLElement) {
 							const top = event.clientY - event.currentTarget.getBoundingClientRect().top;
-							beginCreate(0, top);
+							drag.beginCreate(0, top);
 						}
 					},
-					onMove: (_e, _dx, dy) => updateDrag(dy),
+					onMove: (_e, _dx, dy) => drag.updateDrag(dy),
 					onEnd: commitDrop,
-					onCancel: cancelDrag,
+					onCancel: drag.cancelDrag,
 					axis: 'y',
 					cursor: 'crosshair'
 				}}
@@ -138,11 +131,11 @@
 				title={!editable ? event.lockedReason : undefined}
 				use:pixelDrag={{
 					onStart: () => {
-						if (editable) beginMove(event, 0, top, h);
+						if (editable) drag.beginMove(event, 0, top, h);
 					},
-					onMove: (_e, _dx, dy) => updateDrag(dy),
+					onMove: (_e, _dx, dy) => drag.updateDrag(dy),
 					onEnd: commitDrop,
-					onCancel: cancelDrag,
+					onCancel: drag.cancelDrag,
 					axis: 'y'
 				}}
 			>
@@ -160,11 +153,11 @@
 						use:pixelDrag={{
 							onStart: (e) => {
 								e.stopPropagation();
-								beginResize(event, 0, top, h);
+								drag.beginResize(event, 0, top, h);
 							},
-							onMove: (_e, _dx, dy) => updateDrag(dy),
+							onMove: (_e, _dx, dy) => drag.updateDrag(dy),
 							onEnd: commitDrop,
-							onCancel: cancelDrag,
+							onCancel: drag.cancelDrag,
 							axis: 'y'
 						}}
 						role="none"

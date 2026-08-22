@@ -16,8 +16,18 @@ const held = (...names: ReadonlyArray<string>) => new Set(names);
 describe('Identity and AccessControl owners', () => {
 	it('applies explicit deny before allow', () => {
 		const policies = [
-			{ name: 'allow', effect: 'allow' as const, actions: ['read'], capabilities: { apps: ['people'] } },
-			{ name: 'deny', effect: 'deny' as const, actions: ['read'], capabilities: { apps: ['people'] } }
+			{
+				name: 'allow',
+				effect: 'allow' as const,
+				actions: ['read'],
+				capabilities: { apps: ['people'] }
+			},
+			{
+				name: 'deny',
+				effect: 'deny' as const,
+				actions: ['read'],
+				capabilities: { apps: ['people'] }
+			}
 		];
 		expect(decide(policies, subject, 'read', 'people', held('allow', 'deny'))).toEqual({
 			allowed: false,
@@ -38,7 +48,12 @@ describe('Identity and AccessControl owners', () => {
 	 */
 	it('ignores a policy the team does not hold', () => {
 		const policies = [
-			{ name: 'allow', effect: 'allow' as const, actions: ['read'], capabilities: { apps: ['people'] } }
+			{
+				name: 'allow',
+				effect: 'allow' as const,
+				actions: ['read'],
+				capabilities: { apps: ['people'] }
+			}
 		];
 		expect(decide(policies, subject, 'read', 'people', held())).toEqual({
 			allowed: false,

@@ -3,18 +3,18 @@ import { Cause, Effect, Exit, Fiber, Result } from 'effect';
 
 export type PlatformUser = Readonly<{
 	/**
-	 * The person, as the row they are: `bolt_auth_user.norbital_id`, the uuid every workspace column
+	 * The person, as the row they are: `bolt_auth_user.id`, the uuid every workspace column
 	 * that points at a person holds.
 	 *
 	 * The only identity published here. There used to be a second field, `id`, carrying the same
 	 * value under a name that did not say what the value was — and the shell filled both from the
-	 * display name, so `where: { user_id: { eq: user.norbital_id } }` sent an email's local part to a
+	 * display name, so `where: { user_id: { eq: user.id } }` sent an email's local part to a
 	 * `uuid` column and Postgres refused it as 22P02. Two spellings for one identity is what let a
 	 * label sit in the key's slot unnoticed; the spelling kept is the one authored code already uses
 	 * for a row's key everywhere else.
 	 */
-	readonly norbital_id: string;
-	readonly email?: string;
+	readonly id: string;
+	readonly email?: string | undefined;
 	/**
 	 * Whether this person administers the workspace: `bolt_auth_user.status`, as the host reports it.
 	 *
@@ -33,7 +33,7 @@ export type PlatformUser = Readonly<{
  * worth naming, because it was not merely dead: the shell filled it from the sidebar's role label,
  * so a field spelled like a team identity published the string `'Admin'` or `'Member'`. Authored
  * code that reached for it would have got a silent empty result rather than an error, which is
- * the same defect as the old `id`/`norbital_id` pair and harder to see. A label belongs to the
+ * the same defect as the old `id`/`id` pair and harder to see. A label belongs to the
  * surface that renders it, not to the context authored queries key on.
  */
 /**
@@ -108,13 +108,12 @@ export class LatestQuery<T> {
 		this.#fiber = fiber;
 		return Effect.runPromise(
 			Fiber.await(fiber).pipe(
-				Effect.map((exit) => {
-					if (Exit.isSuccess(exit)) return exit.value;
+				Effect.flatMap((exit) => {
+					if (Exit.isSuccess(exit)) return Effect.succeed(exit.value);
 					// A superseded run is interrupted; an interrupted fiber exits as a failure whose
 					// cause carries no error — that is the "dropped" case, not a query failure.
 					const failed = Cause.findError(exit.cause);
-					if (Result.isSuccess(failed)) throw failed.success;
-					return undefined;
+					return Result.isSuccess(failed) ? Effect.fail(failed.success) : Effect.succeed(undefined);
 				})
 			)
 		);

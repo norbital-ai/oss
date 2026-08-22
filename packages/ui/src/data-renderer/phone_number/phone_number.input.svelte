@@ -15,7 +15,7 @@
 		phoneInputPlaceholder,
 		resolvePhoneCountry,
 		sanitizePhoneInput
-	} from './phone_number.utils.js';
+	} from '#lib/data-renderer/phone_number/phone_number.utils';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -50,7 +50,7 @@
 	let country = $state<CountryCode>('US');
 	let draft = $state('');
 	let hasBlurred = $state(false);
-	let lastEmittedValue: string | null | undefined;
+	let lastEmittedValue = $state<string | null | undefined>(undefined);
 	const phonePlaceholderText = t('dataRenderer.phonePlaceholder');
 	const inputPlaceholder = $derived(
 		placeholder === phonePlaceholderText

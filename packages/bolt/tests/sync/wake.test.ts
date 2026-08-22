@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { failure, success, type TransportRequest } from '@norbital-ai/bolt-protocol';
-import { Collections } from '../../src/runtime/collections/collections.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
 import { decodeWake, SYNC_TOPIC } from '../../src/runtime/sync/wake.js';
 import {
 	adminSubject,

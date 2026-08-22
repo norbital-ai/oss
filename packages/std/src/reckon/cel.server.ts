@@ -1,4 +1,5 @@
 import { Environment, type ParseResult } from '@marcbachmann/cel-js';
+import { Effect } from 'effect';
 import type {
 	ComputationDefinition,
 	InlinedTable,
@@ -21,7 +22,7 @@ type ScopeRef = { scope: Record<string, unknown> | null };
 /** A compiled CEL environment bound to a specific computation definition. */
 export type ReckonEnvironment = {
 	readonly id: string;
-	readonly outputs: string[];
+	readonly outputs: ReadonlyArray<string>;
 	readonly exprs: Record<string, string>;
 	readonly tables: Record<string, InlinedTable>;
 	readonly exprOrder: string[];
@@ -130,13 +131,25 @@ export function validateDefinition(
 	}
 	if (errors.length > 0) return { ok: false, errors };
 
-	try {
-		const env = createEnvironment(def, customOps);
-		return { ok: true, definitionHash: env.definitionHash, order: env.exprOrder };
-	} catch (err) {
-		if (err instanceof CycleError) {
-			return { ok: false, errors: [{ message: err.message }] };
-		}
-		return { ok: false, errors: [{ message: (err as Error).message }] };
-	}
+	return Effect.runSync(
+		Effect.try({
+			try: () => createEnvironment(def, customOps),
+			catch: (cause) => cause
+		}).pipe(
+			Effect.match({
+				onSuccess: (env): ValidationResult => ({
+					ok: true as const,
+					definitionHash: env.definitionHash,
+					order: env.exprOrder
+				}),
+				onFailure: (err): ValidationResult =>
+					err instanceof CycleError
+						? { ok: false, errors: [{ message: err.message }] }
+						: {
+								ok: false,
+								errors: [{ message: err instanceof Error ? err.message : String(err) }]
+							}
+			})
+		)
+	);
 }

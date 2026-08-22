@@ -1,12 +1,12 @@
 import { Effect, Fiber } from 'effect';
-import type { ParsedCommandQuery } from './mention-sources.js';
+import type { ParsedCommandQuery } from '#lib/client/ui/agent/mention-sources.js';
 
-export type DebouncedRecordSearchParsed = Pick<ParsedCommandQuery, 'text' | 'collection'>;
+type DebouncedRecordSearchParsed = Pick<ParsedCommandQuery, 'text' | 'collection'>;
 
 /** Debounces record search so caret moves that keep the same query do not refetch. */
 export function createDebouncedRecordSearch<T>(options: {
 	readonly delayMs?: number;
-	readonly search: (text: string, collection: string | null) => Promise<readonly T[]>;
+	readonly search: (text: string, collection: string | null) => Effect.Effect<readonly T[]>;
 	readonly onLoading: (loading: boolean) => void;
 	readonly onResults: (hits: readonly T[]) => void;
 }): {
@@ -57,7 +57,7 @@ export function createDebouncedRecordSearch<T>(options: {
 		const collection = parsed.collection;
 		const search = Effect.gen(function* () {
 			yield* Effect.sleep(delayMs);
-			const hits = yield* Effect.tryPromise(() => options.search(searchText, collection));
+			const hits = yield* options.search(searchText, collection);
 			if (searchVersion !== version) return;
 			options.onResults(hits);
 			options.onLoading(false);

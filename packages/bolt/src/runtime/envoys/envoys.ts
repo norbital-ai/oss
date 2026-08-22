@@ -1,22 +1,22 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { Agents } from '../agents/agents.js';
-import { AccessControl } from '../access/access-control.js';
-import { ApprovalConflict } from '../approvals/approvals.js';
-import { PendingApproval } from '../collections/collections.js';
-import type { WhereCompileError } from '../collections/where.js';
-import { Communication } from '../facilities/services.js';
-import { Database } from '../facilities/database.js';
-import { Identity } from '../identity/identity.js';
-import { RateLimits } from '../rate-limits.js';
-import { TenantScope } from '../tenant.js';
-import { envoySubject } from '../identity/static-identity.js';
-import { Workspace } from '../workspace.js';
-import { AuthoredRefusal } from '../../authoring/refusal.js';
-import { InvocationBudget } from '../budget.js';
+import * as Agents from '#lib/runtime/agents/agents.js';
+import * as AccessControl from '#lib/runtime/access/access-control.js';
+import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
+import { PendingApproval } from '#lib/runtime/collections/collections.js';
+import type { WhereCompileError } from '#lib/runtime/collections/where.js';
+import { Communication } from '#lib/runtime/facilities/services.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import * as Identity from '#lib/runtime/identity/identity.js';
+import * as RateLimits from '#lib/runtime/rate-limits.js';
+import * as TenantScope from '#lib/runtime/tenant.js';
+import { envoySubject } from '#lib/runtime/identity/static-identity.js';
+import * as Workspace from '#lib/runtime/workspace.js';
+import { AuthoredRefusal } from '#lib/authoring/refusal.js';
+import * as InvocationBudget from '#lib/runtime/budget.js';
 
 /** Carries envoy error through the typed envoys failure channel without losing diagnostic context. */
-export class EnvoyError extends Schema.TaggedError<EnvoyError>()('Bolt.Envoys.Error', {
+class EnvoyError extends Schema.TaggedError<EnvoyError>()('Bolt.Envoys.Error', {
 	envoy: Schema.NonEmptyString,
 	message: Schema.NonEmptyString
 }) {
@@ -77,7 +77,7 @@ export interface EnvoyDelivery extends Schema.Schema.Type<typeof EnvoyDelivery> 
  * every message it ever received, which is what field-operations shipped. An envoy carries its
  * declared policies now, so there is no lookup left to come back empty.
  */
-export const EnvoyOutcome = Schema.Struct({
+const EnvoyOutcome = Schema.Struct({
 	status: Schema.Literals(['answered', 'duplicate', 'silent', 'registration_required']),
 	envoy: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
@@ -161,13 +161,12 @@ export const layer = Layer.effect(
 			status: string
 		) {
 			const row = claimed.rows[0];
-			const id =
-				row !== null && typeof row === 'object' ? Reflect.get(row, 'norbital_id') : undefined;
+			const id = row !== null && typeof row === 'object' ? Reflect.get(row, 'id') : undefined;
 			if (typeof id !== 'string') return;
 			yield* database
 				.execute(EffectId.make(`${effectId}:settle`), {
 					_tag: 'Query',
-					sql: 'update bolt_envoy_inbound set status = $2, answered_at = now() where "norbital_id" = $1::uuid',
+					sql: 'update bolt_envoy_inbound set status = $2, answered_at = now() where "id" = $1::uuid',
 					parameters: [id, status]
 				})
 				.pipe(
@@ -233,7 +232,7 @@ export const layer = Layer.effect(
 					         sender_external_id, sender_display_name, status)
 					      values ($1, $2, $3, $4, $5, $6, 'received')
 					      on conflict (receipt_key) do nothing
-					  returning "norbital_id"`,
+					  returning "id"`,
 					parameters: [
 						envoyName,
 						delivery.conversationId,
@@ -297,7 +296,7 @@ export const layer = Layer.effect(
 					{
 						tenantId: subject.tenantId,
 						userId: subject.userId,
-						...(senderId === undefined ? {} : { sender: senderId })
+						sender: senderId
 					},
 					access.limits(subject)
 				);
@@ -384,4 +383,3 @@ export const layer = Layer.effect(
 		});
 	})
 );
-export * as Envoys from './envoys.js';

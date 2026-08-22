@@ -17,12 +17,6 @@ const sourceFiles = (root: string): readonly string[] =>
 
 const occurrences = (source: string, pattern: RegExp): number => source.match(pattern)?.length ?? 0;
 
-/**
- * The old names still occur in one place on purpose: the forward migration that renames an existing
- * database in place. They are lineage there, not live runtime vocabulary. Everything else is an
- * actual cutover remnant, so this test scans executable source while keeping the migration's exact
- * old-name budget visible.
- */
 describe('clean-cut vocabulary', () => {
 	it('keeps deleted channel-agent identifiers out of live source', () => {
 		const schemaPlanPath = join(sourceRoot, 'compiler/schema-plan.ts');
@@ -42,23 +36,13 @@ describe('clean-cut vocabulary', () => {
 		expect(existsSync(join(sourceRoot, 'runtime/envoys/envoys.ts'))).toBe(true);
 	});
 
-	it('confines old persisted identifiers to the explicit rename lineage', () => {
-		const schemaPlan = readFileSync(join(sourceRoot, 'compiler/schema-plan.ts'), 'utf8');
-		const start = schemaPlan.indexOf("id: 'bolt:envoy-0000-rename-from-channel'");
-		const end = schemaPlan.indexOf("id: 'bolt:envoy-registrations'", start);
-		expect(start).toBeGreaterThan(-1);
-		expect(end).toBeGreaterThan(start);
-
-		const lineage = schemaPlan.slice(start, end);
-		const outsideLineage = `${schemaPlan.slice(0, start)}${schemaPlan.slice(end)}`;
-		expect(occurrences(lineage, /\bbolt_channel_registrations\b/g)).toBe(2);
-		expect(occurrences(lineage, /\bbolt_channel_receipts\b/g)).toBe(2);
-		expect(occurrences(lineage, /\bbolt_channel_inbound\b/g)).toBe(2);
-		expect(occurrences(lineage, /\bbolt_channel_receipts_window\b/g)).toBe(1);
-		expect(occurrences(lineage, /\bchannel_name\b/g)).toBe(3);
+	it('contains no persisted compatibility vocabulary', () => {
+		const source = sourceFiles(sourceRoot)
+			.map((path) => readFileSync(path, 'utf8'))
+			.join('\n');
 		expect(
 			occurrences(
-				outsideLineage,
+				source,
 				/\bbolt_channel_(?:registrations|receipts|inbound|receipts_window)\b|\bchannel_name\b/g
 			)
 		).toBe(0);
@@ -66,6 +50,7 @@ describe('clean-cut vocabulary', () => {
 
 	it('preserves every legitimate channel sense protected from the envoy rename', () => {
 		const schemaPlan = readFileSync(join(sourceRoot, 'compiler/schema-plan.ts'), 'utf8');
+		const systemModels = readFileSync(join(sourceRoot, 'authoring/system-models.ts'), 'utf8');
 		const transportIdentity = readFileSync(
 			join(sourceRoot, 'runtime/envoys/transport-identity.ts'),
 			'utf8'
@@ -75,16 +60,15 @@ describe('clean-cut vocabulary', () => {
 		const clientRuntime = readFileSync(join(sourceRoot, 'client/runtime.ts'), 'utf8');
 
 		// Person address book.
-		expect(schemaPlan).toContain(
-			'alter table bolt_auth_user add column if not exists channels jsonb'
-		);
+		expect(systemModels).toContain('channels: jsonb()');
+		expect(schemaPlan).not.toContain('alter table bolt_auth_user');
 		expect(transportIdentity).toContain('bolt_auth_user.channels');
 		// Deliberately deferred protocol wire field.
 		expect(protocol).toContain('VerifyInbound: { channel: Schema.NonEmptyString');
 		expect(protocol).toContain('Send: { channel: Schema.NonEmptyString');
 		// Browser/PostgreSQL channel vocabulary is unrelated to envoy identity.
 		expect(replica).toContain('BroadcastChannel');
-		expect(replica).toContain('readonly listen?:');
+		expect(replica).toContain('listen?(channel:');
 		expect(clientRuntime).toContain("query('select pg_notify($1, $2)'");
 	});
 });

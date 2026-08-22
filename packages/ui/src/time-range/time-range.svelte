@@ -13,7 +13,7 @@
 	import { cn } from '#lib/utils';
 	import { TimeRangeField } from 'bits-ui';
 	import { watch } from 'runed';
-	import { compareTimeValues } from './compare.js';
+	import { compareTimeValues } from '#lib/time-range/compare';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -208,7 +208,6 @@
 
 	// Determine which segments should be highlighted
 	const shouldHighlightStart = $derived(hasStartAfterEndError || hasCustomValidationError);
-	const shouldHighlightEnd = $derived(hasCustomValidationError);
 </script>
 
 <TimeRangeField.Root
@@ -278,7 +277,7 @@
 							{:else}
 								{@const isErrorSegment =
 									(type === 'start' && shouldHighlightStart) ||
-									(type === 'end' && shouldHighlightEnd)}
+									(type === 'end' && hasCustomValidationError)}
 								<TimeRangeField.Segment
 									{part}
 									class={cn(

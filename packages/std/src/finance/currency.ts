@@ -1,3 +1,18 @@
+import { Schema } from 'effect';
+
+/** A normalized ISO 4217 currency code shared by authored money fields and their renderers. */
+export const CurrencyCodeSchema = Schema.Trim.pipe(
+	Schema.check(Schema.isPattern(/^[A-Z]{3}$/, { message: 'Currency must be an ISO 4217 code.' }))
+);
+
+/** The one stored and wire shape of a monetary amount. */
+export const MoneyValueSchema = Schema.Struct({
+	value: Schema.Finite,
+	currency: CurrencyCodeSchema
+});
+
+export type MoneyValue = Schema.Schema.Type<typeof MoneyValueSchema>;
+
 const ZERO_DECIMAL = new Set([
 	'BIF',
 	'CLP',
@@ -27,69 +42,30 @@ export function currencyFractionDigits(currency: string): number {
 	return 2;
 }
 
+export function toMinorUnits(value: number, currency: string): bigint {
+	return BigInt(Math.round(value * 10 ** currencyFractionDigits(currency)));
+}
+
+export function fromMinorUnits(minor: bigint, currency: string): number {
+	return Number(minor) / 10 ** currencyFractionDigits(currency);
+}
+
 /**
  * Consolidated ISO Currency constant with all currency information
  * Each object contains: code, symbol, name, country, and flag
  */
+// prettier-ignore -- the static literal stays allocation-free while one row per currency keeps source size bounded.
 export const ISO_CURRENCY = [
 	{ code: 'AED', symbol: 'د.إ', name: 'UAE Dirham', country: 'AE', flag: '🇦🇪' },
-	{
-		code: 'AFN',
-		symbol: '؋',
-		name: 'Afghan Afghani',
-		country: 'AF',
-		flag: '🇦🇫'
-	},
+	{ code: 'AFN', symbol: '؋', name: 'Afghan Afghani', country: 'AF', flag: '🇦🇫' },
 	{ code: 'ALL', symbol: 'L', name: 'Albanian Lek', country: 'AL', flag: '🇦🇱' },
-	{
-		code: 'AMD',
-		symbol: '֏',
-		name: 'Armenian Dram',
-		country: 'AM',
-		flag: '🇦🇲'
-	},
-	{
-		code: 'ANG',
-		symbol: 'ƒ',
-		name: 'Netherlands Antillean Guilder',
-		country: 'CW',
-		flag: '🇨🇼'
-	},
-	{
-		code: 'AOA',
-		symbol: 'Kz',
-		name: 'Angolan Kwanza',
-		country: 'AO',
-		flag: '🇦🇴'
-	},
-	{
-		code: 'ARS',
-		symbol: '$',
-		name: 'Argentine Peso',
-		country: 'AR',
-		flag: '🇦🇷'
-	},
-	{
-		code: 'AUD',
-		symbol: 'A$',
-		name: 'Australian Dollar',
-		country: 'AU',
-		flag: '🇦🇺'
-	},
-	{
-		code: 'AWG',
-		symbol: 'ƒ',
-		name: 'Aruban Florin',
-		country: 'AW',
-		flag: '🇦🇼'
-	},
-	{
-		code: 'AZN',
-		symbol: '₼',
-		name: 'Azerbaijani Manat',
-		country: 'AZ',
-		flag: '🇦🇿'
-	},
+	{ code: 'AMD', symbol: '֏', name: 'Armenian Dram', country: 'AM', flag: '🇦🇲' },
+	{ code: 'ANG', symbol: 'ƒ', name: 'Netherlands Antillean Guilder', country: 'CW', flag: '🇨🇼' },
+	{ code: 'AOA', symbol: 'Kz', name: 'Angolan Kwanza', country: 'AO', flag: '🇦🇴' },
+	{ code: 'ARS', symbol: '$', name: 'Argentine Peso', country: 'AR', flag: '🇦🇷' },
+	{ code: 'AUD', symbol: 'A$', name: 'Australian Dollar', country: 'AU', flag: '🇦🇺' },
+	{ code: 'AWG', symbol: 'ƒ', name: 'Aruban Florin', country: 'AW', flag: '🇦🇼' },
+	{ code: 'AZN', symbol: '₼', name: 'Azerbaijani Manat', country: 'AZ', flag: '🇦🇿' },
 	{
 		code: 'BAM',
 		symbol: 'КМ',
@@ -97,871 +73,145 @@ export const ISO_CURRENCY = [
 		country: 'BA',
 		flag: '🇧🇦'
 	},
-	{
-		code: 'BBD',
-		symbol: '$',
-		name: 'Barbadian Dollar',
-		country: 'BB',
-		flag: '🇧🇧'
-	},
-	{
-		code: 'BDT',
-		symbol: '৳',
-		name: 'Bangladeshi Taka',
-		country: 'BD',
-		flag: '🇧🇩'
-	},
-	{
-		code: 'BGN',
-		symbol: 'лв',
-		name: 'Bulgarian Lev',
-		country: 'BG',
-		flag: '🇧🇬'
-	},
-	{
-		code: 'BHD',
-		symbol: '.د.ب',
-		name: 'Bahraini Dinar',
-		country: 'BH',
-		flag: '🇧🇭'
-	},
-	{
-		code: 'BIF',
-		symbol: 'Fr',
-		name: 'Burundian Franc',
-		country: 'BI',
-		flag: '🇧🇮'
-	},
-	{
-		code: 'BMD',
-		symbol: '$',
-		name: 'Bermudian Dollar',
-		country: 'BM',
-		flag: '🇧🇲'
-	},
-	{
-		code: 'BND',
-		symbol: '$',
-		name: 'Brunei Dollar',
-		country: 'BN',
-		flag: '🇧🇳'
-	},
-	{
-		code: 'BOB',
-		symbol: 'Bs.',
-		name: 'Bolivian Boliviano',
-		country: 'BO',
-		flag: '🇧🇴'
-	},
-	{
-		code: 'BOV',
-		symbol: '¤',
-		name: 'Bolivian Mvdol',
-		country: 'BO',
-		flag: '🇧🇴'
-	},
-	{
-		code: 'BRL',
-		symbol: 'R$',
-		name: 'Brazilian Real',
-		country: 'BR',
-		flag: '🇧🇷'
-	},
-	{
-		code: 'BSD',
-		symbol: '$',
-		name: 'Bahamian Dollar',
-		country: 'BS',
-		flag: '🇧🇸'
-	},
-	{
-		code: 'BTN',
-		symbol: 'Nu.',
-		name: 'Bhutanese Ngultrum',
-		country: 'BT',
-		flag: '🇧🇹'
-	},
-	{
-		code: 'BWP',
-		symbol: 'P',
-		name: 'Botswana Pula',
-		country: 'BW',
-		flag: '🇧🇼'
-	},
-	{
-		code: 'BYN',
-		symbol: 'Br',
-		name: 'Belarusian Ruble',
-		country: 'BY',
-		flag: '🇧🇾'
-	},
-	{
-		code: 'BZD',
-		symbol: '$',
-		name: 'Belize Dollar',
-		country: 'BZ',
-		flag: '🇧🇿'
-	},
-	{
-		code: 'CAD',
-		symbol: 'C$',
-		name: 'Canadian Dollar',
-		country: 'CA',
-		flag: '🇨🇦'
-	},
-	{
-		code: 'CDF',
-		symbol: 'Fr',
-		name: 'Congolese Franc',
-		country: 'CD',
-		flag: '🇨🇩'
-	},
+	{ code: 'BBD', symbol: '$', name: 'Barbadian Dollar', country: 'BB', flag: '🇧🇧' },
+	{ code: 'BDT', symbol: '৳', name: 'Bangladeshi Taka', country: 'BD', flag: '🇧🇩' },
+	{ code: 'BGN', symbol: 'лв', name: 'Bulgarian Lev', country: 'BG', flag: '🇧🇬' },
+	{ code: 'BHD', symbol: '.د.ب', name: 'Bahraini Dinar', country: 'BH', flag: '🇧🇭' },
+	{ code: 'BIF', symbol: 'Fr', name: 'Burundian Franc', country: 'BI', flag: '🇧🇮' },
+	{ code: 'BMD', symbol: '$', name: 'Bermudian Dollar', country: 'BM', flag: '🇧🇲' },
+	{ code: 'BND', symbol: '$', name: 'Brunei Dollar', country: 'BN', flag: '🇧🇳' },
+	{ code: 'BOB', symbol: 'Bs.', name: 'Bolivian Boliviano', country: 'BO', flag: '🇧🇴' },
+	{ code: 'BOV', symbol: '¤', name: 'Bolivian Mvdol', country: 'BO', flag: '🇧🇴' },
+	{ code: 'BRL', symbol: 'R$', name: 'Brazilian Real', country: 'BR', flag: '🇧🇷' },
+	{ code: 'BSD', symbol: '$', name: 'Bahamian Dollar', country: 'BS', flag: '🇧🇸' },
+	{ code: 'BTN', symbol: 'Nu.', name: 'Bhutanese Ngultrum', country: 'BT', flag: '🇧🇹' },
+	{ code: 'BWP', symbol: 'P', name: 'Botswana Pula', country: 'BW', flag: '🇧🇼' },
+	{ code: 'BYN', symbol: 'Br', name: 'Belarusian Ruble', country: 'BY', flag: '🇧🇾' },
+	{ code: 'BZD', symbol: '$', name: 'Belize Dollar', country: 'BZ', flag: '🇧🇿' },
+	{ code: 'CAD', symbol: 'C$', name: 'Canadian Dollar', country: 'CA', flag: '🇨🇦' },
+	{ code: 'CDF', symbol: 'Fr', name: 'Congolese Franc', country: 'CD', flag: '🇨🇩' },
 	{ code: 'CHE', symbol: '¤', name: 'WIR Euro', country: 'CH', flag: '🇨🇭' },
 	{ code: 'CHF', symbol: 'Fr', name: 'Swiss Franc', country: 'CH', flag: '🇨🇭' },
 	{ code: 'CHW', symbol: '¤', name: 'WIR Franc', country: 'CH', flag: '🇨🇭' },
-	{
-		code: 'CLF',
-		symbol: '¤',
-		name: 'Chilean Unit of Account',
-		country: 'CL',
-		flag: '🇨🇱'
-	},
+	{ code: 'CLF', symbol: '¤', name: 'Chilean Unit of Account', country: 'CL', flag: '🇨🇱' },
 	{ code: 'CLP', symbol: '$', name: 'Chilean Peso', country: 'CL', flag: '🇨🇱' },
 	{ code: 'CNY', symbol: '¥', name: 'Chinese Yuan', country: 'CN', flag: '🇨🇳' },
-	{
-		code: 'COP',
-		symbol: '$',
-		name: 'Colombian Peso',
-		country: 'CO',
-		flag: '🇨🇴'
-	},
-	{
-		code: 'COU',
-		symbol: '¤',
-		name: 'Unidad de Valor Real',
-		country: 'CO',
-		flag: '🇨🇴'
-	},
-	{
-		code: 'CRC',
-		symbol: '₡',
-		name: 'Costa Rican Colón',
-		country: 'CR',
-		flag: '🇨🇷'
-	},
-	{
-		code: 'CUC',
-		symbol: '$',
-		name: 'Cuban Convertible Peso',
-		country: 'CU',
-		flag: '🇨🇺'
-	},
+	{ code: 'COP', symbol: '$', name: 'Colombian Peso', country: 'CO', flag: '🇨🇴' },
+	{ code: 'COU', symbol: '¤', name: 'Unidad de Valor Real', country: 'CO', flag: '🇨🇴' },
+	{ code: 'CRC', symbol: '₡', name: 'Costa Rican Colón', country: 'CR', flag: '🇨🇷' },
+	{ code: 'CUC', symbol: '$', name: 'Cuban Convertible Peso', country: 'CU', flag: '🇨🇺' },
 	{ code: 'CUP', symbol: '$', name: 'Cuban Peso', country: 'CU', flag: '🇨🇺' },
-	{
-		code: 'CVE',
-		symbol: '$',
-		name: 'Cape Verdean Escudo',
-		country: 'CV',
-		flag: '🇨🇻'
-	},
-	{
-		code: 'CZK',
-		symbol: 'Kč',
-		name: 'Czech Koruna',
-		country: 'CZ',
-		flag: '🇨🇿'
-	},
-	{
-		code: 'DJF',
-		symbol: 'Fr',
-		name: 'Djiboutian Franc',
-		country: 'DJ',
-		flag: '🇩🇯'
-	},
-	{
-		code: 'DKK',
-		symbol: 'kr',
-		name: 'Danish Krone',
-		country: 'DK',
-		flag: '🇩🇰'
-	},
-	{
-		code: 'DOP',
-		symbol: '$',
-		name: 'Dominican Peso',
-		country: 'DO',
-		flag: '🇩🇴'
-	},
-	{
-		code: 'DZD',
-		symbol: 'د.ج',
-		name: 'Algerian Dinar',
-		country: 'DZ',
-		flag: '🇩🇿'
-	},
-	{
-		code: 'EGP',
-		symbol: '£',
-		name: 'Egyptian Pound',
-		country: 'EG',
-		flag: '🇪🇬'
-	},
-	{
-		code: 'ERN',
-		symbol: 'Nfk',
-		name: 'Eritrean Nakfa',
-		country: 'ER',
-		flag: '🇪🇷'
-	},
-	{
-		code: 'ETB',
-		symbol: 'Br',
-		name: 'Ethiopian Birr',
-		country: 'ET',
-		flag: '🇪🇹'
-	},
+	{ code: 'CVE', symbol: '$', name: 'Cape Verdean Escudo', country: 'CV', flag: '🇨🇻' },
+	{ code: 'CZK', symbol: 'Kč', name: 'Czech Koruna', country: 'CZ', flag: '🇨🇿' },
+	{ code: 'DJF', symbol: 'Fr', name: 'Djiboutian Franc', country: 'DJ', flag: '🇩🇯' },
+	{ code: 'DKK', symbol: 'kr', name: 'Danish Krone', country: 'DK', flag: '🇩🇰' },
+	{ code: 'DOP', symbol: '$', name: 'Dominican Peso', country: 'DO', flag: '🇩🇴' },
+	{ code: 'DZD', symbol: 'د.ج', name: 'Algerian Dinar', country: 'DZ', flag: '🇩🇿' },
+	{ code: 'EGP', symbol: '£', name: 'Egyptian Pound', country: 'EG', flag: '🇪🇬' },
+	{ code: 'ERN', symbol: 'Nfk', name: 'Eritrean Nakfa', country: 'ER', flag: '🇪🇷' },
+	{ code: 'ETB', symbol: 'Br', name: 'Ethiopian Birr', country: 'ET', flag: '🇪🇹' },
 	{ code: 'EUR', symbol: '€', name: 'Euro', country: 'DE', flag: '🇩🇪' },
-	{
-		code: 'FJD',
-		symbol: '$',
-		name: 'Fijian Dollar',
-		country: 'FJ',
-		flag: '🇫🇯'
-	},
-	{
-		code: 'FKP',
-		symbol: '£',
-		name: 'Falkland Islands Pound',
-		country: 'FK',
-		flag: '🇫🇰'
-	},
-	{
-		code: 'GBP',
-		symbol: '£',
-		name: 'British Pound',
-		country: 'GB',
-		flag: '🇬🇧'
-	},
-	{
-		code: 'GEL',
-		symbol: '₾',
-		name: 'Georgian Lari',
-		country: 'GE',
-		flag: '🇬🇪'
-	},
-	{
-		code: 'GHS',
-		symbol: '₵',
-		name: 'Ghanaian Cedi',
-		country: 'GH',
-		flag: '🇬🇭'
-	},
-	{
-		code: 'GIP',
-		symbol: '£',
-		name: 'Gibraltar Pound',
-		country: 'GI',
-		flag: '🇬🇮'
-	},
-	{
-		code: 'GMD',
-		symbol: 'D',
-		name: 'Gambian Dalasi',
-		country: 'GM',
-		flag: '🇬🇲'
-	},
-	{
-		code: 'GNF',
-		symbol: 'Fr',
-		name: 'Guinean Franc',
-		country: 'GN',
-		flag: '🇬🇳'
-	},
-	{
-		code: 'GTQ',
-		symbol: 'Q',
-		name: 'Guatemalan Quetzal',
-		country: 'GT',
-		flag: '🇬🇹'
-	},
-	{
-		code: 'GYD',
-		symbol: '$',
-		name: 'Guyanese Dollar',
-		country: 'GY',
-		flag: '🇬🇾'
-	},
-	{
-		code: 'HKD',
-		symbol: 'HK$',
-		name: 'Hong Kong Dollar',
-		country: 'HK',
-		flag: '🇭🇰'
-	},
-	{
-		code: 'HNL',
-		symbol: 'L',
-		name: 'Honduran Lempira',
-		country: 'HN',
-		flag: '🇭🇳'
-	},
-	{
-		code: 'HRK',
-		symbol: 'kn',
-		name: 'Croatian Kuna',
-		country: 'HR',
-		flag: '🇭🇷'
-	},
-	{
-		code: 'HTG',
-		symbol: 'G',
-		name: 'Haitian Gourde',
-		country: 'HT',
-		flag: '🇭🇹'
-	},
-	{
-		code: 'HUF',
-		symbol: 'Ft',
-		name: 'Hungarian Forint',
-		country: 'HU',
-		flag: '🇭🇺'
-	},
-	{
-		code: 'IDR',
-		symbol: 'Rp',
-		name: 'Indonesian Rupiah',
-		country: 'ID',
-		flag: '🇮🇩'
-	},
-	{
-		code: 'ILS',
-		symbol: '₪',
-		name: 'Israeli Shekel',
-		country: 'IL',
-		flag: '🇮🇱'
-	},
+	{ code: 'FJD', symbol: '$', name: 'Fijian Dollar', country: 'FJ', flag: '🇫🇯' },
+	{ code: 'FKP', symbol: '£', name: 'Falkland Islands Pound', country: 'FK', flag: '🇫🇰' },
+	{ code: 'GBP', symbol: '£', name: 'British Pound', country: 'GB', flag: '🇬🇧' },
+	{ code: 'GEL', symbol: '₾', name: 'Georgian Lari', country: 'GE', flag: '🇬🇪' },
+	{ code: 'GHS', symbol: '₵', name: 'Ghanaian Cedi', country: 'GH', flag: '🇬🇭' },
+	{ code: 'GIP', symbol: '£', name: 'Gibraltar Pound', country: 'GI', flag: '🇬🇮' },
+	{ code: 'GMD', symbol: 'D', name: 'Gambian Dalasi', country: 'GM', flag: '🇬🇲' },
+	{ code: 'GNF', symbol: 'Fr', name: 'Guinean Franc', country: 'GN', flag: '🇬🇳' },
+	{ code: 'GTQ', symbol: 'Q', name: 'Guatemalan Quetzal', country: 'GT', flag: '🇬🇹' },
+	{ code: 'GYD', symbol: '$', name: 'Guyanese Dollar', country: 'GY', flag: '🇬🇾' },
+	{ code: 'HKD', symbol: 'HK$', name: 'Hong Kong Dollar', country: 'HK', flag: '🇭🇰' },
+	{ code: 'HNL', symbol: 'L', name: 'Honduran Lempira', country: 'HN', flag: '🇭🇳' },
+	{ code: 'HRK', symbol: 'kn', name: 'Croatian Kuna', country: 'HR', flag: '🇭🇷' },
+	{ code: 'HTG', symbol: 'G', name: 'Haitian Gourde', country: 'HT', flag: '🇭🇹' },
+	{ code: 'HUF', symbol: 'Ft', name: 'Hungarian Forint', country: 'HU', flag: '🇭🇺' },
+	{ code: 'IDR', symbol: 'Rp', name: 'Indonesian Rupiah', country: 'ID', flag: '🇮🇩' },
+	{ code: 'ILS', symbol: '₪', name: 'Israeli Shekel', country: 'IL', flag: '🇮🇱' },
 	{ code: 'INR', symbol: '₹', name: 'Indian Rupee', country: 'IN', flag: '🇮🇳' },
-	{
-		code: 'IQD',
-		symbol: 'ع.د',
-		name: 'Iraqi Dinar',
-		country: 'IQ',
-		flag: '🇮🇶'
-	},
+	{ code: 'IQD', symbol: 'ع.د', name: 'Iraqi Dinar', country: 'IQ', flag: '🇮🇶' },
 	{ code: 'IRR', symbol: '﷼', name: 'Iranian Rial', country: 'IR', flag: '🇮🇷' },
-	{
-		code: 'ISK',
-		symbol: 'kr',
-		name: 'Icelandic Króna',
-		country: 'IS',
-		flag: '🇮🇸'
-	},
-	{
-		code: 'JMD',
-		symbol: '$',
-		name: 'Jamaican Dollar',
-		country: 'JM',
-		flag: '🇯🇲'
-	},
-	{
-		code: 'JOD',
-		symbol: 'د.ا',
-		name: 'Jordanian Dinar',
-		country: 'JO',
-		flag: '🇯🇴'
-	},
+	{ code: 'ISK', symbol: 'kr', name: 'Icelandic Króna', country: 'IS', flag: '🇮🇸' },
+	{ code: 'JMD', symbol: '$', name: 'Jamaican Dollar', country: 'JM', flag: '🇯🇲' },
+	{ code: 'JOD', symbol: 'د.ا', name: 'Jordanian Dinar', country: 'JO', flag: '🇯🇴' },
 	{ code: 'JPY', symbol: '¥', name: 'Japanese Yen', country: 'JP', flag: '🇯🇵' },
-	{
-		code: 'KES',
-		symbol: 'Sh',
-		name: 'Kenyan Shilling',
-		country: 'KE',
-		flag: '🇰🇪'
-	},
-	{
-		code: 'KGS',
-		symbol: 'с',
-		name: 'Kyrgyzstani Som',
-		country: 'KG',
-		flag: '🇰🇬'
-	},
-	{
-		code: 'KHR',
-		symbol: '៛',
-		name: 'Cambodian Riel',
-		country: 'KH',
-		flag: '🇰🇭'
-	},
-	{
-		code: 'KMF',
-		symbol: 'Fr',
-		name: 'Comorian Franc',
-		country: 'KM',
-		flag: '🇰🇲'
-	},
-	{
-		code: 'KPW',
-		symbol: '₩',
-		name: 'North Korean Won',
-		country: 'KP',
-		flag: '🇰🇵'
-	},
-	{
-		code: 'KRW',
-		symbol: '₩',
-		name: 'South Korean Won',
-		country: 'KR',
-		flag: '🇰🇷'
-	},
-	{
-		code: 'KWD',
-		symbol: 'د.ك',
-		name: 'Kuwaiti Dinar',
-		country: 'KW',
-		flag: '🇰🇼'
-	},
-	{
-		code: 'KYD',
-		symbol: '$',
-		name: 'Cayman Islands Dollar',
-		country: 'KY',
-		flag: '🇰🇾'
-	},
-	{
-		code: 'KZT',
-		symbol: '₸',
-		name: 'Kazakhstani Tenge',
-		country: 'KZ',
-		flag: '🇰🇿'
-	},
+	{ code: 'KES', symbol: 'Sh', name: 'Kenyan Shilling', country: 'KE', flag: '🇰🇪' },
+	{ code: 'KGS', symbol: 'с', name: 'Kyrgyzstani Som', country: 'KG', flag: '🇰🇬' },
+	{ code: 'KHR', symbol: '៛', name: 'Cambodian Riel', country: 'KH', flag: '🇰🇭' },
+	{ code: 'KMF', symbol: 'Fr', name: 'Comorian Franc', country: 'KM', flag: '🇰🇲' },
+	{ code: 'KPW', symbol: '₩', name: 'North Korean Won', country: 'KP', flag: '🇰🇵' },
+	{ code: 'KRW', symbol: '₩', name: 'South Korean Won', country: 'KR', flag: '🇰🇷' },
+	{ code: 'KWD', symbol: 'د.ك', name: 'Kuwaiti Dinar', country: 'KW', flag: '🇰🇼' },
+	{ code: 'KYD', symbol: '$', name: 'Cayman Islands Dollar', country: 'KY', flag: '🇰🇾' },
+	{ code: 'KZT', symbol: '₸', name: 'Kazakhstani Tenge', country: 'KZ', flag: '🇰🇿' },
 	{ code: 'LAK', symbol: '₭', name: 'Lao Kip', country: 'LA', flag: '🇱🇦' },
-	{
-		code: 'LBP',
-		symbol: 'ل.ل',
-		name: 'Lebanese Pound',
-		country: 'LB',
-		flag: '🇱🇧'
-	},
-	{
-		code: 'LKR',
-		symbol: 'Rs',
-		name: 'Sri Lankan Rupee',
-		country: 'LK',
-		flag: '🇱🇰'
-	},
-	{
-		code: 'LRD',
-		symbol: '$',
-		name: 'Liberian Dollar',
-		country: 'LR',
-		flag: '🇱🇷'
-	},
+	{ code: 'LBP', symbol: 'ل.ل', name: 'Lebanese Pound', country: 'LB', flag: '🇱🇧' },
+	{ code: 'LKR', symbol: 'Rs', name: 'Sri Lankan Rupee', country: 'LK', flag: '🇱🇰' },
+	{ code: 'LRD', symbol: '$', name: 'Liberian Dollar', country: 'LR', flag: '🇱🇷' },
 	{ code: 'LSL', symbol: 'L', name: 'Lesotho Loti', country: 'LS', flag: '🇱🇸' },
-	{
-		code: 'LYD',
-		symbol: 'ل.د',
-		name: 'Libyan Dinar',
-		country: 'LY',
-		flag: '🇱🇾'
-	},
-	{
-		code: 'MAD',
-		symbol: 'د.م.',
-		name: 'Moroccan Dirham',
-		country: 'MA',
-		flag: '🇲🇦'
-	},
+	{ code: 'LYD', symbol: 'ل.د', name: 'Libyan Dinar', country: 'LY', flag: '🇱🇾' },
+	{ code: 'MAD', symbol: 'د.م.', name: 'Moroccan Dirham', country: 'MA', flag: '🇲🇦' },
 	{ code: 'MDL', symbol: 'L', name: 'Moldovan Leu', country: 'MD', flag: '🇲🇩' },
-	{
-		code: 'MGA',
-		symbol: 'Ar',
-		name: 'Malagasy Ariary',
-		country: 'MG',
-		flag: '🇲🇬'
-	},
-	{
-		code: 'MKD',
-		symbol: 'ден',
-		name: 'Macedonian Denar',
-		country: 'MK',
-		flag: '🇲🇰'
-	},
-	{
-		code: 'MMK',
-		symbol: 'Ks',
-		name: 'Myanmar Kyat',
-		country: 'MM',
-		flag: '🇲🇲'
-	},
-	{
-		code: 'MNT',
-		symbol: '₮',
-		name: 'Mongolian Tugrik',
-		country: 'MN',
-		flag: '🇲🇳'
-	},
-	{
-		code: 'MOP',
-		symbol: 'P',
-		name: 'Macanese Pataca',
-		country: 'MO',
-		flag: '🇲🇴'
-	},
-	{
-		code: 'MRU',
-		symbol: 'UM',
-		name: 'Mauritanian Ouguiya',
-		country: 'MR',
-		flag: '🇲🇷'
-	},
-	{
-		code: 'MUR',
-		symbol: '₨',
-		name: 'Mauritian Rupee',
-		country: 'MU',
-		flag: '🇲🇺'
-	},
-	{
-		code: 'MVR',
-		symbol: '.ރ',
-		name: 'Maldivian Rufiyaa',
-		country: 'MV',
-		flag: '🇲🇻'
-	},
-	{
-		code: 'MWK',
-		symbol: 'MK',
-		name: 'Malawian Kwacha',
-		country: 'MW',
-		flag: '🇲🇼'
-	},
+	{ code: 'MGA', symbol: 'Ar', name: 'Malagasy Ariary', country: 'MG', flag: '🇲🇬' },
+	{ code: 'MKD', symbol: 'ден', name: 'Macedonian Denar', country: 'MK', flag: '🇲🇰' },
+	{ code: 'MMK', symbol: 'Ks', name: 'Myanmar Kyat', country: 'MM', flag: '🇲🇲' },
+	{ code: 'MNT', symbol: '₮', name: 'Mongolian Tugrik', country: 'MN', flag: '🇲🇳' },
+	{ code: 'MOP', symbol: 'P', name: 'Macanese Pataca', country: 'MO', flag: '🇲🇴' },
+	{ code: 'MRU', symbol: 'UM', name: 'Mauritanian Ouguiya', country: 'MR', flag: '🇲🇷' },
+	{ code: 'MUR', symbol: '₨', name: 'Mauritian Rupee', country: 'MU', flag: '🇲🇺' },
+	{ code: 'MVR', symbol: '.ރ', name: 'Maldivian Rufiyaa', country: 'MV', flag: '🇲🇻' },
+	{ code: 'MWK', symbol: 'MK', name: 'Malawian Kwacha', country: 'MW', flag: '🇲🇼' },
 	{ code: 'MXN', symbol: '$', name: 'Mexican Peso', country: 'MX', flag: '🇲🇽' },
-	{
-		code: 'MXV',
-		symbol: '¤',
-		name: 'Mexican Unidad de Inversion',
-		country: 'MX',
-		flag: '🇲🇽'
-	},
-	{
-		code: 'MYR',
-		symbol: 'RM',
-		name: 'Malaysian Ringgit',
-		country: 'MY',
-		flag: '🇲🇾'
-	},
-	{
-		code: 'MZN',
-		symbol: 'MT',
-		name: 'Mozambican Metical',
-		country: 'MZ',
-		flag: '🇲🇿'
-	},
-	{
-		code: 'NAD',
-		symbol: '$',
-		name: 'Namibian Dollar',
-		country: 'NA',
-		flag: '🇳🇦'
-	},
-	{
-		code: 'NGN',
-		symbol: '₦',
-		name: 'Nigerian Naira',
-		country: 'NG',
-		flag: '🇳🇬'
-	},
-	{
-		code: 'NIO',
-		symbol: 'C$',
-		name: 'Nicaraguan Córdoba',
-		country: 'NI',
-		flag: '🇳🇮'
-	},
-	{
-		code: 'NOK',
-		symbol: 'kr',
-		name: 'Norwegian Krone',
-		country: 'NO',
-		flag: '🇳🇴'
-	},
-	{
-		code: 'NPR',
-		symbol: '₨',
-		name: 'Nepalese Rupee',
-		country: 'NP',
-		flag: '🇳🇵'
-	},
-	{
-		code: 'NZD',
-		symbol: 'NZ$',
-		name: 'New Zealand Dollar',
-		country: 'NZ',
-		flag: '🇳🇿'
-	},
-	{
-		code: 'OMR',
-		symbol: 'ر.ع.',
-		name: 'Omani Rial',
-		country: 'OM',
-		flag: '🇴🇲'
-	},
-	{
-		code: 'PAB',
-		symbol: 'B/.',
-		name: 'Panamanian Balboa',
-		country: 'PA',
-		flag: '🇵🇦'
-	},
-	{
-		code: 'PEN',
-		symbol: 'S/',
-		name: 'Peruvian Sol',
-		country: 'PE',
-		flag: '🇵🇪'
-	},
-	{
-		code: 'PGK',
-		symbol: 'K',
-		name: 'Papua New Guinean Kina',
-		country: 'PG',
-		flag: '🇵🇬'
-	},
-	{
-		code: 'PHP',
-		symbol: '₱',
-		name: 'Philippine Peso',
-		country: 'PH',
-		flag: '🇵🇭'
-	},
-	{
-		code: 'PKR',
-		symbol: '₨',
-		name: 'Pakistani Rupee',
-		country: 'PK',
-		flag: '🇵🇰'
-	},
-	{
-		code: 'PLN',
-		symbol: 'zł',
-		name: 'Polish Złoty',
-		country: 'PL',
-		flag: '🇵🇱'
-	},
-	{
-		code: 'PYG',
-		symbol: '₲',
-		name: 'Paraguayan Guaraní',
-		country: 'PY',
-		flag: '🇵🇾'
-	},
-	{
-		code: 'QAR',
-		symbol: 'ر.ق',
-		name: 'Qatari Riyal',
-		country: 'QA',
-		flag: '🇶🇦'
-	},
-	{
-		code: 'RON',
-		symbol: 'lei',
-		name: 'Romanian Leu',
-		country: 'RO',
-		flag: '🇷🇴'
-	},
-	{
-		code: 'RSD',
-		symbol: 'дин.',
-		name: 'Serbian Dinar',
-		country: 'RS',
-		flag: '🇷🇸'
-	},
-	{
-		code: 'RUB',
-		symbol: '₽',
-		name: 'Russian Ruble',
-		country: 'RU',
-		flag: '🇷🇺'
-	},
-	{
-		code: 'RWF',
-		symbol: 'Fr',
-		name: 'Rwandan Franc',
-		country: 'RW',
-		flag: '🇷🇼'
-	},
+	{ code: 'MXV', symbol: '¤', name: 'Mexican Unidad de Inversion', country: 'MX', flag: '🇲🇽' },
+	{ code: 'MYR', symbol: 'RM', name: 'Malaysian Ringgit', country: 'MY', flag: '🇲🇾' },
+	{ code: 'MZN', symbol: 'MT', name: 'Mozambican Metical', country: 'MZ', flag: '🇲🇿' },
+	{ code: 'NAD', symbol: '$', name: 'Namibian Dollar', country: 'NA', flag: '🇳🇦' },
+	{ code: 'NGN', symbol: '₦', name: 'Nigerian Naira', country: 'NG', flag: '🇳🇬' },
+	{ code: 'NIO', symbol: 'C$', name: 'Nicaraguan Córdoba', country: 'NI', flag: '🇳🇮' },
+	{ code: 'NOK', symbol: 'kr', name: 'Norwegian Krone', country: 'NO', flag: '🇳🇴' },
+	{ code: 'NPR', symbol: '₨', name: 'Nepalese Rupee', country: 'NP', flag: '🇳🇵' },
+	{ code: 'NZD', symbol: 'NZ$', name: 'New Zealand Dollar', country: 'NZ', flag: '🇳🇿' },
+	{ code: 'OMR', symbol: 'ر.ع.', name: 'Omani Rial', country: 'OM', flag: '🇴🇲' },
+	{ code: 'PAB', symbol: 'B/.', name: 'Panamanian Balboa', country: 'PA', flag: '🇵🇦' },
+	{ code: 'PEN', symbol: 'S/', name: 'Peruvian Sol', country: 'PE', flag: '🇵🇪' },
+	{ code: 'PGK', symbol: 'K', name: 'Papua New Guinean Kina', country: 'PG', flag: '🇵🇬' },
+	{ code: 'PHP', symbol: '₱', name: 'Philippine Peso', country: 'PH', flag: '🇵🇭' },
+	{ code: 'PKR', symbol: '₨', name: 'Pakistani Rupee', country: 'PK', flag: '🇵🇰' },
+	{ code: 'PLN', symbol: 'zł', name: 'Polish Złoty', country: 'PL', flag: '🇵🇱' },
+	{ code: 'PYG', symbol: '₲', name: 'Paraguayan Guaraní', country: 'PY', flag: '🇵🇾' },
+	{ code: 'QAR', symbol: 'ر.ق', name: 'Qatari Riyal', country: 'QA', flag: '🇶🇦' },
+	{ code: 'RON', symbol: 'lei', name: 'Romanian Leu', country: 'RO', flag: '🇷🇴' },
+	{ code: 'RSD', symbol: 'дин.', name: 'Serbian Dinar', country: 'RS', flag: '🇷🇸' },
+	{ code: 'RUB', symbol: '₽', name: 'Russian Ruble', country: 'RU', flag: '🇷🇺' },
+	{ code: 'RWF', symbol: 'Fr', name: 'Rwandan Franc', country: 'RW', flag: '🇷🇼' },
 	{ code: 'SAR', symbol: '﷼', name: 'Saudi Riyal', country: 'SA', flag: '🇸🇦' },
-	{
-		code: 'SBD',
-		symbol: '$',
-		name: 'Solomon Islands Dollar',
-		country: 'SB',
-		flag: '🇸🇧'
-	},
-	{
-		code: 'SCR',
-		symbol: '₨',
-		name: 'Seychellois Rupee',
-		country: 'SC',
-		flag: '🇸🇨'
-	},
-	{
-		code: 'SDG',
-		symbol: 'ج.س.',
-		name: 'Sudanese Pound',
-		country: 'SD',
-		flag: '🇸🇩'
-	},
-	{
-		code: 'SEK',
-		symbol: 'kr',
-		name: 'Swedish Krona',
-		country: 'SE',
-		flag: '🇸🇪'
-	},
-	{
-		code: 'SGD',
-		symbol: 'S$',
-		name: 'Singapore Dollar',
-		country: 'SG',
-		flag: '🇸🇬'
-	},
-	{
-		code: 'SHP',
-		symbol: '£',
-		name: 'Saint Helena Pound',
-		country: 'SH',
-		flag: '🇸🇭'
-	},
-	{
-		code: 'SLL',
-		symbol: 'Le',
-		name: 'Sierra Leonean Leone',
-		country: 'SL',
-		flag: '🇸🇱'
-	},
-	{
-		code: 'SOS',
-		symbol: 'Sh',
-		name: 'Somali Shilling',
-		country: 'SO',
-		flag: '🇸🇴'
-	},
-	{
-		code: 'SRD',
-		symbol: '$',
-		name: 'Surinamese Dollar',
-		country: 'SR',
-		flag: '🇸🇷'
-	},
-	{
-		code: 'SSP',
-		symbol: '£',
-		name: 'South Sudanese Pound',
-		country: 'SS',
-		flag: '🇸🇸'
-	},
-	{
-		code: 'STN',
-		symbol: 'Db',
-		name: 'São Tomé and Príncipe Dobra',
-		country: 'ST',
-		flag: '🇸🇹'
-	},
-	{
-		code: 'SVC',
-		symbol: '$',
-		name: 'Salvadoran Colón',
-		country: 'SV',
-		flag: '🇸🇻'
-	},
-	{
-		code: 'SYP',
-		symbol: '£S',
-		name: 'Syrian Pound',
-		country: 'SY',
-		flag: '🇸🇾'
-	},
-	{
-		code: 'SZL',
-		symbol: 'L',
-		name: 'Swazi Lilangeni',
-		country: 'SZ',
-		flag: '🇸🇿'
-	},
+	{ code: 'SBD', symbol: '$', name: 'Solomon Islands Dollar', country: 'SB', flag: '🇸🇧' },
+	{ code: 'SCR', symbol: '₨', name: 'Seychellois Rupee', country: 'SC', flag: '🇸🇨' },
+	{ code: 'SDG', symbol: 'ج.س.', name: 'Sudanese Pound', country: 'SD', flag: '🇸🇩' },
+	{ code: 'SEK', symbol: 'kr', name: 'Swedish Krona', country: 'SE', flag: '🇸🇪' },
+	{ code: 'SGD', symbol: 'S$', name: 'Singapore Dollar', country: 'SG', flag: '🇸🇬' },
+	{ code: 'SHP', symbol: '£', name: 'Saint Helena Pound', country: 'SH', flag: '🇸🇭' },
+	{ code: 'SLL', symbol: 'Le', name: 'Sierra Leonean Leone', country: 'SL', flag: '🇸🇱' },
+	{ code: 'SOS', symbol: 'Sh', name: 'Somali Shilling', country: 'SO', flag: '🇸🇴' },
+	{ code: 'SRD', symbol: '$', name: 'Surinamese Dollar', country: 'SR', flag: '🇸🇷' },
+	{ code: 'SSP', symbol: '£', name: 'South Sudanese Pound', country: 'SS', flag: '🇸🇸' },
+	{ code: 'STN', symbol: 'Db', name: 'São Tomé and Príncipe Dobra', country: 'ST', flag: '🇸🇹' },
+	{ code: 'SVC', symbol: '$', name: 'Salvadoran Colón', country: 'SV', flag: '🇸🇻' },
+	{ code: 'SYP', symbol: '£S', name: 'Syrian Pound', country: 'SY', flag: '🇸🇾' },
+	{ code: 'SZL', symbol: 'L', name: 'Swazi Lilangeni', country: 'SZ', flag: '🇸🇿' },
 	{ code: 'THB', symbol: '฿', name: 'Thai Baht', country: 'TH', flag: '🇹🇭' },
-	{
-		code: 'TJS',
-		symbol: 'ЅМ',
-		name: 'Tajikistani Somoni',
-		country: 'TJ',
-		flag: '🇹🇯'
-	},
-	{
-		code: 'TMT',
-		symbol: 'm',
-		name: 'Turkmenistani Manat',
-		country: 'TM',
-		flag: '🇹🇲'
-	},
-	{
-		code: 'TND',
-		symbol: 'د.ت',
-		name: 'Tunisian Dinar',
-		country: 'TN',
-		flag: '🇹🇳'
-	},
-	{
-		code: 'TOP',
-		symbol: 'T$',
-		name: 'Tongan Paʻanga',
-		country: 'TO',
-		flag: '🇹🇴'
-	},
+	{ code: 'TJS', symbol: 'ЅМ', name: 'Tajikistani Somoni', country: 'TJ', flag: '🇹🇯' },
+	{ code: 'TMT', symbol: 'm', name: 'Turkmenistani Manat', country: 'TM', flag: '🇹🇲' },
+	{ code: 'TND', symbol: 'د.ت', name: 'Tunisian Dinar', country: 'TN', flag: '🇹🇳' },
+	{ code: 'TOP', symbol: 'T$', name: 'Tongan Paʻanga', country: 'TO', flag: '🇹🇴' },
 	{ code: 'TRY', symbol: '₺', name: 'Turkish Lira', country: 'TR', flag: '🇹🇷' },
-	{
-		code: 'TTD',
-		symbol: '$',
-		name: 'Trinidad and Tobago Dollar',
-		country: 'TT',
-		flag: '🇹🇹'
-	},
-	{
-		code: 'TWD',
-		symbol: '$',
-		name: 'New Taiwan Dollar',
-		country: 'TW',
-		flag: '🇹🇼'
-	},
-	{
-		code: 'TZS',
-		symbol: 'Sh',
-		name: 'Tanzanian Shilling',
-		country: 'TZ',
-		flag: '🇹🇿'
-	},
-	{
-		code: 'UAH',
-		symbol: '₴',
-		name: 'Ukrainian Hryvnia',
-		country: 'UA',
-		flag: '🇺🇦'
-	},
-	{
-		code: 'UGX',
-		symbol: 'Sh',
-		name: 'Ugandan Shilling',
-		country: 'UG',
-		flag: '🇺🇬'
-	},
+	{ code: 'TTD', symbol: '$', name: 'Trinidad and Tobago Dollar', country: 'TT', flag: '🇹🇹' },
+	{ code: 'TWD', symbol: '$', name: 'New Taiwan Dollar', country: 'TW', flag: '🇹🇼' },
+	{ code: 'TZS', symbol: 'Sh', name: 'Tanzanian Shilling', country: 'TZ', flag: '🇹🇿' },
+	{ code: 'UAH', symbol: '₴', name: 'Ukrainian Hryvnia', country: 'UA', flag: '🇺🇦' },
+	{ code: 'UGX', symbol: 'Sh', name: 'Ugandan Shilling', country: 'UG', flag: '🇺🇬' },
 	{ code: 'USD', symbol: '$', name: 'US Dollar', country: 'US', flag: '🇺🇸' },
-	{
-		code: 'USN',
-		symbol: '$',
-		name: 'US Dollar (Next day)',
-		country: 'US',
-		flag: '🇺🇸'
-	},
+	{ code: 'USN', symbol: '$', name: 'US Dollar (Next day)', country: 'US', flag: '🇺🇸' },
 	{
 		code: 'UYI',
 		symbol: '¤',
@@ -969,177 +219,33 @@ export const ISO_CURRENCY = [
 		country: 'UY',
 		flag: '🇺🇾'
 	},
-	{
-		code: 'UYU',
-		symbol: '$',
-		name: 'Uruguayan Peso',
-		country: 'UY',
-		flag: '🇺🇾'
-	},
-	{
-		code: 'UYW',
-		symbol: '¤',
-		name: 'Unidad Previsional',
-		country: 'UY',
-		flag: '🇺🇾'
-	},
-	{
-		code: 'UZS',
-		symbol: 'сўм',
-		name: 'Uzbekistani Som',
-		country: 'UZ',
-		flag: '🇺🇿'
-	},
-	{
-		code: 'VED',
-		symbol: 'Bs.D',
-		name: 'Venezuelan Bolívar Digital',
-		country: 'VE',
-		flag: '🇻🇪'
-	},
-	{
-		code: 'VES',
-		symbol: 'Bs.S',
-		name: 'Venezuelan Bolívar Soberano',
-		country: 'VE',
-		flag: '🇻🇪'
-	},
-	{
-		code: 'VND',
-		symbol: '₫',
-		name: 'Vietnamese Dong',
-		country: 'VN',
-		flag: '🇻🇳'
-	},
-	{
-		code: 'VUV',
-		symbol: 'Vt',
-		name: 'Vanuatu Vatu',
-		country: 'VU',
-		flag: '🇻🇺'
-	},
+	{ code: 'UYU', symbol: '$', name: 'Uruguayan Peso', country: 'UY', flag: '🇺🇾' },
+	{ code: 'UYW', symbol: '¤', name: 'Unidad Previsional', country: 'UY', flag: '🇺🇾' },
+	{ code: 'UZS', symbol: 'сўм', name: 'Uzbekistani Som', country: 'UZ', flag: '🇺🇿' },
+	{ code: 'VED', symbol: 'Bs.D', name: 'Venezuelan Bolívar Digital', country: 'VE', flag: '🇻🇪' },
+	{ code: 'VES', symbol: 'Bs.S', name: 'Venezuelan Bolívar Soberano', country: 'VE', flag: '🇻🇪' },
+	{ code: 'VND', symbol: '₫', name: 'Vietnamese Dong', country: 'VN', flag: '🇻🇳' },
+	{ code: 'VUV', symbol: 'Vt', name: 'Vanuatu Vatu', country: 'VU', flag: '🇻🇺' },
 	{ code: 'WST', symbol: 'T', name: 'Samoan Tala', country: 'WS', flag: '🇼🇸' },
-	{
-		code: 'XAF',
-		symbol: 'Fr',
-		name: 'Central African CFA Franc',
-		country: 'CM',
-		flag: '🇨🇲'
-	},
-	{
-		code: 'XAG',
-		symbol: 'oz',
-		name: 'Silver Ounce',
-		country: null,
-		flag: null
-	},
+	{ code: 'XAF', symbol: 'Fr', name: 'Central African CFA Franc', country: 'CM', flag: '🇨🇲' },
+	{ code: 'XAG', symbol: 'oz', name: 'Silver Ounce', country: null, flag: null },
 	{ code: 'XAU', symbol: 'oz', name: 'Gold Ounce', country: null, flag: null },
-	{
-		code: 'XBA',
-		symbol: '¤',
-		name: 'European Composite Unit',
-		country: null,
-		flag: null
-	},
-	{
-		code: 'XBB',
-		symbol: '¤',
-		name: 'European Monetary Unit',
-		country: null,
-		flag: null
-	},
-	{
-		code: 'XBC',
-		symbol: '¤',
-		name: 'European Unit of Account 9',
-		country: null,
-		flag: null
-	},
-	{
-		code: 'XBD',
-		symbol: '¤',
-		name: 'European Unit of Account 17',
-		country: null,
-		flag: null
-	},
-	{
-		code: 'XCD',
-		symbol: '$',
-		name: 'Eastern Caribbean Dollar',
-		country: 'AG',
-		flag: '🇦🇬'
-	},
-	{
-		code: 'XDR',
-		symbol: '¤',
-		name: 'Special Drawing Rights',
-		country: null,
-		flag: null
-	},
-	{
-		code: 'XOF',
-		symbol: 'Fr',
-		name: 'West African CFA Franc',
-		country: 'SN',
-		flag: '🇸🇳'
-	},
-	{
-		code: 'XPD',
-		symbol: 'oz',
-		name: 'Palladium Ounce',
-		country: null,
-		flag: null
-	},
+	{ code: 'XBA', symbol: '¤', name: 'European Composite Unit', country: null, flag: null },
+	{ code: 'XBB', symbol: '¤', name: 'European Monetary Unit', country: null, flag: null },
+	{ code: 'XBC', symbol: '¤', name: 'European Unit of Account 9', country: null, flag: null },
+	{ code: 'XBD', symbol: '¤', name: 'European Unit of Account 17', country: null, flag: null },
+	{ code: 'XCD', symbol: '$', name: 'Eastern Caribbean Dollar', country: 'AG', flag: '🇦🇬' },
+	{ code: 'XDR', symbol: '¤', name: 'Special Drawing Rights', country: null, flag: null },
+	{ code: 'XOF', symbol: 'Fr', name: 'West African CFA Franc', country: 'SN', flag: '🇸🇳' },
+	{ code: 'XPD', symbol: 'oz', name: 'Palladium Ounce', country: null, flag: null },
 	{ code: 'XPF', symbol: 'Fr', name: 'CFP Franc', country: 'PF', flag: '🇵🇫' },
-	{
-		code: 'XPT',
-		symbol: 'oz',
-		name: 'Platinum Ounce',
-		country: null,
-		flag: null
-	},
+	{ code: 'XPT', symbol: 'oz', name: 'Platinum Ounce', country: null, flag: null },
 	{ code: 'XSU', symbol: '¤', name: 'SUCRE', country: null, flag: null },
-	{
-		code: 'XTS',
-		symbol: '¤',
-		name: 'Testing Currency Code',
-		country: null,
-		flag: null
-	},
-	{
-		code: 'XUA',
-		symbol: '¤',
-		name: 'ADB Unit of Account',
-		country: null,
-		flag: null
-	},
-	{
-		code: 'XXX',
-		symbol: '¤',
-		name: 'Unknown Currency',
-		country: null,
-		flag: null
-	},
+	{ code: 'XTS', symbol: '¤', name: 'Testing Currency Code', country: null, flag: null },
+	{ code: 'XUA', symbol: '¤', name: 'ADB Unit of Account', country: null, flag: null },
+	{ code: 'XXX', symbol: '¤', name: 'Unknown Currency', country: null, flag: null },
 	{ code: 'YER', symbol: '﷼', name: 'Yemeni Rial', country: 'YE', flag: '🇾🇪' },
-	{
-		code: 'ZAR',
-		symbol: 'R',
-		name: 'South African Rand',
-		country: 'ZA',
-		flag: '🇿🇦'
-	},
-	{
-		code: 'ZMW',
-		symbol: 'ZK',
-		name: 'Zambian Kwacha',
-		country: 'ZM',
-		flag: '🇿🇲'
-	},
-	{
-		code: 'ZWL',
-		symbol: '$',
-		name: 'Zimbabwean Dollar',
-		country: 'ZW',
-		flag: '🇿🇼'
-	}
+	{ code: 'ZAR', symbol: 'R', name: 'South African Rand', country: 'ZA', flag: '🇿🇦' },
+	{ code: 'ZMW', symbol: 'ZK', name: 'Zambian Kwacha', country: 'ZM', flag: '🇿🇲' },
+	{ code: 'ZWL', symbol: '$', name: 'Zimbabwean Dollar', country: 'ZW', flag: '🇿🇼' }
 ] as const;

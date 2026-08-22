@@ -6,7 +6,7 @@
 	import { Cluster, Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
-	import type { SelectionDraft, StepsConfig } from './types.js';
+	import type { SelectionDraft, StepsConfig } from '#lib/multi-step-combobox/types';
 
 	const { t } = useI18n<UiKeys>();
 

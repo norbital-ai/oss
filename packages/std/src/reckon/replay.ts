@@ -1,16 +1,28 @@
+import { Schema } from 'effect';
 import type { ComputationDefinition, ComputationManifest } from './definition.js';
 import { createEnvironment } from './cel.server.js';
-import { runComputationWithEnv } from './runtime.server.js';
+import { runComputation } from './runtime.server.js';
 
-/** Result of replaying a manifest. */
-export type ReplayResult = {
+/**
+ * Result of replaying a manifest.
+ *
+ * The mismatch half is schema-owned so a caller replaying from the stored result of another host
+ * decodes it with the same shape the verifier produced.
+ */
+export const ReplayResultSchema = Schema.Struct({
 	/** The outputs produced by replaying. */
-	outputs: Record<string, unknown>;
+	outputs: Schema.Record(Schema.String, Schema.Unknown),
 	/** Whether the replayed outputs match the manifest's recorded outputs. */
-	matches: boolean;
+	matches: Schema.Boolean,
 	/** Per-output comparison (only included when there's a mismatch). */
-	mismatches?: Record<string, { expected: unknown; actual: unknown }>;
-};
+	mismatches: Schema.optional(
+		Schema.Record(
+			Schema.String,
+			Schema.Struct({ expected: Schema.Unknown, actual: Schema.Unknown })
+		)
+	)
+});
+export type ReplayResult = Schema.Schema.Type<typeof ReplayResultSchema>;
 
 /**
  * Replay a computation manifest to verify integrity.
@@ -46,7 +58,7 @@ export function replayManifest(
 		};
 	}
 
-	const { outputs } = runComputationWithEnv(env, manifest.inputSnapshot);
+	const { outputs } = runComputation(def, manifest.inputSnapshot, env);
 
 	const mismatches: Record<string, { expected: unknown; actual: unknown }> = {};
 	let matches = true;

@@ -9,9 +9,10 @@
 	import { Spinner } from '#lib/spinner';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
+	import { Effect } from 'effect';
 	import { tick } from 'svelte';
 	import ComboboxContent from './combobox-content.svelte';
-	import type { TComboboxCommandItem, TInfiniteLoadingConfig, TOption } from './index.js';
+	import type { TComboboxCommandItem, TInfiniteLoadingConfig, TOption } from '#lib/combobox';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -45,7 +46,7 @@
 		avoidCollisions: boolean;
 		collisionPadding: number;
 		renderSelectionContent: Snippet;
-		onOpenChange: (open: boolean) => Promise<void> | void;
+		onOpenChange: (open: boolean) => Effect.Effect<void, unknown> | void;
 		onClear: (e: Event) => void;
 		readonlyContent?: Snippet;
 		showCreateForm: boolean;
@@ -162,13 +163,18 @@
 		element?.scrollIntoView({ block: 'center' });
 	}
 
-	async function handleOpenChange(newOpen: boolean) {
-		await onOpenChange(newOpen);
-		if (newOpen && scrollToSelection) {
-			await tick();
-			await tick();
-			scrollToCurrentSelection();
-		}
+	function handleOpenChange(newOpen: boolean): void {
+		Effect.runFork(
+			Effect.gen(function* () {
+				const change = onOpenChange(newOpen);
+				if (change) yield* change;
+				if (newOpen && scrollToSelection) {
+					yield* Effect.promise(() => tick());
+					yield* Effect.promise(() => tick());
+					scrollToCurrentSelection();
+				}
+			})
+		);
 	}
 
 	const trapFocus = $derived(showCreateForm ? submitting : true);

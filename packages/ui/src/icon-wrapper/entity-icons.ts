@@ -77,13 +77,8 @@ export const ENTITY_ICONS = {
 	}
 } as const;
 
-export type DatatypeEntity = keyof typeof ENTITY_ICONS.datatype;
-export type ModuleEntity = keyof typeof ENTITY_ICONS.module;
-export type StateEntity = keyof typeof ENTITY_ICONS.state;
-export type UIEntity = keyof typeof ENTITY_ICONS.ui;
-
-export type EntityCategory = keyof typeof ENTITY_ICONS;
-export type EntityName<C extends EntityCategory> = keyof (typeof ENTITY_ICONS)[C];
+type EntityCategory = keyof typeof ENTITY_ICONS;
+type EntityName<C extends EntityCategory> = keyof (typeof ENTITY_ICONS)[C];
 
 export function resolveIcon(name: EntityName<EntityCategory> | string): string {
 	for (const category of Object.values(ENTITY_ICONS)) {

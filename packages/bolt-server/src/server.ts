@@ -3,12 +3,25 @@ import {
 	EffectId,
 	Invocation,
 	InvocationId,
+	PluginTrustedContext,
 	PROTOCOL_VERSION,
 	TransportRequest,
 	type FacilityBindings,
 	type RealtimeOutput
 } from '@norbital-ai/bolt-protocol';
-import { Clock, Effect, ManagedRuntime, Result, Schema } from 'effect';
+import {
+	Clock,
+	Context,
+	Cause,
+	Effect,
+	Layer,
+	ManagedRuntime,
+	Number as EffectNumber,
+	Option,
+	Result,
+	Schema,
+	Semaphore
+} from 'effect';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
@@ -36,55 +49,114 @@ export class CommandInputError extends Schema.TaggedError<CommandInputError>()(
 	}
 ) {}
 
-// stupidity:allow AL10 -- public server lifecycle stays beside its constructor in the required 14-file architecture
+/** The server lifecycle: the transport it owns and the one-shot gate that closes it. */
 export interface RunningServer {
 	readonly address: { readonly host: string; readonly port: number };
 	readonly close: () => Promise<void>;
 }
 
-// stupidity:allow AL10 -- private runtime requirement stays beside its only consumer in the required 14-file architecture
-type RuntimeServices = BundleLoader | ServerHealth;
+/** The runtime's services: one loader, one health machine, one id-ministing service. */
+type RuntimeServices = BundleLoader | ServerHealth | UuidGeneration;
 type RealtimeEvent = Extract<Invocation, { readonly _tag: 'Realtime' }>['event'];
+
+/**
+ * How this host mints the random identifiers every invocation and connection needs.
+ *
+ * A service rather than a direct `randomUUID()` call so the effects that mint identifiers are
+ * deterministic under an injected provider, and so the caller of a mint can be held responsible for
+ * the source's security posture (the default is `node:crypto`, not a numeric RNG).
+ */
+export class UuidGeneration extends Context.Service<
+	UuidGeneration,
+	{ readonly next: () => InvocationId }
+>()('@norbital-ai/bolt-server/UuidGeneration') {}
+
+export const uuidGenerationLayer = Layer.succeed(UuidGeneration, {
+	next: () => InvocationId.make(randomUUID())
+});
+
+/** The payload shape a host plugin may send, decoded once instead of field-guessed. */
+const PluginInput = Schema.Struct({
+	input: Schema.optionalKey(Schema.Json),
+	trustedContext: Schema.optionalKey(PluginTrustedContext)
+});
 
 /** Reads a bounded request body while coupling Node stream destruction to Effect interruption. */
 const readBody = (
 	request: IncomingMessage,
 	limit: number
 ): Effect.Effect<Uint8Array | undefined, ServerTransportError> =>
-	Effect.tryPromise({
-		try: async (signal) => {
-			const chunks: Array<Uint8Array> = [];
-			let length = 0;
-			/** Destroys the Node stream when the owning Effect is interrupted; stupidity:allow Q4 -- removable AbortSignal listener must retain callback identity. */
-			const abort = () => request.destroy(signal.reason);
-			signal.addEventListener('abort', abort, { once: true });
-			try {
-				for await (const chunk of request) {
-					const bytes =
-						typeof chunk === 'string' ? new TextEncoder().encode(chunk) : new Uint8Array(chunk);
-					length += bytes.byteLength;
-					if (length > limit) throw new Error('request body exceeds configured limit');
-					chunks.push(bytes);
-				}
-			} finally {
-				signal.removeEventListener('abort', abort);
+	Effect.callback((resume, signal) => {
+		const chunks: Array<Uint8Array> = [];
+		let length = 0;
+		let settled = false;
+		const cleanup = () => {
+			request.off('data', onData);
+			request.off('end', onEnd);
+			request.off('error', onError);
+			request.off('aborted', onAborted);
+			signal.removeEventListener('abort', onAbort);
+		};
+		const failure = (cause: unknown) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resume(
+				Effect.fail(
+					new ServerTransportError({
+						operation: 'BoltServer.Server.readBody',
+						message: 'Unable to read request body',
+						cause
+					})
+				)
+			);
+		};
+		function onData(chunk: string | Buffer): void {
+			const bytes =
+				typeof chunk === 'string' ? new TextEncoder().encode(chunk) : new Uint8Array(chunk);
+			length += bytes.byteLength;
+			if (length > limit) {
+				failure(new Error('request body exceeds configured limit'));
+				request.destroy();
+				return;
 			}
-
-			if (length === 0) return undefined;
+			chunks.push(bytes);
+		}
+		function onEnd(): void {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			if (length === 0) {
+				resume(Effect.succeed(undefined));
+				return;
+			}
 			const body = new Uint8Array(length);
 			let offset = 0;
 			for (const chunk of chunks) {
 				body.set(chunk, offset);
 				offset += chunk.byteLength;
 			}
-			return body;
-		},
-		catch: (cause) =>
-			new ServerTransportError({
-				operation: 'BoltServer.Server.readBody',
-				message: 'Unable to read request body',
-				cause
-			})
+			resume(Effect.succeed(body));
+		}
+		function onError(cause: Error): void {
+			failure(cause);
+		}
+		function onAborted(): void {
+			failure(new Error('request body stream was aborted'));
+		}
+		function onAbort(): void {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			request.destroy(signal.reason);
+		}
+
+		request.on('data', onData);
+		request.once('end', onEnd);
+		request.once('error', onError);
+		request.once('aborted', onAborted);
+		signal.addEventListener('abort', onAbort, { once: true });
+		return Effect.sync(cleanup);
 	});
 
 /** Writes a terminal JSON response only while the transport remains writable. */
@@ -189,9 +261,10 @@ const dispatchRealtime = Effect.fn('BoltServer.Server.dispatchRealtime')(functio
 	facilities: FacilityBindings
 ) {
 	const now = yield* Clock.currentTimeMillis;
+	const uuid = yield* UuidGeneration;
 	const invocation = Invocation.cases.Realtime.make({
 		protocolVersion: PROTOCOL_VERSION,
-		id: InvocationId.make(randomUUID()),
+		id: uuid.next(),
 		scope: configuration.scope,
 		deadlineEpochMs: now + configuration.invocationTimeoutMillis,
 		connectionId,
@@ -240,6 +313,7 @@ const dispatchRealtime = Effect.fn('BoltServer.Server.dispatchRealtime')(functio
 	}
 	return realtime;
 });
+
 const handleSse = Effect.fn('BoltServer.Server.handleSse')(function* (
 	request: IncomingMessage,
 	response: ServerResponse,
@@ -248,11 +322,12 @@ const handleSse = Effect.fn('BoltServer.Server.handleSse')(function* (
 	facilities: FacilityBindings
 ) {
 	const requestedConnectionId = url.searchParams.get('connectionId') ?? undefined;
-	const connectionId = requestedConnectionId ?? randomUUID();
+	const uuid = yield* UuidGeneration;
+	const connectionId = requestedConnectionId ?? uuid.next();
 	const afterCursor = url.searchParams.get('afterCursor') ?? undefined;
 	const requestedMaxFrames = Number(url.searchParams.get('maxFrames') ?? '64');
 	const maxFrames = Number.isInteger(requestedMaxFrames)
-		? Math.min(Math.max(requestedMaxFrames, 1), 256)
+		? EffectNumber.clamp({ minimum: 1, maximum: 256 })(requestedMaxFrames)
 		: 64;
 	let event: RealtimeEvent;
 	if (request.method === 'DELETE') {
@@ -282,35 +357,35 @@ const handleSse = Effect.fn('BoltServer.Server.handleSse')(function* (
 	response.setHeader('content-type', 'text/event-stream; charset=utf-8');
 	response.setHeader('cache-control', 'no-store');
 	response.setHeader('x-bolt-connection-id', connectionId);
-	yield* Effect.tryPromise({
-		try: (signal) =>
-			(output?.frames ?? []).reduce(
-				(pending, frame) =>
-					pending.then(async () => {
-						if (signal.aborted || response.destroyed) throw signal.reason;
-						const payload = JSON.stringify({
-							cursor: frame.cursor,
-							kind: frame.kind,
-							bytes: Buffer.from(frame.bytes).toString('base64')
-						});
-						if (!response.write(`event: ${frame.kind}\ndata: ${payload}\n\n`)) {
-							await Promise.race([
-								once(response, 'drain', { signal }),
-								once(response, 'close', { signal }).then(() => {
-									throw new Error('SSE client disconnected');
-								})
-							]);
-						}
-					}),
-				Promise.resolve()
-			),
-		catch: (cause) =>
-			new ServerTransportError({
-				operation: 'BoltServer.Server.writeSse',
-				message: 'Unable to write Bolt SSE frames',
-				cause
-			})
-	});
+	yield* Effect.forEach(
+		output?.frames ?? [],
+		(frame) =>
+			Effect.tryPromise({
+				try: async (signal) => {
+					if (signal.aborted || response.destroyed) throw signal.reason;
+					const payload = JSON.stringify({
+						cursor: frame.cursor,
+						kind: frame.kind,
+						bytes: Buffer.from(frame.bytes).toString('base64')
+					});
+					if (!response.write(`event: ${frame.kind}\ndata: ${payload}\n\n`)) {
+						await Promise.race([
+							once(response, 'drain', { signal }),
+							once(response, 'close', { signal }).then(() => {
+								throw new Error('SSE client disconnected');
+							})
+						]);
+					}
+				},
+				catch: (cause) =>
+					new ServerTransportError({
+						operation: 'BoltServer.Server.writeSse',
+						message: 'Unable to write Bolt SSE frames',
+						cause
+					})
+			}),
+		{ discard: true }
+	);
 	response.end();
 });
 
@@ -364,9 +439,9 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 				})
 		});
 		const pluginBody = yield* readBody(request, configuration.requestBodyLimitBytes);
-		const decodedPayload = yield* (
+		const parsedPayload = yield* (
 			pluginBody === undefined
-				? Effect.succeed<Schema.Json>(null)
+				? Effect.succeed<Schema.Json>({})
 				: Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
 						new TextDecoder().decode(pluginBody)
 					).pipe(
@@ -379,32 +454,43 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 						)
 					)
 		).pipe(Effect.result);
+		if (Result.isFailure(parsedPayload)) {
+			writeJson(response, 400, parsedPayload.failure);
+			return;
+		}
+		const decodedPayload = yield* Schema.decodeUnknownEffect(PluginInput)(
+			parsedPayload.success
+		).pipe(
+			Effect.mapError(
+				() =>
+					new CommandInputError({
+						code: 'invalid_json_value',
+						message: 'Bolt plugin body does not match the plugin input contract'
+					})
+			),
+			Effect.result
+		);
 		if (Result.isFailure(decodedPayload)) {
 			writeJson(response, 400, decodedPayload.failure);
 			return;
 		}
-		const payload = decodedPayload.success;
-		const read = (field: string): Schema.Json =>
-			payload !== null && typeof payload === 'object' && !Array.isArray(payload)
-				? ((Reflect.get(payload, field) ?? null) as Schema.Json)
-				: null;
 		const pluginNow = yield* Clock.currentTimeMillis;
 		writeDispatchResult(
 			response,
 			yield* dispatch(
 				Invocation.cases.Plugin.make({
 					protocolVersion: PROTOCOL_VERSION,
-					id: InvocationId.make(randomUUID()),
+					id: (yield* UuidGeneration).next(),
 					scope: configuration.scope,
 					deadlineEpochMs: pluginNow + configuration.invocationTimeoutMillis,
 					plugin: names.plugin,
 					command: names.command,
-					input: read('input'),
+					input: decodedPayload.success.input ?? null,
 					// Carried from the request rather than from the body, so the credential Bolt
 					// authenticates is the one the caller actually presented on the wire — the body is
 					// the part an attacker writes, and `trustedContext` rides in it.
 					headers: rawRequestHeaders(request),
-					trustedContext: read('trustedContext')
+					trustedContext: decodedPayload.success.trustedContext ?? {}
 				}),
 				facilities,
 				configuration.invocationTimeoutMillis
@@ -458,7 +544,7 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 		const now = yield* Clock.currentTimeMillis;
 		const invocation = Invocation.cases.Command.make({
 			protocolVersion: PROTOCOL_VERSION,
-			id: InvocationId.make(randomUUID()),
+			id: (yield* UuidGeneration).next(),
 			scope: configuration.scope,
 			deadlineEpochMs: now + configuration.invocationTimeoutMillis,
 			command,
@@ -499,7 +585,7 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 	const now = yield* Clock.currentTimeMillis;
 	const invocation = Invocation.cases.Request.make({
 		protocolVersion: PROTOCOL_VERSION,
-		id: InvocationId.make(randomUUID()),
+		id: (yield* UuidGeneration).next(),
 		scope: configuration.scope,
 		deadlineEpochMs: now + configuration.invocationTimeoutMillis,
 		method: request.method ?? 'GET',
@@ -511,33 +597,69 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 	writeDispatchResult(response, result);
 });
 
+/** Completes one realtime frame write through ws's callback API, mapped to the transport error contract. */
+const writeRealtimeFrame = (
+	socket: WebSocket,
+	frame: RealtimeOutput['frames'][number]
+): Effect.Effect<void, ServerTransportError> =>
+	Effect.callback<void, unknown>((resume) => {
+		if (socket.readyState !== WebSocket.OPEN) {
+			resume(Effect.void);
+			return;
+		}
+		socket.send(frame.bytes, { binary: frame.kind === 'binary' }, (error) => {
+			if (error == null) resume(Effect.void);
+			else resume(Effect.fail(error));
+		});
+	}).pipe(
+		Effect.mapError(
+			(cause) =>
+				new ServerTransportError({
+					operation: 'BoltServer.Server.writeRealtimeFrame',
+					message: 'Unable to write Bolt realtime frame',
+					cause
+				})
+		)
+	);
+
 /** Applies frames and an optional close instruction in Bolt cursor order. */
-const applyRealtimeOutput = async (
+const applyRealtimeOutput = Effect.fn('BoltServer.Server.applyRealtimeOutput')(function* (
 	socket: WebSocket,
 	output: RealtimeOutput | undefined
-): Promise<void> => {
+) {
 	if (output === undefined) return;
-	await output.frames.reduce(
-		(pending, frame) =>
-			pending.then(
-				() =>
-					new Promise<void>((resolve, reject) => {
-						if (socket.readyState !== WebSocket.OPEN) {
-							resolve();
-							return;
-						}
-						socket.send(frame.bytes, { binary: frame.kind === 'binary' }, (error) => {
-							if (error == null) resolve();
-							else reject(error);
-						});
-					})
-			),
-		Promise.resolve()
-	);
+	yield* Effect.forEach(output.frames, (frame) => writeRealtimeFrame(socket, frame));
 	if (output.close !== undefined && socket.readyState === WebSocket.OPEN) {
 		socket.close(output.close.code, output.close.reason);
 	}
-};
+});
+
+/** One event, dispatched and drained under a single serial permit; the repeated Pulls depend on each other. */
+const processRealtimeEvent = Effect.fn('BoltServer.Server.processRealtimeEvent')(function* (
+	connectionId: string,
+	event: RealtimeEvent,
+	configuration: ServerConfiguration,
+	facilities: FacilityBindings,
+	socket: WebSocket
+) {
+	const output = yield* dispatchRealtime(connectionId, event, configuration, facilities);
+	yield* applyRealtimeOutput(socket, output);
+	let cursor = output?.nextCursor;
+	while (cursor !== undefined && socket.readyState === WebSocket.OPEN) {
+		const pulled = yield* dispatchRealtime(
+			connectionId,
+			Invocation.cases.Realtime.fields.event.cases.Pull.make({
+				afterCursor: cursor,
+				maxFrames: 64
+			}),
+			configuration,
+			facilities
+		);
+		yield* applyRealtimeOutput(socket, pulled);
+		if ((pulled?.frames.length ?? 0) === 0) return;
+		cursor = pulled?.nextCursor;
+	}
+});
 
 /** Starts the HTTP, static, SSE, and WebSocket shell around one loaded Bolt bundle. */
 export const startServer = async <E>(
@@ -564,84 +686,98 @@ export const startServer = async <E>(
 			.catch((cause: unknown) => {
 				// The response body stays opaque, but an unexplained 500 with no server-side record
 				// is undiagnosable — every operator report of one started here.
-				console.error(`bolt-server: ${request.method} ${request.url} failed`, cause);
+				void Effect.runPromise(
+					Effect.logError(`bolt-server: ${request.method} ${request.url} failed`, cause)
+				);
 				writeJson(response, 500, { code: 'bolt_server.internal_error' });
 			});
 	});
 
 	websocketServer.on('connection', (socket, request) => {
-		const connectionId = randomUUID();
-		let sequence = 0;
-		let tail = Promise.resolve();
-
-		/** Dispatches one bounded realtime event under the server shutdown signal; stupidity:allow Q4 -- per-connection closure binds session identity and shutdown signal. */
-		const invoke = (event: RealtimeEvent) =>
-			runtime.runPromise(dispatchRealtime(connectionId, event, configuration, facilities), {
-				signal: shutdown.signal
+		/** Mints the session identity and the serialization gate before any event can be enqueued. */
+		const session = () =>
+			Effect.gen(function* () {
+				const uuid = yield* UuidGeneration;
+				const semaphore = yield* Semaphore.make(1);
+				return { connectionId: uuid.next(), semaphore };
 			});
+		void runtime
+			.runPromise(session(), { signal: shutdown.signal })
+			.then(({ connectionId, semaphore }) => {
+				let sequence = 0;
 
-		/** Serializes events and cursor pulls for one socket to preserve session order. */
-		const enqueue = (event: RealtimeEvent): Promise<void> => {
-			tail = tail
-				.then(async () => {
-					/** Recursively drains Pull pages because each cursor depends on its predecessor. */
-					const pullRemaining = async (cursor: string | undefined): Promise<void> => {
-						if (cursor === undefined || socket.readyState !== WebSocket.OPEN) return;
-						const pulled = await invoke(
-							Invocation.cases.Realtime.fields.event.cases.Pull.make({
-								afterCursor: cursor,
-								maxFrames: 64
-							})
-						);
-						await applyRealtimeOutput(socket, pulled);
-						if ((pulled?.frames.length ?? 0) === 0) return;
-						await pullRemaining(pulled?.nextCursor);
-					};
-					const output = await invoke(event);
-					await applyRealtimeOutput(socket, output);
-					await pullRemaining(output?.nextCursor);
-				})
-				.catch(() => {
-					if (socket.readyState === WebSocket.OPEN)
-						socket.close(1011, 'Bolt realtime dispatch failed');
+				/** Runs one event under the session permit, reporting a dispatch failure by closing the socket. */
+				const enqueue = (event: RealtimeEvent): Promise<void> =>
+					runtime.runPromise(
+						Semaphore.withPermit(semaphore)(
+							processRealtimeEvent(connectionId, event, configuration, facilities, socket)
+						).pipe(
+							Effect.catchCause((cause) =>
+								Effect.sync(() => {
+									if (!Cause.hasInterruptsOnly(cause) && socket.readyState === WebSocket.OPEN) {
+										socket.close(1011, 'Bolt realtime dispatch failed');
+									}
+								})
+							)
+						),
+						{ signal: shutdown.signal }
+					);
+				/** Gives Bolt a durable cancellation event before the host closes the socket; stupidity:allow Q4 -- Set membership requires one stable per-connection callback identity. */
+				const cancel = (): Promise<void> =>
+					enqueue(
+						Invocation.cases.Realtime.fields.event.cases.Cancel.make({
+							reason: 'Server shutting down'
+						})
+					);
+				cancelConnections.add(cancel);
+
+				const protocol = request.headers['sec-websocket-protocol']?.split(',')[0]?.trim();
+				void enqueue(
+					Invocation.cases.Realtime.fields.event.cases.Open.make(
+						protocol === undefined || protocol.length === 0 ? {} : { protocol }
+					)
+				);
+				socket.on('message', (data, isBinary) => {
+					void enqueue(
+						Invocation.cases.Realtime.fields.event.cases.Input.make({
+							frame: {
+								sequence: sequence++,
+								kind: isBinary ? 'binary' : 'text',
+								bytes: Array.isArray(data)
+									? new Uint8Array(Buffer.concat(data))
+									: new Uint8Array(data)
+							}
+						})
+					);
 				});
-			return tail;
-		};
-		/** Gives Bolt a durable cancellation event before the host closes the socket; stupidity:allow Q4 -- Set membership requires one stable per-connection callback identity. */
-		const cancel = () =>
-			enqueue(
-				Invocation.cases.Realtime.fields.event.cases.Cancel.make({
-					reason: 'Server shutting down'
-				})
-			);
-		cancelConnections.add(cancel);
-
-		const protocol = request.headers['sec-websocket-protocol']?.split(',')[0]?.trim();
-		enqueue(
-			Invocation.cases.Realtime.fields.event.cases.Open.make(
-				protocol === undefined || protocol.length === 0 ? {} : { protocol }
-			)
-		);
-		socket.on('message', (data, isBinary) => {
-			enqueue(
-				Invocation.cases.Realtime.fields.event.cases.Input.make({
-					frame: {
-						sequence: sequence++,
-						kind: isBinary ? 'binary' : 'text',
-						bytes: Array.isArray(data) ? new Uint8Array(Buffer.concat(data)) : new Uint8Array(data)
+				socket.once('close', (code, reason) => {
+					if (shutdown.signal.aborted) {
+						cancelConnections.delete(cancel);
+						return;
 					}
-				})
-			);
-		});
-		socket.once('close', (code, reason) => {
-			cancelConnections.delete(cancel);
-			enqueue(
-				Invocation.cases.Realtime.fields.event.cases.Close.make({
-					code,
-					reason: reason.toString('utf8')
-				})
-			);
-		});
+					void Effect.runPromise(
+						Effect.tryPromise(() =>
+							enqueue(
+								Invocation.cases.Realtime.fields.event.cases.Close.make({
+									code,
+									reason: reason.toString('utf8')
+								})
+							)
+						).pipe(
+							Effect.ensuring(Effect.sync(() => cancelConnections.delete(cancel))),
+							Effect.catch(() => Effect.void)
+						)
+					);
+				});
+			})
+			.catch((cause: unknown) => {
+				void Effect.runPromise(
+					Effect.logError('bolt-server: websocket session setup failed', cause)
+				);
+				if (socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
+					socket.close(1011, 'Bolt websocket session failed');
+				}
+			});
 	});
 
 	server.on('upgrade', (request, socket, head) => {
@@ -689,6 +825,3 @@ export const startServer = async <E>(
 		close
 	};
 };
-
-/** Names the physical transport constructor for explicit host composition. */
-export const ServerTransport = { start: startServer };

@@ -1,7 +1,26 @@
-import { SQL, getTableColumns, is, sql } from 'drizzle-orm';
-import { PgDialect, pgTable, type AnyPgColumn, type AnyPgColumnBuilder } from 'drizzle-orm/pg-core';
-import type { FieldDefinition, ScalarType } from './workspace-schema.js';
-import type { ModelDeclaration } from './models-schema.js';
+import { SQL, getColumns, is, sql } from 'drizzle-orm';
+import {
+	PgDialect,
+	pgTable,
+	uuid,
+	type AnyPgColumn,
+	type AnyPgColumnBuilder,
+	type PgBuildColumns,
+	type PgBuildExtraConfigColumns,
+	type PgTableExtraConfigValue,
+	type PgTableWithColumns
+} from 'drizzle-orm/pg-core';
+import { Effect, Record as EffectRecord } from 'effect';
+import type { CollectionDefinition, FieldDefinition, ScalarType } from './workspace-schema.js';
+import {
+	isReferenceBuilder,
+	referenceStorageColumn,
+	type AnyModelFieldBuilder,
+	type ModelDeclaration,
+	type ModelIndex,
+	type ReferenceBuilder
+} from './models-schema.js';
+import { defineSystemRowModel, type SystemRowColumns } from './system-row-model.js';
 
 /**
  * Reads what a `defineModel` declaration actually says.
@@ -165,12 +184,13 @@ const declaredColumnSql = (
 	// every other column's type — the scalar mapping in `buildSchemaPlan` still answers, exactly as it
 	// did before this existed — but a default this cannot render is a divergence, and swallowing that
 	// here would trade a named error for the silent mismatch this function exists to prevent.
-	let built: Readonly<Record<string, AnyPgColumn>>;
-	try {
-		built = getTableColumns(pgTable('bolt_column_types', columns));
-	} catch {
-		return declared;
-	}
+	// The module is deliberately synchronous API (its callers read it in plain passes), so the Effect
+	// pipeline is adapted once at this edge.
+	const built = Effect.runSync(
+		Effect.try(() => getColumns(pgTable('bolt_column_types', columns))).pipe(
+			Effect.catch(() => Effect.succeed<Readonly<Record<string, AnyPgColumn>>>({}))
+		)
+	) as Readonly<Record<string, AnyPgColumn>>;
 	for (const [name, column] of Object.entries(built)) {
 		if (typeof configOf(columns[name])?.dimensions === 'number') continue;
 		const sqlDefault = declaredDefault(column);
@@ -184,12 +204,34 @@ const declaredColumnSql = (
 
 /** Describes one authored model's columns as the field definitions the runtime and schema plan consume. */
 export const describeModelColumns = (
-	columns: Readonly<Record<string, AnyPgColumnBuilder>> | undefined
+	columns: Readonly<Record<string, AnyModelFieldBuilder>> | undefined
 ): Readonly<Record<string, FieldDefinition>> => {
 	if (columns === undefined) return {};
-	const columnSql = declaredColumnSql(columns);
+	const physicalColumns = Object.fromEntries(
+		Object.entries(columns).filter(
+			(entry): entry is [string, AnyPgColumnBuilder] => !isReferenceBuilder(entry[1])
+		)
+	);
+	const columnSql = declaredColumnSql(physicalColumns);
 	const fields: Record<string, FieldDefinition> = {};
 	for (const [name, builder] of Object.entries(columns)) {
+		if (isReferenceBuilder(builder)) {
+			fields[name] = {
+				type: 'reference',
+				required: builder.config.notNull,
+				indexed: true,
+				...(builder.config.isUnique ? { unique: true } : {}),
+				reference: {
+					targets: Object.entries(builder.targets).map(([tag, collection]) => ({
+						tag,
+						collection,
+						storageColumn: referenceStorageColumn(name, tag)
+					})),
+					onDelete: builder.config.onDelete
+				}
+			};
+			continue;
+		}
 		const config = configOf(builder);
 		if (config === undefined) continue;
 		const { sqlType, sqlDefault } = columnSql.get(name) ?? {};
@@ -200,6 +242,8 @@ export const describeModelColumns = (
 			// cannot satisfy and the database computes anyway.
 			required: generated === undefined && config.notNull === true,
 			indexed: config.primaryKey === true || config.isUnique === true,
+			...(config.primaryKey === true ? { primaryKey: true } : {}),
+			...(config.isUnique === true ? { unique: true } : {}),
 			...(sqlType === undefined ? {} : { sqlType }),
 			// Skipped on a generated column for the same reason `required` is: Postgres refuses a column
 			// that is both computed and defaulted, and Drizzle cannot express one either.
@@ -245,6 +289,186 @@ export const describeModel = (
 	declaration: ModelDeclaration | undefined
 ): Readonly<Record<string, FieldDefinition>> => describeModelColumns(declaration?.columns);
 
+type ModelCollectionOptions = Readonly<{
+	readonly hooks?: ReadonlyArray<string>;
+	readonly sourcePath?: string;
+}>;
+
+const assertNoSystemColumnOverrides = (declaration: ModelDeclaration | undefined): void => {
+	if (declaration === undefined) return;
+	const system = defineSystemRowModel().columns;
+	const collisions = Object.keys(declaration.columns)
+		.filter((name) => name in system)
+		.toSorted();
+	if (collisions.length > 0)
+		throw new TypeError(`A model cannot redeclare platform columns: ${collisions.join(', ')}`);
+};
+
+/**
+ * The single column of a plain index — one string column and nothing declared.
+ *
+ * A model may declare an index with `unique`, `where`, `method`, `opclass` or expression members;
+ * only the bare form can be folded into the column's own `indexed` flag, which is what this
+ * separates from indexes that have to keep travelling as their own entity.
+ */
+const simpleIndexColumn = (index: ModelIndex): string | undefined => {
+	if (index.columns.length !== 1) return undefined;
+	const [column] = index.columns;
+	return typeof column === 'string' &&
+		index.name === undefined &&
+		index.unique === undefined &&
+		index.where === undefined &&
+		index.method === undefined &&
+		index.opclass === undefined
+		? column
+		: undefined;
+};
+
+/**
+ * Compiles one `defineModel` through the collection path shared by tenant and platform models.
+ *
+ * The serialized workspace entry contributes only facts that come from its owning file name or
+ * compiler discovery. Fields and model metadata always come from the declaration itself, so a
+ * runtime-owned model cannot grow a parallel description of the same table.
+ */
+export const compileModel = (
+	base: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
+	declaration: ModelDeclaration | undefined,
+	options: ModelCollectionOptions = {}
+): CollectionDefinition<Readonly<Record<string, FieldDefinition>>> => {
+	assertNoSystemColumnOverrides(declaration);
+	const metadata = declaration?.metadata;
+	const indexes = metadata?.indexes ?? [];
+	const simpleIndexes = new Set(
+		indexes.flatMap((index) => {
+			const column = simpleIndexColumn(index);
+			return column === undefined ? [] : [column];
+		})
+	);
+	const described = Object.fromEntries(
+		Object.entries(describeModel(declaration)).map(([name, field]) => [
+			name,
+			simpleIndexes.has(name) ? { ...field, indexed: true } : field
+		])
+	);
+	const structuredIndexes = indexes.filter((index) => simpleIndexColumn(index) === undefined);
+	const hooks = options.hooks ?? [];
+	const exclusions = metadata?.exclusions ?? [];
+	return {
+		...base,
+		...(Object.keys(described).length === 0 ? {} : { fields: described }),
+		...(hooks.length === 0 ? {} : { hooks }),
+		...(exclusions.length === 0 ? {} : { exclusions }),
+		...(structuredIndexes.length === 0 ? {} : { indexes: structuredIndexes }),
+		...(metadata?.approvalLock === undefined ? {} : { approvalLock: metadata.approvalLock }),
+		...(metadata?.sync === undefined ? {} : { sync: metadata.sync }),
+		...(metadata?.history === undefined ? {} : { history: metadata.history }),
+		...(metadata?.description === undefined ? {} : { description: metadata.description }),
+		...(metadata?.icon === undefined ? {} : { icon: metadata.icon }),
+		...(options.sourcePath === undefined ? {} : { sourcePath: options.sourcePath })
+	};
+};
+
+/** Extra constraints the workspace compiler adds after the model has supplied its own columns. */
+type UnionToIntersection<Union> = (Union extends unknown ? (value: Union) => void : never) extends (
+	value: infer Intersection
+) => void
+	? Intersection
+	: never;
+type AuthoredPhysicalColumns<TColumns extends Readonly<Record<string, AnyModelFieldBuilder>>> = {
+	readonly [K in keyof TColumns as TColumns[K] extends AnyPgColumnBuilder ? K : never]: Extract<
+		TColumns[K],
+		AnyPgColumnBuilder
+	>;
+} & UnionToIntersection<
+	{
+		[K in keyof TColumns]: TColumns[K] extends ReferenceBuilder<infer Targets>
+			? {
+					readonly [
+						Tag in keyof Targets & string as `${K & string}__${Lowercase<Tag>}_id`
+					]: ReturnType<typeof uuid>;
+				}
+			: Record<never, never>;
+	}[keyof TColumns]
+>;
+
+type ModelTableConfiguration<TColumns extends Readonly<Record<string, AnyModelFieldBuilder>>> = (
+	columns: PgBuildExtraConfigColumns<SystemRowColumns & AuthoredPhysicalColumns<TColumns>>
+) => Array<PgTableExtraConfigValue>;
+
+type CompiledModelTable<
+	TName extends string,
+	TColumns extends Readonly<Record<string, AnyModelFieldBuilder>>
+> = PgTableWithColumns<{
+	name: TName;
+	schema: undefined;
+	columns: PgBuildColumns<TName, SystemRowColumns & AuthoredPhysicalColumns<TColumns>>;
+	dialect: 'pg';
+}>;
+
+/**
+ * Compiles one `defineModel` into the Drizzle table used by migrations and database integrations.
+ *
+ * The model remains the source of truth. The table name comes from discovery, platform columns
+ * come from the collection runtime, and callers may add relationship constraints without
+ * redeclaring either. Better Auth and tenant migrations both consume this exact operation.
+ */
+export const compileModelTable = <
+	const TName extends string,
+	const TColumns extends Readonly<Record<string, AnyModelFieldBuilder>>
+>(
+	name: TName,
+	declaration: ModelDeclaration<TColumns>,
+	configure?: ModelTableConfiguration<TColumns>
+) => {
+	assertNoSystemColumnOverrides(declaration);
+	const authoredColumns: Record<string, AnyPgColumnBuilder> = {};
+	for (const [fieldName, builder] of Object.entries(declaration.columns)) {
+		if (!isReferenceBuilder(builder)) {
+			authoredColumns[fieldName] = builder;
+			continue;
+		}
+		for (const tag of Object.keys(builder.targets)) {
+			const storageColumn = referenceStorageColumn(fieldName, tag);
+			if (storageColumn in declaration.columns || storageColumn in authoredColumns)
+				throw new TypeError(
+					`Reference field ${fieldName} generates column ${storageColumn}, but that column is already declared.`
+				);
+			authoredColumns[storageColumn] = uuid();
+		}
+	}
+	const columns = {
+		...defineSystemRowModel().columns,
+		...authoredColumns
+	} as SystemRowColumns &
+		AuthoredPhysicalColumns<TColumns> &
+		Readonly<Record<string, AnyPgColumnBuilder>>;
+	// The runtime loop above performs the type-level `AuthoredPhysicalColumns` transform. Drizzle's
+	// overloaded factory cannot infer a key-remapped generic intersection from that loop, so the cast
+	// is kept at this one compiler boundary and callers still receive the exact physical table.
+	return pgTable(
+		name,
+		columns as Readonly<Record<string, AnyPgColumnBuilder>>,
+		configure as never
+	) as CompiledModelTable<TName, TColumns>;
+};
+
+type CompiledModelTables<TModels extends Readonly<Record<string, ModelDeclaration>>> = {
+	readonly [TName in keyof TModels]: TModels[TName] extends ModelDeclaration<infer TColumns>
+		? CompiledModelTable<TName & string, TColumns>
+		: never;
+};
+
+/** Compiles a heterogeneous model registry without widening every table to the registry's union. */
+export const compileModelTables = <
+	const TModels extends Readonly<Record<string, ModelDeclaration>>
+>(
+	models: TModels
+): CompiledModelTables<TModels> =>
+	EffectRecord.map(models, (declaration, name) =>
+		compileModelTable(name, declaration)
+	) as CompiledModelTables<TModels>;
+
 /**
  * The operation/phase pairs an authored `+hooks.ts` actually declares.
  *
@@ -264,4 +488,3 @@ export const describeHooks = (declaration: unknown): ReadonlyArray<string> => {
 	}
 	return named.toSorted();
 };
-

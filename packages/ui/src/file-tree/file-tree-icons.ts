@@ -1,4 +1,4 @@
-import type { FileTreeEntry } from './file-tree.types';
+import type { FileTreeEntry } from '#lib/file-tree/file-tree.types';
 
 /** Cursor / VS Code–style Iconify ids for workspace file tree rows. */
 export function getDefaultFileTreeEntryIcon(

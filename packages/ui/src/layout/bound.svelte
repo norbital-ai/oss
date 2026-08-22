@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutPad } from './layout.shared.js';
+	import type { LayoutAttributes, LayoutElement, LayoutPad } from '#lib/layout/layout.shared';
 
 	export type BoundSize = 'compact' | 'standard' | 'tall' | 'fit' | 'full';
 	export interface BoundProps extends LayoutAttributes {
@@ -25,7 +25,7 @@
 
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import { INSET_CLASS, PAD_CLASSES } from './layout.shared.js';
+	import { INSET_CLASS, PAD_CLASSES } from '#lib/layout/layout.shared';
 
 	let {
 		as = 'div',

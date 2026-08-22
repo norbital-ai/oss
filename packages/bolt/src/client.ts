@@ -1,6 +1,6 @@
-import { Schema } from 'effect';
+import { Effect, Schema } from 'effect';
 import type { InvocationScope } from '@norbital-ai/bolt-protocol';
-import { SyncChange, SyncCursor } from './runtime/sync/sync.js';
+import { SyncChange, SyncCursor } from '#lib/runtime/sync/sync.js';
 
 export type BoltTransport = Readonly<{
 	readonly command: (command: string, input: Schema.Json, signal?: AbortSignal) => Promise<unknown>;
@@ -20,21 +20,27 @@ export type BoltClient = Readonly<{
 const ClientFactories = {
 	bolt: (scope: InvocationScope, transport: BoltTransport): BoltClient => ({
 		scope,
-		command: async (command, input, output, signal) =>
-			Schema.decodeUnknownPromise(output)(await transport.command(command, input, signal))
+		command: (command, input, output, signal) =>
+			Effect.runPromise(
+				Effect.tryPromise(() => transport.command(command, input, signal)).pipe(
+					Effect.flatMap(Schema.decodeUnknownEffect(output))
+				)
+			)
 	}),
 	collection: (client: BoltClient, collection: string) => ({
 		// The command answers one keyset page. This view takes a row count and gives back rows, so it
 		// reads the page apart here rather than making every caller of it learn about cursors.
-		findMany: async (limit = 100, signal?: AbortSignal) =>
-			(
-				await client.command(
-					'collections.findMany',
-					{ collection, limit },
-					Schema.Struct({ rows: Schema.Array(Schema.Json) }),
-					signal
-				)
-			).rows
+		findMany: (limit = 100, signal?: AbortSignal) =>
+			Effect.runPromise(
+				Effect.tryPromise(() =>
+					client.command(
+						'collections.findMany',
+						{ collection, limit },
+						Schema.Struct({ rows: Schema.Array(Schema.Json) }),
+						signal
+					)
+				).pipe(Effect.map((page) => page.rows))
+			)
 	}),
 	remote: (client: BoltClient, command: string) => (input: Schema.Json, signal?: AbortSignal) =>
 		client.command(command, input, Schema.Json, signal),

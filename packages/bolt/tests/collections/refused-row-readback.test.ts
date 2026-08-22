@@ -1,18 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
+import { defineConnection } from '../../src/authoring/index.js';
 import {
 	app,
 	collection,
-	defineConnection,
 	defineSend,
 	field,
 	policy,
 	workspace,
 	type WorkspaceDefinition
-} from '../../src/authoring/index.js';
+} from '../../src/authoring/workspace-schema.js';
 import { describeIntegrations } from '../../src/authoring/integration-introspection.js';
-import { Collections } from '../../src/runtime/collections/collections.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 
@@ -159,10 +159,10 @@ describe('a batch the subject may write only part of', () => {
 		// The answer is the stored rows and nothing else. Two, not four — and the refused bodies are
 		// not among them under any guise.
 		expect(bodiesOf(written)).toEqual(['note 0', 'note 1']);
-		// A stored row, not the submission wearing its shape: `norbital_row_version` is a column the
+		// A stored row, not the submission wearing its shape: `row_version` is a column the
 		// database fills, and no payload here carries one. Without it this test would still pass on a
 		// fabrication that merely got the count right.
-		for (const row of written) expect(row['norbital_row_version']).toBe(1);
+		for (const row of written) expect(row['row_version']).toBe(1);
 
 		// The hook that must not run for a record that does not exist.
 		expect(bodiesOf(afterRecords.filter((record) => record !== undefined))).toEqual([
@@ -187,12 +187,12 @@ describe('a batch the subject may write only part of', () => {
 				const created = yield* collections.mutate(EffectId.make('refused-2'), writer, 'notes', [
 					{ body: 'kept' }
 				]);
-				const id = created[0]?.['norbital_id'];
+				const id = created[0]?.['id'];
 				// One update that lands and one that cannot: the second names an id no row carries, so
 				// its statement matches nothing, exactly as a refused insert does.
 				return yield* collections.mutate(EffectId.make('refused-3'), writer, 'notes', [
-					{ norbital_id: String(id), body: 'kept, edited' },
-					{ norbital_id: '00000000-0000-4000-8000-000000000000', body: 'never existed' }
+					{ id: String(id), body: 'kept, edited' },
+					{ id: '00000000-0000-4000-8000-000000000000', body: 'never existed' }
 				]);
 			})
 		);
@@ -207,7 +207,7 @@ describe('a batch the subject may write only part of', () => {
 /**
  * The same lie, in the authoring API, where it must be refused rather than dropped.
  *
- * `api.db.create` used to end `row ?? { norbital_id: id, ...values }` exactly as the batch path did.
+ * `api.db.create` used to end `row ?? { id: id, ...values }` exactly as the batch path did.
  * The batch path now omits a refused row and proceeds, because a batch legitimately has others; here
  * an authored hook asked for one record and the very next line it runs will use what comes back, so
  * answering `undefined` would only move the fabrication into the workspace's own code. It refuses.
@@ -284,7 +284,7 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 			partner: {
 				connection: defineConnection({ baseUrl: 'https://integration.invalid' }),
 				send: {
-					note_created: defineSend<{ readonly norbital_id: string; readonly body: string }>({
+					note_created: defineSend<{ readonly id: string; readonly body: string }>({
 						send: { method: 'POST', path: '/notes' },
 						on: 'create',
 						body: ({ record }) => ({ body: record.body })
@@ -312,9 +312,9 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 		);
 
 		// What is actually there, and what every table below has to agree with — two of the four.
-		const stored = await harness.database.query('select norbital_id, body from notes');
+		const stored = await harness.database.query('select id, body from notes');
 		expect(bodiesOf(stored)).toEqual(['note 0', 'note 1']);
-		const storedIds = stored.map((row) => String(row['norbital_id'])).toSorted();
+		const storedIds = stored.map((row) => String(row['id'])).toSorted();
 
 		// The sync log. A row here for a refused record is a `create` every replica applies.
 		const sync = await harness.database.query(

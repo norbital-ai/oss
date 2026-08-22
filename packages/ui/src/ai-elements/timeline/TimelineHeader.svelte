@@ -4,7 +4,7 @@
 	import { cn } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { Snippet } from 'svelte';
-	import { Shimmer } from '../shimmer';
+	import { Shimmer } from '#lib/ai-elements/shimmer';
 	import { getTimelineContext } from './timeline-context.svelte.js';
 
 	interface TimelineHeaderProps {

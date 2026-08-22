@@ -26,9 +26,9 @@ export type MatrixEntry = Readonly<{
 	readonly ownerEpoch: string;
 }>;
 
-export type FacilityState = Readonly<{ readonly name: string; readonly available: boolean }>;
+type FacilityState = Readonly<{ readonly name: string; readonly available: boolean }>;
 
-export type TenantMatrixEnvironment = Readonly<{
+type TenantMatrixEnvironment = Readonly<{
 	readonly id: string;
 	readonly label: string;
 	readonly releaseId: string;
@@ -38,7 +38,7 @@ export type TenantMatrixEnvironment = Readonly<{
 	readonly live: boolean;
 }>;
 
-export type TenantMatrixGraph = Readonly<{
+type TenantMatrixGraph = Readonly<{
 	readonly environments: ReadonlyArray<TenantMatrixEnvironment>;
 	readonly live: TenantMatrixEnvironment | undefined;
 }>;
@@ -73,14 +73,14 @@ export const buildTenantMatrix = (
 };
 
 /** One line inside a drawn node: what it is on the left, what the host said on the right. */
-export type MatrixRow = Readonly<{
+type MatrixRow = Readonly<{
 	readonly label: string;
 	readonly value: string;
 	/** Full identifier when `value` is a shortened display form. */
 	readonly title?: string;
 }>;
 
-export type MatrixNode = Readonly<{
+type MatrixNode = Readonly<{
 	readonly id: string;
 	readonly title: string;
 	/** Drives the node's chip: what this box is currently doing, in one word. */
@@ -93,7 +93,7 @@ export type MatrixNode = Readonly<{
 	readonly height: number;
 }>;
 
-export type MatrixLayout = Readonly<{
+type MatrixLayout = Readonly<{
 	readonly nodes: ReadonlyArray<MatrixNode>;
 	readonly width: number;
 	readonly height: number;
@@ -109,9 +109,6 @@ const NODE_HEADER = 34;
 const NODE_PAD = 20;
 const RELEASE_ID_VISIBLE = 16;
 
-/** A node is as tall as its rows need. */
-const nodeHeight = (rows: number): number => NODE_HEADER + rows * ROW_HEIGHT + NODE_PAD;
-
 /**
  * Places the environment boxes on a fixed grid, under the lane's own title.
  *
@@ -119,11 +116,12 @@ const nodeHeight = (rows: number): number => NODE_HEADER + rows * ROW_HEIGHT + N
  * authored source revision — so every box can state it without the layout reaching for a snapshot
  * of its own.
  */
-export const layoutTenantMatrix = (
+const layoutTenantMatrix = (
 	matrix: TenantMatrixGraph,
 	detail: { readonly revision: number }
 ): MatrixLayout => {
-	const environmentHeight = nodeHeight(4);
+	// A node is as tall as its four rows need.
+	const environmentHeight = NODE_HEADER + 4 * ROW_HEIGHT + NODE_PAD;
 	const environmentsY = LANE_HEADER;
 
 	const environmentNodes = matrix.environments.map((environment, index): MatrixNode => {
@@ -183,8 +181,7 @@ export type MatrixNodeData = Readonly<{
 	readonly rows: ReadonlyArray<MatrixRow>;
 }>;
 
-export type MatrixFlowNode = Node<MatrixNodeData, MatrixNodeKind>;
-export type MatrixFlowEdge = Edge;
+type MatrixFlowNode = Node<MatrixNodeData, MatrixNodeKind>;
 
 /**
  * Turns the pure layout into a Svelte Flow graph.
@@ -197,7 +194,7 @@ export type MatrixFlowEdge = Edge;
 export const buildMatrixFlow = (
 	matrix: TenantMatrixGraph,
 	detail: { readonly revision: number }
-): { nodes: MatrixFlowNode[]; edges: MatrixFlowEdge[] } => {
+): { nodes: MatrixFlowNode[]; edges: Edge[] } => {
 	const layout = layoutTenantMatrix(matrix, detail);
 	const lane: MatrixFlowNode = {
 		id: 'lane:environments',

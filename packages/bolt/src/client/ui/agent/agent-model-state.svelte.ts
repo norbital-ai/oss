@@ -1,55 +1,63 @@
-import { Effect } from 'effect';
-import type { AiModelCatalog } from './models.js';
-import type { WorkspaceRemoteTransport } from './remote-transport.js';
+import { Schema } from 'effect';
+import type { RemoteQuery } from '#lib/client/runtime.js';
 
 /**
  * One model the host offers for a turn. The host catalog is the only answer to "what is about to
  * run"; Bolt renders the picker and does not keep a second list of ids.
+ *
+ * The catalog is host IO: it arrives from `ai.models` over the wire, so the shape is owned here as
+ * Schema and the type is derived from it, rather than declared by hand next to it.
  */
-export type AgentModelCatalogStatus = 'idle' | 'loading' | 'ready' | 'error';
+const AgentModelCatalogStatus = Schema.Literals(['idle', 'loading', 'ready', 'error']);
 
-const state = $state({
-	catalog: null as AiModelCatalog | null,
-	selectedModel: '',
-	status: 'idle' as AgentModelCatalogStatus
+export type AgentModelCatalogStatus = Schema.Schema.Type<typeof AgentModelCatalogStatus>;
+
+const AiModelOption = Schema.Struct({
+	id: Schema.String,
+	label: Schema.String,
+	contextLength: Schema.optionalKey(Schema.Number),
+	/**
+	 * The model family this option belongs to — `anthropic/claude-opus-4` for every dated or
+	 * suffixed variant of it. The picker groups by family so a provider offering eight snapshots of
+	 * one model shows as one entry rather than eight.
+	 */
+	canonicalSlug: Schema.optionalKey(Schema.String)
 });
 
-let activeTransport: WorkspaceRemoteTransport | undefined;
-// The memoized load for the current transport: `Effect.cached` deduplicates concurrent callers into
-// one in-flight fetch and keeps the result for every later caller.
-let loadOnce: Effect.Effect<Effect.Effect<void>> | undefined;
+export type AiModelOption = Schema.Schema.Type<typeof AiModelOption>;
 
-/** One model catalog and next-turn selection shared by every mounted agent surface. */
-export function getAgentModelState(): typeof state {
-	return state;
-}
+export const AiModelCatalogSchema = Schema.Struct({
+	defaultModel: Schema.String,
+	options: Schema.Array(AiModelOption)
+});
 
-/** Loads the host model catalog once per transport and keeps the shared picker selection in sync. */
-export function loadAgentModelCatalog(transport: WorkspaceRemoteTransport): Promise<void> {
-	if (transport !== activeTransport) {
-		activeTransport = transport;
-		const load = Effect.gen(function* () {
-			const catalog = yield* Effect.tryPromise(() => transport.agentModels());
-			if (transport !== activeTransport) return;
-			state.catalog = catalog;
-			if (catalog && !catalog.options.some((option) => option.id === state.selectedModel)) {
-				state.selectedModel = catalog.defaultModel;
+type AiModelCatalog = Schema.Schema.Type<typeof AiModelCatalogSchema>;
+
+export type WorkspaceRemoteTransport = {
+	readonly agentModels: RemoteQuery<AiModelCatalog>;
+};
+
+export type AgentModelController = ReturnType<typeof createAgentModelController>;
+
+/** Owns one mounted workspace's model catalog and its deduplicated load. */
+export function createAgentModelController(transport: WorkspaceRemoteTransport) {
+	const selection = $state({ selectedModel: '' });
+	return {
+		state: {
+			get catalog(): AiModelCatalog | null {
+				return transport.agentModels.current ?? null;
+			},
+			get selectedModel(): string {
+				return selection.selectedModel;
+			},
+			set selectedModel(value: string) {
+				selection.selectedModel = value;
+			},
+			get status(): AgentModelCatalogStatus {
+				if (transport.agentModels.loading) return 'loading';
+				if (transport.agentModels.error !== undefined) return 'error';
+				return transport.agentModels.current === undefined ? 'idle' : 'ready';
 			}
-			state.status = catalog ? 'ready' : 'error';
-		}).pipe(
-			Effect.catch(() =>
-				Effect.sync(() => {
-					if (transport !== activeTransport) return;
-					state.status = 'error';
-				})
-			)
-		);
-		loadOnce = Effect.cached(load);
-		state.catalog = null;
-		state.selectedModel = '';
-		state.status = 'idle';
-	}
-	if (state.status === 'ready') return Promise.resolve();
-	state.status = 'loading';
-	return Effect.runPromise(Effect.flatten(loadOnce ?? Effect.succeed(Effect.succeed(undefined))));
+		}
+	};
 }

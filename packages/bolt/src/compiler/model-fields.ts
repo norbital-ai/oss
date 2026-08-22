@@ -1,10 +1,10 @@
 import type {
 	FieldDefinition,
-	RelationDefinition,
-	ScalarType
+	FieldType,
+	RelationDefinition
 } from '../authoring/workspace-schema.js';
 
-const builderTypes: Readonly<Record<string, ScalarType>> = {
+const builderTypes: Readonly<Record<string, FieldType>> = {
 	// No `uuid` entry, deliberately. A builder name is all this can see, and `uuid()` and
 	// `uuid().array()` share it — `statutory_contributions.relief_for` is the second — so claiming
 	// `uuid` here would plan a `uuid` column for an array. `describeModelColumns` reads the built
@@ -20,6 +20,7 @@ const builderTypes: Readonly<Record<string, ScalarType>> = {
 	jsonb: 'json',
 	json: 'json',
 	vector: 'json',
+	reference: 'reference',
 	// `custom()` is a jsonb column. Missing it planned `text`, so every custom value round-tripped
 	// as a JSON *string* and every consumer reading `value.by` saw a character instead of a field.
 	custom: 'json'
@@ -101,12 +102,13 @@ const catalogKinds: Readonly<Record<string, string>> = {
 	geolocation: 'geolocation',
 	file: 'file',
 	vector: 'json',
+	reference: 'reference',
 	custom: 'custom',
 	jsonb: 'json',
 	json: 'json'
 };
 
-export type CollectionCatalogField = Readonly<{
+type CollectionCatalogField = Readonly<{
 	readonly name: string;
 	readonly kind: string;
 	/** Whether the column holds a list of its kind — today only `file({ multiple: true })`. */
@@ -145,9 +147,9 @@ const enumValues = (window: string): ReadonlyArray<string> | undefined => {
 	const match = window.match(/enums\(\[([^\]]*)\]/);
 	const body = match?.[1];
 	if (body === undefined) return undefined;
-	const values = [...body.matchAll(/'([^']+)'/g)]
-		.map((entry) => entry[1])
-		.filter((value): value is string => value !== undefined);
+	const values = [...body.matchAll(/'([^']+)'/g)].flatMap((entry) =>
+		entry[1] === undefined ? [] : [entry[1]]
+	);
 	return values.length === 0 ? undefined : values;
 };
 
@@ -174,15 +176,11 @@ const recordLabel = (source: string): string | undefined => {
 	const declaration = source.match(/recordLabel:\s*(\[[^\]]*\]|['"][^'"]+['"])/)?.[1];
 	if (declaration === undefined) return undefined;
 	if (!declaration.startsWith('[')) return declaration.slice(1, -1);
-	const columns = [...declaration.matchAll(/['"]([^'"]+)['"]/g)]
-		.map((match) => match[1])
-		.filter((column): column is string => column !== undefined);
+	const columns = [...declaration.matchAll(/['"]([^'"]+)['"]/g)].flatMap((match) =>
+		match[1] === undefined ? [] : [match[1]]
+	);
 	return columns.length === 0 ? undefined : columns.join(LABEL_TERM_JOIN);
 };
-
-/** Reads the type name out of `custom('leave_event')`. */
-const customTypeName = (window: string): string | undefined =>
-	window.match(/custom\(\s*'([^']+)'/)?.[1];
 
 /** CollectionTable metadata: field kinds, search opt-in, and relations from `+relationship.ts`. */
 export const extractCollectionCatalog = (
@@ -203,7 +201,7 @@ export const extractCollectionCatalog = (
 			// of them rendering through whichever renderer happened to register last.
 			kind:
 				builder === 'custom'
-					? (customTypeName(window) ?? 'custom')
+					? (window.match(/custom\(\s*'([^']+)'/)?.[1] ?? 'custom')
 					: (catalogKinds[builder] ?? 'text'),
 			nullable: !window.includes('.notNull()'),
 			// Safe only because a field's window now ends at the next field: while the boundary ran

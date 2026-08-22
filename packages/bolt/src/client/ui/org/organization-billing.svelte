@@ -1,56 +1,16 @@
 <script lang="ts" module>
-	/**
-	 * One row of the host's metered ledger, as the host's operations seam reports it.
-	 *
-	 * `observedAtMillis` is non-finite when the host sent a row without an observation time; such a
-	 * row still counts towards its meter but is never dated, rather than being dated at a stand-in.
-	 */
-	export type MeteredObservation = {
-		readonly kind: string;
-		readonly quantity: number;
-		readonly observedAtMillis: number;
-	};
-
-	/**
-	 * One meter in the host's current UTC-month projection. Quantities stay in the meter's own unit;
-	 * `*MicroSgd` is the locked Colony conversion the Stripe meter events already use.
-	 */
-	export type PeriodEstimateMeter = {
-		readonly kind: string;
-		readonly monthToDateQuantity: number;
-		readonly projectedQuantity: number;
-		readonly monthToDateMicroSgd: number;
-		readonly projectedMicroSgd: number;
-		readonly method: string;
-	};
-
-	/**
-	 * The host's estimate for this UTC calendar month, as the host reports `usageEstimate`.
-	 */
-	export type PeriodEstimate = {
-		readonly periodStartMillis: number;
-		readonly periodEndMillis: number;
-		readonly asOfMillis: number;
-		readonly meters: ReadonlyArray<PeriodEstimateMeter>;
-		readonly monthToDateMicroSgd: number;
-		readonly projectedMicroSgd: number;
-	};
-
-	/** A missing or unreadable host estimate still leaves the pane one shape to render. */
-	export const EMPTY_PERIOD_ESTIMATE: PeriodEstimate = {
-		periodStartMillis: 0,
-		periodEndMillis: 0,
-		asOfMillis: 0,
-		meters: [],
-		monthToDateMicroSgd: 0,
-		projectedMicroSgd: 0
-	};
+	export {
+		EMPTY_PERIOD_ESTIMATE,
+		type MeteredObservation,
+		type PeriodEstimate
+	} from './organization-state.js';
 </script>
 
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { buttonVariants } from '@norbital-ai/ui/button';
 	import { Bound, Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import type { MeteredObservation, PeriodEstimate } from './organization-state.js';
 
 	let {
 		usage,
@@ -130,26 +90,38 @@
 	);
 
 	/** Every known meter in a fixed order, with any kind the ledger observed that we do not know. */
-	const meters = $derived(
-		[
-			...Object.keys(USAGE_UNITS),
-			...[...new Set(usage.map((observation) => observation.kind))].filter(
-				(kind) => USAGE_UNITS[kind] === undefined
-			)
-		].map((kind) => {
-			const recorded = usage.filter((observation) => observation.kind === kind);
-			const period = usageEstimate.meters.find((candidate) => candidate.kind === kind);
-			return {
-				kind,
-				unit: USAGE_UNITS[kind] ?? 'units',
-				monthToDateQuantity: period?.monthToDateQuantity ?? 0,
-				projectedQuantity: period?.projectedQuantity ?? 0,
-				observedAtMillis: recorded.reduce(
-					(latest, observation) => Math.max(latest, observation.observedAtMillis),
-					-Infinity
-				)
-			};
-		})
+	const meters = $derived.by(
+		(): Array<{
+			kind: string;
+			unit: string;
+			monthToDateQuantity: number;
+			projectedQuantity: number;
+			observedAtMillis: number;
+		}> => {
+			// Indexed once, not per kind: each meter would otherwise re-search the same arrays.
+			const estimateByKind = new Map<string, (typeof usageEstimate.meters)[number]>();
+			for (const candidate of usageEstimate.meters) {
+				if (!estimateByKind.has(candidate.kind)) estimateByKind.set(candidate.kind, candidate);
+			}
+			const observedAt = new Map<string, number>();
+			for (const observation of usage) {
+				const latest = observedAt.get(observation.kind);
+				if (latest === undefined || observation.observedAtMillis > latest) {
+					observedAt.set(observation.kind, observation.observedAtMillis);
+				}
+			}
+			const unknownKinds = [...observedAt.keys()].filter((kind) => USAGE_UNITS[kind] === undefined);
+			return [...Object.keys(USAGE_UNITS), ...unknownKinds].map((kind) => {
+				const period = estimateByKind.get(kind);
+				return {
+					kind,
+					unit: USAGE_UNITS[kind] ?? 'units',
+					monthToDateQuantity: period?.monthToDateQuantity ?? 0,
+					projectedQuantity: period?.projectedQuantity ?? 0,
+					observedAtMillis: observedAt.get(kind) ?? -Infinity
+				};
+			});
+		}
 	);
 </script>
 

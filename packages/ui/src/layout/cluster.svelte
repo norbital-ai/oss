@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
+	import type { LayoutAttributes, LayoutElement, LayoutGap } from '#lib/layout/layout.shared';
 
 	export interface ClusterProps extends LayoutAttributes {
 		as?: LayoutElement;
@@ -19,7 +19,7 @@
 
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import { GAP_CLASSES } from './layout.shared.js';
+	import { GAP_CLASSES } from '#lib/layout/layout.shared';
 
 	let {
 		as = 'div',

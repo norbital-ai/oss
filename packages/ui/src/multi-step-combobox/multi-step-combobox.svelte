@@ -22,7 +22,8 @@
 	import { isEqual } from 'es-toolkit/predicate';
 	import { watch } from 'runed';
 	import { tick, type Snippet } from 'svelte';
-	import { Spinner } from '../spinner/index.js';
+	import { Spinner } from '#lib/spinner';
+	import { Effect, Number as Number_ } from 'effect';
 	import MultiStepSelectionSidebar from './multi-step-selection-sidebar.svelte';
 	import MultiStepHeader from './multi-step-header.svelte';
 	import MultiStepValueLabel from './multi-step-value-label.svelte';
@@ -308,10 +309,10 @@
 				// On open, default the visible step to the first incomplete step,
 				// or the last step if the selection is fully configured
 				if (isOpen && nextList.length > 0) {
-					const selIdx = Math.min(
-						Math.max(currentSelectionIndex, 0),
-						Math.max(nextList.length - 1, 0)
-					);
+					const selIdx = Number_.clamp(currentSelectionIndex, {
+						minimum: 0,
+						maximum: Math.max(nextList.length - 1, 0)
+					});
 					currentStepIndex = firstIncompleteStep(nextList[selIdx]);
 				}
 				return;
@@ -379,7 +380,12 @@
 	}
 
 	function focusInputSoon() {
-		void tick().then(() => refs.searchInput?.focus());
+		void Effect.runPromise(
+			Effect.gen(function* () {
+				yield* Effect.promise(() => tick());
+				refs.searchInput?.focus();
+			})
+		);
 	}
 
 	const ensureSelectionExists = () => {
@@ -397,7 +403,10 @@
 
 	const updateSelection = (mutator: (draft: SelectionDraft) => SelectionDraft) => {
 		const list = getSelectionsArray();
-		const index = Math.min(Math.max(currentSelectionIndex, 0), Math.max(list.length - 1, 0));
+		const index = Number_.clamp(currentSelectionIndex, {
+			minimum: 0,
+			maximum: Math.max(list.length - 1, 0)
+		});
 		const base = list[index] ?? ({} as SelectionDraft);
 		const updated = mutator({ ...base });
 		const nextList = [...list];

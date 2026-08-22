@@ -1,26 +1,17 @@
-<script module lang="ts">
-	import { FEATURE_COLOR_STYLES } from '@norbital-ai/ui/feature-colors';
-
-	// A constant lookup into a frozen table, so it belongs to the module rather than to every
-	// instance — and it is emphatically not a computation to make reactive.
-	const AGENT_STYLES = FEATURE_COLOR_STYLES.agents;
-</script>
-
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Effect, Schema } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
+	import { FEATURE_COLOR_STYLES } from '@norbital-ai/ui/feature-colors';
 	import { cn } from '@norbital-ai/ui/utils';
 	import {
 		ENVOY_CONNECTION_UNREPORTABLE,
-		EnvoyStatusSchema,
-		type EnvoyStatus,
 		type StudioEnvoy,
 		type StudioTool
-	} from './studio-state.js';
+	} from '#lib/client/ui/studio/studio-state.js';
+	import type { SystemClientApi } from '#lib/client/system-client.js';
 
 	/**
 	 * Envoys, and the tools this workspace authored, on a single page.
@@ -45,61 +36,33 @@
 	let {
 		envoys = [],
 		tools = [],
-		command,
+		system,
 		onopenSource
 	}: {
 		envoys?: ReadonlyArray<StudioEnvoy>;
 		tools?: ReadonlyArray<StudioTool>;
-		command: (name: string, input: Readonly<Record<string, string>>) => Promise<unknown>;
+		system: SystemClientApi;
 		onopenSource?: ((path: string) => void) | undefined;
 	} = $props();
+	const agentStyles = $derived(FEATURE_COLOR_STYLES.agents);
 
-	/**
-	 * Every envoy's last read, held as one cell.
-	 *
-	 * A read either lands or fails per envoy, and both halves plus the in-flight flag change on the
-	 * same click — three independent cells only made a single refresh three writes.
-	 */
-	let connections = $state<{
-		readonly reads: Readonly<Record<string, EnvoyStatus>>;
-		readonly failures: Readonly<Record<string, string>>;
-		readonly pending: boolean;
-	}>({ reads: {}, failures: {}, pending: false });
-
-	/** Reads every envoy's status in one pass, so the list is never half-answered. */
-	const readConnections = async (): Promise<void> => {
-		connections = { ...connections, pending: true };
-		const results = await Promise.all(
-			envoys.map(async ({ name }) => {
-				try {
-					return {
-						envoy: name,
-						status: await Effect.runPromise(
-							Schema.decodeUnknownEffect(EnvoyStatusSchema)(
-								await command('envoys.status', { envoy: name })
-							)
-						)
-					};
-				} catch (cause) {
-					return { envoy: name, failure: cause instanceof Error ? cause.message : String(cause) };
-				}
-			})
-		);
-		connections = {
-			reads: Object.fromEntries(
-				results.flatMap((result) => ('status' in result ? [[result.envoy, result.status]] : []))
-			) as Readonly<Record<string, EnvoyStatus>>,
-			failures: Object.fromEntries(
-				results.flatMap((result) => ('failure' in result ? [[result.envoy, result.failure]] : []))
-			) as Readonly<Record<string, string>>,
-			pending: false
-		};
-	};
+	let mounted = $state(false);
+	const connectionQueries = $derived(
+		mounted
+			? envoys.map((envoy) => ({
+					name: envoy.name,
+					query: system.envoys.status({ envoy: envoy.name })
+				}))
+			: []
+	);
+	const connectionQuery = (envoy: string) =>
+		connectionQueries.find(({ name }) => name === envoy)?.query;
+	const connectionsPending = $derived(connectionQueries.some(({ query }) => query.loading));
 
 	// The read is the browser's: server rendering must not issue a Bolt command, and a reader who
 	// opens Envoys has already asked the question the read answers.
 	onMount(() => {
-		if (envoys.length > 0) void readConnections();
+		mounted = true;
 	});
 </script>
 
@@ -110,8 +73,9 @@
 {/snippet}
 
 {#snippet connectionChip(envoy: string)}
-	{@const failure = connections.failures[envoy]}
-	{@const status = connections.reads[envoy]}
+	{@const query = connectionQuery(envoy)}
+	{@const failure = query?.error}
+	{@const status = query?.current}
 	<span
 		class={cn(
 			'shrink-0 rounded-full px-2 py-0.5 text-tiny font-semibold',
@@ -130,7 +94,7 @@
 		{failure !== undefined
 			? 'Status unavailable'
 			: status === undefined
-				? connections.pending
+				? query?.loading
 					? 'Reading…'
 					: 'Not read'
 				: status.registered
@@ -145,10 +109,10 @@
 			<div
 				class={cn(
 					'flex size-6 items-center justify-center rounded-md border',
-					AGENT_STYLES.iconWrapperClass
+					agentStyles.iconWrapperClass
 				)}
 			>
-				<ProductIcon name="agent" class={cn('size-3.5', AGENT_STYLES.iconClass)} />
+				<ProductIcon name="agent" class={cn('size-3.5', agentStyles.iconClass)} />
 			</div>
 			<h2 class="text-sm font-medium text-foreground">Envoys ({envoys.length})</h2>
 		</Inline>
@@ -170,8 +134,10 @@
 					size="sm"
 					variant="ghost"
 					class="ml-auto h-6 shrink-0 gap-1 px-2 text-micro"
-					disabled={connections.pending}
-					onclick={() => void readConnections()}
+					disabled={connectionsPending}
+					onclick={() => {
+						for (const { query } of connectionQueries) void query.refresh();
+					}}
 				>
 					<Icon icon="lucide:refresh-cw" class="size-3" />
 					Re-read status
@@ -179,8 +145,9 @@
 			</Inline>
 			<Stack gap="sm">
 				{#each envoys as envoy (envoy.name)}
-					{@const status = connections.reads[envoy.name]}
-					{@const failure = connections.failures[envoy.name]}
+					{@const query = connectionQuery(envoy.name)}
+					{@const status = query?.current}
+					{@const failure = query?.error}
 					<Stack
 						gap="sm"
 						class="rounded-lg border border-border/60 bg-card p-4 shadow-card"
@@ -191,10 +158,10 @@
 								<div
 									class={cn(
 										'flex size-6 shrink-0 items-center justify-center rounded-md border',
-										AGENT_STYLES.iconWrapperClass
+										agentStyles.iconWrapperClass
 									)}
 								>
-									<ProductIcon name="agent" class={cn('size-3.5', AGENT_STYLES.iconClass)} />
+									<ProductIcon name="agent" class={cn('size-3.5', agentStyles.iconClass)} />
 								</div>
 								<div class="min-w-0">
 									<p class="truncate font-mono text-sm font-semibold text-foreground">
@@ -213,7 +180,7 @@
 						<Inline gap="sm" align="center" class="min-w-0">
 							<span class="text-micro text-muted-foreground">
 								{#if failure !== undefined}
-									{failure}
+									{failure instanceof Error ? failure.message : String(failure)}
 								{:else if status === undefined}
 									The runtime has not been asked yet.
 								{:else}
@@ -243,8 +210,8 @@
 			{@render sectionHeading('Workspace tools', tools.length)}
 			<p class="max-w-xl text-xs leading-relaxed text-muted-foreground">
 				Listed here, granted elsewhere. A tool reaches a turn when a policy the subject holds names
-				it under <code>capabilities.tools</code> — so authoring one offers it to nobody until a
-				policy says so, and there is no agent it belongs to.
+				it under <code>capabilities.tools</code> — so authoring one offers it to nobody until a policy
+				says so, and there is no agent it belongs to.
 			</p>
 			{#if tools.length === 0}
 				<p class="max-w-3xl text-xs leading-relaxed text-muted-foreground">None.</p>

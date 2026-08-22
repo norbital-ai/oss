@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import type { CollectionField } from '@norbital-ai/ui/data-renderer';
-	import type { WorkspaceClient } from './workspace-client.js';
+	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 
 	/**
 	 * Records of one collection, read the way every workspace surface reads them.

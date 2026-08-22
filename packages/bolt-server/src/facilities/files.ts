@@ -1,17 +1,13 @@
-import {
-	FacilityCall,
-	FileRequest,
-	FileResponse,
-	failure,
-	makeWireError,
-	success,
-	type FacilityBinding
-} from '@norbital-ai/bolt-protocol';
-import { Config, Effect, Schema } from 'effect';
+import { FileRequest, FileResponse, type FacilityBinding } from '@norbital-ai/bolt-protocol';
+import { Config, Effect } from 'effect';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, relative, resolve, sep } from 'node:path';
-import { selectConfiguredProvider, type ConfiguredProviderFactory } from '../config.js';
+import {
+	makeWireBinding,
+	selectConfiguredProvider,
+	type ConfiguredProviderFactory
+} from '../config.js';
 
 // stupidity:allow AL10 -- local file-store options stay beside their constructor in the required 14-file architecture
 export interface LocalFilesOptions {
@@ -19,85 +15,86 @@ export interface LocalFilesOptions {
 }
 
 /** Creates an atomic, rooted, traversal-safe local filesystem binding. */
-export const makeLocalFilesBinding = ({
-	rootDirectory
-}: LocalFilesOptions): FacilityBinding<FileRequest, FileResponse> => {
+export const makeLocalFilesBinding = (
+	{ rootDirectory }: LocalFilesOptions,
+	/** Names the temporary companion of an atomic write; injected so the suffix's source is a parameter, never ambient. */
+	temporarySuffix: () => string = () => randomUUID()
+): FacilityBinding<FileRequest, FileResponse> => {
 	const root = resolve(rootDirectory);
 	/** Resolves a wire key while refusing any path that escapes the configured root. */
-	const pathFor = (key: string): string => {
+	const pathFor = (key: string): Effect.Effect<string, Error> => {
 		if (key.includes('\0')) {
-			throw new Error('file key contains a null byte');
+			return Effect.fail(new Error('file key contains a null byte'));
 		}
 		const path = resolve(root, key);
 		const fromRoot = relative(root, path);
 		if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`)) {
-			throw new Error('file key leaves the configured root');
+			return Effect.fail(new Error('file key leaves the configured root'));
 		}
-		return path;
+		return Effect.succeed(path);
 	};
 
-	return {
-		call: async (unsafeMetadata, unsafeInput, signal) => {
-			try {
-				await Schema.decodeUnknownPromise(FacilityCall)(unsafeMetadata);
-				const input = await Schema.decodeUnknownPromise(FileRequest)(unsafeInput);
-				if (signal.aborted) {
-					return failure(makeWireError('files.cancelled', 'File call was cancelled'));
-				}
-
-				if (input._tag === 'Read') {
-					const bytes = new Uint8Array(await readFile(pathFor(input.key), { signal }));
-					return success(
-						FileResponse.make({
+	return makeWireBinding({
+		request: FileRequest,
+		response: FileResponse,
+		cancelled: { code: 'files.cancelled', message: 'File call was cancelled' },
+		failed: { code: 'files.failed', message: 'Local file operation failed', retryable: false },
+		invoke: (_metadata, input, signal) =>
+			Effect.runPromise(
+				Effect.gen(function* () {
+					if (input._tag === 'Read') {
+						const path = yield* pathFor(input.key);
+						const bytes = new Uint8Array(
+							yield* Effect.tryPromise(() => readFile(path, { signal }))
+						);
+						return FileResponse.make({
 							key: input.key,
 							bytes,
 							etag: createHash('sha256').update(bytes).digest('hex')
-						})
-					);
-				}
-
-				if (input._tag === 'Write') {
-					const path = pathFor(input.key);
-					await mkdir(dirname(path), { recursive: true });
-					const temporaryPath = `${path}.${randomUUID()}.tmp`;
-					try {
-						await writeFile(temporaryPath, input.bytes, { signal });
-						await rename(temporaryPath, path);
-					} finally {
-						await rm(temporaryPath, { force: true });
+						});
 					}
-					return success(
-						FileResponse.make({
+
+					if (input._tag === 'Write') {
+						const path = yield* pathFor(input.key);
+						yield* Effect.tryPromise(() => mkdir(dirname(path), { recursive: true }));
+						const temporaryPath = `${path}.${temporarySuffix()}.tmp`;
+						const staged = Effect.gen(function* () {
+							yield* Effect.tryPromise(() => writeFile(temporaryPath, input.bytes, { signal }));
+							yield* Effect.tryPromise(() => rename(temporaryPath, path));
+						});
+						yield* staged.pipe(
+							Effect.ensuring(
+								Effect.tryPromise(() => rm(temporaryPath, { force: true })).pipe(
+									Effect.catch(() => Effect.void)
+								)
+							)
+						);
+						return FileResponse.make({
 							key: input.key,
 							etag: createHash('sha256').update(input.bytes).digest('hex')
-						})
+						});
+					}
+
+					if (input._tag === 'Delete') {
+						const path = yield* pathFor(input.key);
+						yield* Effect.tryPromise(() => rm(path, { force: true }));
+						return FileResponse.make({ key: input.key });
+					}
+
+					const prefixPath = yield* pathFor(input.prefix);
+					const entries = yield* Effect.tryPromise(() =>
+						readdir(prefixPath, { recursive: true, withFileTypes: true })
 					);
-				}
-
-				if (input._tag === 'Delete') {
-					await rm(pathFor(input.key), { force: true });
-					return success(FileResponse.make({ key: input.key }));
-				}
-
-				const prefixPath = pathFor(input.prefix);
-				const entries = await readdir(prefixPath, { recursive: true, withFileTypes: true });
-				const keys = entries
-					.filter((entry) => entry.isFile())
-					.map((entry) =>
-						relative(root, resolve(entry.parentPath, entry.name)).split(sep).join('/')
-					)
-					.sort();
-				return success(FileResponse.make({ keys }));
-			} catch {
-				return failure(
-					makeWireError('files.failed', 'Local file operation failed', {
-						retryable: false,
-						outcome: signal.aborted ? 'unknown' : 'known'
-					})
-				);
-			}
-		}
-	};
+					const keys = entries
+						.filter((entry) => entry.isFile())
+						.map((entry) =>
+							relative(root, resolve(entry.parentPath, entry.name)).split(sep).join('/')
+						)
+						.sort();
+					return FileResponse.make({ keys });
+				})
+			)
+	});
 };
 
 /** Loads the rooted self-host file store from Effect's current ConfigProvider. */
@@ -121,9 +118,3 @@ export const makeFilesBindingFromConfig = <Error>(
 		if (provider === 'local') return yield* makeLocalFilesBindingFromConfig();
 		return yield* selectConfiguredProvider('FILES', factories);
 	});
-
-/** Exposes rooted-local and Config-selected file binding construction. */
-export const FileFacilities = {
-	local: makeLocalFilesBinding,
-	fromConfig: makeFilesBindingFromConfig
-};

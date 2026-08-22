@@ -90,6 +90,10 @@ describe('Bolt authored source discovery', () => {
 		expect(discovered.datatypeNames).toEqual(['money']);
 		expect(discovered.mcpServerNames).toEqual(['search']);
 		expect(discovered.skillNames).toEqual(['triage']);
+		expect(discovered.mcpFiles).toEqual([join(root, 'src', 'capabilities', 'mcp', '+search.ts')]);
+		expect(discovered.skillFiles).toEqual([
+			join(root, 'src', 'capabilities', 'skills', 'triage', '+skill.md')
+		]);
 		// A policy is named by its file and nothing else, so a file called `+agent.ts` under
 		// `access/policies/` is a policy called `agent`. There is no suffix left to carry the kind.
 		expect(discovered.policies).toEqual(['agent']);

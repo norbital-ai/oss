@@ -12,7 +12,7 @@
 
 <script lang="ts" generics="TRow extends object">
 	import { onMount } from 'svelte';
-	import type { CollectionTableColumnPrimitiveProps } from './collection-table.types.js';
+	import type { CollectionTableColumnPrimitiveProps } from '#lib/collection-table/collection-table.types';
 
 	type Props = CollectionTableColumnPrimitiveProps<TRow>;
 

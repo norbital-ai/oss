@@ -24,7 +24,8 @@ const taskSchemaSteps = () =>
 		policies: [],
 		relations: []
 	} as unknown as WorkspaceDefinition).steps.filter(
-		(step) => step.id.startsWith('bolt:task') || step.id.startsWith('bolt:schedule')
+		(step) =>
+			step.id.startsWith('collection:bolt_task') || step.id.startsWith('collection:bolt_schedule')
 	);
 
 const at = (iso: string): number => Date.parse(iso);
@@ -56,32 +57,33 @@ describe('bolt task queue over a host facility', () => {
 		database = await PGlite.create('memory://');
 		// The facility's own semantics, and the two that matter are easy to get wrong: a batch is one
 		// transaction, and its answer is every statement's rows concatenated.
-		execute = async (statements) => {
-			const rows: Array<Record<string, unknown>> = [];
-			await database.exec('begin');
-			try {
-				for (const statement of statements) {
-					const result = await database.query<Record<string, unknown>>(statement.sql, [
-						...statement.parameters
-					]);
-					rows.push(...result.rows);
+		execute = (statements) =>
+			Effect.promise(async () => {
+				const rows: Array<Record<string, unknown>> = [];
+				await database.exec('begin');
+				try {
+					for (const statement of statements) {
+						const result = await database.query<Record<string, unknown>>(statement.sql, [
+							...statement.parameters
+						]);
+						rows.push(...result.rows);
+					}
+					await database.exec('commit');
+				} catch (cause) {
+					await database.exec('rollback');
+					throw cause;
 				}
-				await database.exec('commit');
-			} catch (cause) {
-				await database.exec('rollback');
-				throw cause;
-			}
-			// The one place a real host differs and a test must not: every value crossing the wire is
-			// JSON-safe, so a timestamp arrives as an ISO string rather than as a `Date`.
-			return rows.map((row) =>
-				Object.fromEntries(
-					Object.entries(row).map(([key, value]) => [
-						key,
-						value instanceof Date ? value.toISOString() : value
-					])
-				)
-			);
-		};
+				// The one place a real host differs and a test must not: every value crossing the wire is
+				// JSON-safe, so a timestamp arrives as an ISO string rather than as a `Date`.
+				return rows.map((row) =>
+					Object.fromEntries(
+						Object.entries(row).map(([key, value]) => [
+							key,
+							value instanceof Date ? value.toISOString() : value
+						])
+					)
+				);
+			});
 		for (const step of taskSchemaSteps()) await database.exec(step.sql);
 	});
 
@@ -93,7 +95,24 @@ describe('bolt task queue over a host facility', () => {
 		await database.exec('delete from bolt_task; delete from bolt_schedule');
 	});
 
-	const queue = () => makeQueue(execute);
+	const effectQueue = () => makeQueue(execute);
+	const queue = () => {
+		const effects = effectQueue();
+		return {
+			...effects,
+			declare: (...arguments_: Parameters<typeof effects.declare>) =>
+				Effect.runPromise(effects.declare(...arguments_)),
+			roll: (...arguments_: Parameters<typeof effects.roll>) =>
+				Effect.runPromise(effects.roll(...arguments_)),
+			take: (...arguments_: Parameters<typeof effects.take>) =>
+				Effect.runPromise(effects.take(...arguments_)),
+			finish: (...arguments_: Parameters<typeof effects.finish>) =>
+				Effect.runPromise(effects.finish(...arguments_)),
+			when: () => Effect.runPromise(effects.when())
+		};
+	};
+	const runStatements = (statements: Parameters<ExecuteStatements>[0]) =>
+		Effect.runPromise(execute(statements));
 
 	const tasks = async () =>
 		(
@@ -210,7 +229,7 @@ describe('bolt task queue over a host facility', () => {
 			);
 			const rolled = await queue().roll(now);
 			expect(rolled.rolled).toBe(1);
-			await execute(rolled.statements);
+			await runStatements(rolled.statements);
 			const [task] = await tasks();
 			expect(task?.command).toBe('automations.digest');
 			expect(task?.effect_id).toBe(slotEffectId('automations.digest', slot));
@@ -244,7 +263,7 @@ describe('bolt task queue over a host facility', () => {
 				`update bolt_schedule set next_run_at = '${new Date(missed).toISOString()}'`
 			);
 			const rolled = await queue().roll(now);
-			await execute(rolled.statements);
+			await runStatements(rolled.statements);
 			expect(await tasks()).toHaveLength(1);
 			expect(new Date(String((await schedules())[0]?.next_run_at)).getTime()).toBe(
 				hourAt(now) + HOUR_MS
@@ -275,8 +294,8 @@ describe('bolt task queue over a host facility', () => {
 			const second = await queue().roll(now + 1_000);
 			// Two hosts that both read the same stored slot compute the same `effect_id`, so the unique
 			// index picks a winner and the loser's insert is a no-op. No leader election anywhere.
-			await execute(first.statements);
-			await execute(second.statements);
+			await runStatements(first.statements);
+			await runStatements(second.statements);
 			expect(await tasks()).toHaveLength(1);
 		});
 
@@ -288,7 +307,7 @@ describe('bolt task queue over a host facility', () => {
 			);
 			const rolled = await queue().roll(Date.now());
 			expect(rolled.rejections).toHaveLength(1);
-			await execute(rolled.statements);
+			await runStatements(rolled.statements);
 			expect(await schedules()).toHaveLength(0);
 			expect(await tasks()).toHaveLength(0);
 		});
@@ -296,7 +315,7 @@ describe('bolt task queue over a host facility', () => {
 
 	describe('take', () => {
 		const enqueue = async (effectId: string, runAt?: string) =>
-			execute(
+			runStatements(
 				queue().enqueueStatements([
 					{
 						command: 'integrations.flush',
@@ -357,7 +376,7 @@ describe('bolt task queue over a host facility', () => {
 
 	describe('finish', () => {
 		const takeOne = async (effectId: string) => {
-			await execute(
+			await runStatements(
 				queue().enqueueStatements([{ command: 'integrations.flush', input: {}, effectId }])
 			);
 			const [task] = await queue().take([], { hideForMillis: 60_000, batchSize: 1 });
@@ -429,7 +448,7 @@ describe('bolt task queue over a host facility', () => {
 				at('2026-08-20T04:00:00.000Z')
 			);
 			expect(await queue().when()).toBe(at('2026-08-20T06:00:00.000Z'));
-			await execute(
+			await runStatements(
 				queue().enqueueStatements([
 					{
 						command: 'integrations.flush',
@@ -446,9 +465,6 @@ describe('bolt task queue over a host facility', () => {
 
 	describe('a tick', () => {
 		const ran: Array<{ command: string; attemptEffectId: string }> = [];
-		/** A queue failure is a rejected promise here; the test wants it as a plain thrown error. */
-		const rethrow = (cause: unknown): Error =>
-			cause instanceof Error ? cause : new Error(String(cause));
 		const run: Run<never, never> = (task, attemptEffectId) =>
 			Effect.sync(() => {
 				ran.push({ command: task.command, attemptEffectId });
@@ -473,7 +489,7 @@ describe('bolt task queue over a host facility', () => {
 			);
 			await database.exec("update bolt_schedule set next_run_at = now() - interval '1 second'");
 			const report = await Effect.runPromise(
-				makeRunner(queue(), run, rethrow).tick({ nowEpochMs: Date.now(), remainingMillis: 60_000 })
+				makeRunner(effectQueue(), run).tick({ nowEpochMs: Date.now(), remainingMillis: 60_000 })
 			);
 			// A schedule that comes due this instant is run by *this* tick, because the roll's insert and
 			// the take commit together.
@@ -485,11 +501,11 @@ describe('bolt task queue over a host facility', () => {
 		});
 
 		it('runs each attempt under its own effect id', async () => {
-			await execute(
+			await runStatements(
 				queue().enqueueStatements([{ command: 'integrations.flush', input: {}, effectId: 'one' }])
 			);
 			await Effect.runPromise(
-				makeRunner(queue(), run, rethrow).tick({ nowEpochMs: Date.now(), remainingMillis: 60_000 })
+				makeRunner(effectQueue(), run).tick({ nowEpochMs: Date.now(), remainingMillis: 60_000 })
 			);
 			// Every facility is idempotent on `(scope, effectId)`. An attempt that reused the previous
 			// attempt's id would be answered with its cached result — a retry that reports success while
@@ -511,7 +527,7 @@ describe('bolt task queue over a host facility', () => {
 			);
 			await database.exec("update bolt_schedule set next_run_at = now() - interval '1 second'");
 			const report = await Effect.runPromise(
-				makeRunner(queue(), run, rethrow).tick({ nowEpochMs: Date.now(), remainingMillis: 1 })
+				makeRunner(effectQueue(), run).tick({ nowEpochMs: Date.now(), remainingMillis: 1 })
 			);
 			// Taking here would hide the row for a millisecond, hand it to the next tick, and burn an
 			// attempt on work nobody ever tried.
@@ -525,14 +541,12 @@ describe('bolt task queue over a host facility', () => {
 		});
 
 		it('carries a failure back to the row rather than out of the tick', async () => {
-			await execute(
+			await runStatements(
 				queue().enqueueStatements([{ command: 'integrations.flush', input: {}, effectId: 'one' }])
 			);
 			const report = await Effect.runPromise(
-				makeRunner(
-					queue(),
-					(task) => Effect.succeed({ _tag: 'Failed' as const, task, error: 'partner unavailable' }),
-					rethrow
+				makeRunner(effectQueue(), (task) =>
+					Effect.succeed({ _tag: 'Failed' as const, task, error: 'partner unavailable' })
 				).tick({ nowEpochMs: Date.now(), remainingMillis: 60_000 })
 			);
 			expect(report.ran).toBe(1);

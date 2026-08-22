@@ -5,8 +5,8 @@
 	import type {
 		CollectionRecordFlagTone,
 		ResolvedCollectionRecordMetadata
-	} from './collection-record-metadata.js';
-	import { collectionRecordMetadataDescription } from './collection-record-metadata.js';
+	} from '#lib/collection-record-metadata/collection-record-metadata';
+	import { collectionRecordMetadataDescription } from '#lib/collection-record-metadata/collection-record-metadata';
 
 	let {
 		metadata,

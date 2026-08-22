@@ -77,7 +77,7 @@ parent + nested `with`) is enough. See [data-access.md](data-access.md#eliminate
 
 ### 6. Never show system UUIDs — even for relationships
 
-`norbital_id` and FK uuid values are system keys. They must not appear as text, as “… Id” labels,
+`id` and FK uuid values are system keys. They must not appear as text, as “… Id” labels,
 as Combobox option labels, as `recordLabel` fields, or as fallbacks when a map misses.
 
 | Surface               | Required                                                                   |
@@ -114,7 +114,7 @@ as Combobox option labels, as `recordLabel` fields, or as fallbacks when a map m
 ```
 
 Stupidity scanner **UI17** flags common violations (`?? value` on id columns, `label="… Id"`,
-`Column name="norbital_id"`, bare `Field name="*_id"`).
+`Column name="id"`, bare `Field name="*_id"`).
 
 ## Product rules
 
@@ -141,22 +141,22 @@ Inline the selector in the app (see principles 1–3):
 	const activeRange = { effective_range: { contains_date: today } } as const;
 
 	const companiesQuery = client.db.companies.findMany({
-		where: { norbital_approval_id: { isNull: true }, ...activeRange },
+		where: { approval_id: { isNull: true }, ...activeRange },
 		orderBy: { name: 'asc' },
 		limit: 500
 	});
 	const companies = $derived(companiesQuery.current ?? []);
 	const companyOptions = $derived(
 		companies.map((company) => ({
-			value: company.norbital_id,
+			value: company.id,
 			label: company.name,
 			search_term: company.name
 		}))
 	);
 	const selectedCompanyId = $derived(
-		companyId != null && companies.some((company) => company.norbital_id === companyId)
+		companyId != null && companies.some((company) => company.id === companyId)
 			? companyId
-			: (companies[0]?.norbital_id ?? null)
+			: (companies[0]?.id ?? null)
 	);
 </script>
 
@@ -168,7 +168,7 @@ Inline the selector in the app (see principles 1–3):
 			options={companyOptions}
 			value={selectedCompanyId}
 			onValueChange={(value) => {
-				companyId = typeof value === 'string' ? value : (companies[0]?.norbital_id ?? null);
+				companyId = typeof value === 'string' ? value : (companies[0]?.id ?? null);
 			}}
 			emptyPlaceholder="Select legal entity…"
 			searchPlaceholder="Search companies…"

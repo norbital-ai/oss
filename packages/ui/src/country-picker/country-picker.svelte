@@ -5,7 +5,7 @@
 	import { Inline } from '#lib/layout';
 
 	const { t } = useI18n<UiKeys>();
-	import { COUNTRY_CODES, COUNTRY_NAMES } from './country-data';
+	import { COUNTRY_CODES, COUNTRY_NAMES } from '#lib/country-picker/country-data';
 
 	const countryCode = COUNTRY_CODES;
 	const countryNames = COUNTRY_NAMES;

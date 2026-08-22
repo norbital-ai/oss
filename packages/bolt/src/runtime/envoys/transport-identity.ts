@@ -1,4 +1,4 @@
-import { Schema } from 'effect';
+import { Option, Schema } from 'effect';
 
 /**
  * A messaging identity someone has proven is theirs, as stored on `bolt_auth_user.channels`.
@@ -26,9 +26,6 @@ export const TransportIdentity = Schema.Struct({
 	verified: Schema.Boolean
 });
 export interface TransportIdentity extends Schema.Schema.Type<typeof TransportIdentity> {}
-
-/** What the `channels` column holds: an address book, in no meaningful order. */
-export const TransportIdentities = Schema.Array(TransportIdentity);
 
 /**
  * The comparable form of one address on one transport.
@@ -86,21 +83,16 @@ export const identityMatches = (
  * The column is `jsonb` and nothing constrains what a hand-written row may put there, so a malformed
  * entry drops out rather than failing the read. A sender is then simply unrecognised — which on an
  * `authenticated` envoy means a registration prompt, the same safe answer an unknown number gets.
- * The alternative, failing the whole lookup, would take an envoy down over one bad row.
+ * The alternative, failing the whole lookup, would take an envoy down over one bad row. It is why
+ * the entries are decoded one at a time rather than as a list: one bad entry must not sink the ones
+ * beside it.
  */
+const decodeIdentity = Schema.decodeUnknownOption(TransportIdentity);
+
 export const identitiesOf = (value: unknown): ReadonlyArray<TransportIdentity> => {
 	if (!Array.isArray(value)) return [];
 	return value.flatMap((entry) => {
-		if (entry === null || typeof entry !== 'object') return [];
-		const type = Reflect.get(entry, 'type');
-		const address = Reflect.get(entry, 'address');
-		const verified = Reflect.get(entry, 'verified');
-		return typeof type === 'string' &&
-			type.length > 0 &&
-			typeof address === 'string' &&
-			address.length > 0 &&
-			typeof verified === 'boolean'
-			? [{ type, address, verified }]
-			: [];
+		const decoded = decodeIdentity(entry);
+		return Option.isSome(decoded) ? [decoded.value] : [];
 	});
 };

@@ -1,8 +1,9 @@
 <script lang="ts">
-	import type { Component } from 'svelte';
+	import { Effect } from 'effect';
+	import { untrack, type Component } from 'svelte';
 	import { ModeWatcher } from 'mode-watcher';
+	import { humanize } from '@norbital-ai/std/string';
 	import {
-		resolveCollectionClient,
 		setCollectionClientContext,
 		setCollectionSurfaceRuntime,
 		type CollectionSurface
@@ -11,30 +12,28 @@
 		setDataRendererRuntimeContext,
 		type CustomTypeRendererMap
 	} from '@norbital-ai/ui/data-renderer';
-	import type { WorkspaceImpersonation } from '@norbital-ai/ui/workspace-shell';
 	import BoltApp from './app.svelte';
 	import { Scroll, Stack } from '@norbital-ai/ui/layout';
 	import {
 		WORKSPACE_HOST_PLUGINS,
 		WORKSPACE_SETTINGS_PATH,
 		hostPluginKeyFromPath
-	} from './workspace-navigation.js';
+	} from '#lib/client/ui/shell/workspace-navigation.js';
 	import WorkspaceMembers from '../settings/workspace.svelte';
-	import { EMPTY_WORKSPACE_ACCESS, type WorkspaceAccess } from '../settings/access.js';
+	import { EMPTY_WORKSPACE_ACCESS } from '#lib/client/ui/settings/rows.js';
 	import EnvoysSettings from '../org/envoys-settings.svelte';
 	import OrganizationSettings from '../org/organization-settings.svelte';
 	import SecretsSettings from '../org/secrets-settings.svelte';
 	import StudioShell from '../studio/studio-shell.svelte';
-	import { configureAgentRuntime } from '../agent/client.js';
-	import { WEB_AGENT_ID } from '../agent/conversation-selector.js';
-	import { setWorkspaceRemoteTransport } from '../agent/remote-transport.js';
+	import { provideAgentClient } from '../agent/client.svelte.js';
+	import { WEB_AGENT_ID } from '#lib/client/ui/agent/conversation-selector.js';
 	import { WorkspaceUploadClient } from '../state/file-upload-client.svelte.js';
-	import { workspaceSession } from '../../session.js';
+	import { workspaceSession } from '#lib/client/session.js';
 	import type {
 		CompiledWorkspace,
 		WorkspaceHostActions,
 		WorkspaceView
-	} from './workspace-contract.js';
+	} from '#lib/client/ui/shell/workspace-contract.js';
 
 	/**
 	 * The whole workspace UI, inside the tenant's own compiled bundle.
@@ -63,6 +62,7 @@
 	} = $props();
 
 	const session = workspaceSession();
+	let replicaAccessScope = $state(session.accessScope);
 
 	/**
 	 * The authored record surfaces, keyed by collection.
@@ -76,13 +76,16 @@
 	 * slow module cannot hold up the other twenty.
 	 */
 	const collectionSurfaces = $state<Record<string, CollectionSurface>>({});
+	// svelte-ignore state_referenced_locally -- loader identity is fixed for this compiled mount; rerunning on host view updates would duplicate module loads.
 	for (const [collection, load] of Object.entries(workspace.representationLoaders)) {
-		void load()
-			.then((module) => {
-				const representation = module as CollectionSurface['representation'];
-				if (representation !== undefined) collectionSurfaces[collection] = { representation };
-			})
-			.catch(() => undefined);
+		void Effect.runPromise(
+			Effect.tryPromise(load).pipe(
+				Effect.tap((representation) =>
+					Effect.sync(() => (collectionSurfaces[collection] = { representation }))
+				),
+				Effect.catch(() => Effect.void)
+			)
+		);
 	}
 	setCollectionSurfaceRuntime({
 		appId: () => landingName ?? '',
@@ -98,12 +101,11 @@
 	 * sheet now reads the record itself, and this is where it gets the client to read it through —
 	 * the same compiled client Studio's Data tab uses, from the bundle, never from a host lookup.
 	 *
-	 * Duck-checked rather than cast: `WorkspaceClient` under-declares what the generated runtime
-	 * actually carries (`records`, `history`, `approvals`), and this is the seam that verifies it.
+	 * The generated client is typed with the complete collection capability, including records,
+	 * history and approvals, so the context receives it directly without a second runtime guard.
 	 */
 	// svelte-ignore state_referenced_locally -- the compiled workspace is fixed for this mount.
-	const collectionClient = resolveCollectionClient(workspace.client);
-	if (collectionClient) setCollectionClientContext(() => collectionClient);
+	setCollectionClientContext(() => workspace.client);
 
 	/**
 	 * A custom type's own renderer, keyed by the type name its columns declare.
@@ -112,13 +114,14 @@
 	 * the component that reads it. Without these every custom field falls through to the JSON dump.
 	 */
 	const customTypeRenderers = $state<Record<string, CustomTypeRendererMap[string]>>({});
+	// svelte-ignore state_referenced_locally -- custom renderer modules belong to this fixed compiled mount and load exactly once.
 	for (const [typeName, load] of Object.entries(workspace.customTypeRendererLoaders)) {
-		void load()
-			.then((module) => {
-				const renderer = module as CustomTypeRendererMap[string];
-				if (renderer !== undefined) customTypeRenderers[typeName] = renderer;
-			})
-			.catch(() => undefined);
+		void Effect.runPromise(
+			Effect.tryPromise(load).pipe(
+				Effect.tap((renderer) => Effect.sync(() => (customTypeRenderers[typeName] = renderer))),
+				Effect.catch(() => Effect.void)
+			)
+		);
 	}
 
 	setDataRendererRuntimeContext({
@@ -127,41 +130,13 @@
 		// vault. Refusing names what is missing; returning an empty result would render an address
 		// picker that silently finds nothing and a map that is silently blank.
 		autocompleteGeolocation: () =>
-			Promise.reject(new Error('Geolocation autocomplete needs a provider credential in Secrets.')),
+			Effect.fail(new Error('Geolocation autocomplete needs a provider credential in Secrets.')),
 		renderStaticMap: () =>
-			Promise.reject(new Error('Static maps need a provider credential in Secrets.')),
+			Effect.fail(new Error('Static maps need a provider credential in Secrets.')),
 		// A real client over the host's declared file store. This used to be a stub whose every member
 		// rejected, so a record sheet with a file field could take no file at all.
 		createFileUploadClient: () => new WorkspaceUploadClient()
 	});
-
-	const FALLBACK_DEFAULT_MODEL = 'deepseek/deepseek-v4-flash-0731';
-
-	const isModelCatalog = (
-		value: unknown
-	): value is {
-		defaultModel: string;
-		options: ReadonlyArray<{ id: string; label: string; contextLength?: number }>;
-	} => {
-		if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-		const defaultModel = Reflect.get(value, 'defaultModel');
-		const options = Reflect.get(value, 'options');
-		return (
-			typeof defaultModel === 'string' &&
-			Array.isArray(options) &&
-			options.every((option) => {
-				if (option === null || typeof option !== 'object' || Array.isArray(option)) return false;
-				const id = Reflect.get(option, 'id');
-				const label = Reflect.get(option, 'label');
-				const contextLength = Reflect.get(option, 'contextLength');
-				return (
-					typeof id === 'string' &&
-					typeof label === 'string' &&
-					(contextLength === undefined || typeof contextLength === 'number')
-				);
-			})
-		);
-	};
 
 	/**
 	 * The subject the local replica reasons about.
@@ -193,24 +168,20 @@
 	 * The web agent has no declaration and no name of its own beyond this one; every *other* agent is
 	 * an envoy, reached on a transport rather than here.
 	 */
-	$effect(() => {
-		configureAgentRuntime({
-			transport: session.transport,
+	const agentModelsQuery = $derived(workspace.client.system.ai.models({}));
+
+	provideAgentClient(
+		untrack(() => ({
+			client: workspace.client,
 			subject,
-			agentName: WEB_AGENT_ID,
-			userId: subject.userId
-		});
-	});
-	setWorkspaceRemoteTransport({
-		// Host catalog is optional until Identity publishes one; a missing command and an invalid
-		// response shape both fall back to the same default catalog.
-		agentModels: async () => {
-			const catalog = await session.transport.command('ai.models', {}).catch(() => undefined);
-			return isModelCatalog(catalog)
-				? catalog
-				: { defaultModel: FALLBACK_DEFAULT_MODEL, options: [] };
+			agentName: WEB_AGENT_ID
+		})),
+		{
+			get agentModels() {
+				return agentModelsQuery;
+			}
 		}
-	});
+	);
 
 	/**
 	 * Which of the compiled apps this session is actually allowed to see.
@@ -224,24 +195,11 @@
 	 * disclosure this closes. The runtime remains the authority either way — this gates what the
 	 * workspace offers, never what it will serve.
 	 */
-	let accessibleApps = $state<ReadonlyArray<string>>([]);
-
-	const readVisibleApps = (payload: unknown): ReadonlyArray<string> => {
-		// An unreadable shape is not a permissive one: anything but an array of names reads as "no
-		// apps", so a changed projection cannot silently widen the sidebar back to the whole registry.
-		const listed =
-			typeof payload === 'object' && payload !== null ? Reflect.get(payload, 'apps') : undefined;
-		return Array.isArray(listed)
-			? listed.filter((entry): entry is string => typeof entry === 'string')
-			: [];
-	};
-
-	void session.transport
-		.command('apps.visible', {})
-		.then((payload) => {
-			accessibleApps = readVisibleApps(payload);
-		})
-		.catch(() => undefined);
+	const visibleAppsQuery = $derived.by(() => {
+		void replicaAccessScope;
+		return workspace.client.system.apps.visible({});
+	});
+	const accessibleApps = $derived(visibleAppsQuery.current?.apps ?? []);
 
 	/**
 	 * Whether this session may preview the workspace as one of its teams, and which team it is on now.
@@ -252,43 +210,11 @@
 	 * "no picker" — an administrative control that appears because a read failed is worse than one
 	 * that appears a round trip late.
 	 */
-	let impersonation = $state<WorkspaceImpersonation | null>(null);
-	let replicaAccessScope = $state(session.accessScope);
-
-	const readImpersonation = (payload: unknown): WorkspaceImpersonation | null => {
-		if (typeof payload !== 'object' || payload === null) return null;
-		const teams = Reflect.get(payload, 'teams');
-		const activeTeamIds = Reflect.get(payload, 'activeTeamIds');
-		return {
-			isAdmin: Reflect.get(payload, 'isAdmin') === true,
-			isActive: Reflect.get(payload, 'isActive') === true,
-			activeTeamIds: Array.isArray(activeTeamIds)
-				? activeTeamIds.filter((entry): entry is string => typeof entry === 'string')
-				: [],
-			teams: Array.isArray(teams)
-				? teams.flatMap((entry: unknown) => {
-						if (typeof entry !== 'object' || entry === null) return [];
-						const id = Reflect.get(entry, 'id');
-						const name = Reflect.get(entry, 'name');
-						return typeof id === 'string' && id.length > 0
-							? [{ id, name: typeof name === 'string' ? name : null }]
-							: [];
-					})
-				: []
-		};
-	};
-
-	const loadImpersonation = (): void => {
-		void session.transport
-			.command('access.impersonation', {})
-			.then((payload) => {
-				impersonation = readImpersonation(payload);
-			})
-			.catch(() => {
-				impersonation = null;
-			});
-	};
-	loadImpersonation();
+	const impersonationQuery = $derived.by(() => {
+		void replicaAccessScope;
+		return workspace.client.system.access.impersonation({});
+	});
+	const impersonation = $derived(impersonationQuery.current ?? null);
 
 	/**
 	 * The runtime accepts the preview first; only then does the host store it.
@@ -299,51 +225,21 @@
 	 * written — the per-request seam re-checks the same authority but deliberately records nothing, or
 	 * a preview would append one row per request and bury the entry that says it began.
 	 */
-	const impersonateTeam = async (teamId: string): Promise<void> => {
-		let response: unknown;
-		try {
-			response = await session.transport.command('access.impersonateTeam', { teamId });
-		} catch (cause) {
-			// Swallowing it would leave a picker that appears to have selected a team the runtime never
-			// granted. Re-reading the state snaps the control back to what is actually in force.
-			console.error('Impersonation was refused', cause);
-			loadImpersonation();
-			return;
-		}
-		// The host callback writes the cookie synchronously. Switch the browser caches immediately after
-		// it, in the same turn, so refreshed queries carry the new preview while the previous replica is
-		// already unavailable to readers.
-		actions.impersonate(teamId);
-		const nextScope = `team:${teamId}`;
-		workspace.changeAccessScope(nextScope);
-		replicaAccessScope = nextScope;
-		accessibleApps = readVisibleApps(response);
-		if (impersonation !== null) {
-			impersonation = {
-				...impersonation,
-				isActive: true,
-				activeTeamIds: [teamId]
-			};
-		}
-	};
+	const impersonateTeam = (teamId: string): Effect.Effect<void> =>
+		Effect.gen(function* () {
+			yield* workspace.client.system.access.impersonateTeam({ teamId });
+			// The host callback writes the cookie synchronously. Switch the browser caches immediately
+			// so no reader can observe rows held under the previous policy scope.
+			actions.impersonate(teamId);
+			const nextScope = `team:${teamId}`;
+			workspace.changeAccessScope(nextScope);
+			replicaAccessScope = nextScope;
+		}).pipe(Effect.catch((cause) => Effect.logError('Impersonation was refused', cause)));
 
 	const stopImpersonating = (): void => {
 		actions.stopImpersonating();
 		workspace.changeAccessScope('operator');
 		replicaAccessScope = 'operator';
-		accessibleApps = [];
-		if (impersonation !== null) {
-			impersonation = { ...impersonation, isActive: false, activeTeamIds: [] };
-		}
-		// The visual mode changes immediately; these two reads repopulate the administrator's app list
-		// and reconcile the picker without remounting the workspace or waiting on a document navigation.
-		void session.transport
-			.command('apps.visible', {})
-			.then((payload) => {
-				accessibleApps = readVisibleApps(payload);
-			})
-			.catch(() => undefined);
-		loadImpersonation();
 	};
 
 	/**
@@ -355,9 +251,6 @@
 	 * `accessibleApps` never reached it.
 	 */
 	const hostPluginsVisible = $derived(!(impersonation?.isActive ?? false));
-
-	const humanize = (value: string): string =>
-		value.replaceAll(/[-_]/g, ' ').replaceAll(/\b\w/g, (character) => character.toUpperCase());
 
 	const resolveAppName = (href: string): string | undefined => {
 		if (!href.startsWith('/app/')) return undefined;
@@ -386,13 +279,9 @@
 			...[...parents].map((name) => ({
 				name,
 				label: workspace.appGroups[name]?.label ?? humanize(name.split('/').at(-1) ?? name),
-				...(workspace.appGroups[name]?.description === undefined
-					? {}
-					: { description: workspace.appGroups[name].description }),
+				description: workspace.appGroups[name]?.description,
 				icon: workspace.appGroups[name]?.icon ?? 'lucide:layout-grid',
-				...(workspace.appGroups[name]?.defaultChild === undefined
-					? {}
-					: { defaultChild: workspace.appGroups[name].defaultChild })
+				defaultChild: workspace.appGroups[name]?.defaultChild
 			})),
 			...names.map((name) => {
 				const index = name.lastIndexOf('/');
@@ -401,10 +290,10 @@
 					name,
 					label: meta?.label ?? humanize(index < 0 ? name : name.slice(index + 1)),
 					icon: meta?.icon ?? 'lucide:layout-grid',
-					...(meta?.description === undefined ? {} : { description: meta.description }),
-					...(meta?.banner === undefined ? {} : { banner: meta.banner }),
-					...(meta?.thumbnail === undefined ? {} : { thumbnail: meta.thumbnail }),
-					...(index < 0 ? {} : { parent: name.slice(0, index) })
+					description: meta?.description,
+					banner: meta?.banner,
+					thumbnail: meta?.thumbnail,
+					parent: index < 0 ? undefined : name.slice(0, index)
 				};
 			})
 		];
@@ -413,50 +302,61 @@
 	const path = $derived(view.path === '' ? '/' : view.path);
 	const hostPlugin = $derived(hostPluginKeyFromPath(path));
 	const landingName = $derived(resolveAppName(path));
-	let App = $state<Component | null>(null);
-	let appLoading = $state(false);
+	/**
+	 * Which app component is mounted, and whether its module is still arriving.
+	 *
+	 * One cell because the three fields move together: the request counter is what tells a late module
+	 * that the navigation it belongs to was already superseded, and `component`/`loading` are what the
+	 * shell renders while that is decided.
+	 */
+	const appMount = $state({
+		component: null as Component | null,
+		loading: false,
+		request: 0
+	});
+	const App = $derived(appMount.component);
 
 	/**
 	 * Which navigation the mounted component belongs to.
 	 *
 	 * An app module is fetched, not held: the first visit to one costs a cold dynamic import.
-	 * Assigning `App` only after that await left the *previous* app fully rendered under the new
-	 * app's banner, tabs and URL for the entire wait. The old component comes down when the URL
+	 * Assigning `appMount.component` only after that await left the *previous* app fully rendered under
+	 * the new app's banner, tabs and URL for the entire wait. The old component comes down when the URL
 	 * changes; the new one goes up when it arrives.
 	 *
 	 * The counter is the other half: two overlapping navigations resolve in import order, not click
 	 * order, so a slow app could land on top of the fast one the operator actually asked for. Only
 	 * the newest request is allowed to assign.
 	 */
-	let requestedApp = 0;
-
-	const loadAppName = async (name: string | undefined): Promise<void> => {
-		const request = ++requestedApp;
-		App = null;
-		appLoading = false;
+	const loadAppName = (name: string | undefined): Promise<void> => {
+		const request = ++appMount.request;
+		appMount.component = null;
+		appMount.loading = false;
 		const loader = name === undefined ? undefined : workspace.appLoaders[name];
-		if (loader === undefined) return;
-		appLoading = true;
-		try {
-			const loaded = await loader();
-			if (request !== requestedApp) return;
-			// The generated registry types app loaders as returning `unknown`; a Svelte component is a
-			// function at runtime, and this boundary is where that is asserted once.
-			App = typeof loaded === 'function' ? (loaded as Component) : null;
-		} catch {
-			// A module that fails to evaluate is a missing app, not the previous one. Swallowing this
-			// silently is what left a broken import rendering the app the operator had just left.
-			if (request !== requestedApp) return;
-			App = null;
-		} finally {
-			if (request === requestedApp) appLoading = false;
-		}
+		if (loader === undefined) return Effect.runPromise(Effect.void);
+		appMount.loading = true;
+		return Effect.runPromise(
+			Effect.tryPromise(loader).pipe(
+				Effect.tap((loaded) =>
+					Effect.sync(() => {
+						if (request === appMount.request) appMount.component = loaded;
+					})
+				),
+				// A module that fails to evaluate is a missing app, never the previous one.
+				Effect.catch(() =>
+					Effect.sync(() => {
+						if (request === appMount.request) appMount.component = null;
+					})
+				),
+				Effect.ensuring(
+					Effect.sync(() => {
+						if (request === appMount.request) appMount.loading = false;
+					})
+				),
+				Effect.asVoid
+			)
+		);
 	};
-
-	// Read once per mount; membership does not change under the user mid-session.
-	$effect(() => {
-		void loadWorkspaceAccess();
-	});
 
 	/**
 	 * Starts the local replica, which is what makes a second visit cheap.
@@ -474,14 +374,18 @@
 		const accessScope = replicaAccessScope;
 		let stop: (() => void) | undefined;
 		let unmounted = false;
-		void workspace
-			.startLocalReplica(accessScope)
-			.then((replica) => {
-				// Resolved after teardown — stop it now rather than leaking the stream it just opened.
-				if (unmounted) replica.stop();
-				else stop = replica.stop;
-			})
-			.catch(() => undefined);
+		void Effect.runPromise(
+			Effect.tryPromise(() => workspace.startLocalReplica(accessScope)).pipe(
+				Effect.tap((replica) =>
+					Effect.sync(() => {
+						// Resolved after teardown — stop it now rather than leaking its stream.
+						if (unmounted) replica.stop();
+						else stop = replica.stop;
+					})
+				),
+				Effect.catch(() => Effect.void)
+			)
+		);
 		return () => {
 			unmounted = true;
 			stop?.();
@@ -505,115 +409,9 @@
 		void loadAppName(name);
 	});
 
-	type MemberRole = 'admin' | 'manager' | 'basic';
-	let workspaceAccess = $state<WorkspaceAccess>(EMPTY_WORKSPACE_ACCESS);
-	let accessLoading = $state(true);
-	let accessError = $state<string | undefined>(undefined);
-
-	/**
-	 * The wire carries role and status as open strings; the settings surfaces are typed on closed
-	 * sets. Deciding what an unrecognised value means belongs here, at the boundary, rather than
-	 * being asserted past — an unknown role reads as the least privileged one.
-	 */
-	const asMemberRole = (value: unknown): MemberRole =>
-		value === 'admin' || value === 'manager' ? value : 'basic';
-	const text = (row: unknown, field: string): string =>
-		typeof row === 'object' && row !== null && typeof Reflect.get(row, field) === 'string'
-			? (Reflect.get(row, field) as string)
-			: '';
-	const optionalText = (row: unknown, field: string): string | undefined => {
-		const value = text(row, field);
-		return value === '' ? undefined : value;
-	};
-
-	const decodeAccess = (payload: unknown): WorkspaceAccess => {
-		if (typeof payload !== 'object' || payload === null) return EMPTY_WORKSPACE_ACCESS;
-		const list = (field: string): ReadonlyArray<unknown> => {
-			const value = Reflect.get(payload, field);
-			return Array.isArray(value) ? value : [];
-		};
-		return {
-			members: list('members').map((row) => ({
-				id: text(row, 'id'),
-				email: text(row, 'email'),
-				name: text(row, 'name'),
-				role: asMemberRole(
-					typeof row === 'object' && row !== null ? Reflect.get(row, 'role') : undefined
-				),
-				status: (() => {
-					const raw =
-						typeof row === 'object' && row !== null ? Reflect.get(row, 'status') : undefined;
-					return raw === 'suspended' || raw === 'invited' ? raw : 'active';
-				})(),
-				// `team`, singular, because that is the key the projection publishes — a person belongs
-				// to exactly one team. This read `teams` and filtered an array that is never on the
-				// wire, so every member rendered as belonging to nothing at all.
-				...(optionalText(row, 'team') === undefined ? {} : { team: text(row, 'team') })
-			})),
-			invitations: list('invitations').map((row) => ({
-				id: text(row, 'id'),
-				email: text(row, 'email'),
-				role: asMemberRole(
-					typeof row === 'object' && row !== null ? Reflect.get(row, 'role') : undefined
-				),
-				status: (() => {
-					const raw =
-						typeof row === 'object' && row !== null ? Reflect.get(row, 'status') : undefined;
-					return raw === 'accepted' || raw === 'revoked' || raw === 'expired' ? raw : 'pending';
-				})(),
-				...(optionalText(row, 'invitedBy') === undefined
-					? {}
-					: { invitedBy: text(row, 'invitedBy') }),
-				...(optionalText(row, 'expiresAt') === undefined
-					? {}
-					: { expiresAt: text(row, 'expiresAt') })
-			})),
-			// `parentId` and `description` are carried rather than dropped: the projection reads all four
-			// columns off `bolt_team`, and the chart below is a *hierarchy* — decoding the id and the
-			// name alone drew every team as a root and threw the nesting away between the wire and the
-			// component that exists to show it.
-			teams: list('teams').map((row) => ({
-				id: text(row, 'id'),
-				name: text(row, 'name'),
-				...(optionalText(row, 'parentId') === undefined ? {} : { parentId: text(row, 'parentId') }),
-				...(optionalText(row, 'description') === undefined
-					? {}
-					: { description: text(row, 'description') })
-			})),
-			events: list('events').map((row) => ({
-				id: text(row, 'id'),
-				action: text(row, 'action'),
-				actor: text(row, 'actor'),
-				...(optionalText(row, 'subject') === undefined ? {} : { subject: text(row, 'subject') }),
-				at: text(row, 'at')
-			}))
-		};
-	};
-
-	/**
-	 * Workspace membership is tenant state, so the tenant runtime is what answers for it.
-	 *
-	 * Over the session's transport, like every other read here. This used to be its own `fetch` to a
-	 * literal host path with its own `Authorization` header — a fifth HTTP client, and the only one
-	 * that could disagree with the rest about where a command goes.
-	 */
-	const loadWorkspaceAccess = async (): Promise<void> => {
-		accessLoading = true;
-		accessError = undefined;
-		try {
-			workspaceAccess = decodeAccess(
-				await session.transport.command('identity.workspaceAccess', {
-					tenantId: view.organization.id
-				})
-			);
-		} catch (cause) {
-			// Surfaced on the People surface rather than swallowed: a silent empty read renders as a
-			// working workspace with nobody in it, which is how an empty people page is born.
-			accessError = cause instanceof Error ? cause.message : String(cause);
-		} finally {
-			accessLoading = false;
-		}
-	};
+	const memberAccessQuery = $derived(
+		workspace.client.system.identity.workspaceAccess({ tenantId: view.organization.id })
+	);
 </script>
 
 <svelte:head><title>{workspace.title}</title></svelte:head>
@@ -659,15 +457,19 @@
 	onSignOut={actions.signOut}
 >
 	{#if path === WORKSPACE_SETTINGS_PATH || path.startsWith(`${WORKSPACE_SETTINGS_PATH}/`)}
-		<WorkspaceMembers access={workspaceAccess} loading={accessLoading} error={accessError} />
+		<WorkspaceMembers
+			access={memberAccessQuery.current ?? EMPTY_WORKSPACE_ACCESS}
+			loading={memberAccessQuery.loading}
+			error={memberAccessQuery.error === undefined ? undefined : String(memberAccessQuery.error)}
+		/>
 	{:else if hostPlugin === 'workspace-studio'}
 		<StudioShell client={workspace.client} />
 	{:else if hostPlugin === 'organization'}
-		<OrganizationSettings tenantId={view.organization.id} />
+		<OrganizationSettings tenantId={view.organization.id} client={workspace.client} />
 	{:else if hostPlugin === 'envoys'}
-		<EnvoysSettings />
+		<EnvoysSettings client={workspace.client} />
 	{:else if hostPlugin === 'environment_secrets'}
-		<SecretsSettings />
+		<SecretsSettings client={workspace.client} />
 	{:else if hostPlugin !== null}
 		<Scroll as="section" name={hostPlugin} inset class="bg-background" aria-label={hostPlugin}>
 			<Stack gap="sm">
@@ -677,7 +479,7 @@
 		</Scroll>
 	{:else if App}
 		<App />
-	{:else if appLoading}
+	{:else if appMount.loading}
 		<!-- The app surface is empty because its module is still arriving, not because the app is. -->
 		<p role="status" class="p-6 text-sm text-muted-foreground">Loading application…</p>
 	{/if}

@@ -21,16 +21,36 @@
 
 	const toggleGroupCtx = $derived({ variant, size });
 
+	function updateSingle(next: string): void {
+		value = next;
+		if (restProps.type === 'single') restProps.onValueChange?.(next);
+	}
+
+	function updateMultiple(next: string[]): void {
+		value = next;
+		if (restProps.type === 'multiple') restProps.onValueChange?.(next);
+	}
+
 	// Pass getter to delay reading - maintains reactivity
 	setToggleGroupCtx(() => () => toggleGroupCtx);
 </script>
 
-<ToggleGroupPrimitive.Root
-	bind:ref
-	class={cn('flex items-center justify-center gap-1', className)}
-	bind:value={
-		value as unknown /* stupidity: boundary-cast -- Svelte cannot preserve bits-ui's single/multiple binding discriminant */ as string &
-			string[]
-	}
-	{...restProps}
-/>
+{#if restProps.type === 'single'}
+	<ToggleGroupPrimitive.Root
+		{...restProps}
+		type="single"
+		bind:ref
+		class={cn('flex items-center justify-center gap-1', className)}
+		value={typeof value === 'string' ? value : undefined}
+		onValueChange={updateSingle}
+	/>
+{:else}
+	<ToggleGroupPrimitive.Root
+		{...restProps}
+		type="multiple"
+		bind:ref
+		class={cn('flex items-center justify-center gap-1', className)}
+		value={Array.isArray(value) ? value : undefined}
+		onValueChange={updateMultiple}
+	/>
+{/if}

@@ -31,7 +31,7 @@ import {
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
-import { Integrations } from '../../src/runtime/integrations/integrations.js';
+import * as Integrations from '../../src/runtime/integrations/integrations.js';
 import {
 	makeBoltTestRuntime,
 	makeTestDatabase,
@@ -113,7 +113,9 @@ const definition = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+	],
 	teams: {
 		admin: ['admin']
 	},

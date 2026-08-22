@@ -42,7 +42,7 @@ const FIELDS: ReadonlyArray<Bounds> = [
  * restricted a day matches if *either* does, and `*` expands to every value, so a set that happens
  * to hold every day is indistinguishable from a literal `*` once expanded.
  */
-export type CronFields = Readonly<{
+type CronFields = Readonly<{
 	readonly minutes: ReadonlyArray<number>;
 	readonly hours: ReadonlyArray<number>;
 	readonly daysOfMonth: ReadonlyArray<number>;
@@ -52,11 +52,11 @@ export type CronFields = Readonly<{
 	readonly dayOfWeekIsWildcard: boolean;
 }>;
 
-export type CronParse =
+type CronParse =
 	| Readonly<{ readonly _tag: 'Parsed'; readonly fields: CronFields }>
 	| Readonly<{ readonly _tag: 'Rejected'; readonly reason: string }>;
 
-export type CronNext =
+type CronNext =
 	| Readonly<{ readonly _tag: 'Next'; readonly epochMs: number }>
 	| Readonly<{ readonly _tag: 'Rejected'; readonly reason: string }>;
 
@@ -147,7 +147,7 @@ export const parse = (expression: string): CronParse => {
 			hours,
 			daysOfMonth,
 			months,
-			daysOfWeek: Array.from(new Set(weekdays.map((day) => day % 7))).toSorted((a, b) => a - b),
+			daysOfWeek: [...new Set(weekdays.map((day) => day % 7))].toSorted((a, b) => a - b),
 			dayOfMonthIsWildcard: terms[2] === '*',
 			dayOfWeekIsWildcard: terms[4] === '*'
 		}
@@ -175,6 +175,33 @@ const SEARCH_DAYS = 366 * 4;
 const MINUTE_MS = 60_000;
 
 /**
+ * The first instant one candidate day names that is not before the search boundary.
+ *
+ * The first day of the search is the only partial day: everything after it starts at 00:00, and
+ * only the hour and minute that equaled the boundary's own are pinned below it.
+ */
+const firstMinuteOfDay = (
+	fields: CronFields,
+	year: number,
+	month: number,
+	day: number,
+	boundaryHour: number,
+	boundaryMinute: number,
+	isFirstDay: boolean
+): number | undefined => {
+	for (const hour of fields.hours) {
+		const earliestHour = isFirstDay ? boundaryHour : 0;
+		if (hour < earliestHour) continue;
+		const earliestMinute = isFirstDay && hour === boundaryHour ? boundaryMinute : 0;
+		for (const minute of fields.minutes) {
+			if (minute < earliestMinute) continue;
+			return Date.UTC(year, month, day, hour, minute);
+		}
+	}
+	return undefined;
+};
+
+/**
  * The first instant this expression names *strictly after* `afterEpochMs`, at minute granularity.
  *
  * Strictly after, and computed from the caller's `now` rather than from the previous due time, is
@@ -195,17 +222,16 @@ export const nextRunAfter = (expression: string, afterEpochMs: number): CronNext
 	for (let elapsed = 0; elapsed <= SEARCH_DAYS; elapsed += 1) {
 		const midnight = new Date(Date.UTC(year, month, day));
 		if (dayMatches(fields, midnight)) {
-			// Only the first day of the search is partial; every later candidate day starts at 00:00.
-			const isFirstDay = elapsed === 0;
-			const earliestHour = isFirstDay ? from.getUTCHours() : 0;
-			for (const hour of fields.hours) {
-				if (hour < earliestHour) continue;
-				const earliestMinute = isFirstDay && hour === from.getUTCHours() ? from.getUTCMinutes() : 0;
-				for (const minute of fields.minutes) {
-					if (minute < earliestMinute) continue;
-					return { _tag: 'Next', epochMs: Date.UTC(year, month, day, hour, minute) };
-				}
-			}
+			const instant = firstMinuteOfDay(
+				fields,
+				year,
+				month,
+				day,
+				from.getUTCHours(),
+				from.getUTCMinutes(),
+				elapsed === 0
+			);
+			if (instant !== undefined) return { _tag: 'Next', epochMs: instant };
 		}
 		const nextDay = new Date(Date.UTC(year, month, day + 1));
 		year = nextDay.getUTCFullYear();
@@ -217,5 +243,3 @@ export const nextRunAfter = (expression: string, afterEpochMs: number): CronNext
 		reason: `names no instant in the ${SEARCH_DAYS} days after the given time`
 	};
 };
-
-export * as Cron from './cron.js';

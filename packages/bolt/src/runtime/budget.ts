@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from 'effect';
+import { Context, Effect, Layer, Result, Schema } from 'effect';
 
 /**
  * How deep the work that caused this invocation already was.
@@ -11,7 +11,12 @@ import { Context, Effect, Layer, Schema } from 'effect';
  * does, and it is what actually stops `write → automation → write → automation` from running until
  * somebody notices the bill.
  */
-export const DEPTH_FIELD = 'bolt_depth';
+const DEPTH_FIELD = 'bolt_depth';
+
+const DepthPayload = Schema.Struct({
+	[DEPTH_FIELD]: Schema.optionalKey(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)))
+});
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
 
 /**
  * How many levels of enqueued work one originating request may cause.
@@ -94,11 +99,10 @@ export const layer = (
  * treated as the start of a chain rather than allowed to fail an unrelated decode. A negative or
  * fractional value is not a depth, and neither is a string.
  */
-export const depthOf = (payload: unknown): number => {
-	if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return 0;
-	const value = Reflect.get(payload, DEPTH_FIELD);
-	return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 0;
-};
+export const depthOf = (payload: unknown): number =>
+	Result.getOrElse(Schema.decodeUnknownResult(DepthPayload)(payload), () => ({ bolt_depth: 0 }))[
+		DEPTH_FIELD
+	] ?? 0;
 
 /**
  * Stamps the depth a child should run at onto the payload being enqueued.
@@ -107,9 +111,7 @@ export const depthOf = (payload: unknown): number => {
  * only party entitled to say how deep a piece of work is is the runtime that is causing it, and a
  * depth carried in from a caller's own input would let anything reset itself to zero.
  */
-export const stampDepth = (payload: Schema.Json, depth: number): Schema.Json =>
-	typeof payload === 'object' && payload !== null && !Array.isArray(payload)
-		? { ...(payload as Readonly<Record<string, Schema.Json>>), [DEPTH_FIELD]: depth }
-		: { [DEPTH_FIELD]: depth };
-
-export * as InvocationBudget from './budget.js';
+export const stampDepth = (payload: Schema.Json, depth: number): Schema.Json => ({
+	...Result.getOrElse(Schema.decodeUnknownResult(JsonObject)(payload), () => ({})),
+	[DEPTH_FIELD]: depth
+});

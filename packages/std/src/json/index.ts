@@ -1,31 +1,34 @@
-export type JsonPatchOperation = {
-	op: 'add' | 'remove' | 'replace';
-	path: string;
-	value?: unknown;
-};
+import { Option, Schema } from 'effect';
+
+/**
+ * One mutation in a JSON Patch document, as `deepDiff` and the form engine's delta carry it.
+ *
+ * The wire shape has one schema owner so both producers and consumers agree on the op names — a
+ * `move` or `copy` op drifts out of the form engine's vocabulary and back in as a misapplied diff.
+ */
+export const JsonPatchOperationSchema = Schema.Struct({
+	op: Schema.Literals(['add', 'remove', 'replace']),
+	path: Schema.String,
+	value: Schema.optional(Schema.Unknown)
+});
+
+export type JsonPatchOperation = Schema.Schema.Type<typeof JsonPatchOperationSchema>;
 
 /**
  * Parse a JSON string, returning `null` on failure.
  *
- * Returns `unknown` — callers must narrow the result (e.g. with a Zod schema
- * or a type guard) before treating it as a concrete type. This is the
+ * Returns `unknown` — callers must decode the result with an Effect Schema
+ * before treating it as a concrete type. This is the
  * unvalidated boundary parse; structured validation belongs at the call site.
  */
 export function safeParse(json: string): unknown {
-	try {
-		// stupidity:allow R6b -- this boundary intentionally returns unknown for caller validation
-		return JSON.parse(json);
-	} catch {
-		return null;
-	}
-}
-
-function escapePointer(s: string): string {
-	return s.replace(/~/g, '~0').replace(/\//g, '~1');
+	return Option.getOrElse(() => null)(
+		Schema.decodeOption(Schema.fromJsonString(Schema.Unknown))(json)
+	);
 }
 
 function pathJoin(base: string, key: string): string {
-	return `${base}/${escapePointer(key)}`;
+	return `${base}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`;
 }
 
 export function deepDiff(a: unknown, b: unknown, basePath = ''): JsonPatchOperation[] {

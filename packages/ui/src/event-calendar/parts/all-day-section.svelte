@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import { assignLanes, isSameDay } from '../utils.js';
-	import type { CalendarEvent, EventRenderContext } from '../types.js';
+	import { assignLanes, isSameDay } from '#lib/event-calendar/utils';
+	import type { CalendarEvent, EventRenderContext } from '#lib/event-calendar/types';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { Snippet } from 'svelte';
 	import EventBar from './event-bar.svelte';

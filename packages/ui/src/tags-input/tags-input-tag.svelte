@@ -1,9 +1,7 @@
 <script lang="ts">
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
-
-	type TagColor =
-		'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple' | 'pink' | 'brown' | 'grey' | 'black';
+	import type { TagColor } from '#lib/tags-input/types';
 
 	let {
 		value,

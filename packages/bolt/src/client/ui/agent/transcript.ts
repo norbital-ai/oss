@@ -1,14 +1,18 @@
 /**
- * How one message embedded in a synced `chat_session` reads in the panel.
+ * How one synced `chat_message` row reads in the panel.
  *
  * The loop stores one turn per row and its steps as the parts inside it, so this is a projection of
  * the stored turn and not a second model of the conversation. Kept out of the component because it is the only part
  * with an answer worth checking, and this package has no browser runner to check it through one.
  */
-import { parseStoredGoalVerdict, parseStoredVerifierScheduled } from './goal-verdict.js';
+import { Effect, Option, Schema } from 'effect';
+import {
+	parseStoredGoalVerdict,
+	parseStoredVerifierScheduled
+} from '#lib/client/ui/agent/goal-verdict.js';
+import { parseAgentMessage } from '#lib/runtime/agents/agent-message.js';
 import { humanize } from '@norbital-ai/std';
-import type { BoltUiKeys } from './i18n.js';
-import { parseStoredSummary } from './intent.js';
+import { parseStoredSummary } from '#lib/client/ui/agent/intent.js';
 
 function parsePublicMcpToolName(
 	name: string
@@ -18,7 +22,7 @@ function parsePublicMcpToolName(
 	return { server: name.slice(0, index), tool: name.slice(index + 1) };
 }
 
-export type PanelText = {
+type PanelText = {
 	readonly kind: 'text';
 	readonly key: string;
 	readonly role: string;
@@ -27,7 +31,7 @@ export type PanelText = {
 };
 
 /** One provider reasoning part, intentionally separate from the answer and collapsed in the UI. */
-export type PanelReasoning = {
+type PanelReasoning = {
 	readonly kind: 'reasoning';
 	readonly key: string;
 	readonly content: string;
@@ -41,7 +45,7 @@ export type PanelReasoning = {
  * which arguments produced which rows, so a call is the unit here rather than the row that carried
  * it.
  */
-export type PanelToolCall = {
+type PanelToolCall = {
 	readonly kind: 'tool';
 	readonly key: string;
 	/** Registered name, kept verbatim — tenant and host tools are not in the label table. */
@@ -50,7 +54,7 @@ export type PanelToolCall = {
 	 * Catalog key for a built-in tool label, or `null` when the tool is not one
 	 * Bolt ships — those render the humanized name in `label` instead.
 	 */
-	readonly labelKey: BoltUiKeys | null;
+	readonly labelKey: string | null;
 	/** Humanized fallback label, used only when `labelKey` is null. */
 	readonly label: string | null;
 	readonly icon: string;
@@ -89,7 +93,7 @@ export type PanelToolCall = {
  * tool call whose message body sits inside the arguments blob, which says a message was sent without
  * showing what was said. Both are the same event and it is a message, so it is a row of its own.
  */
-export type PanelAgentMessage = {
+type PanelAgentMessage = {
 	readonly kind: 'agent-message';
 	readonly key: string;
 	/** `in` when this session received it, `out` when it sent it. */
@@ -112,7 +116,7 @@ export type PanelAgentMessage = {
  * all of it costs nothing, and a summary of a summary with no path back to the original is the
  * failure this exists to prevent.
  */
-export type PanelCheckpoint = {
+type PanelCheckpoint = {
 	readonly kind: 'checkpoint';
 	readonly key: string;
 	readonly summary: string;
@@ -122,7 +126,7 @@ export type PanelCheckpoint = {
 };
 
 /** Independent verifier result for a goal-mode turn. Not the agent's own claim. */
-export type PanelGoal = {
+type PanelGoal = {
 	readonly kind: 'goal';
 	readonly key: string;
 	readonly achieved: boolean;
@@ -131,7 +135,7 @@ export type PanelGoal = {
 };
 
 /** End-action scheduled for this turn. The person can edit the prompt before it runs. */
-export type PanelVerifier = {
+type PanelVerifier = {
 	readonly kind: 'verifier';
 	readonly key: string;
 	readonly prompt: string;
@@ -146,6 +150,92 @@ export type PanelMessage =
 	| PanelGoal
 	| PanelVerifier;
 
+/** One typed `chat_message` row, with only its intentionally untyped jsonb content left to decode. */
+type StoredChatMessageRow = Readonly<{
+	readonly id: string;
+	readonly conversation_id: string;
+	readonly turn_id: string | null;
+	readonly role: string;
+	readonly content: unknown;
+}>;
+
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
+const JsonObjects = Schema.Array(JsonObject);
+const ElicitationRequest = Schema.Struct({
+	id: Schema.optionalKey(Schema.String),
+	message: Schema.String,
+	mode: Schema.optionalKey(Schema.Literals(['form', 'url'])),
+	url: Schema.optionalKey(Schema.String)
+});
+const StoredTurn = Schema.Struct({
+	id: Schema.String,
+	status: Schema.String,
+	subagent_id: Schema.NullOr(Schema.String),
+	parts: Schema.Array(JsonObject),
+	usage: Schema.optionalKey(JsonObject),
+	error: Schema.optionalKey(Schema.String)
+});
+const StoredText = Schema.Union([Schema.String, Schema.Struct({ text: Schema.String })]);
+const decodeStoredTurn = Schema.decodeUnknownOption(StoredTurn);
+const decodeStoredText = Schema.decodeUnknownOption(StoredText);
+const decodeJsonObject = Schema.decodeUnknownOption(JsonObject);
+const decodeJsonObjects = Schema.decodeUnknownOption(JsonObjects);
+const decodeElicitationRequest = Schema.decodeUnknownOption(ElicitationRequest);
+
+/**
+ * Projects the typed, reactive `chat_message` query into the transcript's presentation records.
+ *
+ * Only `content` is decoded: it is the model's deliberate jsonb payload. Collection columns are
+ * already typed by `PlatformSchema`, so this function never re-checks or widens them.
+ */
+export function projectStoredChatMessages(rows: readonly StoredChatMessageRow[]) {
+	const projected = rows.map((row) => {
+		const relayed = parseAgentMessage(row.content);
+		if (relayed !== null) {
+			return {
+				id: row.id,
+				kind: relayed.kind,
+				role: row.role,
+				from: relayed.from,
+				parts: [{ kind: 'text', text: relayed.text }],
+				turn_id: row.turn_id
+			};
+		}
+		return Option.match(decodeStoredTurn(row.content), {
+			onNone: () => {
+				const content = Option.getOrElse(decodeStoredText(row.content), () => '');
+				return {
+					id: row.id,
+					role: row.role,
+					parts: [{ kind: 'text', text: typeof content === 'string' ? content : content.text }],
+					turn_id: row.turn_id
+				};
+			},
+			onSome: (turn) => ({ ...turn, role: row.role, turn_id: row.turn_id })
+		});
+	});
+	const turns = rows.flatMap((row) =>
+		Option.match(decodeStoredTurn(row.content), {
+			onNone: () => [],
+			onSome: ({ id, status, subagent_id, error }) => [
+				{ id, status, subagent_id, ...(error === undefined ? {} : { error }) }
+			]
+		})
+	);
+	const delegatedTurnIds = new Set(
+		turns.filter((turn) => turn.subagent_id !== null).map((turn) => turn.id)
+	);
+	return {
+		messages: projected.map((record) => ({
+			...record,
+			...(record.turn_id !== null && delegatedTurnIds.has(record.turn_id)
+				? { delegated: true }
+				: {})
+		})),
+		turns
+	};
+}
+
 /**
  * Tool payloads are held behind a disclosure and capped.
  *
@@ -156,19 +246,7 @@ export type PanelMessage =
  */
 const PAYLOAD_LIMIT = 2_000;
 
-type ToolMetadata = { readonly labelKey: BoltUiKeys | null; readonly icon: string };
-
-/** The tools this package resolves itself. Tenant and host tools are named by their registration. */
-export const SEARCH_TOOLS = new Set([
-	'describe_workspace',
-	'list_skills',
-	'read_skill',
-	'read_collection',
-	'list_sandbox_agents',
-	'read_sandbox_agent'
-]);
-
-export const AUTHORING_TOOLS = new Set(['write_collection']);
+type ToolMetadata = { readonly labelKey: string | null; readonly icon: string };
 
 const TOOL_METADATA: Readonly<Record<string, ToolMetadata>> = {
 	describe_workspace: { labelKey: 'bolt.agent.tool.describeWorkspace', icon: 'lucide:book-open' },
@@ -234,7 +312,7 @@ export function toPanelMessages(
 	const turnStatus = new Map<string, string>();
 	const subagentTurnIds = new Set<string>();
 	for (const turn of turns) {
-		const turnId = turn.norbital_id;
+		const turnId = turn.id;
 		if (typeof turnId === 'string' && typeof turn.status === 'string') {
 			turnStatus.set(turnId, turn.status);
 		}
@@ -265,56 +343,77 @@ export function toPanelMessages(
 	// which is what makes repeated compaction readable rather than a chain of recaps of recaps.
 	let output: PanelMessage[] = [];
 	for (const record of roots) {
-		if (record.kind === 'usage') continue;
-		if (record.kind === 'summary') {
-			const id = record.norbital_id;
-			const content = textOf(record);
-			if (typeof id === 'string' && content !== null) {
-				const parsed = parseStoredSummary(content);
-				output = [
-					{
-						kind: 'checkpoint',
-						key: id,
-						summary: parsed.text,
-						before: output,
-						fold: parsed.fold
-					}
-				];
-				continue;
-			}
+		const projected = projectRoot(record, context);
+		if (projected.checkpoint !== undefined) {
+			output = [{ ...projected.checkpoint, before: output }];
+		} else {
+			output.push(...projected.rows);
 		}
-		if (record.kind === 'agent_message') {
-			const relayed = toInboundAgentMessage(record);
-			if (relayed !== null) {
-				output.push(relayed);
-				continue;
-			}
-		}
-		if (record.kind === 'goal') {
-			const id = record.norbital_id;
-			const content = textOf(record);
-			if (typeof id === 'string' && content !== null) {
-				const scheduled = parseStoredVerifierScheduled(content);
-				if (scheduled) {
-					output.push({ kind: 'verifier', key: id, prompt: scheduled });
-					continue;
-				}
-				const verdict = parseStoredGoalVerdict(content);
-				if (verdict) {
-					output.push({
-						kind: 'goal',
-						key: id,
-						achieved: verdict.achieved,
-						summary: verdict.summary,
-						gaps: verdict.gaps
-					});
-					continue;
-				}
-			}
-		}
-		output.push(...toPanelRow(record, context, 0));
 	}
 	return output;
+}
+
+type RootProjection = Readonly<{
+	/** A fold replaces everything the transcript has projected so far. */
+	readonly checkpoint?: PanelCheckpoint;
+	readonly rows: readonly PanelMessage[];
+}>;
+
+/**
+ * Projects one root record: a summary or a goal folds the whole prefix, a relayed agent message is a
+ * row of its own, and everything else is read by the per-record projector. Split out of the framing
+ * loop so the fold policy and the row projection do not nest four decisions deep in one place.
+ */
+function projectRoot(
+	record: Readonly<Record<string, unknown>>,
+	context: ProjectionContext
+): RootProjection {
+	if (record.kind === 'usage') return { rows: [] };
+	if (record.kind === 'summary') {
+		const checkpoint = checkpointFold(record);
+		return checkpoint === null
+			? { rows: toPanelRow(record, context, 0) }
+			: { checkpoint, rows: [] };
+	}
+	if (record.kind === 'agent_message') {
+		const relayed = toInboundAgentMessage(record);
+		return relayed === null ? { rows: toPanelRow(record, context, 0) } : { rows: [relayed] };
+	}
+	if (record.kind === 'goal') {
+		const verdict = goalVerdict(record);
+		return verdict === null ? { rows: toPanelRow(record, context, 0) } : { rows: [verdict] };
+	}
+	return { rows: toPanelRow(record, context, 0) };
+}
+
+/** The checkpoint this summary record folds, or nothing when it is malformed. */
+function checkpointFold(record: Readonly<Record<string, unknown>>): PanelCheckpoint | null {
+	const id = record.id;
+	const content = textOf(record);
+	// A malformed checkpoint — no id, or no text to fold — is a row like any other.
+	if (typeof id !== 'string' || content === null) return null;
+	const parsed = parseStoredSummary(content);
+	return { kind: 'checkpoint', key: id, summary: parsed.text, before: [], fold: parsed.fold };
+}
+
+/** The verifier verdict or scheduled prompt this goal record folds, or nothing when it reads as content. */
+function goalVerdict(record: Readonly<Record<string, unknown>>): PanelGoal | PanelVerifier | null {
+	const id = record.id;
+	const content = textOf(record);
+	// A malformed goal is a row like any other too — a verifier verdict missing its text reads
+	// as plain content rather than vanishing.
+	if (typeof id !== 'string' || content === null) return null;
+	const scheduled = parseStoredVerifierScheduled(content);
+	if (scheduled) return { kind: 'verifier', key: id, prompt: scheduled };
+	const verdict = parseStoredGoalVerdict(content);
+	if (verdict === null) return null;
+	return {
+		kind: 'goal',
+		key: id,
+		achieved: verdict.achieved,
+		summary: verdict.summary,
+		gaps: verdict.gaps
+	};
 }
 
 type ProjectionContext = {
@@ -340,13 +439,13 @@ const MAX_SUBAGENT_DEPTH = 3;
  * parts rather than by reading one of them. The row used to hold a single part and a turn was spread
  * over several rows, which is why one turn rendered as several separate agent blocks.
  */
-// stupidity:allow Q3 -- ordered part projector
+// repository-health:allow Q3 -- ordered part projector
 function toPanelRow(
 	record: Readonly<Record<string, unknown>>,
 	context: ProjectionContext,
 	depth: number
 ): PanelMessage[] {
-	const id = record.norbital_id;
+	const id = record.id;
 	if (typeof id !== 'string') return [];
 	if (record.kind === 'usage') return [];
 	const role = typeof record.role === 'string' ? record.role : 'assistant';
@@ -379,18 +478,18 @@ function toPanelRow(
 }
 
 /** Projects one stored tool call into the collapsed row the panel renders. */
-// stupidity:allow Q3 -- large projector
+// repository-health:allow Q3 -- large projector
 function toToolCall(
 	call: unknown,
 	key: string,
 	context: ProjectionContext,
 	depth: number
 ): PanelToolCall {
-	const record = isRecord(call) ? call : {};
+	const record: Record<string, unknown> = Option.getOrElse(decodeJsonObject(call), () => ({} as Record<string, unknown>));
 	const name = typeof record.name === 'string' ? record.name : 'tool';
 	const metadata = TOOL_METADATA[name];
 	const mcpParsed = parsePublicMcpToolName(name);
-	const input = isRecord(record.input) ? record.input : undefined;
+	const input = Option.getOrUndefined(decodeJsonObject(record.input));
 	const id = typeof record.id === 'string' ? record.id : null;
 	const answered = id !== null && context.results.has(id);
 	const output = answered ? context.results.get(id) : undefined;
@@ -401,7 +500,8 @@ function toToolCall(
 			: [];
 	// The loop turns a thrown tool into `{ error }` and feeds it back to the model rather than failing
 	// the turn, so a failed call is visible only here — the run around it still reports success.
-	const error = isRecord(output) && typeof output.error === 'string' ? output.error : null;
+	const decodedOutput = Option.getOrElse(decodeJsonObject(output), () => ({} as Record<string, unknown>));
+	const error = typeof decodedOutput.error === 'string' ? decodedOutput.error : null;
 	const labelKey = mcpParsed ? null : (metadata?.labelKey ?? null);
 	const label = mcpParsed
 		? `${humanize(mcpParsed.server)} · ${humanize(mcpParsed.tool)}`
@@ -416,10 +516,9 @@ function toToolCall(
 	const family = mcpParsed ? 'mcp' : SANDBOX_AGENT_TOOLS.has(name) ? 'sandbox' : null;
 	const requests =
 		answered &&
-		isRecord(output) &&
-		output.resultType === 'input_required' &&
-		Array.isArray(output.requests)
-			? output.requests
+		decodedOutput.resultType === 'input_required' &&
+		Array.isArray(decodedOutput.requests)
+			? decodedOutput.requests
 			: null;
 	const elicitation = requests ? parseElicitationRequests(requests) : null;
 	const inputRequired = requests !== null;
@@ -462,10 +561,10 @@ function toToolCall(
 function toInboundAgentMessage(
 	record: Readonly<Record<string, unknown>>
 ): PanelAgentMessage | null {
-	const id = record.norbital_id;
+	const id = record.id;
 	const text = textOf(record);
 	if (typeof id !== 'string' || text === null) return null;
-	const from = isRecord(record.from) ? record.from : {};
+	const from = Option.getOrElse(decodeJsonObject(record.from), () => ({} as Record<string, unknown>));
 	return {
 		kind: 'agent-message',
 		key: id,
@@ -493,11 +592,11 @@ function toOutboundAgentMessage(
 	context: ProjectionContext
 ): PanelAgentMessage | null {
 	if (call.name !== 'message_sandbox_agent') return null;
-	const input = isRecord(part.input) ? part.input : {};
+	const input = Option.getOrElse(decodeJsonObject(part.input), () => ({} as Record<string, unknown>));
 	if (typeof input.message !== 'string') return null;
 	const id = typeof part.id === 'string' ? part.id : null;
 	const answer = id === null ? undefined : context.results.get(id);
-	const output = isRecord(answer) ? answer : {};
+	const output = Option.getOrElse(decodeJsonObject(answer), () => ({} as Record<string, unknown>));
 	return {
 		kind: 'agent-message',
 		key: call.key,
@@ -512,34 +611,36 @@ function toOutboundAgentMessage(
 }
 
 /** Narrows a tool's `input_required` payload to the fields the disclosure can render. */
-// stupidity:allow Q3 -- request projector
+// repository-health:allow Q3 -- request projector
 function parseElicitationRequests(
 	requests: readonly unknown[]
 ): NonNullable<PanelToolCall['elicitation']> {
 	return requests.flatMap((request) => {
-		if (!isRecord(request) || typeof request.message !== 'string') return [];
-		return [
-			{
-				id: typeof request.id === 'string' ? request.id : `elicitation-${request.message}`,
-				message: request.message,
-				...(request.mode === 'form' || request.mode === 'url' ? { mode: request.mode } : {}),
-				...(typeof request.url === 'string' ? { url: request.url } : {})
-			}
-		];
+		return Option.match(decodeElicitationRequest(request), {
+			onNone: () => [],
+			onSome: (decoded) => [
+				{
+					id: decoded.id ?? `elicitation-${decoded.message}`,
+					message: decoded.message,
+					...(decoded.mode === undefined ? {} : { mode: decoded.mode }),
+					...(decoded.url === undefined ? {} : { url: decoded.url })
+				}
+			]
+		});
 	});
 }
 
 /** Caps a tool payload so an expanded call stays readable in the panel scroller. */
 function formatPayload(value: unknown): string {
-	try {
-		return clamp(JSON.stringify(value, null, 2) ?? String(value));
-	} catch {
-		return clamp(String(value));
-	}
+	return Effect.runSync(
+		Effect.try(() => clamp(JSON.stringify(value, null, 2) ?? String(value))).pipe(
+			Effect.catch(() => Effect.succeed(clamp(String(value))))
+		)
+	);
 }
 
 /** Truncates a payload or detail string at the panel's display cap. */
-// stupidity:allow Q4 -- named helper
+// repository-health:allow Q4 -- named helper
 function clamp(text: string, limit: number = PAYLOAD_LIMIT): string {
 	return text.length <= limit ? text : `${text.slice(0, limit)}…`;
 }
@@ -551,8 +652,7 @@ function clamp(text: string, limit: number = PAYLOAD_LIMIT): string {
  * which is one part. Keeping the shape uniform is what lets one projector read the whole transcript.
  */
 function partsOf(record: Readonly<Record<string, unknown>>): readonly Record<string, unknown>[] {
-	const parts = record.parts;
-	return Array.isArray(parts) ? parts.filter(isRecord) : [];
+	return Option.getOrElse(decodeJsonObjects(record.parts), () => []);
 }
 
 /** The record's own words: the first text part, or nothing when it never produced any. */
@@ -561,13 +661,6 @@ function textOf(record: Readonly<Record<string, unknown>>): string | null {
 		if (part.kind === 'text' && typeof part.text === 'string') return part.text;
 	}
 	return null;
-}
-
-/** A plain object, as opposed to an array or a primitive the projectors cannot index. */
-// stupidity:allow Q4 -- named helper
-function isRecord(value: unknown): value is Record<string, unknown> {
-	// stupidity:allow R5b -- projector boundary
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -598,8 +691,8 @@ export function toPanelUsage(
 	let totalTokens = 0;
 	let costUsd: number | null = null;
 	for (const record of records) {
-		const usage = record.usage;
-		if (!isRecord(usage)) continue;
+		const usage = Option.getOrUndefined(decodeJsonObject(record.usage));
+		if (usage === undefined) continue;
 		// A delegated agent runs against a window of its own. Counting its usage here would report the
 		// person's next prompt as landing in whatever context a subagent happened to leave behind.
 		if (record.delegated === true) continue;
@@ -627,7 +720,7 @@ export function toPanelUsage(
 	}
 	return { contextTokens, contextLength, totalTokens, costUsd };
 }
-export type PanelUsage = ReturnType<typeof toPanelUsage>;
+type PanelUsage = ReturnType<typeof toPanelUsage>;
 
 /**
  * The conversation's durable totals, as the session row carries them.
@@ -637,17 +730,19 @@ export type PanelUsage = ReturnType<typeof toPanelUsage>;
  * them at all.
  */
 /** Reads the session row's durable usage counters, or null when nothing has settled. */
-export function toSessionTotals(record: Readonly<Record<string, unknown>> | undefined) {
+type DurableSessionTotals = Readonly<{
+	readonly usage_cost_usd: number;
+	readonly usage_cost_micro_units: number;
+	readonly usage_cost_currency: string | null;
+	readonly usage_total_tokens: number;
+	readonly usage_turns_counted: number;
+	readonly usage_turns_unreported: number;
+}>;
+
+export function toSessionTotals(record: DurableSessionTotals | undefined) {
 	if (!record) return null;
-	/** Treats a missing or non-finite counter as zero rather than dropping the totals. */
-	// stupidity:allow Q4 -- named helper
-	const count = (key: string): number => {
-		const value = record[key];
-		return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-	};
-	const currency = record['usage_cost_currency'];
 	const totals = {
-		costUsd: count('usage_cost_usd'),
+		costUsd: record.usage_cost_usd,
 		/**
 		 * What the host will invoice, in millionths of `currency`, and the currency it is in.
 		 *
@@ -655,16 +750,16 @@ export function toSessionTotals(record: Readonly<Record<string, unknown>> | unde
 		 * provider charge is what the model cost, and this is what the person reading it will pay.
 		 * `null` currency means the host prices nothing and the provider figure is all there is.
 		 */
-		costMicroUnits: count('usage_cost_micro_units'),
-		currency: typeof currency === 'string' && currency.length > 0 ? currency : null,
-		totalTokens: count('usage_total_tokens'),
-		turnsCounted: count('usage_turns_counted'),
-		turnsUnreported: count('usage_turns_unreported')
+		costMicroUnits: record.usage_cost_micro_units,
+		currency: record.usage_cost_currency,
+		totalTokens: record.usage_total_tokens,
+		turnsCounted: record.usage_turns_counted,
+		turnsUnreported: record.usage_turns_unreported
 	};
 	// A session that has settled nothing has nothing to say, which is not the same as zero spend.
 	return totals.turnsCounted === 0 ? null : totals;
 }
-export type SessionTotals = NonNullable<ReturnType<typeof toSessionTotals>>;
+type SessionTotals = NonNullable<ReturnType<typeof toSessionTotals>>;
 
 /**
  * What this conversation has cost, as one string, or nothing when no figure has been reported.

@@ -33,7 +33,7 @@ const depsetLayoutVersion = 'host-plus-linux-musl-x64-arm64-v2';
  * and bundle gates address depsets by exactly this scheme.
  */
 
-export const defaultRegistry = 'https://npm.pkg.github.com';
+const defaultRegistry = 'https://npm.pkg.github.com';
 
 /** Content address of a depset: the lockfile bytes alone decide it. */
 export function lockHash(lockfile) {
@@ -95,7 +95,7 @@ function writeRegistryConfiguration(directory, { withCredentials }) {
  * Fetch every package the lockfile names into the shared store. The only step that touches
  * the network, and the only step that needs registry credentials.
  */
-export function warmStore({ manifest, lockfile, pnpmWorkspace, storeDirectory }) {
+function warmStore({ manifest, lockfile, pnpmWorkspace, storeDirectory }) {
 	requirePnpmWorkspace(pnpmWorkspace);
 	const scratch = path.join(storeDirectory, '.warm', lockHash(lockfile));
 	rmSync(scratch, { recursive: true, force: true });
@@ -171,8 +171,6 @@ export function materialize({ manifest, lockfile, pnpmWorkspace, storeDirectory,
 			installed: true,
 			elapsedMs: Number(process.hrtime.bigint() - started) / 1_000_000
 		};
-	} catch (cause) {
-		throw cause;
 	} finally {
 		rmSync(staging, { recursive: true, force: true });
 	}

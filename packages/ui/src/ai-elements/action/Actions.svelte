@@ -2,7 +2,7 @@
 	import { cn } from '#lib/utils';
 	import type { HTMLAttributes } from 'svelte/elements';
 
-	export type ActionsProps = HTMLAttributes<HTMLDivElement>;
+	type ActionsProps = HTMLAttributes<HTMLDivElement>;
 
 	let { class: className, children, ...restProps }: ActionsProps = $props();
 </script>

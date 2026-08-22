@@ -4,8 +4,17 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { yaml, yamlLanguage } from '@codemirror/lang-yaml';
 import type { Language } from '@codemirror/language';
 import type { Extension } from '@codemirror/state';
-import type { CodeEditorLanguage } from './code-editor.types.js';
-import { markdownBlockDecorations } from './markdown-blocks.js';
+import { Schema } from 'effect';
+import { markdownBlockDecorations } from '#lib/code-editor/markdown-blocks';
+
+const CodeEditorLanguageSchema = Schema.Literals([
+	'javascript',
+	'json',
+	'markdown',
+	'plaintext',
+	'yaml'
+]);
+export type CodeEditorLanguage = typeof CodeEditorLanguageSchema.Type;
 
 const javascriptLanguage = javascript({ typescript: true }).language;
 const jsonLanguage = json().language;

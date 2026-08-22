@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement } from './layout.shared.js';
+	import type { LayoutAttributes, LayoutElement } from '#lib/layout/layout.shared';
 
 	export type ColumnSpan = 1 | 2 | 3 | 4 | 5 | 6 | 'all';
 	export interface ColumnProps extends LayoutAttributes {
@@ -13,7 +13,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { getContext } from 'svelte';
-	import { COLUMN_PARENT_CONTEXT, type ColumnParentContext } from './layout.shared.js';
+	import { COLUMN_PARENT_CONTEXT, type ColumnParentContext } from '#lib/layout/layout.shared';
 
 	let { as = 'div', span = 1, class: className, children, ...restProps }: ColumnProps = $props();
 	const parent = getContext<ColumnParentContext>(COLUMN_PARENT_CONTEXT);

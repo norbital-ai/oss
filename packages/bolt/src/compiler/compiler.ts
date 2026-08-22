@@ -1,16 +1,30 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { WorkspaceDefinition } from '../authoring/workspace-schema.js';
 import { buildManifest, type ManifestInput } from '../manifest/manifest.js';
-import { appCapabilityNames } from './app-names.js';
 import { buildSchemaPlan, type SchemaPlan } from './schema-plan.js';
 
+/**
+ * Every exact name an application capability may grant.
+ *
+ * Runtime access treats a path prefix as a group grant: `hr_controller` reaches
+ * `hr_controller/leave` and every other app below that directory. Generated authoring types must
+ * therefore include the same prefixes, while remaining a closed union that rejects misspellings.
+ */
+export const appCapabilityNames = (appNames: ReadonlyArray<string>): ReadonlyArray<string> =>
+	[
+		...new Set(
+			appNames.flatMap((name) =>
+				name.split('/').map((_, index, parts) => parts.slice(0, index + 1).join('/'))
+			)
+		)
+	]
+		.filter((name) => name.length > 0)
+		.toSorted();
+
 /** Carries discovery error through the typed compiler failure channel without losing diagnostic context. */
-export class DiscoveryError extends Schema.TaggedError<DiscoveryError>()(
-	'Bolt.Compiler.DiscoveryError',
-	{
-		message: Schema.NonEmptyString
-	}
-) {
+class DiscoveryError extends Schema.TaggedError<DiscoveryError>()('Bolt.Compiler.DiscoveryError', {
+	message: Schema.NonEmptyString
+}) {
 	readonly category = 'workspace-discovery' as const;
 	readonly retryable = false;
 	readonly phase = 'discover' as const;
@@ -47,7 +61,7 @@ export const discoverWorkspace = CompilerValues.discover;
 export const generateWorkspaceTypes = CompilerValues.generateTypes;
 
 /** Carries compilation error through the typed compiler failure channel without losing diagnostic context. */
-export class CompilationError extends Schema.TaggedError<CompilationError>()(
+class CompilationError extends Schema.TaggedError<CompilationError>()(
 	'Bolt.Compiler.CompilationError',
 	{
 		message: Schema.NonEmptyString
@@ -58,14 +72,14 @@ export class CompilationError extends Schema.TaggedError<CompilationError>()(
 	readonly phase = 'compile' as const;
 }
 
-export type Compilation = Readonly<{
+type Compilation = Readonly<{
 	readonly workspace: WorkspaceDefinition;
 	readonly manifest: ReturnType<typeof buildManifest>;
 	readonly schemaPlan: SchemaPlan;
 	readonly generatedTypes: string;
 }>;
 
-export type Interface = Readonly<{
+type Interface = Readonly<{
 	readonly discover: (
 		candidates: ReadonlyArray<WorkspaceDefinition>
 	) => Effect.Effect<WorkspaceDefinition, DiscoveryError>;
@@ -79,7 +93,7 @@ export type Interface = Readonly<{
 }>;
 
 /** Identifies the compiler service in Effect's context so dependency wiring remains explicit and type checked. */
-export const Service = Context.Service<Interface>('@norbital-ai/bolt/Compiler');
+const Service = Context.Service<Interface>('@norbital-ai/bolt/Compiler');
 
 const checkWorkspace = Effect.fn('Compiler.check')(function* (workspace: WorkspaceDefinition) {
 	const names = workspace.collections.map(({ name }) => name);
@@ -92,7 +106,7 @@ const checkWorkspace = Effect.fn('Compiler.check')(function* (workspace: Workspa
 	}
 });
 
-export const layer = Layer.succeed(
+const layer = Layer.succeed(
 	Service,
 	Service.of({
 		discover: Effect.fn('Compiler.discover')(function* (candidates) {
@@ -114,5 +128,3 @@ export const layer = Layer.succeed(
 		buildSchemaPlan
 	})
 );
-
-export * as Compiler from './compiler.js';

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import { eventTimeLabel } from '../utils.js';
-	import type { CalendarEvent, EventRenderContext } from '../types.js';
+	import { eventTimeLabel } from '#lib/event-calendar/utils';
+	import type { CalendarEvent, EventRenderContext } from '#lib/event-calendar/types';
 	import type { Snippet } from 'svelte';
 
 	let {

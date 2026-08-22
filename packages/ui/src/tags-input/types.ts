@@ -31,20 +31,33 @@
 // ================================
 
 import type { HTMLInputAttributes } from 'svelte/elements';
+import { Schema } from 'effect';
 
 /**
  * Available tag colors
  */
-export type TagColor =
-	'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple' | 'pink' | 'brown' | 'grey' | 'black';
+const TagColorSchema = Schema.Literals([
+	'red',
+	'orange',
+	'yellow',
+	'green',
+	'blue',
+	'purple',
+	'pink',
+	'brown',
+	'grey',
+	'black'
+]);
+export type TagColor = typeof TagColorSchema.Type;
 
 /**
  * Colored tag type
  */
-export type ColoredTag = {
-	value: string;
-	color: TagColor;
-};
+const ColoredTagSchema = Schema.Struct({
+	value: Schema.String,
+	color: TagColorSchema
+});
+export type ColoredTag = typeof ColoredTagSchema.Type;
 
 /**
  * Configuration for different HTML input types
@@ -58,45 +71,6 @@ interface InputTypeConfig {
 	display: (value: InputTypeValue) => string;
 	/** Default validation for this input type */
 	validate?: (value: InputTypeValue, existing: InputTypeValue[]) => boolean;
-}
-
-/**
- * Props for the basic TagsInput component
- * @template T - The type of values stored in the tags
- */
-export interface TagsInputProps<T = string> extends Omit<HTMLInputAttributes, 'value' | 'type'> {
-	/** Array of tag values */
-	value?: T[];
-
-	/** CSS class name */
-	class?: string;
-
-	/** Placeholder text when no tags exist */
-	placeholder?: string;
-
-	/** Whether the input is disabled */
-	disabled?: boolean;
-
-	/** HTML input type (number, email, tel, url, date, etc.) */
-	type?: string;
-
-	/** Callback when values change */
-	onValueChange?: (values: T[]) => void;
-
-	/** Custom validation function - return undefined for invalid values */
-	validate?: (value: T, existing: T[]) => T | undefined;
-
-	/** Custom parser for converting string input to type T */
-	parseValue?: (input: string) => T | undefined;
-
-	/** Custom display formatter for type T */
-	displayValue?: (value: T) => string;
-
-	/** A tag that cannot be deleted */
-	fixedTag?: T;
-
-	/** Maximum number of visible tags (shows "+N more" for overflow) */
-	maxVisible?: number;
 }
 
 /**
@@ -187,13 +161,8 @@ export const INPUT_TYPE_CONFIGS: Record<string, InputTypeConfig> = {
 
 	url: {
 		parse: (val: string) => {
-			try {
-				const url = val.trim();
-				new URL(url.startsWith('http') ? url : `https://${url}`);
-				return url;
-			} catch {
-				return undefined;
-			}
+			const url = val.trim();
+			return URL.canParse(url.startsWith('http') ? url : `https://${url}`) ? url : undefined;
 		},
 		display: (val) => String(val)
 	},

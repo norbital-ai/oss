@@ -1,7 +1,7 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
-import { replicaLocation } from '../../src/client/replica/pglite-loader.js';
-import type { PGliteLike } from '../../src/client/replica/pglite-sql.js';
+import { Effect } from 'effect';
+import { adaptPGlite, replicaLocation } from '../../src/client/replica/pglite-loader.js';
 
 /**
  * One engine per browser rather than one per tab.
@@ -54,32 +54,40 @@ describe('telling other tabs what changed', () => {
 		// travels with the database precisely so it cannot arrive before the rows it describes.
 		const database = await PGlite.create('memory://');
 		databases.push(database);
-		const engine = database as unknown as PGliteLike;
+		const engine = adaptPGlite(database);
 
 		const heard: Array<string> = [];
-		const stop = await engine.listen?.('bolt_replica_changed', (payload) => heard.push(payload));
+		const stop = await Effect.runPromise(
+			engine.listen('bolt_replica_changed', (payload) => heard.push(payload))
+		);
 
-		await engine.query('select pg_notify($1, $2)', [
-			'bolt_replica_changed',
-			JSON.stringify(['people', 'companies'])
-		]);
+		await Effect.runPromise(
+			engine.query('select pg_notify($1, $2)', [
+				'bolt_replica_changed',
+				JSON.stringify(['people', 'companies'])
+			])
+		);
 		await new Promise((resolve) => setTimeout(resolve, 50));
 
 		expect(heard).toHaveLength(1);
 		expect(JSON.parse(heard[0] ?? '[]')).toEqual(['people', 'companies']);
-		await stop?.();
+		await Effect.runPromise(stop());
 	});
 
 	it('stops delivering once the listener is released', async () => {
 		const database = await PGlite.create('memory://');
 		databases.push(database);
-		const engine = database as unknown as PGliteLike;
+		const engine = adaptPGlite(database);
 
 		const heard: Array<string> = [];
-		const stop = await engine.listen?.('bolt_replica_changed', (payload) => heard.push(payload));
-		await stop?.();
+		const stop = await Effect.runPromise(
+			engine.listen('bolt_replica_changed', (payload) => heard.push(payload))
+		);
+		await Effect.runPromise(stop());
 
-		await engine.query('select pg_notify($1, $2)', ['bolt_replica_changed', '["people"]']);
+		await Effect.runPromise(
+			engine.query('select pg_notify($1, $2)', ['bolt_replica_changed', '["people"]'])
+		);
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		// A tab that closed its replica must not keep invalidating caches it no longer owns.
 		expect(heard).toEqual([]);

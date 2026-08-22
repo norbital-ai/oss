@@ -318,7 +318,7 @@ on `record`: `null` means create, while a row means an existing record. Do not p
 call site. Keep editable fields inside the generated form and avoid duplicating them in read-only summaries.
 
 Collection surfaces are record summaries, not database inspectors: give each one a human-readable title and
-description, and never expose `norbital_id`, UUID fields, or `*_id` keys as a list title or subtitle. Density,
+description, and never expose `id`, UUID fields, or `*_id` keys as a list title or subtitle. Density,
 duplication, and data-renderer rules are in [interface-ideology.md](references/interface-ideology.md).
 
 ## Who is looking at this page
@@ -337,15 +337,15 @@ want something that is not in this table, it is not there; do not guess a field 
 
 | Field              | Is                                       | Use it for                                                     |
 | ------------------ | ---------------------------------------- | -------------------------------------------------------------- |
-| `user.norbital_id` | `bolt_auth_user.norbital_id`, a **uuid** | The only value you may key a row by                            |
+| `user.id` | `bolt_auth_user.id`, a **uuid** | The only value you may key a row by                            |
 | `user.email`       | The address, as the host reports it      | Display, and matching a column that genuinely holds an address |
 | `user.admin`       | `bolt_auth_user.status === 'admin'`      | Widening a surface for administrators                          |
 | `apps`             | The app names **this session may see**   | Deriving authority — see below                                 |
 | `envoys`           | Declared envoys, with `audience`         | Offering an envoy to the right audience                        |
 
-**`user.norbital_id` is the row key. There is no second spelling.** A field named `id` used to sit
+**`user.id` is the row key. There is no second spelling.** A field named `id` used to sit
 beside it carrying the same value, the shell filled both from the display name, and every authored
-query of the shape `where: { user_id: { eq: user.norbital_id } }` therefore sent an email's local
+query of the shape `where: { user_id: { eq: user.id } }` therefore sent an email's local
 part to a `uuid` column and failed as Postgres 22P02. The surface reported "could not load your
 profile", which is a plausible sentence for a parse error and sent two people looking at the wrong
 layer. One spelling now, and it is the one every other row key uses.

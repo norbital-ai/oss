@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Option, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { Database } from '../facilities/database.js';
-import * as Identity from '../identity/identity.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import * as Identity from '#lib/runtime/identity/identity.js';
 import {
 	SecretCipher,
 	bind,
@@ -66,7 +66,7 @@ const personalBinding = (tenantId: string, userId: string, name: string): string
  */
 
 /** The typed refusal for an invocation with no person behind it: a task, an activation, a health probe. */
-export class NoPersonalSubject extends Schema.TaggedError<NoPersonalSubject>()(
+class NoPersonalSubject extends Schema.TaggedError<NoPersonalSubject>()(
 	'Bolt.PersonalSecrets.NoSubject',
 	{ operation: Schema.NonEmptyString }
 ) {
@@ -76,7 +76,7 @@ export class NoPersonalSubject extends Schema.TaggedError<NoPersonalSubject>()(
 }
 
 /** What the owner may know about one of their own entries: its name and whether a value is stored — never the value. */
-export type PersonalSecretStatus = Readonly<{
+type PersonalSecretStatus = Readonly<{
 	readonly name: string;
 	readonly configured: boolean;
 	readonly updatedAt?: string;
@@ -121,7 +121,7 @@ export type Interface = Readonly<{
 	) => Effect.Effect<void, NoPersonalSubject | Database.FacilityError>;
 }>;
 
-export const Service = Context.Service<Interface>('@norbital-ai/bolt/PersonalSecrets');
+const Service = Context.Service<Interface>('@norbital-ai/bolt/PersonalSecrets');
 
 /** Reads the loosely-typed values a SQL row hands back without scattering guards through each projection. */
 const rowText = (row: unknown, field: string): string | undefined => {
@@ -132,7 +132,7 @@ const rowText = (row: unknown, field: string): string | undefined => {
 	return typeof value === 'string' ? value : undefined;
 };
 
-export const layer = Layer.effect(
+const layer = Layer.effect(
 	Service,
 	Effect.gen(function* () {
 		const database = yield* Database.Service;

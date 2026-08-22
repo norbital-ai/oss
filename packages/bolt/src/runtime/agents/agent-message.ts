@@ -8,26 +8,34 @@
  * the receiving agent's prompt says it too rather than presenting another agent's words as the
  * person's own instruction.
  *
- * Deliberately dependency-free: the runtime writes this shape and the browser panel reads it, and a
- * second, quietly diverging notion of "who sent this" is the failure worth spending a shared module
- * to avoid.
+ * The shape is owned by a Schema even though this module deliberately has no other Effect runtime
+ * dependency: it is the one wire format between the runtime and the browser panel, and the panel
+ * decodes it with the same Schema the runtime encodes with, so a divergence between the two sides
+ * cannot compile.
  */
 
-export const AGENT_MESSAGE_KIND = 'agent_message';
+import { Option, Schema } from 'effect';
+
+const AGENT_MESSAGE_KIND = 'agent_message';
 
 /** The session a message came from, as much of it as the sender could name. */
-export type AgentMessageSender = {
-	readonly sessionId: string;
-	readonly agentName: string;
+const AgentMessageSender = Schema.Struct({
+	sessionId: Schema.String,
+	agentName: Schema.String,
 	/** The conversation's own title, which is what tells two sessions of one agent apart. */
-	readonly title: string | null;
-};
+	title: Schema.NullOr(Schema.String)
+});
+type AgentMessageSender = Schema.Schema.Type<typeof AgentMessageSender>;
 
-export type StoredAgentMessage = {
-	readonly kind: typeof AGENT_MESSAGE_KIND;
-	readonly from: AgentMessageSender;
-	readonly text: string;
-};
+const StoredAgentMessage = Schema.Struct({
+	kind: Schema.Literal(AGENT_MESSAGE_KIND),
+	from: AgentMessageSender,
+	text: Schema.String
+});
+type StoredAgentMessage = Schema.Schema.Type<typeof StoredAgentMessage>;
+
+const decodeStoredText = Schema.decodeUnknownOption(Schema.fromJsonString(StoredAgentMessage));
+const decodeStoredValue = Schema.decodeUnknownOption(StoredAgentMessage);
 
 export const encodeAgentMessage = (from: AgentMessageSender, text: string): StoredAgentMessage => ({
 	kind: AGENT_MESSAGE_KIND,
@@ -35,36 +43,20 @@ export const encodeAgentMessage = (from: AgentMessageSender, text: string): Stor
 	text
 });
 
-/** A plain object, as opposed to an array or a primitive whose fields cannot be read. */
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-	typeof value === 'object' && value !== null && !Array.isArray(value);
-
 /**
  * Reads a stored record as an agent-to-agent message, or nothing when it is an ordinary one.
  *
  * Accepts the JSON string form as well as the decoded object: the log column is `jsonb`, and the
- * paths that reach this have handed it back both ways.
+ * paths that reach this have handed it back both ways. Both forms decode through the same schema,
+ * so a value that is not exactly the message shape reads as no message rather than as a half one.
  */
 export function parseAgentMessage(content: unknown): StoredAgentMessage | null {
-	if (typeof content === 'string') {
-		try {
-			return parseAgentMessage(JSON.parse(content));
-		} catch {
-			return null;
-		}
-	}
-	if (!isRecord(content) || content.kind !== AGENT_MESSAGE_KIND) return null;
-	const text = content.text;
-	const from = content.from;
-	if (typeof text !== 'string' || !isRecord(from)) return null;
-	const sessionId = from.sessionId;
-	const agentName = from.agentName;
-	if (typeof sessionId !== 'string' || typeof agentName !== 'string') return null;
-	return {
-		kind: AGENT_MESSAGE_KIND,
-		from: { sessionId, agentName, title: typeof from.title === 'string' ? from.title : null },
-		text
-	};
+	const decoded =
+		typeof content === 'string' ? decodeStoredText(content) : decodeStoredValue(content);
+	return Option.match(decoded, {
+		onNone: () => null,
+		onSome: (message) => message
+	});
 }
 
 /**

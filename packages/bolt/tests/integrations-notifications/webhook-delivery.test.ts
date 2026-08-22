@@ -163,7 +163,7 @@ const harness = (options: { readonly secret?: string | null; readonly nowMs?: nu
 		// Refuses rather than answers: neither binding here declares a `resolve`, so the loop must
 		// never reach this. A stub that quietly succeeded would hide the loop starting to call it.
 		resolve: () => Effect.fail({ message: 'this binding declares no resolve' }),
-		now: () => options.nowMs ?? NOW
+		now: Effect.succeed(options.nowMs ?? NOW)
 	};
 	return { dependencies, ledger, rows, writes };
 };

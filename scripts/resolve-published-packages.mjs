@@ -20,11 +20,15 @@ import {
 import {
 	platformPackageKey,
 	publicPackageDirectories,
+	readManifest,
 	readPublicPackageEntries
 } from './lib/package-release.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sha512Pattern = /^sha512-[A-Za-z0-9+/]{86}==$/;
+const publicPackageDirectoryByName = new Map(
+	publicPackageDirectories.map((candidate) => [`@norbital-ai/${candidate}`, candidate])
+);
 
 function fail(message) {
 	throw new Error(message);
@@ -78,60 +82,70 @@ export async function resolvePublishedPackages({
 	const entries = [];
 
 	try {
-		for (const local of localEntries) {
-			const directory = publicPackageDirectories.find(
-				(candidate) => local.name === `@norbital-ai/${candidate}`
-			);
-			if (!directory) fail(`No package directory mapping for ${local.name}.`);
-			const packumentUrl = new URL(encodeURIComponent(local.name), registry);
-			const packumentResponse = await fetchImplementation(packumentUrl, {
-				headers: {
-					accept: 'application/vnd.npm.install-v1+json',
-					...authHeaders(token)
+		// The packages are independent of one another, so the registry work is batched; each entry
+		// keeps its own archive path and the results are collected in declaration order.
+		const resolved = await Promise.all(
+			localEntries.map(async (local) => {
+				const directory = publicPackageDirectoryByName.get(local.name);
+				if (!directory) fail(`No package directory mapping for ${local.name}.`);
+				const packumentUrl = new URL(encodeURIComponent(local.name), registry);
+				const packumentResponse = await fetchImplementation(packumentUrl, {
+					headers: {
+						accept: 'application/vnd.npm.install-v1+json',
+						...authHeaders(token)
+					}
+				});
+				if (!packumentResponse.ok) {
+					fail(`${local.name} packument returned HTTP ${packumentResponse.status}.`);
 				}
-			});
-			if (!packumentResponse.ok) {
-				fail(`${local.name} packument returned HTTP ${packumentResponse.status}.`);
-			}
-			const packument = await packumentResponse.json();
-			const published = packument.versions?.[local.version];
-			if (!published) {
-				fail(`${local.name}@${local.version} is not published by ${registry.origin}.`);
-			}
-			if (typeof published.dist?.tarball !== 'string' || published.dist.tarball === '') {
-				fail(`${local.name}@${local.version} has no dist.tarball.`);
-			}
-			const tarball = new URL(published.dist.tarball, registry);
-			if (!['http:', 'https:'].includes(tarball.protocol) || tarball.username || tarball.password) {
-				fail(`${local.name}@${local.version} has an invalid tarball URL.`);
-			}
-			const integrity = published.dist?.integrity;
-			if (!sha512Pattern.test(integrity ?? '')) {
-				fail(`${local.name}@${local.version} has no sha512 dist.integrity.`);
-			}
-			const tarballResponse = await fetchImplementation(tarball, {
-				headers: tarball.origin === registry.origin ? authHeaders(token) : {}
-			});
-			const bytes = await responseBytes(tarballResponse, `${local.name}@${local.version} tarball`);
-			assertSha512Integrity(bytes, integrity, `${local.name}@${local.version}`);
-			const archivePath = path.join(temporaryDirectory, `${directory}.tgz`);
-			writeFileSync(archivePath, bytes);
-			const inspected = inspectPackageArchive(archivePath, {
-				directory,
-				expectedName: local.name,
-				expectedVersion: local.version,
-				repositoryLicense
-			});
-			if (inspected.integrity !== integrity) {
-				fail(`${local.name}@${local.version} archive inspection changed its integrity.`);
-			}
-			entries.push({
-				name: local.name,
-				version: local.version,
-				tarball: tarball.href,
-				integrity
-			});
-		}
+				const packument = await packumentResponse.json();
+				const published = packument.versions?.[local.version];
+				if (!published) {
+					fail(`${local.name}@${local.version} is not published by ${registry.origin}.`);
+				}
+				if (typeof published.dist?.tarball !== 'string' || published.dist.tarball === '') {
+					fail(`${local.name}@${local.version} has no dist.tarball.`);
+				}
+				const tarball = new URL(published.dist.tarball, registry);
+				if (
+					!['http:', 'https:'].includes(tarball.protocol) ||
+					tarball.username ||
+					tarball.password
+				) {
+					fail(`${local.name}@${local.version} has an invalid tarball URL.`);
+				}
+				const integrity = published.dist?.integrity;
+				if (!sha512Pattern.test(integrity ?? '')) {
+					fail(`${local.name}@${local.version} has no sha512 dist.integrity.`);
+				}
+				const tarballResponse = await fetchImplementation(tarball, {
+					headers: tarball.origin === registry.origin ? authHeaders(token) : {}
+				});
+				const bytes = await responseBytes(
+					tarballResponse,
+					`${local.name}@${local.version} tarball`
+				);
+				assertSha512Integrity(bytes, integrity, `${local.name}@${local.version}`);
+				const archivePath = path.join(temporaryDirectory, `${directory}.tgz`);
+				writeFileSync(archivePath, bytes);
+				const inspected = inspectPackageArchive(archivePath, {
+					directory,
+					expectedName: local.name,
+					expectedVersion: local.version,
+					repositoryLicense
+				});
+				if (inspected.integrity !== integrity) {
+					fail(`${local.name}@${local.version} archive inspection changed its integrity.`);
+				}
+				return {
+					name: local.name,
+					version: local.version,
+					tarball: tarball.href,
+					integrity
+				};
+			})
+		);
+		entries.push(...resolved);
 		if (archiveOutput) {
 			mkdirSync(archiveOutput, { recursive: true });
 			for (const directory of publicPackageDirectories) {
@@ -164,7 +178,7 @@ const dependencyMapFields = [
 
 function normalizePackedManifest(packageRoot) {
 	const manifestPath = path.join(packageRoot, 'package.json');
-	const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+	const manifest = readManifest(manifestPath);
 	for (const field of dependencyMapFields) {
 		if (manifest[field] == null) continue;
 		manifest[field] = Object.fromEntries(
@@ -235,9 +249,7 @@ export function resolveWorkspacePackages({ archiveBaseUrl, archiveOutput }) {
 
 	try {
 		for (const local of localEntries) {
-			const directory = publicPackageDirectories.find(
-				(candidate) => local.name === `@norbital-ai/${candidate}`
-			);
+			const directory = publicPackageDirectoryByName.get(local.name);
 			if (!directory) fail(`No package directory mapping for ${local.name}.`);
 			const archivePath = packWorkspacePackage({ directory, temporaryDirectory });
 			const inspected = inspectPackageArchive(archivePath, {

@@ -6,7 +6,7 @@ import { SYSTEM_COLLECTIONS } from '../../src/runtime/schema/system-collections.
  * Hand-written SQL against a system collection, checked against what that collection declares.
  *
  * This exists because a column was dropped and a writer was left behind. The now-deleted
- * `channel-principal.ts` did `insert into bolt_team ("norbital_id", "name", "inherits")` after
+ * `channel-principal.ts` did `insert into bolt_team ("id", "name", "inherits")` after
  * `inherits` was removed, so the statement failed with `column "inherits" of relation "bolt_team"
  * does not exist` — and the `Effect.catch` around it turned that into a warning. Every channel in
  * every workspace refused inbound messages, and it reached a person as "the WhatsApp integration
@@ -31,12 +31,7 @@ const SOURCES = [
 const declaredColumns = (collectionName: string): ReadonlySet<string> | undefined => {
 	const collection = SYSTEM_COLLECTIONS.find((entry) => entry.name === collectionName);
 	if (collection === undefined) return undefined;
-	return new Set([
-		...Object.keys(collection.fields),
-		'norbital_id',
-		'norbital_created_at',
-		'norbital_updated_at'
-	]);
+	return new Set([...Object.keys(collection.fields), 'id', 'created_at', 'updated_at']);
 };
 
 /** Each `insert into "?<table>"? ( "a", "b", … )` in one source, as a table and its column list. */

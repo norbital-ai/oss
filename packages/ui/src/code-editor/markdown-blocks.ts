@@ -11,20 +11,16 @@ import {
 const fencedCodeLine = Decoration.line({ class: 'cm-md-codeblock' });
 const blockquoteLine = Decoration.line({ class: 'cm-md-blockquote' });
 
-const headingLine = {
-	ATXHeading1: Decoration.line({ class: 'cm-md-heading cm-md-h1' }),
-	ATXHeading2: Decoration.line({ class: 'cm-md-heading cm-md-h2' }),
-	ATXHeading3: Decoration.line({ class: 'cm-md-heading cm-md-h3' }),
-	ATXHeading4: Decoration.line({ class: 'cm-md-heading cm-md-h4' }),
-	ATXHeading5: Decoration.line({ class: 'cm-md-heading cm-md-h5' }),
-	ATXHeading6: Decoration.line({ class: 'cm-md-heading cm-md-h6' }),
-	SetextHeading1: Decoration.line({ class: 'cm-md-heading cm-md-h1' }),
-	SetextHeading2: Decoration.line({ class: 'cm-md-heading cm-md-h2' })
-} as const;
-
-function isHeadingName(name: string): name is keyof typeof headingLine {
-	return name in headingLine;
-}
+const headingDecorations = new Map<string, Decoration>([
+	['ATXHeading1', Decoration.line({ class: 'cm-md-heading cm-md-h1' })],
+	['ATXHeading2', Decoration.line({ class: 'cm-md-heading cm-md-h2' })],
+	['ATXHeading3', Decoration.line({ class: 'cm-md-heading cm-md-h3' })],
+	['ATXHeading4', Decoration.line({ class: 'cm-md-heading cm-md-h4' })],
+	['ATXHeading5', Decoration.line({ class: 'cm-md-heading cm-md-h5' })],
+	['ATXHeading6', Decoration.line({ class: 'cm-md-heading cm-md-h6' })],
+	['SetextHeading1', Decoration.line({ class: 'cm-md-heading cm-md-h1' })],
+	['SetextHeading2', Decoration.line({ class: 'cm-md-heading cm-md-h2' })]
+]);
 
 function markLines(
 	view: EditorView,
@@ -55,8 +51,9 @@ function buildDecorations(view: EditorView): DecorationSet {
 					markLines(view, node.from, node.to, blockquoteLine, lines);
 					return false;
 				}
-				if (isHeadingName(node.name)) {
-					markLines(view, node.from, node.to, headingLine[node.name], lines);
+				const heading = headingDecorations.get(node.name);
+				if (heading) {
+					markLines(view, node.from, node.to, heading, lines);
 					return false;
 				}
 				return true;

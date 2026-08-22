@@ -1,13 +1,13 @@
 import { Effect, Result, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
-import type { AuthoredIntegrationBinding } from '../../authoring/integration-introspection.js';
+import type { AuthoredIntegrationBinding } from '#lib/authoring/integration-introspection.js';
 import type {
 	HttpConnection,
 	IntegrationDeclaration,
 	IntegrationPullDeclaration
-} from '../../authoring/workspace-schema.js';
-import { absorbRecords, type AbsorbDependencies } from './absorb.js';
-import { isRetryableStatus, nextLink, retryDelayMs, type IntegrationHttpMethod } from './http.js';
+} from '#lib/authoring/workspace-schema.js';
+import { absorbRecords, type AbsorbDependencies } from '#lib/runtime/integrations/absorb.js';
+import { IntegrationHttpRequest, isRetryableStatus, nextLink, retryDelayMs } from '#lib/runtime/integrations/http.js';
 
 /**
  * One binding's run, from request to rows.
@@ -44,12 +44,7 @@ export type PullDependencies = AbsorbDependencies &
 		readonly request: (
 			effectId: EffectId,
 			connector: string,
-			descriptor: {
-				readonly method: IntegrationHttpMethod;
-				readonly url: string;
-				readonly headers: Readonly<Record<string, string>>;
-				readonly body?: Schema.Json;
-			}
+			descriptor: Schema.Schema.Type<typeof IntegrationHttpRequest>
 		) => Effect.Effect<Fetched, { readonly message: string; readonly retryable: boolean }>;
 		/** Reads a declared secret, or fails naming the variable that has no value. */
 		readonly secret: (
@@ -57,7 +52,7 @@ export type PullDependencies = AbsorbDependencies &
 			name: string
 		) => Effect.Effect<string, { readonly message: string }>;
 		readonly sleep: (milliseconds: number) => Effect.Effect<void>;
-		readonly now: () => number;
+		readonly now: Effect.Effect<number>;
 	}>;
 
 /**
@@ -66,9 +61,10 @@ export type PullDependencies = AbsorbDependencies &
  * One walker rather than two, because the records and the next-cursor are found the same way and
  * only differ in what they expect at the bottom. They did differ once: the cursor read was
  * top-level-only, so an enveloped `next-cursor` came back `undefined` and the paging loop treated a
- * source with more pages as a source with one.
+ * source with more pages as a source with one. Webhook deliveries walk their bodies the same way
+ * and import this one — a second copy is how the two paths forget each other again.
  */
-const walk = (body: Schema.Json, path: ReadonlyArray<string>): unknown => {
+export const walk = (body: Schema.Json, path: ReadonlyArray<string>): unknown => {
 	let cursor: unknown = body;
 	for (const step of path) {
 		if (cursor === null || typeof cursor !== 'object' || Array.isArray(cursor)) return undefined;
@@ -143,12 +139,7 @@ const fetchWithRetry = (
 	dependencies: PullDependencies,
 	effectId: EffectId,
 	connector: string,
-	descriptor: {
-		readonly method: 'GET' | 'POST';
-		readonly url: string;
-		readonly headers: Readonly<Record<string, string>>;
-		readonly body?: Schema.Json;
-	},
+	descriptor: Schema.Schema.Type<typeof IntegrationHttpRequest>,
 	retry: IntegrationPullDeclaration['retry']
 ): Effect.Effect<Fetched, { readonly message: string }> =>
 	Effect.gen(function* () {
@@ -171,7 +162,7 @@ const fetchWithRetry = (
 			// `Retry-After` belongs to the response that just arrived, so it is read here rather than at
 			// the top of the next turn — the source is the only party that knows when it will be ready.
 			const after = Result.isSuccess(outcome) ? outcome.success.headers['retry-after'] : undefined;
-			yield* dependencies.sleep(retryDelayMs(attempt, backoff, after, dependencies.now()));
+			yield* dependencies.sleep(retryDelayMs(attempt, backoff, after, yield* dependencies.now));
 		}
 		return yield* Effect.fail({ message: last });
 	});
@@ -186,8 +177,7 @@ const pageUrl = (
 		readonly absoluteUrl: string | undefined;
 		readonly token: string | undefined;
 	}
-): string => {
-	if (page.absoluteUrl !== undefined) return page.absoluteUrl;
+): string => {	if (page.absoluteUrl !== undefined) return page.absoluteUrl;
 	const url = new URL(
 		`${connection.baseUrl}${binding.path.startsWith('/') ? '' : '/'}${binding.path}`
 	);
@@ -235,6 +225,51 @@ export const authenticationHeaders = (
 		const value = yield* secret(effectId, authentication.value.env);
 		return { [authentication.header]: value };
 	});
+
+/** What the next page should ask for, and whether there is one. */
+const advance = (
+	pageSpec: NonNullable<IntegrationPullDeclaration['pages']>,
+	response: Fetched,
+	rawLength: number
+): Readonly<{ pageToken?: string; absoluteUrl?: string; stop: boolean }> => {
+	// It is checked first because it is the only one that decides nothing: one complete page is a
+	// complete state, and a source with one answer is not a source with one page.
+	if (pageSpec.style === 'cursor') {
+		const token =
+			'header' in pageSpec.next
+				? response.headers[pageSpec.next.header.toLowerCase()]
+				: bodyValue(response.body, pageSpec.next);
+		if (token === undefined || token === '') return { stop: true };
+		return { pageToken: token, stop: false };
+	}
+	if (pageSpec.style === 'link-header') {
+		const absoluteUrl = nextLink(response.headers['link']);
+		if (absoluteUrl === undefined) return { stop: true };
+		return { absoluteUrl, stop: false };
+	}
+	if (pageSpec.size !== undefined && rawLength < pageSpec.size) return { stop: true };
+	return { stop: false };
+};
+
+/**
+ * What the declaration says the next cursor is, read from one page's response.
+ *
+ * Owned beside `advance` because they are the two reads of one response — the paging rule and the
+ * cursor rule — and a drift between them is how a multi-page source becomes a one-page source.
+ */
+const nextCursorFrom = (
+	cursorSpec: NonNullable<IntegrationPullDeclaration['cursor']>,
+	response: Fetched,
+	records: ReadonlyArray<unknown>
+): string | undefined => {
+	const next =
+		'header' in cursorSpec.next
+			? response.headers[cursorSpec.next.header.toLowerCase()]
+			: 'maxOf' in cursorSpec.next
+				? watermark(records, cursorSpec.next.maxOf)
+				: bodyValue(response.body, cursorSpec.next);
+	return next === undefined || next === '' ? undefined : next;
+};
 
 /**
  * Runs one binding to completion.
@@ -316,32 +351,17 @@ export const runPullBinding = (
 			// The cursor advances from what this page said, so a run that stops early still resumes from
 			// the last page it actually read rather than from the last page it asked for.
 			if (binding.cursor !== undefined) {
-				const next =
-					'header' in binding.cursor.next
-						? response.headers[binding.cursor.next.header.toLowerCase()]
-						: 'maxOf' in binding.cursor.next
-							? watermark(absorbed.decoded, binding.cursor.next.maxOf)
-							: bodyValue(response.body, binding.cursor.next);
-				if (next !== undefined && next !== '') nextCursor = next;
+				const next = nextCursorFrom(binding.cursor, response, absorbed.decoded);
+				if (next !== undefined) nextCursor = next;
 			}
 
 			const pageSpec = binding.pages;
 			if (pageSpec === undefined) break;
 			if (raw.length === 0) break;
-			if (pageSpec.style === 'cursor') {
-				pageToken =
-					'header' in pageSpec.next
-						? response.headers[pageSpec.next.header.toLowerCase()]
-						: bodyValue(response.body, pageSpec.next);
-				if (pageToken === undefined || pageToken === '') break;
-			}
-			if (pageSpec.style === 'link-header') {
-				absoluteUrl = nextLink(response.headers['link']);
-				if (absoluteUrl === undefined) break;
-			}
-			if (pageSpec.style === 'page' && pageSpec.size !== undefined && raw.length < pageSpec.size)
-				break;
-			if (pageSpec.style === 'offset' && raw.length < pageSpec.size) break;
+			const next = advance(pageSpec, response, raw.length);
+			if (next.stop) break;
+			if (next.pageToken !== undefined) pageToken = next.pageToken;
+			if (next.absoluteUrl !== undefined) absoluteUrl = next.absoluteUrl;
 		}
 		return {
 			binding: binding.name,

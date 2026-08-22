@@ -8,8 +8,8 @@ import type {
 	InvocationId,
 	ProviderOutcome
 } from '@norbital-ai/bolt-protocol';
-import { describeCause } from '../workspace.js';
-import * as Identity from '../identity/identity.js';
+import { describeCause } from '#lib/runtime/workspace.js';
+import * as Identity from '#lib/runtime/identity/identity.js';
 
 /** Carries facility error through the typed facilities failure channel without losing diagnostic context. */
 export class FacilityError extends Schema.TaggedError<FacilityError>()('Bolt.FacilityError', {
@@ -73,15 +73,10 @@ export const invokeBinding = <Input, Output>(
 			idempotencyKey: effectId,
 			...(Option.isSome(subject)
 				? {
-						subject: {
-							userId: subject.value.userId,
-							// The team, not a role list. What it entitles them to is the release's business,
-							// not something a facility binding needs told. `teamPath[0]` *is* the subject's own
-							// team — there is no second field carrying it, so there is nothing to disagree.
-							...(subject.value.teamPath[0] === undefined
-								? {}
-								: { team: subject.value.teamPath[0] })
-						}
+						subject:
+							subject.value.teamPath[0] === undefined
+								? { userId: subject.value.userId }
+								: { userId: subject.value.userId, team: subject.value.teamPath[0] }
 					}
 				: {})
 		};
@@ -127,4 +122,3 @@ export const layer = (
 	);
 
 export type { ProviderOutcome };
-export * as Database from './database.js';

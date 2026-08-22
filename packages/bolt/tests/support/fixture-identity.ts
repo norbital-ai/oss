@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 import { NORMAL_STATUS, type SubjectStatus } from '../../src/runtime/identity/identity.js';
 
 /**
- * The `norbital_id` a fixture's readable user id becomes.
+ * The `id` a fixture's readable user id becomes.
  *
- * Identity is an ordinary collection, so its key is `norbital_id uuid` — the type a workspace's own
+ * Identity is an ordinary collection, so its key is `id uuid` — the type a workspace's own
  * `owner_id` references. Fixtures still name people `u1` or `user-admin-token`, because a test that
  * reads back a random uuid says nothing about who it is; the SQL casts that name through `md5()` to
  * a uuid, and this is the same derivation in TypeScript so an assertion can name the person too.
@@ -21,7 +21,7 @@ export const fixtureUserId = (name: string): string => {
 };
 
 /**
- * The `norbital_id` a team's name becomes, derived rather than allocated — the same trade the user
+ * The `id` a team's name becomes, derived rather than allocated — the same trade the user
  * ids above make, and for the same reason.
  *
  * A person belongs to one team by `team_id uuid`, so a fixture that wanted to place somebody used to
@@ -71,7 +71,7 @@ export const seedTeam = async (
 	} = {}
 ): Promise<void> => {
 	await harness.database.query(
-		`insert into bolt_team ("norbital_id", "name", "parent_id")
+		`insert into bolt_team ("id", "name", "parent_id")
 		 values ($1::uuid, $2, $3::uuid) on conflict do nothing`,
 		[fixtureTeamId(name), name, options.parent === undefined ? null : fixtureTeamId(options.parent)]
 	);
@@ -96,7 +96,7 @@ export const seedSession = async (
 	options: {
 		/** The bearer token the invocation will carry. */
 		readonly token: string;
-		/** The readable name of the person, hashed to their `norbital_id` by `fixtureUserId`. */
+		/** The readable name of the person, hashed to their `id` by `fixtureUserId`. */
 		readonly user: string;
 		readonly team?: string;
 		readonly tenantId?: string;
@@ -107,16 +107,16 @@ export const seedSession = async (
 	if (options.team !== undefined) await seedTeam(harness, options.team);
 	await harness.database.query(
 		`with person as (
-			insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "team_id", "status")
+			insert into bolt_auth_user ("id", "name", "email", "tenantId", "team_id", "status")
 			values (md5($2::text)::uuid, $2, $4, $3, $5::uuid, $6)
-			on conflict ("norbital_id") do update set
+			on conflict ("id") do update set
 				"email" = excluded."email",
 				"tenantId" = excluded."tenantId",
 				"team_id" = excluded."team_id",
 				"status" = excluded."status"
-			returning "norbital_id" as id
+			returning "id" as id
 		 )
-		 insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt")
+		 insert into bolt_auth_session ("id", "token", "userId", "expiresAt")
 		 select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
 		[
 			options.token,

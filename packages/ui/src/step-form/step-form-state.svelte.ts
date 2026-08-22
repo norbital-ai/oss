@@ -1,6 +1,6 @@
 import type { FormSchema, InferSchema } from '../form/form_state.svelte';
-import { fieldAndFormErrorsFromStandardIssues } from '../form/standard_schema_form_errors';
-import type { Step, StepFormConfig, StepFormSubmitContract } from './types';
+import { fieldAndFormErrorsFromStandardIssues } from '#lib/form/standard_schema_form_errors';
+import type { Step, StepFormConfig, StepFormSubmitContract } from '#lib/step-form/types';
 
 export class StepFormState<T extends FormSchema> {
 	currentStep = $state(0);
@@ -32,7 +32,11 @@ export class StepFormState<T extends FormSchema> {
 			return true;
 		}
 
-		this.submission.setErrors(fieldAndFormErrorsFromStandardIssues(issues));
+		const errors = fieldAndFormErrorsFromStandardIssues(issues);
+		this.submission.setErrors({
+			fieldErrors: { ...errors.fieldErrors },
+			formErrors: [...errors.formErrors]
+		});
 		this.onStepValidationFailed?.();
 		return false;
 	}

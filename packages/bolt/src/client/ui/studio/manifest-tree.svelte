@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Effect } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { FileTree, type FileTreeEntry } from '@norbital-ai/ui/file-tree';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
@@ -12,7 +13,7 @@
 		type AuthoringView,
 		type ManifestSection,
 		type SourceTreeEntry
-	} from './studio-state.js';
+	} from '#lib/client/ui/studio/studio-state.js';
 
 	/**
 	 * The authoring navigator: the workspace's own manifest under Manifest, its files under Editor.
@@ -72,8 +73,8 @@
 		sourceTreeMatches(files, searchQuery, fileSizes).map(toFileTreeEntry)
 	);
 
-	const toggleDirectory = async (path: string): Promise<FileTreeEntry[]> =>
-		sourceTreeChildren(files, path, fileSizes).map(toFileTreeEntry);
+	const toggleDirectory = (path: string): Effect.Effect<FileTreeEntry[]> =>
+		Effect.succeed(sourceTreeChildren(files, path, fileSizes).map(toFileTreeEntry));
 
 	const selectEntry = (path: string, entry: FileTreeEntry): void => {
 		if (entry.type === 'file') onselect?.(`source:${path}`);
@@ -122,7 +123,7 @@
 					</button>
 
 					{#if open}
-						<!-- stupidity:allow UI7 -- Nested entry indent: ml-5 is hierarchy indentation alongside the guide border, not sibling spacing. -->
+						<!-- repository-health:allow UI7 -- Nested entry indent: ml-5 is hierarchy indentation alongside the guide border, not sibling spacing. -->
 						<div class="ml-5 border-l border-border/50 pl-2">
 							{#each section.entries as entry (entry.name)}
 								<button

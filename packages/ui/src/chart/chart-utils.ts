@@ -1,3 +1,4 @@
+import { Schema } from 'effect';
 import type { Tooltip } from 'layerchart';
 import { getContext, setContext, type Component } from 'svelte';
 
@@ -15,37 +16,42 @@ export type ChartConfig = {
 
 export type ChartDisplayValue = string | number | null;
 
-export type ChartDisplayConfigEntry = {
-	label?: string;
-	color?: string;
-};
+const ChartDisplayConfigEntrySchema = Schema.Struct({
+	label: Schema.optional(Schema.String),
+	color: Schema.optional(Schema.String)
+});
+export type ChartDisplayConfigEntry = typeof ChartDisplayConfigEntrySchema.Type;
 
-export type ChartDisplayConfig = Record<string, ChartDisplayConfigEntry>;
+const ChartDisplayConfigSchema = Schema.Record(Schema.String, ChartDisplayConfigEntrySchema);
+export type ChartDisplayConfig = typeof ChartDisplayConfigSchema.Type;
 
-export type ChartDisplayValueFormat = {
-	style: 'number' | 'percent' | 'currency';
-	currency?: string;
-	maximumFractionDigits?: number;
-	minimumFractionDigits?: number;
-};
+const ChartDisplayValueFormatSchema = Schema.Struct({
+	style: Schema.Literals(['number', 'percent', 'currency']),
+	currency: Schema.optional(Schema.String),
+	maximumFractionDigits: Schema.optional(Schema.Number),
+	minimumFractionDigits: Schema.optional(Schema.Number)
+});
+export type ChartDisplayValueFormat = typeof ChartDisplayValueFormatSchema.Type;
 
-export type CartesianChartDatum = Record<string, ChartDisplayValue>;
+type CartesianChartDatum = Record<string, ChartDisplayValue>;
 
-export type DonutChartDatum = {
-	key: string;
-	value: number;
-};
+const DonutChartDatumSchema = Schema.Struct({
+	key: Schema.String,
+	value: Schema.Number
+});
+type DonutChartDatum = typeof DonutChartDatumSchema.Type;
 
-export type BaseChartSpec = {
-	title?: string;
-	description?: string;
-	loading?: boolean;
-	config: ChartDisplayConfig;
-	showGrid?: boolean;
-	valueFormat?: ChartDisplayValueFormat;
-};
+const BaseChartSpecSchema = Schema.Struct({
+	title: Schema.optional(Schema.String),
+	description: Schema.optional(Schema.String),
+	loading: Schema.optional(Schema.Boolean),
+	config: ChartDisplayConfigSchema,
+	showGrid: Schema.optional(Schema.Boolean),
+	valueFormat: Schema.optional(ChartDisplayValueFormatSchema)
+});
+type BaseChartSpec = typeof BaseChartSpecSchema.Type;
 
-export type CartesianChartSpec = BaseChartSpec & {
+type CartesianChartSpec = BaseChartSpec & {
 	kind: 'bar' | 'line' | 'area';
 	data: CartesianChartDatum[];
 	xKey: string;
@@ -55,7 +61,7 @@ export type CartesianChartSpec = BaseChartSpec & {
 	xAxisLabelRotation?: number;
 };
 
-export type DonutChartSpec = BaseChartSpec & {
+type DonutChartSpec = BaseChartSpec & {
 	kind: 'donut';
 	data: DonutChartDatum[];
 	innerRadius?: number;
@@ -63,12 +69,10 @@ export type DonutChartSpec = BaseChartSpec & {
 
 export type ChartDisplaySpec = CartesianChartSpec | DonutChartSpec;
 
-export type TooltipPayload = Tooltip.TooltipSeries;
-
 // Helper to extract item config from a payload.
 export function getPayloadConfigFromPayload(
 	config: ChartConfig,
-	payload: TooltipPayload,
+	payload: Tooltip.TooltipSeries,
 	key: string
 ) {
 	if (typeof payload !== 'object' || payload === null) return undefined;

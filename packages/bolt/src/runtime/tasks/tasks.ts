@@ -1,11 +1,12 @@
-import { Context, Effect, Layer, type Schema } from 'effect';
+import { Clock, Context, Effect, Layer, Number as ENumber, Schema } from 'effect';
 import {
 	EffectId,
 	type DatabaseRequest,
 	type EffectId as EffectIdType
 } from '@norbital-ai/bolt-protocol';
-import { Database, type CallContext } from '../facilities/database.js';
-import { Tasks } from '../facilities/services.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import type { CallContext } from '#lib/runtime/facilities/database.js';
+import { Tasks } from '#lib/runtime/facilities/services.js';
 import {
 	enqueueStatements,
 	makeQueue,
@@ -13,8 +14,8 @@ import {
 	type Enqueue,
 	type Rejection,
 	type Statement
-} from './queue.js';
-import { makeRunner, type Run, type TickReport } from './runner.js';
+} from '#lib/runtime/tasks/queue.js';
+import { makeRunner, type Run, type TickReport } from '#lib/runtime/tasks/runner.js';
 
 /**
  * Scheduled and background work, composed against the facilities a host binds.
@@ -118,11 +119,14 @@ const asRequest = (statements: ReadonlyArray<Statement>): DatabaseRequest => {
 				_tag: 'Transaction',
 				statements: statements.map((statement) => ({
 					sql: statement.sql,
-					parameters: statement.parameters as ReadonlyArray<Schema.Json>
+					parameters: statement.parameters
 				}))
 			}
-		: { _tag: 'Query', sql: only.sql, parameters: only.parameters as ReadonlyArray<Schema.Json> };
+		: { _tag: 'Query', sql: only.sql, parameters: only.parameters };
 };
+
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
+const DatabaseRows = Schema.Array(JsonObject);
 
 /**
  * How long this invocation has left.
@@ -132,8 +136,8 @@ const asRequest = (statements: ReadonlyArray<Statement>): DatabaseRequest => {
  * its own: a tick that arrives past its deadline would otherwise hide a row for a millisecond and
  * burn an attempt on work it had no time to try.
  */
-const remainingMillis = (deadlineEpochMs: number): number =>
-	Math.max(1, deadlineEpochMs - Date.now());
+const remainingMillis = (deadlineEpochMs: number, nowEpochMs: number): number =>
+	Math.max(1, deadlineEpochMs - nowEpochMs);
 
 export const layer = (context: CallContext) =>
 	Layer.effect(
@@ -145,46 +149,34 @@ export const layer = (context: CallContext) =>
 			/**
 			 * The queue's one dependency, built over the database facility.
 			 *
-			 * Promise-shaped because `queue.ts` is, and bridged with `Effect.runPromise` the same way
-			 * `identity.ts` bridges Better Auth — the effect it runs needs no services, so there is no
-			 * context to lose. A failure is rethrown as the `FacilityError` it already is rather than as a
-			 * stringified copy, so the typed error survives the round trip and `mapError` below can hand
-			 * it straight back.
-			 *
 			 * Each call takes its own effect id. The database facility meters per call and keys that meter
 			 * on `(release, effectId)`, so a tick that used one id for all three round trips would have two
 			 * of them billed to an observation that already exists.
 			 */
 			const executeUnder = (effectId: EffectIdType, label: string) => {
 				let issued = 0;
-				return async (statements: ReadonlyArray<Statement>) => {
+				return (statements: ReadonlyArray<Statement>) => {
 					issued += 1;
-					const outcome = await Effect.runPromise(
-						database
-							.execute(EffectId.make(`${effectId}:${label}:${issued}`), asRequest(statements))
-							.pipe(
-								Effect.match({
-									onSuccess: (response) => ({ ok: true as const, response }),
-									onFailure: (error) => ({ ok: false as const, error })
-								})
+					return database
+						.execute(EffectId.make(`${effectId}:${label}:${issued}`), asRequest(statements))
+						.pipe(
+							Effect.flatMap((response) =>
+								Schema.decodeUnknownEffect(DatabaseRows)(response.rows).pipe(
+									Effect.mapError(
+										() =>
+											new Database.FacilityError({
+												operation: 'tasks',
+												code: 'task_queue_invalid_response',
+												message: 'Task queue database query returned a non-row value',
+												retryable: false,
+												outcome: 'known'
+											})
+									)
+								)
 							)
-					);
-					if (!outcome.ok) throw outcome.error;
-					return outcome.response.rows as ReadonlyArray<Record<string, unknown>>;
+						);
 				};
 			};
-
-			/** Recovers the typed failure `executeUnder` rethrew, so nothing downstream sees an `unknown`. */
-			const asFacilityError = (cause: unknown): Database.FacilityError =>
-				cause instanceof Database.FacilityError
-					? cause
-					: new Database.FacilityError({
-							operation: 'tasks',
-							code: 'task_queue_failed',
-							message: cause instanceof Error ? cause.message : String(cause),
-							retryable: true,
-							outcome: 'unknown'
-						});
 
 			const queueUnder = (effectId: EffectIdType, label: string) =>
 				makeQueue(executeUnder(effectId, label));
@@ -210,24 +202,24 @@ export const layer = (context: CallContext) =>
 				wake,
 				enqueue: Effect.fn('TaskQueue.enqueue')(function* (effectId, enqueues) {
 					if (enqueues.length === 0) return;
+					const nowEpochMs = yield* Clock.currentTimeMillis;
 					const soonest = enqueues.reduce(
-						(earliest, enqueue) => Math.min(earliest, enqueue.runAtEpochMs ?? Date.now()),
+						(earliest, enqueue) => Math.min(earliest, enqueue.runAtEpochMs ?? nowEpochMs),
 						Number.POSITIVE_INFINITY
 					);
 					yield* wake(EffectId.make(`${effectId}:wake`), soonest);
 					yield* database.execute(effectId, asRequest(enqueueStatements(enqueues)));
 				}),
-				declare: Effect.fn('TaskQueue.declare')(function* (effectId, declarations, nowEpochMs) {
-					return yield* Effect.tryPromise({
-						try: () => queueUnder(effectId, 'declare').declare(declarations, nowEpochMs),
-						catch: asFacilityError
-					});
-				}),
+				declare: Effect.fn('TaskQueue.declare')((effectId, declarations, nowEpochMs) =>
+					queueUnder(effectId, 'declare').declare(declarations, nowEpochMs)
+				),
 				tick: (effectId, run) =>
-					makeRunner(queueUnder(effectId, 'tick'), run, asFacilityError).tick({
-						nowEpochMs: Date.now(),
-						remainingMillis: remainingMillis(context.deadlineEpochMs)
-					}),
+					Effect.flatMap(Clock.currentTimeMillis, (nowEpochMs) =>
+						makeRunner(queueUnder(effectId, 'tick'), run).tick({
+							nowEpochMs,
+							remainingMillis: remainingMillis(context.deadlineEpochMs, nowEpochMs)
+						})
+					),
 				history: Effect.fn('TaskQueue.history')(function* (effectId, command, limit) {
 					const rows = yield* database.execute(effectId, {
 						_tag: 'Query',
@@ -237,9 +229,9 @@ export const layer = (context: CallContext) =>
 						sql:
 							'select effect_id, status, attempts, error, created_at, updated_at ' +
 							'from bolt_task where command = $1 order by created_at desc limit $2',
-						parameters: [command, Math.max(1, Math.min(50, Math.trunc(limit)))]
+						parameters: [command, ENumber.clamp({ minimum: 1, maximum: 50 })(Math.trunc(limit))]
 					});
-					return rows.rows as ReadonlyArray<Schema.Json>;
+					return rows.rows;
 				}),
 				status: Effect.fn('TaskQueue.status')(function* (effectId, taskId) {
 					const rows = yield* database.execute(effectId, {
@@ -262,5 +254,3 @@ export const layer = (context: CallContext) =>
 			});
 		})
 	);
-
-export * as TaskQueue from './tasks.js';

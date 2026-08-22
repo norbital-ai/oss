@@ -3,19 +3,14 @@ import type {
 	CollectionRegistry,
 	CollectionRow
 } from '@norbital-ai/std/collection';
-import type {
-	Component,
-	ComponentConstructorOptions,
-	ComponentInternals,
-	Snippet,
-	SvelteComponent
-} from 'svelte';
-import type { CollectionQueryState } from '../collection-query/index.js';
+import type { Component, ComponentInternals, Snippet } from 'svelte';
+import type { CollectionQueryState } from '#lib/collection-query';
 import type {
 	CollectionTableInitialFilter,
 	CollectionTableIntegrationStatus,
 	CollectionTablePipeline
-} from '../collection-table/collection-table.types.js';
+} from '#lib/collection-table/collection-table.types';
+import type { Effect } from 'effect';
 
 export type CollectionToolbarName<TCollections extends CollectionRegistry> = Extract<
 	keyof TCollections,
@@ -57,14 +52,11 @@ export interface CollectionToolbarFilterProps<TValue extends string = string> {
 }
 
 /**
- * `Filter` as handed to the toolbar's filter composition. Isomorphic (construct + call) so
+ * `Filter` as handed to the toolbar's filter composition. Callable (the Svelte 5 component shape) so
  * svelte-check accepts it as a component; the generic lets each usage instantiate `TValue` from
  * `options` so `value` and `onValueChange` stay tied to the same union.
  */
 export interface CollectionToolbarFilterComponent {
-	new <TValue extends string = string>(
-		options: ComponentConstructorOptions<CollectionToolbarFilterProps<TValue>>
-	): SvelteComponent<CollectionToolbarFilterProps<TValue>>;
 	<TValue extends string = string>(
 		this: void,
 		internals: ComponentInternals,
@@ -109,7 +101,7 @@ export interface CollectionToolbarActionProps {
 	 * a bare disabled button leaves the operator guessing which precondition they missed.
 	 */
 	unavailable?: string;
-	onRun: () => void | Promise<void>;
+	onRun: () => void | Effect.Effect<void, unknown>;
 }
 
 /**
@@ -127,8 +119,8 @@ export interface CollectionToolbarOperations<TRow extends object> {
 		fieldName: string,
 		value: unknown,
 		rows: readonly TRow[]
-	) => Promise<void>;
-	readonly deleteSelected?: (rows: readonly TRow[]) => Promise<void>;
+	) => Effect.Effect<void, unknown>;
+	readonly deleteSelected?: (rows: readonly TRow[]) => Effect.Effect<void, unknown>;
 	/** Mutation-only refusal. Selection and pipelines remain available. */
 	readonly updateUnavailable?: string | null;
 	/** Mutation-only refusal. Selection and pipelines remain available. */
@@ -145,7 +137,7 @@ export interface CollectionToolbarOperations<TRow extends object> {
 	 * does while waiting.
 	 */
 	readonly disabled?: boolean;
-	refresh(): Promise<void>;
+	refresh(): Effect.Effect<void, unknown>;
 }
 
 /** What the view applies on the operator's behalf, shown behind the toolbar's info button. */

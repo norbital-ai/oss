@@ -1,21 +1,18 @@
 <script lang="ts">
-	import type {
-		CollectionField,
-		CollectionRecord,
-		CollectionRelationOptions
-	} from '@norbital-ai/std/collection';
-	import { resolveRecordLabel } from '@norbital-ai/std/collection';
-	import { humanize } from '@norbital-ai/std/string';
+	import type { CollectionField } from '@norbital-ai/std/collection';
 	import Icon from '@iconify/svelte';
-	import { DataRenderer } from '../data-renderer/index.js';
+	import { DataRenderer } from '#lib/data-renderer';
 	import RelationshipRenderer from '../data-renderer/relationship/relationship.renderer.svelte';
 	import { Inline, Stack } from '#lib/layout';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import {
 		collectionAppliedFilterConditions,
-		type AppliedFilterCollectionDefinition,
 		type CollectionAppliedFilterCondition
-	} from './collection-table-applied-filters.js';
+	} from '#lib/collection-table/collection-table-applied-filters';
+	import {
+		relationLabelOptions,
+		type FilterCollectionDefinition
+	} from '#lib/collection-table/collection-table-filter-fields';
 
 	let {
 		where,
@@ -23,8 +20,8 @@
 		collections
 	}: {
 		where: unknown;
-		definition: AppliedFilterCollectionDefinition;
-		collections: Readonly<Record<string, AppliedFilterCollectionDefinition>>;
+		definition: FilterCollectionDefinition;
+		collections: Readonly<Record<string, FilterCollectionDefinition>>;
 	} = $props();
 
 	const { t } = useI18n<UiKeys>();
@@ -42,10 +39,6 @@
 		return condition.operator === 'ilike' && typeof condition.operand === 'string'
 			? condition.operand.replace(/^%|%$/g, '')
 			: condition.operand;
-	}
-
-	function hasValue(condition: CollectionAppliedFilterCondition): boolean {
-		return condition.operator !== 'isNull' && condition.operator !== 'isNotNull';
 	}
 
 	function message(condition: CollectionAppliedFilterCondition): string {
@@ -93,18 +86,10 @@
 		const [before = '', after = ''] = message(condition).split(VALUE_TOKEN, 2);
 		return [before, after];
 	}
-
-	function relationOptions(targetName: string): CollectionRelationOptions {
-		const target = collections[targetName];
-		return {
-			label: (record: CollectionRecord) =>
-				resolveRecordLabel(target?.recordLabel ?? null, record) ?? humanize(targetName)
-		};
-	}
 </script>
 
 {#snippet conditionValue(condition: CollectionAppliedFilterCondition)}
-	{#if hasValue(condition)}
+	{#if condition.operator !== 'isNull' && condition.operator !== 'isNotNull'}
 		{@const operand = displayOperand(condition)}
 		{#if condition.lookupTarget}
 			<RelationshipRenderer
@@ -115,7 +100,7 @@
 						? null
 						: String(condition.operand)}
 				multiple={Array.isArray(condition.operand)}
-				options={relationOptions(condition.lookupTarget)}
+				options={relationLabelOptions(collections[condition.lookupTarget], condition.lookupTarget)}
 				displayOnly
 				class="inline font-medium"
 			/>

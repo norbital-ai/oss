@@ -3,7 +3,7 @@
 	import {
 		WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS,
 		type WorkspaceNavigationItem
-	} from './workspace-shell.types.js';
+	} from '#lib/workspace-shell/workspace-shell.types';
 	import WorkspaceSidebarNavigationItem from './workspace-sidebar-navigation-item.svelte';
 
 	let {

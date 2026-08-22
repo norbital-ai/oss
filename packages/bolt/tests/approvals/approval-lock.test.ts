@@ -2,26 +2,28 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Layer, Ref, Schema } from 'effect';
 import { EffectId, type DatabaseRequest, type DatabaseResponse } from '@norbital-ai/bolt-protocol';
-import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
-import { AccessControl } from '../../src/runtime/access/access-control.js';
-import { ApprovalConflict, Approvals } from '../../src/runtime/approvals/approvals.js';
-import { Automations } from '../../src/runtime/automations/automations.js';
-import { Collections, PendingApproval } from '../../src/runtime/collections/collections.js';
-import { SyncWake } from '../../src/runtime/sync/wake.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import * as AccessControl from '../../src/runtime/access/access-control.js';
+import * as Approvals from '../../src/runtime/approvals/approvals.js';
+import { ApprovalConflict } from '../../src/runtime/approvals/approvals.js';
+import * as Automations from '../../src/runtime/automations/automations.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
+import { PendingApproval } from '../../src/runtime/collections/collections.js';
+import * as SyncWake from '../../src/runtime/sync/wake.js';
 import {
 	AuthoredRuntimeService,
 	emptyAuthoredRuntime
 } from '../../src/runtime/collections/authored.js';
-import { Database } from '../../src/runtime/facilities/database.js';
+import * as Database from '../../src/runtime/facilities/database.js';
 import { AI, Files, Tasks, Transport } from '../../src/runtime/facilities/services.js';
-import { TenantScope } from '../../src/runtime/tenant.js';
-import { InvocationBudget } from '../../src/runtime/budget.js';
+import * as TenantScope from '../../src/runtime/tenant.js';
+import * as InvocationBudget from '../../src/runtime/budget.js';
 import { Subject } from '../../src/runtime/identity/identity.js';
-import { TaskQueue } from '../../src/runtime/tasks/tasks.js';
-import { Workspace } from '../../src/runtime/workspace.js';
+import * as TaskQueue from '../../src/runtime/tasks/tasks.js';
+import * as Workspace from '../../src/runtime/workspace.js';
 import { testCallContext } from '../support/bolt-test-layer.js';
 
-/** A stable UUID for a readable fixture name — records are keyed by `norbital_id uuid`. */
+/** A stable UUID for a readable fixture name — records are keyed by `id uuid`. */
 const rid = (name: string): string => {
 	const digest = createHash('sha1').update(name).digest('hex').slice(0, 32);
 	return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
@@ -246,7 +248,7 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 					yield* Ref.set(tables, new Map(current).set(table, existing));
 					return { rows: [row], affectedRows: 1 } satisfies DatabaseResponse;
 				}
-				if (sql.startsWith('update "') && sql.includes('norbital_approval_id = $2')) {
+				if (sql.startsWith('update "') && sql.includes('approval_id = $2')) {
 					const table = quotedName(sql, 'update');
 					const id = String(parameters[0]);
 					const requestId = String(parameters[1]);
@@ -255,12 +257,11 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 					const row = existing.get(id);
 					if (
 						row === undefined ||
-						(typeof row['norbital_approval_id'] === 'string' &&
-							row['norbital_approval_id'].length > 0)
+						(typeof row['approval_id'] === 'string' && row['approval_id'].length > 0)
 					) {
 						return { rows: [], affectedRows: 0 } satisfies DatabaseResponse;
 					}
-					const next = { ...row, norbital_approval_id: requestId };
+					const next = { ...row, approval_id: requestId };
 					existing.set(id, next);
 					yield* Ref.set(tables, new Map(current).set(table ?? '', existing));
 					return { rows: [{ id }], affectedRows: 1 } satisfies DatabaseResponse;
@@ -281,20 +282,17 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 						const index = Number(assignment[2]);
 						if (column !== undefined) next[column] = parameters[index - 1] ?? null;
 					}
-					if (sql.includes('norbital_approval_id = null')) next['norbital_approval_id'] = null;
+					if (sql.includes('approval_id = null')) next['approval_id'] = null;
 					existing.set(id, next);
 					yield* Ref.set(tables, new Map(current).set(table ?? '', existing));
 					return { rows: [next], affectedRows: 1 } satisfies DatabaseResponse;
 				}
-				if (sql.includes('select norbital_approval_id')) {
+				if (sql.includes('select approval_id')) {
 					const table = quotedName(sql, 'from');
 					const current = yield* Ref.get(tables);
 					const row = current.get(table ?? '')?.get(String(parameters[0]));
 					return {
-						rows:
-							row === undefined
-								? []
-								: [{ norbital_approval_id: row['norbital_approval_id'] ?? null }],
+						rows: row === undefined ? [] : [{ approval_id: row['approval_id'] ?? null }],
 						affectedRows: 0
 					} satisfies DatabaseResponse;
 				}
@@ -404,7 +402,7 @@ describe('approval lock and resume', () => {
 			expect(pending).toBeInstanceOf(PendingApproval);
 			if (!(pending instanceof PendingApproval)) return;
 			// A request id is derived from the intercepted write, not a readable join of its parts:
-			// `approval_request` is keyed by `norbital_id uuid`. What matters is that it is well formed
+			// `approval_request` is keyed by `id uuid`. What matters is that it is well formed
 			// and stable, so a retry re-joins this approval rather than opening a second one.
 			expect(pending.requestId).toMatch(
 				/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/
@@ -454,7 +452,7 @@ describe('approval lock and resume', () => {
 				yield* collectionsService.findMany(EffectId.make('read-resume'), subject, {
 					collection: 'orders'
 				})
-			).toEqual([expect.objectContaining({ norbital_id: rid('order-2'), title: 'Released' })]);
+			).toEqual([expect.objectContaining({ id: rid('order-2'), title: 'Released' })]);
 		}).pipe(Effect.provide(testLayer()))
 	);
 
@@ -530,7 +528,7 @@ describe('approval lock and resume', () => {
 				yield* collectionsService.findMany(EffectId.make('read-two-step-done'), subject, {
 					collection: 'employees'
 				})
-			).toEqual([expect.objectContaining({ norbital_id: rid('employee-1'), name: 'Ada' })]);
+			).toEqual([expect.objectContaining({ id: rid('employee-1'), name: 'Ada' })]);
 		}).pipe(Effect.provide(testLayer()))
 	);
 
@@ -558,9 +556,9 @@ describe('approval lock and resume', () => {
 				})
 			).toEqual([
 				expect.objectContaining({
-					norbital_id: rid('note-1'),
+					id: rid('note-1'),
 					body: 'Original',
-					norbital_approval_id: pending.requestId
+					approval_id: pending.requestId
 				})
 			]);
 			const requested = yield* approvalsService.status(
@@ -577,9 +575,9 @@ describe('approval lock and resume', () => {
 				})
 			).toEqual([
 				expect.objectContaining({
-					norbital_id: rid('note-1'),
+					id: rid('note-1'),
 					body: 'Pending',
-					norbital_approval_id: null
+					approval_id: null
 				})
 			]);
 		}).pipe(Effect.provide(testLayer()))
@@ -618,7 +616,7 @@ describe('approval lock and resume', () => {
 			yield* collectionsService.discard(EffectId.make('discard-rejected'), pending.requestId);
 			// Write-then-lock means the row was already there when it was refused. Releasing its lock
 			// would have published exactly the record somebody just rejected, because a workspace's
-			// liveness predicate is `norbital_approval_id is null` — so the provisional write goes.
+			// liveness predicate is `approval_id is null` — so the provisional write goes.
 			expect(
 				yield* collectionsService.findMany(EffectId.make('read-rejected'), subject, {
 					collection: 'orders'
@@ -665,9 +663,9 @@ describe('approval lock and resume', () => {
 				})
 			).toEqual([
 				expect.objectContaining({
-					norbital_id: rid('note-reject'),
+					id: rid('note-reject'),
 					body: 'Original',
-					norbital_approval_id: null
+					approval_id: null
 				})
 			]);
 		}).pipe(Effect.provide(testLayer()))

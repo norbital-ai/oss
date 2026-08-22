@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import type { CommandSeparatorProps } from './types.js';
+	import type { CommandSeparatorProps } from '#lib/command/types';
 
 	let { ref = $bindable(null), class: className, ...restProps }: CommandSeparatorProps = $props();
 </script>

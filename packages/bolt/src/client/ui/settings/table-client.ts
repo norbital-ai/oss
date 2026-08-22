@@ -5,8 +5,8 @@ import type {
 	CollectionFilterOptions,
 	CollectionOperations,
 	CollectionRecord,
-	CollectionRegistry,
 	CollectionType,
+	ErasedCollectionRegistry,
 	RemoteQuery
 } from '@norbital-ai/std/collection';
 import {
@@ -14,6 +14,7 @@ import {
 	collectionTableRowMatchesSearch,
 	collectionTableRowMatchesWhere
 } from '@norbital-ai/ui/collection-table';
+import { Effect } from 'effect';
 
 /**
  * A settled query: the rows are already in hand, so there is no loading state to model.
@@ -22,7 +23,9 @@ export const settled = <T>(current: T): RemoteQuery<T> => ({
 	current,
 	loading: false,
 	error: undefined,
-	refresh: () => Promise.resolve()
+	refresh: () => Effect.runPromise(Effect.void),
+	then: (onfulfilled, onrejected) =>
+		Effect.runPromise(Effect.succeed(current)).then(onfulfilled, onrejected)
 });
 
 /**
@@ -100,16 +103,14 @@ export const readOnly = (
  * The rows are read at call time rather than captured, so a client built once keeps answering with
  * the latest rows however many times a table remounts.
  */
-export const inMemoryCollectionClient = <TRegistry extends CollectionRegistry>(
-	definitions: Readonly<Record<keyof TRegistry & string, CollectionDefinition>>,
-	rowsByCollection: Readonly<Record<keyof TRegistry & string, ReadonlyArray<CollectionRecord>>>
-): CollectionClient<TRegistry> => {
+export const inMemoryCollectionClient = (
+	definitions: Readonly<Record<string, CollectionDefinition>>,
+	rowsByCollection: Readonly<Record<string, ReadonlyArray<CollectionRecord>>>
+): CollectionClient<ErasedCollectionRegistry> => {
 	const clients: Record<string, CollectionOperations<CollectionType>> = {};
 	for (const name of Object.keys(definitions)) {
 		clients[name] = readOnly(rowsByCollection[name] ?? []);
 	}
-	// stupidity: boundary-cast — the generic registry's per-collection row types are erased at this
-	// boundary; the table reads the erased `CollectionRecord` shape either way.
 	return {
 		db: clients,
 		collections: definitions,
@@ -118,5 +119,5 @@ export const inMemoryCollectionClient = <TRegistry extends CollectionRegistry>(
 			findMany: (collectionName: string, query?: CollectionBaseQuery<CollectionRecord>) =>
 				(clients[collectionName] ?? readOnly([])).findMany(query)
 		}
-	} as unknown as CollectionClient<TRegistry>;
+	};
 };

@@ -106,9 +106,9 @@ describe('the workspace system prompt', () => {
 				join(workspaceRoot, 'src', 'collections', 'orders', '+model.ts'),
 				'export default {};\n'
 			);
-			await expect(
-				Effect.runPromise(discoverAuthoredSource(workspaceRoot))
-			).rejects.toThrow(/\+agents\.md/);
+			await expect(Effect.runPromise(discoverAuthoredSource(workspaceRoot))).rejects.toThrow(
+				/\+agents\.md/
+			);
 		} finally {
 			await rm(workspaceRoot, { recursive: true, force: true });
 		}

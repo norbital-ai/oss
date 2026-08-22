@@ -14,9 +14,19 @@ import {
 	type TaskResponse
 } from '@norbital-ai/bolt-protocol';
 import { EnvironmentName, InvocationId, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
-import { app, collection, field, policy, tool, workspace } from '../../src/authoring/index.js';
+import {
+	app,
+	collection,
+	describeMcpServer,
+	field,
+	policy,
+	tool,
+	workspace
+} from '../../src/authoring/workspace-schema.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
+import { McpCallToolRequest } from '../../src/runtime/agents/agents.js';
+import { IntegrationHttpRequest } from '../../src/runtime/integrations/http.js';
 
 const scope = {
 	tenantId: TenantId.make('tenant-1'),
@@ -35,7 +45,12 @@ const definition = workspace({
 			name: 'admin-agent',
 			effect: 'allow',
 			actions: ['agent'],
-			capabilities: { apps: ['web'], tools: ['summarize'], mcp: ['search'] }
+			capabilities: {
+				apps: ['web'],
+				tools: ['summarize'],
+				mcp: ['search'],
+				skills: ['payroll']
+			}
 		}),
 		policy({
 			name: 'admin-data',
@@ -53,13 +68,36 @@ const definition = workspace({
 	envoys: [],
 	integrations: [],
 	prompt: 'You are the test workspace agent.',
-	tools: [tool({ name: 'summarize', description: 'Summarize records.', command: 'summarize' })],
-	skills: [],
+	tools: [
+		tool({ name: 'summarize', description: 'Summarize records.', command: 'summarize' }),
+		...describeMcpServer('search', {
+			url: 'https://mcp.example.test',
+			tools: [
+				{
+					name: 'lookup',
+					description: 'Search indexed records.',
+					inputSchema: {
+						type: 'object',
+						properties: { q: { type: 'string' } },
+						required: ['q']
+					}
+				}
+			]
+		})
+	],
+	skills: [{ name: 'payroll', body: '# Payroll\n\nUse the approved workflow.' }],
 	requiredFacilities: ['database', 'ai', 'tasks', 'hostTools']
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-tools' });
 const bundle = makeBundle(definition, manifest, {});
 const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'], policies: [] };
+const subjectRow = {
+	userId: subject.userId,
+	tenantId: subject.tenantId,
+	email: null,
+	status: 'normal',
+	teamPath: subject.teamPath
+};
 const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 	call: (_metadata, request) => {
 		// Authentication reads Better Auth's session joined to its user table. Matching on
@@ -67,7 +105,7 @@ const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 		// the old `bolt_sessions` would have it answer nothing and every command would read as
 		// unauthenticated.
 		if (request._tag === 'Query' && request.sql.includes('bolt_auth_session')) {
-			return Promise.resolve({ _tag: 'Success', value: { rows: [subject], affectedRows: 0 } });
+			return Promise.resolve({ _tag: 'Success', value: { rows: [subjectRow], affectedRows: 0 } });
 		}
 		return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 1 } });
 	}
@@ -90,9 +128,17 @@ describe('Bolt agent tool loop', () => {
 		// fixture of what they are believed to hold would prove nothing about what is written.
 		const written: Array<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }> =
 			[];
+		let titleWrite: ReadonlyArray<unknown> | undefined;
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			call: (metadata, request, signal) => {
-				if (request._tag === 'Query' && request.sql.includes('bolt_agent_messages')) {
+				if (
+					request._tag === 'Query' &&
+					request.sql.startsWith('update chat_session') &&
+					request.sql.includes('set title = case')
+				) {
+					titleWrite = request.parameters;
+				}
+				if (request._tag === 'Query' && request.sql.includes('chat_message')) {
 					written.push({ sql: request.sql, parameters: request.parameters });
 				}
 				return sessionDatabase.call(metadata, request, signal);
@@ -137,6 +183,7 @@ describe('Bolt agent tool loop', () => {
 		expect(turns).toBe(2);
 		expect(Schema.decodeUnknownSync(BundleResult)(result)).toEqual(result);
 		expect(hostCalls).toEqual([]);
+		expect(titleWrite).toEqual(['conversation-tools', 'What collections exist?']);
 		// The conversation log is what replicates to the panel, so the turn and the call it made have to
 		// be in it: one assistant message per turn, and a call and its answer sharing an id so the two can
 		// be paired.
@@ -200,7 +247,7 @@ describe('Bolt agent tool loop', () => {
 		let stored: unknown = null;
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			call: (metadata, request, signal) => {
-				if (request._tag === 'Query' && request.sql.includes('bolt_agent_messages')) {
+				if (request._tag === 'Query' && request.sql.includes('chat_message')) {
 					if (request.sql.startsWith('insert') && request.parameters[1] === 'assistant') {
 						stored = JSON.parse(String(request.parameters[2]));
 					}
@@ -286,7 +333,7 @@ describe('Bolt agent tool loop', () => {
 			[];
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			call: (metadata, request, signal) => {
-				if (request._tag === 'Query' && request.sql.includes('bolt_agent_messages')) {
+				if (request._tag === 'Query' && request.sql.includes('chat_message')) {
 					written.push({ sql: request.sql, parameters: request.parameters });
 				}
 				return sessionDatabase.call(metadata, request, signal);
@@ -368,7 +415,11 @@ describe('Bolt agent tool loop', () => {
 		const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
 			call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-mcp' } })
 		};
-		const connectorCalls: Array<{ connector: string; operation: string }> = [];
+		const connectorCalls: Array<{
+			connector: string;
+			operation: string;
+			input: unknown;
+		}> = [];
 		const facilities: FacilityBindings = {
 			scope,
 			database,
@@ -376,8 +427,31 @@ describe('Bolt agent tool loop', () => {
 			tasks,
 			connector: {
 				call: (_metadata, request) => {
-					connectorCalls.push({ connector: request.connector, operation: request.operation });
-					return Promise.resolve({ _tag: 'Success', value: { output: { hits: 2 } } });
+					const http = Schema.decodeUnknownSync(IntegrationHttpRequest)(request.input);
+					const called = Schema.decodeUnknownSync(McpCallToolRequest)(http.body);
+					connectorCalls.push({
+						connector: request.connector,
+						operation: request.operation,
+						input: request.input
+					});
+					return Promise.resolve({
+						_tag: 'Success',
+						value: {
+							output: {
+								status: 200,
+								headers: { 'content-type': 'application/json' },
+								body: {
+									jsonrpc: '2.0',
+									id: called.id,
+									result: {
+										resultType: 'complete',
+										content: [{ type: 'text', text: '2 hits' }],
+										structuredContent: { hits: 2 }
+									}
+								}
+							}
+						}
+					});
 				}
 			}
 		};
@@ -401,7 +475,86 @@ describe('Bolt agent tool loop', () => {
 			_tag: 'Success',
 			response: { value: { output: { text: 'Found 2 hits' }, status: 'completed' } }
 		});
-		expect(connectorCalls).toEqual([{ connector: 'search', operation: 'lookup' }]);
+		expect(connectorCalls).toEqual([
+			{
+				connector: 'search',
+				operation: 'http.request',
+				input: {
+					method: 'POST',
+					url: 'https://mcp.example.test',
+					headers: {
+						accept: 'application/json, text/event-stream',
+						'content-type': 'application/json',
+						'mcp-protocol-version': '2026-07-28'
+					},
+					body: {
+						jsonrpc: '2.0',
+						id: expect.any(String),
+						method: 'tools/call',
+						params: {
+							_meta: {
+								'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+								'io.modelcontextprotocol/clientCapabilities': {}
+							},
+							name: 'lookup',
+							arguments: { q: 'payroll' }
+						}
+					}
+				}
+			}
+		]);
+	});
+
+	it('refuses an undeclared tool even when its MCP server is granted', async () => {
+		let turns = 0;
+		let connectorCalls = 0;
+		const result = await bundle.dispatch(
+			{
+				_tag: 'Command',
+				protocolVersion: PROTOCOL_VERSION,
+				id: InvocationId.make('agent-mcp-undeclared'),
+				scope,
+				deadlineEpochMs: Date.now() + 10_000,
+				command: 'agents.turn',
+				input: {
+					subject,
+					agent: 'web',
+					conversationId: 'conversation-mcp-undeclared',
+					message: 'Delete the remote index'
+				},
+				headers: { authorization: ['Bearer test-session'] }
+			},
+			{
+				scope,
+				database: sessionDatabase,
+				ai: {
+					call: () => {
+						turns += 1;
+						return Promise.resolve({
+							_tag: 'Success',
+							value: {
+								output:
+									turns === 1
+										? { toolCalls: [{ name: 'search:delete', input: {} }] }
+										: { text: 'Refused' }
+							}
+						});
+					}
+				},
+				tasks: {
+					call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-mcp-denied' } })
+				},
+				connector: {
+					call: () => {
+						connectorCalls += 1;
+						return Promise.resolve({ _tag: 'Success', value: { output: null } });
+					}
+				}
+			},
+			new AbortController().signal
+		);
+		expect(result).toMatchObject({ _tag: 'Success' });
+		expect(connectorCalls).toBe(0);
 	});
 
 	it('spawns an in-session subagent and parks only at the explicit await', async () => {
@@ -444,7 +597,7 @@ describe('Bolt agent tool loop', () => {
 			call: (metadata, request, signal) => {
 				if (
 					request._tag === 'Query' &&
-					request.sql.includes('from bolt_conversations') &&
+					request.sql.includes('from chat_session') &&
 					request.parameters[0] === targetSessionId
 				) {
 					return Promise.resolve({

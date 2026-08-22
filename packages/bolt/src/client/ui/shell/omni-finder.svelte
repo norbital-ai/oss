@@ -3,10 +3,9 @@
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { humanize } from '@norbital-ai/std/string';
 	import type { WorkspaceNavigationModel } from '@norbital-ai/ui/workspace-shell';
-	import type { BoltUiKeys } from '../agent/i18n.js';
-	import type { AgentComposerSeed } from '../agent/composer-chrome.js';
+	import type { AgentComposerSeed } from '#lib/client/ui/agent/composer-chrome.js';
 	import {
-		COMMAND_PREFIX,
+		COMMAND_SCOPES,
 		commandPrefixChar,
 		createMentionSources,
 		filterCollections,
@@ -15,12 +14,12 @@
 		shouldSearchRecords,
 		type CommandScope,
 		type MentionRecordHit
-	} from '../agent/mention-sources.js';
-	import { createDebouncedRecordSearch } from '../agent/debounced-record-search.js';
-	import type { FinderEntity, FinderRow } from '../finder/finder-entity.js';
+	} from '#lib/client/ui/agent/mention-sources.js';
+	import { createDebouncedRecordSearch } from '#lib/client/ui/agent/debounced-record-search.js';
+	import type { FinderEntity, FinderRow } from '#lib/client/ui/finder/finder-entity.js';
 	import FinderPalette from '../finder/finder-palette.svelte';
 
-	const { t } = useI18n<BoltUiKeys>();
+	const { t } = useI18n();
 
 	/**
 	 * Cmd+/ host for the shared finder. Record search is a second step: pick a collection,
@@ -39,9 +38,9 @@
 		collections?: readonly string[];
 		navigationModel: WorkspaceNavigationModel;
 		agentAvailable?: boolean;
-		onNavigate: (href: string) => void;
+		onNavigate?: ((href: string) => void) | undefined;
 		onAskAgent: (seed?: AgentComposerSeed) => void;
-		onOpenRecord: (target: { collectionName: string; recordId: string }) => void;
+		onOpenRecord?: ((target: { collectionName: string; recordId: string }) => void) | undefined;
 	} = $props();
 
 	const mentionSources = createMentionSources({
@@ -257,7 +256,7 @@
 		const rows: FinderRow[] = [];
 
 		if (scope === null && !query.trim()) {
-			for (const prefixScope of Object.keys(COMMAND_PREFIX) as CommandScope[]) {
+			for (const prefixScope of COMMAND_SCOPES) {
 				rows.push({
 					value: rowValue('command', `prefix-${prefixScope}`),
 					kind: 'command',
@@ -309,15 +308,13 @@
 				label: item.label,
 				// The navigation model already carries the authored blurb; the finder was dropping it and
 				// leaving the settings rows as bare nouns.
-				description: typeof item.description === 'string' ? item.description : undefined,
+				description: item.description ?? undefined,
 				icon: item.icon ?? 'lucide:settings',
 				entity: { kind: 'navigate', href: item.href }
 			});
-			if (item.children?.length) {
-				for (let index = item.children.length - 1; index >= 0; index -= 1) {
-					const child = item.children[index];
-					if (child) systemStack.push(child);
-				}
+			if (item.children !== undefined) {
+				// Pushed in reverse so `pop()` yields them back in authored order.
+				for (const child of [...item.children].reverse()) systemStack.push(child);
 			}
 		}
 		return rows.filter(
@@ -419,11 +416,11 @@
 		switch (entity.kind) {
 			case 'app':
 			case 'navigate':
-				onNavigate(entity.href);
+				onNavigate?.(entity.href);
 				open = false;
 				return;
 			case 'record':
-				onOpenRecord({ collectionName: entity.collection, recordId: entity.recordId });
+				onOpenRecord?.({ collectionName: entity.collection, recordId: entity.recordId });
 				open = false;
 				return;
 			case 'scope':
@@ -433,7 +430,7 @@
 				commitQuery(commandPrefixChar(entity.scope), true);
 				return;
 			case 'plan':
-				onAskAgent({ message: entity.query || undefined, planMode: true });
+				onAskAgent(entity.query ? { message: entity.query, planMode: true } : { planMode: true });
 				open = false;
 				return;
 			case 'ask-agent':

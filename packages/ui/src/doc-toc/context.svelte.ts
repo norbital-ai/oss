@@ -1,6 +1,6 @@
 import { createContext } from 'svelte';
-import { DocTocAnchorObserver } from './anchor-observer';
-import type { DocTocItem, DocTocItemInfo } from './types';
+import { DocTocAnchorObserver } from '#lib/doc-toc/anchor-observer';
+import type { DocTocItem, DocTocItemInfo } from '#lib/doc-toc/types';
 
 export class DocTocState {
 	readonly observer = new DocTocAnchorObserver();

@@ -1,6 +1,6 @@
 import { defineMessages } from '@norbital-ai/std/i18n';
 
-export const boltIdentityMessages = defineMessages({
+const boltIdentityMessages = defineMessages({
 	en: {
 		'bolt.identity.headingSignIn': 'Sign in',
 		'bolt.identity.emailLabel': 'Email address',

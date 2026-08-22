@@ -13,17 +13,16 @@
 		RemoteQuery
 	} from '@norbital-ai/std/collection';
 	import { Button } from '#lib/button';
-	import { FormState, type FormSchema, type TranslateFn } from '#lib/form';
+	import { FormState, maybeAsync, type FormSchema, type TranslateFn } from '#lib/form';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Cover, Grid, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
 	import {
 		deriveFormFieldNames,
-		isFullWidthFormField,
 		optionalCollectionRecordId,
 		pickFieldNames
-	} from '../collection-table/collection-card-derivation.js';
+	} from '#lib/collection-table/collection-card-derivation';
 	import CollectionFormField, {
 		setCollectionFormFieldContext
 	} from './collection-form-field.svelte';
@@ -32,14 +31,15 @@
 		CollectionRecordMetadataView,
 		collectionRecordRestriction,
 		resolveCollectionRecordMetadata
-	} from '../collection-record-metadata/index.js';
+	} from '#lib/collection-record-metadata';
 	import type {
 		CollectionFormFieldComponent,
 		CollectionFormName,
 		CollectionFormProps,
 		CollectionFormValidation,
 		CollectionFormValidationIssue
-	} from './collection-form.types.js';
+	} from '#lib/collection-form/collection-form.types';
+	import { Effect } from 'effect';
 	import {
 		getCollectionClientForSurface,
 		setCollectionClientContext
@@ -77,14 +77,21 @@
 		return issues;
 	}
 
+	/**
+	 * Result of the runtime schema validation, in the Standard Schema v1 shape: either the issue
+	 * list (validation failed) or the transformed candidate (validation passed).
+	 */
+	type RuntimeValidationResult =
+		{ issues: CollectionFormValidationIssue[] } | { value: Record<string, unknown> };
+
 	function validateRegisteredFields(
-		fields: readonly CollectionField[],
+		fieldsByName: ReadonlyMap<string, CollectionField>,
 		registeredFields: ReadonlySet<string>,
 		candidate: Readonly<Record<string, unknown>>
 	): CollectionFormValidationIssue[] {
 		const issues: CollectionFormValidationIssue[] = [];
 		for (const fieldName of registeredFields) {
-			const field = fields.find((entry) => entry.name === fieldName);
+			const field = fieldsByName.get(fieldName);
 			if (!field || field.readOnly) continue;
 			issues.push(...validateFieldValue(field, fieldName, candidate[fieldName]));
 		}
@@ -99,42 +106,77 @@
 		});
 	}
 
-	async function applySchemaValidation(
+	/**
+	 * Schema validation is an async boundary (a `~standard` validator), so its failure is modelled
+	 * in the Effect error channel and folded into the issue list, never thrown.
+	 */
+	const applySchemaValidation = (
 		candidate: Record<string, unknown>,
 		validation: CollectionFormValidation | undefined,
 		issues: CollectionFormValidationIssue[]
-	): Promise<Record<string, unknown>> {
-		if (!validation?.schema) return candidate;
-		const result = await validation.schema['~standard'].validate(candidate);
-		if (result.issues) {
-			issues.push(
-				...result.issues.map((issue) => ({
-					message: issue.message,
-					path: standardIssuePath(issue.path)
-				}))
-			);
-			return candidate;
-		}
-		if (result.value == null || typeof result.value !== 'object' || Array.isArray(result.value)) {
-			issues.push({ message: t('form.valuesMustBeObject'), path: [] });
-			return candidate;
-		}
-		return Object.fromEntries(Object.entries(result.value));
-	}
+	): Effect.Effect<Record<string, unknown>> => {
+		if (!validation?.schema) return Effect.succeed(candidate);
+		return maybeAsync(() => validation.schema!['~standard'].validate(candidate)).pipe(
+			Effect.catch((cause) =>
+				Effect.sync(() => {
+					issues.push({
+						message: cause instanceof Error ? cause.message : String(cause),
+						path: []
+					});
+					return candidate;
+				})
+			),
+			Effect.map((result) => {
+				// boundary-cast — standard-schema answers either a discriminable issue list or a
+				// validated value; the catch above folds a thrown validation into the same answer as
+				// the untouched candidate, so the map re-reads every runtime answer as that shape.
+				const answer = result as RuntimeValidationResult;
+				if ('issues' in answer) {
+					issues.push(
+						...answer.issues.map((issue) => ({
+							message: issue.message,
+							path: standardIssuePath(issue.path)
+						}))
+					);
+					return candidate;
+				}
+				if (
+					answer.value == null ||
+					typeof answer.value !== 'object' ||
+					Array.isArray(answer.value)
+				) {
+					issues.push({ message: t('form.valuesMustBeObject'), path: [] });
+					return candidate;
+				}
+				return Object.fromEntries(Object.entries(answer.value));
+			})
+		);
+	};
 
-	async function applySemanticValidation(
+	/**
+	 * Cross-field validation may perform asynchronous domain checks; its failure is a modelled
+	 * issue with the same continuation the caller expects.
+	 */
+	const applySemanticValidation = (
 		candidate: Readonly<Record<string, unknown>>,
 		validation: CollectionFormValidation | undefined,
 		issues: CollectionFormValidationIssue[]
-	): Promise<void> {
-		if (issues.length > 0 || !validation?.semantic) return;
-		try {
-			const semanticIssues = await validation.semantic(candidate);
-			if (semanticIssues) issues.push(...semanticIssues);
-		} catch (cause) {
-			issues.push({ message: cause instanceof Error ? cause.message : String(cause), path: [] });
-		}
-	}
+	): Effect.Effect<void> => {
+		if (issues.length > 0 || !validation?.semantic) return Effect.void;
+		return validation.semantic(candidate).pipe(
+			Effect.catch((cause) =>
+				Effect.sync(() => {
+					issues.push({
+						message: cause instanceof Error ? cause.message : String(cause),
+						path: []
+					});
+				})
+			),
+			Effect.map((semanticIssues) => {
+				if (semanticIssues) issues.push(...semanticIssues);
+			})
+		);
+	};
 
 	let {
 		client,
@@ -156,6 +198,9 @@
 	// svelte-ignore state_referenced_locally -- a mounted collection surface keeps one generated client.
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionForm');
 	setCollectionClientContext(() => workspaceClient);
+	// Field kinds whose form control spans the full intrinsic grid width (RFC IV.2 / V.4).
+	const FULL_WIDTH_FORM_KINDS: ReadonlySet<string> = new Set(['text', 'json', 'matrix', 'file']);
+
 	const { t } = useI18n<UiKeys>();
 
 	// svelte-ignore state_referenced_locally
@@ -188,28 +233,41 @@
 			? pickFieldNames(definition.fields, fields as readonly string[])
 			: deriveFormFieldNames(definition.fields)
 	);
+	// One field lookup per definition, so validation never re-searches the field list per row.
+	const fieldByName = $derived(
+		new Map(definition.fields.map((field) => [field.name, field] as const))
+	);
 	const autoFields = $derived(
 		autoFieldNames
-			.map((name) => definition.fields.find((field) => field.name === name))
-			.filter((field): field is NonNullable<typeof field> => field != null)
+			.map((name) => fieldByName.get(name))
+			.filter((field): field is CollectionField => field != null)
 	);
 	const registeredFields = new Set<string>();
-	let historyQuery = $state<RemoteQuery<readonly CollectionRecordHistoryEntry[]>>();
+	let historyRequested = $state(false);
+	const historyQuery = $derived.by(() => {
+		if (!historyRequested || !recordId || !workspaceClient.history) return undefined;
+		return workspaceClient.history.findMany(String(collection), recordId);
+	});
 	let deleting = $state(false);
+
+	const validateCandidate = (data: unknown): Effect.Effect<RuntimeValidationResult> =>
+		Effect.gen(function* () {
+			if (data == null || typeof data !== 'object' || Array.isArray(data)) {
+				return { issues: [{ message: t('form.formMustBeObject'), path: [] }] };
+			}
+
+			let candidate = Object.fromEntries(Object.entries(data));
+			const issues = validateRegisteredFields(fieldByName, registeredFields, candidate);
+			candidate = yield* applySchemaValidation(candidate, validation, issues);
+			yield* applySemanticValidation(candidate, validation, issues);
+
+			return issues.length > 0 ? { issues } : { value: candidate };
+		});
+	// The `~standard` adapter is the Standard Schema contract of `FormState`; the effect is the
+	// validation body, adapted once at this framework boundary.
 	const runtimeSchema = {
 		'~standard': {
-			validate: async (data: unknown) => {
-				if (data == null || typeof data !== 'object' || Array.isArray(data)) {
-					return { issues: [{ message: t('form.formMustBeObject'), path: [] }] };
-				}
-
-				let candidate = Object.fromEntries(Object.entries(data));
-				const issues = validateRegisteredFields(definition.fields, registeredFields, candidate);
-				candidate = await applySchemaValidation(candidate, validation, issues);
-				await applySemanticValidation(candidate, validation, issues);
-
-				return issues.length > 0 ? { issues } : { value: candidate };
-			}
+			validate: (data: unknown) => Effect.runPromise(validateCandidate(data))
 		}
 	} satisfies FormSchema;
 	// svelte-ignore state_referenced_locally -- a mounted form owns one record baseline; record changes remount its representation.
@@ -223,29 +281,34 @@
 		translate: t as TranslateFn,
 		remoteFn:
 			() =>
-			async (data): Promise<CollectionRow<TCollections[TName]>> => {
+			(data): Effect.Effect<CollectionRow<TCollections[TName]>, unknown> => {
 				const operations = client.db[collection];
 				const values = Object.fromEntries(Object.entries(data));
 				if (onSubmit) return onSubmit(values);
 				if (recordId) {
-					if (!operations.update) throw new Error('This collection cannot be updated.');
+					if (!operations.update)
+						return Effect.fail(new Error('This collection cannot be updated.'));
 					const dirtyValues: Record<string, unknown> = Object.fromEntries(
 						definition.fields
 							.filter((field) => form.hasChangesForPath(field.name))
 							.map((field) => [field.name, values[field.name]])
 					);
-					return operations.update(
-						recordId,
-						dirtyValues as CollectionUpdateInput<TCollections[TName]> // stupidity: boundary-cast — dirty rendered fields and validation constrain this dynamic update payload to the selected collection.
+					return Effect.tryPromise(() =>
+						operations.update!(
+							recordId,
+							dirtyValues as CollectionUpdateInput<TCollections[TName]> // stupidity: boundary-cast — dirty rendered fields and validation constrain this dynamic update payload to the selected collection.
+						)
 					);
 				}
-				if (!operations.create) throw new Error('This collection cannot be created.');
-				return operations.create(
-					values as CollectionCreateInput<TCollections[TName]> // stupidity: boundary-cast — rendered fields and validation constrain this dynamic form payload to the selected collection.
+				if (!operations.create) return Effect.fail(new Error('This collection cannot be created.'));
+				return Effect.tryPromise(() =>
+					operations.create!(
+						values as CollectionCreateInput<TCollections[TName]> // stupidity: boundary-cast — rendered fields and validation constrain this dynamic form payload to the selected collection.
+					)
 				);
 			},
-		onSuccess: async (record) => {
-			if (record && onAfterSubmit) await onAfterSubmit(record);
+		onSuccess: (record) => {
+			if (record && onAfterSubmit) return onAfterSubmit(record);
 		}
 	});
 	const dirtyFieldCount = $derived(
@@ -254,11 +317,8 @@
 
 	function loadHistory(): void {
 		if (!recordId || !workspaceClient.history) return;
-		if (historyQuery) {
-			if (historyQuery.error) void historyQuery.refresh();
-			return;
-		}
-		historyQuery = workspaceClient.history.findMany(String(collection), recordId);
+		if (historyQuery?.error) void historyQuery.refresh();
+		else historyRequested = true;
 	}
 
 	setCollectionFormFieldContext({
@@ -282,27 +342,36 @@
 		historyError: () => historyQuery?.error
 	});
 
-	async function submit(event: SubmitEvent): Promise<void> {
+	function submit(event: SubmitEvent): void {
 		event.preventDefault();
-		try {
-			await form.submit();
-		} catch (cause) {
-			console.error(`[CollectionForm:${String(collection)}] submission failed`, cause);
-		}
+		Effect.runFork(
+			form
+				.submit()
+				.pipe(
+					Effect.catch((cause) =>
+						Effect.logError(`[CollectionForm:${String(collection)}] submission failed`, cause)
+					)
+				)
+		);
 	}
 
 	function clear(): void {
 		form.reset();
 	}
 
-	async function deleteRecord(): Promise<void> {
+	function deleteRecord(): void {
 		if (!deleteAction || deleting || deleteRestriction || disabled || loading) return;
 		deleting = true;
-		try {
-			await deleteAction.onDelete();
-		} finally {
-			deleting = false;
-		}
+		const deletion = deleteAction.onDelete();
+		Effect.runFork(
+			(deletion || Effect.void).pipe(
+				Effect.onExit(() =>
+					Effect.sync(() => {
+						deleting = false;
+					})
+				)
+			)
+		);
 	}
 
 	onDestroy(() => form.destroy());
@@ -402,7 +471,7 @@
 				<!-- Auto field emission (RFC V.4a): intrinsic Grid, full-width spans per field kind. -->
 				<Grid minimum="card">
 					{#each autoFields as field (field.name)}
-						<div class={isFullWidthFormField(field.kind) ? 'col-span-full' : ''}>
+						<div class={FULL_WIDTH_FORM_KINDS.has(field.kind) ? 'col-span-full' : ''}>
 							<CollectionFormField name={field.name} />
 						</div>
 					{/each}

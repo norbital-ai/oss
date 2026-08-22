@@ -1,4 +1,4 @@
-export type AppMetadata = Readonly<{
+type AppMetadata = Readonly<{
 	readonly title: string | null;
 	readonly description: string | null;
 	readonly icon: string | null;
@@ -51,7 +51,7 @@ export const extractAppMetadata = (source: string): AppMetadata => ({
 	banner: taggedMeta(source, 'banner')
 });
 
-export type GroupMetadata = Readonly<{
+type GroupMetadata = Readonly<{
 	readonly label: string | null;
 	readonly description: string | null;
 	readonly icon: string | null;

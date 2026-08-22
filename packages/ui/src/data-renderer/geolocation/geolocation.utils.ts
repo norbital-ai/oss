@@ -1,32 +1,24 @@
-export type TGeolocationPickerGeometry = {
-	lon: number;
-	lat: number;
-};
+import { Schema } from 'effect';
 
-export type TGeolocationPickerValue = {
-	geometry: TGeolocationPickerGeometry | null;
-	formatted_address: string;
-	type: 'Point';
-	srid: number;
-};
+const geolocationGeometrySchema = Schema.Struct({
+	lon: Schema.Number,
+	lat: Schema.Number
+});
 
-export function parseGeolocationPickerValue(value: unknown): TGeolocationPickerValue | null {
-	if (value == null || typeof value !== 'object') return null;
-	const formattedAddress = Reflect.get(value, 'formatted_address');
-	const type = Reflect.get(value, 'type');
-	const srid = Reflect.get(value, 'srid');
-	const geometry = Reflect.get(value, 'geometry');
-	if (typeof formattedAddress !== 'string' || type !== 'Point' || typeof srid !== 'number') {
-		return null;
-	}
-	if (geometry === null) {
-		return { geometry: null, formatted_address: formattedAddress, type, srid };
-	}
-	if (geometry == null || typeof geometry !== 'object') return null;
-	const lon = Reflect.get(geometry, 'lon');
-	const lat = Reflect.get(geometry, 'lat');
-	if (typeof lon !== 'number' || typeof lat !== 'number') return null;
-	return { geometry: { lon, lat }, formatted_address: formattedAddress, type, srid };
+/** Geocoder answer shape: PostGIS-ish Point plus the human address the picker displays. */
+const geolocationPickerValueSchema = Schema.Struct({
+	geometry: Schema.NullOr(geolocationGeometrySchema),
+	formatted_address: Schema.String,
+	type: Schema.Literal('Point'),
+	srid: Schema.Number
+});
+export type TGeolocationPickerValue = typeof geolocationPickerValueSchema.Type;
+
+const decodeGeolocationPickerValue = Schema.decodeUnknownResult(geolocationPickerValueSchema);
+
+function parseGeolocationPickerValue(value: unknown): TGeolocationPickerValue | null {
+	const decoded = decodeGeolocationPickerValue(value);
+	return decoded._tag === 'Success' ? decoded.success : null;
 }
 
 export function parseGeolocationPickerValues(

@@ -1,4 +1,4 @@
-import type { Schema } from 'effect';
+import { Effect, Result, Schema } from 'effect';
 
 /**
  * The read cache the sync engine invalidates.
@@ -18,7 +18,7 @@ import type { Schema } from 'effect';
  */
 
 /** A cached answer, with the collections whose changes would falsify it. */
-export type CachedAnswer = Readonly<{
+type CachedAnswer = Readonly<{
 	readonly value: Schema.Json;
 	readonly collections: ReadonlyArray<string>;
 	readonly at: number;
@@ -34,7 +34,7 @@ export type CachedAnswer = Readonly<{
 const stableStringify = (value: unknown): string => {
 	if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
 	if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-	const entries = Object.entries(value as Record<string, unknown>)
+	const entries = Object.entries(value)
 		.filter(([, entry]) => entry !== undefined)
 		.toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
 	return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`).join(',')}}`;
@@ -71,17 +71,23 @@ export const collectionsFor = (command: string, input: Schema.Json): ReadonlyArr
 };
 
 export type QueryCache = Readonly<{
-	readonly read: (key: string) => Promise<Schema.Json | undefined>;
+	readonly read: (key: string) => Effect.Effect<Schema.Json | undefined>;
 	readonly write: (key: string, value: Schema.Json, collections: ReadonlyArray<string>) => void;
 	/** Drops every answer that read one of these collections. Returns the keys dropped. */
 	readonly invalidate: (collections: ReadonlyArray<string>) => ReadonlyArray<string>;
 	readonly clear: () => void;
 	/** Resolves once the persisted answers are back in memory. */
-	readonly hydrated: Promise<void>;
+	readonly hydrated: Effect.Effect<void>;
 }>;
 
 const DATABASE_NAME = 'bolt-query-cache';
 const STORE_NAME = 'answers';
+const PersistedAnswer = Schema.Struct({
+	key: Schema.String,
+	value: Schema.Json,
+	collections: Schema.Array(Schema.String),
+	at: Schema.Number
+});
 
 /**
  * How long a persisted answer may be served before it is treated as absent.
@@ -93,116 +99,125 @@ const STORE_NAME = 'answers';
  */
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-const openDatabase = (): Promise<IDBDatabase | undefined> =>
-	new Promise((resolve) => {
-		if (typeof indexedDB === 'undefined') {
-			resolve(undefined);
-			return;
-		}
-		try {
-			const request = indexedDB.open(DATABASE_NAME, 1);
-			request.onupgradeneeded = () => {
-				if (!request.result.objectStoreNames.contains(STORE_NAME)) {
-					request.result.createObjectStore(STORE_NAME);
-				}
-			};
-			request.onsuccess = () => resolve(request.result);
-			// A browser with storage disabled, a private window, or a blocked upgrade all land here. The
-			// cache degrades to memory-only rather than failing the page: a missing cache is a slow read,
-			// never a broken one.
-			request.onerror = () => resolve(undefined);
-			request.onblocked = () => resolve(undefined);
-		} catch {
-			resolve(undefined);
-		}
+const openDatabase = Effect.callback<IDBDatabase | undefined>((resume) => {
+	if (typeof indexedDB === 'undefined') {
+		resume(Effect.succeed(undefined));
+		return;
+	}
+	const opened = Result.try(() => {
+		const request = indexedDB.open(DATABASE_NAME, 1);
+		request.onupgradeneeded = () => {
+			if (!request.result.objectStoreNames.contains(STORE_NAME)) {
+				request.result.createObjectStore(STORE_NAME);
+			}
+		};
+		request.onsuccess = () => resume(Effect.succeed(request.result));
+		// A browser with storage disabled, a private window, or a blocked upgrade all land here. The
+		// cache degrades to memory-only rather than failing the page: a missing cache is a slow read,
+		// never a broken one.
+		request.onerror = () => resume(Effect.succeed(undefined));
+		request.onblocked = () => resume(Effect.succeed(undefined));
 	});
+	if (Result.isFailure(opened)) resume(Effect.succeed(undefined));
+});
 
 /**
  * Builds the cache for one workspace scope.
  *
  * `namespace` keeps tenants and environments apart in shared browser storage; without it, signing
  * into a second tenant would paint the first tenant's rows before the revalidation landed.
+ *
+ * `now` is the cache's clock, injected so a test can control the age bound without waiting a day.
  */
-export const createQueryCache = (namespace: string): QueryCache => {
+export const createQueryCache = (namespace: string, now: () => number = Date.now): QueryCache => {
 	const memory = new Map<string, CachedAnswer>();
 	let database: IDBDatabase | undefined;
 	const scoped = (key: string): string => `${namespace}::${key}`;
 
-	const hydrated = openDatabase().then(
-		(opened) =>
-			new Promise<void>((resolve) => {
-				database = opened;
-				if (opened === undefined) {
-					resolve();
-					return;
-				}
-				try {
-					const store = opened.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME);
-					const request = store.getAll();
-					request.onsuccess = () => {
-						const now = Date.now();
-						for (const entry of request.result as ReadonlyArray<
-							CachedAnswer & { readonly key?: string }
-						>) {
-							const key = entry.key;
-							if (typeof key !== 'string' || !key.startsWith(`${namespace}::`)) continue;
-							if (now - entry.at > MAX_AGE_MS) continue;
-							memory.set(key.slice(namespace.length + 2), {
-								value: entry.value,
-								collections: entry.collections,
-								at: entry.at
-							});
-						}
-						resolve();
-					};
-					request.onerror = () => resolve();
-				} catch {
-					resolve();
-				}
-			})
+	const hydrated = Effect.runSync(
+		Effect.cached(
+			openDatabase.pipe(
+				Effect.flatMap((opened) => {
+					database = opened;
+					if (opened === undefined) return Effect.void;
+					return Effect.callback<void>((resume) => {
+						const transaction = Result.try(() => {
+							const store = opened.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME);
+							const request = store.getAll();
+							request.onsuccess = () => {
+								const at = now();
+								for (const candidate of request.result) {
+									const entry = Result.getOrElse(
+										Schema.decodeUnknownResult(PersistedAnswer)(candidate),
+										() => undefined
+									);
+									if (entry === undefined || !entry.key.startsWith(`${namespace}::`)) continue;
+									if (at - entry.at > MAX_AGE_MS) continue;
+									memory.set(entry.key.slice(namespace.length + 2), {
+										value: entry.value,
+										collections: entry.collections,
+										at: entry.at
+									});
+								}
+								resume(Effect.void);
+							};
+							request.onerror = () => resume(Effect.void);
+						});
+						if (Result.isFailure(transaction)) resume(Effect.void);
+					});
+				})
+			)
+		)
 	);
 
 	const persist = (key: string, answer: CachedAnswer): void => {
 		if (database === undefined) return;
-		try {
-			const store = database.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME);
+		const activeDatabase = database;
+		const stored = Result.try(() => {
+			const store = activeDatabase.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME);
 			store.put({ ...answer, key: scoped(key) }, scoped(key));
-		} catch {
+		});
+		if (Result.isFailure(stored)) {
 			// A quota failure, or a database closed underneath us by a version change in another tab.
 			// Memory still holds the answer, so this costs persistence across a reload and nothing else.
+			Effect.runSync(Effect.logError('Bolt query cache: persistence failed', stored.failure));
 		}
 	};
 
 	const forget = (keys: ReadonlyArray<string>): void => {
 		if (database === undefined || keys.length === 0) return;
-		try {
-			const store = database.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME);
+		const activeDatabase = database;
+		const deleted = Result.try(() => {
+			const store = activeDatabase.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME);
 			for (const key of keys) store.delete(scoped(key));
-		} catch {
+		});
+		if (Result.isFailure(deleted)) {
 			// Same as `persist`: the in-memory drop already happened, which is the half that decides
 			// what this session serves.
+			Effect.runSync(Effect.logError('Bolt query cache: deletion failed', deleted.failure));
 		}
 	};
 
 	return {
 		hydrated,
-		read: async (key) => {
-			// Awaited rather than read straight out of `memory`, because the queries a page issues on
-			// mount race the hydration that would answer them. Awaiting costs a microtask on a warm
-			// cache and is the difference between a cache that works on refresh and one that only ever
-			// works on in-session navigation.
-			await hydrated;
-			const answer = memory.get(key);
-			if (answer === undefined) return undefined;
-			if (Date.now() - answer.at > MAX_AGE_MS) {
-				memory.delete(key);
-				forget([key]);
-				return undefined;
-			}
-			return answer.value;
-		},
+		read: (key) =>
+			hydrated.pipe(
+				Effect.map(() => {
+					// Sequenced behind hydration because the queries a page issues on mount race the persisted
+					// answers being restored. The Effect is already memoized, so a warm read only observes its
+					// result; the ordering is what makes refresh caching work, not just in-session navigation.
+					const answer = memory.get(key);
+					if (answer === undefined) return undefined;
+					if (now() - answer.at > MAX_AGE_MS) {
+						memory.delete(key);
+						forget([key]);
+						return undefined;
+					}
+					return answer.value;
+				})
+			),
 		write: (key, value, collections) => {
-			const answer: CachedAnswer = { value, collections, at: Date.now() };
+			const answer: CachedAnswer = { value, collections, at: now() };
 			memory.set(key, answer);
 			persist(key, answer);
 		},

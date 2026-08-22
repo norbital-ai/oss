@@ -18,7 +18,7 @@ const relations: ReadonlyArray<RelationDefinition> = [
 		target: 'pay_components',
 		cardinality: 'one',
 		from: { collection: 'component_entries', column: 'pay_component_id' },
-		to: { collection: 'pay_components', column: 'norbital_id' }
+		to: { collection: 'pay_components', column: 'id' }
 	},
 	{
 		// Declared with the endpoints in the opposite order, which authors do and the resolver must
@@ -28,7 +28,7 @@ const relations: ReadonlyArray<RelationDefinition> = [
 		target: 'component_entries',
 		cardinality: 'many',
 		from: { collection: 'component_entries', column: 'pay_component_id' },
-		to: { collection: 'pay_components', column: 'norbital_id' }
+		to: { collection: 'pay_components', column: 'id' }
 	},
 	{
 		name: 'component_payslip_line',
@@ -36,7 +36,7 @@ const relations: ReadonlyArray<RelationDefinition> = [
 		target: 'payslip_lines',
 		cardinality: 'one',
 		from: { collection: 'pay_components', column: 'payslip_line_id' },
-		to: { collection: 'payslip_lines', column: 'norbital_id' }
+		to: { collection: 'payslip_lines', column: 'id' }
 	},
 	{
 		name: 'endpointless',
@@ -47,23 +47,56 @@ const relations: ReadonlyArray<RelationDefinition> = [
 ];
 
 const definition = { relations } as unknown as WorkspaceDefinition;
+const referenceDefinition = {
+	...definition,
+	collections: [
+		{
+			name: 'payslip_sources',
+			fields: {
+				source: {
+					type: 'reference',
+					required: true,
+					indexed: true,
+					unique: true,
+					reference: {
+						onDelete: 'restrict',
+						targets: [
+							{
+								tag: 'TIME_ENTRY',
+								collection: 'time_entries',
+								storageColumn: 'source__time_entry_id'
+							},
+							{
+								tag: 'LEAVE_REQUEST',
+								collection: 'leave_requests',
+								storageColumn: 'source__leave_request_id'
+							}
+						]
+					}
+				}
+			}
+		}
+	]
+} as unknown as WorkspaceDefinition;
 
 const tables: Readonly<Record<string, ReadonlyArray<Record<string, Schema.Json>>>> = {
 	pay_components: [
 		{
-			norbital_id: 'pc-1',
+			id: 'pc-1',
 			code: 'LOAN',
 			name: 'Loan recovery',
 			secret: 'hidden',
 			payslip_line_id: 'pl-1'
 		},
-		{ norbital_id: 'pc-2', code: 'CLAIM', name: 'Claim', secret: 'hidden', payslip_line_id: null }
+		{ id: 'pc-2', code: 'CLAIM', name: 'Claim', secret: 'hidden', payslip_line_id: null }
 	],
-	payslip_lines: [{ norbital_id: 'pl-1', period: '2026-06' }],
+	payslip_lines: [{ id: 'pl-1', period: '2026-06' }],
 	component_entries: [
-		{ norbital_id: 'ce-1', pay_component_id: 'pc-1' },
-		{ norbital_id: 'ce-2', pay_component_id: 'pc-1' }
-	]
+		{ id: 'ce-1', pay_component_id: 'pc-1' },
+		{ id: 'ce-2', pay_component_id: 'pc-1' }
+	],
+	time_entries: [{ id: 'te-1', work_date: '2026-08-01' }],
+	leave_requests: [{ id: 'lr-1', from_date: '2026-08-02' }]
 };
 
 /** Stands in for the caller's authorized read, recording every batch it is asked for. */
@@ -87,11 +120,55 @@ const run = (
 ) => Effect.runSync(attachRelations(definition, collection, rows, spec, read));
 
 describe('relation prefetch', () => {
+	it('hydrates each polymorphic target under the same discriminated reference property', () => {
+		const { read, calls } = reader();
+		const result = Effect.runSync(
+			attachRelations(
+				referenceDefinition,
+				'payslip_sources',
+				[
+					{ id: 'ps-1', source: { kind: 'TIME_ENTRY', id: 'te-1' } },
+					{ id: 'ps-2', source: { kind: 'LEAVE_REQUEST', id: 'lr-1' } }
+				],
+				{ source: true },
+				read
+			)
+		);
+		expect(result).toMatchObject([
+			{ source: { kind: 'TIME_ENTRY', id: 'te-1', record: { work_date: '2026-08-01' } } },
+			{ source: { kind: 'LEAVE_REQUEST', id: 'lr-1', record: { from_date: '2026-08-02' } } }
+		]);
+		expect(calls.map(({ collection }) => collection).sort()).toEqual([
+			'leave_requests',
+			'time_entries'
+		]);
+	});
+
+	it('projects each hydrated reference arm exactly as authored', () => {
+		const { read } = reader();
+		const [row] = Effect.runSync(
+			attachRelations(
+				referenceDefinition,
+				'payslip_sources',
+				[{ id: 'ps-1', source: { kind: 'TIME_ENTRY', id: 'te-1' } }],
+				{ source: { TIME_ENTRY: { columns: { work_date: true } } } },
+				read
+			)
+		);
+		expect(row).toEqual({
+			id: 'ps-1',
+			source: {
+				kind: 'TIME_ENTRY',
+				id: 'te-1',
+				record: { work_date: '2026-08-01' }
+			}
+		});
+	});
 	it('attaches a one-relation as the record itself', () => {
 		const { read } = reader();
 		const [row] = run(
 			'component_entries',
-			[{ norbital_id: 'ce-1', pay_component_id: 'pc-1' }],
+			[{ id: 'ce-1', pay_component_id: 'pc-1' }],
 			{ entry_pay_component: true },
 			read
 		);
@@ -102,12 +179,12 @@ describe('relation prefetch', () => {
 		const { read } = reader();
 		const rows = run(
 			'pay_components',
-			[{ norbital_id: 'pc-1' }, { norbital_id: 'pc-2' }],
+			[{ id: 'pc-1' }, { id: 'pc-2' }],
 			{ component_entries: true },
 			read
 		);
 		expect(rows[0]).toMatchObject({
-			component_entries: [{ norbital_id: 'ce-1' }, { norbital_id: 'ce-2' }]
+			component_entries: [{ id: 'ce-1' }, { id: 'ce-2' }]
 		});
 		expect(rows[1]).toMatchObject({ component_entries: [] });
 	});
@@ -116,7 +193,7 @@ describe('relation prefetch', () => {
 		const { read } = reader();
 		const [row] = run(
 			'component_entries',
-			[{ norbital_id: 'ce-9', pay_component_id: 'missing' }],
+			[{ id: 'ce-9', pay_component_id: 'missing' }],
 			{ entry_pay_component: true },
 			read
 		);
@@ -129,9 +206,9 @@ describe('relation prefetch', () => {
 		run(
 			'component_entries',
 			[
-				{ norbital_id: 'ce-1', pay_component_id: 'pc-1' },
-				{ norbital_id: 'ce-2', pay_component_id: 'pc-1' },
-				{ norbital_id: 'ce-3', pay_component_id: 'pc-2' }
+				{ id: 'ce-1', pay_component_id: 'pc-1' },
+				{ id: 'ce-2', pay_component_id: 'pc-1' },
+				{ id: 'ce-3', pay_component_id: 'pc-2' }
 			],
 			{ entry_pay_component: true },
 			read
@@ -140,21 +217,34 @@ describe('relation prefetch', () => {
 		// Deduplicated: three rows, two distinct keys.
 		expect(calls[0]).toMatchObject({
 			collection: 'pay_components',
-			column: 'norbital_id',
+			column: 'id',
 			values: ['pc-1', 'pc-2']
 		});
 	});
 
-	it('narrows to the requested columns while keeping identity', () => {
+	it('narrows to exactly the requested columns', () => {
 		const { read } = reader();
 		const [row] = run(
 			'component_entries',
-			[{ norbital_id: 'ce-1', pay_component_id: 'pc-1' }],
+			[{ id: 'ce-1', pay_component_id: 'pc-1' }],
 			{ entry_pay_component: { columns: { code: true, name: true } } },
 			read
 		);
 		const related = (row as Record<string, Record<string, unknown>>)['entry_pay_component'];
-		expect(Object.keys(related ?? {}).sort()).toEqual(['code', 'name', 'norbital_id']);
+		expect(Object.keys(related ?? {}).sort()).toEqual(['code', 'name']);
+		expect(related?.['secret']).toBeUndefined();
+	});
+
+	it('supports exclusion projections without turning them into select-all', () => {
+		const { read } = reader();
+		const [row] = run(
+			'component_entries',
+			[{ id: 'ce-1', pay_component_id: 'pc-1' }],
+			{ entry_pay_component: { columns: { secret: false } } },
+			read
+		);
+		const related = (row as Record<string, Record<string, unknown>>)['entry_pay_component'];
+		expect(related).toMatchObject({ id: 'pc-1', code: 'LOAN', name: 'Loan recovery' });
 		expect(related?.['secret']).toBeUndefined();
 	});
 
@@ -162,7 +252,7 @@ describe('relation prefetch', () => {
 		const { read } = reader();
 		const [row] = run(
 			'component_entries',
-			[{ norbital_id: 'ce-1', pay_component_id: 'pc-1' }],
+			[{ id: 'ce-1', pay_component_id: 'pc-1' }],
 			{ entry_pay_component: { with: { component_payslip_line: { columns: { period: true } } } } },
 			read
 		);
@@ -177,7 +267,7 @@ describe('relation prefetch', () => {
 		const { read } = reader((collection) => collection !== 'pay_components');
 		const [row] = run(
 			'component_entries',
-			[{ norbital_id: 'ce-1', pay_component_id: 'pc-1' }],
+			[{ id: 'ce-1', pay_component_id: 'pc-1' }],
 			{ entry_pay_component: true },
 			read
 		);
@@ -188,7 +278,7 @@ describe('relation prefetch', () => {
 		const { calls, read } = reader();
 		const [row] = run(
 			'component_entries',
-			[{ norbital_id: 'ce-1', pay_component_id: 'pc-1' }],
+			[{ id: 'ce-1', pay_component_id: 'pc-1' }],
 			{ unknown_relation: true, endpointless: true },
 			read
 		);
@@ -207,7 +297,7 @@ describe('relation prefetch', () => {
 
 	it('returns the rows untouched when nothing is requested', () => {
 		const { calls, read } = reader();
-		const rows = [{ norbital_id: 'ce-1', pay_component_id: 'pc-1' }];
+		const rows = [{ id: 'ce-1', pay_component_id: 'pc-1' }];
 		expect(run('component_entries', rows, undefined, read)).toEqual(rows);
 		expect(calls).toHaveLength(0);
 	});

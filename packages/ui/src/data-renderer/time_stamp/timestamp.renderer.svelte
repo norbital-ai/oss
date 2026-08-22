@@ -2,8 +2,11 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import DateView from './views/date.view.svelte';
 	import TimeView from './views/time.view.svelte';
-	import { calendarDateToInstant, instantToCalendarDate } from './date.utils.js';
-	import type { DataRendererProps } from '../data-renderer.types.js';
+	import {
+		calendarDateToInstant,
+		instantToCalendarDate
+	} from '#lib/data-renderer/time_stamp/date.utils';
+	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 
 	const { t } = useI18n<UiKeys>();
 

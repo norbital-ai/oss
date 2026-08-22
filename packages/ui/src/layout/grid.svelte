@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
+	import type { LayoutAttributes, LayoutElement, LayoutGap } from '#lib/layout/layout.shared';
 
 	export type GridMinimum = 'compact' | 'card' | 'panel';
 	export interface GridProps extends LayoutAttributes {
@@ -20,7 +20,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { setContext } from 'svelte';
-	import { COLUMN_PARENT_CONTEXT, GAP_CLASSES } from './layout.shared.js';
+	import { COLUMN_PARENT_CONTEXT, GAP_CLASSES } from '#lib/layout/layout.shared';
 
 	let {
 		as = 'div',

@@ -1,6 +1,12 @@
-import type { CollectionField } from '@norbital-ai/std/collection';
+import { Schema } from 'effect';
+import { isSystemCollectionField, type CollectionField } from '@norbital-ai/std/collection';
 import { humanize } from '@norbital-ai/std/string';
-import { formatDataValue, type Translate } from '../data-renderer/data-renderer.utils.js';
+import { formatDataValue, type Translate } from '#lib/data-renderer/data-renderer.utils';
+import {
+	resolveCollectionRecordMetadata,
+	type CollectionRecordMetadataResolver,
+	type ResolvedCollectionRecordMetadata
+} from '#lib/collection-record-metadata';
 
 /**
  * Shared, framework-owned derivation for the collection-view auto-defaults (RFC V.2–V.4).
@@ -16,33 +22,30 @@ import { formatDataValue, type Translate } from '../data-renderer/data-renderer.
  * lane overrides, and `<Column card="…">` role hints.
  */
 
-/** System fields are framework-managed (`norbital_*`) and never authored into a view. */
+/** System fields are framework-managed and never authored into a view. */
 export function isSystemField(name: string): boolean {
-	return name.startsWith('norbital_');
+	return isSystemCollectionField(name);
 }
 
 /**
  * The framework row key, when the value is a persisted row rather than a draft.
  *
- * This is the single place the framework reads `norbital_id` off a caller-supplied object, so an
+ * This is the single place the framework reads `id` off a caller-supplied object, so an
  * authored surface never has to: it hands over the record it already has and the framework tells
  * create and update apart from the presence of the key.
  */
 export function optionalCollectionRecordId(record: object | undefined | null): string | undefined {
 	if (record == null) return undefined;
-	const value = Reflect.get(record, 'norbital_id');
+	const value = Reflect.get(record, 'id');
 	return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 /** Resolve a required runtime row key before issuing a selection-scoped mutation. */
 export function collectionRecordId(record: object): string {
 	const value = optionalCollectionRecordId(record);
-	if (value === undefined) throw new Error('Cannot mutate a record without a norbital_id.');
+	if (value === undefined) throw new Error('Cannot mutate a record without a id.');
 	return value;
 }
-
-/** Field kinds whose form control spans the full intrinsic grid width (RFC IV.2 / V.4). */
-const FULL_WIDTH_FORM_KINDS: ReadonlySet<string> = new Set(['text', 'json', 'matrix', 'file']);
 
 /** Textual kinds that read well as a card title / subtitle line. */
 const TEXT_LIKE_KINDS: ReadonlySet<string> = new Set(['text', 'phone', 'email', 'url', 'markdown']);
@@ -50,16 +53,6 @@ const TEXT_LIKE_KINDS: ReadonlySet<string> = new Set(['text', 'phone', 'email', 
 /** A short textual field (never an array), suitable for a title or subtitle line. */
 function isTextLike(field: CollectionField): boolean {
 	return !field.array && TEXT_LIKE_KINDS.has(field.kind);
-}
-
-/** A relation field, whose target `record_label` renders as a readable subtitle. */
-function isRelationLike(field: CollectionField): boolean {
-	return field.relation != null;
-}
-
-/** An enum-backed field. */
-export function isEnumField(field: CollectionField): boolean {
-	return field.kind === 'enum';
 }
 
 /**
@@ -80,27 +73,32 @@ export function pickFieldNames(
 }
 
 /** Card-role hints contributed by `<Column card="…">` (RFC V.2c); board passes none. */
-export interface CardRoleHints {
-	title?: string;
-	subtitle?: readonly string[];
-	badge?: string;
-}
+const cardRoleHintsSchema = Schema.Struct({
+	title: Schema.optionalKey(Schema.String),
+	subtitle: Schema.optionalKey(Schema.Array(Schema.String)),
+	badge: Schema.optionalKey(Schema.String)
+});
+type CardRoleHints = typeof cardRoleHintsSchema.Type;
 
+const cardTitleSourceSchema = Schema.Union([
+	Schema.Struct({ kind: Schema.Literal('field'), name: Schema.String }),
+	Schema.Struct({ kind: Schema.Literal('record-label') })
+]);
 /**
  * How a card title resolves: a specific field's value, or the collection's runtime
  * `record_label` (CEL) — which only the caller can evaluate per record.
  */
-export type CardTitleSource =
-	{ readonly kind: 'field'; readonly name: string } | { readonly kind: 'record-label' };
+type CardTitleSource = typeof cardTitleSourceSchema.Type;
 
 /** The derived mobile-card / kanban-card shape (RFC V.2d / V.3). */
-export interface AutoCardModel {
-	readonly title: CardTitleSource;
+const autoCardModelSchema = Schema.Struct({
+	title: cardTitleSourceSchema,
 	/** Secondary field names, capped at two, title excluded. */
-	readonly subtitles: readonly string[];
+	subtitles: Schema.Array(Schema.String),
 	/** Badge field name, if any. */
-	readonly badge?: string;
-}
+	badge: Schema.optionalKey(Schema.String)
+});
+export type AutoCardModel = typeof autoCardModelSchema.Type;
 
 /**
  * The auto card model derived from column card-role hints and, where a role is unfilled, the
@@ -137,11 +135,11 @@ export function deriveAutoCard(
 		roles?.subtitle && roles.subtitle.length > 0
 			? roles.subtitle
 			: visible
-					.filter((field) => isTextLike(field) || isRelationLike(field))
+					.filter((field) => isTextLike(field) || field.relation != null)
 					.map((field) => field.name);
 	const subtitles = subtitleSource.filter((name) => name !== titleFieldName).slice(0, 2);
 
-	const badge = roles?.badge ?? visible.find((field) => isEnumField(field))?.name;
+	const badge = roles?.badge ?? visible.find((field) => field.kind === 'enum')?.name;
 
 	return { title, subtitles, badge };
 }
@@ -171,7 +169,7 @@ export function formatAutoCardField(
  * Passing the resolution in keeps that difference at the call site instead of teaching this module
  * about columns.
  */
-export type CardText = (name: string) => string;
+type CardText = (name: string) => string;
 
 /** Join the non-empty subtitle values selected by an auto-card model. */
 export function formatAutoCardSubtitle(model: AutoCardModel, text: CardText): string {
@@ -200,22 +198,24 @@ export function formatAutoCardBadge(
 }
 
 /** A kanban lane derived from a groupBy field's enum values in model order (RFC V.3). */
-export interface DerivedLane {
-	readonly value: string;
-	readonly label: string;
-	readonly color?: string;
-}
+const derivedLaneSchema = Schema.Struct({
+	value: Schema.String,
+	label: Schema.String,
+	color: Schema.optionalKey(Schema.String)
+});
+type DerivedLane = typeof derivedLaneSchema.Type;
 
+const authoredLaneSchema = Schema.Struct({
+	value: Schema.String,
+	label: Schema.optionalKey(Schema.String),
+	color: Schema.optionalKey(Schema.String)
+});
 /** Authored lane pick/order with optional presentation overrides (RFC V.3). */
-export interface AuthoredLane {
-	readonly value: string;
-	readonly label?: string;
-	readonly color?: string;
-}
+type AuthoredLane = typeof authoredLaneSchema.Type;
 
 export type AuthoredLaneInput = string | AuthoredLane;
 
-export function normalizeAuthoredLane(lane: AuthoredLaneInput): AuthoredLane {
+function normalizeAuthoredLane(lane: AuthoredLaneInput): AuthoredLane {
 	if (typeof lane === 'string') return { value: lane };
 	return { value: String(lane.value), label: lane.label, color: lane.color };
 }
@@ -266,7 +266,7 @@ function singularizeWord(word: string): string {
 }
 
 /** Humanized, singular collection name for the auto "New …" create button (RFC V.2f). */
-export function humanizedSingular(collectionName: string): string {
+function humanizedSingular(collectionName: string): string {
 	const parts = humanize(collectionName).split(' ');
 	if (parts.length === 0) return collectionName;
 	parts[parts.length - 1] = singularizeWord(parts[parts.length - 1]);
@@ -286,7 +286,7 @@ export function createActionLabel(
 
 /**
  * Ordered field names for an auto-emitted form (RFC V.4a): every writable field in declaration
- * order. System (`norbital_*`) and read-only fields are excluded. The `fields` prop narrows this.
+ * order. System and read-only fields are excluded. The `fields` prop narrows this.
  */
 export function deriveFormFieldNames(fields: readonly CollectionField[]): string[] {
 	return fields
@@ -294,7 +294,17 @@ export function deriveFormFieldNames(fields: readonly CollectionField[]): string
 		.map((field) => field.name);
 }
 
-/** True when a field kind's form control spans the full intrinsic-grid width (RFC V.4a). */
-export function isFullWidthFormField(kind: string): boolean {
-	return FULL_WIDTH_FORM_KINDS.has(kind);
+/**
+ * Resolve the metadata cells a collection surface shows for one record, with the catalog-back
+ * copy both the table and the board use for the framework-provided entries.
+ */
+export function resolvedRecordMetadataFor<TRow extends object>(
+	record: TRow,
+	metadata: CollectionRecordMetadataResolver<TRow> | undefined,
+	t: Translate
+): readonly ResolvedCollectionRecordMetadata[] {
+	return resolveCollectionRecordMetadata(record, metadata?.(record), {
+		pendingApprovalLabel: t('recordMetadata.pendingApproval'),
+		pendingApprovalReason: t('recordMetadata.pendingApprovalReason')
+	});
 }

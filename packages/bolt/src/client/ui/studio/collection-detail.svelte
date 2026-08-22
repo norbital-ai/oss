@@ -9,8 +9,8 @@
 	import { cn } from '@norbital-ai/ui/utils';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import type { CollectionField } from '@norbital-ai/ui/data-renderer';
-	import type { WorkspaceClient } from './workspace-client.js';
-	import type { ManifestCollection, WorkspaceManifest } from './studio-state.js';
+	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
+	import type { ManifestCollection, WorkspaceManifest } from '#lib/client/ui/studio/studio-state.js';
 
 	/**
 	 * One collection, read through its five faces: its records, its model, and the code declared
@@ -52,7 +52,7 @@
 			nullable: !field.required,
 			...(field.generated ? { readOnly: true } : {}),
 			...(field.search === true ? { search: true } : {}),
-			...(field.values === undefined ? {} : { values: field.values })
+			values: field.values
 		}));
 	});
 	const hooks = $derived(collection.hooks ?? []);

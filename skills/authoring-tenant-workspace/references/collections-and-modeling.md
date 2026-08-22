@@ -143,7 +143,7 @@ import type { Relationships } from './$types.js';
 export default ((r) => ({
 	sites: { site_visits: r.many.site_visits() },
 	site_visits: {
-		site: r.one.sites({ from: r.site_visits.site_id, to: r.sites.norbital_id })
+		site: r.one.sites({ from: r.site_visits.site_id, to: r.sites.id })
 	}
 })) satisfies Relationships;
 ```
@@ -166,11 +166,11 @@ export default {
 			Effect.gen(function* () {
 				const siteIds = [...new Set(inputs.map((input) => input.site_id))];
 				const sites = yield* api.db.query.sites.findMany({
-					where: { norbital_id: { in: siteIds } },
-					columns: { norbital_id: true },
+					where: { id: { in: siteIds } },
+					columns: { id: true },
 					limit: 5000
 				});
-				return { knownSites: new Set(sites.map((site) => site.norbital_id)) };
+				return { knownSites: new Set(sites.map((site) => site.id)) };
 			}),
 		perRecord: {
 			before: {

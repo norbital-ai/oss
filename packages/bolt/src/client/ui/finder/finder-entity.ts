@@ -1,7 +1,7 @@
 import type { CommandItemData } from '@norbital-ai/ui/command';
-import type { CommandScope } from '../agent/mention-sources.js';
+import type { CommandScope } from '#lib/client/ui/agent/mention-sources.js';
 
-export type FinderRowKind = 'group' | 'app' | 'record' | 'command' | 'loading' | 'empty' | 'scope';
+type FinderRowKind = 'group' | 'app' | 'record' | 'command' | 'loading' | 'empty' | 'scope';
 
 export type FinderRow = CommandItemData & {
 	kind: FinderRowKind;
@@ -63,7 +63,7 @@ export type FinderEntity =
 			readonly href: string;
 	  };
 
-export type FinderPromptInsert = {
+type FinderPromptInsert = {
 	readonly text: string;
 	readonly mention?: {
 		readonly collection: string;

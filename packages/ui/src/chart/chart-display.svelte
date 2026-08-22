@@ -3,13 +3,14 @@
 		ChartConfig as UIChartConfig,
 		ChartDisplaySpec,
 		ChartDisplayValueFormat
-	} from './chart-utils.js';
+	} from '#lib/chart/chart-utils';
 	import ChartContainer from './chart-container.svelte';
 	import ChartSkeleton from './chart-skeleton.svelte';
 	import ChartTooltip from './chart-tooltip.svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Inline, Scroll, Stack } from '#lib/layout';
 	import { AreaChart, BarChart, LineChart, PieChart } from 'layerchart';
+	import { Number as Number_ } from 'effect';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -76,7 +77,7 @@
 	const cartesianChartWidth = $derived.by(() => {
 		if (!isCartesianChartSpec(spec)) return 0;
 		const pointWidth = spec.kind === 'bar' ? 48 + spec.series.length * 18 : 72;
-		return Math.min(2400, Math.max(320, spec.data.length * pointWidth));
+		return Number_.clamp(spec.data.length * pointWidth, { minimum: 320, maximum: 2400 });
 	});
 	const formatAxisLabel = (value: unknown): string => {
 		if (value == null) return '';

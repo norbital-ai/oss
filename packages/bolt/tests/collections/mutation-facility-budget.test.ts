@@ -1,8 +1,8 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
-import { Collections } from '../../src/runtime/collections/collections.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import {
 	adminSubject,
@@ -62,9 +62,9 @@ const definition = workspace({
 	automations: [],
 	envoys: [],
 	integrations: [],
-		prompt: 'You are the test workspace agent.',
-		tools: [],
-		skills: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
 	requiredFacilities: [],
 	policies: [
 		policy({

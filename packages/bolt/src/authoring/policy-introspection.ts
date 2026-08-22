@@ -1,3 +1,4 @@
+import { Result, Schema } from 'effect';
 import type { PolicyDeclaration, RuntimePolicyGrant } from './workspace-schema.js';
 import {
 	resolvePolicyLimits,
@@ -22,14 +23,58 @@ import {
  * The approval an authored grant declares, before this module gives it an identity.
  *
  * `key` is the author's; everything else below is derived from where the grant sits.
+ *
+ * Schema-owned and validated once, because the declaration arrives from compiled authored
+ * source that this module has never seen: the guard below is the whole verification an approval
+ * is a list of steps rather than a summary of it.
  */
-type AuthoredApproval = {
-	readonly steps: ReadonlyArray<{
-		readonly key: string;
-		readonly approvers: ReadonlyArray<string>;
-		readonly description?: string;
-	}>;
-};
+const AuthoredApprovalSchema = Schema.Struct({
+	steps: Schema.Array(
+		Schema.Struct({
+			key: Schema.String,
+			approvers: Schema.Array(Schema.String),
+			description: Schema.optionalKey(Schema.String)
+		})
+	)
+});
+const isAuthoredApproval = Schema.is(AuthoredApprovalSchema);
+
+const AuthoredGrant = Schema.Struct({
+	collection: Schema.String,
+	action: Schema.Literals(['read', 'create', 'update', 'delete', 'history']),
+	where: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+	fields: Schema.optionalKey(Schema.Array(Schema.String)),
+	approval: Schema.optionalKey(Schema.Unknown)
+});
+const PolicyCapabilities = Schema.Struct({
+	apps: Schema.optionalKey(Schema.Array(Schema.String)),
+	tools: Schema.optionalKey(Schema.Array(Schema.String)),
+	mcp: Schema.optionalKey(Schema.Array(Schema.String)),
+	skills: Schema.optionalKey(Schema.Array(Schema.String))
+});
+const AuthoredRateLimitRule = Schema.Struct({
+	window: Schema.String,
+	limit: Schema.Number,
+	key: Schema.optionalKey(Schema.Literals(['address', 'subject', 'sender', 'tenant']))
+});
+const AuthoredPolicy = Schema.Struct({
+	description: Schema.String,
+	grants: Schema.Array(AuthoredGrant),
+	capabilities: Schema.optionalKey(PolicyCapabilities),
+	limits: Schema.optionalKey(
+		Schema.Record(
+			Schema.String,
+			Schema.Union([AuthoredRateLimitRule, Schema.Array(AuthoredRateLimitRule)])
+		)
+	)
+});
+const AuthoredEnvoy = Schema.Struct({
+	transport: Schema.String,
+	audience: Schema.Literals(['public', 'authenticated']),
+	policies: Schema.Array(Schema.String),
+	task: Schema.String,
+	groupMessages: Schema.optionalKey(Schema.Literals(['disabled', 'mention_or_reply', 'all']))
+});
 
 /**
  * A grant's approval identity, derived rather than authored.
@@ -56,18 +101,6 @@ export const approvalConfigurationId = (
 export const approvalStepId = (configurationId: string, key: string): string =>
 	`${configurationId}:${key}`;
 
-const isAuthoredApproval = (value: unknown): value is AuthoredApproval =>
-	value !== null &&
-	typeof value === 'object' &&
-	Array.isArray(Reflect.get(value, 'steps')) &&
-	(Reflect.get(value, 'steps') as ReadonlyArray<unknown>).every(
-		(step) =>
-			step !== null &&
-			typeof step === 'object' &&
-			typeof Reflect.get(step, 'key') === 'string' &&
-			Array.isArray(Reflect.get(step, 'approvers'))
-	);
-
 /** A human-readable label for an approval, so a timeline reads as prose rather than as an id. */
 const label = (value: string): string =>
 	value.replaceAll('_', ' ').replace(/^./, (first) => first.toLocaleUpperCase());
@@ -79,10 +112,7 @@ const label = (value: string): string =>
  * `ApprovalConfiguration` shape `approvals.ts` decodes — `id`, `name`, and a step `id` and `name`
  * per entry. Every one of those is computed here, from the grant's own coordinates.
  */
-const describeGrant = (
-	policyName: string,
-	grant: RuntimePolicyGrant
-): RuntimePolicyGrant => {
+const describeGrant = (policyName: string, grant: RuntimePolicyGrant): RuntimePolicyGrant => {
 	if (!isAuthoredApproval(grant.approval)) {
 		if (grant.approval === undefined) return grant;
 		throw new TypeError(
@@ -118,34 +148,21 @@ const describeGrant = (
  * the name is a string literal the compiler wrote from the path.
  */
 export const describePolicy = (name: string, declaration: unknown): PolicyDeclaration => {
-	if (declaration === null || typeof declaration !== 'object') {
+	const decoded = Schema.decodeUnknownResult(AuthoredPolicy)(declaration);
+	if (Result.isFailure(decoded)) {
 		throw new TypeError(
-			`Policy ${name} does not export a policy object. A policy file default-exports { description, grants, capabilities?, limits? }.`
+			`Policy ${name} does not export a valid policy object. A policy file default-exports { description, grants, capabilities?, limits? }.`
 		);
 	}
-	const description = Reflect.get(declaration, 'description');
-	const grants = Reflect.get(declaration, 'grants');
-	if (typeof description !== 'string' || description.trim() === '') {
+	const { capabilities, description, grants } = decoded.success;
+	if (description.trim() === '') {
 		throw new TypeError(`Policy ${name} requires a description.`);
 	}
-	if (!Array.isArray(grants)) {
-		throw new TypeError(`Policy ${name} requires a grants array, even an empty one.`);
-	}
-	const capabilities = Reflect.get(declaration, 'capabilities');
-	const list = (key: string): ReadonlyArray<string> => {
-		const value =
-			capabilities === null || typeof capabilities !== 'object'
-				? undefined
-				: Reflect.get(capabilities, key);
-		return Array.isArray(value) ? value.filter((entry) => typeof entry === 'string') : [];
-	};
 	const limits: Readonly<Record<string, ReadonlyArray<RateLimitRule>>> = resolvePolicyLimits(
-		Reflect.get(declaration, 'limits') as Parameters<typeof resolvePolicyLimits>[0]
+		decoded.success.limits
 	);
 	validatePolicyLimits(name, limits);
-	const described = (grants as ReadonlyArray<RuntimePolicyGrant>).map((grant) =>
-		describeGrant(name, grant)
-	);
+	const described = grants.map((grant: RuntimePolicyGrant) => describeGrant(name, grant));
 	return Object.freeze({
 		name,
 		description,
@@ -155,10 +172,10 @@ export const describePolicy = (name: string, declaration: unknown): PolicyDeclar
 		actions: [...new Set(described.map(({ action }) => action))],
 		grants: described,
 		capabilities: {
-			apps: list('apps'),
-			tools: list('tools'),
-			mcp: list('mcp'),
-			skills: list('skills')
+			apps: capabilities?.apps ?? [],
+			tools: capabilities?.tools ?? [],
+			mcp: capabilities?.mcp ?? [],
+			skills: capabilities?.skills ?? []
 		},
 		limits
 	});
@@ -181,40 +198,31 @@ export const describeEnvoy = (
 	readonly task: string;
 	readonly groupMessages?: 'disabled' | 'mention_or_reply' | 'all';
 } => {
-	if (declaration === null || typeof declaration !== 'object') {
+	const decoded = Schema.decodeUnknownResult(AuthoredEnvoy)(declaration);
+	if (Result.isFailure(decoded)) {
 		throw new TypeError(
-			`Envoy ${name} does not export an envoy object. An envoy file default-exports { transport, audience, policies, task, groupMessages? }.`
+			`Envoy ${name} does not export a valid envoy object. An envoy file default-exports { transport, audience, policies, task, groupMessages? }.`
 		);
 	}
-	const transport = Reflect.get(declaration, 'transport');
-	const audience = Reflect.get(declaration, 'audience');
-	const policies = Reflect.get(declaration, 'policies');
-	const task = Reflect.get(declaration, 'task');
-	const groupMessages = Reflect.get(declaration, 'groupMessages');
-	if (typeof transport !== 'string' || transport.trim() === '') {
+	if (decoded.success.transport.trim() === '') {
 		throw new TypeError(`Envoy ${name} requires a transport.`);
 	}
-	if (audience !== 'public' && audience !== 'authenticated') {
-		throw new TypeError(`Envoy ${name} has an unsupported audience.`);
-	}
-	if (!Array.isArray(policies) || policies.length === 0) {
+	if (decoded.success.policies.length === 0) {
 		throw new TypeError(
 			`Envoy ${name} names no policies, so every turn on it would hold no authority at all. Name the policies it may act under.`
 		);
 	}
-	if (typeof task !== 'string' || task.trim() === '') {
+	if (decoded.success.task.trim() === '') {
 		throw new TypeError(`Envoy ${name} requires a task.`);
 	}
 	return Object.freeze({
 		name,
-		transport,
-		audience,
-		policies: Object.freeze(policies.filter((entry): entry is string => typeof entry === 'string')),
-		task: task.trim(),
-		...(groupMessages === 'disabled' ||
-		groupMessages === 'mention_or_reply' ||
-		groupMessages === 'all'
-			? { groupMessages }
-			: {})
+		transport: decoded.success.transport,
+		audience: decoded.success.audience,
+		policies: Object.freeze(decoded.success.policies),
+		task: decoded.success.task.trim(),
+		...(decoded.success.groupMessages === undefined
+			? {}
+			: { groupMessages: decoded.success.groupMessages })
 	});
 };

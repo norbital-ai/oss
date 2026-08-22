@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import { SyncChange, SyncCursor } from '../../runtime/sync/sync.js';
+import { SyncChange, SyncCursor } from '#lib/runtime/sync/sync.js';
 
 /**
  * The pull loop behind the browser replica.
@@ -10,18 +10,21 @@ import { SyncChange, SyncCursor } from '../../runtime/sync/sync.js';
  * touches SQL, which is what lets it be tested without a database.
  */
 
-export type SyncTransport = Readonly<{
-	readonly head: () => Promise<SyncCursor>;
-	readonly diff: (cursor: SyncCursor, limit: number) => Promise<ReadonlyArray<SyncChange>>;
+type SyncTransport = Readonly<{
+	readonly head: () => Effect.Effect<SyncCursor, unknown>;
+	readonly diff: (
+		cursor: SyncCursor,
+		limit: number
+	) => Effect.Effect<ReadonlyArray<SyncChange>, unknown>;
 }>;
 
-export type ReplicaSink = Readonly<{
+type ReplicaSink = Readonly<{
 	/** Applies one ordered batch. A `reset` change means the sink must drop everything it holds. */
-	readonly apply: (changes: ReadonlyArray<SyncChange>) => Promise<void>;
-	readonly reset: () => Promise<void>;
+	readonly apply: (changes: ReadonlyArray<SyncChange>) => Effect.Effect<void, unknown>;
+	readonly reset: () => Effect.Effect<void, unknown>;
 }>;
 
-export type SyncClientOptions = Readonly<{
+type SyncClientOptions = Readonly<{
 	readonly transport: SyncTransport;
 	readonly sink: ReplicaSink;
 	/** Rows per round trip. The server clamps this; asking for more just wastes a request. */
@@ -35,98 +38,99 @@ export type SyncClientOptions = Readonly<{
 	 */
 	readonly initialCursor?: SyncCursor;
 	/** Called after each batch so a UI can re-run its live queries. */
-	readonly onAdvance?: (cursor: SyncCursor) => void;
-	readonly onError?: (cause: unknown) => void;
+	readonly onAdvance?: (cursor: SyncCursor) => Effect.Effect<void, unknown>;
+	readonly onError?: ((cause: unknown) => void) | undefined;
 }>;
 
 export const ORIGIN_CURSOR: SyncCursor = { xid: 0, sequence: 0 };
 
 /** True when a batch tells the client its cursor fell off the retained history. */
-export const isResetBatch = (changes: ReadonlyArray<SyncChange>): boolean =>
+const isResetBatch = (changes: ReadonlyArray<SyncChange>): boolean =>
 	changes.some((change) => change.operation === 'reset');
 
 /** Orders two cursors the way the server orders its outbox. */
 export const compareCursors = (left: SyncCursor, right: SyncCursor): number =>
 	left.xid === right.xid ? left.sequence - right.sequence : left.xid - right.xid;
 
-export type SyncClient = Readonly<{
+type SyncClient = Readonly<{
 	readonly cursor: () => SyncCursor;
 	/** Pulls until the server has nothing further. Returns how many changes were applied. */
-	readonly drain: () => Promise<number>;
+	readonly drain: () => Effect.Effect<number, unknown>;
 	/** Rewinds to the origin, for a caller that found its resume point no longer exists. */
 	readonly reset: () => void;
 	readonly stop: () => void;
 }>;
 
-export const createSyncClient = (options: SyncClientOptions): SyncClient => {
-	const batchSize = Math.max(1, options.batchSize ?? 200);
-	let cursor: SyncCursor = options.initialCursor ?? ORIGIN_CURSOR;
-	let stopped = false;
-	let draining: Promise<number> | undefined;
+export const createSyncClient = (options: SyncClientOptions): Effect.Effect<SyncClient> =>
+	Effect.gen(function* () {
+		const batchSize = Math.max(1, options.batchSize ?? 200);
+		let cursor: SyncCursor = options.initialCursor ?? ORIGIN_CURSOR;
+		let stopped = false;
 
-	const pull = (): Effect.Effect<number> => {
-		let applied = 0;
-		let more = true;
-		return Effect.gen(function* () {
-			yield* Effect.whileLoop({
-				while: () => !stopped && more,
-				step: () => void 0,
-				body: () =>
-					Effect.gen(function* () {
-						const changes = yield* Effect.tryPromise(() =>
-							options.transport.diff(cursor, batchSize)
-						);
-						if (changes.length === 0) {
-							more = false;
-							return;
-						}
-						if (isResetBatch(changes)) {
-							// The client is further behind than the server still remembers. Everything local is
-							// unreconstructible from here, so the projection is dropped and rebuilt from the
-							// reset point rather than silently diverging.
-							yield* Effect.tryPromise(() => options.sink.reset());
-							const reset = changes.find((change) => change.operation === 'reset');
-							cursor = reset?.cursor ?? ORIGIN_CURSOR;
-							options.onAdvance?.(cursor);
-							return;
-						}
-						yield* Effect.tryPromise(() => options.sink.apply(changes));
-						applied += changes.length;
-						const last = changes[changes.length - 1];
-						if (last !== undefined) cursor = last.cursor;
-						options.onAdvance?.(cursor);
-						if (changes.length < batchSize) more = false;
-					}).pipe(
-						Effect.catch((cause: unknown) => {
-							more = false;
-							options.onError?.(cause);
-							return Effect.succeed(undefined);
-						})
-					)
+		const pull = (): Effect.Effect<number> => {
+			let applied = 0;
+			let more = true;
+			return Effect.gen(function* () {
+				yield* Effect.whileLoop({
+					while: () => !stopped && more,
+					step: () => void 0,
+					body: () =>
+						Effect.gen(function* () {
+							const changes = yield* options.transport.diff(cursor, batchSize);
+							if (changes.length === 0) {
+								more = false;
+								return;
+							}
+							if (isResetBatch(changes)) {
+								// The client is further behind than the server still remembers. Everything local is
+								// unreconstructible from here, so the projection is dropped and rebuilt from the
+								// reset point rather than silently diverging.
+								yield* options.sink.reset();
+								const reset = changes.find((change) => change.operation === 'reset');
+								cursor = reset?.cursor ?? ORIGIN_CURSOR;
+								if (options.onAdvance !== undefined) yield* options.onAdvance(cursor);
+								return;
+							}
+							yield* options.sink.apply(changes);
+							applied += changes.length;
+							const last = changes[changes.length - 1];
+							if (last !== undefined) cursor = last.cursor;
+							if (options.onAdvance !== undefined) yield* options.onAdvance(cursor);
+							if (changes.length < batchSize) more = false;
+						}).pipe(
+							Effect.catch((cause: unknown) => {
+								more = false;
+								options.onError?.(cause);
+								return Effect.succeed(undefined);
+							})
+						)
+				});
+				return applied;
 			});
-			return applied;
-		});
-	};
+		};
+		const [drain, invalidateDrain] = yield* Effect.cachedInvalidateWithTTL(
+			Effect.suspend(pull),
+			'Infinity'
+		);
 
-	return {
-		cursor: () => cursor,
-		// Concurrent callers share one pass: two overlapping drains would read the same cursor and
-		// apply the same batch twice.
-		drain: () => {
-			if (draining !== undefined) return draining;
-			draining = Effect.runPromise(pull()).finally(() => {
-				draining = undefined;
-			});
-			return draining;
-		},
-		reset: () => {
-			cursor = ORIGIN_CURSOR;
-		},
-		stop: () => {
-			stopped = true;
-		}
-	};
-};
+		return {
+			cursor: () => cursor,
+			// Concurrent callers share one pass: two overlapping drains would read the same cursor and
+			// apply the same batch twice.
+			drain: () =>
+				drain.pipe(
+					// Keep the completed pass visible until every caller already scheduled in this burst has
+					// observed it, then make the next notification pull from the advanced cursor.
+					Effect.ensuring(Effect.yieldNow.pipe(Effect.andThen(invalidateDrain)))
+				),
+			reset: () => {
+				cursor = ORIGIN_CURSOR;
+			},
+			stop: () => {
+				stopped = true;
+			}
+		};
+	});
 
 /** Decodes a diff response from the wire into ordered changes. */
 export const decodeChanges = (value: unknown): ReadonlyArray<SyncChange> =>

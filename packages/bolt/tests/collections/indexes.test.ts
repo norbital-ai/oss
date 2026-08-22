@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
-import { collection, defineModel, field, text, workspace } from '../../src/authoring/index.js';
+import { defineModel, text } from '../../src/authoring/index.js';
+import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { describeModel } from '../../src/authoring/model-introspection.js';
 import { planWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
 import { buildSchemaPlan, collectionIndexName } from '../../src/compiler/schema-plan.js';

@@ -1,5 +1,5 @@
 import type { ThinkingOrbState } from '@norbital-ai/ui/thinking-orb';
-import { toPanelMessages } from './transcript.js';
+import { toPanelMessages } from '#lib/client/ui/agent/transcript.js';
 
 /**
  * What the orb says, in the three states a reader can actually act on.
@@ -8,21 +8,18 @@ import { toPanelMessages } from './transcript.js';
  * animation to distinguish "searching" from "authoring" at 20 pixels, and asked the runtime to
  * report which of them was true. Neither held up: the shapes read the same at that size, and the
  * runtime only ever knows whether a turn is running. Three states each mean something different to
- * the person watching: nothing is happening, something is, or something broke.
- *
- * The union now travels with the component in `@norbital-ai/ui/thinking-orb`; this alias keeps the
- * runtime's own name for it so the projection below still reads in the runtime's vocabulary.
+ * the person watching: nothing is happening, something is, or something broke. The union now
+ * travels with the component in `@norbital-ai/ui/thinking-orb`.
  */
-export type AgentOrbState = ThinkingOrbState;
 
-export type AgentOrbStatusKey =
+type AgentOrbStatusKey =
 	'bolt.shell.workspaceAgentDescription' | 'bolt.agent.working' | 'bolt.agent.failed';
 
 /** A running turn with no agent output for this long is treated as failed so the composer unlocks. */
 export const AGENT_TURN_STALE_MS = 60_000;
 
 /** Copy key for the live orb — ready keeps the sheet description, the rest name what is happening. */
-export function agentOrbStatusKey(state: AgentOrbState): AgentOrbStatusKey {
+export function agentOrbStatusKey(state: ThinkingOrbState): AgentOrbStatusKey {
 	switch (state) {
 		case 'ready':
 			return 'bolt.shell.workspaceAgentDescription';
@@ -39,10 +36,24 @@ export function agentOrbStatusKey(state: AgentOrbState): AgentOrbStatusKey {
 
 /** In-transcript / composer busy copy. Ready reads as working — the description is header-only. */
 export function agentOrbBusyStatusKey(
-	state: AgentOrbState
+	state: ThinkingOrbState
 ): Exclude<AgentOrbStatusKey, 'bolt.shell.workspaceAgentDescription'> {
 	return state === 'error' ? 'bolt.agent.failed' : 'bolt.agent.working';
 }
+
+/**
+ * The durable conversation aggregate a surface projects the orb from.
+ *
+ * Only the parts the orb reads — the stored messages and turns, plus the submitted-state flags the
+ * panel holds before the store has confirmed anything. Named so the projection reads in the runtime's
+ * own vocabulary rather than as an anonymous four-field parameter.
+ */
+type AgentOrbStateInput = Readonly<{
+	readonly pending?: boolean;
+	readonly failed?: boolean;
+	readonly messages?: readonly Readonly<Record<string, unknown>>[];
+	readonly turns?: readonly Readonly<Record<string, unknown>>[];
+}>;
 
 /**
  * Project the durable conversation aggregate into the one product-wide Agent activity state.
@@ -51,12 +62,7 @@ export function agentOrbBusyStatusKey(
  * A just-submitted request may set `pending` before its turn is replicated; that short interval is
  * deliberately represented as working instead of ready.
  */
-export function agentOrbState(input: {
-	readonly pending?: boolean;
-	readonly failed?: boolean;
-	readonly messages?: readonly Readonly<Record<string, unknown>>[];
-	readonly turns?: readonly Readonly<Record<string, unknown>>[];
-}): AgentOrbState {
+export function agentOrbState(input: AgentOrbStateInput): ThinkingOrbState {
 	const messages = input.messages ?? [];
 	const turns = input.turns ?? [];
 	const root = [...turns].filter((turn) => turn.subagent_id == null).at(-1);

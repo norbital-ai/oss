@@ -16,19 +16,19 @@ import type { CollectionHooks, CreateGraph } from '../../src/authoring/contracts
 interface TestSchema {
 	readonly tables: {
 		readonly payroll_runs: {
-			$inferSelect: { norbital_id: string; company_id: string; period: string };
+			$inferSelect: { id: string; company_id: string; period: string };
 			$inferInsert: { company_id: string; period: string; configuration_hash?: string };
 		};
 		readonly payslips: {
-			$inferSelect: { norbital_id: string; payroll_run_id: string; gross: number };
+			$inferSelect: { id: string; payroll_run_id: string; gross: number };
 			$inferInsert: { payroll_run_id: string; employment_id: string; gross: number };
 		};
 		readonly payslip_lines: {
-			$inferSelect: { norbital_id: string; payslip_id: string; amount: number };
+			$inferSelect: { id: string; payslip_id: string; amount: number };
 			$inferInsert: { payslip_id: string; amount: number };
 		};
 		readonly companies: {
-			$inferSelect: { norbital_id: string; name: string };
+			$inferSelect: { id: string; name: string };
 			$inferInsert: { name: string };
 		};
 	};

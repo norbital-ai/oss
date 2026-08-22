@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Cron } from '../../src/runtime/tasks/cron.js';
+import * as Cron from '../../src/runtime/tasks/cron.js';
 
 /**
  * The parser is hand-written, so this is the whole of its warrant.

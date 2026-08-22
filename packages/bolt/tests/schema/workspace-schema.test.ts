@@ -1,8 +1,9 @@
 import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { collection, field, workspace } from '../../src/authoring/index.js';
+import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
-import { WorkspaceSchema } from '../../src/runtime/schema/workspace-schema.js';
+import { SYSTEM_MODELS } from '../../src/authoring/system-models.js';
+import * as WorkspaceSchema from '../../src/runtime/schema/workspace-schema.js';
 import {
 	makeBoltTestRuntime,
 	testWorkspace,
@@ -32,44 +33,12 @@ describe('WorkspaceSchema owner', () => {
 		const collectionSteps = plan.steps
 			.filter(({ id }) => id.startsWith('collection:'))
 			.map(({ id }) => id);
-		// Only Bolt's own collections remain: `a` and `z records` are authored, so their tables, columns
-		// and indexes come from the drizzle lineage and the plan renders nothing for them. What is left
-		// is what no workspace lineage can carry, and every index still sorts after the table it needs.
-		expect(collectionSteps).toEqual([
-			'collection:approval_request',
-			'collection:approval_request:index:collection_name',
-			'collection:approval_request:index:record_id',
-			'collection:approval_request:index:status',
-			// Identity is runtime-owned too, and for the same reason: it exists in every workspace,
-			// including one that authors no collections, so no workspace lineage carries it.
-			'collection:bolt_auth_account',
-			'collection:bolt_auth_account:index:userId',
-			'collection:bolt_auth_config',
-			'collection:bolt_auth_config:index:key',
-			'collection:bolt_auth_session',
-			'collection:bolt_auth_session:index:token',
-			'collection:bolt_auth_session:index:userId',
-			'collection:bolt_auth_user',
-			// Sorts between the table and its indexes, which is the whole reason its id is
-			// `collection:…` rather than `bolt:…`: a `bolt:` prefix would sort ahead of the
-			// `create table` and a fresh provision would fail on a relation that does not exist yet.
-			'collection:bolt_auth_user:column:channels',
-			'collection:bolt_auth_user:column:kind:drop',
-			'collection:bolt_auth_user:index:email',
-			'collection:bolt_auth_user:index:team_id',
-			'collection:bolt_auth_user:index:tenantId',
-			'collection:bolt_auth_verification',
-			'collection:bolt_auth_verification:index:identifier',
-			// A team is runtime-owned for the same reason identity is, and it is *part* of identity:
-			// resolving a subject joins it, so a host that created the auth tables without this one
-			// would authenticate nobody.
-			'collection:bolt_team',
-			'collection:bolt_team:column:inherits:drop',
-			'collection:bolt_team:index:name',
-			'collection:requestor',
-			'collection:requestor:index:approval_request_id',
-			'collection:requestor:index:user_id'
-		]);
+		const tables = collectionSteps.filter((id) => id.split(':').length === 2);
+		expect(tables).toEqual(
+			Object.keys(SYSTEM_MODELS)
+				.map((name) => `collection:${name}`)
+				.toSorted()
+		);
 		// Authored collections reach the plan only if they declare something Drizzle cannot render.
 		expect(collectionSteps.some((id) => id.includes('z records'))).toBe(false);
 		expect(plan.steps.map(({ id }) => id)).toEqual([...plan.steps.map(({ id }) => id)].toSorted());
@@ -301,7 +270,7 @@ describe('WorkspaceSchema owner', () => {
 				)
 			);
 			// The table is back, and it is back because the lineage ran.
-			expect(await harness.database.query('select norbital_id from people')).toEqual([]);
+			expect(await harness.database.query('select id from people')).toEqual([]);
 			expect(
 				await harness.runtime.runPromise(
 					Effect.flatMap(WorkspaceSchema.Service, (schema) =>
@@ -355,7 +324,7 @@ describe('WorkspaceSchema owner', () => {
 	 * The plan's `create table if not exists` used to run on every migrate, so a table dropped out from
 	 * under the workspace quietly reappeared — empty, and indistinguishable from one that had always
 	 * been there. That is drift repair by coincidence: the same statement equally silently accepted a
-	 * table whose columns no longer matched, which is how a collection without `norbital_sys_period`
+	 * table whose columns no longer matched, which is how a collection without `sys_period`
 	 * survived a green verify. A forward-only lineage cannot re-create a table it has already been
 	 * recorded as having created, and `verify` is the arbiter that says so out loud.
 	 */

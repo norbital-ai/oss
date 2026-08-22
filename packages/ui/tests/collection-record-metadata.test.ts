@@ -13,7 +13,7 @@ const copy = {
 
 test('protected system state and authored metadata resolve through one strict contract', () => {
 	const resolved = resolveCollectionRecordMetadata(
-		{ norbital_approval_id: 'approval-1' },
+		{ approval_id: 'approval-1' },
 		[
 			{
 				kind: 'restriction',
@@ -66,8 +66,5 @@ test('flags never restrict mutations and restrictions apply only to declared ope
 });
 
 test('an empty protected approval field injects no system metadata', () => {
-	assert.deepEqual(
-		resolveCollectionRecordMetadata({ norbital_approval_id: '' }, undefined, copy),
-		[]
-	);
+	assert.deepEqual(resolveCollectionRecordMetadata({ approval_id: '' }, undefined, copy), []);
 });

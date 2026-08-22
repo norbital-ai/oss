@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Inline, Stack } from '#lib/layout';
-	import { Shimmer } from '../shimmer';
+	import { Shimmer } from '#lib/ai-elements/shimmer';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Tooltip } from '#lib/tooltip';
 	import { cn } from '#lib/utils';
@@ -73,7 +73,7 @@
 
 	const context = getTimelineContext()();
 	let isVisible = $state(false);
-	let element = $state() as HTMLDivElement;
+	let element = $state<HTMLDivElement>();
 
 	const statusStyles = {
 		complete: 'text-muted-foreground',

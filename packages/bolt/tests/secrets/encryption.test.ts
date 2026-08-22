@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { defineEnvironment } from '../../src/authoring/environment-schema.js';
-import { Identity } from '../../src/runtime/identity/identity.js';
+import * as Identity from '../../src/runtime/identity/identity.js';
 import {
 	PersonalSecrets,
 	type Interface as PersonalSecretsInterface
@@ -47,16 +47,18 @@ const vaultWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+	],
 	teams: {
 		admin: ['admin']
 	},
 	automations: [],
 	envoys: [],
 	integrations: [],
-		prompt: 'You are the test workspace agent.',
-		tools: [],
-		skills: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
 	requiredFacilities: [],
 	environment: defineEnvironment({ [SECRET_NAME]: { label: 'Geocoding key' } })
 });
@@ -64,12 +66,14 @@ const vaultWorkspace = workspace({
 const userA: Identity.Subject = {
 	userId: 'user-a',
 	tenantId: 'test-tenant',
-	policies: [], teamPath: ['employee']
+	policies: [],
+	teamPath: ['employee']
 };
 const userB: Identity.Subject = {
 	userId: 'user-b',
 	tenantId: 'test-tenant',
-	policies: [], teamPath: ['employee']
+	policies: [],
+	teamPath: ['employee']
 };
 
 const writePersonal = (

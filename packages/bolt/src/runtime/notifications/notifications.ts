@@ -1,8 +1,8 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
-import { Communication } from '../facilities/services.js';
-import { Database } from '../facilities/database.js';
-import { Workspace } from '../workspace.js';
+import { Communication } from '#lib/runtime/facilities/services.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import * as Workspace from '#lib/runtime/workspace.js';
 
 export const Notification = Schema.Struct({
 	id: Schema.NonEmptyString,
@@ -107,4 +107,3 @@ export const layer = Layer.effect(
 		});
 	})
 );
-export * as Notifications from './notifications.js';

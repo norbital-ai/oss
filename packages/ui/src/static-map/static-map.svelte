@@ -1,13 +1,14 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Effect } from 'effect';
 	import type { Map as LeafletMap } from 'leaflet';
 	import type { Snippet } from 'svelte';
 	import type { Action } from 'svelte/action';
 	import { fromAction } from 'svelte/attachments';
 	import { cn } from '#lib/utils';
 	import { Inline } from '#lib/layout';
-	import * as Popover from '../popover';
-	import type { StaticMapMarker } from './static-map.types.js';
+	import * as Popover from '#lib/popover';
+	import type { StaticMapMarker } from '#lib/static-map/static-map.types';
 
 	let {
 		markers,
@@ -62,8 +63,9 @@
 			updateMarkerPositions();
 		}
 
-		void import('leaflet')
-			.then((module) => {
+		void Effect.runPromise(
+			Effect.gen(function* () {
+				const module = yield* Effect.tryPromise(() => import('leaflet'));
 				if (cancelled) return;
 				leaflet = module;
 				map = module.map(container, {
@@ -95,10 +97,14 @@
 				resizeObserver.observe(container);
 				ready = true;
 				fitMarkers();
-			})
-			.catch((cause: unknown) => {
-				errorMessage = cause instanceof Error ? cause.message : String(cause);
-			});
+			}).pipe(
+				Effect.catch((error) =>
+					Effect.sync(() => {
+						errorMessage = error.message;
+					})
+				)
+			)
+		);
 
 		return {
 			update(nextMarkers) {

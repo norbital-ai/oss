@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { Shimmer } from '../shimmer';
+	import { Shimmer } from '#lib/ai-elements/shimmer';
 	import { Button, type ButtonProps } from '#lib/button';
 	import { Tooltip } from '#lib/tooltip';
 	import { cn } from '#lib/utils';
 
-	export type ActionProps = ButtonProps & {
+	type ActionProps = ButtonProps & {
 		tooltip?: string;
 		label?: string;
 		/** Enable shimmer effect on the label/tooltip text */

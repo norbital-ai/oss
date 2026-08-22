@@ -10,9 +10,9 @@ import {
 	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { Approvals } from '../../src/runtime/approvals/approvals.js';
+import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
-import type { Identity } from '../../src/runtime/identity/identity.js';
+import type * as Identity from '../../src/runtime/identity/identity.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 import { fixtureUserId, seedSession, seedTeam } from '../support/fixture-identity.js';
 
@@ -75,7 +75,7 @@ const jobApproval = {
 };
 
 /** Both parties read only their own rows — the narrowing an approver's ordinary grant would have. */
-const ownRowsOnly = { $sql: '"owner_id"::text = ${requestor.norbital_id}' } as const;
+const ownRowsOnly = { $sql: '"owner_id"::text = ${requestor.id}' } as const;
 
 const reviewWorkspace = workspace({
 	name: 'test-workspace',
@@ -118,7 +118,8 @@ const reviewWorkspace = workspace({
 const raiserSubject: Identity.Subject = {
 	userId: fixtureUserId('raiser'),
 	tenantId: 'test-tenant',
-	teamPath: ['Raisers'], policies: []
+	teamPath: ['Raisers'],
+	policies: []
 };
 
 const titlesVisibleTo = async (runtime: BoltTestRuntime, credential: string) => {
@@ -142,7 +143,7 @@ const place = async (runtime: BoltTestRuntime) => {
 	await seedSession(runtime, { token: 'reviewer-token', user: 'reviewer', team: REVIEWERS });
 	await seedSession(runtime, { token: 'bystander-token', user: 'bystander', team: 'Bystanders' });
 	await runtime.database.query(
-		`insert into jobs ("norbital_id", "title", "owner_id") values ($1::uuid, $2, $3)`,
+		`insert into jobs ("id", "title", "owner_id") values ($1::uuid, $2, $3)`,
 		[JOB_ID, 'Extra scaffolding', fixtureUserId('raiser')]
 	);
 };

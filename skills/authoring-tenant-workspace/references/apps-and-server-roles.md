@@ -214,7 +214,7 @@ export default defineAutomation(
 		handler: (api, { scope }) =>
 			Effect.gen(function* () {
 				const count = yield* api.db.query.sites.count({});
-				return { count, site: scope.incoming_record.norbital_id };
+				return { count, site: scope.incoming_record.id };
 			})
 	}
 );

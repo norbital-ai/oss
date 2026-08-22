@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { currencyFractionDigits, ISO_CURRENCY } from '@norbital-ai/std/finance';
+	import { currencyFractionDigits, ISO_CURRENCY, type MoneyValue } from '@norbital-ai/std/finance';
 	import Icon from '@iconify/svelte';
 	import { Button, buttonVariants } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
@@ -9,11 +9,6 @@
 	import * as Popover from '#lib/popover';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
-
-	export interface MoneyValue {
-		value: number;
-		currency: string;
-	}
 
 	interface MoneyDraft {
 		amount: string;
@@ -31,7 +26,7 @@
 		class: className,
 		onValueChange
 	}: {
-		value: MoneyValue | MoneyValue[] | null;
+		value: MoneyValue | readonly MoneyValue[] | null;
 		id?: string;
 		currencies?: readonly string[];
 		multiple?: boolean;

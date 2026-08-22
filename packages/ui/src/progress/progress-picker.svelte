@@ -10,6 +10,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import Button, { buttonVariants } from '../button/button.svelte';
 	import { Inline, Stack } from '#lib/layout';
+	import { Number as Number_ } from 'effect';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -43,7 +44,7 @@
 	// ============================================================================
 	let isOpen = $state(false);
 
-	let activeDragCleanup: (() => void) | null = null;
+	let activeDragCleanup = $state<(() => void) | null>(null);
 
 	// Internal editing state - keeps ALL progress values
 	let editingProgress = $state<number[]>([]);
@@ -113,7 +114,7 @@
 		const target = event.currentTarget as HTMLElement;
 		const rect = target.getBoundingClientRect();
 		const percentage = Math.round(((event.clientX - rect.left) / rect.width) * 100);
-		const clampedPercentage = Math.max(0, Math.min(100, percentage));
+		const clampedPercentage = Number_.clamp(percentage, { minimum: 0, maximum: 100 });
 
 		updateProgress(index, clampedPercentage);
 	};
@@ -127,7 +128,7 @@
 		const handleMouseMove = (e: MouseEvent) => {
 			const rect = target.getBoundingClientRect();
 			const percentage = Math.round(((e.clientX - rect.left) / rect.width) * 100);
-			const clampedPercentage = Math.max(0, Math.min(100, percentage));
+			const clampedPercentage = Number_.clamp(percentage, { minimum: 0, maximum: 100 });
 
 			updateProgress(index, clampedPercentage);
 		};

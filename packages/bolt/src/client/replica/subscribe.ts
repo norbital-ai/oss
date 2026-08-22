@@ -1,4 +1,5 @@
-import { workspaceSession } from '../session.js';
+import { Result, Schema } from 'effect';
+import { workspaceSession } from '#lib/client/session.js';
 /**
  * Listening for changes instead of asking for them.
  *
@@ -18,41 +19,45 @@ import { workspaceSession } from '../session.js';
  * command channel to travel on.
  */
 
-export type SubscribeOptions = Readonly<{
+type SubscribeOptions = Readonly<{
 	/** Called with the collections a change touched. May be empty, which means "something changed". */
 	readonly onChange: (collections: ReadonlyArray<string>) => void;
 	/** Called when the connection is established, and again after each reconnect. */
 	readonly onOpen?: () => void;
-	readonly onError?: (cause: unknown) => void;
+	readonly onError?: ((cause: unknown) => void) | undefined;
 	/** Overridable so a test can supply a stub; the browser's own `EventSource` otherwise. */
 	readonly source?: (url: string) => EventSourceLike;
 }>;
 
-/** The slice of `EventSource` this uses, so a test needs no DOM. */
+/**
+ * The slice of `EventSource` this uses, so a test needs no DOM.
+ *
+ * `onerror` is deliberately nullable the way the DOM type is: `EventSource` exposes it as a
+ * property rather than a method. Adapting a real `EventSource` is a framework boundary — its
+ * members are wider (real `MessageEvent`s, positional overloads) — so the narrowing happens in one
+ * place below rather than at every call site.
+ */
 export type EventSourceLike = {
 	addEventListener: (type: string, listener: (event: { data?: string }) => void) => void;
 	close: () => void;
-	onerror?: ((event: unknown) => void) | null;
+	onerror: ((event: unknown) => void) | null;
 };
 
 export type Subscription = Readonly<{ readonly stop: () => void }>;
 
+/** The one object the host's change fan-out releases: the names of the collections that changed. */
+const ChangeFrame = Schema.Struct({
+	collections: Schema.Array(Schema.String)
+});
+
 const parseCollections = (data: string | undefined): ReadonlyArray<string> => {
 	if (data === undefined || data.length === 0) return [];
-	try {
-		const parsed: unknown = JSON.parse(data);
-		const collections =
-			parsed !== null && typeof parsed === 'object'
-				? (Reflect.get(parsed, 'collections') as unknown)
-				: undefined;
-		return Array.isArray(collections)
-			? collections.filter((entry): entry is string => typeof entry === 'string')
-			: [];
-	} catch {
-		// A frame we cannot read is still a frame: something changed, and the safe reading of an
-		// unparseable hint is "refresh everything" rather than "ignore it".
-		return [];
-	}
+	return (
+		Result.getOrElse(
+			Schema.decodeUnknownResult(Schema.fromJsonString(ChangeFrame))(data),
+			() => null
+		)?.collections ?? []
+	);
 };
 
 /**
@@ -65,30 +70,35 @@ const parseCollections = (data: string | undefined): ReadonlyArray<string> => {
 export const subscribeToChanges = (options: SubscribeOptions): Subscription => {
 	const create =
 		options.source ??
-		((url: string) =>
-			new EventSource(url, { withCredentials: true }) as unknown as EventSourceLike);
+		((url: string): EventSourceLike => {
+			// The browser's `EventSource` is wider than the slice this module uses — real
+			// `MessageEvent`s, positional overloads, non-nullable members — so the framework boundary
+			// is adapted here, once, instead of asserted at each call site.
+			const source = new EventSource(url, { withCredentials: true });
+			return {
+				addEventListener: (type, listener) =>
+					source.addEventListener(type, (event) => {
+						listener(event instanceof MessageEvent ? { data: String(event.data) } : {});
+					}),
+				close: () => source.close(),
+				set onerror(listener: ((event: unknown) => void) | null) {
+					source.onerror = listener;
+				}
+			};
+		});
 
-	let source: EventSourceLike | undefined;
-	try {
-		source = create(workspaceSession().syncStreamUrl);
-	} catch (cause) {
+	const opened = Result.try(() => create(workspaceSession().syncStreamUrl));
+	if (Result.isFailure(opened)) {
 		// No `EventSource` at all — a non-browser runtime, or a policy that blocks it. The replica
 		// still works; it just only learns about changes when something else asks it to drain.
-		options.onError?.(cause);
+		options.onError?.(opened.failure);
 		return { stop: () => undefined };
 	}
+	const source = opened.success;
 
 	source.addEventListener('sync', (event) => options.onChange(parseCollections(event.data)));
 	source.addEventListener('ready', () => options.onOpen?.());
 	source.onerror = (event) => options.onError?.(event);
 
-	return {
-		stop: () => {
-			try {
-				source?.close();
-			} catch {
-				// Already closed; nothing to unwind.
-			}
-		}
-	};
+	return { stop: () => void Result.try(() => source.close()) };
 };

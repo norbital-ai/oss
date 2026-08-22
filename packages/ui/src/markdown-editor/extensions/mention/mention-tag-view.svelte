@@ -3,6 +3,7 @@
 	import { Badge } from '#lib/badge';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { Editor, NodeViewRendererProps } from '@tiptap/core';
+	import type { MentionItem } from './mention-configured.svelte';
 
 	let {
 		editor,
@@ -53,20 +54,10 @@
 		};
 	});
 
-	export interface MentionItem {
-		id: string;
-		type: 'collection' | 'column' | 'route' | 'template' | 'workspace' | 'folder' | 'file' | 'user';
-		label: string;
-		description: string;
-		icon: string;
-		metadata?: Record<string, unknown>;
-		parentId?: string;
-	}
-
 	/**
 	 * Formats a mention item into a human-readable label for display in badges
 	 */
-	export function formatMentionItemLabel(item: MentionItem): string {
+	function formatMentionItemLabel(item: MentionItem): string {
 		const collectionName = item.metadata?.collectionName as string | undefined;
 
 		switch (item.type) {

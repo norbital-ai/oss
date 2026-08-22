@@ -73,6 +73,12 @@
 			"default": "./build/quality/audit.js"
 		}
 	},
+	"imports": {
+		"#lib/*": {
+			"development": "./src/*",
+			"default": "./build/*"
+		}
+	},
 	"bin": {
 		"bolt": "./build/compiler/cli.js"
 	},
@@ -87,7 +93,8 @@
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt"
 	},
 	"dependencies": {
-		"@electric-sql/pglite": "^0.3.16",
+		"@electric-sql/pglite": "^0.5.5",
+		"@electric-sql/pglite-pgvector": "^0.0.6",
 		"@iconify/svelte": "catalog:",
 		"@norbital-ai/bolt-protocol": "workspace:*",
 		"@norbital-ai/std": "workspace:*",
@@ -114,7 +121,7 @@
 		"@sveltejs/package": "^2.5.8",
 		"@types/node": "^26.2.0",
 		"@types/qrcode": "^1.5.6",
-		"happy-dom": "^20.11.2",
+		"happy-dom": "^20.11.6",
 		"svelte": "^5.56.10",
 		"svelte-check": "^4.7.6",
 		"typescript": "catalog:",

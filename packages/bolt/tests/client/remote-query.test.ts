@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { Effect, Schema } from 'effect';
 import { createRemoteQuery } from '../../src/client/remote-query.svelte.js';
 
 /**
@@ -14,7 +15,7 @@ import { createRemoteQuery } from '../../src/client/remote-query.svelte.js';
 describe('remote query failure reporting', () => {
 	it('rejects with the cause the command failed on', async () => {
 		const cause = new Error('PostgreSQL operation failed: operator does not exist: text = uuid');
-		const query = createRemoteQuery(() => Promise.reject(cause));
+		const query = createRemoteQuery(() => Effect.fail(cause), undefined, Schema.Json);
 		await expect(Promise.resolve(query)).rejects.toThrow('operator does not exist: text = uuid');
 		expect(query.error).toBe(cause);
 		expect(query.current).toBeUndefined();
@@ -22,7 +23,11 @@ describe('remote query failure reporting', () => {
 
 	/** A command that answers nothing at all still has to say so, rather than resolving `undefined`. */
 	it('still names a command that completed without a value', async () => {
-		const query = createRemoteQuery(() => Promise.resolve(undefined as never));
+		const query = createRemoteQuery(
+			() => Effect.succeed(undefined as never),
+			undefined,
+			Schema.Json
+		);
 		await expect(Promise.resolve(query)).rejects.toThrow(
 			'Remote invocation completed without a value'
 		);

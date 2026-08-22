@@ -2,9 +2,8 @@
 	import { cn } from '#lib/utils';
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
 	import { watch } from 'runed';
-	import { tick } from 'svelte';
 	import { getCommandState } from './command-state.svelte.js';
-	import type { CommandItemData, CommandListProps } from './types.js';
+	import type { CommandItemData, CommandListProps } from '#lib/command/types';
 
 	let {
 		ref = $bindable(null),
@@ -73,26 +72,19 @@
 		}
 	);
 
-	watch(
-		() =>
-			[
-				commandState.resolvedIndicatorValue,
-				commandState.inputMode,
-				commandState.visibleItemsSignature
-			] as const,
-		() => {
-			if (commandState.inputMode !== 'keyboard') return;
-			const target = commandState.resolvedIndicatorValue;
-			if (!target) return;
+	// Scroll the indicator into view after the DOM flush that follows a
+	// keyboard selection change. $effect runs post-flush, so no tick() promise
+	// chain is needed.
+	$effect(() => {
+		if (commandState.inputMode !== 'keyboard') return;
+		const target = commandState.resolvedIndicatorValue;
+		if (!target) return;
 
-			const indicatorIndex = commandState.visibleItems.findIndex((item) => item.value === target);
-			if (indicatorIndex === -1) return;
+		const indicatorIndex = commandState.visibleItems.findIndex((item) => item.value === target);
+		if (indicatorIndex === -1) return;
 
-			void tick().then(() => {
-				virtualizer.scrollToIndex(indicatorIndex, { align: 'auto' });
-			});
-		}
-	);
+		virtualizer.scrollToIndex(indicatorIndex, { align: 'auto' });
+	});
 
 	function handleMouseEnter() {
 		commandState.mouseInsideList = true;

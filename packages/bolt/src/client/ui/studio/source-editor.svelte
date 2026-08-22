@@ -3,7 +3,7 @@
 	import * as Breadcrumb from '@norbital-ai/ui/breadcrumb';
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
 	import { Cover, Stack } from '@norbital-ai/ui/layout';
-	import { editorLanguage } from './studio-state.js';
+	import { editorLanguage } from '#lib/client/ui/studio/studio-state.js';
 
 	/**
 	 * The Editor view's right-hand pane: one source file from the host revision, edited into the next.

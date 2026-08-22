@@ -1,15 +1,12 @@
 <script lang="ts">
 	import type { WithElementRef } from '#lib/utils';
 	import { cn } from '#lib/utils';
-	import { SLIDING_INDICATOR_MS } from '#lib/sliding-indicator';
+	import { bindSlidingIndicatorMeasure, type SlidingIndicatorRect } from '#lib/sliding-indicator';
 	import { onMount } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
 
 	const ACTIVE_SELECTOR =
 		'[data-sidebar="menu-button"][data-active="true"], [data-sidebar="menu-sub-button"][data-active="true"]';
-
-	/** Match shared sliding indicator duration on the rail element. */
-	const ANIMATION_MS = SLIDING_INDICATOR_MS;
 
 	let {
 		ref = $bindable(null),
@@ -24,22 +21,10 @@
 		offset?: number;
 	} = $props();
 
-	type IndicatorRect = {
-		top: number;
-		height: number;
-		left: number;
-	};
-
-	let sidebarRootElement: HTMLElement | null = null;
-	let menuContentElement: HTMLElement | null = null;
+	let sidebarRootElement = $state<HTMLElement | null>(null);
+	let menuContentElement = $state<HTMLElement | null>(null);
 	let style = $state('opacity: 0;');
-	let hasPositioned = false;
-	let isAnimating = false;
-	let pendingResizeSync = false;
-	let trackFrameId = 0;
-	let scheduleFrameId = 0;
-	let animateEndTimer: ReturnType<typeof setTimeout> | undefined;
-	let resizeFrameId = 0;
+	let trackFrameId = $state(0);
 
 	function isElementVisible(el: HTMLElement): boolean {
 		if (el.offsetHeight === 0 && el.offsetWidth === 0) return false;
@@ -84,8 +69,8 @@
 	}
 
 	/** Places the rail on the active row — nested items are indented, so a fixed sidebar offset misses them. */
-	function calculateIndicatorRect(el: HTMLElement): IndicatorRect | null {
-		if (!ref || !el) return null;
+	function calculateIndicatorRect(el: HTMLElement): SlidingIndicatorRect | null {
+		if (!ref) return null;
 
 		const containerRect = ref.getBoundingClientRect();
 		const elRect = el.getBoundingClientRect();
@@ -97,102 +82,39 @@
 		const top = center - indicatorHeight / 2;
 		const left = position === 'left' ? Math.max(0, elRect.left - containerRect.left + offset) : 0;
 
-		return { top, height: indicatorHeight, left };
+		return { x: left, y: top, width: elRect.width, height: indicatorHeight };
 	}
 
-	function clearAnimationTimer(): void {
-		if (animateEndTimer !== undefined) {
-			clearTimeout(animateEndTimer);
-			animateEndTimer = undefined;
-		}
+	function formatSidebarIndicatorStyle(
+		rect: SlidingIndicatorRect,
+		options: { useTransition: boolean; hasPositioned: boolean }
+	): string {
+		const transition = options.hasPositioned && options.useTransition ? '' : ' transition: none;';
+		return `transform: translate3d(${rect.x}px, ${rect.y}px, 0); height: ${rect.height}px; opacity: 1;${transition}`;
 	}
 
-	function finishAnimation(): void {
-		clearAnimationTimer();
-		isAnimating = false;
-		if (pendingResizeSync) {
-			pendingResizeSync = false;
-			updatePosition(true);
-		}
-	}
-
-	function beginAnimation(): void {
-		clearAnimationTimer();
-		isAnimating = true;
-		animateEndTimer = setTimeout(finishAnimation, ANIMATION_MS + 32);
-	}
-
-	function updatePosition(animate: boolean): void {
-		if (!sidebarRootElement) return;
-
-		const activeEl = findActiveElement();
-		if (!activeEl) {
-			style = 'opacity: 0;';
-			return;
-		}
-
-		const rect = calculateIndicatorRect(activeEl);
-		if (!rect) {
-			style = 'opacity: 0;';
-			return;
-		}
-
-		if (!hasPositioned) {
-			animate = false;
-			hasPositioned = true;
-		}
-
-		if (animate) {
-			beginAnimation();
-		}
-
-		const transition = animate || isAnimating ? '' : ' transition: none;';
-		style = `transform: translate3d(${rect.left}px, ${rect.top}px, 0); height: ${rect.height}px; opacity: 1;${transition}`;
-	}
-
-	function scheduleUpdate(animate: boolean): void {
-		if (scheduleFrameId) cancelAnimationFrame(scheduleFrameId);
-		scheduleFrameId = requestAnimationFrame(() => {
-			scheduleFrameId = 0;
-			updatePosition(animate);
-		});
-	}
-
-	/** Let nav paint before starting the rail transition. */
-	function scheduleAnimatedUpdate(): void {
-		if (scheduleFrameId) cancelAnimationFrame(scheduleFrameId);
-		beginAnimation();
-		scheduleFrameId = requestAnimationFrame(() => {
-			scheduleFrameId = requestAnimationFrame(() => {
-				scheduleFrameId = 0;
-				updatePosition(true);
-			});
-		});
-	}
-
-	function scheduleResizeSync(): void {
-		if (isAnimating) {
-			pendingResizeSync = true;
-			return;
-		}
-		if (resizeFrameId) cancelAnimationFrame(resizeFrameId);
-		resizeFrameId = requestAnimationFrame(() => {
-			resizeFrameId = 0;
-			updatePosition(false);
-		});
-	}
+	const indicatorPositioned = { current: false };
+	const scheduleUpdate = bindSlidingIndicatorMeasure({
+		getTarget: findActiveElement,
+		getRect: calculateIndicatorRect,
+		onStyle: (next) => {
+			style = next;
+		},
+		positioned: indicatorPositioned,
+		formatStyle: formatSidebarIndicatorStyle
+	});
 
 	function startTracking(): void {
 		if (trackFrameId) cancelAnimationFrame(trackFrameId);
 		const startTime = performance.now();
 
 		function loop(): void {
-			updatePosition(false);
+			scheduleUpdate(false);
 			if (performance.now() - startTime < 500) {
 				trackFrameId = requestAnimationFrame(loop);
 			} else {
 				trackFrameId = 0;
-				updatePosition(true);
+				scheduleUpdate(true);
 			}
 		}
 		loop();
@@ -214,7 +136,7 @@
 
 		if (!sidebarRootElement || !menuContentElement) return;
 
-		updatePosition(false);
+		scheduleUpdate(false);
 
 		const mo = new MutationObserver((mutations) => {
 			let shouldTrack = false;
@@ -234,7 +156,7 @@
 				scheduleUpdate(false);
 				startTracking();
 			} else if (shouldAnimate) {
-				scheduleAnimatedUpdate();
+				scheduleUpdate(true);
 			}
 		});
 
@@ -246,17 +168,14 @@
 		});
 
 		const ro = new ResizeObserver(() => {
-			scheduleResizeSync();
+			scheduleUpdate(false);
 		});
 		ro.observe(menuContentElement);
 
 		return () => {
 			mo.disconnect();
 			ro.disconnect();
-			clearAnimationTimer();
 			if (trackFrameId) cancelAnimationFrame(trackFrameId);
-			if (scheduleFrameId) cancelAnimationFrame(scheduleFrameId);
-			if (resizeFrameId) cancelAnimationFrame(resizeFrameId);
 		};
 	});
 

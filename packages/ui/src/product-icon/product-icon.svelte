@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { SVGAttributes } from 'svelte/elements';
-	import { productLayerIconGeometry, type ProductIconName } from './product-icons.js';
+	import { productLayerIconGeometry, type ProductIconName } from '#lib/product-icon/product-icons';
 
 	let {
 		name,

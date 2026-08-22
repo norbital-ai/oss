@@ -2,7 +2,7 @@ import { Schema } from 'effect';
 
 /** Carries skill error through the typed agents failure channel without losing diagnostic context. */
 export class SkillError extends Schema.TaggedError<SkillError>()('Bolt.Agents.SkillError', {
-	name: Schema.NonEmptyString,
+	name: Schema.String,
 	reason: Schema.Literals(['invalid-name', 'missing', 'unreadable'])
 }) {
 	readonly category = 'skill' as const;
@@ -21,4 +21,16 @@ export class ToolNotAllowed extends Schema.TaggedError<ToolNotAllowed>()(
 	readonly category = 'tool-access' as const;
 	readonly retryable = false;
 	readonly message = `The tool "${this.tool}" is not allowed for the agent "${this.agent}".`;
+}
+
+/** Carries typed MCP transport and protocol failures without flattening them into tool output. */
+export class McpToolError extends Schema.TaggedError<McpToolError>()('Bolt.Agents.McpToolError', {
+	server: Schema.NonEmptyString,
+	tool: Schema.NonEmptyString,
+	reason: Schema.Literals(['invalid-input', 'invalid-response', 'http-status', 'protocol-error']),
+	detail: Schema.NonEmptyString
+}) {
+	readonly category = 'mcp' as const;
+	readonly retryable = this.reason === 'http-status';
+	readonly message = `MCP ${this.server}:${this.tool} failed: ${this.detail}.`;
 }

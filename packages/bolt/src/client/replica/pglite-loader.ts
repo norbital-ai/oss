@@ -1,4 +1,6 @@
-import type { PGliteLike, ProvisioningStep } from './pglite-sql.js';
+import type { PGliteLike, ProvisioningStep } from '#lib/client/replica/pglite-sql.js';
+import { Effect } from 'effect';
+import type { PGliteInterface } from '@electric-sql/pglite';
 
 /**
  * Loading the local database engine, on Bolt's side of the boundary.
@@ -23,6 +25,29 @@ import type { PGliteLike, ProvisioningStep } from './pglite-sql.js';
 
 import { PGliteWorker } from '@electric-sql/pglite/worker';
 
+type SharedPGlite = PGliteInterface & {
+	readonly isLeader?: boolean;
+	onLeaderChange?: (callback: () => void) => () => void;
+};
+
+/** The one adapter from PGlite's Promise API into the replica's Effect-native database port. */
+export const adaptPGlite = (database: SharedPGlite): PGliteLike => ({
+	query: <T>(sql: string, parameters?: ReadonlyArray<unknown>) =>
+		Effect.tryPromise(() =>
+			database.query<T>(sql, parameters === undefined ? undefined : [...parameters])
+		).pipe(Effect.map((result) => ({ rows: result.rows }))),
+	exec: (sql) => Effect.tryPromise(() => database.exec(sql)),
+	close: () => Effect.tryPromise(() => database.close()),
+	get isLeader() {
+		return database.isLeader ?? true;
+	},
+	listen: (channel, callback) =>
+		Effect.tryPromise(() => database.listen(channel, callback)).pipe(
+			Effect.map((stop) => () => Effect.tryPromise(() => stop()).pipe(Effect.asVoid))
+		),
+	onLeaderChange: (callback) => database.onLeaderChange?.(callback) ?? (() => undefined)
+});
+
 /**
  * Where the replica persists, scoped to the workspace it mirrors.
  *
@@ -34,19 +59,23 @@ import { PGliteWorker } from '@electric-sql/pglite/worker';
 export const replicaLocation = (scope: string): string =>
 	`idb://bolt-replica::${scope.replaceAll(/[^a-zA-Z0-9:_-]/g, '_')}`;
 
-export const openPGlite = async (
+export const openPGlite = Effect.fn('Replica.openPGlite')(function* (
 	_steps: ReadonlyArray<ProvisioningStep>,
-	scope = 'local'
-): Promise<PGliteLike> => {
+	scope: string = 'local'
+): Effect.fn.Return<PGliteLike, unknown> {
 	const dataDir = replicaLocation(scope);
 	/**
 	 * `new URL(..., import.meta.url)` rather than a bare specifier, because this has to survive being
 	 * a dependency: the bundler rewrites this form into an emitted worker chunk, while a plain string
 	 * path would be resolved against the *host* application's root, where this file does not live.
 	 */
-	const engine = new Worker(new URL('./pglite-worker.js', import.meta.url), { type: 'module' });
+	const engine = yield* Effect.sync(
+		() => new Worker(new URL('./pglite-worker.js', import.meta.url), { type: 'module' })
+	);
 	// `id` is the leader-election key. Scoping it to the workspace keeps two open workspaces from
 	// electing one leader between them and proxying one's queries into the other's database.
-	const database = await PGliteWorker.create(engine, { dataDir, id: dataDir });
-	return database as unknown as PGliteLike;
-};
+	const database = yield* Effect.tryPromise(() =>
+		PGliteWorker.create(engine, { dataDir, id: dataDir })
+	);
+	return adaptPGlite(database);
+});

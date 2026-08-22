@@ -1,15 +1,16 @@
 import type { IFileUploadClient } from '#lib/file-upload';
-import type { StaticMapImage, StaticMapRequest } from '../static-map/static-map.types.js';
-import type { TGeolocationPickerValue } from './geolocation/geolocation.utils.js';
+import type { StaticMapImage, StaticMapRequest } from '#lib/static-map/static-map.types';
+import type { TGeolocationPickerValue } from '#lib/data-renderer/geolocation/geolocation.utils';
 import { getContext, setContext, type Component } from 'svelte';
-import type { DataRendererProps } from './data-renderer.types.js';
+import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
+import type { Effect } from 'effect';
 
 export type CustomTypeRendererMap = Readonly<Record<string, Component<DataRendererProps>>>;
 
 export interface DataRendererRuntime {
-	autocompleteGeolocation(query: string): Promise<TGeolocationPickerValue[]>;
+	autocompleteGeolocation(query: string): Effect.Effect<TGeolocationPickerValue[], unknown>;
 	createFileUploadClient(): IFileUploadClient;
-	renderStaticMap(input: StaticMapRequest): Promise<StaticMapImage>;
+	renderStaticMap(input: StaticMapRequest): Effect.Effect<StaticMapImage, unknown>;
 	readonly customTypeRenderers: CustomTypeRendererMap;
 }
 

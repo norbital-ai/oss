@@ -1,10 +1,11 @@
+import { Result } from 'effect';
 import type {
 	WorkspaceNavigationItem,
 	WorkspaceOrganizationOption
 } from '@norbital-ai/ui/workspace-shell';
-import type { AppDeclaration } from '../../../authoring/workspace-schema.js';
+import type { AppDeclaration } from '#lib/authoring/workspace-schema.js';
 
-export type NavigationLabelResolver = {
+type NavigationLabelResolver = {
 	has(key: string): boolean;
 	t(key: string, vars?: { readonly [name: string]: string | number }): string;
 };
@@ -19,7 +20,7 @@ export type HostPlugin = Readonly<{
 }>;
 
 export const WORKSPACE_SETTINGS_PATH = '/people';
-export const HOST_PLUGIN_SURFACE_PREFIX = '/__host';
+const HOST_PLUGIN_SURFACE_PREFIX = '/__host';
 export const AGENT_PATH = '/agent';
 
 const NavigationText = {
@@ -27,7 +28,7 @@ const NavigationText = {
 		value.replaceAll(/[-_]/g, ' ').replaceAll(/\b\w/g, (character) => character.toUpperCase())
 };
 
-export const hostPluginSurfaceHref = (pluginKey: string): string =>
+const hostPluginSurfaceHref = (pluginKey: string): string =>
 	`${HOST_PLUGIN_SURFACE_PREFIX}/${encodeURIComponent(pluginKey)}`;
 
 /**
@@ -42,11 +43,10 @@ export const hostPluginKeyFromPath = (pathname: string): string | null => {
 	if (!pathname.startsWith(prefix)) return null;
 	const raw = pathname.slice(prefix.length).split('/')[0] ?? '';
 	if (raw.length === 0) return null;
-	try {
-		return decodeURIComponent(raw);
-	} catch {
-		return raw;
-	}
+	return Result.getOrElse(
+		Result.try(() => decodeURIComponent(raw)),
+		() => raw
+	);
 };
 
 /**
@@ -105,7 +105,7 @@ const navigationTitleKeys = (id: string): ReadonlyArray<string> => {
 	return [`app.${id}.title`, `app.${id.replaceAll('/', '.')}.title`, `app.${leaf}.title`];
 };
 
-export const resolveNavigationLabel = (
+const resolveNavigationLabel = (
 	i18n: NavigationLabelResolver | undefined,
 	id: string,
 	fallback: string
@@ -243,21 +243,21 @@ export const filterAccessibleApps = <App extends ShellApp>(
 	return apps.filter((app) => visible.has(app.name));
 };
 
-export type ShellApp = AppDeclaration & {
-	readonly icon?: string;
+type ShellApp = AppDeclaration & {
+	readonly icon?: string | undefined;
 	/** `null` when the app declares none — distinct from "not yet normalised". */
-	readonly description?: string | null;
-	readonly thumbnail?: string | null;
-	readonly banner?: string;
-	readonly parent?: string;
-	readonly defaultChild?: string;
+	readonly description?: string | null | undefined;
+	readonly thumbnail?: string | null | undefined;
+	readonly banner?: string | undefined;
+	readonly parent?: string | undefined;
+	readonly defaultChild?: string | undefined;
 };
 
 const toApplicationItem = (
 	app: ShellApp,
 	input: {
 		currentPath: string;
-		i18n?: NavigationLabelResolver;
+		i18n?: NavigationLabelResolver | undefined;
 		childrenOf: ReadonlyMap<string, ReadonlyArray<ShellApp>>;
 	}
 ): WorkspaceNavigationItem => {
@@ -315,7 +315,11 @@ export const buildApplicationNavigation = (input: {
 	return declared
 		.filter((app) => app.parent === undefined || !names.has(app.parent))
 		.map((app) =>
-			toApplicationItem(app, { currentPath: input.currentPath, i18n: input.i18n, childrenOf })
+			toApplicationItem(app, {
+				currentPath: input.currentPath,
+				i18n: input.i18n,
+				childrenOf
+			})
 		);
 };
 
@@ -378,9 +382,6 @@ export const buildSystemNavigation = (input: {
 		...visible.filter((plugin) => plugin.placement !== 'settings').map(pluginItem)
 	];
 };
-
-export const workspaceAuthorizesAgentSurface = (currentPath: string): boolean =>
-	currentPath === AGENT_PATH;
 
 /** Returns the host plugin whose surface matches the current path, or null. */
 export const resolveHostPluginSurface = (

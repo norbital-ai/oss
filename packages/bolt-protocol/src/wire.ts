@@ -126,15 +126,17 @@ export const success = FacilityResults.success;
 export const failure = FacilityResults.failure;
 
 /** Carries make wire error through the typed src failure channel without losing diagnostic context. */
+const decodeWireError = Schema.decodeUnknownSync(WireError);
+
 export const makeWireError = (
 	code: string,
 	message: string,
 	options: WireErrorOptions = {}
-): WireError => ({
-	code,
-	message,
-	retryable: options.retryable ?? false,
-	outcome: options.outcome ?? 'known',
-	...(options.httpStatus === undefined ? {} : { httpStatus: options.httpStatus }),
-	...(options.details === undefined ? {} : { details: options.details })
-});
+): WireError =>
+	decodeWireError({
+		code,
+		message,
+		retryable: options.retryable ?? false,
+		outcome: options.outcome ?? 'known',
+		...options
+	});

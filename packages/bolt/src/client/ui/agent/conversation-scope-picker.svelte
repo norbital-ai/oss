@@ -3,7 +3,7 @@
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Inline } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
-	import { AGENT_COMPOSER_CONTROL_TEXT_CLASS } from './composer-chrome.js';
+	import { AGENT_COMPOSER_CONTROL_TEXT_CLASS } from '#lib/client/ui/agent/composer-chrome.js';
 
 	let {
 		value,

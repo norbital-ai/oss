@@ -1,8 +1,11 @@
 <script lang="ts">
+	import { Effect, Schema } from 'effect';
 	import { onDestroy, onMount } from 'svelte';
 	import { Bound, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
-	import { workspaceSession } from '../../session.js';
+	import { workspaceSession } from '#lib/client/session.js';
+	import type { WorkspaceManifest } from '#lib/client/ui/studio/studio-state.js';
+	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 
 	/**
 	 * The Envoys surface: every agent this workspace exposes on a transport, and how each is doing.
@@ -36,49 +39,77 @@
 	 * host owned the shell. The workspace client owns it now, and one declared session is what every
 	 * surface reads — a second channel handed down beside it would be two ways to say the same thing.
 	 */
-	const { transport, operations } = workspaceSession();
+	let { client }: { client: WorkspaceClient } = $props();
+	const { operations } = workspaceSession();
 
 	/**
 	 * Exactly the projection `workspace.manifest` publishes for an envoy.
 	 *
 	 * No `agent`. The manifest stopped carrying one because there is nothing to point at.
 	 */
-	type DeclaredEnvoy = {
-		readonly name: string;
-		readonly transport: string;
-		readonly audience: string;
-	};
-	/** Exactly what `envoys.status` returns. */
-	type EnvoyStatus = {
-		readonly envoy: string;
-		readonly registered: boolean;
-		readonly received: number;
-		readonly replied: number;
-	};
+	type DeclaredEnvoy = WorkspaceManifest['envoys'][number];
+	/** Exactly what `envoys.status` returns — one owner: the Studio's `EnvoyStatusSchema`, decoded. */
 	/** Exactly the projection the host's `transport` operation answers with. */
-	type Connection = {
-		readonly envoy: string;
-		readonly provider: string;
-		readonly state: 'disconnected' | 'connecting' | 'pairing' | 'connected' | 'error';
-		readonly pairedAs?: string;
-		readonly pairing?: string;
-		readonly pairingExpiresAt?: number;
-		readonly error?: string;
-		readonly stored: boolean;
-	};
+	const ConnectionSchema = Schema.Struct({
+		envoy: Schema.String,
+		provider: Schema.String,
+		state: Schema.Literals(['disconnected', 'connecting', 'pairing', 'connected', 'error']),
+		pairedAs: Schema.optionalKey(Schema.String),
+		pairing: Schema.optionalKey(Schema.String),
+		pairingExpiresAt: Schema.optionalKey(Schema.Number),
+		error: Schema.optionalKey(Schema.String),
+		stored: Schema.Boolean
+	});
+	type Connection = typeof ConnectionSchema.Type;
+	const ConnectionAnswerSchema = Schema.Struct({
+		connection: Schema.optionalKey(ConnectionSchema)
+	});
 
-	let envoys = $state<ReadonlyArray<DeclaredEnvoy>>([]);
-	let statuses = $state<Record<string, EnvoyStatus>>({});
+	let mounted = $state(false);
+	const manifestQuery = $derived(mounted ? client.system.workspace.manifest({}) : undefined);
+	const envoys = $derived<ReadonlyArray<DeclaredEnvoy>>(manifestQuery?.current?.envoys ?? []);
+	const statusQueries = $derived(
+		envoys.map((envoy) => {
+			const deadline = AbortSignal.timeout(STATUS_DEADLINE_MS);
+			return {
+				name: envoy.name,
+				deadline,
+				query: client.system.envoys.status({ envoy: envoy.name }, deadline)
+			};
+		})
+	);
+	const statuses = $derived(
+		Object.fromEntries(
+			statusQueries.flatMap(({ name, query }) =>
+				query.current === undefined ? [] : [[name, query.current] as const]
+			)
+		)
+	);
 	// Kept beside the statuses rather than folded into them: an envoy whose status could not be read
 	// has no registration state at all, and a record that can hold both would let the page render a
 	// `registered: false` it never received.
-	let statusErrors = $state<Record<string, string>>({});
+	const statusErrors = $derived(
+		Object.fromEntries(
+			statusQueries.flatMap(({ name, deadline, query }) =>
+				query.error === undefined
+					? []
+					: [
+							[
+								name,
+								deadline.aborted
+									? `The runtime did not answer within ${Math.round(STATUS_DEADLINE_MS / 1000)}s.`
+									: query.error instanceof Error
+										? query.error.message
+										: 'The runtime did not report this envoy.'
+							] as const
+						]
+			)
+		)
+	);
 	let connections = $state<Record<string, Connection>>({});
 	let connectionErrors = $state<Record<string, string>>({});
 	let qrCodes = $state<Record<string, string>>({});
 	let pairingBusy = $state<Record<string, boolean>>({});
-	let loading = $state(true);
-	let error = $state<string | null>(null);
 
 	/**
 	 * How long one status read may take before this page says so.
@@ -108,104 +139,24 @@
 	};
 	onDestroy(() => stopPolling());
 
-	/** One array off an untyped command response, or nothing when the key is absent or not a list. */
-	const rowsOf = (value: unknown, key: string): ReadonlyArray<unknown> => {
-		if (value === null || typeof value !== 'object') return [];
-		const rows = Reflect.get(value, key);
-		return Array.isArray(rows) ? rows : [];
-	};
-
-	/** One string field off an untyped row, or nothing when it is absent or not a string. */
-	const stringOf = (value: unknown, key: string): string | undefined => {
-		if (value === null || typeof value !== 'object') return undefined;
-		const field = Reflect.get(value, key);
-		return typeof field === 'string' && field.length > 0 ? field : undefined;
-	};
-
-	/**
-	 * Reads the workspace's envoys, then each one's traffic and connection.
-	 *
-	 * The manifest is read field by field rather than asserted with a cast. `command` answers
-	 * `unknown`, and the envoy projection is a hand-built object literal in `dispatch.ts` rather than
-	 * a schema the wire enforces — so a cast would let a projection that stopped carrying `transport`
-	 * or `audience` render the word "undefined" onto a page whose whole premise is that it states
-	 * only what was actually published. An envoy missing a field is dropped.
-	 *
-	 * The reads are fanned out rather than run in sequence: they are independent, and one slow envoy
-	 * should not hold up the rest of the list. Each writes its own key, so a failure lands against
-	 * the envoy it belongs to instead of failing the page.
-	 */
-	const load = async (): Promise<void> => {
-		loading = true;
-		error = null;
-		try {
-			const summary = await transport.command('workspace.manifest', {});
-			envoys = rowsOf(summary, 'envoys').flatMap((entry) => {
-				const name = stringOf(entry, 'name');
-				const wire = stringOf(entry, 'transport');
-				const audience = stringOf(entry, 'audience');
-				return name === undefined || wire === undefined || audience === undefined
-					? []
-					: [{ name, transport: wire, audience }];
-			});
-		} catch (cause) {
-			error = cause instanceof Error ? cause.message : 'Unable to read the workspace manifest.';
-			loading = false;
-			return;
-		}
-		loading = false;
-		await Promise.all(
-			envoys.flatMap((envoy) => [
-				readStatus(envoy.name),
-				runPairing(envoy.name, envoy.transport, 'status')
-			])
-		);
-	};
-
-	/**
-	 * One envoy's traffic, or the reason there is none, inside the deadline.
-	 *
-	 * The signal is handed to the command rather than raced beside it, so a read this page has
-	 * stopped waiting for also stops costing a request — a race would leave the fetch running
-	 * unobserved behind a card that already reported it as unanswered.
-	 *
-	 * A timeout is reported as a timeout and not as whatever `AbortSignal` happens to name its
-	 * reason. The distinction matters to whoever reads the card: "the runtime did not answer" is a
-	 * fact about this workspace's runtime, while `signal timed out` is a fact about the browser and
-	 * tells an operator nothing they can act on.
-	 */
-	const readStatus = async (envoy: string): Promise<void> => {
-		const deadline = AbortSignal.timeout(STATUS_DEADLINE_MS);
-		try {
-			statuses[envoy] = (await transport.command(
-				'envoys.status',
-				{ envoy },
-				deadline
-			)) as EnvoyStatus;
-		} catch (cause) {
-			statusErrors[envoy] = deadline.aborted
-				? `The runtime did not answer within ${Math.round(STATUS_DEADLINE_MS / 1000)}s.`
-				: cause instanceof Error
-					? cause.message
-					: 'The runtime did not report this envoy.';
-		}
-	};
-
 	/** Renders the transport's pairing payload as a QR the phone's camera can read. */
-	const renderQr = async (envoy: string, payload: string | undefined): Promise<void> => {
-		if (payload === undefined) {
-			delete qrCodes[envoy];
-			return;
-		}
-		const { toDataURL } = await import('qrcode');
-		// Fixed colours rather than the theme's: a QR is read by a camera, not by a person, and a
-		// low-contrast pairing code in dark mode is one that simply does not scan.
-		qrCodes[envoy] = await toDataURL(payload, {
-			margin: 2,
-			width: 240,
-			color: { dark: '#000000', light: '#ffffff' }
+	const renderQr = (envoy: string, payload: string | undefined) =>
+		Effect.gen(function* () {
+			if (payload === undefined) {
+				delete qrCodes[envoy];
+				return;
+			}
+			const { toDataURL } = yield* Effect.tryPromise(() => import('qrcode'));
+			// Fixed colours rather than the theme's: a QR is read by a camera, not by a person, and a
+			// low-contrast pairing code in dark mode is one that simply does not scan.
+			qrCodes[envoy] = yield* Effect.tryPromise(() =>
+				toDataURL(payload, {
+					margin: 2,
+					width: 240,
+					color: { dark: '#000000', light: '#ffffff' }
+				})
+			);
 		});
-	};
 
 	/**
 	 * Pairing, which is host-owned and asked through `operations` rather than through the runtime.
@@ -218,43 +169,48 @@
 	 * `action: 'transport'`, not `'envoy'`. Colony supplies the wire and never sees a policy, so its
 	 * half of this is named for the wire.
 	 */
-	const runPairing = async (
+	const runPairing = (
 		envoy: string,
 		provider: string,
 		operation: 'pair' | 'status' | 'unpair'
-	): Promise<void> => {
-		if (pairingBusy[envoy] === true && operation !== 'status') return;
-		if (operation !== 'status') pairingBusy[envoy] = true;
-		try {
-			const answer = (await operations.run({
-				action: 'transport',
-				operation,
-				envoy,
-				provider
-			})) as { readonly connection?: Connection };
+	): Effect.Effect<void> =>
+		Effect.gen(function* () {
+			if (pairingBusy[envoy] === true && operation !== 'status') return;
+			if (operation !== 'status') pairingBusy[envoy] = true;
+			const answer = yield* Schema.decodeUnknownEffect(ConnectionAnswerSchema)(
+				yield* Effect.tryPromise(() =>
+					operations.run({ action: 'transport', operation, envoy, provider })
+				)
+			);
 			const next = answer.connection;
-			if (next === undefined) throw new Error('The host did not report this envoy.');
+			if (next === undefined)
+				return yield* Effect.fail(new Error('The host did not report this envoy.'));
 			connections[envoy] = next;
 			delete connectionErrors[envoy];
-			await renderQr(envoy, next.pairing);
+			yield* renderQr(envoy, next.pairing);
 			if (next.state === 'connected' || next.state === 'error') stopPolling(envoy);
 			else if (!polls.has(envoy) && next.state !== 'disconnected') {
 				polls.set(
 					envoy,
-					setInterval(() => void runPairing(envoy, provider, 'status'), POLL_MS)
+					setInterval(() => void Effect.runPromise(runPairing(envoy, provider, 'status')), POLL_MS)
 				);
 			}
-		} catch (cause) {
-			// Shown verbatim. The refusals this host produces name what is wrong and what to do — no
-			// transport for this provider, no secret key to seal a credential with, two envoys open on
-			// one transport — and replacing them with "pairing failed" throws all of that away.
-			connectionErrors[envoy] =
-				cause instanceof Error ? cause.message : 'The host refused this operation.';
-			stopPolling(envoy);
-		} finally {
-			if (operation !== 'status') pairingBusy[envoy] = false;
-		}
-	};
+		}).pipe(
+			Effect.catch((cause) => {
+				// Shown verbatim. The refusals this host produces name what is wrong and what to do — no
+				// transport for this provider, no secret key to seal a credential with, two envoys open on
+				// one transport — and replacing them with "pairing failed" throws all of that away.
+				connectionErrors[envoy] =
+					cause instanceof Error ? cause.message : 'The host refused this operation.';
+				stopPolling(envoy);
+				return Effect.void;
+			}),
+			Effect.ensuring(
+				Effect.sync(() => {
+					if (operation !== 'status') pairingBusy[envoy] = false;
+				})
+			)
+		);
 
 	const connectionLabel = (envoy: string): string => {
 		const connection = connections[envoy];
@@ -277,9 +233,16 @@
 	// issue a Bolt command, and a reader who opens Envoys has already asked the question it answers.
 	// It ran at component init here, which happens on the server too under any host that renders this
 	// surface — `workspaceSession()` throws there rather than returning a session to command with.
-	onMount(() => {
-		void load();
+	const pairingStarted = new Set<string>();
+	$effect(() => {
+		for (const envoy of envoys) {
+			if (pairingStarted.has(envoy.name)) continue;
+			pairingStarted.add(envoy.name);
+			void Effect.runPromise(runPairing(envoy.name, envoy.transport, 'status'));
+		}
 	});
+
+	onMount(() => (mounted = true));
 </script>
 
 {#snippet pairingPanel(envoy: DeclaredEnvoy)}
@@ -351,7 +314,7 @@
 				type="button"
 				class="rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-50"
 				disabled={pairingBusy[envoy.name] === true}
-				onclick={() => void runPairing(envoy.name, envoy.transport, 'pair')}
+				onclick={() => void Effect.runPromise(runPairing(envoy.name, envoy.transport, 'pair'))}
 			>
 				{connection?.stored === true ? 'Reconnect' : 'Pair this envoy'}
 			</button>
@@ -360,7 +323,7 @@
 					type="button"
 					class="rounded-md border px-2.5 py-1 text-xs font-medium text-destructive disabled:opacity-50"
 					disabled={pairingBusy[envoy.name] === true}
-					onclick={() => void runPairing(envoy.name, envoy.transport, 'unpair')}
+					onclick={() => void Effect.runPromise(runPairing(envoy.name, envoy.transport, 'unpair'))}
 				>
 					Unpair
 				</button>
@@ -484,9 +447,9 @@
 				<h1 class="text-heading">Envoys</h1>
 				<p class="max-w-2xl text-meta">
 					The agents this workspace exposes on a transport, and how each one is reachable. What an
-					envoy may <em>do</em> is the policies it declares, in the workspace source. A collection's
-					own record sync is not configured here — it belongs to the collection, under its tab in
-					Workspace Studio.
+					envoy may <em>do</em> is the policies it declares, in the workspace source. A collection's own
+					record sync is not configured here — it belongs to the collection, under its tab in Workspace
+					Studio.
 				</p>
 			</Stack>
 		</Stack>
@@ -506,10 +469,14 @@
 			-->
 			<Scroll name="Envoys">
 				<Stack gap="md" class="min-h-0">
-					{#if loading}
+					{#if manifestQuery === undefined || manifestQuery.loading}
 						<p class="text-sm text-muted-foreground">Reading the workspace manifest…</p>
-					{:else if error !== null}
-						<p class="text-sm text-destructive" role="alert">{error}</p>
+					{:else if manifestQuery.error !== undefined}
+						<p class="text-sm text-destructive" role="alert">
+							{manifestQuery.error instanceof Error
+								? manifestQuery.error.message
+								: 'Unable to read the workspace manifest.'}
+						</p>
 					{:else if envoys.length === 0}
 						<div
 							class="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground"

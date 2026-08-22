@@ -14,12 +14,11 @@
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Spinner } from '@norbital-ai/ui/spinner';
 	import { Textarea } from '@norbital-ai/ui/textarea';
-	import type { PanelMessage } from './transcript.js';
+	import type { PanelMessage } from '#lib/client/ui/agent/transcript.js';
 	import Self from './agent-transcript-item.svelte';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import type { BoltUiKeys } from './i18n.js';
 
-	const { t } = useI18n<BoltUiKeys>();
+	const { t } = useI18n();
 
 	/**
 	 * Where this row sits, which decides what a `user` message means.
@@ -46,7 +45,7 @@
 
 	/** Writes the edited verifier prompt back when the field blurs. */
 	function saveVerifierPrompt(): void {
-		// stupidity:allow Q3 -- event handler
+		// repository-health:allow Q3 -- event handler
 		if (message.kind !== 'verifier') return;
 		if (prompt === message.prompt) return;
 		onVerifierPrompt?.(prompt);
@@ -62,7 +61,7 @@
 	 * alone cannot; the id is the last resort, and it is still better than an unattributed message.
 	 */
 	function counterpart(message: Extract<PanelMessage, { kind: 'agent-message' }>): string {
-		// stupidity:allow Q4 -- named helper
+		// repository-health:allow Q4 -- named helper
 		const named = message.agentName ?? message.sessionTitle;
 		if (named === null) return message.sessionId ?? t('bolt.agent.unknownAgent');
 		return message.sessionTitle === null || message.sessionTitle === message.agentName
@@ -72,7 +71,7 @@
 
 	/** A built-in tool's label is a catalog key; everything else is the humanized name. */
 	function toolLabel(message: Extract<PanelMessage, { kind: 'tool' }>): string {
-		// stupidity:allow Q4 -- named helper
+		// repository-health:allow Q4 -- named helper
 		return message.labelKey ? t(message.labelKey) : (message.label ?? message.name);
 	}
 </script>
@@ -83,7 +82,7 @@
 		     tabs are the addition: the summary alone tells a reader that history went somewhere without
 		     telling them where, and nothing was actually deleted to hide. -->
 		<details class="group/compaction w-full text-xs" role="note">
-			<!-- stupidity:allow UI6 -- details disclosure summary is a clickable control row. -->
+			<!-- repository-health:allow UI6 -- details disclosure summary is a clickable control row. -->
 			<summary
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
@@ -168,7 +167,7 @@
 		     of the time, and the payload is tenant data that belongs behind a deliberate click rather
 		     than in the flow of the conversation. -->
 		<details class="group/tool w-full">
-			<!-- stupidity:allow UI6 -- details disclosure summary is a clickable control row. -->
+			<!-- repository-health:allow UI6 -- details disclosure summary is a clickable control row. -->
 			<summary
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta whitespace-nowrap transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
@@ -334,7 +333,7 @@
 {:else if message.kind === 'reasoning'}
 	<li class="message" data-role="reasoning">
 		<details class="group/reasoning w-full">
-			<!-- stupidity:allow UI6 -- reasoning is supplementary detail behind a disclosure. -->
+			<!-- repository-health:allow UI6 -- reasoning is supplementary detail behind a disclosure. -->
 			<summary
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
@@ -355,7 +354,7 @@
 {:else if message.kind === 'verifier'}
 	<li class="message my-1.5" data-role="verifier" data-testid="agent-verifier-scheduled">
 		<details class="group/verifier w-full" open>
-			<!-- stupidity:allow UI6 -- verifier disclosure is a clickable control row. -->
+			<!-- repository-health:allow UI6 -- verifier disclosure is a clickable control row. -->
 			<summary
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
@@ -385,7 +384,7 @@
 {:else if message.kind === 'goal'}
 	<li class="message my-1.5" data-role="goal" data-achieved={message.achieved}>
 		<details class="group/goal w-full">
-			<!-- stupidity:allow UI6 -- goal verification is supplementary detail behind a disclosure. -->
+			<!-- repository-health:allow UI6 -- goal verification is supplementary detail behind a disclosure. -->
 			<summary
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>

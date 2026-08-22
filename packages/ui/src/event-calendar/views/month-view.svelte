@@ -9,8 +9,8 @@
 		isSameDay,
 		isWeekend,
 		startOfMonth
-	} from '../utils.js';
-	import type { CalendarEvent, EventRenderContext } from '../types.js';
+	} from '#lib/event-calendar/utils';
+	import type { CalendarEvent, EventRenderContext } from '#lib/event-calendar/types';
 	import type { Snippet } from 'svelte';
 	import EventPill from '../parts/event-pill.svelte';
 	import { buttonVariants } from '#lib/button';
@@ -45,8 +45,7 @@
 	const cellEvents = $derived.by(() => {
 		const map = new Map<string, CalendarEvent[]>();
 		for (const day of days) {
-			const key = day.toISOString().slice(0, 10);
-			map.set(key, []);
+			map.set(day.toISOString().slice(0, 10), []);
 		}
 		for (const event of events) {
 			const evStart = new Date(event.start);
@@ -55,19 +54,13 @@
 			evEnd.setHours(23, 59, 59, 999);
 
 			for (const day of days) {
-				if (day >= evStart && day <= evEnd) {
-					const key = day.toISOString().slice(0, 10);
-					const list = map.get(key);
-					if (list) list.push(event);
-				}
+				if (day < evStart || day > evEnd) continue;
+				const list = map.get(day.toISOString().slice(0, 10));
+				if (list) list.push(event);
 			}
 		}
 		return map;
 	});
-
-	function isOutsideMonth(day: Date): boolean {
-		return day < monthStart || day > monthEnd;
-	}
 </script>
 
 <Scroll axis="y" name={t('misc.monthEvents')} class={cn('bg-background p-2', className)}>
@@ -79,7 +72,7 @@
 			{@const cellKey = day.toISOString().slice(0, 10)}
 			{@const dayEvents = cellEvents.get(cellKey) ?? []}
 			{@const isToday = isSameDay(day, today)}
-			{@const isOutside = isOutsideMonth(day)}
+			{@const isOutside = day < monthStart || day > monthEnd}
 			{@const isWknd = isWeekend(day)}
 			{@const overflow = Math.max(0, dayEvents.length - MAX_PILLS)}
 

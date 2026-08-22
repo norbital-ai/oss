@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { Shimmer } from '../shimmer';
+	import { Shimmer } from '#lib/ai-elements/shimmer';
 	import { CollapsibleTrigger } from '#lib/collapsible';
 	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';

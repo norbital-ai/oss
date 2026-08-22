@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { Collections } from '../../src/runtime/collections/collections.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -11,7 +11,7 @@ import {
 /**
  * A valid record id for a one-letter fixture name.
  *
- * Records are keyed by `norbital_id uuid`; `'a'` was only ever accepted by the `id text` primary key
+ * Records are keyed by `id uuid`; `'a'` was only ever accepted by the `id text` primary key
  * Bolt used to invent, so these fixtures built rows a real database would have rejected.
  */
 const rid = (name: string): string =>
@@ -46,7 +46,9 @@ const searchable = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+	],
 	teams: {
 		admin: ['admin']
 	},

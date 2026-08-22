@@ -1,8 +1,6 @@
 import { defineMessages, type LocaleCatalogs } from '@norbital-ai/std/i18n';
 
-export type BoltUiKeys = string;
-
-export const boltAgentMessages = defineMessages({
+const boltAgentMessages = defineMessages({
 	en: {
 		'bolt.agent.adminConversationReadOnly':
 			'Read-only administrator view. Only the conversation owner can reply.',

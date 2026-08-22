@@ -22,11 +22,14 @@
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt-server"
 	},
 	"dependencies": {
-		"@electric-sql/pglite": "^0.3.16",
+		"@electric-sql/pglite": "^0.5.5",
+		"@electric-sql/pglite-pgvector": "^0.0.6",
 		"@norbital-ai/bolt-protocol": "workspace:*",
-		"effect": "4.0.0-rc.111",
 		"pg": "^8.23.0",
 		"ws": "^8.21.3"
+	},
+	"peerDependencies": {
+		"effect": "4.0.0-rc.111"
 	},
 	"devDependencies": {
 		"@effect/vitest": "4.0.0-rc.111",

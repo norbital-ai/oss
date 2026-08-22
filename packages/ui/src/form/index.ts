@@ -4,6 +4,7 @@ export { default as FieldDescription } from './field_description.svelte';
 export { default as FieldErrors } from './field_errors.svelte';
 export {
 	FormState,
+	maybeAsync,
 	type AutoSubmitConfig,
 	type FormSchema,
 	type FormStateConfig,

@@ -2,7 +2,7 @@
  * @fileoverview Identity-Aware JSON Diffing Engine
  *
  * Provides utilities for comparing objects with special handling for arrays
- * of objects that have identity keys ('id', 'norbital_id'). This prevents
+ * of objects that have identity keys ('id', 'id'). This prevents
  * false positives when items are reordered or deleted from the middle of an array.
  */
 
@@ -12,7 +12,7 @@ import { deepDiff, type JsonPatchOperation } from '@norbital-ai/std/json';
  * Reserved identity keys used to identify objects in arrays.
  * Objects with these keys will be compared by identity rather than position.
  */
-const IDENTITY_KEYS = ['id', 'norbital_id'] as const;
+const IDENTITY_KEYS = ['id', 'id'] as const;
 
 /**
  * Finds the identity key for an array of objects.
@@ -42,30 +42,27 @@ function findIdentityKey(arr: unknown[]): string | undefined {
  * @param path - Dot-notation path (e.g., 'columns.0.name')
  * @returns RFC 6902 JSON Pointer (e.g., '/columns/ID/name')
  */
-export function resolvePathToIdentity(obj: unknown, path: string): string {
+function resolvePathToIdentity(obj: unknown, path: string): string {
 	const parts = path.split('.');
 	let current: unknown = obj;
 	let pointer = '';
 
 	for (let i = 0; i < parts.length; i++) {
 		const part = parts[i];
-		if (Array.isArray(current)) {
-			const index = parseInt(part, 10);
-			const item = current[index];
-			if (item && typeof item === 'object') {
-				const idKey = findIdentityKey(current);
-				if (idKey) {
-					pointer += `/${readKey(item, idKey)}`;
-					current = item;
-					continue;
-				}
-			}
-		}
-		pointer += `/${part}`;
+		pointer += `/${resolveArrayIndex(current, part) ?? part}`;
 		current = readKey(current, part);
 	}
 
 	return pointer;
+}
+
+/** When the current path segment is a positional index into an identity-keyed array, emit the id instead. */
+function resolveArrayIndex(current: unknown, part: string): string | null {
+	if (!Array.isArray(current)) return null;
+	const item = current[parseInt(part, 10)];
+	if (item == null || typeof item !== 'object') return null;
+	const idKey = findIdentityKey(current);
+	return idKey ? String(readKey(item, idKey)) : null;
 }
 
 /**
@@ -105,7 +102,7 @@ function normalizeForDiff(obj: unknown): unknown {
 
 /**
  * Compare two objects with identity-aware array handling.
- * Arrays of objects with 'id' or 'norbital_id' keys are compared by identity,
+ * Arrays of objects with 'id' or 'id' keys are compared by identity,
  * not by position. This prevents false positives when items are reordered
  * or deleted from the middle of an array.
  *

@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 import { fixtureUserId } from '../support/fixture-identity.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { Identity } from '../../src/runtime/identity/identity.js';
+import * as Identity from '../../src/runtime/identity/identity.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 
 let harness: BoltTestRuntime | undefined;
@@ -24,8 +24,8 @@ const access = (harness: BoltTestRuntime) =>
 /** A team row, id derived from the name so a fixture can point at one without reading it back. */
 const addTeam = (harness: BoltTestRuntime, name: string) =>
 	harness.database.query(
-		`insert into bolt_team ("norbital_id", "name") values (md5($1::text)::uuid, $1)
-		 on conflict ("norbital_id") do nothing`,
+		`insert into bolt_team ("id", "name") values (md5($1::text)::uuid, $1)
+		 on conflict ("id") do nothing`,
 		[name]
 	);
 
@@ -49,7 +49,7 @@ const addSession = (
 	status: 'normal' | 'admin' = 'normal'
 ) =>
 	harness.database.query(
-		`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId", "team_id", "status") values (md5($2::text)::uuid, $2, $4, 'test-tenant', case when $3::text is null then null else md5($3::text)::uuid end, $5) on conflict ("norbital_id") do update set "team_id" = excluded."team_id", "email" = excluded."email", "tenantId" = excluded."tenantId", "status" = excluded."status" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
+		`with person as (insert into bolt_auth_user ("id", "name", "email", "tenantId", "team_id", "status") values (md5($2::text)::uuid, $2, $4, 'test-tenant', case when $3::text is null then null else md5($3::text)::uuid end, $5) on conflict ("id") do update set "team_id" = excluded."team_id", "email" = excluded."email", "tenantId" = excluded."tenantId", "status" = excluded."status" returning "id" as id) insert into bolt_auth_session ("id", "token", "userId", "expiresAt") select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
 		[`token-${userId}`, userId, team, email, status]
 	);
 
@@ -79,7 +79,7 @@ describe('workspace access projection', () => {
 		harness = await makeBoltTestRuntime();
 		await addSession(harness, 'u1', null, 'ada@example.test');
 		await harness.database.query(
-			`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId") values (md5('u1'::text)::uuid, 'u1', 'ada@example.test', 'test-tenant') on conflict ("norbital_id") do update set "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), 'token-second', person.id, now() + interval '2 hours' from person`
+			`with person as (insert into bolt_auth_user ("id", "name", "email", "tenantId") values (md5('u1'::text)::uuid, 'u1', 'ada@example.test', 'test-tenant') on conflict ("id") do update set "email" = excluded."email", "tenantId" = excluded."tenantId" returning "id" as id) insert into bolt_auth_session ("id", "token", "userId", "expiresAt") select gen_random_uuid(), 'token-second', person.id, now() + interval '2 hours' from person`
 		);
 		const result = await access(harness);
 		expect(result.members).toHaveLength(1);
@@ -93,11 +93,11 @@ describe('workspace access projection', () => {
 		// own workspace's access list — and an administrator reviewing who had access saw a shorter
 		// list than the truth. `u-signed-out` is a member with no session and must still appear.
 		await harness.database.query(
-			`insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId") values (md5('u-signed-out'::text)::uuid, 'u-signed-out', 'gone@example.test', 'test-tenant')`
+			`insert into bolt_auth_user ("id", "name", "email", "tenantId") values (md5('u-signed-out'::text)::uuid, 'u-signed-out', 'gone@example.test', 'test-tenant')`
 		);
 		// Another tenant's member stays out entirely, session or no session.
 		await harness.database.query(
-			`insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId") values (md5('u-other'::text)::uuid, 'u-other', 'other@example.test', 'other-tenant')`
+			`insert into bolt_auth_user ("id", "name", "email", "tenantId") values (md5('u-other'::text)::uuid, 'u-other', 'other@example.test', 'other-tenant')`
 		);
 		const result = await access(harness);
 		expect(result.members.map(({ id }) => id)).toEqual(

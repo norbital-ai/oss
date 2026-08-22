@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Effect, Schema } from 'effect';
 	import { Bound, Cluster, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import BillingPane, {
@@ -10,7 +11,9 @@
 		EMPTY_ORGANIZATION_DRAFT,
 		type OrganizationDraft
 	} from './organization-general.svelte';
-	import { workspaceSession } from '../../session.js';
+	import { workspaceSession } from '#lib/client/session.js';
+	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
+	import { OrganizationHostSnapshotSchema } from './organization-state.js';
 
 	/**
 	 * The Organization surface: the organization's own attributes and what it has been billed for.
@@ -33,7 +36,7 @@
 	 * pane that fetched for itself would re-read the whole operations snapshot — which carries the
 	 * workspace's entire source tree — on every tab switch.
 	 */
-	let { tenantId }: { tenantId: string } = $props();
+	let { tenantId, client }: { tenantId: string; client: WorkspaceClient } = $props();
 
 	const session = workspaceSession();
 
@@ -44,37 +47,9 @@
 	let hostLoading = $state(true);
 	let hostFailure = $state<string | null>(null);
 	let activeTab = $state('general');
+	const manifestQuery = $derived(client.system.workspace.manifest({}));
 	/** Whether the Stripe-backed figures have been asked for. They are fetched at most once. */
 	let billingLoaded = $state(false);
-
-	/** Reads a string field off an untyped payload, treating anything else as absent. */
-	const text = (row: unknown, field: string): string => {
-		const value = row === null || typeof row !== 'object' ? undefined : Reflect.get(row, field);
-		return typeof value === 'string' ? value : '';
-	};
-	/** Reads an array field off an untyped payload, treating anything else as empty. */
-	const list = (payload: unknown, field: string): ReadonlyArray<unknown> => {
-		const value =
-			payload === null || typeof payload !== 'object' ? undefined : Reflect.get(payload, field);
-		return Array.isArray(value) ? value : [];
-	};
-	/**
-	 * Reads a finite number off an untyped host payload. Missing or non-numeric fields stay
-	 * non-finite so the estimate decoder can reject a partial object instead of treating it as zero.
-	 */
-	function amount(row: unknown, field: string): number {
-		if (row === null || typeof row !== 'object') {
-			return Number.NaN;
-		}
-		const value = Reflect.get(row, field);
-		if (typeof value !== 'number') {
-			return Number.NaN;
-		}
-		if (!Number.isFinite(value)) {
-			return Number.NaN;
-		}
-		return value;
-	}
 
 	/**
 	 * Reads the host's view of this tenant: the organization record and the metered ledger.
@@ -82,79 +57,33 @@
 	 * Both come from the host's operations seam because both are the host's measurement, not tenant
 	 * state — the runtime meters nothing and holds no organization attributes.
 	 */
-	const loadHost = async (): Promise<void> => {
-		hostLoading = true;
-		hostFailure = null;
-		try {
+	const loadHost = (): Effect.Effect<void> =>
+		Effect.gen(function* () {
+			hostLoading = true;
+			hostFailure = null;
 			// Billing only when the Billing tab is the one being shown. General renders a name, a slug
 			// and a logo, and used to wait on two sequential Stripe calls to do it.
-			const snapshot: unknown = await session.operations.read({ billing: activeTab === 'billing' });
-			const stored = Reflect.get(Object(snapshot), 'organization');
-			profile = {
-				name: text(stored, 'name'),
-				description: text(stored, 'description'),
-				countryCode: text(stored, 'countryCode'),
-				companySize: text(stored, 'companySize'),
-				logoKey: text(stored, 'logoKey') === '' ? null : text(stored, 'logoKey')
-			};
+			const snapshot = yield* Effect.tryPromise(() =>
+				session.operations.read({ billing: activeTab === 'billing' })
+			).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrganizationHostSnapshotSchema)));
+			profile = snapshot.organization;
 			// A record nobody has saved yet reads as a wall of blank fields. The workspace the tenant
 			// routes is named by its own manifest, so until the organization is given a name of its
 			// own the form opens on that name — the first save then persists it with the rest.
-			if (profile.name === '') {
-				const summary: unknown = await session.transport
-					.command('workspace.manifest', {})
-					.catch(() => undefined);
-				const workspaceName = text(summary, 'name');
-				if (workspaceName !== '') profile.name = workspaceName;
-			}
-			usage = list(snapshot, 'usage').map((row) => ({
-				kind: text(row, 'kind'),
-				quantity: Number(Reflect.get(Object(row), 'quantity') ?? 0),
-				// No fallback: a row the host sent without its observation time is left non-finite so it
-				// is reported as undated, rather than dated at a moment nothing was measured.
-				observedAtMillis: Number(Reflect.get(Object(row), 'observedAtMillis'))
-			}));
-			const snapshotEstimate = Reflect.get(Object(snapshot), 'usageEstimate');
-			const periodStartMillis = amount(snapshotEstimate, 'periodStartMillis');
-			const periodEndMillis = amount(snapshotEstimate, 'periodEndMillis');
-			const asOfMillis = amount(snapshotEstimate, 'asOfMillis');
-			const monthToDateMicroSgd = amount(snapshotEstimate, 'monthToDateMicroSgd');
-			const projectedMicroSgd = amount(snapshotEstimate, 'projectedMicroSgd');
-			usageEstimate =
-				Number.isFinite(periodStartMillis) && Number.isFinite(periodEndMillis)
-					? {
-							periodStartMillis,
-							periodEndMillis,
-							asOfMillis: Number.isFinite(asOfMillis) ? asOfMillis : periodStartMillis,
-							monthToDateMicroSgd: Number.isFinite(monthToDateMicroSgd) ? monthToDateMicroSgd : 0,
-							projectedMicroSgd: Number.isFinite(projectedMicroSgd) ? projectedMicroSgd : 0,
-							meters: list(snapshotEstimate, 'meters').map((row) => {
-								const monthToDateQuantity = amount(row, 'monthToDateQuantity');
-								const projectedQuantity = amount(row, 'projectedQuantity');
-								const meterMonthToDate = amount(row, 'monthToDateMicroSgd');
-								const meterProjected = amount(row, 'projectedMicroSgd');
-								return {
-									kind: text(row, 'kind'),
-									monthToDateQuantity: Number.isFinite(monthToDateQuantity)
-										? monthToDateQuantity
-										: 0,
-									projectedQuantity: Number.isFinite(projectedQuantity) ? projectedQuantity : 0,
-									monthToDateMicroSgd: Number.isFinite(meterMonthToDate) ? meterMonthToDate : 0,
-									projectedMicroSgd: Number.isFinite(meterProjected) ? meterProjected : 0,
-									method: text(row, 'method')
-								};
-							})
-						}
-					: EMPTY_PERIOD_ESTIMATE;
-			stripeDashboardUrl = text(snapshot, 'stripeDashboardUrl') || 'https://dashboard.stripe.com/';
-		} catch (cause) {
-			hostFailure = cause instanceof Error ? cause.message : 'Unable to read host state.';
-		} finally {
-			hostLoading = false;
-		}
-	};
+			if (profile.name === '' && manifestQuery.current?.name)
+				profile = { ...profile, name: manifestQuery.current.name };
+			usage = snapshot.usage;
+			usageEstimate = snapshot.usageEstimate ?? EMPTY_PERIOD_ESTIMATE;
+			stripeDashboardUrl = snapshot.stripeDashboardUrl;
+		}).pipe(
+			Effect.catch(() => {
+				hostFailure = 'Unable to read host state.';
+				return Effect.void;
+			}),
+			Effect.ensuring(Effect.sync(() => (hostLoading = false)))
+		);
 
-	void loadHost();
+	void Effect.runPromise(loadHost());
 </script>
 
 {#snippet generalContent()}
@@ -190,7 +119,7 @@
 						// actually asked for the numbers, and is where the round trip belongs.
 						if (next === 'billing' && !billingLoaded) {
 							billingLoaded = true;
-							void loadHost();
+							void Effect.runPromise(loadHost());
 						}
 					}}
 					showContent={false}

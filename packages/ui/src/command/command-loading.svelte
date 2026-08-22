@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import type { CommandLoadingProps } from './types.js';
+	import type { CommandLoadingProps } from '#lib/command/types';
 
 	let {
 		ref = $bindable(null),

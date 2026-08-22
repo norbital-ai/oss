@@ -4,7 +4,7 @@
 		"allowImportingTsExtensions": true,
 		"noEmit": true,
 		"target": "ES2024",
-		"paths": { "$lib/*": ["./src/*"] }
+		"paths": { "#lib/*": ["./src/*"] }
 	},
 	"include": ["src/**/*.ts", "src/**/*.svelte"],
 	"exclude": ["build", "tests"]

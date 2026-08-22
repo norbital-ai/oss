@@ -1,4 +1,5 @@
-import type { FeatureColorKey } from '../feature-colors/index.js';
+import { Schema } from 'effect';
+import { FeatureColorKeySchema } from '#lib/feature-colors';
 
 /**
  * A sidebar section heading is the `text-overline` role and nothing more, so the constant
@@ -12,19 +13,21 @@ export const WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS = 'text-xs font-normal sm:text-mi
 export const WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS =
 	'pointer-events-none absolute top-1/2 right-2 flex -translate-y-1/2 items-center justify-center';
 
-export interface WorkspaceOrganizationOption {
-	readonly id: string;
-	readonly name: string;
-	readonly logoUrl?: string | null;
-}
+const WorkspaceOrganizationOptionSchema = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	logoUrl: Schema.optional(Schema.NullOr(Schema.String))
+});
+export type WorkspaceOrganizationOption = typeof WorkspaceOrganizationOptionSchema.Type;
 
-export interface WorkspaceUserSummary {
-	readonly name: string;
-	readonly email: string;
-	readonly role: string;
-	readonly avatarUrl?: string | null;
-	readonly teamLabels: readonly string[];
-}
+const WorkspaceUserSummarySchema = Schema.Struct({
+	name: Schema.String,
+	email: Schema.String,
+	role: Schema.String,
+	avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
+	teamLabels: Schema.Array(Schema.String)
+});
+export type WorkspaceUserSummary = typeof WorkspaceUserSummarySchema.Type;
 
 export interface WorkspaceNavigationItem {
 	readonly key: string;
@@ -32,21 +35,36 @@ export interface WorkspaceNavigationItem {
 	readonly icon: string | null;
 	readonly href: string;
 	readonly active: boolean;
-	/** Compact provenance label for a host-supplied navigation surface. */
 	readonly badge?: string;
-	readonly featureColor?: FeatureColorKey;
-	/** Authored app description, shown by the omni finder beneath the label. */
+	readonly featureColor?: typeof FeatureColorKeySchema.Type;
 	readonly description?: string | null;
-	/** Authored app thumbnail, shown by the omni finder and the overview cards. */
 	readonly thumbnail?: string | null;
-	readonly children?: readonly WorkspaceNavigationItem[];
+	readonly children?: ReadonlyArray<WorkspaceNavigationItem>;
 }
 
+const WorkspaceNavigationItemSchema: Schema.Codec<WorkspaceNavigationItem> = Schema.Struct({
+	key: Schema.String,
+	label: Schema.String,
+	icon: Schema.NullOr(Schema.String),
+	href: Schema.String,
+	active: Schema.Boolean,
+	badge: Schema.optional(Schema.String),
+	featureColor: Schema.optional(FeatureColorKeySchema),
+	description: Schema.optional(Schema.NullOr(Schema.String)),
+	thumbnail: Schema.optional(Schema.NullOr(Schema.String)),
+	children: Schema.optional(
+		Schema.Array(
+			Schema.suspend((): Schema.Codec<WorkspaceNavigationItem> => WorkspaceNavigationItemSchema)
+		)
+	)
+});
+
 /** A team a workspace admin can preview the workspace under. */
-export interface WorkspaceImpersonationTeam {
-	readonly id: string;
-	readonly name: string | null;
-}
+const WorkspaceImpersonationTeamSchema = Schema.Struct({
+	id: Schema.String,
+	name: Schema.NullOr(Schema.String)
+});
+export type WorkspaceImpersonationTeam = typeof WorkspaceImpersonationTeamSchema.Type;
 
 /**
  * Admin team impersonation state for the account menu.
@@ -54,24 +72,23 @@ export interface WorkspaceImpersonationTeam {
  * The shell renders the picker only when the host supplies the data; the host
  * decides who qualifies (admins only) and what teams exist.
  */
-export interface WorkspaceImpersonation {
-	readonly isAdmin: boolean;
-	readonly isActive: boolean;
-	readonly activeTeamIds: readonly string[];
-	readonly teams: readonly WorkspaceImpersonationTeam[];
-}
+const WorkspaceImpersonationSchema = Schema.Struct({
+	isAdmin: Schema.Boolean,
+	isActive: Schema.Boolean,
+	activeTeamIds: Schema.Array(Schema.String),
+	teams: Schema.Array(WorkspaceImpersonationTeamSchema)
+});
+export type WorkspaceImpersonation = typeof WorkspaceImpersonationSchema.Type;
 
-export function toggleWorkspaceNavigationBranch({
-	open,
-	href,
-	expanded,
-	onNavigate
-}: {
+type WorkspaceNavigationBranchParams = {
 	open: boolean;
 	href: string;
 	expanded: boolean;
 	onNavigate?: (href: string) => void;
-}): boolean {
+};
+
+export function toggleWorkspaceNavigationBranch(params: WorkspaceNavigationBranchParams): boolean {
+	const { open, href, expanded, onNavigate } = params;
 	if (!open) {
 		onNavigate?.(href);
 		return expanded;
@@ -79,14 +96,15 @@ export function toggleWorkspaceNavigationBranch({
 	return !expanded;
 }
 
-export interface WorkspaceNavigationModel {
-	readonly activeOrganization: WorkspaceOrganizationOption;
-	readonly organizations: readonly WorkspaceOrganizationOption[];
-	readonly user: WorkspaceUserSummary;
-	readonly system: readonly WorkspaceNavigationItem[];
-	readonly applications: readonly WorkspaceNavigationItem[];
+const WorkspaceNavigationModelSchema = Schema.Struct({
+	activeOrganization: WorkspaceOrganizationOptionSchema,
+	organizations: Schema.Array(WorkspaceOrganizationOptionSchema),
+	user: WorkspaceUserSummarySchema,
+	system: Schema.Array(WorkspaceNavigationItemSchema),
+	applications: Schema.Array(WorkspaceNavigationItemSchema),
 	/** Optional destination for the Applications section label, such as an app directory. */
-	readonly applicationsHref?: string;
+	applicationsHref: Schema.optional(Schema.String),
 	/** Compact account-adjacent tools, rendered above notifications in the sidebar footer. */
-	readonly utilities?: readonly WorkspaceNavigationItem[];
-}
+	utilities: Schema.optional(Schema.Array(WorkspaceNavigationItemSchema))
+});
+export type WorkspaceNavigationModel = typeof WorkspaceNavigationModelSchema.Type;

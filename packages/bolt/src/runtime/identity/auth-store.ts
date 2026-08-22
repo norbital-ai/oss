@@ -1,6 +1,7 @@
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { drizzle } from 'drizzle-orm/pg-proxy';
-import { authSchema } from './auth-tables.js';
+import { Effect, Record as EffectRecord } from 'effect';
+import { AUTH_MODELS, SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 
 /**
  * Better Auth over a host facility, through Drizzle.
@@ -26,10 +27,13 @@ import { authSchema } from './auth-tables.js';
 export type ExecuteQuery = (
 	sql: string,
 	parameters: ReadonlyArray<unknown>
-) => Promise<{
-	readonly rows: ReadonlyArray<Record<string, unknown>>;
-	readonly affectedRows: number;
-}>;
+) => Effect.Effect<
+	{
+		readonly rows: ReadonlyArray<Record<string, unknown>>;
+		readonly affectedRows: number;
+	},
+	unknown
+>;
 
 /**
  * Drizzle's proxy driver wants positional rows; a facility answers with named ones.
@@ -41,14 +45,24 @@ export type ExecuteQuery = (
 const positional = (rows: ReadonlyArray<Record<string, unknown>>): Array<Array<unknown>> =>
 	rows.map((row) => Object.values(row));
 
+/** Better Auth's required Drizzle view, selected from the canonical compiled system models. */
+const authSchema = Object.freeze(
+	EffectRecord.mapEntries(AUTH_MODELS, (name) => [name, SYSTEM_MODEL_TABLES[name]])
+);
+
 export const makeAuthStore = (execute: ExecuteQuery) => {
-	const database = drizzle(async (sql, parameters, method) => {
-		const result = await execute(sql, parameters);
-		// `execute` asks for the driver's own result shape; `all` asks for rows to map. Only the
-		// latter is positional, and returning arrays for both is what makes `returning()` come back
-		// as a list of undefined columns.
-		return { rows: method === 'all' ? positional(result.rows) : [...result.rows] };
-	});
+	const database = drizzle((sql, parameters, method) =>
+		Effect.runPromise(
+			execute(sql, parameters).pipe(
+				Effect.map((result) => ({
+					// `execute` asks for the driver's own result shape; `all` asks for rows to map. Only
+					// the latter is positional, and returning arrays for both is what makes `returning()`
+					// come back as a list of undefined columns.
+					rows: method === 'all' ? positional(result.rows) : [...result.rows]
+				}))
+			)
+		)
+	);
 	return drizzleAdapter(database, {
 		provider: 'pg',
 		schema: authSchema,

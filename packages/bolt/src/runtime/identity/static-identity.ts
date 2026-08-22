@@ -1,4 +1,4 @@
-import type { Identity } from './identity.js';
+import type * as Identity from '#lib/runtime/identity/identity.js';
 
 /**
  * The static identities this runtime mints, and the one rule they all obey.
@@ -36,7 +36,7 @@ export const automationPrincipalId = (automationName: string): string =>
  *   ceiling for everybody — a linked contractor who administers the web app reaches exactly what an
  *   anonymous sender reaches, no more.
  * - **Identity is the sender's, and only narrows.** `userId` becomes the matched account's, so a
- *   grant carrying `${requestor.norbital_id}` resolves to that person and returns *their* rows where
+ *   grant carrying `${requestor.id}` resolves to that person and returns *their* rows where
  *   the bare principal would match none. A narrowing, never a widening.
  * - **`admin` is dropped.** `AccessControl.decide` short-circuits on `subject.admin` before it
  *   consults a single policy, so carrying an administrator's flag across would make their phone a
@@ -49,14 +49,16 @@ export const envoySubject = (
 	envoy: { readonly name: string; readonly policies: ReadonlyArray<string> },
 	tenantId: string,
 	linked: Readonly<{ readonly userId: string; readonly email?: string }> | undefined
-): Identity.Subject => ({
-	userId: linked?.userId ?? envoyPrincipalId(envoy.name),
-	tenantId,
-	teamPath: [],
-	policies: [...envoy.policies],
-	admin: false,
-	...(linked?.email === undefined ? {} : { email: linked.email })
-});
+): Identity.Subject => {
+	const subject = {
+		userId: linked?.userId ?? envoyPrincipalId(envoy.name),
+		tenantId,
+		teamPath: [],
+		policies: [...envoy.policies],
+		admin: false
+	};
+	return linked?.email === undefined ? subject : { ...subject, email: linked.email };
+};
 
 /**
  * The subject one automation run acts under.
@@ -94,5 +96,3 @@ export const seedSubject = (tenantId: string): Identity.Subject => ({
 	policies: [],
 	admin: false
 });
-
-export * as StaticIdentity from './static-identity.js';

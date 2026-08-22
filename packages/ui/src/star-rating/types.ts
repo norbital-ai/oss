@@ -1,7 +1,7 @@
 import type { Snippet } from 'svelte';
 
 // types.ts
-export type RatingGroupItemState = 'active' | 'partial' | 'inactive';
+type RatingGroupItemState = 'active' | 'partial' | 'inactive';
 
 export interface StarRatingStarProps {
 	index: number;

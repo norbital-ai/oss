@@ -13,8 +13,8 @@ import { extractRelationships } from '../../src/compiler/model-fields.js';
 const source = `
 export default defineRelationships((r) => ({
 	payslips: {
-		run: cascade(r.one.payroll_runs({ from: r.payslips.payroll_run_id, to: r.payroll_runs.norbital_id })),
-		employment: r.one.employments({ from: r.payslips.employment_id, to: r.employments.norbital_id })
+		run: cascade(r.one.payroll_runs({ from: r.payslips.payroll_run_id, to: r.payroll_runs.id })),
+		employment: r.one.employments({ from: r.payslips.employment_id, to: r.employments.id })
 	}
 }));
 `;

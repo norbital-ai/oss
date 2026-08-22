@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { WebhookSignatureSpec } from '../../authoring/contracts-schema.js';
-import { WEBHOOK_DEFAULT_TOLERANCE_SECONDS } from '../../authoring/workspace-schema.js';
+import type { WebhookSignatureSpec } from '#lib/authoring/contracts-schema.js';
+import { WEBHOOK_DEFAULT_TOLERANCE_SECONDS } from '#lib/authoring/workspace-schema.js';
 
 /**
  * Whether a pushed delivery really came from the source, decided before anything reads its body.
@@ -34,9 +34,9 @@ import { WEBHOOK_DEFAULT_TOLERANCE_SECONDS } from '../../authoring/workspace-sch
  * absence rather than hidden — see `verifyDelivery`'s return.
  */
 
-export type SignatureRefusal = Readonly<{ readonly reason: string }>;
+type SignatureRefusal = Readonly<{ readonly reason: string }>;
 
-export type SignatureProof = Readonly<{
+type SignatureProof = Readonly<{
 	/** The verified digest, hex-encoded. Used as a delivery key when the source names no event id. */
 	readonly digest: string;
 	/**
@@ -52,7 +52,7 @@ export type SignatureProof = Readonly<{
 	readonly replayChecked: boolean;
 }>;
 
-export type SignatureOutcome =
+type SignatureOutcome =
 	| Readonly<{ readonly verified: true; readonly proof: SignatureProof }>
 	| Readonly<{ readonly verified: false; readonly refusal: SignatureRefusal }>;
 
@@ -121,7 +121,7 @@ const timestampMs = (value: string): number | undefined => {
 	return Number.isNaN(parsed) ? undefined : parsed;
 };
 
-export type Delivery = Readonly<{
+type Delivery = Readonly<{
 	readonly headers: Readonly<Record<string, string>>;
 	/** The request body exactly as it arrived. Never a re-serialisation of the parsed document. */
 	readonly body: string;

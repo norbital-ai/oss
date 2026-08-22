@@ -1,4 +1,5 @@
 import type { Snippet } from 'svelte';
+import type { Effect } from 'effect';
 import type { FormSchema, InferSchema } from '../form/form_state.svelte';
 
 export type Step<TFinal extends FormSchema> = {
@@ -13,7 +14,7 @@ export type StepFormSubmitErrors = {
 };
 
 export type StepFormSubmitContract<TData> = {
-	handleSubmit: (event: Event) => void | Promise<void>;
+	handleSubmit: (event: Event) => void | Effect.Effect<void, unknown>;
 	readonly isSubmitting: boolean;
 	readonly errors: StepFormSubmitErrors;
 	getData: () => TData;

@@ -1,4 +1,4 @@
-name: Release fixed beta packages
+name: Release packages
 
 on:
   push:
@@ -47,21 +47,13 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
 
-      # Build every publishable package once, before pnpm runs each package's prepack.
+      # Run the same package gates as CI before anything can reach the registry. This builds every
+      # publishable package once, so each package's prepack below is a turbo cache hit.
       #
-      # Each package's `prepack` is `turbo run build --filter=<pkg>`. Building here avoids repeating
-      # the dependency builds once for every package published below.
-      # Building here leaves each prepack a cache hit, so the sequential packs do no repeated work.
-      # It must run through turbo, and not `pnpm packages:build`, so that turbo's cache is the thing
-      # that gets populated — a pnpm-driven build produces the same output and still leaves every
-      # prepack a cache miss.
-      #
-      # This used to anchor on `...@norbital-ai/pod`, whose dependency closure happened to be exactly
-      # the publishable set. Pod and platform-utils are gone, and `ui` now closes over what is left:
-      # it pulls in std and config. Keep this filter in step with `publicPackageDirectories` in
-      # `scripts/lib/package-release.mjs`, which is what `publication:check` reads.
-      - name: Build publishable packages
-        run: pnpm exec turbo run build --filter=...@norbital-ai/ui --filter=...@norbital-ai/bolt --filter=...@norbital-ai/bolt-server
+      # `check:packages:ci` also packs and inspects every public archive, including declaration emit,
+      # local-protocol removal, license, provenance metadata, and the coherent release version.
+      - name: Check publishable packages
+        run: pnpm check:packages:ci
 
       # Skipped, not failed, when this version is already on the registry.
       #
@@ -73,12 +65,14 @@ jobs:
       # Checked per package rather than once, because the set must stay coherent: if a version is
       # only partly published, the remaining packages still publish and the set converges without
       # turning an ordinary source-only push into a failed release.
-      - name: Publish one coherent beta package set
+      - name: Publish one coherent package set
         run: |
           set -euo pipefail
           published=0
           skipped=0
-          for package in config std ui bolt-protocol bolt-server bolt; do
+          mapfile -t packages < <(node --input-type=module -e \
+            "import { publicPackageDirectories } from './scripts/lib/package-release.mjs'; console.log(publicPackageDirectories.join('\\n'))")
+          for package in "${packages[@]}"; do
             name="$(node -p "require('./packages/$package/package.json').name")"
             version="$(node -p "require('./packages/$package/package.json').version")"
             if npm view "$name@$version" version --registry="$PACKAGE_REGISTRY_URL" >/dev/null 2>&1; then

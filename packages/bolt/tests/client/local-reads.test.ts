@@ -4,14 +4,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
-import { vector } from '@electric-sql/pglite/vector';
-import { Collections } from '../../src/runtime/collections/collections.js';
-import { Sync } from '../../src/runtime/sync/sync.js';
-import { WorkspaceSchema } from '../../src/runtime/schema/workspace-schema.js';
-import { Workspace } from '../../src/runtime/workspace.js';
+import { vector } from '@electric-sql/pglite-pgvector';
+import * as Collections from '../../src/runtime/collections/collections.js';
+import * as Sync from '../../src/runtime/sync/sync.js';
+import * as WorkspaceSchema from '../../src/runtime/schema/workspace-schema.js';
+import * as Workspace from '../../src/runtime/workspace.js';
 import { openLocalDatabase, type BootstrapTransport } from '../../src/client/replica/bootstrap.js';
 import { createLocalReader } from '../../src/client/replica/local-reads.js';
-import type { PGliteLike } from '../../src/client/replica/pglite-sql.js';
+import { adaptPGlite } from '../../src/client/replica/pglite-loader.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -41,18 +41,18 @@ afterEach(async () => {
 });
 
 const transportFor = (runtime: BoltTestRuntime): BootstrapTransport => ({
-	command: async (command, input) => {
+	command: (command, input) => {
 		const record =
 			input !== null && typeof input === 'object' && !Array.isArray(input) ? input : {};
-		return runtime.runtime.runPromise(
-			Effect.gen(function* () {
-				const sync = yield* Sync.Service;
-				switch (command) {
-					case 'sync.provisioning': {
-						const plan = (yield* WorkspaceSchema.Service).plan();
-						const workspace = yield* Workspace.Service;
-						return {
-							steps: [
+		return Effect.tryPromise(() =>
+			runtime.runtime.runPromise(
+				Effect.gen(function* () {
+					const sync = yield* Sync.Service;
+					switch (command) {
+						case 'sync.provisioning': {
+							const plan = (yield* WorkspaceSchema.Service).plan();
+							const workspace = yield* Workspace.Service;
+							const steps = [
 								...plan.steps
 									.filter(({ id }) => id.startsWith('bolt:'))
 									.map(({ id, sql }) => ({ id, sql })),
@@ -67,45 +67,56 @@ const transportFor = (runtime: BoltTestRuntime): BootstrapTransport => ({
 								...plan.steps
 									.filter(({ id }) => !id.startsWith('bolt:'))
 									.map(({ id, sql }) => ({ id, sql }))
-							],
-							fingerprint: plan.fingerprint,
-							collections: workspace.definition.collections.map(({ name, fields }) => ({
-								name,
-								fields
-							})),
-							relations: workspace.definition.relations ?? []
-						} as unknown as Schema.Json;
+							];
+							const provisioning = {
+								steps,
+								fingerprint: WorkspaceSchema.fingerprintSchemaSteps(steps),
+								collections: workspace.definition.collections.map(({ name, fields }) => ({
+									name,
+									fields
+								})),
+								relations: workspace.definition.relations ?? []
+							};
+							return Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(
+								JSON.stringify(provisioning)
+							);
+						}
+						case 'sync.shape':
+							return (yield* sync.shape(adminSubject)) as unknown as Schema.Json;
+						case 'sync.snapshot':
+							return (yield* sync.snapshot(
+								runtime.effectId(
+									`snapshot:${String(Reflect.get(record, 'collection'))}:${String(Reflect.get(record, 'after') ?? 'first')}`
+								),
+								adminSubject,
+								String(Reflect.get(record, 'collection')),
+								typeof Reflect.get(record, 'after') === 'string'
+									? String(Reflect.get(record, 'after'))
+									: undefined,
+								Number(Reflect.get(record, 'limit') ?? 500)
+							)) as unknown as Schema.Json;
+						default:
+							throw new Error(`unexpected command ${command}`);
 					}
-					case 'sync.shape':
-						return (yield* sync.shape(adminSubject)) as unknown as Schema.Json;
-					case 'sync.snapshot':
-						return (yield* sync.snapshot(
-							runtime.effectId(
-								`snapshot:${String(Reflect.get(record, 'collection'))}:${String(Reflect.get(record, 'after') ?? 'first')}`
-							),
-							adminSubject,
-							String(Reflect.get(record, 'collection')),
-							typeof Reflect.get(record, 'after') === 'string'
-								? String(Reflect.get(record, 'after'))
-								: undefined,
-							Number(Reflect.get(record, 'limit') ?? 500)
-						)) as unknown as Schema.Json;
-					default:
-						throw new Error(`unexpected command ${command}`);
-				}
-			})
+				})
+			)
 		);
 	}
 });
 
 const openReplica = async (runtime: BoltTestRuntime) =>
-	openLocalDatabase(transportFor(runtime), async () => {
-		const database = await PGlite.create('memory://', {
-			extensions: { pg_trgm, btree_gist, vector }
-		});
-		databases.push(database);
-		return database as unknown as PGliteLike;
-	});
+	Effect.runPromise(
+		openLocalDatabase(transportFor(runtime), () =>
+			Effect.tryPromise(() =>
+				PGlite.create('memory://', {
+					extensions: { pg_trgm, btree_gist, vector }
+				})
+			).pipe(
+				Effect.tap((database) => Effect.sync(() => databases.push(database))),
+				Effect.map(adaptPGlite)
+			)
+		)
+	);
 
 /** Rows as the server would return them, through the real Collections service. */
 const serverRows = (runtime: BoltTestRuntime, input: Record<string, unknown>) =>
@@ -151,11 +162,13 @@ describe('reads answered by the replica', () => {
 			where: { team: { eq: 'flight' } },
 			orderBy: { name: 'asc' }
 		};
-		const local = await reader.answer('collections.findMany', query as never);
+		const local = await Effect.runPromise(reader.answer('collections.findMany', query as never));
 		const server = await serverRows(harness, query);
 
 		expect(local).toBeDefined();
-		const localRows = (local as { readonly rows: ReadonlyArray<Record<string, unknown>> }).rows;
+		const localRows = Schema.decodeUnknownSync(
+			Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) })
+		)(local).rows;
 		// The same rows, in the same order — the point of reusing the server's own compiler.
 		expect(localRows.map((row) => row['name'])).toEqual(
 			server.map((row) => Reflect.get(row as object, 'name'))
@@ -169,10 +182,12 @@ describe('reads answered by the replica', () => {
 		const replica = await openReplica(harness);
 		const reader = createLocalReader(replica.engine, replica.shape, replica.readable);
 
-		const counted = await reader.answer('collections.count', {
-			collection: 'people',
-			where: { team: { eq: 'core' } }
-		} as never);
+		const counted = await Effect.runPromise(
+			reader.answer('collections.count', {
+				collection: 'people',
+				where: { team: { eq: 'core' } }
+			} as never)
+		);
 		expect(counted).toBe(2);
 	});
 
@@ -185,11 +200,15 @@ describe('reads answered by the replica', () => {
 		// Four rows, asking for two: the caller needs a `nextCursor`, and only the server can mint one
 		// that seeks correctly.
 		expect(
-			await reader.answer('collections.findMany', { collection: 'people', limit: 2 } as never)
+			await Effect.runPromise(
+				reader.answer('collections.findMany', { collection: 'people', limit: 2 } as never)
+			)
 		).toBeUndefined();
 		// The whole result fits, so there is no successor and `nextCursor: null` is the honest answer.
 		expect(
-			await reader.answer('collections.findMany', { collection: 'people', limit: 50 } as never)
+			await Effect.runPromise(
+				reader.answer('collections.findMany', { collection: 'people', limit: 50 } as never)
+			)
 		).toBeDefined();
 	});
 
@@ -202,13 +221,17 @@ describe('reads answered by the replica', () => {
 		// `with` expands relationships, which lives in the Collections service. Ignoring the key would
 		// answer a different question while looking successful.
 		expect(
-			await reader.answer('collections.findMany', {
-				collection: 'people',
-				with: { team: true }
-			} as never)
+			await Effect.runPromise(
+				reader.answer('collections.findMany', {
+					collection: 'people',
+					with: { team: true }
+				} as never)
+			)
 		).toBeUndefined();
 		expect(
-			await reader.answer('collections.findMany', { collection: 'people', search: 'ada' } as never)
+			await Effect.runPromise(
+				reader.answer('collections.findMany', { collection: 'people', search: 'ada' } as never)
+			)
 		).toBeUndefined();
 	});
 
@@ -221,7 +244,9 @@ describe('reads answered by the replica', () => {
 		// The replica holds only permitted rows, but a collection outside the reported shape must never
 		// be served from it regardless.
 		expect(
-			await reader.answer('collections.findMany', { collection: 'people' } as never)
+			await Effect.runPromise(
+				reader.answer('collections.findMany', { collection: 'people' } as never)
+			)
 		).toBeUndefined();
 	});
 
@@ -231,10 +256,14 @@ describe('reads answered by the replica', () => {
 		const reader = createLocalReader(replica.engine, replica.shape, replica.readable);
 
 		expect(
-			await reader.answer('collections.create', { collection: 'people' } as never)
+			await Effect.runPromise(
+				reader.answer('collections.create', { collection: 'people' } as never)
+			)
 		).toBeUndefined();
 		expect(
-			await reader.answer('collections.history', { collection: 'people' } as never)
+			await Effect.runPromise(
+				reader.answer('collections.history', { collection: 'people' } as never)
+			)
 		).toBeUndefined();
 	});
 });

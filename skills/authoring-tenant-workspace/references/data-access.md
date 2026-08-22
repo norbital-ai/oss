@@ -28,9 +28,9 @@ build the next handle with `$derived` — never `$effect` or `watch`. Templates 
 ```svelte
 <!-- RIGHT -->
 const selectedCompanyId = $derived(
-	companyId != null && companies.some((c) => c.norbital_id === companyId)
+	companyId != null && companies.some((c) => c.id === companyId)
 		? companyId
-		: (companies[0]?.norbital_id ?? null)
+		: (companies[0]?.id ?? null)
 );
 const rosterQuery = $derived(
 	selectedCompanyId == null
@@ -73,7 +73,7 @@ Do **not** create N+1 patterns (one query per row, or one query per relation col
 <!-- WRONG: N queries (or N parallel handles) for N rows -->
 {#each rows as row}
 	{@const emp = client.db.employments.findFirst({
-		where: { norbital_id: { eq: row.employment_id } }
+		where: { id: { eq: row.employment_id } }
 	})}
 {/each}
 ```
@@ -137,7 +137,7 @@ create: {
 				where: {
 					employment_id: { in: employmentIds },
 					kind: { eq: 'TIME_OFF' },
-					norbital_approval_id: { isNull: true },
+					approval_id: { isNull: true },
 					from_date: { lte: dates.at(-1) },
 					to_date: { gte: dates[0] }
 				},
@@ -256,14 +256,14 @@ Effect.gen(function* () {
 	// Bad: N employments produce N database calls.
 	for (const employment of employments) {
 		const terms = yield* api.db.query.employment_terms.findMany({
-			where: { employment_id: { eq: employment.norbital_id } },
+			where: { employment_id: { eq: employment.id } },
 			limit: 5000
 		});
 		validateTerms(employment, terms);
 	}
 
 	// Good: one filtered query and O(1) lookup per employment.
-	const employmentIds = [...new Set(employments.map((row) => row.norbital_id))];
+	const employmentIds = [...new Set(employments.map((row) => row.id))];
 	const terms = employmentIds.length
 		? yield* api.db.query.employment_terms.findMany({
 				where: { employment_id: { in: employmentIds } },
@@ -278,7 +278,7 @@ Effect.gen(function* () {
 	}
 
 	for (const employment of employments) {
-		validateTerms(employment, termsByEmployment.get(employment.norbital_id) ?? []);
+		validateTerms(employment, termsByEmployment.get(employment.id) ?? []);
 	}
 });
 ```
@@ -305,7 +305,7 @@ Effect.gen(function* () {
 			AND: [{ employment_id: { in: employmentIds } }, { work_date: { gte: start, lte: end } }]
 		},
 		columns: {
-			norbital_id: true,
+			id: true,
 			employment_id: true,
 			work_date: true,
 			clock_in: true,
@@ -341,11 +341,11 @@ const employments =
 	yield *
 	api.db.query.employments.findMany({
 		where: { legal_entity_id: { eq: legalEntityId } },
-		columns: { norbital_id: true, employee_id: true },
+		columns: { id: true, employee_id: true },
 		with: {
 			time_entry_employment: {
 				where: { work_date: { gte: start, lte: end } },
-				columns: { norbital_id: true, work_date: true, clock_in: true, clock_out: true }
+				columns: { id: true, work_date: true, clock_in: true, clock_out: true }
 			}
 		},
 		limit: 5000
@@ -367,7 +367,7 @@ const near =
 		metric: 'l2', // binary PDQ embedding; use 'cosine' for Gemini omni
 		maxDistance: Math.sqrt(31),
 		limit: 50,
-		excludeIds: [record.norbital_id]
+		excludeIds: [record.id]
 	});
 // each row includes `.distance`
 ```

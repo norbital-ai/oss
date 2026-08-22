@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { refuse, AuthoredRefusal } from '../../src/authoring/refusal.js';
-import { Collections } from '../../src/runtime/collections/collections.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import {
 	adminSubject,
@@ -34,9 +34,9 @@ const definition = workspace({
 	automations: [],
 	envoys: [],
 	integrations: [],
-		prompt: 'You are the test workspace agent.',
-		tools: [],
-		skills: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
 	requiredFacilities: [],
 	policies: [
 		policy({
@@ -101,7 +101,7 @@ describe('a batched write that fails', () => {
 		expect(failure).toBeInstanceOf(Collections.MutationPhaseFailure);
 		expect(failure).toMatchObject({ phase: 'prepare', collection: 'notes', committed: [] });
 		// The claim `committed: []` makes, checked against the database rather than taken on trust.
-		expect(await harness.database.query('select norbital_id from notes')).toHaveLength(0);
+		expect(await harness.database.query('select id from notes')).toHaveLength(0);
 		// And the sentence the author wrote is still the failure underneath, not a casualty of it.
 		const cause = Collections.unwrapMutationPhase(failure);
 		expect(cause).toBeInstanceOf(AuthoredRefusal);
@@ -118,12 +118,10 @@ describe('a batched write that fails', () => {
 		expect(failure).toMatchObject({ phase: 'settle', collection: 'notes' });
 		// The transaction committed before the `after` hook ran, so the rows exist. This is exactly
 		// the case a caller must not retry, and `committed` is what lets it tell.
-		const stored = await harness.database.query('select norbital_id from notes');
+		const stored = await harness.database.query('select id from notes');
 		expect(stored).toHaveLength(2);
 		const committed = (failure as Collections.MutationPhaseFailure).committed;
-		expect([...committed].toSorted()).toEqual(
-			stored.map((row) => String(row['norbital_id'])).toSorted()
-		);
+		expect([...committed].toSorted()).toEqual(stored.map((row) => String(row['id'])).toSorted());
 		const cause = Collections.unwrapMutationPhase(failure);
 		expect(cause).toBeInstanceOf(AuthoredRefusal);
 		expect((cause as AuthoredRefusal).action).toBe('create.after');

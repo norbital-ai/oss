@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { useI18n, type UiKeys } from '../../../i18n/index.js';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { ParseError } from 'papaparse';
 
 	const { t } = useI18n<UiKeys>();

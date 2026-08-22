@@ -4,6 +4,7 @@ import type {
 	CollectionRecord
 } from '@norbital-ai/std/collection';
 import { PersistedState } from 'runed';
+import { Number as Number_ } from 'effect';
 
 /**
  * A filter path checked against the row it filters.
@@ -55,7 +56,7 @@ const MAX_COLLECTION_PAGE_SIZE = 500;
  */
 export class CollectionQueryState<TRow extends object = CollectionRecord> {
 	#search = $state('');
-	#filters = $state<readonly TypedCollectionFilter<TRow>[]>([]);
+	#filters = $state<readonly CollectionFilter[]>([]);
 	#pageIndex = $state(0);
 	#pageSize = $state(DEFAULT_COLLECTION_PAGE_SIZE);
 	#storedPageSize: PersistedState<number> | null = null;
@@ -79,7 +80,7 @@ export class CollectionQueryState<TRow extends object = CollectionRecord> {
 		return this.#search;
 	}
 
-	get filters(): readonly TypedCollectionFilter<TRow>[] {
+	get filters(): readonly CollectionFilter[] {
 		return this.#filters;
 	}
 
@@ -103,7 +104,7 @@ export class CollectionQueryState<TRow extends object = CollectionRecord> {
 		this.#pageIndex = 0;
 	}
 
-	setFilters(filters: readonly TypedCollectionFilter<TRow>[]): void {
+	setFilters(filters: readonly CollectionFilter[]): void {
 		this.#filters = filters;
 		this.#pageIndex = 0;
 	}
@@ -145,5 +146,5 @@ export class CollectionQueryState<TRow extends object = CollectionRecord> {
 
 function clampPageSize(pageSize: number): number {
 	if (!Number.isFinite(pageSize)) return DEFAULT_COLLECTION_PAGE_SIZE;
-	return Math.max(1, Math.min(MAX_COLLECTION_PAGE_SIZE, Math.trunc(pageSize)));
+	return Number_.clamp(Math.trunc(pageSize), { minimum: 1, maximum: MAX_COLLECTION_PAGE_SIZE });
 }

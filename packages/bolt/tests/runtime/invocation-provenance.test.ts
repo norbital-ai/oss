@@ -12,9 +12,10 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { automation } from '../../src/authoring/automations-schema.js';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { AccessControl } from '../../src/runtime/access/access-control.js';
-import { Approvals } from '../../src/runtime/approvals/approvals.js';
-import { Collections, PendingApproval } from '../../src/runtime/collections/collections.js';
+import * as AccessControl from '../../src/runtime/access/access-control.js';
+import * as Approvals from '../../src/runtime/approvals/approvals.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
+import { PendingApproval } from '../../src/runtime/collections/collections.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	adminSubject,
@@ -158,7 +159,9 @@ const gatedWorkspace = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+	],
 	teams: {
 		admin: ['admin']
 	},
@@ -349,12 +352,10 @@ describe('invocation provenance', () => {
 		// gate is gone is the record settling. It is the lock and not the row's existence that says so
 		// now — a gated create writes its row up front and holds it, so "no row" no longer distinguishes
 		// a refused resume from an accepted one, and asserting it would have passed either way.
-		const heldAfterPlugin = await harness.database.query('select norbital_approval_id from people');
+		const heldAfterPlugin = await harness.database.query('select approval_id from people');
 		const posted = await outcomeOf(harness, plugin('collections.resume', { requestId }));
-		expect(heldAfterPlugin[0]?.['norbital_approval_id']).toEqual(expect.any(String));
-		expect(await harness.database.query('select norbital_approval_id from people')).toEqual(
-			heldAfterPlugin
-		);
+		expect(heldAfterPlugin[0]?.['approval_id']).toEqual(expect.any(String));
+		expect(await harness.database.query('select approval_id from people')).toEqual(heldAfterPlugin);
 		expect(posted._tag === 'Failure' ? posted.failure : undefined).toBeInstanceOf(
 			AccessControl.AccessDenied
 		);
@@ -365,8 +366,8 @@ describe('invocation provenance', () => {
 		expect(resumed.value).toMatchObject({ resumed: true, requestId });
 		expect(await harness.database.query('select name from people')).toEqual([{ name: 'Ada' }]);
 		// Released only by the task: the record is settled, and nothing holds it.
-		expect(await harness.database.query('select norbital_approval_id from people')).toEqual([
-			{ norbital_approval_id: null }
+		expect(await harness.database.query('select approval_id from people')).toEqual([
+			{ approval_id: null }
 		]);
 	});
 });

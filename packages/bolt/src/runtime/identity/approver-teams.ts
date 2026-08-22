@@ -1,7 +1,7 @@
 import { Effect, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import type { WorkspaceDefinition } from '../../authoring/workspace-schema.js';
-import { Database } from '../facilities/database.js';
+import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
+import * as Database from '#lib/runtime/facilities/database.js';
 
 /**
  * The one field of an approval configuration that binds it to a team row.
@@ -33,7 +33,7 @@ const ApproverSteps = Schema.Struct({
  * The *authored* spelling is what survives deduplication, because that is what an operator reading
  * the settings surface should see next to the code they wrote.
  */
-export type ApprovalStep = Readonly<{
+type ApprovalStep = Readonly<{
 	/** The policy the step was declared in, so a diagnostic can name the file to open. */
 	readonly policy: string;
 	/** The collection the guarded grant is on — what an approver is being asked to look at. */
@@ -48,7 +48,7 @@ export type ApprovalStep = Readonly<{
 	 * It is here so a diagnostic can name the step the way a log line and an approval row do, rather
 	 * than by an index that means nothing outside the array it came from.
 	 */
-	readonly id?: string;
+	readonly id?: string | undefined;
 	readonly approvers: ReadonlyArray<string>;
 }>;
 
@@ -72,7 +72,7 @@ export const approvalSteps = (definition: WorkspaceDefinition): ReadonlyArray<Ap
 					collection: grant.collection,
 					action: grant.action,
 					index,
-					...(step.id === undefined ? {} : { id: step.id }),
+					id: step.id,
 					approvers: step.approvers
 				});
 			});
@@ -134,7 +134,7 @@ export const reconcileApproverTeams = Effect.fn('Bolt.reconcileApproverTeams')(f
 				// and sits under nobody: descent is unconditional, so *where* a team is placed is the
 				// whole of what it composes, and placing one is an operator's decision in `teams.update`
 				// rather than something the reconciler makes on their behalf.
-				sql: `insert into bolt_team ("norbital_id", "name")
+				sql: `insert into bolt_team ("id", "name")
 				      select gen_random_uuid(), $1::text
 				       where not exists (select 1 from bolt_team where lower("name") = lower($1::text))
 				   returning "name"`,
@@ -160,5 +160,3 @@ export const reconcileApproverTeams = Effect.fn('Bolt.reconcileApproverTeams')(f
 	}
 	return created;
 });
-
-export * as ApproverTeams from './approver-teams.js';

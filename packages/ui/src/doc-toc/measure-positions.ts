@@ -1,4 +1,4 @@
-import type { DocTocItem } from './types';
+import type { DocTocItem } from '#lib/doc-toc/types';
 
 export type DocTocPosition = [top: number, bottom: number] | null;
 

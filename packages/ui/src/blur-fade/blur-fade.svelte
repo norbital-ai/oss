@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
-	import { onMount } from 'svelte';
+	import type { Attachment } from 'svelte/attachments';
 	import type { HTMLAttributes } from 'svelte/elements';
 
 	let {
@@ -24,49 +24,28 @@
 		inView?: boolean;
 	} = $props();
 
-	let mounted = $state(false);
-	let isInView = $state(false);
-	const inViewMode = $derived(inView);
-
-	// stupidity:allow V11 -- mounted intentionally starts the entrance transition after hydration
-	onMount(() => {
-		// Small delay to ensure DOM is ready
-		const timer = setTimeout(() => {
-			mounted = true;
-		}, 50);
-
-		// If inView mode is enabled, use Intersection Observer
-		if (inViewMode && ref) {
-			const observer = new IntersectionObserver(
-				(entries) => {
-					entries.forEach((entry) => {
-						if (entry.isIntersecting) {
-							isInView = true;
-							observer.disconnect();
-						}
-					});
-				},
-				{ threshold: 0.1 }
-			);
-
-			if (ref) observer.observe(ref);
-
-			return () => {
-				clearTimeout(timer);
-				observer.disconnect();
-			};
+	const animate: Attachment<HTMLDivElement> = (element) => {
+		if (!inView) {
+			const frame = requestAnimationFrame(() => element.classList.add('animate'));
+			return () => cancelAnimationFrame(frame);
 		}
-
-		return () => clearTimeout(timer);
-	});
-
-	const shouldAnimate = $derived(inViewMode ? isInView : mounted);
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (!entries.some((entry) => entry.isIntersecting)) return;
+				element.classList.add('animate');
+				observer.disconnect();
+			},
+			{ threshold: 0.1 }
+		);
+		observer.observe(element);
+		return () => observer.disconnect();
+	};
 </script>
 
 <div
 	bind:this={ref}
 	class={cn('blur-fade-wrapper', className)}
-	class:animate={shouldAnimate}
+	{@attach animate}
 	style="--delay: {delay}s; --duration: {duration}s; --y-offset: {yOffset}px; --blur: {blur};"
 	{...restProps}
 >

@@ -52,7 +52,7 @@ describe('RAW where entries', () => {
 
 	it('combines with ordinary column conditions rather than replacing them', () => {
 		const query = compiled({
-			norbital_approval_id: { isNull: true },
+			approval_id: { isNull: true },
 			RAW: (
 				table: Record<string, unknown>,
 				{ sql }: { sql: (s: TemplateStringsArray, ...v: unknown[]) => unknown }

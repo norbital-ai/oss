@@ -1,10 +1,11 @@
+import { Schema } from 'effect';
 import {
 	AI_SGD_PER_PROVIDER_USD,
+	BILLING_ACCESS_TIERS,
 	COMPUTE_SGD_PER_SECOND,
 	DISC_SGD_PER_GB_MONTH,
 	FILES_SGD_PER_GB_MONTH,
-	HOURS_PER_BILLING_MONTH,
-	type BillingAccessTier
+	HOURS_PER_BILLING_MONTH
 } from './rate-card.js';
 
 export const BILLING_CURRENCY = 'SGD' as const;
@@ -12,10 +13,20 @@ export const DEFAULT_BILLING_TRIAL_DAYS = 30;
 export const CURRENCY_MINOR_UNITS_PER_MAJOR_UNIT = 100;
 export const PLATFORM_PRODUCT_ID = 'platform';
 
-export type BillingCatalogueInterval = 'month' | 'year';
-export type BillingCataloguePriceModel = 'flat' | 'per_seat' | 'metered';
+/**
+ * The Stripe catalogue surfaces (plans, prices, products) are declared here without a transport
+ * dependency, with the shape owned once by these schemas — a host that pushes the catalogue to
+ * Stripe decodes from the same source of truth the type is derived from.
+ */
+export const BillingCatalogueIntervalSchema = Schema.Literals(['month', 'year']);
+export type BillingCatalogueInterval = Schema.Schema.Type<typeof BillingCatalogueIntervalSchema>;
 
-export const AI_USAGE_METER_ID = 'norbital_ai_cost_sgd_micros_v1';
+export const BillingCataloguePriceModelSchema = Schema.Literals(['flat', 'per_seat', 'metered']);
+export type BillingCataloguePriceModel = Schema.Schema.Type<
+	typeof BillingCataloguePriceModelSchema
+>;
+
+export const AI_USAGE_METER_ID = 'bolt_ai_cost_sgd_micros_v1';
 
 function stripeDecimalCents(sgdPerUnit: number): string {
 	return (sgdPerUnit * CURRENCY_MINOR_UNITS_PER_MAJOR_UNIT)
@@ -38,9 +49,9 @@ const USAGE_METER_UNIT_AMOUNT_CENTS = {
 } as const;
 
 export const USAGE_METER_IDS = {
-	compute: 'norbital_compute_seconds_v1',
-	disc: 'norbital_disc_gb_hours_v1',
-	files: 'norbital_files_gb_hours_v1',
+	compute: 'bolt_compute_seconds_v1',
+	disc: 'bolt_disc_gb_hours_v1',
+	files: 'bolt_files_gb_hours_v1',
 	ai: AI_USAGE_METER_ID
 } as const;
 
@@ -67,54 +78,65 @@ export function aiProviderCostSgdMicros(providerCostUsd: number): number {
 	return Math.round(providerCostUsd * AI_SGD_PER_PROVIDER_USD * 1_000_000);
 }
 
-export type BillingCatalogueTier = {
-	upTo: number | 'inf';
-	amount: string;
-};
+export const BillingCatalogueTierSchema = Schema.Struct({
+	upTo: Schema.Union([Schema.Number, Schema.Literal('inf')]),
+	amount: Schema.String
+});
+export type BillingCatalogueTier = Schema.Schema.Type<typeof BillingCatalogueTierSchema>;
 
-export type BillingProviderEnvironment = 'sandbox' | 'production';
+export const BillingProviderEnvironmentSchema = Schema.Literals(['sandbox', 'production']);
+export type BillingProviderEnvironment = Schema.Schema.Type<
+	typeof BillingProviderEnvironmentSchema
+>;
 
-export type BillingCatalogueProviderPriceIds = {
-	sandbox: string | null;
-	production: string | null;
-};
+export const BillingCatalogueProviderPriceIdsSchema = Schema.Struct({
+	sandbox: Schema.NullishOr(Schema.String),
+	production: Schema.NullishOr(Schema.String)
+});
+export type BillingCatalogueProviderPriceIds = Schema.Schema.Type<
+	typeof BillingCatalogueProviderPriceIdsSchema
+>;
 
-export type BillingCataloguePrice = {
-	id: string;
-	name: string;
-	description: string;
-	model: BillingCataloguePriceModel;
-	interval: BillingCatalogueInterval;
-	checkout: boolean;
-	stripePriceIds: BillingCatalogueProviderPriceIds;
-	amount?: string;
-	unitAmountDecimal?: string;
-	meterId?: string;
-	dimensions?: Readonly<Record<string, string>>;
-	tiersMode?: 'graduated' | 'volume';
-	tiers?: readonly BillingCatalogueTier[];
-};
+export const BillingCataloguePriceSchema = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	description: Schema.String,
+	model: BillingCataloguePriceModelSchema,
+	interval: BillingCatalogueIntervalSchema,
+	checkout: Schema.Boolean,
+	stripePriceIds: BillingCatalogueProviderPriceIdsSchema,
+	amount: Schema.optional(Schema.String),
+	unitAmountDecimal: Schema.optional(Schema.String),
+	meterId: Schema.optional(Schema.String),
+	dimensions: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+	tiersMode: Schema.optional(Schema.Literals(['graduated', 'volume'])),
+	tiers: Schema.optional(Schema.Array(BillingCatalogueTierSchema))
+});
+export type BillingCataloguePrice = Schema.Schema.Type<typeof BillingCataloguePriceSchema>;
 
-export type BillingCataloguePlan = {
-	id: string;
-	trialDays: number;
-	allowPromotionCodes: boolean;
-	checkoutSeatPriceId: BillingCataloguePrice['id'];
-	seatPriceIds: Readonly<Record<BillingAccessTier, BillingCataloguePrice['id']>>;
-};
+export const BillingCataloguePlanSchema = Schema.Struct({
+	id: Schema.String,
+	trialDays: Schema.Number,
+	allowPromotionCodes: Schema.Boolean,
+	checkoutSeatPriceId: Schema.String,
+	seatPriceIds: Schema.Record(Schema.Literals(BILLING_ACCESS_TIERS), Schema.String)
+});
+export type BillingCataloguePlan = Schema.Schema.Type<typeof BillingCataloguePlanSchema>;
 
-export type BillingCatalogueProduct = {
-	id: string;
-	name: string;
-	description: string;
-	prices: readonly BillingCataloguePrice[];
-	plans: readonly BillingCataloguePlan[];
-};
+export const BillingCatalogueProductSchema = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	description: Schema.String,
+	prices: Schema.Array(BillingCataloguePriceSchema),
+	plans: Schema.Array(BillingCataloguePlanSchema)
+});
+export type BillingCatalogueProduct = Schema.Schema.Type<typeof BillingCatalogueProductSchema>;
 
-export type BillingCatalogue = {
-	currency: typeof BILLING_CURRENCY;
-	products: readonly BillingCatalogueProduct[];
-};
+export const BillingCatalogueSchema = Schema.Struct({
+	currency: Schema.Literal(BILLING_CURRENCY),
+	products: Schema.Array(BillingCatalogueProductSchema)
+});
+export type BillingCatalogue = Schema.Schema.Type<typeof BillingCatalogueSchema>;
 
 export function formatBillingAmountFromMinorUnits(
 	amountMinorUnits: string | number,
@@ -279,10 +301,3 @@ export {
 	LOCAL_CLOUD_RATE_CARD,
 	type BillingAccessTier
 } from './rate-card.js';
-export {
-	BILLING_SOURCE_CATALOGUE,
-	BILLING_SOURCE_IDS,
-	BILLING_SOURCE_UNITS,
-	type BillingSourceDefinition,
-	type BillingSourceId
-} from './metering.js';

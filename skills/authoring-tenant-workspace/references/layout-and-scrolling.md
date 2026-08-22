@@ -69,7 +69,7 @@ tab already owns the app inset, so those inner owners do not add `inset`.
 ## The scroll contract
 
 **Never nest two scrollports on the same axis.** The inner one traps scroll — the user gets
-"stuck" in a small region, unable to scroll the parent. The stupidity scanner rule **UI16** flags
+"stuck" in a small region, unable to scroll the parent. Repository-health rule **UI16** flags
 the common cases automatically.
 
 Every framework scroll owner has the same affordances: the thumb is hidden at rest and appears on

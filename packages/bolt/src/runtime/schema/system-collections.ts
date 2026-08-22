@@ -1,250 +1,25 @@
+import { Record as EffectRecord } from 'effect';
+import { compileModel } from '#lib/authoring/model-introspection.js';
+import { SYSTEM_COLLECTION_MODELS } from '#lib/authoring/system-models.js';
 import {
 	collection,
-	field,
 	type CollectionDefinition,
 	type FieldDefinition,
 	type PolicyDeclaration
-} from '../../authoring/workspace-schema.js';
-import { COLONY_SYSTEM_POLICY } from '../access/system-principal.js';
+} from '#lib/authoring/workspace-schema.js';
+import { COLONY_SYSTEM_POLICY } from '#lib/runtime/access/system-principal.js';
 
 /**
- * Collections the runtime owns and authored workspace code reads.
+ * Platform models enter through the same model-to-collection compiler as tenant-authored models.
  *
- * Approval state is not private runtime bookkeeping: a workspace decides what "live" means by
- * filtering on `norbital_approval_id`, and its reports read `approval_request` directly for status,
- * timing, and which rows a request holds. Declaring them here — rather than as hand-written DDL —
- * keeps one source for the schema plan, the where compiler's column list, and lookup.
- *
- * They stay here rather than becoming `src/collections/approval_request/+model.ts` in each workspace,
- * and the reason is that they are not the workspace's to declare. `Approvals` writes these rows in
- * every workspace, including one that authors no collections at all, so a template that omitted the
- * model — or renamed a column in it — would boot a runtime whose only writer has nowhere to write.
- * Twenty-odd templates each holding their own copy of Bolt's table is twenty places for that shape to
- * drift from the service that owns it.
- *
- * What keeps the shape honest is `verify`: it reads `information_schema` and compares every column of
- * `withSystemCollections(definition)` against the live table, so a database whose `approval_request`
- * predates a change here is named column by column and `migrate` refuses to report success. The cost
- * of staying runtime-owned is that `bolt migrate` writes no `ALTER` for them — the plan's
- * `create table if not exists` provisions a new database and cannot evolve an old one — so changing a
- * field here fails an existing workspace loudly rather than migrating it. That is a live limitation,
- * not a covered case.
+ * The empty base contributes only the collection name. Drizzle fields, indexes, history, description,
+ * and every other model fact come from the canonical `defineModel` declaration.
  */
-
-/** One open or closed approval flow over a collection mutation. */
-const approvalRequest = collection({
-	name: 'approval_request',
-	fields: {
-		collection_name: field.string({ required: true, indexed: true }),
-		record_id: field.string({ required: true, indexed: true }),
-		action: field.string({ required: true }),
-		status: field.string({ required: true, indexed: true }),
-		steps: field.json({ required: true }),
-		locked_record_refs: field.json({ required: true }),
-		closed_at: field.datetime(),
-		closed_by: field.string()
-	},
-	history: false
-});
-
-/** Links an approval request to the user who raised it. */
-const requestor = collection({
-	name: 'requestor',
-	fields: {
-		approval_request_id: field.string({ required: true, indexed: true }),
-		user_id: field.string({ required: true, indexed: true })
-	},
-	history: false
-});
-
-/**
- * Identity, declared as collections rather than as DDL beside them.
- *
- * These four *are* Better Auth's tables. There is no second `user` shadowing an auth table and no
- * hand-written `create table` for them anywhere: they are ordinary runtime-owned collections, so the
- * schema plan creates them the way it creates `approval_request`, `verify` checks their columns like
- * any other, and a workspace relates to `user` with the same `norbital_id` every collection is keyed
- * by. `auth-tables.ts` maps Better Auth's field names onto these columns, which is all the library
- * requires of a schema.
- *
- * They are the runtime's and not the workspace's for the reason the note above gives: identity
- * exists in every workspace, including one that authors no collections at all, so a template that
- * omitted the model — or renamed a column in it — would boot a runtime whose only writer has nowhere
- * to write.
- *
- * The prefix on the table names is deliberate. `user`, `session` and `account` are names a tenant's
- * own workspace is entitled to use, and a workspace with a `user` collection would otherwise share a
- * table with the auth system and corrupt both.
- */
-const authUser = collection({
-	name: 'bolt_auth_user',
-	fields: {
-		name: field.string({ required: true }),
-		/**
-		 * One row per address, and the index is unique for two reasons that meet here.
-		 *
-		 * Better Auth already assumes it — it looks a person up by email and expects one answer — and
-		 * admitting a workspace's first administrator depends on it: that write is an upsert on the
-		 * address, made before the person exists, so `on conflict ("email")` needs something to
-		 * conflict against. Without it the statement does not degrade, it fails, and the founder is
-		 * left with a workspace they can sign into and cannot read. Nulls do not collide in a Postgres
-		 * unique index, so the provisioner's addressless service row is unaffected.
-		 */
-		email: field.string({ indexed: true, unique: true }),
-		emailVerified: field.boolean({ required: true, sqlDefault: 'false' }),
-		image: field.string(),
-		/**
-		 * Whether this person administers the workspace. `normal` or `admin`, and nothing else.
-		 *
-		 * Deliberately *not* a role. It used to sit beside a `kind` column that answered "is this a
-		 * person or a service"; every row in this table is a person now — a static identity is minted
-		 * in memory and never written here — so that column had one possible value and no reader, and
-		 * it is gone.
-		 *
-		 * It is not a role because `subjectHasPolicy` matches a subject to a policy by role, and there
-		 * is no policy called `admin` in any workspace, and a team that named one would confer
-		 * nothing. The arrangement this replaces put the founder in every team the workspace
-		 * mentioned, which made "administers the workspace" indistinguishable from "is simultaneously
-		 * an employee, a supervisor, a manager and an HR controller"; any change to the ladder
-		 * silently changed what an administrator was.
-		 *
-		 * Administration is a property of the person, so it lives on the person. `AccessControl`
-		 * short-circuits on it before it consults a single policy.
-		 *
-		 * `sqlDefault` is what makes seeding safe: a row written by the seed loader or created by
-		 * Better Auth on first sign-in is `normal` without anybody having to remember to say so.
-		 */
-		status: field.string({ required: true, sqlDefault: "'normal'" }),
-		/** The workspace this subject belongs to — Bolt's concept, not Better Auth's. */
-		tenantId: field.string({ indexed: true }),
-		/**
-		 * The one team this person belongs to, or null.
-		 *
-		 * One, not many, and that is the simplification the rest of this design rests on: there is no
-		 * union across memberships to resolve, no join table, and every combination of authority
-		 * anybody actually holds has a name in `+teams.ts` that appears in a diff. Two people who
-		 * need different authority belong to two teams; one person who needs a combination belongs to
-		 * a team that is that combination.
-		 *
-		 * Nullable, because a person can exist before anybody has placed them — a founder admitted
-		 * into an empty workspace, an address that has just verified a code. Such a subject holds no
-		 * policies at all, which is the correct answer and a visible one.
-		 */
-		team_id: field.uuid({ indexed: true }),
-		/**
-		 * The messaging identities this person has proven are theirs — a WhatsApp number, a Telegram
-		 * handle — as `[{ type, verified, ...address }]`.
-		 *
-		 * This is what makes an inbound channel message attributable. A transport hands the runtime an
-		 * address and nothing else, and `bolt_auth_user` held no address of any kind except `email`, so
-		 * a channel declaring `audience: 'authenticated'` had literally nothing to authenticate a
-		 * sender against — the audience was decorative.
-		 *
-		 * **It confers nothing.** A row here answers one question — is this sender someone we know —
-		 * and never widens what the resulting turn may do: capability on a channel comes from the
-		 * channel's declared `policy` and from nowhere else. A verified number belonging to a workspace
-		 * administrator still reaches exactly what the channel declares, which is why this is an
-		 * address book and not a credential.
-		 *
-		 * `verified` is stored rather than implied by the row existing, because the two are genuinely
-		 * different states: an administrator recording a contractor's number is a claim, and only a
-		 * completed proof of possession makes it an identity. `Channels.receive` matches on
-		 * `verified === true` alone, so an unproven claim is inert rather than trusted.
-		 *
-		 * Json rather than its own collection: it is read only when a message arrives, always for one
-		 * person at a time, and never queried across people. A join table would buy a query nothing
-		 * asks.
-		 */
-		channels: field.json()
-	},
-	history: false
-});
-
-const authSession = collection({
-	name: 'bolt_auth_session',
-	fields: {
-		expiresAt: field.datetime({ required: true }),
-		token: field.string({ required: true, indexed: true }),
-		ipAddress: field.string(),
-		userAgent: field.string(),
-		userId: field.uuid({ required: true, indexed: true })
-	},
-	history: false
-});
-
-const authAccount = collection({
-	name: 'bolt_auth_account',
-	fields: {
-		accountId: field.string({ required: true }),
-		providerId: field.string({ required: true }),
-		userId: field.uuid({ required: true, indexed: true }),
-		accessToken: field.string(),
-		refreshToken: field.string(),
-		idToken: field.string(),
-		accessTokenExpiresAt: field.datetime(),
-		refreshTokenExpiresAt: field.datetime(),
-		scope: field.string(),
-		password: field.string()
-	},
-	history: false
-});
-
-const authVerification = collection({
-	name: 'bolt_auth_verification',
-	fields: {
-		identifier: field.string({ required: true, indexed: true }),
-		value: field.string({ required: true }),
-		expiresAt: field.datetime({ required: true })
-	},
-	history: false
-});
-
-/** Where bolt keeps the secret that signs its sessions, generated on first use. */
-const authConfig = collection({
-	name: 'bolt_auth_config',
-	fields: {
-		key: field.string({ required: true, indexed: true }),
-		value: field.string({ required: true })
-	},
-	history: false
-});
-
-/**
- * A team: who a person belongs to, and nothing about what that entitles them to.
- *
- * The split is the point, and it is the whole reason this collection can be a runtime row at all.
- * **Membership** changes constantly and belongs to an operator — somebody joins, somebody moves,
- * somebody leaves — so it is a row, edited from a dashboard, with no deploy. **Authority** is which
- * policies a team holds, and that is declared in the workspace's own `+teams.ts` and compiled into
- * the release. A row that granted a policy would be a privilege escalation performed with an
- * `update` statement, in a place no diff, no review and no type check can see.
- *
- * So a team row carries a name and a position, and the name is what binds it to the authored map.
- * A team whose name the release does not declare is inert rather than broken: it holds no policies,
- * it still works as an approval target, and a deploy that removes a team therefore takes its
- * authority away without orphaning anybody.
- *
- * `parent_id` is the hierarchy. It is nullable, self-referential, and `set null` on delete — a team
- * disappearing must not take its children's rows with it.
- */
-const team = collection({
-	name: 'bolt_team',
-	fields: {
-		/**
-		 * The binding to the authored map, and to every `approvers` entry that names this team.
-		 *
-		 * Unique, and compared folded wherever it is compared. Today `roles` matched policies
-		 * case-insensitively while `teams` matched approvers case-sensitively — two string arrays
-		 * with two different rules, and the second one silently produced approvals nobody could
-		 * decide. One rule, enforced by the index.
-		 */
-		name: field.string({ required: true, indexed: true, unique: true }),
-		description: field.string(),
-		/** The parent in the hierarchy, or null at the root. See `resolveTeamPolicies`. */
-		parent_id: field.uuid()
-	},
-	history: false
-});
+const collections = Object.freeze(
+	EffectRecord.map(SYSTEM_COLLECTION_MODELS, (declaration, name) =>
+		compileModel(collection({ name, fields: {} }), declaration)
+	)
+);
 
 /**
  * The collections authentication itself reads, and therefore the ones a host must create before it
@@ -253,15 +28,25 @@ const team = collection({
  */
 export const IDENTITY_COLLECTIONS: ReadonlyArray<
 	CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
-> = Object.freeze([authUser, authSession, authAccount, authVerification, authConfig, team]);
+> = Object.freeze([
+	collections.bolt_auth_user,
+	collections.bolt_auth_session,
+	collections.bolt_auth_account,
+	collections.bolt_auth_verification,
+	collections.bolt_auth_config,
+	collections.bolt_team
+]);
 
 export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
-> = Object.freeze([...IDENTITY_COLLECTIONS, approvalRequest, requestor]);
-
-export const SYSTEM_COLLECTION_NAMES: ReadonlySet<string> = new Set(
-	SYSTEM_COLLECTIONS.map(({ name }) => name)
-);
+> = Object.freeze([
+	...IDENTITY_COLLECTIONS,
+	collections.approval_request,
+	collections.requestor,
+	collections.chat_session,
+	collections.chat_message,
+	collections.bolt_notifications
+]);
 
 /**
  * The approval requests this subject raised.
@@ -271,19 +56,19 @@ export const SYSTEM_COLLECTION_NAMES: ReadonlySet<string> = new Set(
  * mine" cannot be answered from the row itself. `Approvals.request` writes exactly one `requestor`
  * row per request, in the same block that projects the `approval_request` row.
  *
- * `${requestor.norbital_id}` is **not** interpolated by JavaScript here — these are single-quoted
+ * `${requestor.id}` is **not** interpolated by JavaScript here — these are single-quoted
  * strings, so the literal token reaches the policy compiler, which binds `subject.userId` as a
  * parameter. `party` rather than `requestor` as the alias only because the table and the token
  * prefix share a spelling and a reader should not have to work out which is which.
  */
 const RAISED_BY_SUBJECT =
 	'select party."approval_request_id" from requestor party ' +
-	'where party."user_id" = ${requestor.norbital_id}';
+	'where party."user_id" = ${requestor.id}';
 
 /**
  * The name of this subject's one team, folded — reached by a join, because no token names it.
  *
- * `AccessControl.subjectValue` resolves exactly three paths — `requestor.norbital_id`,
+ * `AccessControl.subjectValue` resolves exactly three paths — `requestor.id`,
  * `requestor.tenantId`, `requestor.email` — so a team is something the predicate has to go and look
  * up. `bolt_auth_user.team_id` is one team, nullable, and a subject nobody has placed yields no row:
  * the scalar subquery is then `null`, `lower(...) = null` is `null`, and the approver leg below
@@ -296,8 +81,8 @@ const RAISED_BY_SUBJECT =
  */
 const SUBJECT_TEAM_NAME =
 	'select lower(subject_team."name") from bolt_auth_user subject_user ' +
-	'join bolt_team subject_team on subject_team."norbital_id" = subject_user."team_id" ' +
-	'where subject_user."norbital_id"::text = ${requestor.norbital_id}';
+	'join bolt_team subject_team on subject_team."id" = subject_user."team_id" ' +
+	'where subject_user."id"::text = ${requestor.id}';
 
 /**
  * The approval requests this subject's team is named as an approver of — the "higher ups" leg.
@@ -341,16 +126,12 @@ const APPROVED_BY_SUBJECT_TEAM =
  * Written against unqualified column names on purpose: the same predicate is spliced into three
  * statements that alias the table differently — `findMany` uses none, `Sync.snapshot` uses `r`,
  * `Sync.diff` correlates through `visible` — and an unqualified reference resolves to the outer row
- * in all three. Nothing inside either subquery declares a `norbital_id`, so the correlation cannot
+ * in all three. Nothing inside either subquery declares a `id`, so the correlation cannot
  * be captured by them.
  */
 const READABLE_APPROVAL_REQUEST = Object.freeze({
 	$sql:
-		'"norbital_id"::text in (' +
-		RAISED_BY_SUBJECT +
-		') or "norbital_id"::text in (' +
-		APPROVED_BY_SUBJECT_TEAM +
-		')'
+		'"id"::text in (' + RAISED_BY_SUBJECT + ') or "id"::text in (' + APPROVED_BY_SUBJECT_TEAM + ')'
 });
 
 /**
@@ -360,7 +141,7 @@ const READABLE_APPROVAL_REQUEST = Object.freeze({
  * two columns, one of which is a person, so a member who may not read a single `approval_request`
  * row could still enumerate who had raised each one.
  *
- * Scoped by `approval_request_id` rather than by `user_id = ${requestor.norbital_id}`. The narrower
+ * Scoped by `approval_request_id` rather than by `user_id = ${requestor.id}`. The narrower
  * form would answer "which requests did I raise" and hide the parties of a request the subject may
  * legitimately read as an approver — and would silently start hiding rows the day anything writes a
  * second requestor for one request.
@@ -373,6 +154,14 @@ const READABLE_REQUESTOR = Object.freeze({
 		APPROVED_BY_SUBJECT_TEAM +
 		')'
 });
+
+const OWN_CONVERSATION = Object.freeze({ $sql: '"user_id" = ${requestor.id}' });
+const OWN_CONVERSATION_MESSAGE = Object.freeze({
+	$sql:
+		'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
+		'where owned."user_id" = ${requestor.id})'
+});
+const OWN_NOTIFICATION = Object.freeze({ $sql: '"recipient" = ${requestor.id}' });
 
 /**
  * Reading runtime state is allowed for any authenticated subject; writing never is, because the
@@ -448,12 +237,46 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 		 * collection rather than narrowed.
 		 */
 		{
-			collection: approvalRequest.name,
+			collection: collections.approval_request.name,
 			action: 'read' as const,
 			where: READABLE_APPROVAL_REQUEST
 		},
-		{ collection: requestor.name, action: 'read' as const, where: READABLE_REQUESTOR },
-		{ collection: authUser.name, action: 'read' as const, fields: ['norbital_id', 'name'] }
+		{
+			collection: collections.requestor.name,
+			action: 'read' as const,
+			where: READABLE_REQUESTOR
+		},
+		{
+			collection: collections.bolt_auth_user.name,
+			action: 'read' as const,
+			fields: ['id', 'name']
+		},
+		{
+			collection: collections.bolt_team.name,
+			action: 'read' as const,
+			fields: ['id', 'name']
+		},
+		{
+			collection: collections.chat_session.name,
+			action: 'read' as const,
+			where: OWN_CONVERSATION
+		},
+		{
+			collection: collections.chat_message.name,
+			action: 'read' as const,
+			where: OWN_CONVERSATION_MESSAGE
+		},
+		{
+			collection: collections.bolt_notifications.name,
+			action: 'read' as const,
+			where: OWN_NOTIFICATION
+		},
+		{
+			collection: collections.bolt_notifications.name,
+			action: 'update' as const,
+			where: OWN_NOTIFICATION,
+			fields: ['read']
+		}
 	]
 });
 
@@ -473,21 +296,10 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
  * `authenticated` for the read policy, `system` for the host's — and those two flags are the whole
  * of what `PolicyDeclaration` has and `PolicyDefinition` does not.
  */
-export const BUILT_IN_POLICIES: ReadonlyArray<PolicyDeclaration> = Object.freeze([
+const BUILT_IN_POLICIES: ReadonlyArray<PolicyDeclaration> = Object.freeze([
 	SYSTEM_READ_POLICY,
 	COLONY_SYSTEM_POLICY
 ]);
-
-/**
- * The names above, for the surfaces that list policies *as teams*.
- *
- * `impersonationTeams` renders one entry per policy into the administrator's team picker, and a
- * built-in is not a body of staff — the deleted `admin` policy showed up there as though it were
- * one. Anything that offers policies to a person filters on this.
- */
-export const BUILT_IN_POLICY_NAMES: ReadonlySet<string> = new Set(
-	BUILT_IN_POLICIES.map(({ name }) => name)
-);
 
 /** Merges runtime-owned collections and policies into an authored definition without letting either shadow the other. */
 export const withSystemCollections = <

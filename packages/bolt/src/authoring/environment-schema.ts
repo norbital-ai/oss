@@ -12,19 +12,21 @@
  * work without its key refuses at the point of use, where it can say which key is missing.
  */
 
+import { Record, Schema } from 'effect';
+
 /** One declared environment variable. */
-export interface EnvironmentVariableSpec {
+const EnvironmentVariableSpecSchema = Schema.Struct({
 	/** Human label for the Secrets form. Falls back to the variable name. */
-	readonly label?: string;
+	label: Schema.optional(Schema.String),
 	/** What this secret is for, and where to obtain one. Shown under the field. */
-	readonly description?: string;
+	description: Schema.optional(Schema.String),
 	/**
 	 * A value the workspace can run with when the vault has none.
 	 *
 	 * Only for non-sensitive settings — a base URL, a region. A default for a credential would be a
 	 * credential in source, so `secret: true` and `default` are refused together.
 	 */
-	readonly default?: string;
+	default: Schema.optional(Schema.String),
 	/**
 	 * Whether the value is sensitive. Sensitive values are write-only: once stored they are never
 	 * returned to any client, and the form shows whether one is set, never what it is.
@@ -32,12 +34,18 @@ export interface EnvironmentVariableSpec {
 	 * Defaults to `true`. A declaration that says nothing is treated as a secret, because the cost of
 	 * guessing wrong in that direction is a leaked credential.
 	 */
-	readonly secret?: boolean;
-}
+	secret: Schema.optional(Schema.Boolean)
+});
 
-export interface EnvironmentSpec {
-	readonly variables: Readonly<Record<string, EnvironmentVariableSpec>>;
-}
+interface EnvironmentVariableSpec extends Schema.Schema.Type<
+	typeof EnvironmentVariableSpecSchema
+> {}
+
+const EnvironmentSpecSchema = Schema.Struct({
+	variables: Schema.Record(Schema.String, EnvironmentVariableSpecSchema)
+});
+
+export interface EnvironmentSpec extends Schema.Schema.Type<typeof EnvironmentSpecSchema> {}
 
 const NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 
@@ -67,17 +75,20 @@ export const defineEnvironment = <
 	return Object.freeze({ variables });
 };
 
-/**
- * The half of a declaration a browser may see: names, labels, descriptions and whether a value is
+/** The half of a declaration a browser may see: names, labels, descriptions and whether a value is
  * set — never a value, and never a default that belongs to a secret.
  */
-export interface EnvironmentVariableView {
-	readonly name: string;
-	readonly label: string;
-	readonly description?: string;
-	readonly secret: boolean;
-	readonly default?: string;
-}
+const EnvironmentVariableViewSchema = Schema.Struct({
+	name: Schema.NonEmptyString,
+	label: Schema.NonEmptyString,
+	description: Schema.optional(Schema.String),
+	secret: Schema.Boolean,
+	default: Schema.optional(Schema.String)
+});
+
+const decodeEnvironmentVariableView = Schema.decodeUnknownSync(EnvironmentVariableViewSchema);
+
+export type EnvironmentVariableView = Schema.Schema.Type<typeof EnvironmentVariableViewSchema>;
 
 /**
  * Projects a declaration for the Secrets form.
@@ -92,12 +103,14 @@ export const describeEnvironment = (
 	Object.entries(declaration?.variables ?? {})
 		.map(([name, variable]) => {
 			const secret = variable.secret ?? true;
-			return {
+			return decodeEnvironmentVariableView(
+				Record.filter({
 				name,
 				label: variable.label ?? name,
-				...(variable.description === undefined ? {} : { description: variable.description }),
+				description: variable.description,
 				secret,
-				...(secret || variable.default === undefined ? {} : { default: variable.default })
-			};
+				default: secret || variable.default === undefined ? undefined : variable.default
+				}, (value) => value !== undefined)
+			);
 		})
 		.sort((left, right) => left.name.localeCompare(right.name));

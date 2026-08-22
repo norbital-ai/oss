@@ -4,9 +4,7 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Snippet } from 'svelte';
 
-	export interface ConversationEmptyStateProps extends WithElementRef<
-		HTMLAttributes<HTMLDivElement>
-	> {
+	interface ConversationEmptyStateProps extends WithElementRef<HTMLAttributes<HTMLDivElement>> {
 		title?: string;
 		description?: string;
 		icon?: Snippet;

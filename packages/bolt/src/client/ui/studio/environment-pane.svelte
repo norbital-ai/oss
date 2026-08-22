@@ -2,7 +2,7 @@
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
 	import { cn } from '@norbital-ai/ui/utils';
-	import type { EnvironmentVariable, ManifestSection } from './studio-state.js';
+	import type { EnvironmentVariable, ManifestSection } from '#lib/client/ui/studio/studio-state.js';
 
 	/**
 	 * The environment this workspace declares in its root `+env.ts`.
@@ -54,7 +54,7 @@
 				<h3 class="text-overline border-b border-border/60 px-4 py-2.5">
 					Declared names ({entries.length}) · {missing} not set
 				</h3>
-				<!-- stupidity:allow UI3 -- compact manifest key/status matrix is not record data -->
+				<!-- repository-health:allow UI3 -- compact manifest key/status matrix is not record data -->
 				<table class="w-full text-left">
 					<thead class="border-b border-border/40">
 						<tr class="text-overline">

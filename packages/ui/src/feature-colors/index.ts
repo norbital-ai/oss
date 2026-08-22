@@ -1,26 +1,30 @@
-import { ENTITY_ICONS } from '../icon-wrapper/entity-icons.js';
+import { ENTITY_ICONS } from '#lib/icon-wrapper/entity-icons';
+import { Schema } from 'effect';
 
-export type FeatureColorKey =
-	| 'accessControl'
-	| 'agents'
-	| 'applications'
-	| 'approvals'
-	| 'automations'
-	| 'workspaceStudio'
-	| 'builtIn'
-	| 'customApps'
-	| 'moduleStudio'
-	| 'permissions'
-	| 'dataBrowser'
-	| 'tasks';
+export const FeatureColorKeySchema = Schema.Literals([
+	'accessControl',
+	'agents',
+	'applications',
+	'approvals',
+	'automations',
+	'workspaceStudio',
+	'builtIn',
+	'customApps',
+	'moduleStudio',
+	'permissions',
+	'dataBrowser',
+	'tasks'
+]);
+export type FeatureColorKey = typeof FeatureColorKeySchema.Type;
 
-export type FeatureColorStyles = {
-	icon: string;
-	navIcon: string;
-	iconWrapperClass: string;
-	iconClass: string;
-	accentClass: string;
-};
+export const FeatureColorStylesSchema = Schema.Struct({
+	icon: Schema.String,
+	navIcon: Schema.String,
+	iconWrapperClass: Schema.String,
+	iconClass: Schema.String,
+	accentClass: Schema.String
+});
+export type FeatureColorStyles = typeof FeatureColorStylesSchema.Type;
 
 const m = ENTITY_ICONS.module;
 

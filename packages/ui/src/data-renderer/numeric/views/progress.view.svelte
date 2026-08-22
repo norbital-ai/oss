@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Number as Number_ } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
@@ -6,7 +7,7 @@
 	import { Inline, Stack } from '#lib/layout';
 	import { Root as Progress } from '#lib/progress';
 	import { cn } from '#lib/utils';
-	import type { DataRendererProps } from '../../data-renderer.types.js';
+	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 
 	interface Props extends DataRendererProps {
 		denominator: number;
@@ -34,13 +35,9 @@
 	const scalarValue = $derived(typeof value === 'number' ? value : null);
 	const formatter = $derived(new Intl.NumberFormat(localeEffective));
 
-	function visualValue(next: number): number {
-		return Math.min(denominator, Math.max(0, next));
-	}
-
 	function parsed(input: HTMLInputElement): number | null | undefined {
 		if (!input.value) return field.nullable ? null : undefined;
-		return Math.min(denominator, Math.max(0, input.valueAsNumber));
+		return Number_.clamp({ minimum: 0, maximum: denominator })(input.valueAsNumber);
 	}
 
 	function updateArrayItem(index: number, input: HTMLInputElement): void {
@@ -49,14 +46,18 @@
 			return;
 		}
 		const next = [...values];
-		next[index] = Math.min(denominator, Math.max(0, input.valueAsNumber));
+		next[index] = Number_.clamp({ minimum: 0, maximum: denominator })(input.valueAsNumber);
 		onValueChange?.(next);
 	}
 </script>
 
 {#snippet progress(progressValue: number)}
 	<Inline gap="md" grow class="min-w-0">
-		<Progress value={visualValue(progressValue)} max={denominator} class="min-w-20 flex-1" />
+		<Progress
+			value={Number_.clamp({ minimum: 0, maximum: denominator })(progressValue)}
+			max={denominator}
+			class="min-w-20 flex-1"
+		/>
 		<span class="whitespace-nowrap text-meta tabular-nums">
 			{formatter.format(progressValue)} / {formatter.format(denominator)}
 		</span>

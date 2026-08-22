@@ -1,2 +1,8 @@
-export * from './keybindings.svelte';
-export { detectShortcutModifier, formatShortcut, type ShortcutModifier } from './shortcut-label.js';
+export {
+	shortcut,
+	detectShortcutModifier,
+	formatShortcut,
+	type Options,
+	type Key,
+	type ShortcutModifier
+} from './keybindings.svelte';

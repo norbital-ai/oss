@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Handle, Position, type Node, type NodeProps } from '@xyflow/svelte';
 	import { Bound, Inline, Stack } from '@norbital-ai/ui/layout';
-	import type { MatrixNodeData, MatrixNodeKind } from './tenant-matrix.js';
+	import type { MatrixNodeData, MatrixNodeKind } from '#lib/client/ui/studio/tenant-matrix.js';
 
 	type MatrixFlowNode = Node<MatrixNodeData, MatrixNodeKind>;
 

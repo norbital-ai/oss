@@ -1,6 +1,6 @@
-import type { DocTocItem, DocTocItemInfo, DocTocTrackBounds } from './types';
+import type { DocTocItem, DocTocItemInfo, DocTocTrackBounds } from '#lib/doc-toc/types';
 
-export type DocTocChangeListener = (items: DocTocItemInfo[]) => void;
+type DocTocChangeListener = (items: DocTocItemInfo[]) => void;
 
 /** IntersectionObserver rootMargin only accepts px or % — not rem. */
 export function buildDocTocRootMargin(topRem = 4, bottomPercent = 55): string {
@@ -16,7 +16,7 @@ function getItemId(url: string): string | null {
 	return null;
 }
 
-function findLastActiveIndex(items: DocTocItemInfo[]): number {
+export function findLastActiveIndex(items: DocTocItemInfo[]): number {
 	for (let i = items.length - 1; i >= 0; i--) {
 		if (items[i].active) return i;
 	}
@@ -122,8 +122,11 @@ export class DocTocAnchorObserver {
 		if (entries.length === 0) return;
 
 		let hasActive = false;
+		const entryById = new Map<string, IntersectionObserverEntry>(
+			entries.map((entry) => [entry.target.id, entry])
+		);
 		const updated = this.items.map((item) => {
-			const entry = entries.find((candidate) => candidate.target.id === item.id);
+			const entry = entryById.get(item.id);
 			const active = entry ? entry.isIntersecting : item.active && !item.fallback;
 
 			if (item.active !== active) {
@@ -206,10 +209,6 @@ export class DocTocAnchorObserver {
 					: item
 		);
 	}
-}
-
-export function findLastActiveDocTocIndex(items: DocTocItemInfo[]): number {
-	return findLastActiveIndex(items);
 }
 
 export function getActiveDocTocItem(items: DocTocItemInfo[]): DocTocItemInfo | undefined {

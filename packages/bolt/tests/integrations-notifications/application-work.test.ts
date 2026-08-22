@@ -1,9 +1,9 @@
 import { Effect, Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { envoy, integration, policy, workspace } from '../../src/authoring/index.js';
+import { envoy, integration, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
-import { Envoys } from '../../src/runtime/envoys/envoys.js';
-import { Database } from '../../src/runtime/facilities/database.js';
+import * as Envoys from '../../src/runtime/envoys/envoys.js';
+import * as Database from '../../src/runtime/facilities/database.js';
 import { Notification } from '../../src/runtime/notifications/notifications.js';
 import { makeBoltTestRuntime } from '../support/bolt-test-layer.js';
 
@@ -74,8 +74,8 @@ describe('Envoys, Integrations, and Notifications owners', () => {
 	 */
 	it('plans the envoy tables the envoy runtime reads and writes', () => {
 		const ids = buildSchemaPlan(envoyedWorkspace()).steps.map(({ id }) => id);
-		expect(ids).toContain('bolt:envoy-registrations');
-		expect(ids).toContain('bolt:envoy-receipts');
+		expect(ids).toContain('collection:bolt_envoy_registrations');
+		expect(ids).toContain('collection:bolt_envoy_receipts');
 	});
 
 	/**

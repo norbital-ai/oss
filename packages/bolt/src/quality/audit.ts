@@ -1,6 +1,7 @@
 import { parse } from 'svelte/compiler';
+import { Result, Schema } from 'effect';
 import ts from 'typescript';
-import { SYSTEM_COLUMN_NAMES } from '../compiler/schema-plan.js';
+import { SYSTEM_COLUMN_NAMES } from '../authoring/system-row-model.js';
 
 export const forbiddenBoltDependencies = [
 	'@norbital-ai/pod',
@@ -111,27 +112,27 @@ export type SystemColumnFinding = Readonly<{
 }>;
 
 /**
- * Authored source handing a framework-owned `norbital_*` value back to a framework component.
+ * Authored source handing a framework-owned system-column value back to a framework component.
  *
  * The rule is not "authored code may not name a system column" — it may, and must. A workspace
- * decides what "live" means by filtering on `norbital_approval_id`, lists key on `norbital_id`, and
- * reports order by `norbital_created_at`. Those spell a column *name* into a query, or read a value
+ * decides what "live" means by filtering on `approval_id`, lists key on `id`, and
+ * reports order by `created_at`. Those spell a column *name* into a query, or read a value
  * the author then joins on; the framework never sees the value.
  *
  * What is banned is the value crossing back over the boundary as a prop. `recordId={record?.
- * norbital_id}` and `view={`employees:employments:${record.norbital_id}`}` told a component the row
+ * id}` and `view={`employees:employments:${record.id}`}` told a component the row
  * identity of the surface that had just mounted it — the one fact the framework unambiguously
  * already had. Fifty-one of those existed; every one was the author re-deriving framework state by
- * hand, and each was a place the shape of `norbital_id` could not change without editing tenant
+ * hand, and each was a place the shape of `id` could not change without editing tenant
  * source. It has since changed, from a generated mirror of an invented `id text` to a real `uuid`
  * primary key, which is exactly the migration those call sites would have blocked.
  *
  * Judged on the syntax tree, in prop-value position only. A member read nested inside an object
  * literal, an array, or a function body is not reported, because that is where the legitimate uses
- * live: `query={{ where: { employee_id: { eq: record.norbital_id } } }}` is a predicate the author
+ * live: `query={{ where: { employee_id: { eq: record.id } } }}` is a predicate the author
  * owns, and `onValueChange={(value) => …}` is authored behavior. The descent below follows only the
  * expression forms that *produce the prop's value* — chains, conditionals, concatenation, template
- * interpolation, and call arguments, which is how `String(record.norbital_id)` would otherwise slip
+ * interpolation, and call arguments, which is how `String(record.id)` would otherwise slip
  * through — and stops at the forms that merely contain one.
  */
 const AuthoringAudit = {
@@ -139,7 +140,7 @@ const AuthoringAudit = {
 		if (node['type'] !== 'MemberExpression') return undefined;
 		const property = node['property'] as Readonly<Record<string, unknown>> | undefined;
 		if (property === undefined) return undefined;
-		// `record['norbital_id']` and `Reflect.get(record, 'norbital_id')` reach the same column by a
+		// `record['id']` and `Reflect.get(record, 'id')` reach the same column by a
 		// spelling a property-name check alone does not see.
 		const name =
 			property['type'] === 'Identifier'
@@ -176,10 +177,14 @@ const AuthoringAudit = {
 				case 'TemplateLiteral':
 				case 'SequenceExpression':
 					return ['expressions'];
-				// Arguments only — a callee named `norbital_id` would be a function, not a column, and
-				// descending into them is what stops `String(record.norbital_id)` laundering the value.
-				case 'CallExpression':
-					return ['arguments'];
+				// Arbitrary calls derive a new value; only explicit scalar coercions preserve identity.
+				case 'CallExpression': {
+					const callee = node['callee'] as Readonly<Record<string, unknown>> | undefined;
+					return callee?.['type'] === 'Identifier' &&
+						(callee['name'] === 'String' || callee['name'] === 'Number')
+						? ['arguments']
+						: [];
+				}
 				default:
 					return [];
 			}
@@ -206,6 +211,50 @@ const AuthoringAudit = {
 };
 
 /**
+ * Walks one attribute's value-input expressions and reports every system-column read it produces.
+ *
+ * The pending worklist is what makes the check see through chains, conditionals and interpolation:
+ * a `record.id` buried under `String(...)` or a concatenation reads the same column and is
+ * reported, while anything the expression merely holds — a nested `where` predicate, an array
+ * literal, a function body — stays out of the walk entirely.
+ */
+const reportAttributeColumnReads = (
+	attribute: Readonly<Record<string, unknown>>,
+	component: string,
+	report: (column: string, component: string, prop: string, start: number) => void
+): void => {
+	const pending = [...AuthoringAudit.attributeExpressions(attribute['value'])];
+	while (pending.length > 0) {
+		const expression = pending.pop();
+		if (expression === undefined) continue;
+		const column = AuthoringAudit.isSystemColumnRead(expression);
+		if (column !== undefined) {
+			report(
+				column,
+				component,
+				typeof attribute['name'] === 'string' ? attribute['name'] : '',
+				typeof expression['start'] === 'number' ? expression['start'] : 0
+			);
+			continue;
+		}
+		pending.push(...AuthoringAudit.valueSources(expression));
+	}
+};
+
+/** Reports a component attribute carrying a read of a framework-owned system column. */
+const systemColumnReadsInComponent = (
+	node: Readonly<Record<string, unknown>>,
+	report: (column: string, component: string, prop: string, start: number) => void
+): void => {
+	const component = typeof node['name'] === 'string' ? node['name'] : 'component';
+	for (const attribute of (node['attributes'] as
+		ReadonlyArray<Readonly<Record<string, unknown>>> | undefined) ?? []) {
+		if (attribute['type'] !== 'Attribute') continue;
+		reportAttributeColumnReads(attribute, component, report);
+	}
+};
+
+/**
  * Reports authored `.svelte` source that hands a framework-owned system column to a component prop.
  *
  * Svelte's own parser, not a text scan and not the TypeScript parser. `dependencies.test.ts` in
@@ -218,56 +267,40 @@ export const auditAuthoredSystemColumns = (
 	files: Readonly<Record<string, string>>
 ): ReadonlyArray<SystemColumnFinding> => {
 	const findings: Array<SystemColumnFinding> = [];
+	const decodeNode = Schema.decodeUnknownResult(Schema.Record(Schema.String, Schema.Unknown));
 	for (const [file, source] of Object.entries(files)) {
 		if (!file.endsWith('.svelte')) continue;
-		const root = parse(source, { modern: true, filename: file }) as unknown as Readonly<
-			Record<string, unknown>
-		>; // stupidity: boundary-cast — the audit walks the fragment structurally and Svelte does not publish a node union it can narrow against.
 		/** Descends the whole fragment, because a component can be nested in any block or snippet. */
-		const visit = (node: Readonly<Record<string, unknown>> | null | undefined): void => {
-			if (node === null || node === undefined || typeof node !== 'object') return;
+		const visit = (node: unknown): void => {
 			if (Array.isArray(node)) {
-				for (const child of node) visit(child as Readonly<Record<string, unknown>>);
+				for (const child of node) visit(child);
 				return;
 			}
+			const decoded = decodeNode(node);
+			if (Result.isFailure(decoded)) return;
 			if (
-				node['type'] === 'Component' ||
-				node['type'] === 'SvelteComponent' ||
-				node['type'] === 'SvelteSelf'
+				decoded.success['type'] === 'Component' ||
+				decoded.success['type'] === 'SvelteComponent' ||
+				decoded.success['type'] === 'SvelteSelf'
 			) {
-				const component = typeof node['name'] === 'string' ? node['name'] : 'component';
-				for (const attribute of (node['attributes'] as
-					ReadonlyArray<Readonly<Record<string, unknown>>> | undefined) ?? []) {
-					if (attribute['type'] !== 'Attribute') continue;
-					const pending = [...AuthoringAudit.attributeExpressions(attribute['value'])];
-					while (pending.length > 0) {
-						const expression = pending.pop();
-						if (expression === undefined) continue;
-						const column = AuthoringAudit.isSystemColumnRead(expression);
-						if (column !== undefined) {
-							findings.push({
-								file,
-								line: source
-									.slice(0, typeof expression['start'] === 'number' ? expression['start'] : 0)
-									.split('\n').length,
-								component,
-								prop: typeof attribute['name'] === 'string' ? attribute['name'] : '',
-								column
-							});
-							continue;
-						}
-						pending.push(...AuthoringAudit.valueSources(expression));
-					}
-				}
+				systemColumnReadsInComponent(decoded.success, (column, component, prop, start) => {
+					findings.push({
+						file,
+						line: source.slice(0, start).split('\n').length,
+						component,
+						prop,
+						column
+					});
+				});
 			}
-			for (const [key, value] of Object.entries(node)) {
+			for (const [key, value] of Object.entries(decoded.success)) {
 				if (key === 'parent') continue;
-				visit(value as Readonly<Record<string, unknown>>);
+				visit(value);
 			}
 		};
 		// The fragment only: a system column named in `<script>` is a query or a join, which the rule
 		// permits, and walking it would report every legitimate use in the workspace.
-		visit(root['fragment'] as Readonly<Record<string, unknown>>);
+		visit(parse(source, { modern: true, filename: file }).fragment);
 	}
 	return findings;
 };

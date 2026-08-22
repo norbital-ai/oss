@@ -16,7 +16,7 @@ import {
 	workspace
 } from '../../src/authoring/workspace-schema.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
-import { Integrations } from '../../src/runtime/integrations/integrations.js';
+import * as Integrations from '../../src/runtime/integrations/integrations.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 
 /**
@@ -56,7 +56,7 @@ const SiteRecord = Schema.Struct({
 });
 
 /**
- * Reads `norbital_id` off a row the api answered with.
+ * Reads `id` off a row the api answered with.
  *
  * The api's rows carry `& Readonly<Record<string, unknown>>`, so a column read is `unknown` and has
  * to be narrowed. A workspace's own generated types name the columns; this suite has no workspace
@@ -89,11 +89,11 @@ const jobsModule = {
 				resolve: ({ records, api }) =>
 					Effect.gen(function* () {
 						const wanted = new Set(records.map((job) => job.site_code));
-						const sites = yield* api.db.query.sites.findMany();
+						const sites = yield* api.db.query.sites!.findMany();
 						const byCode = new Map<string, string>();
 						for (const site of sites) {
 							const code = columnOf(site, 'site_code');
-							const id = columnOf(site, 'norbital_id');
+							const id = columnOf(site, 'id');
 							if (code !== undefined && id !== undefined && wanted.has(code)) byCode.set(code, id);
 						}
 						return byCode;
@@ -157,7 +157,9 @@ const definition = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+	],
 	teams: {
 		admin: ['admin']
 	},
@@ -198,12 +200,10 @@ const build = async (body: Schema.Json): Promise<BoltTestRuntime> => {
 /** The two sites this workspace knows about, inserted the way any other row would be. */
 const seedSites = async (built: BoltTestRuntime): Promise<Readonly<Record<string, string>>> => {
 	const rows = await built.database.query(
-		"insert into sites (site_code, name) values ('SITE-A', 'Alpha'), ('SITE-B', 'Bravo') returning site_code, norbital_id",
+		"insert into sites (site_code, name) values ('SITE-A', 'Alpha'), ('SITE-B', 'Bravo') returning site_code, id",
 		[]
 	);
-	return Object.fromEntries(
-		rows.map((row) => [String(row['site_code']), String(row['norbital_id'])])
-	);
+	return Object.fromEntries(rows.map((row) => [String(row['site_code']), String(row['id'])]));
 };
 
 const pull = (built: BoltTestRuntime, integration: string, binding: string, run: string) =>

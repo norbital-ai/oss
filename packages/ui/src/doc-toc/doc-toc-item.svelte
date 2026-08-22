@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { scrollDocTocLinkIntoView } from './anchor-observer';
+	import { scrollDocTocLinkIntoView } from '#lib/doc-toc/anchor-observer';
 	import { getDocTocState } from './context.svelte';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
-	import type { DocTocItem } from './types';
+	import type { DocTocItem } from '#lib/doc-toc/types';
 
 	let {
 		item,

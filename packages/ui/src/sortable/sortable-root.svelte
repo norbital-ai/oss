@@ -9,7 +9,7 @@
 	import { watch } from 'runed';
 	import SortablePrimitive from 'sortablejs';
 	import { onDestroy } from 'svelte';
-	import type { SortableRootProps } from './index.js';
+	import type { SortableRootProps } from '#lib/sortable';
 
 	let {
 		element,
@@ -35,7 +35,7 @@
 
 	let draggedItemId = $state<string | null>(null);
 
-	let sortableInstance = $state() as SortablePrimitive | undefined;
+	let sortableInstance = $state<SortablePrimitive | undefined>();
 	watch(
 		() => element,
 		(element) => {
@@ -120,7 +120,6 @@
 	);
 	onDestroy(() => {
 		sortableInstance?.destroy();
-		sortableInstance = undefined;
 	});
 </script>
 

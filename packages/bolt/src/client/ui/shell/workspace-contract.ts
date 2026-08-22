@@ -1,6 +1,9 @@
-import type { WorkspaceSession } from '../../session.js';
-import type { TenantMessageCatalogs } from '../agent/i18n.js';
-import type { WorkspaceClient } from '../studio/workspace-client.js';
+import type { WorkspaceSession } from '#lib/client/session.js';
+import type { TenantMessageCatalogs } from '#lib/client/ui/agent/i18n.js';
+import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
+import type { Component } from 'svelte';
+import type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';
+import type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';
 
 /**
  * The whole of what a host says across the boundary, in three parts.
@@ -103,11 +106,15 @@ export type AppMeta = Readonly<{
 export type CompiledWorkspace = Readonly<{
 	readonly title: string;
 	readonly name: string;
-	readonly appLoaders: Readonly<Record<string, () => Promise<unknown>>>;
+	readonly appLoaders: Readonly<Record<string, () => Promise<Component>>>;
 	readonly appGroups: Readonly<Record<string, AppGroup>>;
 	readonly appMeta: Readonly<Record<string, AppMeta>>;
-	readonly representationLoaders: Readonly<Record<string, () => Promise<unknown>>>;
-	readonly customTypeRendererLoaders: Readonly<Record<string, () => Promise<unknown>>>;
+	readonly representationLoaders: Readonly<
+		Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>>
+	>;
+	readonly customTypeRendererLoaders: Readonly<
+		Record<string, () => Promise<CustomTypeRendererMap[string]>>
+	>;
 	readonly policyNames: ReadonlyArray<string>;
 	readonly tenantMessages: TenantMessageCatalogs;
 	/** The workspace's own collection client, for Studio's Data tab. */

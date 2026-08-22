@@ -6,7 +6,7 @@ import type {
 	SelectionState,
 	TreeNodes,
 	TreeSelectStateProps
-} from './index.js';
+} from '#lib/tree-select';
 
 // ============================================================================
 // Type Guards
@@ -28,6 +28,20 @@ export function isRequiredChildNode<TMetadata>(
 // Node Classes (Data Only - No Methods)
 // ============================================================================
 
+/** Constructor payload for a tree node: the immutable fields that build one node. */
+type TreeNodeParams<TMetadata> = {
+	id: string;
+	title: string;
+	searchText?: string;
+	icon: string;
+	depth: number;
+	displayDepth: number;
+	metadata: TMetadata;
+	parentNode: TreeParentNode<TMetadata> | undefined;
+	treeState: TreeState<TMetadata>;
+	action?: NodeActionCallback<TMetadata>;
+};
+
 /**
  * Regular child node (leaf node)
  */
@@ -43,18 +57,7 @@ export class TreeChildNode<TMetadata> {
 	readonly action?: NodeActionCallback<TMetadata>;
 	readonly treeState: TreeState<TMetadata>;
 
-	constructor(params: {
-		id: string;
-		title: string;
-		searchText?: string;
-		icon: string;
-		depth: number;
-		displayDepth: number;
-		metadata: TMetadata;
-		parentNode: TreeParentNode<TMetadata> | undefined;
-		treeState: TreeState<TMetadata>;
-		action?: NodeActionCallback<TMetadata>;
-	}) {
+	constructor(params: TreeNodeParams<TMetadata>) {
 		this.id = params.id;
 		this.title = params.title;
 		this.searchText = params.searchText;
@@ -78,52 +81,12 @@ export class TreeChildNode<TMetadata> {
 }
 
 /**
- * Required child node (selecting it requires all siblings to be selected)
+ * Required child node (selecting it requires all siblings to be selected).
+ *
+ * Same field surface as `TreeChildNode`; the type carries the requirement so selection rules can
+ * distinguish the two node kinds while sharing one implementation.
  */
-export class RequiredTreeChildNode<TMetadata> {
-	readonly id: string;
-	readonly title: string;
-	readonly searchText?: string;
-	readonly icon: string;
-	readonly depth: number;
-	readonly displayDepth: number;
-	readonly metadata: TMetadata;
-	readonly parentNode: TreeParentNode<TMetadata> | undefined;
-	readonly action?: NodeActionCallback<TMetadata>;
-	readonly treeState: TreeState<TMetadata>;
-
-	constructor(params: {
-		id: string;
-		title: string;
-		searchText?: string;
-		icon: string;
-		depth: number;
-		displayDepth: number;
-		metadata: TMetadata;
-		parentNode: TreeParentNode<TMetadata> | undefined;
-		treeState: TreeState<TMetadata>;
-		action?: NodeActionCallback<TMetadata>;
-	}) {
-		this.id = params.id;
-		this.title = params.title;
-		this.searchText = params.searchText;
-		this.icon = params.icon;
-		this.depth = params.depth;
-		this.displayDepth = params.displayDepth;
-		this.metadata = params.metadata;
-		this.parentNode = params.parentNode;
-		this.treeState = params.treeState;
-		this.action = params.action;
-	}
-
-	get isSelected(): boolean {
-		return this.treeState.selectedNodeIds.has(this.id);
-	}
-
-	get disabled(): boolean {
-		return this.treeState.disabledNodeIds.has(this.id);
-	}
-}
+export class RequiredTreeChildNode<TMetadata> extends TreeChildNode<TMetadata> {}
 
 /**
  * Parent node (has children)
@@ -141,19 +104,7 @@ export class TreeParentNode<TMetadata> {
 	readonly treeState: TreeState<TMetadata>;
 	readonly children: TreeNodes<TMetadata>[] = [];
 
-	constructor(params: {
-		id: string;
-		title: string;
-		searchText?: string;
-		icon: string;
-		depth: number;
-		displayDepth: number;
-		metadata: TMetadata;
-		parentNode: TreeParentNode<TMetadata> | undefined;
-		treeState: TreeState<TMetadata>;
-		children?: TreeNodes<TMetadata>[];
-		action?: NodeActionCallback<TMetadata>;
-	}) {
+	constructor(params: TreeNodeParams<TMetadata> & { children?: TreeNodes<TMetadata>[] }) {
 		this.id = params.id;
 		this.title = params.title;
 		this.searchText = params.searchText;

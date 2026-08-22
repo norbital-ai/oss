@@ -4,8 +4,8 @@ description: >-
   How the Norbital platform itself behaves at runtime: approvals, policies and permissions, record
   history, audit, system columns, and what a workspace agent can and cannot do. Load before
   answering any question about how Norbital works, why a write was blocked or locked, who can
-  approve something, where a configuration change lives, or what a `norbital_`-prefixed column
-  means. This platform is not in any model's training data, so answering from memory produces
+  approve something, where a configuration change lives, or what a framework-owned column means.
+  This platform is not in any model's training data, so answering from memory produces
   confident wrong answers.
 license: MIT
 metadata:
@@ -59,8 +59,8 @@ Read the reference that matches the question. Do not answer from memory.
 - **[Approvals and policies](references/approvals-and-policies.md)** — how permission grants work,
   how an approval flow is declared and routed, write-then-lock behaviour, approval statuses, why a
   record came back locked, who is allowed to approve.
-- **[Records, history and audit](references/records-history-and-audit.md)** — the `norbital_`
-  system columns on every row, temporal history, rollback, audit, and how the client replica syncs.
+- **[Records, history and audit](references/records-history-and-audit.md)** — the framework-owned
+  columns on every row, temporal history, rollback, audit, and how the client replica syncs.
 - **[Agent capabilities](references/agent-capabilities.md)** — what a workspace agent can do, how
   its tool surface is decided, and the honesty rules that apply when a tool fails.
 

@@ -6,12 +6,13 @@ import type {
 	CollectionRow
 } from '@norbital-ai/std/collection';
 import type { Snippet } from 'svelte';
-import type { CollectionRecordMetadataResolver } from '../collection-record-metadata/index.js';
-import type { AuthoredLaneInput } from '../collection-table/collection-card-derivation.js';
+import type { Effect } from 'effect';
+import type { CollectionRecordMetadataResolver } from '#lib/collection-record-metadata';
+import type { AuthoredLaneInput } from '#lib/collection-table/collection-card-derivation';
 import type {
 	CollectionTableIntegrationStatus,
 	CollectionTablePipeline
-} from '../collection-table/collection-table.types.js';
+} from '#lib/collection-table/collection-table.types';
 
 export type CollectionKanbanName<TCollections extends CollectionRegistry> = Extract<
 	keyof TCollections,
@@ -50,6 +51,8 @@ export interface CollectionKanbanProps<
 	 * Move handler. Omit for the default optimistic move that writes `toLane` into the groupBy
 	 * field with rollback on failure (RFC V.3c).
 	 */
-	onCardMove?: (move: CollectionKanbanMove<CollectionRow<TCollections[TName]>>) => Promise<void>;
+	onCardMove?: (
+		move: CollectionKanbanMove<CollectionRow<TCollections[TName]>>
+	) => Effect.Effect<void, unknown>;
 	class?: string;
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as FieldPrimitive from '#lib/field';
-	import { getField } from './context';
+	import { getField } from '#lib/form/context';
 
 	let { class: className }: { class?: string } = $props();
 

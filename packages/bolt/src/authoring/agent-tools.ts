@@ -1,15 +1,12 @@
 import { Effect, Schema } from 'effect';
 import type { BeforeApi } from './contracts-schema.js';
-import type { AdaptedAuthoringSchema } from './handlers-schema.js';
 
 /**
  * One workspace-agent tool, with the Effect schema the author declares for its input.
  *
- * The authoring boundary adapts the schema to a Standard Schema (`Schema.toStandardSchemaV1`) so
- * the generated dispatcher keeps validating through `~standard`, exactly as it already reads an
- * authored remote's schema — the adapter is the platform's, not the author's.
+ * The compiler decodes it directly with Effect Schema at the invocation boundary.
  */
-export type AgentToolDefinition<
+type AgentToolDefinition<
 	S extends Schema.Codec<unknown, unknown> = Schema.Codec<unknown, unknown>
 > = {
 	readonly description: string;
@@ -17,17 +14,10 @@ export type AgentToolDefinition<
 	run(
 		api: BeforeApi,
 		input: Schema.Schema.Type<S>
-	): Effect.Effect<unknown, unknown, never> | unknown | Promise<unknown>;
+	): Effect.Effect<unknown, unknown, never> | unknown;
 };
 
-/**
- * A declared tool after authoring: the input schema has been adapted to the Standard Schema the
- * compiled dispatcher validates through `~standard`, while remaining the author's schema.
- */
-export type DefinedAgentTool<S extends Schema.Codec<unknown, unknown>> = Omit<
-	AgentToolDefinition<S>,
-	'input'
-> & { readonly input: AdaptedAuthoringSchema<S> };
+type DefinedAgentTool<S extends Schema.Codec<unknown, unknown>> = AgentToolDefinition<S>;
 
 /** Declare one compiler-discovered workspace-agent tool in a `+<name>.tool.ts` file. */
 export const defineAgentTool = <const S extends Schema.Codec<unknown, unknown>>(
@@ -38,7 +28,6 @@ export const defineAgentTool = <const S extends Schema.Codec<unknown, unknown>>(
 	}
 	return Object.freeze({
 		...definition,
-		description: definition.description.trim(),
-		input: Schema.toStandardSchemaV1(definition.input)
+		description: definition.description.trim()
 	});
 };

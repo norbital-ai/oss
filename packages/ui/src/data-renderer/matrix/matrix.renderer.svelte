@@ -9,7 +9,6 @@
 
 	export interface MatrixRow {
 		readonly id?: string;
-		readonly norbital_id?: string;
 	}
 
 	type MatrixRowKey<TRow extends MatrixRow> = Extract<keyof TRow, string>;
@@ -92,8 +91,8 @@
 		TableAPI,
 		type TableSortEntry,
 		type TCreateColumnProps
-	} from '../../collection-table/internal/index.js';
-	import { collectionTableColumnCanSort } from '../../collection-table/collection-table.types.js';
+	} from '#lib/collection-table/internal';
+	import { collectionTableColumnCanSort } from '#lib/collection-table/collection-table.types';
 	import { Bound, Scroll, Stack } from '#lib/layout';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn, renderSnippet } from '#lib/utils';
@@ -128,7 +127,6 @@
 
 	function resolveRowId(row: TRow, index: number): string {
 		if (getRowId) return getRowId(row, index);
-		if (typeof row.norbital_id === 'string') return row.norbital_id;
 		if (typeof row.id === 'string') return row.id;
 		return `row-${index}`;
 	}
@@ -140,10 +138,6 @@
 		if (index < 0) return null;
 		const row = rows[index];
 		return row == null ? null : { row, index };
-	}
-
-	function rowEditDisabled(row: TRow, index: number): boolean {
-		return disabled || isRowDisabled?.(row, index) === true;
 	}
 
 	function rowRemovable(row: TRow, index: number): boolean {
@@ -283,7 +277,8 @@
 
 {#snippet matrixCellEditor(tableRow: TableRow, column: MatrixColumn<TRow>, borderless: boolean)}
 	{@const source = resolveSource(tableRow)}
-	{@const cellDisabled = source == null ? disabled : rowEditDisabled(source.row, source.index)}
+	{@const cellDisabled =
+		source == null ? disabled : disabled || isRowDisabled?.(source.row, source.index) === true}
 	<MatrixCell
 		row={tableRow}
 		{column}

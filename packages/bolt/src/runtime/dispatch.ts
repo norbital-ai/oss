@@ -1,50 +1,66 @@
-import { Effect, Schema } from 'effect';
+import { Clock, Effect, Number as ENumber, Result, Schema } from 'effect';
 import {
 	CollectionWriteValues,
 	EffectId,
+	PluginTrustedContext,
 	StoredRecord,
 	type DispatchResponse,
 	type Invocation
 } from '@norbital-ai/bolt-protocol';
-import { AccessControl } from './access/access-control.js';
-import { WEB_AGENT_NAME } from '../authoring/workspace-schema.js';
-import { SystemPrincipal } from './access/system-principal.js';
-import { Agents } from './agents/agents.js';
-import { AI, Files } from './facilities/services.js';
-import { Approvals, ApprovalState } from './approvals/approvals.js';
-import { Automations } from './automations/automations.js';
-import { EnvoyDelivery, Envoys } from './envoys/envoys.js';
+import * as AccessControl from '#lib/runtime/access/access-control.js';
+import { WEB_AGENT_NAME, type RelationDefinition } from '#lib/authoring/workspace-schema.js';
+import * as SystemPrincipal from '#lib/runtime/access/system-principal.js';
+import * as Agents from '#lib/runtime/agents/agents.js';
+import {
+	AI,
+	Files,
+	type AIInterface,
+	type FilesInterface
+} from '#lib/runtime/facilities/services.js';
+import * as Approvals from '#lib/runtime/approvals/approvals.js';
+import { ApprovalState } from '#lib/runtime/approvals/approvals.js';
+import * as Automations from '#lib/runtime/automations/automations.js';
+import * as Envoys from '#lib/runtime/envoys/envoys.js';
+import { EnvoyDelivery } from '#lib/runtime/envoys/envoys.js';
 import {
 	automationPrincipalId,
 	envoyPrincipalId,
 	SEED_PRINCIPAL_ID
-} from './identity/static-identity.js';
-import { Collections } from './collections/collections.js';
-import { compileOrderTerms, makeWhereContext } from './collections/where.js';
-import { Integrations } from './integrations/integrations.js';
-import { ADMIN_STATUS, Identity, Subject } from './identity/identity.js';
-import { Database } from './facilities/database.js';
-import { Notification, Notifications } from './notifications/notifications.js';
-import { RemoteRegistry } from './remotes.js';
-import { WorkspaceSchema } from './schema/workspace-schema.js';
-import { Secrets } from './secrets/secrets.js';
-import { PersonalSecrets } from './secrets/personal-secrets.js';
+} from '#lib/runtime/identity/static-identity.js';
+import * as Collections from '#lib/runtime/collections/collections.js';
+import { compileOrderTerms, makeWhereContext } from '#lib/runtime/collections/where.js';
+import * as Integrations from '#lib/runtime/integrations/integrations.js';
+import * as Identity from '#lib/runtime/identity/identity.js';
+import { ADMIN_STATUS, Subject } from '#lib/runtime/identity/identity.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import * as Notifications from '#lib/runtime/notifications/notifications.js';
+import { Notification } from '#lib/runtime/notifications/notifications.js';
+import { RemoteRegistry, type RuntimeRemoteRegistry } from '#lib/runtime/remotes.js';
+import * as WorkspaceSchema from '#lib/runtime/schema/workspace-schema.js';
+import { Secrets, type Interface as SecretsInterface } from '#lib/runtime/secrets/secrets.js';
+import {
+	PersonalSecrets,
+	type Interface as PersonalSecretsInterface
+} from '#lib/runtime/secrets/personal-secrets.js';
 import {
 	describeGeneratedColumnWrite,
 	describeInvalidCustomValue
-} from './collections/custom-values.js';
-import { Sync, SyncCursor } from './sync/sync.js';
+} from '#lib/runtime/collections/custom-values.js';
+import * as Sync from '#lib/runtime/sync/sync.js';
+import { SyncCursor } from '#lib/runtime/sync/sync.js';
 import {
 	AuthoredRuntimeService,
 	makeAuthoringApi,
 	makeBoundAuthoringOps,
-	runAuthoredHandler
-} from './collections/authored.js';
-import { describeCause, DispatchError, Workspace } from './workspace.js';
-import { RateLimits } from './rate-limits.js';
-import { TaskQueue } from './tasks/tasks.js';
+	runAuthoredHandler,
+	type AuthoredRuntime
+} from '#lib/runtime/collections/authored.js';
+import * as Workspace from '#lib/runtime/workspace.js';
+import { describeCause, DispatchError } from '#lib/runtime/workspace.js';
+import * as RateLimits from '#lib/runtime/rate-limits.js';
+import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 
-export { DispatchError } from './workspace.js';
+export { DispatchError } from '#lib/runtime/workspace.js';
 
 const VisibleAppsInput = Schema.Struct({ subject: Subject });
 const ImpersonateInput = Schema.Struct({ actor: Subject, target: Subject });
@@ -121,10 +137,18 @@ const PersonalSecretsWriteInput = Schema.Struct({
 	value: Schema.String
 });
 const PersonalSecretsNameInput = Schema.Struct({ name: Schema.NonEmptyString });
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
 const DataBrowserInput = Schema.Struct({
 	collection: Schema.NonEmptyString,
-	input: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json))
+	input: Schema.optionalKey(Schema.Struct({ limit: Schema.optionalKey(Schema.Number) }))
 });
+const RateLimitAddressInput = Schema.Struct({
+	address: Schema.optionalKey(Schema.String),
+	email: Schema.optionalKey(Schema.String)
+});
+const FounderLedgerRow = Schema.Struct({ value: Schema.NonEmptyString });
+const StoredId = Schema.Struct({ id: Schema.NonEmptyString });
+const decodeJsonObject = Schema.decodeUnknownResult(JsonObject);
 /**
  * What a host may still assert once it has proved who it is, which is only ever *less* authority.
  *
@@ -136,9 +160,6 @@ const DataBrowserInput = Schema.Struct({
  * payload's copy to do except be believed. `impersonatedSubject` survives because it narrows rather
  * than widens — `AccessControl.impersonate` still has to authorize the authenticated actor for it.
  */
-const PluginContext = Schema.Struct({
-	impersonatedSubject: Schema.optionalKey(Schema.NonEmptyString)
-});
 /**
  * The create body, and the `id` that used to be on it.
  *
@@ -471,16 +492,32 @@ const DispatchValues = {
 			)
 		),
 	json: (value: Schema.Json): DispatchResponse => ({ status: 200, headers: {}, value }),
+	/**
+	 * Projects one record to the JSON a wire shape accepts.
+	 *
+	 * A Json boundary has no `undefined` — a key the caller left absent is a key that does not exist.
+	 * Collecting the optional fields first and dropping their absent values here keeps the wire shape
+	 * honest instead of rebuilding it field-by-field at every caller.
+	 */
+	jsonObject: (
+		entry: Readonly<Record<string, Schema.Json | undefined>>
+	): Readonly<Record<string, Schema.Json>> => {
+		const value: Record<string, Schema.Json> = {};
+		for (const [key, field] of Object.entries(entry)) {
+			if (field !== undefined) value[key] = field;
+		}
+		return value;
+	},
 	// The page ceiling belongs to this boundary, not the collections service: a client asks for a
 	// page, while an authored server-side handler asks for the exact rows its computation needs.
 	collectionQuery: (input: typeof CollectionFindInput.Type) => ({
 		collection: input.collection,
-		limit: Math.max(1, Math.min(input.limit ?? 100, 500)),
-		...(input.where === undefined ? {} : { where: input.where }),
-		...(input.orderBy === undefined ? {} : { orderBy: input.orderBy }),
-		...(input.with === undefined ? {} : { with: input.with }),
-		...(input.search === undefined ? {} : { search: input.search }),
-		...(input.after === undefined ? {} : { after: input.after })
+		limit: ENumber.clamp({ minimum: 1, maximum: 500 })(input.limit ?? 100),
+		where: input.where,
+		orderBy: input.orderBy,
+		with: input.with,
+		search: input.search,
+		after: input.after
 		// `columns` is accepted on the wire but deliberately not forwarded: Bolt's read path has no
 		// projection, it selects the whole row. Honouring it would mean rewriting the select list *and*
 		// re-adding every ordering column the cursor is cut from plus every relation key `with` joins
@@ -561,6 +598,40 @@ const checkWrittenValues = Effect.fn('Bolt.checkWrittenValues')(function* (
  */
 const GRAPH_CHECK_DEPTH = 5;
 
+/** The child rows a create body names in `many`-relation keys, followed to their own collections. */
+const writtenGraphChildren = (
+	collection: string,
+	values: Readonly<Record<string, Schema.Json>>,
+	relations: ReadonlyArray<RelationDefinition>
+): ReadonlyArray<{
+	readonly collection: string;
+	readonly values: Readonly<Record<string, Schema.Json>>;
+}> => {
+	const children: Array<{
+		readonly collection: string;
+		readonly values: Readonly<Record<string, Schema.Json>>;
+	}> = [];
+	for (const [key, value] of Object.entries(values)) {
+		const childRows = Schema.decodeUnknownResult(Schema.Array(JsonObject))(value);
+		if (Result.isFailure(childRows)) continue;
+		const relation = relations.find(
+			(candidate) =>
+				candidate.name === key &&
+				candidate.source === collection &&
+				candidate.cardinality === 'many' &&
+				candidate.from?.column !== undefined
+		);
+		if (relation === undefined) continue;
+		for (const child of childRows.success) {
+			children.push({
+				collection: relation.target,
+				values: child
+			});
+		}
+	}
+	return children;
+};
+
 /**
  * The same check, down every branch of a create graph.
  *
@@ -596,34 +667,21 @@ const checkWrittenGraph = Effect.fn('Bolt.checkWrittenGraph')(function* (
 		 * anybody asked for. On a child it lands in the insert's column list beside the id the graph
 		 * assigned, and the statement fails on a duplicate column with nothing to say about why.
 		 */
-		if (Object.hasOwn(node.values, 'norbital_id'))
+		if (Object.hasOwn(node.values, 'id'))
 			yield* Effect.fail(
 				new DispatchError({
 					code: 'invalid_input',
-					message: `A create on ${node.collection} carried a norbital_id. Ids are assigned by the server; to change an existing record use collections.update.`
+					message: `A create on ${node.collection} carried an id. Ids are assigned by the server; to change an existing record use collections.update.`
 				})
 			);
 		yield* checkWrittenValues(node.collection, node.values);
 		if (node.depth >= GRAPH_CHECK_DEPTH) continue;
-		for (const [key, value] of Object.entries(node.values)) {
-			if (!Array.isArray(value)) continue;
-			const relation = relations.find(
-				(candidate) =>
-					candidate.name === key &&
-					candidate.source === node.collection &&
-					candidate.cardinality === 'many' &&
-					candidate.from?.column !== undefined
-			);
-			if (relation === undefined) continue;
-			for (const child of value) {
-				if (child === null || typeof child !== 'object' || Array.isArray(child)) continue;
-				pending.push({
-					collection: relation.target,
-					values: child as Readonly<Record<string, Schema.Json>>,
-					depth: node.depth + 1
-				});
-			}
-		}
+		pending.push(
+			...writtenGraphChildren(node.collection, node.values, relations).map((child) => ({
+				...child,
+				depth: node.depth + 1
+			}))
+		);
 	}
 });
 const json = DispatchValues.json;
@@ -1049,336 +1107,365 @@ export const collectionQuery = DispatchValues.collectionQuery;
 const credentialFromHeaders = DispatchValues.credentialFromHeaders;
 const impersonatedTeamFromHeaders = DispatchValues.impersonatedTeamFromHeaders;
 
-export const dispatchInvocation = Effect.fn('Bolt.dispatch')(function* (invocation: Invocation) {
-	if (invocation._tag === 'Request') {
-		if (new URL(invocation.url, 'http://bolt.invalid').pathname === '/health')
-			return json({ status: 'ok' });
-		const credential = credentialFromHeaders(invocation.headers);
-		if (credential === undefined || credential === '')
-			return yield* new DispatchError({
-				code: 'unauthorized',
-				message: 'Missing authorization credential'
-			});
-		const identity = yield* Identity.Service;
-		const subject = yield* identity.authenticate(EffectId.make(invocation.id), credential);
-		if (subject.tenantId !== invocation.scope.tenantId)
-			return yield* new DispatchError({
-				code: 'tenant_mismatch',
-				message: 'Authenticated subject is outside the invocation tenant'
-			});
-		const access = yield* AccessControl.Service;
-		return json({ subject, apps: access.visibleApps(subject) });
-	}
-	if (invocation._tag === 'Realtime') {
-		if (invocation.event._tag === 'Open')
-			return { status: 200, headers: {}, realtime: { frames: [], nextCursor: '0' } };
-		if (invocation.event._tag === 'Input') {
-			const cursor = String(invocation.event.frame.sequence);
+type DispatchServices =
+	| AccessControl.Interface
+	| Agents.Interface
+	| AIInterface
+	| Approvals.Interface
+	| AuthoredRuntime
+	| Automations.Interface
+	| Collections.Interface
+	| Database.Interface
+	| Envoys.Interface
+	| FilesInterface
+	| Identity.Interface
+	| Integrations.Interface
+	| Notifications.Interface
+	| PersonalSecretsInterface
+	| RateLimits.Interface
+	| RuntimeRemoteRegistry
+	| SecretsInterface
+	| Sync.Interface
+	| TaskQueue.Interface
+	| Workspace.Interface
+	| WorkspaceSchema.Interface;
+
+export const dispatchInvocation: (
+	invocation: Invocation
+) => Effect.Effect<DispatchResponse, unknown, DispatchServices> = Effect.fn('Bolt.dispatch')(
+	function* (invocation: Invocation) {
+		if (invocation._tag === 'Request') {
+			if (new URL(invocation.url, 'http://bolt.invalid').pathname === '/health')
+				return json({ status: 'ok' });
+			const credential = credentialFromHeaders(invocation.headers);
+			if (credential === undefined || credential === '')
+				return yield* new DispatchError({
+					code: 'unauthorized',
+					message: 'Missing authorization credential'
+				});
+			const identity = yield* Identity.Service;
+			const subject = yield* identity.authenticate(EffectId.make(invocation.id), credential);
+			if (subject.tenantId !== invocation.scope.tenantId)
+				return yield* new DispatchError({
+					code: 'tenant_mismatch',
+					message: 'Authenticated subject is outside the invocation tenant'
+				});
+			const access = yield* AccessControl.Service;
+			return json({ subject, apps: access.visibleApps(subject) });
+		}
+		if (invocation._tag === 'Realtime') {
+			if (invocation.event._tag === 'Open')
+				return { status: 200, headers: {}, realtime: { frames: [], nextCursor: '0' } };
+			if (invocation.event._tag === 'Input') {
+				const cursor = String(invocation.event.frame.sequence);
+				return {
+					status: 200,
+					headers: {},
+					realtime: {
+						frames: [
+							{ cursor, kind: invocation.event.frame.kind, bytes: invocation.event.frame.bytes }
+						],
+						nextCursor: cursor
+					}
+				};
+			}
 			return {
 				status: 200,
 				headers: {},
 				realtime: {
-					frames: [
-						{ cursor, kind: invocation.event.frame.kind, bytes: invocation.event.frame.bytes }
-					],
-					nextCursor: cursor
+					frames: [],
+					...(invocation.event._tag === 'Close' || invocation.event._tag === 'Cancel'
+						? {
+								close: {
+									code: invocation.event._tag === 'Close' ? invocation.event.code : 1000,
+									reason: invocation.event.reason
+								}
+							}
+						: {})
 				}
 			};
 		}
-		return {
-			status: 200,
-			headers: {},
-			realtime: {
-				frames: [],
-				...(invocation.event._tag === 'Close' || invocation.event._tag === 'Cancel'
-					? {
-							close: {
-								code: invocation.event._tag === 'Close' ? invocation.event.code : 1000,
-								reason: invocation.event.reason
-							}
-						}
-					: {})
-			}
-		};
-	}
-	if (invocation._tag !== 'Command' && invocation._tag !== 'Plugin' && invocation._tag !== 'Task') {
-		return yield* new DispatchError({
-			code: 'unsupported_invocation',
-			message: 'Unsupported Bolt invocation'
-		});
-	}
-	const effectId = EffectId.make(invocation.id);
-	if (invocation._tag === 'Plugin' && invocation.plugin === 'data-browser') {
-		if (invocation.command !== 'query')
+		if (
+			invocation._tag !== 'Command' &&
+			invocation._tag !== 'Plugin' &&
+			invocation._tag !== 'Task'
+		) {
 			return yield* new DispatchError({
-				code: 'unknown_plugin_command',
-				message: `Unknown Data Browser command: ${invocation.command}`
-			});
-		const input = yield* decode(DataBrowserInput, invocation.input);
-		const context = yield* decode(PluginContext, invocation.trustedContext);
-		// The same credential the `Command` path reads, authenticated the same way, because the Data
-		// Browser is a read of tenant data and there is no weaker thing it could be. Refused when it is
-		// absent rather than downgraded to an empty role set: a silent empty result reads as "this
-		// workspace has no rows" and sends the operator looking for the wrong fault.
-		const credential = credentialFromHeaders(invocation.headers);
-		if (credential === undefined || credential === '') {
-			return yield* new AccessControl.AccessDenied({
-				action: 'read',
-				resource: input.collection,
-				reason:
-					'a Plugin invocation must present a credential before its trustedContext is honoured'
+				code: 'unsupported_invocation',
+				message: 'Unsupported Bolt invocation'
 			});
 		}
-		const identity = yield* Identity.Service;
-		const actor = yield* identity.authenticate(effectId, credential);
-		if (actor.tenantId !== invocation.scope.tenantId)
-			return yield* new DispatchError({
-				code: 'tenant_mismatch',
-				message: 'Plugin actor is outside the invocation tenant'
-			});
-		const subject = yield* Effect.gen(function* () {
-			if (context.impersonatedSubject === undefined) return actor;
-			const target = yield* identity.resolveSubject(
-				effectId,
-				'colony',
-				context.impersonatedSubject
+		const effectId = EffectId.make(invocation.id);
+		if (invocation._tag === 'Plugin' && invocation.plugin === 'data-browser') {
+			if (invocation.command !== 'query')
+				return yield* new DispatchError({
+					code: 'unknown_plugin_command',
+					message: `Unknown Data Browser command: ${invocation.command}`
+				});
+			const input = yield* decode(DataBrowserInput, invocation.input);
+			const context = yield* Schema.decodeUnknownEffect(PluginTrustedContext)(
+				invocation.trustedContext
 			);
-			if (target.tenantId !== invocation.scope.tenantId)
+			// The same credential the `Command` path reads, authenticated the same way, because the Data
+			// Browser is a read of tenant data and there is no weaker thing it could be. Refused when it is
+			// absent rather than downgraded to an empty role set: a silent empty result reads as "this
+			// workspace has no rows" and sends the operator looking for the wrong fault.
+			const credential = credentialFromHeaders(invocation.headers);
+			if (credential === undefined || credential === '') {
+				return yield* new AccessControl.AccessDenied({
+					action: 'read',
+					resource: input.collection,
+					reason:
+						'a Plugin invocation must present a credential before its trustedContext is honoured'
+				});
+			}
+			const identity = yield* Identity.Service;
+			const actor = yield* identity.authenticate(effectId, credential);
+			if (actor.tenantId !== invocation.scope.tenantId)
 				return yield* new DispatchError({
 					code: 'tenant_mismatch',
-					message: 'Plugin target is outside the invocation tenant'
+					message: 'Plugin actor is outside the invocation tenant'
 				});
-			return yield* (yield* AccessControl.Service).impersonate(actor, target);
-		});
-		const collections = yield* Collections.Service;
-		const options = input.input ?? {};
-		const limit = typeof options['limit'] === 'number' ? options['limit'] : undefined;
-		// The *effective* subject, which on an impersonated query is the target and not the actor.
-		// A facility is being told who this read is on behalf of, and the whole content of an
-		// impersonated read is that it is on behalf of somebody else — an operator opening a member's
-		// rows must see that member's per-user state, not their own. The actor is not lost: the subject
-		// `impersonate` returns carries `impersonatedBy`, and the audit row it writes names them.
-		return json(
-			yield* Effect.provideService(
-				collections.findMany(effectId, subject, {
-					collection: input.collection,
-					...(limit === undefined ? {} : { limit })
-				}),
-				Identity.CurrentSubject,
-				subject
-			)
-		);
-	}
-	const authenticated = yield* Effect.gen(function* () {
-		const fields =
-			typeof invocation.input === 'object' &&
-			invocation.input !== null &&
-			!Array.isArray(invocation.input)
-				? invocation.input
-				: {};
-		if (invocation._tag !== 'Command') {
-			yield* authorizeInvocationProvenance(invocation._tag, invocation.command);
-			// Refused, not stripped: a payload that names a subject is asking to run as somebody, and
-			// answering `invalid_input` would report that as a malformed request rather than as the claim
-			// it is. A task that names nobody passes here and fails to decode in its own case, which is
-			// the same refusal by the schema each case already declares.
-			const claimed = MINTED_IDENTITY.find((name) => name in fields);
-			if (claimed !== undefined) {
-				return yield* new AccessControl.AccessDenied({
-					action: 'authenticate',
-					resource: invocation.command,
-					reason: `a ${invocation._tag} invocation carries no credential, so the ${claimed} its payload claims is refused`
-				});
-			}
-			// Nobody is behind a `Task` or a bare `Plugin`, so it carries no subject and nothing is
-			// provided below — a facility called from here sees the same absence the runtime does.
-			return { input: invocation.input, subject: undefined };
-		}
-		// Checked before the credential is demanded, because a person signing in has none yet.
-		//
-		// The tenant is minted here rather than left out. A bolt serves exactly one workspace, so which
-		// tenant a sign-in belongs to is a fact the invocation already carries — and the alternative was
-		// not "no tenant" but a broken flow: Better Auth admits the address, the user row lands with a
-		// null `tenantId`, and the credential it hands back fails `authenticate` as malformed on its
-		// very first use. Nothing else set that column; `startSession` does, but it needs the working
-		// credential this is supposed to produce, and `acceptInvitation` never touched it.
-		//
-		// It comes from `invocation.scope`, never from the payload, which is what `tenantId` being a
-		// `MINTED_IDENTITY` field means — so the refusal below is the same one the credential-free tags
-		// get, for the same reason. Whether an address may reach this command at all is the host's
-		// question, answered in front of the forward by whatever gates the host puts there.
-		if (SIGN_IN_COMMANDS.has(invocation.command)) {
-			const claimed = MINTED_IDENTITY.find((name) => name in fields);
-			if (claimed !== undefined) {
-				return yield* new AccessControl.AccessDenied({
-					action: 'authenticate',
-					resource: invocation.command,
-					reason: `a sign-in carries no credential, so the ${claimed} its payload claims is refused`
-				});
-			}
-			return { input: { ...fields, tenantId: invocation.scope.tenantId }, subject: undefined };
-		}
-		/**
-		 * The host, provisioning a workspace nobody belongs to yet.
-		 *
-		 * Checked before the credential is demanded, for the same structural reason a sign-in is: there
-		 * is nobody to hold a credential. A freshly created database has no tables, so it has no
-		 * `bolt_auth_user` to be an administrator in and no `bolt_auth_session` to authenticate
-		 * against — and `schema.migrate` is the command that would create both. The authority to break
-		 * that deadlock cannot come from the workspace's own membership.
-		 *
-		 * What it comes from instead is possession of `COLONY_GATEWAY_SECRET`, proved per invocation
-		 * over the timestamp, the command, the tenant and the arguments. The subject that produces is
-		 * an ordinary one carrying one role, and `COLONY_SYSTEM_POLICY` — merged into every workspace
-		 * definition by `withSystemCollections` — is what that role matches. So this is not a branch
-		 * that skips access control; it is the only constructor for one particular subject, which then
-		 * goes through `decide` like everybody else and is refused everything the policy does not
-		 * enumerate.
-		 *
-		 * The previous arrangement is what this replaces, rather than joins: the host used to write a
-		 * `bolt_auth_user` row and a `bolt_auth_session` row straight into the tenant database over
-		 * `pg`, then hand bolt the token. That made provisioning authority a *row* — created before it
-		 * was needed, deleted afterwards if nothing crashed, and indistinguishable at the point of
-		 * decision from a person's. Nothing is written here and nothing needs revoking; the authority
-		 * exists for the length of one invocation and the signature that carries it is stale in five
-		 * minutes.
-		 *
-		 * Logged rather than audited, and deliberately: `bolt_audit` is a table that does not exist yet
-		 * during the migration this authorises, so a row would fail exactly when it mattered most. The
-		 * line names `colony system` so an operator reading "who migrated this schema" sees the host and
-		 * not a person; anything downstream that records a subject id records `colony-system` too.
-		 */
-		if (
-			yield* SystemPrincipal.verifySystemSignature({
-				headers: invocation.headers,
-				command: invocation.command,
-				tenantId: invocation.scope.tenantId,
-				input: invocation.input,
-				now: Date.now()
-			})
-		) {
-			// Annotated rather than inferred, so the absence of `admin` is checked here rather than
-			// discovered downstream: a system principal that ever gained that key would short-circuit
-			// `decide`, `rowPredicate` and `visibleApps` and stop being the enumerated thing it is.
-			const subject: Subject = SystemPrincipal.systemSubject(invocation.scope.tenantId);
-			yield* Effect.log(
-				`bolt.dispatch: ${invocation.command} authorized as colony system for ${invocation.scope.tenantId}`
+			const subject = yield* Effect.gen(function* () {
+				if (context.impersonatedSubject === undefined) return actor;
+				const target = yield* identity.resolveSubject(
+					effectId,
+					'colony',
+					context.impersonatedSubject
+				);
+				if (target.tenantId !== invocation.scope.tenantId)
+					return yield* new DispatchError({
+						code: 'tenant_mismatch',
+						message: 'Plugin target is outside the invocation tenant'
+					});
+				return yield* (yield* AccessControl.Service).impersonate(actor, target);
+			});
+			const collections = yield* Collections.Service;
+			const limit = input.input?.limit;
+			// The *effective* subject, which on an impersonated query is the target and not the actor.
+			// A facility is being told who this read is on behalf of, and the whole content of an
+			// impersonated read is that it is on behalf of somebody else — an operator opening a member's
+			// rows must see that member's per-user state, not their own. The actor is not lost: the subject
+			// `impersonate` returns carries `impersonatedBy`, and the audit row it writes names them.
+			return json(
+				yield* Effect.provideService(
+					collections.findMany(effectId, subject, {
+						collection: input.collection,
+						limit
+					}),
+					Identity.CurrentSubject,
+					subject
+				)
 			);
-			// The same minting the credential path does, so no payload field survives to be read as
-			// identity. `actor` is the system principal itself: nobody is impersonating anybody, and a
-			// preview header is dropped rather than honoured — `subjectAsTeam` refuses a non-administrator
-			// anyway, and a system principal must never be narrowed into a workspace role.
+		}
+		const authenticated = yield* Effect.gen(function* () {
+			const fields = Result.getOrElse(decodeJsonObject(invocation.input), () => ({}));
+			if (invocation._tag !== 'Command') {
+				yield* authorizeInvocationProvenance(invocation._tag, invocation.command);
+				// Refused, not stripped: a payload that names a subject is asking to run as somebody, and
+				// answering `invalid_input` would report that as a malformed request rather than as the claim
+				// it is. A task that names nobody passes here and fails to decode in its own case, which is
+				// the same refusal by the schema each case already declares.
+				const claimed = MINTED_IDENTITY.find((name) => name in fields);
+				if (claimed !== undefined) {
+					return yield* new AccessControl.AccessDenied({
+						action: 'authenticate',
+						resource: invocation.command,
+						reason: `a ${invocation._tag} invocation carries no credential, so the ${claimed} its payload claims is refused`
+					});
+				}
+				// Nobody is behind a `Task` or a bare `Plugin`, so it carries no subject and nothing is
+				// provided below — a facility called from here sees the same absence the runtime does.
+				return { input: invocation.input, subject: undefined };
+			}
+			// Checked before the credential is demanded, because a person signing in has none yet.
+			//
+			// The tenant is minted here rather than left out. A bolt serves exactly one workspace, so which
+			// tenant a sign-in belongs to is a fact the invocation already carries — and the alternative was
+			// not "no tenant" but a broken flow: Better Auth admits the address, the user row lands with a
+			// null `tenantId`, and the credential it hands back fails `authenticate` as malformed on its
+			// very first use. Nothing else set that column; `startSession` does, but it needs the working
+			// credential this is supposed to produce, and `acceptInvitation` never touched it.
+			//
+			// It comes from `invocation.scope`, never from the payload, which is what `tenantId` being a
+			// `MINTED_IDENTITY` field means — so the refusal below is the same one the credential-free tags
+			// get, for the same reason. Whether an address may reach this command at all is the host's
+			// question, answered in front of the forward by whatever gates the host puts there.
+			if (SIGN_IN_COMMANDS.has(invocation.command)) {
+				const claimed = MINTED_IDENTITY.find((name) => name in fields);
+				if (claimed !== undefined) {
+					return yield* new AccessControl.AccessDenied({
+						action: 'authenticate',
+						resource: invocation.command,
+						reason: `a sign-in carries no credential, so the ${claimed} its payload claims is refused`
+					});
+				}
+				return { input: { ...fields, tenantId: invocation.scope.tenantId }, subject: undefined };
+			}
+			/**
+			 * The host, provisioning a workspace nobody belongs to yet.
+			 *
+			 * Checked before the credential is demanded, for the same structural reason a sign-in is: there
+			 * is nobody to hold a credential. A freshly created database has no tables, so it has no
+			 * `bolt_auth_user` to be an administrator in and no `bolt_auth_session` to authenticate
+			 * against — and `schema.migrate` is the command that would create both. The authority to break
+			 * that deadlock cannot come from the workspace's own membership.
+			 *
+			 * What it comes from instead is possession of `COLONY_GATEWAY_SECRET`, proved per invocation
+			 * over the timestamp, the command, the tenant and the arguments. The subject that produces is
+			 * an ordinary one carrying one role, and `COLONY_SYSTEM_POLICY` — merged into every workspace
+			 * definition by `withSystemCollections` — is what that role matches. So this is not a branch
+			 * that skips access control; it is the only constructor for one particular subject, which then
+			 * goes through `decide` like everybody else and is refused everything the policy does not
+			 * enumerate.
+			 *
+			 * The previous arrangement is what this replaces, rather than joins: the host used to write a
+			 * `bolt_auth_user` row and a `bolt_auth_session` row straight into the tenant database over
+			 * `pg`, then hand bolt the token. That made provisioning authority a *row* — created before it
+			 * was needed, deleted afterwards if nothing crashed, and indistinguishable at the point of
+			 * decision from a person's. Nothing is written here and nothing needs revoking; the authority
+			 * exists for the length of one invocation and the signature that carries it is stale in five
+			 * minutes.
+			 *
+			 * Logged rather than audited, and deliberately: `bolt_audit` is a table that does not exist yet
+			 * during the migration this authorises, so a row would fail exactly when it mattered most. The
+			 * line names `colony system` so an operator reading "who migrated this schema" sees the host and
+			 * not a person; anything downstream that records a subject id records `colony-system` too.
+			 */
+			if (
+				yield* SystemPrincipal.verifySystemSignature({
+					headers: invocation.headers,
+					command: invocation.command,
+					tenantId: invocation.scope.tenantId,
+					input: invocation.input,
+					now: yield* Clock.currentTimeMillis
+				})
+			) {
+				// Annotated rather than inferred, so the absence of `admin` is checked here rather than
+				// discovered downstream: a system principal that ever gained that key would short-circuit
+				// `decide`, `rowPredicate` and `visibleApps` and stop being the enumerated thing it is.
+				const subject: Subject = SystemPrincipal.systemSubject(invocation.scope.tenantId);
+				yield* Effect.log(
+					`bolt.dispatch: ${invocation.command} authorized as colony system for ${invocation.scope.tenantId}`
+				);
+				// The same minting the credential path does, so no payload field survives to be read as
+				// identity. `actor` is the system principal itself: nobody is impersonating anybody, and a
+				// preview header is dropped rather than honoured — `subjectAsTeam` refuses a non-administrator
+				// anyway, and a system principal must never be narrowed into a workspace role.
+				return {
+					input: {
+						...fields,
+						subject,
+						actor: subject,
+						userId: subject.userId,
+						tenantId: invocation.scope.tenantId,
+						invitedBy: subject.userId,
+						impersonatedTeam: null
+					},
+					subject
+				};
+			}
+			const credential = credentialFromHeaders(invocation.headers);
+			if (credential === undefined || credential === '')
+				return yield* new DispatchError({
+					code: 'unauthorized',
+					message: 'Missing command credential'
+				});
+			const actor = yield* (yield* Identity.Service).authenticate(effectId, credential);
+			if (actor.tenantId !== invocation.scope.tenantId)
+				return yield* new DispatchError({
+					code: 'tenant_mismatch',
+					message: 'Authenticated subject is outside the invocation tenant'
+				});
+			/**
+			 * The one place a team preview changes what this invocation is.
+			 *
+			 * It substitutes the *subject* rather than filtering any particular answer, which is the whole
+			 * point: `visibleApps` decides what the sidebar offers, but the row predicate is what decides
+			 * whether a read is served, and both read the subject's team. Narrowing the subject once here moves
+			 * every decision below together — the ninety-odd cases in `runCommand`, the collection predicates,
+			 * the field masks — so there is no path where the navigation hides an app the runtime would still
+			 * serve rows for.
+			 *
+			 * `actor` stays the real credential holder. `subject` is who the command runs as, `actor` is who
+			 * is really here, and the audit trail, `invitedBy` and `access.impersonation`'s own answer all
+			 * need the second — an admin previewing `Employee` must still be told they may impersonate, or
+			 * the picker disappears and there is no way back.
+			 *
+			 * `impersonatedTeam` is minted unconditionally, as `null` when there is no preview, so a payload
+			 * claiming one is overwritten in both directions rather than only while a preview is running.
+			 */
+			const team = impersonatedTeamFromHeaders(invocation.headers);
+			const subject =
+				team === undefined
+					? actor
+					: yield* (yield* AccessControl.Service).subjectAsTeam(actor, team);
 			return {
 				input: {
 					...fields,
 					subject,
-					actor: subject,
-					userId: subject.userId,
-					tenantId: invocation.scope.tenantId,
-					invitedBy: subject.userId,
-					impersonatedTeam: null
+					actor,
+					userId: actor.userId,
+					tenantId: actor.tenantId,
+					invitedBy: actor.userId,
+					impersonatedTeam: team ?? null
 				},
 				subject
 			};
-		}
-		const credential = credentialFromHeaders(invocation.headers);
-		if (credential === undefined || credential === '')
-			return yield* new DispatchError({
-				code: 'unauthorized',
-				message: 'Missing command credential'
-			});
-		const actor = yield* (yield* Identity.Service).authenticate(effectId, credential);
-		if (actor.tenantId !== invocation.scope.tenantId)
-			return yield* new DispatchError({
-				code: 'tenant_mismatch',
-				message: 'Authenticated subject is outside the invocation tenant'
-			});
+		});
 		/**
-		 * The one place a team preview changes what this invocation is.
+		 * Who the facilities are told this invocation is acting for.
 		 *
-		 * It substitutes the *subject* rather than filtering any particular answer, which is the whole
-		 * point: `visibleApps` decides what the sidebar offers, but the row predicate is what decides
-		 * whether a read is served, and both read the subject's team. Narrowing the subject once here moves
-		 * every decision below together — the ninety-odd cases in `runCommand`, the collection predicates,
-		 * the field masks — so there is no path where the navigation hides an app the runtime would still
-		 * serve rows for.
+		 * Provided once around the whole command body rather than threaded through the services under it,
+		 * because the alternative is a parameter on every facility method and a decision, per call site,
+		 * about what to pass — which is how a facility ends up seeing tenant and environment and nothing
+		 * finer. `invokeBinding` reads it back out of the Effect context, so a per-user secret or a
+		 * signed-in browser session finally has a key to be stored under.
 		 *
-		 * `actor` stays the real credential holder. `subject` is who the command runs as, `actor` is who
-		 * is really here, and the audit trail, `invitedBy` and `access.impersonation`'s own answer all
-		 * need the second — an admin previewing `Employee` must still be told they may impersonate, or
-		 * the picker disappears and there is no way back.
-		 *
-		 * `impersonatedTeam` is minted unconditionally, as `null` when there is no preview, so a payload
-		 * claiming one is overwritten in both directions rather than only while a preview is running.
+		 * The value is the one `authenticate` returned above and nothing else. The payload's own
+		 * `subject` was already overwritten before this point — that is what `MINTED_IDENTITY` is for —
+		 * so there is no route from a request body to what a facility is told. A credential-free tag
+		 * reaches here with `subject: undefined` and provides nothing, leaving `currentSubject` `None`
+		 * rather than a fabricated stand-in a facility would have to learn to distrust.
 		 */
-		const team = impersonatedTeamFromHeaders(invocation.headers);
-		const subject =
-			team === undefined ? actor : yield* (yield* AccessControl.Service).subjectAsTeam(actor, team);
-		return {
-			input: {
-				...fields,
-				subject,
-				actor,
-				userId: actor.userId,
-				tenantId: actor.tenantId,
-				invitedBy: actor.userId,
-				impersonatedTeam: team ?? null
+		/**
+		 * The workspace's own rate policy, applied after identity is settled and before the command runs.
+		 *
+		 * Here rather than at the edge because this is the first point at which the three facts a real
+		 * limit is written in terms of all exist: which command was called, which tenant it belongs to,
+		 * and who is behind it. A reverse proxy sees none of them — behind Traefik it does not reliably
+		 * see even the client IP, which is how one Colony bucket keyed on `getClientAddress()` came to be
+		 * shared by every visitor to the host.
+		 *
+		 * After authentication, so a signed-in person is counted as themselves rather than pooled with
+		 * every other anonymous caller; before the command body, so a refusal costs a map lookup rather
+		 * than the work it was protecting.
+		 */
+		yield* (yield* RateLimits.Service).admit(
+			invocation.command,
+			{
+				tenantId: String(invocation.scope.tenantId),
+				userId: authenticated.subject?.userId,
+				...(rateLimitAddress(invocation.input) === undefined
+					? {}
+					: { address: rateLimitAddress(invocation.input) as string })
 			},
-			subject
-		};
-	});
-	/**
-	 * Who the facilities are told this invocation is acting for.
-	 *
-	 * Provided once around the whole command body rather than threaded through the services under it,
-	 * because the alternative is a parameter on every facility method and a decision, per call site,
-	 * about what to pass — which is how a facility ends up seeing tenant and environment and nothing
-	 * finer. `invokeBinding` reads it back out of the Effect context, so a per-user secret or a
-	 * signed-in browser session finally has a key to be stored under.
-	 *
-	 * The value is the one `authenticate` returned above and nothing else. The payload's own
-	 * `subject` was already overwritten before this point — that is what `MINTED_IDENTITY` is for —
-	 * so there is no route from a request body to what a facility is told. A credential-free tag
-	 * reaches here with `subject: undefined` and provides nothing, leaving `currentSubject` `None`
-	 * rather than a fabricated stand-in a facility would have to learn to distrust.
-	 */
-	/**
-	 * The workspace's own rate policy, applied after identity is settled and before the command runs.
-	 *
-	 * Here rather than at the edge because this is the first point at which the three facts a real
-	 * limit is written in terms of all exist: which command was called, which tenant it belongs to,
-	 * and who is behind it. A reverse proxy sees none of them — behind Traefik it does not reliably
-	 * see even the client IP, which is how one Colony bucket keyed on `getClientAddress()` came to be
-	 * shared by every visitor to the host.
-	 *
-	 * After authentication, so a signed-in person is counted as themselves rather than pooled with
-	 * every other anonymous caller; before the command body, so a refusal costs a map lookup rather
-	 * than the work it was protecting.
-	 */
-	yield* (yield* RateLimits.Service).admit(
-		invocation.command,
-		{
-			tenantId: String(invocation.scope.tenantId),
-			...(authenticated.subject === undefined ? {} : { userId: authenticated.subject.userId }),
-			...(rateLimitAddress(invocation.input) === undefined
-				? {}
-				: { address: rateLimitAddress(invocation.input) as string })
-		},
-		// The holder's own budget, resolved from the policies they hold. It is passed in rather than
-		// looked up inside the limiter for the reason the limiter states: it counts, and something
-		// that already knows who holds what decides which rule to count against.
-		authenticated.subject === undefined
-			? undefined
-			: (yield* AccessControl.Service).limits(authenticated.subject)
-	);
-	const invoked =
-		invocation.command === TICK_COMMAND
-			? runTick(effectId)
-			: runCommand(invocation.command, effectId, authenticated.input);
-	return yield* authenticated.subject === undefined
-		? invoked
-		: Effect.provideService(invoked, Identity.CurrentSubject, authenticated.subject);
-});
+			// The holder's own budget, resolved from the policies they hold. It is passed in rather than
+			// looked up inside the limiter for the reason the limiter states: it counts, and something
+			// that already knows who holds what decides which rule to count against.
+			authenticated.subject === undefined
+				? undefined
+				: (yield* AccessControl.Service).limits(authenticated.subject)
+		);
+		const invoked =
+			invocation.command === TICK_COMMAND
+				? runTick(effectId)
+				: runCommand(invocation.command, effectId, authenticated.input);
+		return yield* authenticated.subject === undefined
+			? invoked
+			: Effect.provideService(invoked, Identity.CurrentSubject, authenticated.subject);
+	}
+);
 
 /**
  * One tick of the tenant's own scheduler, and the only command a host's timer ever sends.
@@ -1463,12 +1550,10 @@ const runTick = Effect.fn('Bolt.runTick')(function* (effectId: EffectId) {
  * address costs, and never to establish identity.
  */
 const rateLimitAddress = (payload: unknown): string | undefined => {
-	if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
-	for (const field of ['address', 'email']) {
-		const value = Reflect.get(payload, field);
-		if (typeof value === 'string' && value.trim() !== '') return value;
-	}
-	return undefined;
+	const decoded = Schema.decodeUnknownResult(RateLimitAddressInput)(payload);
+	if (Result.isFailure(decoded)) return undefined;
+	const value = decoded.success.address ?? decoded.success.email;
+	return value === undefined || value.trim() === '' ? undefined : value;
 };
 
 /**
@@ -1523,15 +1608,17 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			// Rebuilt field by field rather than passed through: whatever this boundary returns reaches a
 			// browser, so the shape is written out here where it can be read, not inherited from a type.
 			return json(
-				entries.map((entry) => ({
-					name: entry.name,
-					label: entry.label,
-					secret: entry.secret,
-					configured: entry.configured,
-					...(entry.description === undefined ? {} : { description: entry.description }),
-					...(entry.default === undefined ? {} : { default: entry.default }),
-					...(entry.updatedAt === undefined ? {} : { updatedAt: entry.updatedAt })
-				}))
+				entries.map((entry) =>
+					DispatchValues.jsonObject({
+						name: entry.name,
+						label: entry.label,
+						secret: entry.secret,
+						configured: entry.configured,
+						description: entry.description,
+						default: entry.default,
+						updatedAt: entry.updatedAt
+					})
+				)
 			);
 		}
 		case 'secrets.write': {
@@ -1564,11 +1651,13 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			// Rebuilt field by field rather than passed through: whatever this boundary returns reaches a
 			// browser, so the shape is written out here where it can be read, not inherited from a type.
 			return json(
-				entries.map((entry) => ({
-					name: entry.name,
-					configured: entry.configured,
-					...(entry.updatedAt === undefined ? {} : { updatedAt: entry.updatedAt })
-				}))
+				entries.map((entry) =>
+					DispatchValues.jsonObject({
+						name: entry.name,
+						configured: entry.configured,
+						updatedAt: entry.updatedAt
+					})
+				)
 			);
 		}
 		case 'personal-secrets.write': {
@@ -1758,12 +1847,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				sql: 'select "value" from bolt_auth_verification where "identifier" = $1 limit 1',
 				parameters: [ledgerIdentifier]
 			});
-			const ledgerRow: unknown = recorded.rows[0];
-			const spentBy =
-				typeof ledgerRow === 'object' && ledgerRow !== null
-					? Reflect.get(ledgerRow, 'value')
-					: undefined;
-			if (typeof spentBy === 'string' && spentBy.length > 0) {
+			const ledgerRow = Schema.decodeUnknownResult(FounderLedgerRow)(recorded.rows[0]);
+			if (Result.isSuccess(ledgerRow)) {
+				const spentBy = ledgerRow.success.value;
 				const [userId, ...rest] = spentBy.split(' ');
 				const boundEmail = rest.join(' ');
 				/**
@@ -1797,6 +1883,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				null,
 				ADMIN_STATUS
 			);
+			const claimExpiresEpochMs = (yield* Clock.currentTimeMillis) + FOUNDER_CLAIM_LEDGER_MILLIS;
 			// Written before the session is minted, so a crash between the two leaves a claim that is
 			// spent rather than one that can be spent again. The founder is already an administrator
 			// at that point and signs in the ordinary way, which is the safe direction to fail.
@@ -1810,7 +1897,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				parameters: [
 					ledgerIdentifier,
 					`${founderId} ${input.email}`,
-					new Date(Date.now() + FOUNDER_CLAIM_LEDGER_MILLIS).toISOString()
+					new Date(claimExpiresEpochMs).toISOString()
 				]
 			});
 			return json({
@@ -1904,8 +1991,8 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					input.subject.userId,
 					{
 						name: input.name,
-						...(input.parentId === undefined ? {} : { parentId: input.parentId }),
-						...(input.description === undefined ? {} : { description: input.description })
+						parentId: input.parentId,
+						description: input.description
 					}
 				)
 			);
@@ -1919,9 +2006,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					input.subject.userId,
 					input.teamId,
 					{
-						...(input.name === undefined ? {} : { name: input.name }),
-						...(input.parentId === undefined ? {} : { parentId: input.parentId }),
-						...(input.description === undefined ? {} : { description: input.description })
+						name: input.name,
+						parentId: input.parentId,
+						description: input.description
 					}
 				)
 			);
@@ -2079,7 +2166,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					code: 'invalid_input',
 					message: 'Skill name is required'
 				});
-			return json(yield* (yield* Agents.Service).readSkill(effectId, input.name));
+			return json(yield* (yield* Agents.Service).readSkill(input.subject, input.name));
 		}
 		// The agent model picker asks for the models this deployment offers. Bolt does not decide that
 		// — the host's AI facility does — so this forwards the question rather than answering it.
@@ -2121,27 +2208,29 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					// compiler now lifts them onto the collection descriptor, and this is the projection
 					// that would otherwise drop them again: a studio needs `description` and `icon` to
 					// name a collection, and `approvalLock` to know a write on it will be held.
-					...(collection.approvalLock === undefined
-						? {}
-						: { approvalLock: collection.approvalLock }),
-					...(collection.description === undefined ? {} : { description: collection.description }),
-					...(collection.icon === undefined ? {} : { icon: collection.icon }),
-					...(collection.sourcePath === undefined ? {} : { sourcePath: collection.sourcePath }),
+					...DispatchValues.jsonObject({
+						approvalLock: collection.approvalLock,
+						description: collection.description,
+						icon: collection.icon,
+						sourcePath: collection.sourcePath
+					}),
 					// Every key a field description carries, not a chosen four. The projection named
 					// `name`/`type`/`required`/`generated` and dropped the rest, so a studio could not
 					// offer an enum's members, could not mark a searchable column, could not resolve a
 					// `custom()` renderer and could not set an upload's accept list — each of them a
 					// declaration a workspace makes, and this the last hop before it would be read.
-					fields: Object.entries(collection.fields).map(([field, definition]) => ({
-						name: field,
-						type: definition.type,
-						required: definition.required,
-						generated: definition.generated !== undefined,
-						...(definition.values === undefined ? {} : { values: [...definition.values] }),
-						...(definition.search === undefined ? {} : { search: definition.search }),
-						...(definition.customType === undefined ? {} : { customType: definition.customType }),
-						...(definition.mimeTypes === undefined ? {} : { mimeTypes: [...definition.mimeTypes] })
-					})),
+					fields: Object.entries(collection.fields).map(([field, definition]) =>
+						DispatchValues.jsonObject({
+							name: field,
+							type: definition.type,
+							required: definition.required,
+							generated: definition.generated !== undefined,
+							values: definition.values === undefined ? undefined : [...definition.values],
+							search: definition.search,
+							customType: definition.customType,
+							mimeTypes: definition.mimeTypes === undefined ? undefined : [...definition.mimeTypes]
+						})
+					),
 					relations: definition.relations
 						.filter((relation) => relation.source === collection.name)
 						.map(({ name, target, cardinality }) => ({ name, target, cardinality }))
@@ -2165,12 +2254,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				// There is no `agent` key, because there is no agent to point at. An envoy *is* one, and
 				// the back-pointer this used to publish had the same value for every envoy in every
 				// workspace: the single synthesized agent the compiler invented.
-				envoys: definition.envoys.map(({ name, transport, audience, groupMessages }) => ({
-					name,
-					transport,
-					audience,
-					...(groupMessages === undefined ? {} : { groupMessages })
-				})),
+				envoys: definition.envoys.map(({ name, transport, audience, groupMessages }) =>
+					DispatchValues.jsonObject({ name, transport, audience, groupMessages })
+				),
 				/**
 				 * Every static identity this release can mint, with the label a surface renders it as.
 				 *
@@ -2261,10 +2347,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const records = yield* maskStoredRecords(input.subject, input.collection, [stored]);
 			// Read off the unmasked row: the id identifies what this caller just created, so it is
 			// theirs to know even where a field policy would keep the column out of `records`.
-			const assignedId = Reflect.get(stored, 'norbital_id');
+			const assigned = yield* decode(StoredId, stored);
 			return json({
 				created: true,
-				norbital_id: typeof assignedId === 'string' ? assignedId : null,
+				id: assigned.id,
 				records
 			});
 		}
@@ -2275,8 +2361,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			yield* (yield* Collections.Service).createMany(effectId, input.subject, records);
 			return json({
 				created: records.length,
-				ids: records.map(({ id }) => id),
-				norbital_ids: records.map(({ id }) => id)
+				ids: records.map(({ id }) => id)
 			});
 		}
 		/**
@@ -2295,7 +2380,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			yield* collections.update(effectId, input.subject, input);
 			const stored = yield* collections.findFirst(effectId, input.subject, {
 				collection: input.collection,
-				where: { norbital_id: { in: [input.id] } }
+				where: { id: { in: [input.id] } }
 			});
 			return json({
 				updated: true,
@@ -2341,28 +2426,32 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		 * needs no generator at runtime and ships no drizzle-kit to the browser.
 		 *
 		 * Ordering matches what a real provision applies: the plan's extensions, functions and `bolt_*`
-		 * tables first, because generated columns call `norbital_date` and trigram indexes need
+		 * tables first, because generated columns call `bolt_date` and trigram indexes need
 		 * `pg_trgm`; then the lineage, which owns every authored collection; then the plan's supplements
 		 * for what Drizzle cannot express.
 		 */
 		case 'sync.provisioning': {
 			const plan = (yield* WorkspaceSchema.Service).plan();
 			const workspace = yield* Workspace.Service;
-			return json({
-				steps: [
-					...plan.steps
-						.filter(({ id }) => id.startsWith('bolt:'))
-						.map(({ id, sql }) => ({ id, sql })),
-					...[...(workspace.definition.migrations ?? [])]
-						.toSorted((left, right) => left.tag.localeCompare(right.tag))
-						.flatMap((entry) =>
-							entry.statements.map((sql, index) => ({ id: `lineage:${entry.tag}:${index}`, sql }))
-						),
-					...plan.steps
-						.filter(({ id }) => !id.startsWith('bolt:'))
-						.map(({ id, sql }) => ({ id, sql }))
-				],
-				fingerprint: plan.fingerprint,
+			const steps = [
+				...plan.steps
+					.filter(({ id }) => id.startsWith('bolt:'))
+					.map(({ id, sql }) => ({ id, sql })),
+				...[...(workspace.definition.migrations ?? [])]
+					.toSorted((left, right) => left.tag.localeCompare(right.tag))
+					.flatMap((entry) =>
+						entry.statements.map((sql, index) => ({ id: `lineage:${entry.tag}:${index}`, sql }))
+					),
+				...plan.steps
+					.filter(({ id }) => !id.startsWith('bolt:'))
+					.map(({ id, sql }) => ({ id, sql }))
+			];
+			// The projection is JSON by construction — every value is a string, an array of strings or
+			// a decoded declaration — so the wire value is the same object after serialisation, and a
+			// decode of the serialised form is the boundary check that keeps that claim honest.
+			const provisioning = {
+				steps,
+				fingerprint: WorkspaceSchema.fingerprintSchemaSteps(steps),
 				/**
 				 * The metadata the replica needs to compile a query the way the server would.
 				 *
@@ -2373,7 +2462,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				 */
 				collections: workspace.definition.collections.map(({ name, fields }) => ({ name, fields })),
 				relations: workspace.definition.relations ?? []
-			} as unknown as Schema.Json);
+			};
+			return json(
+				Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(JSON.stringify(provisioning))
+			);
 		}
 		case 'schema.plan': {
 			const schema = yield* WorkspaceSchema.Service;
@@ -2549,7 +2641,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					const output = yield* runAuthoredHandler(() =>
 						automation.handler(api, { args: input.args, scope: input.scope ?? {} })
 					);
-					return json(output as Schema.Json);
+					return json(yield* decode(Schema.Json, output));
 				}
 			}
 			return yield* new DispatchError({

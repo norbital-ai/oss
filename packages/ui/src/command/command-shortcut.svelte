@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import type { CommandShortcutProps } from './types.js';
+	import type { CommandShortcutProps } from '#lib/command/types';
 
 	let {
 		ref = $bindable(null),

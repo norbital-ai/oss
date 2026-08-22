@@ -1,19 +1,12 @@
 import { Context, Effect, Layer, Schema } from 'effect';
-import type { WorkspaceDefinition } from '../authoring/workspace-schema.js';
-import { withSystemCollections } from './schema/system-collections.js';
+import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
+import { withSystemCollections } from '#lib/runtime/schema/system-collections.js';
 
 /** Carries workspace lookup error through the typed runtime failure channel without losing diagnostic context. */
 export class WorkspaceLookupError extends Schema.TaggedError<WorkspaceLookupError>()(
 	'Bolt.Workspace.LookupError',
 	{
-		kind: Schema.Literals([
-			'collection',
-			'app',
-			'automation',
-			'envoy',
-			'integration',
-			'policy'
-		]),
+		kind: Schema.Literals(['collection', 'app', 'automation', 'envoy', 'integration', 'policy']),
 		name: Schema.NonEmptyString
 	}
 ) {
@@ -122,5 +115,3 @@ export const layer = (authored: WorkspaceDefinition) =>
 			capabilities: () => [...definition.requiredFacilities]
 		});
 	});
-
-export * as Workspace from './workspace.js';

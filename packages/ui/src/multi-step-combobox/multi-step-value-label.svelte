@@ -1,7 +1,7 @@
 <script lang="ts" generics="TValueMap extends Record<string, unknown>">
 	import { isEqual } from 'es-toolkit/predicate';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import type { AnyStepOption, SelectionDraft, StepsConfig } from './types.js';
+	import type { AnyStepOption, SelectionDraft, StepsConfig } from '#lib/multi-step-combobox/types';
 
 	const { t } = useI18n<UiKeys>();
 

@@ -1,7 +1,7 @@
 import { Effect, Result, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
-import type { AuthoredIntegrationBinding } from '../../authoring/integration-introspection.js';
-import { deriveRecordId } from '../derive-record-id.js';
+import type { AuthoredIntegrationBinding } from '#lib/authoring/integration-introspection.js';
+import { deriveRecordId } from '#lib/runtime/derive-record-id.js';
 
 /**
  * Turning a batch of raw records into rows, which is the half a pull and a webhook genuinely share.
@@ -17,7 +17,7 @@ import { deriveRecordId } from '../derive-record-id.js';
 /** The three physical operations absorbing a batch needs; a superset of them is `PullDependencies`. */
 export type AbsorbDependencies = Readonly<{
 	/**
-	 * Existing rows for these external keys, as `key -> every norbital_id carrying it`.
+	 * Existing rows for these external keys, as `key -> every id carrying it`.
 	 *
 	 * A list rather than a single id because one source record may fan out into several rows, and they
 	 * all carry the same identity value. Collapsing them to one made a re-run invisible to every row
@@ -81,7 +81,7 @@ export type AbsorbTarget = Readonly<{
 
 export type Rejection = Readonly<{ readonly index: number; readonly reason: string }>;
 
-export type AbsorbOutcome = Readonly<{
+type AbsorbOutcome = Readonly<{
 	readonly created: number;
 	readonly updated: number;
 	/** The records that decoded, in order — what a `maxOf` cursor takes its watermark from. */
@@ -91,6 +91,10 @@ export type AbsorbOutcome = Readonly<{
 
 const describe = (cause: unknown): string =>
 	cause instanceof Error && cause.message !== '' ? cause.message : String(cause);
+
+/** The `Schema.Json` predicate, built once: it is consulted for every value of every mapped row. */
+const isJsonValue = Schema.is(Schema.Json);
+const UnknownRow = Schema.Record(Schema.String, Schema.Unknown);
 
 /**
  * What one decoded record becomes, decided by the nearest declaration that says so.
@@ -130,8 +134,9 @@ const rowsFor = (
 	}
 	const pipeline = dependencies.pipeline(effectId, target.collection, record);
 	if (pipeline !== undefined) return pipeline;
-	return record !== null && typeof record === 'object' && !Array.isArray(record)
-		? Effect.succeed([record as Readonly<Record<string, unknown>>])
+	const row = Schema.decodeUnknownResult(UnknownRow)(record);
+	return Result.isSuccess(row)
+		? Effect.succeed([row.success])
 		: Effect.fail({
 				message: `${target.integration}.${target.binding} produced a record that is not a row and declares no map`
 			});
@@ -149,7 +154,7 @@ const jsonValues = (
 	Object.fromEntries(
 		Object.entries(row).map(([key, value]) => [
 			key,
-			Schema.is(Schema.Json)(value)
+			isJsonValue(value)
 				? value
 				: value instanceof Date
 					? value.toISOString()

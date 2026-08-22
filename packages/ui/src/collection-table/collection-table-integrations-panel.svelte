@@ -5,7 +5,7 @@
 	import type {
 		CollectionTableIntegrationState,
 		CollectionTableIntegrationStatus
-	} from './collection-table.types.js';
+	} from '#lib/collection-table/collection-table.types';
 
 	const { t } = useI18n<UiKeys>();
 

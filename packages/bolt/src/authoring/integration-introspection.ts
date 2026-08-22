@@ -53,7 +53,7 @@ export type IntegrationSendEventContext = Readonly<{
 	readonly operation: IntegrationSendEvent;
 	readonly record: Readonly<Record<string, unknown>>;
 	/** The row as it was before an update or a delete. Absent on a create, and on a delete of a row nobody read. */
-	readonly previous?: Readonly<Record<string, unknown>>;
+	readonly previous?: Readonly<Record<string, unknown>> | undefined;
 }>;
 
 /**
@@ -105,7 +105,7 @@ export type IntegrationBindingInput = Readonly<{
 	readonly map?: unknown;
 }>;
 /** What an authored outbound binding looks like from here — every field read defensively below. */
-export type IntegrationSendBindingInput = Readonly<{
+type IntegrationSendBindingInput = Readonly<{
 	readonly send?: unknown;
 	readonly on?: unknown;
 	readonly body?: unknown;
@@ -414,7 +414,7 @@ const authoredHalf = (
 		...(typeof resolve === 'function'
 			? {
 					resolve: (records: ReadonlyArray<unknown>, api: unknown): unknown =>
-						Reflect.apply(resolve, undefined, [{ records, api }]) as unknown
+						Reflect.apply(resolve, undefined, [{ records, api }])
 				}
 			: {}),
 		...(typeof map === 'function'
@@ -553,7 +553,7 @@ const sendTrigger = (
 				`Integration ${binding} declares a ${event} trigger that is not a function.`
 			);
 		}
-		predicates.set(event, (context) => Reflect.apply(candidate, undefined, [context]) as unknown);
+		predicates.set(event, (context) => Reflect.apply(candidate, undefined, [context]));
 	}
 	if (predicates.size === 0) {
 		throw new TypeError(
@@ -619,7 +619,7 @@ const sendDeclaration = (
 				? {}
 				: {
 						body: (event: IntegrationSendEventContext): unknown =>
-							Reflect.apply(body, undefined, [event]) as unknown
+							Reflect.apply(body, undefined, [event])
 					})
 		}
 	};

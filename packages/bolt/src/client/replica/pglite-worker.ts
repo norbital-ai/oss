@@ -19,7 +19,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
-import { vector } from '@electric-sql/pglite/vector';
+import { vector } from '@electric-sql/pglite-pgvector';
 import { worker } from '@electric-sql/pglite/worker';
 
 void worker({

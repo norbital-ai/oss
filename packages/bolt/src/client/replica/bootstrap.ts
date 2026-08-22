@@ -1,6 +1,6 @@
-import { Schema } from 'effect';
-import type { SyncChange, SyncCursor } from '../../runtime/sync/sync.js';
-import { compareCursors, ORIGIN_CURSOR } from './sync-client.js';
+import { Effect, Result, Schema } from 'effect';
+import { SyncCursor, type SyncChange } from '#lib/runtime/sync/sync.js';
+import { compareCursors, ORIGIN_CURSOR } from '#lib/client/replica/sync-client.js';
 import {
 	createPGliteSql,
 	bulkUpsert,
@@ -10,10 +10,11 @@ import {
 	writeReplicaCursor,
 	writableColumns,
 	type PGliteLike,
-	type ProvisioningStep
-} from './pglite-sql.js';
-import type { ReplicaShape } from './local-reads.js';
-import type { LocalSql } from './replica.js';
+	ProvisioningStep,
+	type ProvisioningStep as ProvisioningStepType
+} from '#lib/client/replica/pglite-sql.js';
+import { ReplicaShape } from '#lib/client/replica/local-reads.js';
+import type { LocalSql } from '#lib/client/replica/pglite-sql.js';
 
 /**
  * Building a local database that holds the workspace, from nothing.
@@ -35,61 +36,123 @@ import type { LocalSql } from './replica.js';
  */
 
 export type BootstrapTransport = Readonly<{
-	readonly command: (command: string, input: Schema.Json) => Promise<Schema.Json>;
+	readonly command: (command: string, input: Schema.Json) => Effect.Effect<Schema.Json, unknown>;
 }>;
 
-const asRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-	value !== null && typeof value === 'object' && !Array.isArray(value)
-		? (value as Readonly<Record<string, unknown>>)
-		: undefined;
+const ProvisioningResponse = Schema.Struct({
+	steps: Schema.Array(ProvisioningStep),
+	fingerprint: Schema.String,
+	collections: ReplicaShape.fields.collections,
+	relations: ReplicaShape.fields.relations
+});
+const SnapshotRow = Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [
+	Schema.Record(Schema.String, Schema.Json)
+]);
+const SnapshotPage = Schema.Struct({
+	rows: Schema.Array(SnapshotRow),
+	cursor: Schema.optionalKey(SyncCursor),
+	nextAfter: Schema.optionalKey(Schema.NullOr(Schema.String))
+});
 
 /** The ordered DDL this tenant's database was provisioned with. */
-export const readProvisioning = async (
+const readProvisioning = Effect.fn('ReplicaBootstrap.readProvisioning')(function* (
 	transport: BootstrapTransport
-): Promise<{
-	readonly steps: ReadonlyArray<ProvisioningStep>;
-	readonly fingerprint: string;
-	readonly shape: ReplicaShape;
-}> => {
-	const answer = asRecord(await transport.command('sync.provisioning', null));
-	const steps = answer?.['steps'];
-	const fingerprint = answer?.['fingerprint'];
-	if (!Array.isArray(steps)) throw new Error('sync.provisioning returned no steps');
-	const collections = answer?.['collections'];
-	const relations = answer?.['relations'];
+): Effect.fn.Return<
+	{
+		readonly steps: ReadonlyArray<ProvisioningStepType>;
+		readonly fingerprint: string;
+		readonly shape: ReplicaShape;
+	},
+	unknown
+> {
+	const raw = yield* transport.command('sync.provisioning', null);
+	const answer = yield* Schema.decodeUnknownEffect(ProvisioningResponse)(raw);
 	return {
-		steps: steps.flatMap((step) => {
-			const entry = asRecord(step);
-			return typeof entry?.['id'] === 'string' && typeof entry['sql'] === 'string'
-				? [{ id: entry['id'], sql: entry['sql'] }]
-				: [];
-		}),
-		fingerprint: typeof fingerprint === 'string' ? fingerprint : 'unknown',
-		/**
-		 * Absent when the server predates this field, and an empty shape simply means no query is ever
-		 * answered locally — the replica still streams, reads still work, they just go to the server.
-		 */
-		shape: {
-			collections: Array.isArray(collections)
-				? collections.flatMap((entry) => {
-						const record = asRecord(entry);
-						const name = record?.['name'];
-						const fields = asRecord(record?.['fields']);
-						return typeof name === 'string' && fields !== undefined
-							? [{ name, fields: fields as ReplicaShape['collections'][number]['fields'] }]
-							: [];
-					})
-				: [],
-			relations: Array.isArray(relations) ? (relations as ReplicaShape['relations']) : []
-		}
+		steps: answer.steps,
+		fingerprint: answer.fingerprint,
+		shape: { collections: answer.collections, relations: answer.relations }
 	};
-};
+});
 
-export type SnapshotOutcome = Readonly<{
+type SnapshotOutcome = Readonly<{
 	/** Where the log must be streamed from so nothing between the snapshot and now is missed. */
 	readonly cursor: SyncCursor;
 	readonly rows: number;
 }>;
+
+type SnapshotWriter = (
+	collection: string,
+	rows: ReadonlyArray<Readonly<Record<string, unknown>>>
+) => Effect.Effect<number, unknown>;
+
+const oldestCursor = (
+	current: SyncCursor | undefined,
+	candidate: SyncCursor | undefined
+): SyncCursor | undefined =>
+	candidate === undefined || (current !== undefined && compareCursors(current, candidate) <= 0)
+		? current
+		: candidate;
+
+/**
+ * One page of one collection, decoded into what the snapshot loop needs.
+ *
+ * `undefined` means the server answered nothing at all — abort this collection's paging rather than
+ * recording "no records". Rows are kept only when they name their `id`: an upsert cannot key
+ * a row that cannot be rewritten, and one bad row failing a whole page would cost the page's good ones.
+ */
+const readSnapshotPage = Effect.fn('ReplicaBootstrap.readSnapshotPage')(function* (
+	transport: BootstrapTransport,
+	collection: string,
+	pageSize: number,
+	after: string | undefined
+): Effect.fn.Return<
+	| Readonly<{
+			readonly rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
+			readonly cursor?: SyncCursor | undefined;
+			readonly after?: string | undefined;
+	  }>
+	| undefined,
+	unknown
+> {
+	const answer = yield* transport.command('sync.snapshot', {
+		collection,
+		limit: pageSize,
+		...(after === undefined ? {} : { after })
+	});
+	const decoded = Schema.decodeUnknownResult(SnapshotPage)(answer);
+	if (Result.isFailure(decoded)) return undefined;
+	return {
+		rows: decoded.success.rows,
+		cursor: decoded.success.cursor,
+		after: decoded.success.nextAfter ?? undefined
+	};
+});
+
+/** Pages one collection without making the workspace-level traversal own two nested loops. */
+const loadCollectionSnapshot = Effect.fn('ReplicaBootstrap.loadCollectionSnapshot')(function* (
+	transport: BootstrapTransport,
+	write: SnapshotWriter,
+	collection: string,
+	pageSize: number
+): Effect.fn.Return<Readonly<{ cursor?: SyncCursor; rows: number }>, unknown> {
+	let after: string | undefined;
+	let cursor: SyncCursor | undefined;
+	let rows = 0;
+	do {
+			const page = yield* readSnapshotPage(transport, collection, pageSize, after);
+			if (page === undefined) break;
+			// The whole page in one statement. Per-row writes made a first visit take minutes.
+			rows += yield* write(collection, page.rows);
+			// The oldest cursor across every collection governs the stream, so a pick up after the first
+			// page was read re-delivers a little rather than missing something a later page had ahead of it.
+			const pageCursor = page.cursor;
+			if (pageCursor !== undefined && (cursor === undefined || compareCursors(pageCursor, cursor) < 0)) {
+				cursor = pageCursor;
+			}
+			after = page.after;
+	} while (after !== undefined);
+	return cursor === undefined ? { rows } : { cursor, rows };
+});
 
 /**
  * Loads every readable collection's current state into the local database.
@@ -99,58 +162,37 @@ export type SnapshotOutcome = Readonly<{
  * another collection's earlier page had not yet reflected. Taking the oldest re-delivers a little and
  * misses nothing, which is the only safe direction to be wrong in.
  */
-export const loadSnapshot = async (
+const loadSnapshot = Effect.fn('ReplicaBootstrap.loadSnapshot')(function* (
 	transport: BootstrapTransport,
-	write: (
-		collection: string,
-		rows: ReadonlyArray<Readonly<Record<string, unknown>>>
-	) => Promise<number>,
+	write: SnapshotWriter,
 	collections: ReadonlyArray<string>,
 	pageSize = 500
-): Promise<SnapshotOutcome> => {
+): Effect.fn.Return<SnapshotOutcome, unknown> {
 	let cursor: SyncCursor | undefined;
 	let rows = 0;
 	for (const collection of collections) {
-		let after: string | undefined;
-		do {
-			const page = asRecord(
-				await transport.command('sync.snapshot', {
-					collection,
-					limit: pageSize,
-					...(after === undefined ? {} : { after })
-				})
-			);
-			if (page === undefined) break;
-			// The whole page in one statement. Per-row writes made a first visit take minutes.
-			const pageRows = (Array.isArray(page['rows']) ? page['rows'] : []).flatMap((row) => {
-				const record = asRecord(row);
-				return record !== undefined && typeof record['norbital_id'] === 'string' ? [record] : [];
-			});
-			rows += await write(collection, pageRows);
-			const pageCursor = asRecord(page['cursor']);
-			if (pageCursor !== undefined) {
-				const candidate: SyncCursor = {
-					xid: Number(pageCursor['xid'] ?? 0),
-					sequence: Number(pageCursor['sequence'] ?? 0)
-				};
-				if (cursor === undefined || compareCursors(candidate, cursor) < 0) cursor = candidate;
-			}
-			const next = page['nextAfter'];
-			after = typeof next === 'string' ? next : undefined;
-		} while (after !== undefined);
+		const loaded = yield* loadCollectionSnapshot(transport, write, collection, pageSize);
+		rows += loaded.rows;
+		cursor = oldestCursor(cursor, loaded.cursor);
 	}
 	return { cursor: cursor ?? ORIGIN_CURSOR, rows };
-};
+});
 
 /** The collections this subject may read, as the server scopes them. */
-export const readShape = async (transport: BootstrapTransport): Promise<ReadonlyArray<string>> => {
-	const answer = await transport.command('sync.shape', {});
-	return Array.isArray(answer)
-		? answer.filter((entry): entry is string => typeof entry === 'string')
-		: [];
-};
+const readShape = (transport: BootstrapTransport): Effect.Effect<ReadonlyArray<string>, unknown> =>
+	transport
+		.command('sync.shape', {})
+		.pipe(
+			Effect.map(
+				(answer) =>
+					Result.getOrElse(
+						Schema.decodeUnknownResult(Schema.Array(Schema.String))(answer),
+						() => null
+					) ?? []
+			)
+		);
 
-export type LocalDatabase = Readonly<{
+type LocalDatabase = Readonly<{
 	readonly sql: LocalSql;
 	readonly cursor: SyncCursor;
 	readonly fingerprint: string;
@@ -159,8 +201,8 @@ export type LocalDatabase = Readonly<{
 	/** True when an existing local database was reused rather than provisioned and snapshotted. */
 	readonly resumed: boolean;
 	/** Persists how far the replica has streamed, alongside the rows it streamed. */
-	readonly record: (cursor: SyncCursor) => Promise<void>;
-	readonly close: () => Promise<void>;
+	readonly record: (cursor: SyncCursor) => Effect.Effect<void, unknown>;
+	readonly close: () => Effect.Effect<void, unknown>;
 	/**
 	 * The engine itself, for the two things only it can answer: whether this tab leads, and
 	 * `LISTEN`. Everything else goes through `sql`.
@@ -180,12 +222,12 @@ export type LocalDatabase = Readonly<{
  * eagerly would put several megabytes of WebAssembly in front of the first paint of every page, which
  * is the opposite of what the replica exists to achieve.
  */
-export const openLocalDatabase = async (
+export const openLocalDatabase = Effect.fn('ReplicaBootstrap.openLocalDatabase')(function* (
 	transport: BootstrapTransport,
-	open: (steps: ReadonlyArray<ProvisioningStep>) => Promise<PGliteLike>
-): Promise<LocalDatabase> => {
-	const provisioning = await readProvisioning(transport);
-	const database = await open(provisioning.steps);
+	open: (steps: ReadonlyArray<ProvisioningStepType>) => Effect.Effect<PGliteLike, unknown>
+): Effect.fn.Return<LocalDatabase, unknown> {
+	const provisioning = yield* readProvisioning(transport);
+	const database = yield* open(provisioning.steps);
 	/**
 	 * The replica mirrors a database whose integrity is already decided, so it does not re-decide it.
 	 *
@@ -199,15 +241,19 @@ export const openLocalDatabase = async (
 	 * runs under, for the same reason. The server accepted these rows against these constraints; the
 	 * mirror's job is to hold them, not to audit them a second time in an order nobody guarantees.
 	 */
-	await database.exec('set session_replication_role = replica');
-	const provisioned = await provision(database, provisioning.steps, provisioning.fingerprint);
-	const sql = createPGliteSql(database);
+	yield* database.exec('set session_replication_role = replica');
+	const provisioned = yield* provision(database, provisioning.steps, provisioning.fingerprint);
+	const fieldsByCollection = Object.fromEntries(
+		provisioning.shape.collections.map((collection) => [collection.name, collection.fields])
+	);
+	const sql = yield* createPGliteSql(database, fieldsByCollection);
 	if (!provisioned) {
 		// The local database already matches this schema and still holds its rows, so the expensive half
 		// is skipped entirely: no DDL, and no snapshot of a workspace it already has. It resumes from the
 		// cursor it recorded, which is the whole point of persisting the replica rather than rebuilding
 		// it on every visit.
-		const state = await readReplicaState(database);
+		const state = yield* readReplicaState(database);
+		const readable = yield* readShape(transport);
 		return {
 			sql,
 			cursor: state?.cursor ?? ORIGIN_CURSOR,
@@ -215,25 +261,31 @@ export const openLocalDatabase = async (
 			rows: 0,
 			resumed: true,
 			record: (cursor) => writeReplicaCursor(database, cursor),
-			close: async () => {
-				await database.close?.();
-			},
+			close: database.close,
 			engine: database,
 			shape: provisioning.shape,
-			readable: new Set(await readShape(transport))
+			readable: new Set(readable)
 		};
 	}
-	const columnsFor = writableColumns(database);
-	const readable = await readShape(transport);
-	const snapshot = await loadSnapshot(
+	const columnsFor = yield* writableColumns(database);
+	const readable = yield* readShape(transport);
+	const snapshot = yield* loadSnapshot(
 		transport,
-		async (collection, rows) =>
-			bulkUpsert(database, await columnsFor(collection), collection, rows),
+		(collection, rows) =>
+			Effect.gen(function* () {
+				const fields = fieldsByCollection[collection];
+				if (fields === undefined)
+					return yield* Effect.fail(
+						new Error(`sync.shape named collection ${collection} without provisioning metadata`)
+					);
+				const columns = yield* columnsFor(collection);
+				return yield* bulkUpsert(database, columns, collection, rows, fields);
+			}),
 		readable
 	);
 	// Marked only now: until the snapshot has landed, this database does not hold the workspace, and a
 	// later session that read the fingerprint would resume an empty one.
-	await markProvisioned(database, provisioning.fingerprint, snapshot.cursor);
+	yield* markProvisioned(database, provisioning.fingerprint, snapshot.cursor);
 	return {
 		sql,
 		cursor: snapshot.cursor,
@@ -241,11 +293,9 @@ export const openLocalDatabase = async (
 		rows: snapshot.rows,
 		resumed: false,
 		record: (cursor) => writeReplicaCursor(database, cursor),
-		close: async () => {
-			await database.close?.();
-		},
+		close: database.close,
 		engine: database,
 		shape: provisioning.shape,
 		readable: new Set(readable)
 	};
-};
+});

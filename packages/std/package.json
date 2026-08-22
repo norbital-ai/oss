@@ -83,7 +83,9 @@
 		"test": "node --test tests/*.test.ts"
 	},
 	"dependencies": {
-		"@marcbachmann/cel-js": "^8.0.0",
+		"@marcbachmann/cel-js": "^8.0.0"
+	},
+	"peerDependencies": {
 		"effect": "4.0.0-rc.111"
 	},
 	"devDependencies": {

@@ -2,7 +2,7 @@ import type { CollectionField, CollectionFilter } from '@norbital-ai/std/collect
 
 export type CollectionFilterOperator = CollectionFilter['operator'] | 'contains';
 
-export interface CollectionFilterOperatorOption {
+interface CollectionFilterOperatorOption {
 	readonly value: CollectionFilterOperator;
 	readonly label: string;
 }

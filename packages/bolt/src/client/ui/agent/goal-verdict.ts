@@ -1,4 +1,4 @@
-import { Schema } from 'effect';
+import { Result, Schema } from 'effect';
 
 /**
  * An independent verifier's verdict on a goal-mode turn.
@@ -9,68 +9,39 @@ import { Schema } from 'effect';
  * verifier branches of the transcript dead code that TypeScript reported as unreachable.
  */
 
-export const GoalVerdict = Schema.Struct({
+const GoalVerdictSchema = Schema.Struct({
 	achieved: Schema.Boolean,
 	summary: Schema.NonEmptyString,
 	gaps: Schema.Array(Schema.String)
 });
-export interface GoalVerdict extends Schema.Schema.Type<typeof GoalVerdict> {}
+type GoalVerdict = Schema.Schema.Type<typeof GoalVerdictSchema>;
 
-/** What a goal turn reports when verification itself failed to produce a structured answer. */
-export const UNREADABLE_VERDICT: GoalVerdict = {
-	achieved: false,
-	summary: 'The verifier did not return a usable verdict.',
-	gaps: ['Independent verification failed to produce a structured result. Continue the work.']
-};
+/** A stored goal verdict: the verdict fields plus the envelope tag reading them back requires. */
+const StoredGoalVerdict = Schema.Struct({
+	resultType: Schema.Literal('goal_verdict'),
+	achieved: Schema.Boolean,
+	summary: Schema.NonEmptyString,
+	gaps: Schema.Array(Schema.String)
+});
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-	typeof value === 'object' && value !== null && !Array.isArray(value);
-
-/**
- * Reads a verdict out of a model reply, which commonly arrives fenced in a code block.
- * An unreadable reply is a stated non-verdict rather than a thrown error: the turn happened, and
- * reporting "not verified" is more useful than losing the message.
- */
-export const parseGoalVerdict = (text: string): GoalVerdict => {
-	const trimmed = text.trim();
-	const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(trimmed);
-	const raw = fenced?.[1]?.trim() ?? trimmed;
-	try {
-		return Schema.decodeUnknownSync(GoalVerdict)(JSON.parse(raw));
-	} catch {
-		return UNREADABLE_VERDICT;
-	}
-};
+/** A stored verifier schedule: just the prompt, so an empty or missing one is not a schedule. */
+const StoredVerifierScheduled = Schema.Struct({
+	resultType: Schema.Literal('verifier_scheduled'),
+	prompt: Schema.String
+});
 
 /** Reads a verdict previously stored on a message; anything else is not a verdict. */
-export const parseStoredGoalVerdict = (content: string): GoalVerdict | null => {
-	try {
-		const parsed: unknown = JSON.parse(content);
-		if (!isRecord(parsed) || parsed['resultType'] !== 'goal_verdict') return null;
-		return Schema.decodeUnknownSync(GoalVerdict)({
-			achieved: parsed['achieved'],
-			summary: parsed['summary'],
-			gaps: parsed['gaps']
-		});
-	} catch {
-		return null;
-	}
-};
-
-export const serializeGoalVerdict = (verdict: GoalVerdict): string =>
-	JSON.stringify({ resultType: 'goal_verdict', ...verdict });
-
-export const serializeVerifierScheduled = (prompt: string): string =>
-	JSON.stringify({ resultType: 'verifier_scheduled', prompt });
+export const parseStoredGoalVerdict = (content: string): GoalVerdict | null =>
+	Result.map(
+		Schema.decodeUnknownResult(Schema.fromJsonString(StoredGoalVerdict))(content),
+		(parsed) => ({ achieved: parsed.achieved, summary: parsed.summary, gaps: parsed.gaps })
+	).pipe(Result.getOrNull);
 
 /** Reads the prompt a scheduled verifier will run; an empty prompt is not a schedule. */
 export const parseStoredVerifierScheduled = (content: string): string | null => {
-	try {
-		const parsed: unknown = JSON.parse(content);
-		if (!isRecord(parsed) || parsed['resultType'] !== 'verifier_scheduled') return null;
-		const prompt = parsed['prompt'];
-		return typeof prompt === 'string' && prompt.trim().length > 0 ? prompt : null;
-	} catch {
-		return null;
-	}
+	const parsed = Result.getOrElse(
+		Schema.decodeUnknownResult(Schema.fromJsonString(StoredVerifierScheduled))(content),
+		() => null
+	);
+	return parsed === null || parsed.prompt.trim().length === 0 ? null : parsed.prompt;
 };

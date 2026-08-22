@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Effect, Schema } from 'effect';
 	import { humanize } from '@norbital-ai/std/string';
 	import { CodeEditor } from '#lib/code-editor';
 	import { Combobox } from '#lib/combobox';
@@ -7,9 +8,9 @@
 	import { watch } from 'runed';
 	import BooleanRenderer from './boolean/boolean.renderer.svelte';
 	import ChannelsRenderer from './channels/channels.renderer.svelte';
-	import { getDataRendererRuntimeContext } from './data-renderer-runtime.js';
-	import type { DataRendererProps } from './data-renderer.types.js';
-	import { formatStructuredValue } from './data-renderer.utils.js';
+	import { getDataRendererRuntimeContext } from '#lib/data-renderer/data-renderer-runtime';
+	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
+	import { formatStructuredValue } from '#lib/data-renderer/data-renderer.utils';
 	import FileRenderer from './file/file.renderer.svelte';
 	import GeolocationRenderer from './geolocation/geolocation.renderer.svelte';
 	import MoneyRenderer from './money/money.renderer.svelte';
@@ -41,7 +42,7 @@
 	);
 	let structuredDraft = $state('');
 	let structuredError = $state('');
-	let lastEmittedStructuredValue: unknown;
+	let lastEmittedStructuredValue = $state<unknown>(undefined);
 	watch(
 		() => value,
 		(next) => {
@@ -60,14 +61,20 @@
 			onValueChange?.(lastEmittedStructuredValue);
 			return;
 		}
-		try {
-			// stupidity:allow R6b -- JSON.parse is the JSON editor's validation boundary and failures remain local draft errors.
-			lastEmittedStructuredValue = JSON.parse(next);
-			structuredError = '';
-			onValueChange?.(lastEmittedStructuredValue);
-		} catch {
-			structuredError = t('dataRenderer.invalidJson');
-		}
+		Effect.runSync(
+			Effect.try(() => Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(next)).pipe(
+				Effect.match({
+					onFailure: () => {
+						structuredError = t('dataRenderer.invalidJson');
+					},
+					onSuccess: (parsed) => {
+						structuredError = '';
+						lastEmittedStructuredValue = parsed;
+						onValueChange?.(parsed);
+					}
+				})
+			)
+		);
 	}
 </script>
 

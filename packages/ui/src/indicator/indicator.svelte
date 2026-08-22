@@ -6,7 +6,7 @@
 		type IndicatorPosition,
 		type IndicatorSize,
 		type IndicatorVariant
-	} from './indicator-variants.js';
+	} from '#lib/indicator/indicator-variants';
 
 	let {
 		variant = 'default',

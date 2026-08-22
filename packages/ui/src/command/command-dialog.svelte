@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Dialog from '#lib/dialog';
 	import Root from './command.svelte';
-	import type { CommandDialogProps } from './types.js';
+	import type { CommandDialogProps } from '#lib/command/types';
 
 	let {
 		open = $bindable(false),

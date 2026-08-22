@@ -3,7 +3,7 @@
 	import { Indicator } from '#lib/indicator';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
-	import { getField } from './context';
+	import { getField } from '#lib/form/context';
 
 	let {
 		class: className,

@@ -25,7 +25,7 @@ import path from 'node:path';
  * component's `$$bindings` type, which no amount of source discipline removes, and two hand-written
  * modules use `any[]` as the top of the array lattice while walking arbitrary form paths.
  */
-export const declarationAnyAllowances = {
+const declarationAnyAllowances = {
 	ui: ['**/*.svelte.d.ts', 'utils/index.d.ts', 'form/path.d.ts']
 };
 
@@ -37,32 +37,51 @@ export const declarationAnyAllowances = {
  * strings — a degraded inference has never landed inside one, and reading them as code would flag
  * ordinary documentation text embedded in a template type.
  */
-export function stripCommentsAndStrings(source) {
+const skipToNewline = (source, index) => {
+	while (index < source.length && source[index] !== '\n') index += 1;
+	return index;
+};
+
+const skipBlockComment = (source, index) => {
+	index += 2;
+	let newlines = '';
+	while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) {
+		if (source[index] === '\n') newlines += '\n';
+		index += 1;
+	}
+	return { index: index + 2, newlines };
+};
+
+const skipStringBody = (source, index, quote) => {
+	index += 1;
+	let newlines = '';
+	while (index < source.length && source[index] !== quote) {
+		if (source[index] === '\\') index += 1;
+		else if (source[index] === '\n') newlines += '\n';
+		index += 1;
+	}
+	return { index: index + 1, newlines };
+};
+
+function stripCommentsAndStrings(source) {
 	let output = '';
 	let index = 0;
 	while (index < source.length) {
 		const character = source[index];
 		if (character === '/' && source[index + 1] === '/') {
-			while (index < source.length && source[index] !== '\n') index += 1;
+			index = skipToNewline(source, index);
 			continue;
 		}
 		if (character === '/' && source[index + 1] === '*') {
-			index += 2;
-			while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) {
-				if (source[index] === '\n') output += '\n';
-				index += 1;
-			}
-			index += 2;
+			const skipped = skipBlockComment(source, index);
+			index = skipped.index;
+			output += skipped.newlines;
 			continue;
 		}
 		if (character === '"' || character === "'" || character === '`') {
-			index += 1;
-			while (index < source.length && source[index] !== character) {
-				if (source[index] === '\\') index += 1;
-				else if (source[index] === '\n') output += '\n';
-				index += 1;
-			}
-			index += 1;
+			const skipped = skipStringBody(source, index, character);
+			index = skipped.index;
+			output += skipped.newlines;
 			continue;
 		}
 		output += character;
@@ -72,7 +91,7 @@ export function stripCommentsAndStrings(source) {
 }
 
 /** Every `any` in type position under `declarationRoot`, minus the package's stated allowances. */
-export function findDegradedDeclarations(declarationRoot, allowances = []) {
+function findDegradedDeclarations(declarationRoot, allowances = []) {
 	const findings = [];
 	for (const relativePath of globSync('**/*.d.ts', { cwd: declarationRoot }).sort()) {
 		const normalized = relativePath.split(path.sep).join('/');

@@ -1,8 +1,9 @@
 import { PGlite } from '@electric-sql/pglite';
+import { Effect } from 'effect';
+import { AUTH_MODELS } from '../../src/authoring/system-models.js';
 import { identitySchemaSteps } from '../../src/compiler/schema-plan.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-	AUTH_MODELS,
 	DEVELOPMENT_SIGN_IN_CODE,
 	makeAuth,
 	type DeliverCode
@@ -18,16 +19,18 @@ describe('bolt-owned identity over a host facility', () => {
 	let database: PGlite;
 	let execute: ExecuteQuery;
 	const delivered: Array<{ email: string; code: string; purpose: string }> = [];
-	const deliver: DeliverCode = async (message) => {
-		delivered.push({ email: message.email, code: message.code, purpose: message.purpose });
-	};
+	const deliver: DeliverCode = (message) =>
+		Effect.sync(() => {
+			delivered.push({ email: message.email, code: message.code, purpose: message.purpose });
+		});
 
 	beforeAll(async () => {
 		database = await PGlite.create('memory://');
-		execute = async (sql, parameters) => {
-			const result = await database.query<Record<string, unknown>>(sql, [...parameters]);
-			return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
-		};
+		execute = (sql, parameters) =>
+			Effect.promise(async () => {
+				const result = await database.query<Record<string, unknown>>(sql, [...parameters]);
+				return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
+			});
 		for (const statement of identitySchemaSteps()) await database.exec(statement.sql);
 	});
 
@@ -179,17 +182,16 @@ describe('the code a development environment issues', () => {
 		// environment, so its absence is a misconfiguration to surface, not a mode to infer.
 		const database = await PGlite.create('memory://');
 		try {
-			const run: ExecuteQuery = async (sql, parameters) => {
-				const result = await database.query<Record<string, unknown>>(sql, [...parameters]);
-				return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
-			};
+			const run: ExecuteQuery = (sql, parameters) =>
+				Effect.promise(async () => {
+					const result = await database.query<Record<string, unknown>>(sql, [...parameters]);
+					return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
+				});
 			for (const statement of identitySchemaSteps()) await database.exec(statement.sql);
 			const sent: Array<string> = [];
 			const development = makeAuth({
 				execute: run,
-				deliver: async (message) => {
-					sent.push(message.code);
-				},
+				deliver: (message) => Effect.sync(() => void sent.push(message.code)),
 				secret: 'test-secret-not-a-real-one',
 				baseURL: 'http://bolt.test',
 				production: false

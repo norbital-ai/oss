@@ -225,10 +225,12 @@ export const shortcut = (node: HTMLElement, options: Options[] | Options) => {
 
 	for (const option of optionsArray) {
 		const eventType = option.event ?? 'keydown';
-		if (!eventGroups.has(eventType)) {
-			eventGroups.set(eventType, []);
+		let eventOptions = eventGroups.get(eventType);
+		if (eventOptions === undefined) {
+			eventOptions = [];
+			eventGroups.set(eventType, eventOptions);
 		}
-		eventGroups.get(eventType)!.push(option);
+		eventOptions.push(option);
 	}
 
 	// Create event listeners for each event type
@@ -404,3 +406,14 @@ export type Key =
 	| 'back slash'
 	| 'close bracket'
 	| 'single quote';
+
+export type ShortcutModifier = '⌘' | 'Ctrl';
+
+export function detectShortcutModifier(): ShortcutModifier {
+	if (typeof navigator === 'undefined') return 'Ctrl';
+	return /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
+}
+
+export function formatShortcut(modifier: ShortcutModifier, key: string): string {
+	return modifier === '⌘' ? `⌘${key}` : `Ctrl+${key}`;
+}

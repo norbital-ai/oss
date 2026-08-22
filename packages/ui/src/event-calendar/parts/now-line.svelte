@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { onMount } from 'svelte';
-	import { dateToPixels, formatTimeLabel, isSameDay } from '../utils.js';
+	import { dateToPixels, formatTimeLabel, isSameDay } from '#lib/event-calendar/utils';
 
 	let {
 		date,

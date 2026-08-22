@@ -2,8 +2,8 @@
 	import { cn } from '#lib/utils';
 	import Icon from '@iconify/svelte';
 	import type { WithoutChildren } from 'bits-ui';
-	import { Button, type Props } from '../button';
-	import { getEmblaContext } from './context.js';
+	import { Button, type Props } from '#lib/button';
+	import { getEmblaContext } from '#lib/carousel/context';
 
 	let {
 		ref = $bindable(null),

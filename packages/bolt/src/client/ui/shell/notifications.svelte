@@ -18,15 +18,13 @@
 		loading = false,
 		error,
 		expanded = true,
-		onread,
-		onretry
+		onread
 	}: {
 		items?: ReadonlyArray<NotificationItem>;
 		loading?: boolean;
-		error?: string;
+		error?: string | undefined;
 		expanded?: boolean;
 		onread?: (id: string) => void;
-		onretry?: () => void;
 	} = $props();
 
 	const unread = $derived(items.filter(({ read }) => !read));
@@ -89,9 +87,6 @@
 		{#if error !== undefined}
 			<p class="border-b px-3 py-2 text-tiny text-destructive" role="alert">
 				{error}
-				{#if onretry}
-					<button type="button" class="ml-1 underline" onclick={onretry}>Try again</button>
-				{/if}
 			</p>
 		{/if}
 		<Scroll name="Notifications" class="max-h-96">

@@ -1,9 +1,11 @@
-<script module lang="ts">
+<script lang="ts">
+	import { Clock, Effect } from 'effect';
+	import { onMount } from 'svelte';
 	import { FEATURE_COLOR_STYLES } from '@norbital-ai/ui/feature-colors';
+	import type { SystemClientApi } from '#lib/client/system-client.js';
 
-	// Constant lookups into a frozen table: per-module, and not computations to make reactive.
-	const AUTOMATION_STYLES = FEATURE_COLOR_STYLES.automations;
-	const REMOTE_STYLES = FEATURE_COLOR_STYLES.applications;
+	const automationStyles = $derived(FEATURE_COLOR_STYLES.automations);
+	const remoteStyles = $derived(FEATURE_COLOR_STYLES.applications);
 	/**
 	 * What a manual run of each automation is doing, keyed by automation name.
 	 *
@@ -18,96 +20,44 @@
 	 * person who pressed the button and cannot be made to happen as anybody else.
 	 */
 	type AutomationRun = Readonly<{
-		readonly state: 'starting' | 'running' | 'done' | 'failed';
+		readonly state: 'starting' | 'running' | 'failed';
 		readonly taskId?: string;
 		readonly detail?: string;
 		readonly at: number;
 	}>;
 	let runs = $state<Record<string, AutomationRun>>({});
 
-	/**
-	 * What each automation has actually been doing, read from the queue rather than remembered here.
-	 *
-	 * `runs` above knows only what this session pressed. That is the wrong answer to "has this run" —
-	 * a scheduled run at 2am is exactly the one somebody is looking for, and no browser was open for
-	 * it. `automations.history` reads the task rows, so an empty list means the automation has never
-	 * run rather than that nobody watched.
-	 */
-	type AutomationRunRow = Readonly<{
-		readonly effect_id?: string;
-		readonly status?: string;
-		readonly attempts?: number;
-		readonly error?: string | null;
-		readonly created_at?: string;
-	}>;
-	let history = $state<Record<string, ReadonlyArray<AutomationRunRow>>>({});
-	let historyLoaded = $state<Record<string, boolean>>({});
-
-	const loadHistory = async (name: string): Promise<void> => {
-		try {
-			const answer = (await workspaceSession().transport.command('automations.history', {
-				name,
-				limit: 10
-			})) as { readonly runs?: ReadonlyArray<AutomationRunRow> } | null;
-			history = { ...history, [name]: answer?.runs ?? [] };
-		} catch {
-			// A history that cannot be read is left absent rather than shown as empty: "no runs" and
-			// "could not ask" are different facts and an empty list would assert the first.
-		}
-	};
-
-	const runAutomation = async (name: string): Promise<void> => {
-		if (runs[name]?.state === 'starting' || runs[name]?.state === 'running') return;
-		runs = { ...runs, [name]: { state: 'starting', at: Date.now() } };
-		try {
-			const started = (await workspaceSession().transport.command('automations.start', {
-				name,
-				input: {}
-			})) as { readonly taskId?: string };
-			const taskId = started?.taskId;
-			runs = {
-				...runs,
-				[name]: { state: 'running', at: Date.now(), ...(taskId ? { taskId } : {}) }
-			};
-			if (taskId === undefined) return;
-			// Polled rather than pushed: the runtime reports a task's state on request and nothing
-			// streams it, so the surface asks until the answer stops being "running".
-			for (let attempt = 0; attempt < 60; attempt += 1) {
-				await new Promise((resolve) => setTimeout(resolve, 1_000));
-				// `status` and not `state`: the task row's column is `status`, and the queue writes exactly
-				// `done` or `failed` into it from `pending`. Reading a field the row does not have would
-				// have polled sixty times and then reported a run as still going.
-				const status = (await workspaceSession().transport.command('automations.status', {
-					taskId
-				})) as { readonly status?: string; readonly error?: string } | null;
-				const settled = status?.status;
-				if (settled !== 'done' && settled !== 'failed') continue;
-				runs = {
-					...runs,
-					[name]: {
-						state: settled,
-						taskId,
-						at: Date.now(),
-						...(status?.error ? { detail: status.error } : {})
-					}
-				};
-				await loadHistory(name);
-				return;
-			}
-		} catch (cause) {
+	const runAutomation = (name: string): Effect.Effect<void> => {
+		return Effect.gen(function* () {
+			const existing = visibleRun(name);
+			if (existing?.state === 'starting' || existing?.state === 'running') return;
+			runs = { ...runs, [name]: { state: 'starting', at: yield* Clock.currentTimeMillis } };
+			const started = yield* system.automations.start({ name, input: {} });
+			const taskId = started.taskId;
 			runs = {
 				...runs,
 				[name]: {
-					state: 'failed',
-					at: Date.now(),
-					detail: cause instanceof Error ? cause.message : String(cause)
+					state: 'running',
+					at: yield* Clock.currentTimeMillis,
+					...(taskId ? { taskId } : {})
 				}
 			};
-		}
+			if (taskId === undefined) return;
+		}).pipe(
+			Effect.catch((cause) =>
+				Effect.gen(function* () {
+					runs = {
+						...runs,
+						[name]: {
+							state: 'failed',
+							at: yield* Clock.currentTimeMillis,
+							detail: cause instanceof Error ? cause.message : String(cause)
+						}
+					};
+				})
+			)
+		);
 	};
-</script>
-
-<script lang="ts">
 	import Icon from '@iconify/svelte';
 	import EnvoysPanel from './envoys-panel.svelte';
 	import CollectionDetail from './collection-detail.svelte';
@@ -116,8 +66,7 @@
 	import { Bound, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
 	import { cn } from '@norbital-ai/ui/utils';
-	import type { WorkspaceClient } from './workspace-client.js';
-	import { workspaceSession } from '../../session.js';
+	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 	import { Button } from '@norbital-ai/ui/button';
 	import type {
 		EnvironmentVariable,
@@ -125,7 +74,7 @@
 		StudioEnvoy,
 		StudioTool,
 		WorkspaceManifest
-	} from './studio-state.js';
+	} from '#lib/client/ui/studio/studio-state.js';
 
 	/**
 	 * The Manifest view's right-hand pane: one branch of the workspace, or one collection of it.
@@ -144,7 +93,7 @@
 		tools = [],
 		environment = [],
 		environmentError,
-		command,
+		system,
 		onopenSource
 	}: {
 		manifest?: WorkspaceManifest | undefined;
@@ -157,24 +106,74 @@
 		tools?: ReadonlyArray<StudioTool>;
 		environment?: ReadonlyArray<EnvironmentVariable>;
 		environmentError?: string | undefined;
-		command: (name: string, input: Readonly<Record<string, string>>) => Promise<unknown>;
+		system: SystemClientApi;
 		onopenSource?: ((path: string) => void) | undefined;
 	} = $props();
 
-	/**
-	 * Loaded once per automation, from an effect rather than from the template.
-	 *
-	 * Reading it inside the markup would fire during render and again on every state change the read
-	 * itself caused — the shape of an infinite loop, and one that would look like a slow panel rather
-	 * than like a bug. `historyLoaded` is the guard, so a failed read is not retried forever either.
-	 */
+	let mounted = $state(false);
+	const historyQueries = $derived(
+		mounted
+			? (manifest?.automations ?? []).map((automation) => ({
+					name: automation.name,
+					query: system.automations.history({ name: automation.name, limit: 10 })
+				}))
+			: []
+	);
+	const historyQuery = (automation: string) =>
+		historyQueries.find(({ name }) => name === automation)?.query;
+	const statusQueries = $derived(
+		Object.entries(runs).flatMap(([name, run]) =>
+			run.state === 'running' && run.taskId !== undefined
+				? [{ name, taskId: run.taskId, query: system.automations.status({ taskId: run.taskId }) }]
+				: []
+		)
+	);
+	const statusQuery = (automation: string) =>
+		statusQueries.find(({ name }) => name === automation)?.query;
+	const visibleRun = (automation: string) => {
+		const run = runs[automation];
+		if (run === undefined) return undefined;
+		const query = statusQuery(automation);
+		if (query?.error !== undefined)
+			return {
+				...run,
+				state: 'failed' as const,
+				detail: query.error instanceof Error ? query.error.message : String(query.error)
+			};
+		const status = query?.current;
+		if (status?.status === 'done' || status?.status === 'failed')
+			return {
+				...run,
+				state: status.status,
+				...(status.error === undefined ? {} : { detail: status.error })
+			};
+		return run;
+	};
+
 	$effect(() => {
-		for (const automation of manifest?.automations ?? []) {
-			if (historyLoaded[automation.name] === true) continue;
-			historyLoaded = { ...historyLoaded, [automation.name]: true };
-			void loadHistory(automation.name);
+		const active = statusQueries.filter(({ query }) => {
+			const state = query.current?.status;
+			return state !== 'done' && state !== 'failed';
+		});
+		if (active.length === 0) return;
+		const timer = setInterval(() => {
+			for (const { query } of active) void query.refresh();
+		}, 1_000);
+		return () => clearInterval(timer);
+	});
+
+	const refreshedHistory = new Set<string>();
+	$effect(() => {
+		for (const { name, taskId, query } of statusQueries) {
+			const status = query.current?.status;
+			const key = `${name}:${taskId}`;
+			if ((status !== 'done' && status !== 'failed') || refreshedHistory.has(key)) continue;
+			refreshedHistory.add(key);
+			void historyQuery(name)?.refresh();
 		}
 	});
+
+	onMount(() => (mounted = true));
 
 	const kind = $derived(selected.split(':')[0] ?? 'collections');
 	const name = $derived(selected.slice(kind.length + 1));
@@ -365,7 +364,7 @@
 {#snippet automationsPanel(branch: ManifestSection, workspace: WorkspaceManifest)}
 	<Scroll name="Automations panel" class="p-4 sm:p-6">
 		<Stack gap="md">
-			{@render panelHeading(branch, workspace.automations.length, AUTOMATION_STYLES)}
+			{@render panelHeading(branch, workspace.automations.length, automationStyles)}
 
 			{#if workspace.automations.length === 0}
 				{@render emptyBranch(branch, 'No automations defined')}
@@ -373,18 +372,20 @@
 				<Stack gap="sm">
 					{#each workspace.automations as automation (automation.name)}
 						{@const path = `src/automation/+${automation.name}.ts`}
+						{@const run = visibleRun(automation.name)}
+						{@const automationHistory = historyQuery(automation.name)}
 						<Stack gap="sm" class="rounded-lg border border-border/60 bg-card p-4 shadow-card">
 							<Inline align="start" justify="between" gap="sm">
 								<Inline gap="sm" class="min-w-0">
 									<div
 										class={cn(
 											'flex size-6 shrink-0 items-center justify-center rounded-md border',
-											AUTOMATION_STYLES.iconWrapperClass
+											automationStyles.iconWrapperClass
 										)}
 									>
 										<ProductIcon
 											name="automations"
-											class={cn('size-3.5', AUTOMATION_STYLES.iconClass)}
+											class={cn('size-3.5', automationStyles.iconClass)}
 										/>
 									</div>
 									<div class="min-w-0">
@@ -402,14 +403,10 @@
 									<Button
 										size="sm"
 										variant="outline"
-										disabled={runs[automation.name]?.state === 'starting' ||
-											runs[automation.name]?.state === 'running'}
-										onclick={() => void runAutomation(automation.name)}
+										disabled={run?.state === 'starting' || run?.state === 'running'}
+										onclick={() => void Effect.runPromise(runAutomation(automation.name))}
 									>
-										{runs[automation.name]?.state === 'starting' ||
-										runs[automation.name]?.state === 'running'
-											? 'Running…'
-											: 'Run now'}
+										{run?.state === 'starting' || run?.state === 'running' ? 'Running…' : 'Run now'}
 									</Button>
 									{#if files.includes(path)}
 										{@render sourceLink(path)}
@@ -417,8 +414,14 @@
 								</Inline>
 							</Inline>
 							<p class="font-mono text-micro text-muted-foreground">{path}</p>
-							{#if historyLoaded[automation.name] && history[automation.name] !== undefined}
-								{@const rows = history[automation.name] ?? []}
+							{#if automationHistory?.error !== undefined}
+								<p class="text-micro text-destructive">
+									Run history unavailable: {automationHistory.error instanceof Error
+										? automationHistory.error.message
+										: String(automationHistory.error)}
+								</p>
+							{:else if automationHistory?.current !== undefined}
+								{@const rows = automationHistory.current.runs ?? []}
 								{#if rows.length === 0}
 									<p class="text-micro text-muted-foreground">
 										No runs recorded. This automation has not run on its schedule or by hand.
@@ -458,8 +461,7 @@
 									</Stack>
 								{/if}
 							{/if}
-							{#if runs[automation.name]}
-								{@const run = runs[automation.name]}
+							{#if run}
 								<!--
 									The last run this session started, and what came of it.
 
@@ -494,7 +496,7 @@
 {#snippet remotesPanel(branch: ManifestSection)}
 	<Scroll name="Remotes panel" class="p-4 sm:p-6">
 		<Stack gap="md">
-			{@render panelHeading(branch, 0, REMOTE_STYLES)}
+			{@render panelHeading(branch, 0, remoteStyles)}
 			{@render emptyBranch(branch, 'No remotes declared')}
 		</Stack>
 	</Scroll>
@@ -518,7 +520,7 @@
 		<p class="max-w-sm text-center text-xs leading-relaxed">Choose a branch on the left.</p>
 	</Stack>
 {:else if kind === 'envoys'}
-	<EnvoysPanel {envoys} {tools} {command} {onopenSource} />
+	<EnvoysPanel {envoys} {tools} {system} {onopenSource} />
 {:else if kind === 'environment'}
 	<EnvironmentPane {section} entries={environment} failure={environmentError} />
 {:else if kind === 'apps'}

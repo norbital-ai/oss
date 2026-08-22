@@ -41,9 +41,7 @@ describe('the create request', () => {
 
 describe('storedRecordsOf', () => {
 	it('reads the rows out of a write response', () => {
-		expect(storedRecordsOf({ created: true, records: [{ norbital_id: 'a' }] })).toEqual([
-			{ norbital_id: 'a' }
-		]);
+		expect(storedRecordsOf({ created: true, records: [{ id: 'a' }] })).toEqual([{ id: 'a' }]);
 	});
 
 	it('reads an empty result as empty, not as unrecognised', () => {
@@ -51,13 +49,13 @@ describe('storedRecordsOf', () => {
 	});
 
 	it('returns undefined for a response that carries no records at all', () => {
-		expect(storedRecordsOf({ created: true, norbital_id: 'a' })).toBeUndefined();
+		expect(storedRecordsOf({ created: true, id: 'a' })).toBeUndefined();
 	});
 
 	it('returns undefined rather than guessing at a shape it does not recognise', () => {
 		expect(storedRecordsOf(null)).toBeUndefined();
 		expect(storedRecordsOf('records')).toBeUndefined();
-		expect(storedRecordsOf([{ norbital_id: 'a' }])).toBeUndefined();
+		expect(storedRecordsOf([{ id: 'a' }])).toBeUndefined();
 		expect(storedRecordsOf({ records: {} })).toBeUndefined();
 		// A list of things that are not rows is the case worth naming: it is the shape closest to
 		// correct, so it is the one a lenient reader would let through as data.

@@ -5,32 +5,8 @@
 	import { fly } from 'svelte/transition';
 	import { Inline, Scroll } from '#lib/layout';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import type {
-		KanbanCardMove,
-		TCardSnippet,
-		TColumnHeaderActionSnippet,
-		TColumnTitleSnippet,
-		TKanbanColumnData
-	} from './index.js';
+	import type { KanbanProps } from '#lib/kanban';
 	import KanbanColumn from './kanban-column.svelte';
-
-	/* --------------------------------------------------------------------- *
-	 * Props                                                                  *
-	 * --------------------------------------------------------------------- */
-	export interface KanbanProps {
-		value: TKanbanColumnData[];
-		onCardMove?: (move: KanbanCardMove) => void;
-		cardSnippet: TCardSnippet;
-		onLoadMore: (columnId: string, lastVirtualIndex: number) => Promise<void>;
-		itemHeight: number;
-		minColumnWidth?: number;
-		groupName?: string;
-		sortable?: boolean;
-		sortWithinColumn?: boolean;
-		dragHandleClass?: string;
-		columnHeaderActionSnippet?: TColumnHeaderActionSnippet;
-		columnTitleSnippet?: TColumnTitleSnippet;
-	}
 
 	let {
 		value,
@@ -50,7 +26,6 @@
 	/* --------------------------------------------------------------------- *
 	 * Local state                                                            *
 	 * --------------------------------------------------------------------- */
-	let localState = $derived(value);
 	const { t } = useI18n<UiKeys>();
 
 	// Track which columns have been animated to prevent re-animation
@@ -74,7 +49,7 @@
 <!-- Board-wide horizontal scroll with full height ----------------------->
 <Scroll axis="x" name={t('kanban.boardRegion')} class="p-3">
 	<Inline gap="md" align="stretch" fill>
-		{#each localState as column, index (column._id)}
+		{#each value as column, index (column._id)}
 			<Inline gap="none" align="stretch" fill>
 				<div class="flex h-full" in:slideIn={{ columnId: column._id, index }}>
 					<KanbanColumn

@@ -1,4 +1,4 @@
-import { Schema } from 'effect';
+import { Option, Schema } from 'effect';
 
 /**
  * One record on its way into a collection, and the one thing that makes it a graph rather than a row.
@@ -38,8 +38,9 @@ export const CollectionCreateRequest = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	values: CollectionWriteValues
 }).annotate({ identifier: 'BoltCollectionCreateRequest' });
-export interface CollectionCreateRequest
-	extends Schema.Schema.Type<typeof CollectionCreateRequest> {}
+export interface CollectionCreateRequest extends Schema.Schema.Type<
+	typeof CollectionCreateRequest
+> {}
 
 /** One row exactly as the database holds it, defaults and generated columns included. */
 export const StoredRecord = Schema.Record(Schema.String, Schema.Json).annotate({
@@ -70,19 +71,12 @@ export interface CollectionWriteResult extends Schema.Schema.Type<typeof Collect
 /**
  * Reads the stored rows out of a write response, or `undefined` when it carries none.
  *
- * A function rather than a decode, and shared by both halves rather than written twice, for the
- * reason `rowsFrom` is: a client that guesses at the envelope and falls back to something plausible
- * turns "the server answered in a shape I do not recognise" into "the write succeeded and returned
- * nothing", which is indistinguishable from a legitimate empty result and is therefore never
- * investigated. `undefined` here means *unrecognised*, and the caller is expected to fail on it.
+ * Shared by both halves rather than decoded differently at each call site: a client that guesses at
+ * the envelope and falls back to something plausible turns "the server answered in a shape I do not
+ * recognise" into "the write succeeded and returned nothing". `undefined` means *unrecognised*,
+ * and the caller is expected to fail on it.
  */
 export const storedRecordsOf = (value: unknown): ReadonlyArray<StoredRecord> | undefined => {
-	if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
-	const records = Reflect.get(value, 'records');
-	if (!Array.isArray(records)) return undefined;
-	return records.every(
-		(record) => record !== null && typeof record === 'object' && !Array.isArray(record)
-	)
-		? (records as ReadonlyArray<StoredRecord>)
-		: undefined;
+	const decoded = Schema.decodeUnknownOption(CollectionWriteResult)(value);
+	return Option.getOrUndefined(Option.map(decoded, ({ records }) => records));
 };

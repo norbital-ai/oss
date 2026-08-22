@@ -1,41 +1,85 @@
-import { Context, Effect, Layer, Result, Schema } from 'effect';
+import { Clock, Context, Effect, Layer, Result, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import type { AuthoredIntegrationModule } from '../../authoring/integration-introspection.js';
+import type { AuthoredIntegrationModule } from '#lib/authoring/integration-introspection.js';
 import {
 	AuthoredRuntimeService,
 	makeAuthoringApi,
 	makeBoundAuthoringOps,
-	runAuthoredHandler
-} from '../collections/authored.js';
-import { Collections } from '../collections/collections.js';
-import { AI, Connector, Files } from '../facilities/services.js';
-import { TaskQueue } from '../tasks/tasks.js';
-import { Automations } from '../automations/automations.js';
-import { Database } from '../facilities/database.js';
-import type { Identity } from '../identity/identity.js';
-import { Secrets } from '../secrets/secrets.js';
-import { Workspace, describeCause } from '../workspace.js';
+	runAuthoredHandler,
+	type AuthoredRuntime
+} from '#lib/runtime/collections/authored.js';
+import * as Collections from '#lib/runtime/collections/collections.js';
+import {
+	AI,
+	Connector,
+	Files,
+	type AIInterface,
+	type ConnectorInterface,
+	type FilesInterface
+} from '#lib/runtime/facilities/services.js';
+import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
+import * as Automations from '#lib/runtime/automations/automations.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import type * as Identity from '#lib/runtime/identity/identity.js';
+import { Secrets, type Interface as SecretsInterface } from '#lib/runtime/secrets/secrets.js';
+import * as Workspace from '#lib/runtime/workspace.js';
+import { describeCause } from '#lib/runtime/workspace.js';
 import {
 	runOutboxDrain,
 	DRAIN_BATCH_DEFAULT,
 	type ClaimedDelivery,
 	type DeliverDependencies
-} from './deliver.js';
-import { INTEGRATION_HTTP_OPERATION, IntegrationHttpResponse } from './http.js';
-import { runPullBinding, type BindingReport, type PullDependencies } from './pull.js';
-import { runWebhookDelivery, type LedgerState, type WebhookDependencies } from './webhook.js';
+} from '#lib/runtime/integrations/deliver.js';
+import {
+	INTEGRATION_HTTP_OPERATION,
+	IntegrationHttpResponse
+} from '#lib/runtime/integrations/http.js';
+import {
+	runPullBinding,
+	type BindingReport,
+	type PullDependencies
+} from '#lib/runtime/integrations/pull.js';
+import {
+	runWebhookDelivery,
+	type LedgerState,
+	type WebhookDependencies
+} from '#lib/runtime/integrations/webhook.js';
 
 /** Carries integration error through the typed integrations failure channel without losing diagnostic context. */
-export class IntegrationError extends Schema.TaggedError<IntegrationError>()(
-	'Bolt.Integrations.Error',
-	{
-		integration: Schema.NonEmptyString,
-		message: Schema.NonEmptyString
-	}
-) {
+class IntegrationError extends Schema.TaggedError<IntegrationError>()('Bolt.Integrations.Error', {
+	integration: Schema.NonEmptyString,
+	message: Schema.NonEmptyString
+}) {
 	readonly category = 'integration' as const;
 	readonly retryable = false;
 }
+
+const DatabaseNumber = Schema.Union([Schema.Number, Schema.NumberFromString]);
+const UnknownRow = Schema.Record(Schema.String, Schema.Unknown);
+const IdentifiedJsonRow = Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [
+	Schema.Record(Schema.String, Schema.Json)
+]);
+const DueAtRow = Schema.Struct({ due_at: Schema.NullOr(Schema.String) });
+const ClaimedDeliveryRow = Schema.Struct({
+	sequence: DatabaseNumber,
+	binding_name: Schema.String,
+	collection_name: Schema.String,
+	record_id: Schema.String,
+	operation: Schema.String,
+	path: Schema.NullOr(Schema.String),
+	payload: Schema.Json,
+	attempts: DatabaseNumber
+});
+const decodeClaimedDeliveryRow = Schema.decodeUnknownResult(ClaimedDeliveryRow);
+const CursorMap = Schema.Record(Schema.String, Schema.String);
+const InboxStatusRow = Schema.Struct({ status: Schema.String });
+const PullCursorRow = Schema.Struct({ cursor: Schema.Json });
+const FlushInput = Schema.Struct({ limit: Schema.optionalKey(Schema.Number) });
+const IntegrationStateRow = Schema.Struct({ enabled: Schema.Boolean, cursor: Schema.Json });
+const IntegrationCountsRow = Schema.Struct({
+	pending: DatabaseNumber,
+	failed: DatabaseNumber
+});
 /**
  * What an operator can see about one integration without opening a database.
  *
@@ -180,12 +224,9 @@ const OUTBOX_CLAIMABLE = `(status = 'pending' or (status = 'inflight' and update
  * failure of guessing wrong would be a wake that never happens rather than an error anybody sees.
  */
 const readDueAt = (row: Schema.Json | undefined): number | undefined => {
-	if (row === null || row === undefined || typeof row !== 'object' || Array.isArray(row)) {
-		return undefined;
-	}
-	const value = Reflect.get(row, 'due_at');
-	if (typeof value !== 'string') return undefined;
-	const parsed = Date.parse(value);
+	const decoded = Schema.decodeUnknownResult(DueAtRow)(row);
+	if (Result.isFailure(decoded) || decoded.success.due_at === null) return undefined;
+	const parsed = Date.parse(decoded.success.due_at);
 	return Number.isFinite(parsed) ? parsed : undefined;
 };
 
@@ -199,44 +240,25 @@ const readDueAt = (row: Schema.Json | undefined): number | undefined => {
  */
 const claimedDeliveries = (rows: ReadonlyArray<Schema.Json>): ReadonlyArray<ClaimedDelivery> =>
 	rows.flatMap((row) => {
-		if (row === null || typeof row !== 'object' || Array.isArray(row)) return [];
-		const sequence = Number(Reflect.get(row, 'sequence'));
-		const binding = Reflect.get(row, 'binding_name');
-		const collection = Reflect.get(row, 'collection_name');
-		const recordId = Reflect.get(row, 'record_id');
-		const operation = Reflect.get(row, 'operation');
-		const path = Reflect.get(row, 'path');
-		const payload = Reflect.get(row, 'payload');
-		if (
-			!Number.isFinite(sequence) ||
-			typeof binding !== 'string' ||
-			typeof collection !== 'string' ||
-			typeof recordId !== 'string' ||
-			typeof operation !== 'string'
-		)
-			return [];
+		const decoded = decodeClaimedDeliveryRow(row);
+		if (Result.isFailure(decoded)) return [];
+		const value = decoded.success;
 		return [
 			{
-				sequence,
-				binding,
-				collection,
-				recordId,
-				operation,
-				path: typeof path === 'string' ? path : null,
-				payload: Schema.is(Schema.Json)(payload) ? payload : null,
-				attempts: Number(Reflect.get(row, 'attempts')) || 1
+				sequence: value.sequence,
+				binding: value.binding_name,
+				collection: value.collection_name,
+				recordId: value.record_id,
+				operation: value.operation,
+				path: value.path,
+				payload: value.payload,
+				attempts: value.attempts
 			}
 		];
 	});
 
 const cursorsOf = (value: Schema.Json): Readonly<Record<string, string>> =>
-	value === null || typeof value !== 'object' || Array.isArray(value)
-		? {}
-		: Object.fromEntries(
-				Object.entries(value).flatMap(([binding, cursor]) =>
-					typeof cursor === 'string' ? [[binding, cursor] as const] : []
-				)
-			);
+	Result.getOrElse(Schema.decodeUnknownResult(CursorMap)(value), () => ({}));
 
 /**
  * How many rows one source record is assumed to be able to fan out into.
@@ -251,7 +273,19 @@ const MAX_FAN_OUT = 64;
 /** A ceiling on the whole lookup, so a large batch times a wide fan-out still cannot page unboundedly. */
 const MAX_EXISTING_ROWS = 5000;
 
-export const layer = Layer.effect(
+export type LayerServices =
+	| Workspace.Interface
+	| ConnectorInterface
+	| Database.Interface
+	| TaskQueue.Interface
+	| Automations.Interface
+	| Collections.Interface
+	| SecretsInterface
+	| AIInterface
+	| FilesInterface
+	| AuthoredRuntime;
+
+export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 	Service,
 	Effect.gen(function* () {
 		const workspace = yield* Workspace.Service;
@@ -289,12 +323,7 @@ export const layer = Layer.effect(
 					.execute(effectId, {
 						connector: connectorName,
 						operation: INTEGRATION_HTTP_OPERATION,
-						input: {
-							method: descriptor.method,
-							url: descriptor.url,
-							headers: descriptor.headers,
-							...(descriptor.body === undefined ? {} : { body: descriptor.body })
-						}
+						input: descriptor
 					})
 					.pipe(
 						Effect.flatMap((response) =>
@@ -308,7 +337,7 @@ export const layer = Layer.effect(
 						// A facility failure the host marked retryable is a transport hiccup; one it did not is a
 						// refusal, and the retry policy needs to be able to tell them apart.
 						Effect.catch((error) =>
-							error instanceof Database.FacilityError
+							Schema.is(Database.FacilityError)(error)
 								? Effect.fail({ message: error.message, retryable: error.retryable })
 								: Effect.fail(error)
 						)
@@ -339,13 +368,13 @@ export const layer = Layer.effect(
 						Effect.map((rows) => {
 							const found = new Map<string, Array<string>>();
 							for (const row of rows) {
-								if (row === null || typeof row !== 'object' || Array.isArray(row)) continue;
-								const key = Reflect.get(row, column);
-								const id = Reflect.get(row, 'norbital_id');
-								if (typeof key !== 'string' || typeof id !== 'string') continue;
-								const bucket = found.get(key);
-								if (bucket === undefined) found.set(key, [id]);
-								else bucket.push(id);
+								const decoded = Schema.decodeUnknownResult(IdentifiedJsonRow)(row);
+								if (Result.isFailure(decoded)) continue;
+								const key = Schema.decodeUnknownResult(Schema.String)(decoded.success[column]);
+								if (Result.isFailure(key)) continue;
+								const bucket = found.get(key.success);
+								if (bucket === undefined) found.set(key.success, [decoded.success.id]);
+								else bucket.push(decoded.success.id);
 							}
 							// Sorted so `before[offset]` is a stable address across runs: the derived ids do not come
 							// back from the database in any guaranteed order, and an unstable pairing would rewrite
@@ -373,19 +402,7 @@ export const layer = Layer.effect(
 					makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations)
 				);
 				return runAuthoredHandler(() => declared.handler({ input: [record], api }, api)).pipe(
-					Effect.flatMap((rows) =>
-						Array.isArray(rows)
-							? Effect.succeed(
-									rows.flatMap((row) =>
-										row !== null && typeof row === 'object' && !Array.isArray(row)
-											? [row as Readonly<Record<string, unknown>>]
-											: []
-									)
-								)
-							: Effect.fail({
-									message: `the import pipeline for ${collection} returned something that is not a list of rows`
-								})
-					),
+					Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(UnknownRow))),
 					Effect.catch((error) => Effect.fail({ message: describeCause(error) }))
 				);
 			},
@@ -409,7 +426,7 @@ export const layer = Layer.effect(
 				);
 			},
 			sleep: (milliseconds) => Effect.sleep(milliseconds),
-			now: () => Date.now()
+			now: Clock.currentTimeMillis
 		});
 
 		/**
@@ -460,18 +477,15 @@ export const layer = Layer.effect(
 											})
 											.pipe(
 												Effect.map((existing) => {
-													const row = existing.rows[0];
-													const status =
-														row === null ||
-														row === undefined ||
-														typeof row !== 'object' ||
-														Array.isArray(row)
-															? undefined
-															: Reflect.get(row, 'status');
+													const status = Schema.decodeUnknownResult(InboxStatusRow)(
+														existing.rows[0]
+													);
 													// Anything other than a recorded `absorbed` is treated as unfinished and
 													// absorbed again. The upsert makes that harmless, and the opposite default
 													// would silently drop the redelivery meant to finish an interrupted batch.
-													return status === 'absorbed' ? 'absorbed' : 'pending';
+													return Result.isSuccess(status) && status.success.status === 'absorbed'
+														? 'absorbed'
+														: 'pending';
 												})
 											)
 							),
@@ -616,11 +630,15 @@ export const layer = Layer.effect(
 			});
 			const row = result.rows[0];
 			if (row === undefined) return null;
-			const value =
-				row === null || typeof row !== 'object' || Array.isArray(row)
-					? null
-					: Reflect.get(row, 'cursor');
-			return { cursor: Schema.is(Schema.Json)(value) ? value : null };
+			return yield* Schema.decodeUnknownEffect(PullCursorRow)(row).pipe(
+				Effect.mapError(
+					() =>
+						new IntegrationError({
+							integration: name,
+							message: 'Pull lease query returned an invalid cursor row'
+						})
+				)
+			);
 		});
 
 		/**
@@ -839,13 +857,10 @@ export const layer = Layer.effect(
 						message: `${name} declares no send binding, so it has no outbox to flush.`
 					});
 				}
-				const limit =
-					input !== null &&
-					typeof input === 'object' &&
-					!Array.isArray(input) &&
-					typeof Reflect.get(input, 'limit') === 'number'
-						? Number(Reflect.get(input, 'limit'))
-						: DRAIN_BATCH_DEFAULT;
+				const decodedInput = Schema.decodeUnknownResult(FlushInput)(input);
+				const limit = Result.isSuccess(decodedInput)
+					? (decodedInput.success.limit ?? DRAIN_BATCH_DEFAULT)
+					: DRAIN_BATCH_DEFAULT;
 				const report = yield* runOutboxDrain(
 					deliverDependencies(name),
 					effectId,
@@ -930,12 +945,10 @@ export const layer = Layer.effect(
 					sql: 'select enabled, cursor from bolt_integrations where name = $1',
 					parameters: [name]
 				});
-				const row = result.rows[0];
-				const record =
-					row === null || row === undefined || typeof row !== 'object' || Array.isArray(row)
-						? undefined
-						: row;
-				const cursor = record === undefined ? null : Reflect.get(record, 'cursor');
+				const record = Result.getOrElse(
+					Schema.decodeUnknownResult(IntegrationStateRow)(result.rows[0]),
+					() => ({ enabled: false, cursor: null })
+				);
 				// The outbound queue's depth, counted rather than assumed. `inflight` counts as pending
 				// because a drain that died mid-batch left rows in it, and reporting those as neither
 				// pending nor failed is how a stuck queue looks empty.
@@ -944,26 +957,18 @@ export const layer = Layer.effect(
 					sql: "select count(*) filter (where status in ('pending', 'inflight')) as pending, count(*) filter (where status = 'failed') as failed from bolt_integration_outbox where integration_name = $1",
 					parameters: [name]
 				});
-				const counts = outbox.rows[0];
-				const counted = (key: string): number => {
-					const value =
-						counts === null ||
-						counts === undefined ||
-						typeof counts !== 'object' ||
-						Array.isArray(counts)
-							? undefined
-							: Reflect.get(counts, key);
-					return Number(value ?? 0) || 0;
-				};
+				const counts = Result.getOrElse(
+					Schema.decodeUnknownResult(IntegrationCountsRow)(outbox.rows[0]),
+					() => ({ pending: 0, failed: 0 })
+				);
 				return {
 					name,
-					enabled: record !== undefined && Reflect.get(record, 'enabled') === true,
-					cursor: Schema.is(Schema.Json)(cursor) ? cursor : null,
-					pending: counted('pending'),
-					failed: counted('failed')
+					enabled: record.enabled,
+					cursor: record.cursor,
+					pending: counts.pending,
+					failed: counts.failed
 				};
 			})
 		});
 	})
 );
-export * as Integrations from './integrations.js';

@@ -24,7 +24,7 @@ export interface CommandItem {
 	}) => void;
 }
 
-export interface SlashCommandState {
+interface SlashCommandState {
 	flatItems: CommandItem[];
 	visibleFlags: boolean[];
 	selectedIndex: number;
@@ -122,7 +122,7 @@ export function createSlashCommands(stateAccessor: {
 								const query = props.query.trim().toLowerCase();
 								const flags = s.flatItems.map((item) => {
 									const searchable = [item.title, item.description, ...(item.keywords ?? [])]
-										.filter((value): value is string => Boolean(value))
+										.flatMap((value) => (value ? [value] : []))
 										.join(' ')
 										.toLowerCase();
 									return query === '' || searchable.includes(query);

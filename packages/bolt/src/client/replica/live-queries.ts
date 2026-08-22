@@ -13,7 +13,7 @@
  * the dead entries are swept on the next pass rather than by a finalizer.
  */
 
-export type LiveQuery = Readonly<{
+type LiveQuery = Readonly<{
 	/** The collections whose changes falsify this query's current answer. */
 	readonly collections: ReadonlyArray<string>;
 	readonly refresh: () => Promise<void>;
@@ -54,6 +54,7 @@ export const createLiveQueryRegistry = (): LiveQueryRegistry => {
 			if (collections.length === 0) return 0;
 			const changed = new Set(collections);
 			let refreshed = 0;
+			const refreshes: Array<Effect.Effect<void>> = [];
 			for (const query of sweep()) {
 				const affected =
 					changed.has(ANY_COLLECTION) ||
@@ -63,10 +64,12 @@ export const createLiveQueryRegistry = (): LiveQueryRegistry => {
 				// Failures land on the query's own `error` cell, which is where a reader already looks.
 				// Rethrowing here would take down the sync advance that triggered the refresh, so one
 				// collection the subject cannot read would stop every other query updating.
-				void query.refresh().catch(() => undefined);
+				refreshes.push(Effect.promise(query.refresh).pipe(Effect.catch(() => Effect.void)));
 			}
+			Effect.runFork(Effect.all(refreshes, { concurrency: 'unbounded', discard: true }));
 			return refreshed;
 		},
 		size: () => sweep().length
 	};
 };
+import { Effect } from 'effect';

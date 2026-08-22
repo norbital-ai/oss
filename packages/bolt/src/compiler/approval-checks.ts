@@ -28,7 +28,7 @@ import { approvalSteps } from '../runtime/identity/approver-teams.js';
  * *visible*: declare the team in `+teams.ts` holding an empty policy array. Reconciliation still
  * mints the row; what changed is that the name is somewhere a reviewer can find it.
  */
-export type ApprovalDiagnostic = Readonly<{
+type ApprovalDiagnostic = Readonly<{
 	/** Which rule refused, so a suppression or a test can name one without matching prose. */
 	readonly rule:
 		| 'empty-approvers'
@@ -41,23 +41,12 @@ export type ApprovalDiagnostic = Readonly<{
 /** `approvers` entries and `bolt_team.name` are compared folded everywhere else, so they are here. */
 const fold = (value: string): string => value.trim().toLocaleLowerCase();
 
-/** Names a step so a diagnostic points at a file and a grant rather than at an index. */
-const stepLabel = (step: {
-	readonly policy: string;
-	readonly collection: string;
-	readonly action: string;
-	readonly index: number;
-}): string => `${step.policy} (${step.action} on ${step.collection}, step ${step.index + 1})`;
+/** One approval step, exactly as `approvalSteps` emits and this module's diagnostics want to name it. */
+type ApprovalStep = ReturnType<typeof approvalSteps>[number];
 
-/**
- * Whether this grant applies to every row in its collection.
- *
- * A grant with no `where` — or with an empty one — is unconditional. That is what makes it dangerous
- * beside a narrowed sibling: `rowPredicate` ORs the `where` of every matching grant, so `true OR
- * (assignee = me)` is `true` and the narrowing evaporates.
- */
-const isUnconditional = (grant: { readonly where?: Readonly<Record<string, unknown>> }): boolean =>
-	grant.where === undefined || Object.keys(grant.where).length === 0;
+/** Names a step so a diagnostic points at a file and a grant rather than at an index. */
+const stepLabel = (step: ApprovalStep): string =>
+	`${step.policy} (${step.action} on ${step.collection}, step ${step.index + 1})`;
 
 /**
  * Everything that names an array of policies, and is therefore a place composition can happen.
@@ -88,6 +77,79 @@ const holdersOf = (definition: WorkspaceDefinition): ReadonlyArray<Holder> => [
 		policies: automation.policies ?? []
 	}))
 ];
+
+/**
+ * **The check that makes an array of policies safe, and the reason arrays are permitted at all.**
+ *
+ * `rowPredicate` unions the `where` of every matching grant, so an unconditional grant sitting
+ * beside a narrowed one on the same `(collection, action)` collapses the predicate to `true`. The
+ * holder does not get "their own jobs plus dispatch" — they get everything, and the self-scoping
+ * evaporates with nothing to say so. `Contractor (Controller)` in field-operations is exactly
+ * that shape, and two seeded people were unscoped because of it.
+ *
+ * It is a property of `rowPredicate` rather than of how many policies a holder may name — a
+ * single policy can carry an unconditional grant beside a narrowed one by itself — so the fix is
+ * a check rather than an arity limit. Which is what makes envoys and automations able to name
+ * arrays: without this, shipping arrays would spread the hazard from teams to every public
+ * surface, where the holder of the widened grant is a stranger with a phone.
+ *
+ * Decidable from the declarations alone, with no runtime state, because "is there a `where`" is a
+ * syntactic question. Deliberate composition stays possible and stays visible: the author writes
+ * one policy carrying the union they intend, or drops the narrowing. Either way the widening is
+ * something a person typed.
+ */
+const wideningDiagnostics = (
+	holder: Holder,
+	declaredPolicies: ReadonlyMap<string, PolicyDeclaration>
+): ReadonlyArray<ApprovalDiagnostic> => {
+	const held: Array<PolicyDeclaration> = [];
+	for (const name of holder.policies) {
+		const policy = declaredPolicies.get(fold(name));
+		if (policy !== undefined) held.push(policy);
+	}
+	if (held.length < 2) return [];
+	/** Every `(collection, action)` this holder reaches, with which policy said what about it. */
+	const byResource = new Map<
+		string,
+		{ readonly unconditional: Array<string>; readonly narrowed: Array<string> }
+	>();
+	for (const policy of held) {
+		for (const grant of policy.grants ?? []) {
+			const key = `${grant.action} on ${grant.collection}`;
+			const entry = byResource.get(key) ?? { unconditional: [], narrowed: [] };
+			// A grant with no `where` — or with an empty one — is unconditional, and that is what makes
+			// it dangerous beside a narrowed sibling: `rowPredicate` ORs the `where`s, so `true OR
+			// (assignee = me)` is `true` and the narrowing evaporates.
+			const unconditional =
+				grant.where === undefined || Object.keys(grant.where).length === 0;
+			(unconditional ? entry.unconditional : entry.narrowed).push(policy.name);
+			byResource.set(key, entry);
+		}
+	}
+	const diagnostics: Array<ApprovalDiagnostic> = [];
+	for (const [resource, entry] of [...byResource].toSorted(([left], [right]) =>
+		left.localeCompare(right)
+	)) {
+		if (entry.unconditional.length === 0 || entry.narrowed.length === 0) continue;
+		const wide = [...new Set(entry.unconditional)].toSorted();
+		const narrow = [...new Set(entry.narrowed)].toSorted();
+		// A single policy carrying both is the author's own composition, stated in one file, and it
+		// is refused for the same reason — but naming it as one policy rather than as a pair is what
+		// makes the diagnostic actionable.
+		if (wide.length === 1 && narrow.length === 1 && wide[0] === narrow[0]) {
+			diagnostics.push({
+				rule: 'composition-widens-grant',
+				message: `Policy "${wide[0]}" grants ${resource} both unconditionally and with a where, and rowPredicate unions the two — so the narrowed grant does nothing and every row is reachable. Drop one of them.`
+			});
+			continue;
+		}
+		diagnostics.push({
+			rule: 'composition-widens-grant',
+			message: `${holder.label} holds ${narrow.map((name) => `"${name}"`).join(' and ')}, which narrow ${resource} with a where, alongside ${wide.map((name) => `"${name}"`).join(' and ')}, which grant it unconditionally. rowPredicate unions the where of every matching grant, so the predicate collapses to true and the narrowing is silently lost — this holder reaches every row of ${resource.split(' on ')[1] ?? resource}. Either give this holder one policy carrying the composition you intend, or drop the narrowing.`
+		});
+	}
+	return diagnostics;
+};
 
 export const approvalDiagnostics = (
 	definition: WorkspaceDefinition
@@ -161,66 +223,8 @@ export const approvalDiagnostics = (
 			});
 		}
 	}
-
-	/**
-	 * **The check that makes an array of policies safe, and the reason arrays are permitted at all.**
-	 *
-	 * `rowPredicate` unions the `where` of every matching grant, so an unconditional grant sitting
-	 * beside a narrowed one on the same `(collection, action)` collapses the predicate to `true`. The
-	 * holder does not get "their own jobs plus dispatch" — they get everything, and the self-scoping
-	 * evaporates with nothing to say so. `Contractor (Controller)` in field-operations is exactly
-	 * that shape, and two seeded people were unscoped because of it.
-	 *
-	 * It is a property of `rowPredicate` rather than of how many policies a holder may name — a
-	 * single policy can carry an unconditional grant beside a narrowed one by itself — so the fix is
-	 * a check rather than an arity limit. Which is what makes envoys and automations able to name
-	 * arrays: without this, shipping arrays would spread the hazard from teams to every public
-	 * surface, where the holder of the widened grant is a stranger with a phone.
-	 *
-	 * Decidable from the declarations alone, with no runtime state, because "is there a `where`" is a
-	 * syntactic question. Deliberate composition stays possible and stays visible: the author writes
-	 * one policy carrying the union they intend, or drops the narrowing. Either way the widening is
-	 * something a person typed.
-	 */
 	for (const holder of holdersOf(definition)) {
-		const held = holder.policies
-			.map((name) => declaredPolicies.get(fold(name)))
-			.filter((policy): policy is PolicyDeclaration => policy !== undefined);
-		if (held.length < 2) continue;
-		/** Every `(collection, action)` this holder reaches, with which policy said what about it. */
-		const byResource = new Map<
-			string,
-			{ readonly unconditional: Array<string>; readonly narrowed: Array<string> }
-		>();
-		for (const policy of held) {
-			for (const grant of policy.grants ?? []) {
-				const key = `${grant.action} on ${grant.collection}`;
-				const entry = byResource.get(key) ?? { unconditional: [], narrowed: [] };
-				(isUnconditional(grant) ? entry.unconditional : entry.narrowed).push(policy.name);
-				byResource.set(key, entry);
-			}
-		}
-		for (const [resource, entry] of [...byResource].toSorted(([left], [right]) =>
-			left.localeCompare(right)
-		)) {
-			if (entry.unconditional.length === 0 || entry.narrowed.length === 0) continue;
-			const wide = [...new Set(entry.unconditional)].toSorted();
-			const narrow = [...new Set(entry.narrowed)].toSorted();
-			// A single policy carrying both is the author's own composition, stated in one file, and it
-			// is refused for the same reason — but naming it as one policy rather than as a pair is what
-			// makes the diagnostic actionable.
-			if (wide.length === 1 && narrow.length === 1 && wide[0] === narrow[0]) {
-				diagnostics.push({
-					rule: 'composition-widens-grant',
-					message: `Policy "${wide[0]}" grants ${resource} both unconditionally and with a where, and rowPredicate unions the two — so the narrowed grant does nothing and every row is reachable. Drop one of them.`
-				});
-				continue;
-			}
-			diagnostics.push({
-				rule: 'composition-widens-grant',
-				message: `${holder.label} holds ${narrow.map((name) => `"${name}"`).join(' and ')}, which narrow ${resource} with a where, alongside ${wide.map((name) => `"${name}"`).join(' and ')}, which grant it unconditionally. rowPredicate unions the where of every matching grant, so the predicate collapses to true and the narrowing is silently lost — this holder reaches every row of ${resource.split(' on ')[1] ?? resource}. Either give this holder one policy carrying the composition you intend, or drop the narrowing.`
-			});
-		}
+		diagnostics.push(...wideningDiagnostics(holder, declaredPolicies));
 	}
 
 	return diagnostics;

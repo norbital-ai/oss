@@ -15,6 +15,18 @@ const InvocationFields = {
 	deadlineEpochMs: Schema.Number.check(Schema.isFinite())
 };
 
+/** Host-proven context attached to plugin calls; it can only narrow authenticated authority. */
+export const PluginTrustedContext = Schema.Struct({
+	source: Schema.optional(Schema.NonEmptyString),
+	plugin: Schema.optional(Schema.NonEmptyString),
+	subject: Schema.optional(Schema.NonEmptyString),
+	impersonatedSubject: Schema.optional(Schema.NonEmptyString),
+	impersonatedUser: Schema.optional(Schema.NonEmptyString),
+	impersonatedTeam: Schema.optional(Schema.NonEmptyString),
+	app: Schema.optional(Schema.NonEmptyString)
+});
+export type PluginTrustedContext = typeof PluginTrustedContext.Type;
+
 export const Invocation = Schema.TaggedUnion({
 	Request: {
 		...InvocationFields,
@@ -39,7 +51,7 @@ export const Invocation = Schema.TaggedUnion({
 		// where `Command` and `Request` already carry theirs; a second field would be a second thing to
 		// authenticate. Required rather than optional so every producer has to decide what it presents.
 		headers: Schema.Record(Schema.String, Schema.Array(Schema.String)),
-		trustedContext: Schema.Json
+		trustedContext: PluginTrustedContext
 	},
 	Task: {
 		...InvocationFields,

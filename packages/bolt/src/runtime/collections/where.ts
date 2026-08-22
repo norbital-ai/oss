@@ -1,14 +1,15 @@
-import { Result, Schema } from 'effect';
+import { Option, Result, Schema } from 'effect';
 import { is, sql, SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type {
 	FieldDefinition,
 	RelationDefinition,
 	WorkspaceDefinition
-} from '../../authoring/workspace-schema.js';
+} from '#lib/authoring/workspace-schema.js';
+import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 
 /** Parameterized SQL produced by collection predicate or JSON where compilation. */
-export type CompiledQuery = Readonly<{
+type CompiledQuery = Readonly<{
 	readonly sql: string;
 	readonly parameters: ReadonlyArray<Schema.Json>;
 }>;
@@ -37,7 +38,7 @@ export class WhereCompileError extends Schema.TaggedError<WhereCompileError>()(
 ) {}
 
 /** A where clause compiles to SQL or names the condition it could not express. */
-export type WhereResult = Result.Result<CompiledQuery, WhereCompileError>;
+type WhereResult = Result.Result<CompiledQuery, WhereCompileError>;
 
 /**
  * Binary column comparisons. The key is the authored operator; the value is its SQL symbol. These
@@ -78,7 +79,7 @@ const MEMBERSHIP_OPERATORS = ['in', 'notIn'] as const;
 const NULL_OPERATORS = ['isNull', 'isNotNull'] as const;
 
 /** Every operator a single column condition may carry, sorted for stable diagnostics. */
-export const ACCEPTED_FIELD_OPERATORS: ReadonlyArray<string> = [
+const ACCEPTED_FIELD_OPERATORS: ReadonlyArray<string> = [
 	...Object.keys(COMPARISON_SQL),
 	...Object.keys(PATTERN_SQL),
 	...Object.keys(ARRAY_SQL),
@@ -90,11 +91,11 @@ export const ACCEPTED_FIELD_OPERATORS: ReadonlyArray<string> = [
 /** Owns identifier quoting, column mapping, and relation join resolution for collection where compilation. */
 const WhereSql = {
 	quoteIdentifier: (name: string): string => `"${name.replaceAll('"', '""')}"`,
-	// `norbital_id` is the persisted primary key, so it needs no mapping. It used to be rewritten to
+	// `id` is the persisted primary key, so it needs no mapping. It used to be rewritten to
 	// `id`, back when Bolt invented its own table shape and the public name was a generated mirror.
 	mapColumn: (field: string): string => field,
 	isColumn: (context: WhereContext, key: string): boolean =>
-		key.startsWith('norbital_') || Object.hasOwn(context.fields, key),
+		SYSTEM_COLUMN_NAMES.includes(key) || Object.hasOwn(context.fields, key),
 	qualify: (collection: string, field: string): string =>
 		`${WhereSql.quoteIdentifier(collection)}.${WhereSql.quoteIdentifier(WhereSql.mapColumn(field))}`,
 	singular: (collection: string): string =>
@@ -144,7 +145,7 @@ const WhereSql = {
 		if (!context.collections.includes(heuristicTarget)) return undefined;
 		return {
 			target: heuristicTarget,
-			join: `${WhereSql.qualify(heuristicTarget, `${singular}_id`)} = ${WhereSql.qualify(context.collection, 'norbital_id')}`
+			join: `${WhereSql.qualify(heuristicTarget, `${singular}_id`)} = ${WhereSql.qualify(context.collection, 'id')}`
 		};
 	},
 	relatedContext: (context: WhereContext, collection: string): WhereContext => ({
@@ -194,12 +195,17 @@ export const makeWhereContext = (
 const failure = (context: WhereContext, field: string, message: string): WhereResult =>
 	Result.fail(new WhereCompileError({ collection: context.collection, field, message }));
 
+const failed = (error: WhereCompileError): WhereResult => Result.fail(error);
+
 const operandFailure = (context: WhereContext, field: string, operator: string): WhereResult =>
 	failure(
 		context,
 		field,
 		`Operator '${operator}' received an operand that cannot be bound as a query parameter.`
 	);
+
+/** RAW's bound parameters, validated as JSON values in one decode. */
+const decodeJsonParameters = Schema.decodeUnknownOption(Schema.Array(Schema.Json));
 
 /** Compiles one `{ operator: operand }` pair against an already-qualified column. */
 const compileOperator = (
@@ -284,6 +290,142 @@ const compileOperator = (
 	);
 };
 
+const referenceHandle = (
+	context: WhereContext,
+	field: string,
+	value: unknown
+): Result.Result<Readonly<{ readonly column: string; readonly id: string }>, WhereCompileError> => {
+	const reference = context.fields[field]?.reference;
+	if (
+		reference === undefined ||
+		value === null ||
+		typeof value !== 'object' ||
+		Array.isArray(value)
+	)
+		return Result.fail(
+			new WhereCompileError({
+				collection: context.collection,
+				field,
+				message: `Reference '${field}' requires a { kind, id } operand.`
+			})
+		);
+	const kind = Reflect.get(value, 'kind');
+	const id = Reflect.get(value, 'id');
+	const target = reference.targets.find((candidate) => candidate.tag === kind);
+	if (target === undefined || typeof id !== 'string')
+		return Result.fail(
+			new WhereCompileError({
+				collection: context.collection,
+				field,
+				message: `Reference '${field}' requires a known kind and string id.`
+			})
+		);
+	return Result.succeed({
+		column: WhereSql.qualify(context.collection, target.storageColumn),
+		id
+	});
+};
+
+/** Compiles one logical-reference filter operator, as the conjunct it contributes to the condition. */
+const compileReferenceOperator = (
+	context: WhereContext,
+	field: string,
+	operator: string,
+	operand: unknown,
+	reference: NonNullable<FieldDefinition['reference']>,
+	arms: ReadonlyArray<string>
+): WhereResult => {
+	switch (operator) {
+		case 'eq':
+		case 'ne': {
+			const handle = referenceHandle(context, field, operand);
+			return Result.isFailure(handle)
+				? failed(handle.failure)
+				: Result.succeed({
+						sql: `${handle.success.column} is ${operator === 'eq' ? 'not ' : ''}distinct from $1`,
+						parameters: [handle.success.id]
+					});
+		}
+		case 'in':
+		case 'notIn': {
+			if (!Array.isArray(operand)) return operandFailure(context, field, operator);
+			if (operand.length === 0)
+				return Result.succeed({ sql: operator === 'in' ? 'false' : 'true', parameters: [] });
+			const handles = operand.map((value) => referenceHandle(context, field, value));
+			const invalid = handles.find(Result.isFailure);
+			if (invalid !== undefined && Result.isFailure(invalid)) return failed(invalid.failure);
+			return Result.succeed(
+				WhereSql.join(
+					handles.map((handle) => {
+						if (Result.isFailure(handle)) return { sql: 'false', parameters: [] };
+						return {
+							sql: `${handle.success.column} is ${operator === 'in' ? 'not ' : ''}distinct from $1`,
+							parameters: [handle.success.id]
+						};
+					}),
+					operator === 'in' ? 'OR' : 'AND',
+					operator === 'in' ? 'false' : 'true'
+				)
+			);
+		}
+		case 'kind': {
+			if (operand === null || typeof operand !== 'object' || Array.isArray(operand))
+				return operandFailure(context, field, operator);
+			const entries = Object.entries(operand);
+			if (entries.length !== 1 || !['eq', 'ne'].includes(entries[0]?.[0] ?? ''))
+				return failure(
+					context,
+					field,
+					"Reference kind accepts exactly { eq: 'TAG' } or { ne: 'TAG' }."
+				);
+			const [comparison, kind] = entries[0] as [string, unknown];
+			const target = reference.targets.find((candidate) => candidate.tag === kind);
+			if (target === undefined) return operandFailure(context, field, operator);
+			return Result.succeed({
+				sql: `${WhereSql.qualify(context.collection, target.storageColumn)} is ${comparison === 'eq' ? 'not ' : ''}null`,
+				parameters: []
+			});
+		}
+		case 'isNull':
+		case 'isNotNull': {
+			if (typeof operand !== 'boolean') return operandFailure(context, field, operator);
+			const wantsNull = operator === 'isNull' ? operand : !operand;
+			return Result.succeed({
+				sql: arms
+					.map((arm) => `${arm} is ${wantsNull ? '' : 'not '}null`)
+					.join(wantsNull ? ' AND ' : ' OR '),
+				parameters: []
+			});
+		}
+		default:
+			return failure(
+				context,
+				field,
+				`No reference filter operator '${operator}'. Accepted operators: eq, ne, in, notIn, kind, isNull, isNotNull.`
+			);
+	}
+};
+
+/** Compiles logical reference predicates without exposing the hidden arm columns. */
+const compileReferenceCondition = (
+	context: WhereContext,
+	field: string,
+	condition: Readonly<Record<string, unknown>>
+): WhereResult => {
+	const reference = context.fields[field]?.reference;
+	if (reference === undefined) return failure(context, field, `'${field}' is not a reference.`);
+	const arms = reference.targets.map((target) =>
+		WhereSql.qualify(context.collection, target.storageColumn)
+	);
+	const clauses: Array<CompiledQuery> = [];
+	for (const [operator, operand] of Object.entries(condition)) {
+		const compiled = compileReferenceOperator(context, field, operator, operand, reference, arms);
+		if (Result.isFailure(compiled)) return failed(compiled.failure);
+		clauses.push(compiled.success);
+	}
+	return Result.succeed(WhereSql.join(clauses, 'AND', 'true'));
+};
+
 /** Compiles every operator in one column condition as a conjunction. */
 const compileFieldCondition = (
 	context: WhereContext,
@@ -293,6 +435,12 @@ const compileFieldCondition = (
 	if (condition === null || typeof condition !== 'object' || Array.isArray(condition)) {
 		return failure(context, field, 'A column condition must be an object of operators.');
 	}
+	if (context.fields[field]?.reference !== undefined)
+		return compileReferenceCondition(
+			context,
+			field,
+			condition as Readonly<Record<string, unknown>>
+		);
 	const fieldSql = WhereSql.qualify(context.collection, field);
 	const clauses: Array<CompiledQuery> = [];
 	for (const [operator, operand] of Object.entries(condition)) {
@@ -354,40 +502,42 @@ const compileRaw = (
 				: Reflect.get(target, property)
 	});
 
-	try {
-		const fragment = build(table, { sql });
-		if (!is(fragment, SQL)) {
-			return Result.fail(
-				new WhereCompileError({
-					collection: context.collection,
-					field: 'RAW',
-					message: 'RAW must return a sql`` fragment.'
-				})
-			);
-		}
-		const query = new PgDialect().sqlToQuery(fragment);
-		const parameters = query.params.filter((value): value is Schema.Json =>
-			Schema.is(Schema.Json)(value)
+	const rawError = (cause: unknown): WhereCompileError =>
+		new WhereCompileError({
+			collection: context.collection,
+			field: 'RAW',
+			message: `RAW failed to build: ${cause instanceof Error ? cause.message : String(cause)}`
+		});
+
+	const outcome = Result.try({
+		try: () => {
+			const fragment = build(table, { sql });
+			return is(fragment, SQL) ? new PgDialect().sqlToQuery(fragment) : undefined;
+		},
+		catch: rawError
+	});
+	if (Result.isFailure(outcome)) return failed(outcome.failure);
+	if (outcome.success === undefined) {
+		return Result.fail(
+			new WhereCompileError({
+				collection: context.collection,
+				field: 'RAW',
+				message: 'RAW must return a sql`` fragment.'
+			})
 		);
-		if (parameters.length !== query.params.length) {
-			return Result.fail(
+	}
+	const query = outcome.success;
+	return Option.match(decodeJsonParameters(query.params), {
+		onSome: (parameters) => Result.succeed({ sql: query.sql, parameters }),
+		onNone: () =>
+			Result.fail(
 				new WhereCompileError({
 					collection: context.collection,
 					field: 'RAW',
 					message: 'RAW bound a value that cannot cross the facility boundary.'
 				})
-			);
-		}
-		return Result.succeed({ sql: query.sql, parameters });
-	} catch (cause) {
-		return Result.fail(
-			new WhereCompileError({
-				collection: context.collection,
-				field: 'RAW',
-				message: `RAW failed to build: ${cause instanceof Error ? cause.message : String(cause)}`
-			})
-		);
-	}
+			)
+	});
 };
 
 export const compileWhere = (where: unknown, context: WhereContext, offset = 0): WhereResult => {
@@ -470,7 +620,7 @@ export type OrderTerm = Readonly<{ readonly column: string; readonly direction: 
  *
  * Keyset paging seeks past the ordering tuple of a page's last row, so the order has to be total.
  * Sorting on a non-unique column — two people both called Ada — otherwise leaves the tie broken
- * arbitrarily per statement, and rows are skipped or repeated at every page boundary. `norbital_id`
+ * arbitrarily per statement, and rows are skipped or repeated at every page boundary. `id`
  * is the persisted primary key, so appending it is what makes the tuple unique.
  */
 export const compileOrderTerms = (
@@ -479,20 +629,23 @@ export const compileOrderTerms = (
 ): ReadonlyArray<OrderTerm> => {
 	const terms: Array<OrderTerm> = [];
 	if (
-		orderBy !== undefined &&
-		orderBy !== null &&
+		orderBy != null &&
 		typeof orderBy === 'object' &&
 		!Array.isArray(orderBy)
 	) {
 		for (const [field, direction] of Object.entries(orderBy)) {
 			if (!WhereSql.isColumn(context, field)) continue;
+			// A logical reference is backed by one nullable UUID column per target kind.
+			// There is no single persisted scalar with a stable cross-kind ordering, so
+			// ordering it as though it were a normal column would emit invalid SQL.
+			if (context.fields[field]?.reference !== undefined) continue;
 			if (direction !== 'asc' && direction !== 'desc') continue;
 			terms.push({ column: WhereSql.mapColumn(field), direction });
 		}
 	}
-	return terms.some(({ column }) => column === 'norbital_id')
+	return terms.some(({ column }) => column === 'id')
 		? terms
-		: [...terms, { column: 'norbital_id', direction: 'asc' }];
+		: [...terms, { column: 'id', direction: 'asc' }];
 };
 
 /** Renders compiled ordering terms as the ` order by ...` suffix a select carries. */

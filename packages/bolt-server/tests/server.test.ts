@@ -52,6 +52,44 @@ it.effect('returns a typed 400 response for malformed command JSON', () =>
 	)
 );
 
+it.effect('decodes plugin trusted context before dispatch', () =>
+	Effect.acquireUseRelease(
+		Effect.tryPromise(() =>
+			startApplication({ configuration, facilities: { scope: configuration.scope } })
+		),
+		(application) =>
+			Effect.gen(function* () {
+				const endpoint = `http://${application.address.host}:${application.address.port}/_bolt/plugin/test/run`;
+				const invalid = yield* Effect.tryPromise(() =>
+					fetch(endpoint, {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ trustedContext: null })
+					})
+				);
+				assert.strictEqual(invalid.status, 400);
+				assert.deepStrictEqual(yield* Effect.tryPromise(() => invalid.json()), {
+					_tag: 'BoltServer.CommandInputError',
+					code: 'invalid_json_value',
+					message: 'Bolt plugin body does not match the plugin input contract'
+				});
+
+				const valid = yield* Effect.tryPromise(() =>
+					fetch(endpoint, {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({
+							input: { value: 1 },
+							trustedContext: { subject: 'user-1' }
+						})
+					})
+				);
+				assert.strictEqual(valid.status, 204);
+			}),
+		(application) => Effect.promise(() => application.stop())
+	)
+);
+
 it.effect('maps typed Bolt authentication and tenant failures to HTTP status', () =>
 	Effect.acquireUseRelease(
 		Effect.tryPromise(() =>

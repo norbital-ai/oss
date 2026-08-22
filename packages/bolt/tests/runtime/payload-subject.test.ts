@@ -10,9 +10,10 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { defineEnvironment } from '../../src/authoring/environment-schema.js';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { AccessControl } from '../../src/runtime/access/access-control.js';
-import { Approvals } from '../../src/runtime/approvals/approvals.js';
-import { Collections, PendingApproval } from '../../src/runtime/collections/collections.js';
+import * as AccessControl from '../../src/runtime/access/access-control.js';
+import * as Approvals from '../../src/runtime/approvals/approvals.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
+import { PendingApproval } from '../../src/runtime/collections/collections.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	adminSubject,
@@ -51,7 +52,8 @@ const scope = {
 const forgedSubject = {
 	userId: 'user-forged',
 	tenantId: 'test-tenant',
-	teamPath: ['admin'], policies: []
+	teamPath: ['admin'],
+	policies: []
 };
 
 const command = (name: string, credential: string, input: unknown = null) =>
@@ -194,7 +196,9 @@ const gatedWorkspace = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+	],
 	teams: {
 		admin: ['admin']
 	},

@@ -2,7 +2,7 @@
 	import { SvelteFlow } from '@xyflow/svelte';
 	import type { Edge, Node } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
-	import { layoutTeamHierarchy, type TeamNode } from './team-hierarchy.js';
+	import { layoutTeamHierarchy, type TeamNode } from '#lib/client/ui/settings/team-hierarchy.js';
 	import TeamFlowNode from './teams-flow-node.svelte';
 
 	/**
@@ -21,13 +21,14 @@
 
 	type TeamFlowData = Readonly<{
 		readonly name: string;
-		readonly description?: string;
+		readonly description?: string | undefined;
 	}>;
 
 	const chart = $derived(layoutTeamHierarchy(teams));
+	const teamsById = $derived(new Map(teams.map((team) => [team.id, team] as const)));
 	const nodes = $derived(
 		chart.positions.map((position): Node<TeamFlowData, 'team'> => {
-			const team = teams.find((candidate) => candidate.id === position.id);
+			const team = teamsById.get(position.id);
 			return {
 				id: position.id,
 				type: 'team',
@@ -39,7 +40,7 @@
 					name: team?.name ?? position.id,
 					// Carried through so an empty team the release created — the shape a newly declared
 					// `approvers` name arrives in — can say what it is for on the one surface that shows it.
-					...(team?.description === undefined ? {} : { description: team.description })
+					description: team?.description
 				}
 			};
 		})

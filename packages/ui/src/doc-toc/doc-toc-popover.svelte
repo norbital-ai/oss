@@ -4,7 +4,7 @@
 	import { Inline } from '#lib/layout';
 	import Icon from '@iconify/svelte';
 	import { onMount } from 'svelte';
-	import { findLastActiveDocTocIndex, getActiveDocTocItem } from './anchor-observer';
+	import { findLastActiveIndex, getActiveDocTocItem } from '#lib/doc-toc/anchor-observer';
 	import DocTocItem from './doc-toc-item.svelte';
 	import DocTocItems from './doc-toc-items.svelte';
 	import DocTocProgressRing from './doc-toc-progress-ring.svelte';
@@ -29,7 +29,7 @@
 	const activeItem = $derived(getActiveDocTocItem(toc.observedItems));
 	const activeLabel = $derived(activeItem?.original.title ?? toc.items[0]?.title ?? title);
 	const progress = $derived(
-		(findLastActiveDocTocIndex(toc.observedItems) + 1) / Math.max(toc.items.length, 1)
+		(findLastActiveIndex(toc.observedItems) + 1) / Math.max(toc.items.length, 1)
 	);
 
 	onMount(() => {

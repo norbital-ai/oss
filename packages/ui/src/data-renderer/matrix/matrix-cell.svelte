@@ -1,6 +1,6 @@
 <script lang="ts" generics="TRow extends MatrixRow">
 	import { cn } from '#lib/utils';
-	import { DataRenderer } from '../index.js';
+	import { DataRenderer } from '#lib/data-renderer';
 	import RelationshipRenderer from '../relationship/relationship.renderer.svelte';
 	import type { MatrixColumn, MatrixRow } from './matrix.renderer.svelte';
 

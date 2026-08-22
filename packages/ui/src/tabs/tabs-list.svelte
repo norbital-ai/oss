@@ -7,10 +7,10 @@
 		type TabListLayout,
 		type TabListSemantics,
 		type TabListVariant
-	} from './tabs.types.js';
+	} from '#lib/tabs/tabs.types';
 
 	// Indicator styles for the animated background
-	export const indicatorVariants = tv({
+	const indicatorVariants = tv({
 		base: 'absolute inset-0 pointer-events-none',
 		variants: {
 			variant: {
@@ -59,7 +59,7 @@
 		}
 	});
 
-	export const tabTriggerVariants = tv({
+	const tabTriggerVariants = tv({
 		base: 'relative inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1 transition-all outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 disabled:pointer-events-none disabled:opacity-50 cursor-pointer',
 		variants: {
 			variant: {
@@ -117,7 +117,7 @@
 		}
 	});
 
-	export interface TabItem {
+	interface TabItem {
 		value: string;
 		label?: string;
 		disabled?: boolean;
@@ -126,7 +126,7 @@
 		labelSnippet?: Snippet;
 	}
 
-	export interface TabsListProps<T extends TabItem = TabItem> extends TabsPrimitive.ListProps {
+	interface TabsListProps<T extends TabItem = TabItem> extends TabsPrimitive.ListProps {
 		variant?: TabListVariant;
 		semantics?: TabListSemantics;
 		layout?: TabListLayout;
@@ -135,7 +135,7 @@
 	}
 
 	import { createContext } from 'svelte';
-	export type TabsVariantContext = {
+	type TabsVariantContext = {
 		variant: TabListVariant;
 		semantics: TabListSemantics;
 	};
@@ -150,6 +150,7 @@
 		SLIDING_INDICATOR_TRANSITION_CLASS
 	} from '#lib/sliding-indicator';
 	import { cn } from '#lib/utils';
+	import { Effect } from 'effect';
 	import { watch } from 'runed';
 	import { onMount } from 'svelte';
 
@@ -217,7 +218,12 @@
 
 	onMount(() => {
 		// Initial measurement after fonts load
-		document.fonts.ready.then(() => scheduleIndicatorMeasure(false));
+		void Effect.runPromise(
+			Effect.gen(function* () {
+				yield* Effect.promise(() => document.fonts.ready);
+				scheduleIndicatorMeasure(false);
+			})
+		);
 	});
 
 	watch(

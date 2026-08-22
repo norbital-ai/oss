@@ -4,11 +4,10 @@
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { Inline } from '@norbital-ai/ui/layout';
-	import type { BoltUiKeys } from '../agent/i18n.js';
-	import { commandPrefixChar, type CommandScope } from '../agent/mention-sources.js';
-	import type { FinderEntity, FinderRow } from './finder-entity.js';
+	import { commandPrefixChar, type CommandScope } from '#lib/client/ui/agent/mention-sources.js';
+	import type { FinderEntity, FinderRow } from '#lib/client/ui/finder/finder-entity.js';
 
-	const { t } = useI18n<BoltUiKeys>();
+	const { t } = useI18n();
 
 	/**
 	 * Shared finder list. Cmd+/ wraps it in a dialog with an input; the composer `@` menu
@@ -33,11 +32,11 @@
 		items: readonly FinderRow[];
 		showInput?: boolean;
 		disableNavigation?: boolean;
-		activeValue?: string;
+		activeValue?: string | undefined;
 		scope?: string | null;
 		parsedScope?: CommandScope | null;
-		placeholder?: string;
-		ariaLabel?: string;
+		placeholder?: string | undefined;
+		ariaLabel?: string | undefined;
 		inputElement?: HTMLInputElement | null;
 		onPick: (entity: FinderEntity) => void;
 		onQueryInput?: (query: string) => void;
@@ -91,7 +90,7 @@
 			<Command.Input
 				bind:ref={inputElement}
 				value={query}
-				oninput={(event) => onQueryInput?.((event.currentTarget as HTMLInputElement).value)}
+				oninput={(event) => onQueryInput?.(event.currentTarget.value)}
 				{placeholder}
 				aria-label={ariaLabel}
 				class="h-9 text-sm"
@@ -113,71 +112,75 @@
 			class={showInput ? 'max-h-[min(60vh,22rem)]' : 'max-h-64'}
 		>
 			{#snippet itemSnippet({ item, isIndicator })}
-				{@const row = item as FinderRow}
-				{@const highlighted = isIndicator && row.kind !== 'group' && row.kind !== 'empty'}
-				<Inline
-					fill
-					gap={row.kind === 'group' ? 'xs' : 'sm'}
-					justify={row.kind === 'empty' ? 'center' : 'start'}
-					class={`${
-						row.kind === 'group' ? 'text-overline px-3' : 'px-3'
-					} ${highlighted ? 'bg-accent text-accent-foreground' : ''} ${
-						row.kind === 'app' && row.depth === 1 ? 'pl-7' : ''
-					}`}
-				>
-					{#if row.kind === 'group'}
-						<span>{row.label}</span>
-					{:else if row.kind === 'loading'}
-						<Icon
-							icon="lucide:loader-circle"
-							class="size-3 shrink-0 animate-spin text-muted-foreground"
-						/>
-						<span class="text-meta">{t('bolt.shell.omniSearchingRecords')}</span>
-					{:else if row.kind === 'empty'}
-						<span data-testid="agent-mention-empty" class="truncate text-meta">{row.label}</span>
-					{:else}
-						{#if row.thumbnail}
-							<span class="size-4 shrink-0 overflow-hidden rounded-sm">
-								<img
-									src={row.thumbnail}
-									alt=""
-									class="size-full object-cover"
-									loading="lazy"
-									decoding="async"
-								/>
-							</span>
-						{:else if row.icon}
-							<IconWrapper name={row.icon} class="size-3.5 shrink-0 text-muted-foreground" />
-						{:else}
+				{@const row = items.find((candidate) => candidate.value === item.value)}
+				{#if row}
+					{@const highlighted = isIndicator && row.kind !== 'group' && row.kind !== 'empty'}
+					<Inline
+						fill
+						gap={row.kind === 'group' ? 'xs' : 'sm'}
+						justify={row.kind === 'empty' ? 'center' : 'start'}
+						class={`${
+							row.kind === 'group' ? 'text-overline px-3' : 'px-3'
+						} ${highlighted ? 'bg-accent text-accent-foreground' : ''} ${
+							row.kind === 'app' && row.depth === 1 ? 'pl-7' : ''
+						}`}
+					>
+						{#if row.kind === 'group'}
+							<span>{row.label}</span>
+						{:else if row.kind === 'loading'}
 							<Icon
-								icon={row.kind === 'record'
-									? 'lucide:file-text'
-									: row.kind === 'scope'
-										? 'lucide:search'
-										: 'lucide:circle'}
-								class="size-3.5 shrink-0 text-muted-foreground"
+								icon="lucide:loader-circle"
+								class="size-3 shrink-0 animate-spin text-muted-foreground"
 							/>
-						{/if}
-						<!--
+							<span class="text-meta">{t('bolt.shell.omniSearchingRecords')}</span>
+						{:else if row.kind === 'empty'}
+							<span data-testid="agent-mention-empty" class="truncate text-meta">{row.label}</span>
+						{:else}
+							{#if row.thumbnail}
+								<span class="size-4 shrink-0 overflow-hidden rounded-sm">
+									<img
+										src={row.thumbnail}
+										alt=""
+										class="size-full object-cover"
+										loading="lazy"
+										decoding="async"
+									/>
+								</span>
+							{:else if row.icon}
+								<IconWrapper name={row.icon} class="size-3.5 shrink-0 text-muted-foreground" />
+							{:else}
+								<Icon
+									icon={row.kind === 'record'
+										? 'lucide:file-text'
+										: row.kind === 'scope'
+											? 'lucide:search'
+											: 'lucide:circle'}
+									class="size-3.5 shrink-0 text-muted-foreground"
+								/>
+							{/if}
+							<!--
 							A row with prose gets a fixed label column so every description starts at the same x
 							and reads as a second column rather than ragged text chasing the label's width. Rows
 							without one let the label run the full width instead of leaving a hole.
 						-->
-						<span
-							class={`truncate text-xs font-normal text-foreground sm:text-micro ${
-								row.description ? 'w-40 shrink-0 sm:w-52' : 'min-w-0 flex-1'
-							}`}>{row.label}</span
-						>
-						{#if row.description}
-							<span class="min-w-0 flex-1 truncate text-micro text-muted-foreground"
-								>{row.description}</span
+							<span
+								class={`truncate text-xs font-normal text-foreground sm:text-micro ${
+									row.description ? 'w-40 shrink-0 sm:w-52' : 'min-w-0 flex-1'
+								}`}>{row.label}</span
 							>
+							{#if row.description}
+								<span class="min-w-0 flex-1 truncate text-micro text-muted-foreground"
+									>{row.description}</span
+								>
+							{/if}
+							{#if row.hint}
+								<span class="shrink-0 font-mono text-micro text-muted-foreground/70"
+									>{row.hint}</span
+								>
+							{/if}
 						{/if}
-						{#if row.hint}
-							<span class="shrink-0 font-mono text-micro text-muted-foreground/70">{row.hint}</span>
-						{/if}
-					{/if}
-				</Inline>
+					</Inline>
+				{/if}
 			{/snippet}
 		</Command.List>
 	</Command.Root>

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import type { CommandGroupHeadingProps } from './types.js';
+	import type { CommandGroupHeadingProps } from '#lib/command/types';
 
 	let {
 		ref = $bindable(null),

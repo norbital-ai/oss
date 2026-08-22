@@ -1,15 +1,10 @@
 <script lang="ts">
-	import type {
-		CollectionRecord,
-		CollectionRelationOptions,
-		RemoteQuery
-	} from '@norbital-ai/std/collection';
+	import type { CollectionRecord, CollectionRelationOptions } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import { Combobox } from '#lib/combobox';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster } from '#lib/layout';
 	import { cn } from '#lib/utils';
-	import { watch } from 'runed';
 	import { getCollectionClientContext } from '#lib/collection-runtime';
 
 	interface Props {
@@ -63,7 +58,7 @@
 	/** The option set, scoped by the caller's declaration plus whatever the picker has narrowed to. */
 	const optionsQueryInput = $derived.by(() => {
 		if (displayOnly) return null;
-		const declaredWhere = (relationOptions?.where ?? {}) as Record<string, unknown>;
+		const declaredWhere = relationOptions?.where ?? {};
 		const narrowed = Object.entries(activeFilters).filter(([, v]) => v !== '');
 		return {
 			records,
@@ -78,13 +73,10 @@
 			}
 		};
 	});
-	let optionsQuery = $state<RemoteQuery<CollectionRecord[]> | null>(null);
-	watch(
-		() => optionsQueryInput,
-		(input) => {
-			optionsQuery = input ? input.records.findMany(input.target, input.query) : null;
-		},
-		{ lazy: false }
+	const optionsQuery = $derived(
+		optionsQueryInput
+			? optionsQueryInput.records.findMany(optionsQueryInput.target, optionsQueryInput.query)
+			: null
 	);
 
 	/**
@@ -96,16 +88,13 @@
 		return {
 			records,
 			target,
-			query: { where: { norbital_id: { in: selectedIds } }, limit: selectedIds.length }
+			query: { where: { id: { in: selectedIds } }, limit: selectedIds.length }
 		};
 	});
-	let valueQuery = $state<RemoteQuery<CollectionRecord[]> | null>(null);
-	watch(
-		() => valueQueryInput,
-		(input) => {
-			valueQuery = input ? input.records.findMany(input.target, input.query) : null;
-		},
-		{ lazy: false }
+	const valueQuery = $derived(
+		valueQueryInput
+			? valueQueryInput.records.findMany(valueQueryInput.target, valueQueryInput.query)
+			: null
 	);
 
 	/** Label per selected id: the caller's, else one we resolved, else the id itself. */
@@ -116,7 +105,7 @@
 			if (supplied[index] != null) byId.set(id, supplied[index]!);
 		});
 		for (const record of valueQuery?.current ?? []) {
-			const id = record.norbital_id;
+			const id = record.id;
 			if (typeof id === 'string' && relationOptions) byId.set(id, relationOptions.label(record));
 		}
 		return byId;
@@ -125,7 +114,7 @@
 	const options = $derived.by(() => {
 		const byId = new Map<string, string>();
 		for (const record of optionsQuery?.current ?? []) {
-			const id = record.norbital_id;
+			const id = record.id;
 			if (typeof id !== 'string') continue;
 			byId.set(id, relationOptions ? relationOptions.label(record) : id);
 		}

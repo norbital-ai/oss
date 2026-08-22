@@ -199,10 +199,6 @@ export const studioEnvironments = (
 	});
 };
 
-/** The database badge reports the tenant's own Postgres, not the aggregate of every facility. */
-export const databaseReady = (facilities: ReadonlyArray<FacilityState>): boolean =>
-	facilities.find((facility) => facility.name.toLowerCase() === 'database')?.available ?? false;
-
 /** Facilities the operator should see as missing, in the order the panel lists them. */
 export const unavailableFacilities = (
 	facilities: ReadonlyArray<FacilityState>
@@ -364,12 +360,12 @@ export const EnvironmentStatusSchema = Schema.Array(
 export type EnvironmentVariable = (typeof EnvironmentStatusSchema.Type)[number];
 
 /** One row under a section: the entity's name, what distinguishes it, and where it was authored. */
-export type ManifestEntry = Readonly<{
+type ManifestEntry = Readonly<{
 	readonly name: string;
 	readonly detail?: string;
-	readonly sourcePath?: string;
+	readonly sourcePath?: string | undefined;
 	/** Collections carry an authored icon; every other kind takes its section's. */
-	readonly icon?: string;
+	readonly icon?: string | undefined;
 }>;
 
 /** One branch of the authoring tree. The count a branch shows is `entries.length`. */
@@ -421,8 +417,8 @@ export const manifestSections = (
 			return {
 				name: collection.name,
 				detail: `${plural(collection.fields.length, 'field')}${hooks === 0 ? '' : ` · ${plural(hooks, 'hook')}`}`,
-				...(collection.sourcePath === undefined ? {} : { sourcePath: collection.sourcePath }),
-				...(collection.icon === undefined ? {} : { icon: collection.icon })
+				sourcePath: collection.sourcePath,
+				icon: collection.icon
 			};
 		})
 	},
@@ -527,7 +523,7 @@ export type StudioEnvoy = Readonly<{
 	readonly name: string;
 	readonly transport: string;
 	readonly audience: string;
-	readonly sourcePath?: string;
+	readonly sourcePath?: string | undefined;
 }>;
 
 /** `src/capabilities/tools/+<name>.ts` — the filename *is* the tool name. */
@@ -558,7 +554,7 @@ export const workspaceEnvoys = (
 	);
 	return (manifest?.envoys ?? []).map(({ name, transport, audience }) => {
 		const sourcePath = source.get(name);
-		return { name, transport, audience, ...(sourcePath === undefined ? {} : { sourcePath }) };
+		return { name, transport, audience, sourcePath };
 	});
 };
 
@@ -574,7 +570,7 @@ export const workspaceTools = (files: ReadonlyArray<string> = []): ReadonlyArray
 		return name === undefined ? [] : [{ name, sourcePath: path }];
 	});
 
-export type StudioMetric = Readonly<{
+type StudioMetric = Readonly<{
 	readonly id: string;
 	readonly label: string;
 	readonly icon: string;
@@ -590,7 +586,7 @@ export type StudioMetric = Readonly<{
 }>;
 
 /** Bytes in the units an operator reads them in, never more precision than the number carries. */
-export const formatBytes = (bytes: number): string => {
+const formatBytes = (bytes: number): string => {
 	const units = ['B', 'KB', 'MB', 'GB'];
 	let value = bytes;
 	let unit = 0;

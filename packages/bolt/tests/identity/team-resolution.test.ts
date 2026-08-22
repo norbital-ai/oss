@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 import { fixtureUserId } from '../support/fixture-identity.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { Identity } from '../../src/runtime/identity/identity.js';
+import * as Identity from '../../src/runtime/identity/identity.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 
 let harness: BoltTestRuntime | undefined;
@@ -32,12 +32,12 @@ const placeAndAuthenticate = async (options: { readonly teamId: string | null })
 		[TEAM.supervisor, 'Supervisor', TEAM.manager]
 	] as const) {
 		await runtime.database.query(
-			`insert into bolt_team ("norbital_id", "name", "parent_id") values ($1, $2, $3)`,
+			`insert into bolt_team ("id", "name", "parent_id") values ($1, $2, $3)`,
 			[id, name, parent]
 		);
 	}
 	await runtime.database.query(
-		`insert into bolt_auth_user ("norbital_id", "name", "tenantId", "team_id") values (md5($1::text)::uuid, $1, 'test-tenant', $2)`,
+		`insert into bolt_auth_user ("id", "name", "tenantId", "team_id") values (md5($1::text)::uuid, $1, 'test-tenant', $2)`,
 		['u1', options.teamId]
 	);
 	return runtime.runtime.runPromise(
@@ -98,10 +98,10 @@ describe('team resolution during authentication', () => {
 			// Inserted with no parent first, then closed into a loop: the foreign key refuses a parent
 			// that does not exist yet, which is also why an operator can only ever create a cycle by
 			// editing an existing team rather than by creating one.
-			await runtime.database.query(
-				`insert into bolt_team ("norbital_id", "name") values ($1, $2)`,
-				[id, name]
-			);
+			await runtime.database.query(`insert into bolt_team ("id", "name") values ($1, $2)`, [
+				id,
+				name
+			]);
 			void parent;
 		}
 		for (const [id, parent] of [
@@ -109,13 +109,13 @@ describe('team resolution during authentication', () => {
 			[TEAM.manager, TEAM.senior],
 			[TEAM.supervisor, TEAM.manager]
 		] as const) {
-			await runtime.database.query(
-				`update bolt_team set "parent_id" = $2 where "norbital_id" = $1`,
-				[id, parent]
-			);
+			await runtime.database.query(`update bolt_team set "parent_id" = $2 where "id" = $1`, [
+				id,
+				parent
+			]);
 		}
 		await runtime.database.query(
-			`insert into bolt_auth_user ("norbital_id", "name", "tenantId", "team_id") values (md5($1::text)::uuid, $1, 'test-tenant', $2)`,
+			`insert into bolt_auth_user ("id", "name", "tenantId", "team_id") values (md5($1::text)::uuid, $1, 'test-tenant', $2)`,
 			['u1', TEAM.senior]
 		);
 		const subject = await runtime.runtime.runPromise(

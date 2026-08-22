@@ -1,10 +1,11 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
 import {
-	Collections,
 	groupedInsertStatements,
+	insertionLayers,
 	type PlannedInsert
 } from '../../src/runtime/collections/collections.js';
 import {
@@ -185,14 +186,14 @@ describe('the bounds a grouped insert is built against', () => {
 			{
 				table: 'notes',
 				layer: 0,
-				columns: ['norbital_id', 'body'],
+				columns: ['id', 'body'],
 				parameters: ['id-1', 'first'],
 				where: { sql: '"owner" = $1', parameters: ['ada'] }
 			},
 			{
 				table: 'notes',
 				layer: 0,
-				columns: ['norbital_id', 'body'],
+				columns: ['id', 'body'],
 				parameters: ['id-2', 'second'],
 				where: { sql: '"owner" = $1', parameters: ['ada'] }
 			}
@@ -203,7 +204,7 @@ describe('the bounds a grouped insert is built against', () => {
 		expect(statements).toHaveLength(2);
 		for (const statement of statements) {
 			expect(statement.sql).toBe(
-				'insert into "notes" ("norbital_id", "body") select $1, $2 where "owner" = $3'
+				'insert into "notes" ("id", "body") select $1, $2 where "owner" = $3'
 			);
 			expect(statement.parameters).toHaveLength(3);
 		}
@@ -212,10 +213,10 @@ describe('the bounds a grouped insert is built against', () => {
 	/** A parent is still written before the child that names it, whatever else merges. */
 	it('emits a lower layer before a higher one', () => {
 		const statements = groupedInsertStatements([
-			{ table: 'lines', layer: 1, columns: ['norbital_id'], parameters: ['line-1'] },
-			{ table: 'payslips', layer: 0, columns: ['norbital_id'], parameters: ['slip-1'] },
-			{ table: 'lines', layer: 1, columns: ['norbital_id'], parameters: ['line-2'] },
-			{ table: 'payslips', layer: 0, columns: ['norbital_id'], parameters: ['slip-2'] }
+			{ table: 'lines', layer: 1, columns: ['id'], parameters: ['line-1'] },
+			{ table: 'payslips', layer: 0, columns: ['id'], parameters: ['slip-1'] },
+			{ table: 'lines', layer: 1, columns: ['id'], parameters: ['line-2'] },
+			{ table: 'payslips', layer: 0, columns: ['id'], parameters: ['slip-2'] }
 		]);
 
 		expect(statements.map((statement) => statement.sql.split(' (')[0])).toEqual([
@@ -223,5 +224,68 @@ describe('the bounds a grouped insert is built against', () => {
 			'insert into "lines"'
 		]);
 		expect(statements.map((statement) => tuples(statement.sql))).toEqual([2, 2]);
+	});
+});
+
+describe('graph insertion dependency identity', () => {
+	it('uses reference kind and target collection, not a UUID alone', () => {
+		const sharedId = '018f9f89-6cb2-7b3c-8fc8-832ea10c46d1';
+		const graphDefinition = workspace({
+			name: 'reference-batching',
+			version: '1.0.0',
+			collections: [
+				collection({ name: 'time_entries', fields: {} }),
+				collection({ name: 'leave_requests', fields: {} }),
+				collection({
+					name: 'claims',
+					fields: {
+						source: {
+							type: 'reference',
+							required: true,
+							indexed: true,
+							reference: {
+								onDelete: 'restrict',
+								targets: [
+									{
+										tag: 'TIME_ENTRY',
+										collection: 'time_entries',
+										storageColumn: 'source__time_entry_id'
+									},
+									{
+										tag: 'LEAVE_REQUEST',
+										collection: 'leave_requests',
+										storageColumn: 'source__leave_request_id'
+									}
+								]
+							}
+						}
+					}
+				})
+			],
+			apps: [],
+			policies: [],
+			automations: [],
+			integrations: [],
+			prompt: '',
+			tools: [],
+			skills: [],
+			envoys: [],
+			requiredFacilities: []
+		});
+		const layers = insertionLayers(
+			[
+				{ collection: 'time_entries', id: sharedId, values: {} },
+				{
+					collection: 'claims',
+					id: '018f9f89-6cb2-7b3c-8fc8-832ea10c46d2',
+					values: { source: { kind: 'LEAVE_REQUEST', id: sharedId } }
+				},
+				{ collection: 'leave_requests', id: sharedId, values: {} }
+			],
+			graphDefinition
+		);
+		// The earlier time entry has the same UUID but is not this handle's target. The leave row is
+		// later, so neither one creates an earlier-row dependency for the claim.
+		expect(layers).toEqual([0, 0, 0]);
 	});
 });

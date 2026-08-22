@@ -3,10 +3,10 @@ import { Effect, Schema } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { policy } from '../../src/authoring/workspace-schema.js';
-import { Approvals } from '../../src/runtime/approvals/approvals.js';
-import { Collections } from '../../src/runtime/collections/collections.js';
-import type { Identity } from '../../src/runtime/identity/identity.js';
-import { Sync } from '../../src/runtime/sync/sync.js';
+import * as Approvals from '../../src/runtime/approvals/approvals.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
+import type * as Identity from '../../src/runtime/identity/identity.js';
+import * as Sync from '../../src/runtime/sync/sync.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -18,7 +18,7 @@ import { fixtureUserId, seedSession, seedTeam } from '../support/fixture-identit
 /**
  * A valid record id for a readable fixture name.
  *
- * Records are keyed by `norbital_id uuid`. Names like `'person-1'` were only ever accepted by the
+ * Records are keyed by `id uuid`. Names like `'person-1'` were only ever accepted by the
  * `id text` primary key Bolt used to invent, so these fixtures built rows a real database would have
  * rejected — and passed anyway.
  */
@@ -130,11 +130,10 @@ describe('Sync engine over SQL', () => {
 			})
 		);
 
-		const rows = await database.query(
-			'select norbital_id, name, team from people where norbital_id = $1',
-			[rid('p9')]
-		);
-		expect(rows).toEqual([{ norbital_id: rid('p9'), name: 'Katherine', team: 'flight' }]);
+		const rows = await database.query('select id, name, team from people where id = $1', [
+			rid('p9')
+		]);
+		expect(rows).toEqual([{ id: rid('p9'), name: 'Katherine', team: 'flight' }]);
 
 		// The write is replicable: a client that applied it optimistically sees it confirmed.
 		const changes = await runtime.runPromise(
@@ -178,9 +177,9 @@ describe('Sync engine over SQL', () => {
 				]);
 			})
 		);
-		expect(
-			await database.query('select team from people where norbital_id = $1', [rid('p1')])
-		).toEqual([{ team: 'analytical' }]);
+		expect(await database.query('select team from people where id = $1', [rid('p1')])).toEqual([
+			{ team: 'analytical' }
+		]);
 
 		await runtime.runPromise(
 			Effect.gen(function* () {
@@ -194,15 +193,18 @@ describe('Sync engine over SQL', () => {
 				]);
 			})
 		);
-		expect(
-			await database.query('select norbital_id from people where norbital_id = $1', [rid('p1')])
-		).toEqual([]);
+		expect(await database.query('select id from people where id = $1', [rid('p1')])).toEqual([]);
 	});
 
 	it('refuses a mutation the subject may not perform, and writes nothing', async () => {
 		harness = await makeBoltTestRuntime();
 		const { runtime, effectId, database } = harness;
-		const outsider = { userId: 'guest-1', tenantId: 'test-tenant', teamPath: ['guest'], policies: [] };
+		const outsider = {
+			userId: 'guest-1',
+			tenantId: 'test-tenant',
+			teamPath: ['guest'],
+			policies: []
+		};
 
 		const outcome = await runtime.runPromise(
 			Effect.gen(function* () {
@@ -218,7 +220,7 @@ describe('Sync engine over SQL', () => {
 			}).pipe(Effect.result)
 		);
 		expect(outcome._tag).toBe('Failure');
-		expect(await database.query('select norbital_id from people')).toEqual([]);
+		expect(await database.query('select id from people')).toEqual([]);
 	});
 
 	it('reports a reset when the requested cursor is older than the retained outbox', async () => {
@@ -298,7 +300,10 @@ describe('Sync engine over SQL', () => {
 
 		// Collapsing is safe at any cursor, so the mark must not have moved and a replay from the
 		// origin must still converge on the final state rather than being told to rebuild.
-		const mark = await database.query('select xid, sequence from bolt_sync_horizon where id', []);
+		const mark = await database.query(
+			'select xid, sequence from bolt_sync_horizon where singleton',
+			[]
+		);
 		expect(mark[0]).toMatchObject({ xid: 0, sequence: 0 });
 		const changes = await runtime.runPromise(
 			Effect.gen(function* () {
@@ -319,10 +324,9 @@ describe('Sync engine over SQL', () => {
 		const { runtime, effectId, database } = harness;
 		// Written straight to the table, exactly as a seed, an import or a restore does — so the outbox
 		// knows nothing about it and a log-only replica would call this workspace empty.
-		await database.query(
-			"insert into people (norbital_id, name, team) values ($1, 'Seeded', 'core')",
-			[rid('seeded-1')]
-		);
+		await database.query("insert into people (id, name, team) values ($1, 'Seeded', 'core')", [
+			rid('seeded-1')
+		]);
 		const outboxed = await database.query(
 			'select count(*)::int as count from bolt_sync_outbox',
 			[]
@@ -371,7 +375,12 @@ describe('Sync engine over SQL', () => {
 	it('replicates only the collections the subject may read', async () => {
 		harness = await makeBoltTestRuntime();
 		const { runtime, effectId } = harness;
-		const outsider = { userId: 'guest-1', tenantId: 'test-tenant', teamPath: ['guest'], policies: [] };
+		const outsider = {
+			userId: 'guest-1',
+			tenantId: 'test-tenant',
+			teamPath: ['guest'],
+			policies: []
+		};
 		await runtime.runPromise(
 			Effect.gen(function* () {
 				return yield* (yield* Collections.Service).create(effectId('c1'), adminSubject, {
@@ -392,17 +401,26 @@ describe('Sync engine over SQL', () => {
 			// No file collection replicates with them. A `file()` column carries the file inline, so it
 			// arrives with the record that owns it and there is nothing separate to bulk-replicate —
 			// which also stops every file's metadata in the workspace landing in every browser.
-		).toEqual(['approval_request', 'people', 'requestor']);
+		).toEqual([
+			'approval_request',
+			'bolt_auth_user',
+			'bolt_notifications',
+			'bolt_team',
+			'chat_message',
+			'chat_session',
+			'people',
+			'requestor'
+		]);
 		/**
-		 * The authored collection is what an outsider does not replicate, and the runtime-owned three
+		 * The authored collection is what an outsider does not replicate; runtime collections remain
 		 * are what they do.
 		 *
 		 * This used to assert `[]`, and that was the defect rather than the rule: `SYSTEM_READ_POLICY`
 		 * grants these reads to any authenticated subject, but nothing selected it — no team can
 		 * declare `bolt.system-collections` — so only the `isAdministrator` short-circuit reached them
 		 * and every ordinary member replicated an empty shape. The same argument the admin case above
-		 * makes applies to a member: the approval surfaces are read by whoever the approval names,
-		 * and that is not an administrator's surface.
+		 * makes applies to a member: approval rows are scoped to their parties, while the user/team
+		 * directories are field-masked to `id` and `name`.
 		 *
 		 * `people` staying out is what carries the test. An outsider holds no authored policy, and the
 		 * built-in grant names the runtime's collections and no workspace's.
@@ -420,7 +438,15 @@ describe('Sync engine over SQL', () => {
 					return yield* (yield* Sync.Service).shape(outsider);
 				})
 			)
-		).toEqual(['approval_request', 'requestor']);
+		).toEqual([
+			'approval_request',
+			'bolt_auth_user',
+			'bolt_notifications',
+			'bolt_team',
+			'chat_message',
+			'chat_session',
+			'requestor'
+		]);
 		expect(
 			await runtime.runPromise(
 				Effect.gen(function* () {
@@ -491,7 +517,8 @@ describe('Sync engine over SQL', () => {
 		const member = (user: string, team: string): Identity.Subject => ({
 			userId: fixtureUserId(user),
 			tenantId: 'test-tenant',
-			teamPath: [team], policies: []
+			teamPath: [team],
+			policies: []
 		});
 		const party = member('party', CONTRACTOR_TEAM);
 		await runtime.runPromise(
@@ -514,7 +541,7 @@ describe('Sync engine over SQL', () => {
 						undefined,
 						100
 					);
-					return page.rows.map((row) => field(row, 'norbital_id'));
+					return page.rows.map((row) => field(row, 'id'));
 				})
 			);
 

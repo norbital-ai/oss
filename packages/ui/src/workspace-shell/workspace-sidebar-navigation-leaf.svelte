@@ -8,7 +8,7 @@
 		WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS,
 		WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS,
 		type WorkspaceNavigationItem
-	} from './workspace-shell.types.js';
+	} from '#lib/workspace-shell/workspace-shell.types';
 
 	let {
 		item,

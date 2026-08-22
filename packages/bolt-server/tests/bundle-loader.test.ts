@@ -1,10 +1,5 @@
 import { assert, it } from '@effect/vitest';
-import {
-	EnvironmentName,
-	PROTOCOL_VERSION,
-	ReleaseId,
-	TenantId
-} from '@norbital-ai/bolt-protocol';
+import { EnvironmentName, PROTOCOL_VERSION, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import { Effect } from 'effect';
 import { BundleLoadError, BundleLoader, makeLayer } from '../src/bundle-loader.js';
 

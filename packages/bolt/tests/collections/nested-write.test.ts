@@ -1,8 +1,8 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
-import { Collections } from '../../src/runtime/collections/collections.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import {
 	adminSubject,
@@ -40,7 +40,7 @@ const definition = workspace({
 			target: 'order_lines',
 			cardinality: 'many',
 			from: { collection: 'order_lines', column: 'order_id' },
-			to: { collection: 'orders', column: 'norbital_id' }
+			to: { collection: 'orders', column: 'id' }
 		}
 	],
 	apps: [app({ name: 'nested', label: 'Nested' })],
@@ -112,7 +112,7 @@ describe('a nested write', () => {
 		// One transaction, not three: the call count is the shape under test, the same way
 		// `mutation-facility-budget.test.ts` measures the batch.
 		const writes = harness.database.calls.length;
-		const orders = await harness.database.query('select norbital_id, reference from orders');
+		const orders = await harness.database.query('select id, reference from orders');
 		const lines = await harness.database.query(
 			'select order_id, sku from order_lines order by sku'
 		);
@@ -120,10 +120,7 @@ describe('a nested write', () => {
 		expect(orders).toHaveLength(1);
 		expect(lines).toHaveLength(2);
 		// The link the author never wrote: filled from the parent's assigned id.
-		expect(lines.map((row) => row['order_id'])).toEqual([
-			orders[0]!['norbital_id'],
-			orders[0]!['norbital_id']
-		]);
+		expect(lines.map((row) => row['order_id'])).toEqual([orders[0]!['id'], orders[0]!['id']]);
 		expect(writes).toBeLessThan(5);
 	}, 60_000);
 
@@ -155,7 +152,7 @@ describe('a nested write', () => {
 		expect(JSON.stringify(outcome)).toContain('order_line_orders');
 
 		// And nothing was written, because the refusal happened before the transaction.
-		const orders = await harness.database.query('select norbital_id from orders');
+		const orders = await harness.database.query('select id from orders');
 		expect(orders).toHaveLength(0);
 	}, 60_000);
 });

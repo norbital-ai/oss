@@ -10,16 +10,18 @@
  * Scoping is applied centrally, by `scopedStorageKey`, rather than asked of each caller. A
  * workspace author writing an ordinary form never passes an organization id and cannot forget to.
  */
-let organizationId: string | null = null;
+import { createContext } from 'svelte';
 
-/** Set once, from the workspace shell, before any scoped key is read or written. */
-export function setStorageScope(nextOrganizationId: string | null | undefined): void {
-	const trimmed = nextOrganizationId?.trim();
-	organizationId = trimmed ? trimmed : null;
+const [readStorageScope, provideStorageScope] = createContext<() => string | null>();
+
+/** Provides the active organization from the workspace component that owns its lifetime. */
+export function setStorageScope(read: () => string | null): void {
+	provideStorageScope(read);
 }
 
 export function currentStorageScope(): string | null {
-	return organizationId;
+	const read = readStorageScope();
+	return read?.() ?? null;
 }
 
 /**
@@ -30,5 +32,6 @@ export function currentStorageScope(): string | null {
  * inventing a placeholder scope — would produce entries that no later session can find or clear.
  */
 export function scopedStorageKey(key: string): string {
+	const organizationId = currentStorageScope();
 	return organizationId ? `org:${organizationId}:${key}` : key;
 }

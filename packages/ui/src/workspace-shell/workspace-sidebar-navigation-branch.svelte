@@ -9,7 +9,7 @@
 		WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS,
 		toggleWorkspaceNavigationBranch,
 		type WorkspaceNavigationItem
-	} from './workspace-shell.types.js';
+	} from '#lib/workspace-shell/workspace-shell.types';
 	import WorkspaceSidebarNavigationBranch from './workspace-sidebar-navigation-branch.svelte';
 	import WorkspaceSidebarNavigationLeaf from './workspace-sidebar-navigation-leaf.svelte';
 
@@ -28,7 +28,6 @@
 	// Expand the active branch on first paint; watch keeps it open on nav.
 	// svelte-ignore state_referenced_locally
 	let expanded = $state(item.active);
-	const displayed = $derived(expanded);
 	const productIconName = $derived(productIconNameFromReference(item.icon));
 
 	function toggle(): void {
@@ -54,7 +53,7 @@
 			<button
 				{...props}
 				type="button"
-				aria-expanded={open ? displayed : undefined}
+				aria-expanded={open ? expanded : undefined}
 				onclick={toggle}
 				class={cn(
 					typeof props.class === 'string' ? props.class : undefined,
@@ -75,13 +74,13 @@
 				<div class={cn(WORKSPACE_SIDEBAR_TRAILING_SLOT_CLASS, 'size-3.5')} aria-hidden="true">
 					<Icon
 						icon="lucide:chevron-right"
-						class={cn('size-3.5 transition-transform duration-150', displayed && 'rotate-90')}
+						class={cn('size-3.5 transition-transform duration-150', expanded && 'rotate-90')}
 					/>
 				</div>
 			</button>
 		{/snippet}
 	</Sidebar.MenuSubButton>
-	{#if open && displayed && item.children?.length}
+	{#if open && expanded && item.children?.length}
 		<Sidebar.MenuSub>
 			{#each item.children as subItem (subItem.key)}
 				{#if subItem.children?.length}

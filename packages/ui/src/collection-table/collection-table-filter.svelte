@@ -1,16 +1,11 @@
 <script lang="ts">
-	import type {
-		CollectionFilter,
-		CollectionRecord,
-		CollectionRelationOptions
-	} from '@norbital-ai/std/collection';
-	import { resolveRecordLabel } from '@norbital-ai/std/collection';
+	import type { CollectionFilter } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
 	import { PersistedState } from 'runed';
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
-	import { DataRenderer } from '../data-renderer/index.js';
+	import { DataRenderer } from '#lib/data-renderer';
 	import RelationshipRenderer from '../data-renderer/relationship/relationship.renderer.svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Indicator } from '#lib/indicator';
@@ -22,19 +17,20 @@
 		collectionFilterClause,
 		collectionFilterFieldTree,
 		collectionFilterFields,
+		relationLabelOptions,
 		type CollectionFilterField,
 		type FilterCollectionDefinition
-	} from './collection-table-filter-fields.js';
-	import { type Translate } from '../data-renderer/index.js';
+	} from '#lib/collection-table/collection-table-filter-fields';
+	import { type Translate } from '#lib/data-renderer';
 	import {
 		collectionFilterOperandField,
 		collectionFilterOperatorNeedsValue,
 		collectionFilterOperatorOptions,
 		collectionFilterQueryOperator,
 		type CollectionFilterOperator
-	} from './collection-table-filter-operators.js';
-	import type { CollectionTableInitialFilter } from './collection-table.types.js';
-	import type { CollectionToolbarFilterDeclaration } from '../collection-toolbar/collection-toolbar.types.js';
+	} from '#lib/collection-table/collection-table-filter-operators';
+	import type { CollectionTableInitialFilter } from '#lib/collection-table/collection-table.types';
+	import type { CollectionToolbarFilterDeclaration } from '#lib/collection-toolbar/collection-toolbar.types';
 
 	type Filter = {
 		id: number;
@@ -109,7 +105,7 @@
 	);
 	/** Rows that arrived from the seed, so clearing one can be told apart from clearing your own. */
 	let seededIds = $state(new Set<number>());
-	let seedSettled = false;
+	let seedSettled = $state(false);
 
 	$effect(() => {
 		if (seedSettled) return;
@@ -122,8 +118,10 @@
 			seedSettled = true;
 			return;
 		}
+		// Index the picker once per seeding pass instead of re-searching it per seed row.
+		const knownFieldValues = new Set(filterFields.map((field) => field.value));
 		const seeded = initialFilters.flatMap((seed) => {
-			if (!filterFields.some((field) => field.value === seed.field)) return [];
+			if (!knownFieldValues.has(seed.field)) return [];
 			return [{ id: nextId++, field: seed.field, operator: seed.operator, value: seed.value }];
 		});
 		seedSettled = true;
@@ -144,16 +142,8 @@
 	/** Record keys need the target collection's record-label contract, not a UUID text input. */
 	function lookupTarget(field: CollectionFilterField): string | undefined {
 		if (field.field.relation) return field.field.relation.target;
-		if (field.field.name === 'norbital_id') return field.relation?.target ?? definition.name;
+		if (field.field.name === 'id') return field.relation?.target ?? definition.name;
 		return undefined;
-	}
-
-	function relationOptions(targetName: string): CollectionRelationOptions {
-		const target = collections[targetName];
-		return {
-			label: (record: CollectionRecord) =>
-				resolveRecordLabel(target?.recordLabel ?? null, record) ?? humanize(targetName)
-		};
 	}
 
 	function filterIsActive(filter: Filter): boolean {
@@ -337,7 +327,7 @@
 									<RelationshipRenderer
 										{target}
 										value={typeof filter.value === 'string' ? filter.value : null}
-										options={relationOptions(target)}
+										options={relationLabelOptions(collections[target], target)}
 										class="col-start-1 h-8 min-w-0 w-full text-xs sm:col-auto"
 										onValueChange={(value) => setValue(filter.id, value)}
 									/>

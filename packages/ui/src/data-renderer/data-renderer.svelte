@@ -1,16 +1,18 @@
 <script lang="ts">
+	import { Effect } from 'effect';
+	import GeolocationPicker from './geolocation/geolocation.input.svelte';
 	import {
-		GeolocationPicker,
 		parseGeolocationPickerValues,
 		type TGeolocationPickerValue
-	} from './geolocation/geolocation.internal.js';
+	} from '#lib/data-renderer/geolocation/geolocation.utils';
 	import { StructuredValue } from '#lib/structured-value';
+	import { readFileRef } from '#lib/data-renderer/file/file.types';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import DataRendererEditor from './data-renderer-editor.svelte';
-	import { getDataRendererRuntimeContext } from './data-renderer-runtime.js';
-	import type { DataRendererProps } from './data-renderer.types.js';
-	import { formatDataValue, type Translate } from './data-renderer.utils.js';
+	import { getDataRendererRuntimeContext } from '#lib/data-renderer/data-renderer-runtime';
+	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
+	import { formatDataValue, type Translate } from '#lib/data-renderer/data-renderer.utils';
 	import NumericRenderer from './numeric/numeric.renderer.svelte';
 
 	const { t } = useI18n<UiKeys>();
@@ -56,7 +58,7 @@
 	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
 	const rendererRuntime = getDataRendererRuntimeContext();
 	const autocompleteGeolocation =
-		rendererRuntime?.autocompleteGeolocation ?? (() => Promise.resolve([]));
+		rendererRuntime?.autocompleteGeolocation ?? (() => Effect.succeed([]));
 	const customRenderer = $derived(rendererRuntime?.customTypeRenderers[field.kind]);
 
 	/**
@@ -77,12 +79,9 @@
 		if (field.kind !== 'file' || field.relation) return [];
 		const candidates = Array.isArray(value) ? value : value == null ? [] : [value];
 		return candidates.flatMap((candidate) => {
-			if (typeof candidate !== 'object' || candidate === null) return [];
-			const record = candidate as Record<string, unknown>;
-			const key = record['storage_key'];
-			if (typeof key !== 'string' || key === '') return [];
-			const name = typeof record['file_name'] === 'string' ? record['file_name'] : key;
-			return [{ name, url: `/api/files/${encodeURIComponent(key)}` }];
+			const ref = readFileRef(candidate);
+			if (ref === null) return [];
+			return [{ name: ref.file_name, url: `/api/files/${encodeURIComponent(ref.storage_key)}` }];
 		});
 	});
 	const isFileDisplay = $derived(field.kind === 'file' && !field.relation && mode !== 'edit');

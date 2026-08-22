@@ -1,10 +1,12 @@
 import CollectionTableCheckbox from './component/row-selection/collection-table-checkbox.svelte';
 import { renderComponent } from '#lib/utils';
-import { isPlainRecord } from '../collection-table-row-query.js';
+import { isPlainRecord } from '#lib/collection-table/collection-table-row-query';
+import { Array as Array_, Number as Number_, Result } from 'effect';
+import { Schema } from 'effect';
 import { uniqBy } from 'es-toolkit/array';
 import { omit } from 'es-toolkit/object';
 import { PersistedState, watch } from 'runed';
-import type { Translate } from '../../data-renderer/index.js';
+import type { Translate } from '#lib/data-renderer';
 
 function getPath(obj: unknown, path: string): unknown {
 	return path.split('.').reduce((o: unknown, k: string) => {
@@ -13,12 +15,15 @@ function getPath(obj: unknown, path: string): unknown {
 	}, obj);
 }
 
-export type TableSortEntry = {
-	field: string;
-	order: 'asc' | 'desc';
-};
+/** A persisted sort entry; the same schema validates restored and newly-toggled entries. */
+const tableSortEntrySchema = Schema.Struct({
+	field: Schema.String,
+	order: Schema.Literals(['asc', 'desc'])
+});
+export type TableSortEntry = typeof tableSortEntrySchema.Type;
+const decodeSortEntry = Schema.decodeUnknownResult(tableSortEntrySchema);
 
-export const COLLECTION_TABLE_SELECTION_COLUMN_ID = 'norbital_select' as const;
+export const COLLECTION_TABLE_SELECTION_COLUMN_ID = '__selection' as const;
 
 type TableState<T> = PersistedState<T> | MemoryState<T>;
 
@@ -56,6 +61,13 @@ export type TCreateColumnProps<T extends Record<string, unknown>, TCondition = u
 	'table'
 >;
 
+type RowAPIOptions<T extends Record<string, unknown>, TCondition = unknown> = {
+	id: string;
+	index: number;
+	raw: T;
+	table: TableAPI<T, TCondition>;
+};
+
 export class RowAPI<T extends Record<string, unknown>, TCondition = unknown> {
 	id = $state() as string;
 	index = $state() as number;
@@ -65,7 +77,7 @@ export class RowAPI<T extends Record<string, unknown>, TCondition = unknown> {
 	isSelected = $derived(Boolean(this.table.rowSelection.current[this.id]));
 	isExpanded = $derived(Boolean(this.table.expanded.current[this.id]));
 
-	constructor(args: { id: string; index: number; raw: T; table: TableAPI<T, TCondition> }) {
+	constructor(args: RowAPIOptions<T, TCondition>) {
 		this.id = args.id;
 		this.index = args.index;
 		this.raw = args.raw;
@@ -80,6 +92,25 @@ export class RowAPI<T extends Record<string, unknown>, TCondition = unknown> {
 		this.table.toggleRowExpanded(this.id);
 	}
 }
+
+type ColumnAPIOptions<T extends Record<string, unknown>, TCondition = unknown> = {
+	id: string;
+	table: TableAPI<T, TCondition>;
+	header: ColumnAPI<T, TCondition>['header'];
+	cell?: ColumnAPI<T, TCondition>['cell'];
+	accessor?: ColumnAPI<T, TCondition>['accessor'];
+	width?: number;
+	minWidth?: number;
+	maxWidth?: number;
+	enableSorting?: boolean;
+	enablePinning?: boolean;
+	enableResizing?: boolean;
+	enableHiding?: boolean;
+	enableSelection?: boolean;
+	displayOptions?: Array<{ value: string; label: string }>;
+	currentDisplay?: string;
+	onDisplayChange?: (value: string) => void;
+};
 
 export class ColumnAPI<T extends Record<string, unknown>, TCondition = unknown> {
 	id = $state() as string;
@@ -118,24 +149,7 @@ export class ColumnAPI<T extends Record<string, unknown>, TCondition = unknown> 
 		return entry?.order;
 	});
 
-	constructor(init: {
-		id: string;
-		table: TableAPI<T, TCondition>;
-		header: ColumnAPI<T, TCondition>['header'];
-		cell?: ColumnAPI<T, TCondition>['cell'];
-		accessor?: ColumnAPI<T, TCondition>['accessor'];
-		width?: number;
-		minWidth?: number;
-		maxWidth?: number;
-		enableSorting?: boolean;
-		enablePinning?: boolean;
-		enableResizing?: boolean;
-		enableHiding?: boolean;
-		enableSelection?: boolean;
-		displayOptions?: Array<{ value: string; label: string }>;
-		currentDisplay?: string;
-		onDisplayChange?: (value: string) => void;
-	}) {
+	constructor(init: ColumnAPIOptions<T, TCondition>) {
 		this.id = init.id;
 		this.table = init.table;
 		this.header = init.header;
@@ -167,6 +181,24 @@ export class ColumnAPI<T extends Record<string, unknown>, TCondition = unknown> 
 		this.table.setColumnSize(this.id, newSize);
 	}
 }
+
+type TableAPIOptions<T extends Record<string, unknown>, TCondition = unknown> = {
+	rowKey: string | keyof T | `${string}.${string}`;
+	persistenceKey: string;
+	viewKey: string;
+	persistState?: boolean;
+	data?: T[];
+	totalRows?: number;
+	columns?: TCreateColumnProps<T, TCondition>[];
+	callbacks?: TableCallbacks<TCondition>;
+	conditionDefault: TCondition;
+	parseCondition: (raw: unknown) => TCondition;
+	shouldApplyInitialCondition?: (condition: TCondition) => boolean;
+	initialState?: {
+		conditions?: TCondition;
+		sort?: TableSortEntry[];
+	};
+};
 
 export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 	readonly CHECKBOX_WIDTH = 48;
@@ -218,23 +250,7 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 		canResize: boolean;
 	}>;
 
-	constructor(args: {
-		rowKey: string | keyof T | `${string}.${string}`;
-		persistenceKey: string;
-		viewKey: string;
-		persistState?: boolean;
-		data?: T[];
-		totalRows?: number;
-		columns?: TCreateColumnProps<T, TCondition>[];
-		callbacks?: TableCallbacks<TCondition>;
-		conditionDefault: TCondition;
-		parseCondition: (raw: unknown) => TCondition;
-		shouldApplyInitialCondition?: (condition: TCondition) => boolean;
-		initialState?: {
-			conditions?: TCondition;
-			sort?: TableSortEntry[];
-		};
-	}) {
+	constructor(args: TableAPIOptions<T, TCondition>) {
 		this.rowKey = args.rowKey as keyof T;
 		this.persistenceKey = args.persistenceKey;
 		this.viewKey = args.viewKey;
@@ -298,14 +314,20 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 			const selection = cols.find((c) => c.id === COLLECTION_TABLE_SELECTION_COLUMN_ID);
 			const others = cols.filter((c) => c.id !== COLLECTION_TABLE_SELECTION_COLUMN_ID);
 
-			const pinned = others.filter((c) => c.isPinned);
-			const unpinned = others.filter((c) => !c.isPinned);
+			const layoutPartition = Array_.partition(others, (c) =>
+				c.isPinned ? Result.fail(c) : Result.succeed(c)
+			);
+			const pinned = layoutPartition[0];
+			const unpinned = layoutPartition[1];
 
 			const orderedUnpinned =
 				this.columnOrder.current.length > 0
-					? this.columnOrder.current
-							.map((id) => unpinned.find((c) => c.id === id))
-							.filter((c): c is ColumnAPI<T, TCondition> => !!c)
+					? Array_.filterMap(this.columnOrder.current, (id) =>
+							Result.fromNullishOr(
+								unpinned.find((column) => column.id === id),
+								() => undefined
+							)
+						)
 					: unpinned;
 
 			const prefixedPinned = selection ? [selection, ...pinned] : pinned;
@@ -447,10 +469,12 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 
 		{
 			const next = this.sort.current.filter((s) => {
-				if (!s || typeof s.field !== 'string') return false;
-				if (s.order !== 'asc' && s.order !== 'desc') return false;
+				// Restored sort entries may be stale or malformed; decode once through the schema
+				// instead of repairing fields one at a time.
+				const decoded = decodeSortEntry(s);
+				if (decoded._tag === 'Failure') return false;
 				return this.columns.some(
-					(c) => c.enableSorting !== false && this.sortEntryMatchesColumn(c, s.field)
+					(c) => c.enableSorting !== false && this.sortEntryMatchesColumn(c, decoded.success.field)
 				);
 			});
 			if (!this.equalSortArray(this.sort.current, next)) {
@@ -465,9 +489,8 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 			}
 			const augmented: Record<string, string> = { ...next };
 			for (const c of this.columns) {
-				if (!(c.id in augmented) && typeof c.currentDisplay === 'string') {
-					augmented[c.id] = c.currentDisplay;
-				}
+				if (typeof c.currentDisplay !== 'string') continue;
+				augmented[c.id] ??= c.currentDisplay;
 			}
 			if (!this.shallowEqualObject(this.columnDisplay.current, augmented)) {
 				this.columnDisplay.current = augmented;
@@ -602,10 +625,10 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 	setColumnSize(columnId: string, size: number) {
 		const column = this.columns.find((candidate) => candidate.id === columnId);
 		const minimum = column?.minWidth ?? 40;
-		const maximum = column?.maxWidth ?? Number.POSITIVE_INFINITY;
+		const maximum = column?.maxWidth ?? Infinity;
 		this.columnSizing.current = {
 			...this.columnSizing.current,
-			[columnId]: Math.max(minimum, Math.min(maximum, size))
+			[columnId]: Number_.clamp({ minimum, maximum })(size)
 		};
 		this.callbacks?.onColumnSizingChange?.({ ...this.columnSizing.current });
 	}
@@ -670,12 +693,7 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 		this.notifyExpandedChange();
 	}
 
-	createColumnResizer(options: {
-		tableHeaderElement: () => HTMLDivElement | null;
-		containerElement: () => HTMLDivElement | null;
-		onColumnResize: (props: { columnId: string; newSize: number }) => void;
-		getIndexById: (id: string) => number;
-	}) {
+	createColumnResizer(options: ColumnResizerOptions) {
 		const { containerElement, onColumnResize, getIndexById } = options;
 		let activeColumnId = $state<string | null>(null);
 		let initialMouseX = 0;
@@ -740,6 +758,13 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 		};
 	}
 }
+
+type ColumnResizerOptions = {
+	tableHeaderElement: () => HTMLDivElement | null;
+	containerElement: () => HTMLDivElement | null;
+	onColumnResize: (props: { columnId: string; newSize: number }) => void;
+	getIndexById: (id: string) => number;
+};
 
 export function withSelectionColumn<TData extends Record<string, unknown>, TCondition = unknown>(
 	cols: TCreateColumnProps<TData, TCondition>[],

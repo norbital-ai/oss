@@ -1,20 +1,23 @@
 import { Effect, Schema } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
-import type { ToolDeclaration } from '../../authoring/workspace-schema.js';
-import { Collections } from '../collections/collections.js';
-import { Files, HostTools } from '../facilities/services.js';
-import type { Identity } from '../identity/identity.js';
-import { Workspace } from '../workspace.js';
-import { SkillError, ToolNotAllowed } from './agent-errors.js';
+import { SkillDeclaration, type ToolDeclaration, type WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
+import * as Collections from '#lib/runtime/collections/collections.js';
+import type { HostToolsInterface } from '#lib/runtime/facilities/services.js';
+import type * as Identity from '#lib/runtime/identity/identity.js';
+import * as Workspace from '#lib/runtime/workspace.js';
+import { SkillError, ToolNotAllowed } from '#lib/runtime/agents/agent-errors.js';
 
-export const platformToolNames = [
+const platformToolNames = [
 	'describe_workspace',
 	'list_skills',
 	'read_skill',
 	'read_collection',
 	'write_collection'
 ] as const;
-export type PlatformToolName = (typeof platformToolNames)[number];
+const PlatformToolNames = Schema.Literals([...platformToolNames]);
+type PlatformToolName = Schema.Schema.Type<typeof PlatformToolNames>;
+
+export const isPlatformTool = Schema.is(PlatformToolNames);
 
 export const platformToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
@@ -44,9 +47,6 @@ export const platformToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	}
 ];
 
-export const isPlatformTool = (name: string): name is PlatformToolName =>
-	(platformToolNames as ReadonlyArray<string>).includes(name);
-
 const SkillNameInput = Schema.Struct({ name: Schema.NonEmptyString });
 const CollectionReadInput = Schema.Struct({
 	collection: Schema.NonEmptyString,
@@ -59,24 +59,74 @@ const CollectionWriteInput = Schema.Struct({
 	values: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json))
 });
 
-export type ToolExecutionContext = Readonly<{
+type ToolExecutionContext = Readonly<{
 	readonly effectId: EffectIdType;
 	readonly subject: Identity.Subject;
 	readonly agentName: string;
 	/** The skills this subject's policies grant. */
-	readonly skills: ReadonlyArray<string>;
+	readonly skills: ReadonlyArray<SkillDeclaration>;
 	/** The tools this turn was offered, so `describe_workspace` reports what is actually reachable. */
 	readonly toolNames: ReadonlyArray<string>;
 	readonly workspace: Workspace.Interface;
 	readonly collections: Collections.Interface;
-	readonly hostTools: HostTools.Interface;
-	readonly files: Files.Interface;
+	readonly hostTools: HostToolsInterface;
 }>;
 
 const decode = <S extends Schema.Top>(schema: S, input: unknown) =>
 	Schema.decodeUnknownEffect(schema)(input).pipe(
 		Effect.mapError(() => new ToolNotAllowed({ agent: 'platform', tool: 'invalid-input' }))
 	);
+
+/** Reads from the already policy-filtered compiled Skill registry. */
+export const readSkillBody = Effect.fn('Agents.readSkillBody')(function* (
+	skills: ReadonlyArray<SkillDeclaration>,
+	name: string
+) {
+	const decodedName = yield* Schema.decodeUnknownEffect(SkillDeclaration.fields.name)(name).pipe(
+		Effect.mapError(() => new SkillError({ name, reason: 'invalid-name' }))
+	);
+	const skill = skills.find((candidate) => candidate.name === decodedName);
+	if (skill === undefined) return yield* new SkillError({ name: decodedName, reason: 'missing' });
+	return skill.body;
+});
+
+/**
+ * What `describe_workspace` returns to the model: the workspace's declared surface plus what this
+ * subject may actually call. The two halves are different answers — the model is told what the
+ * workspace has, and what the caller is entitled to — so the response is its own shape.
+ */
+const DescribeWorkspaceResult = Schema.Struct({
+	name: Schema.String,
+	version: Schema.String,
+	collections: Schema.Array(Schema.String),
+	apps: Schema.Array(Schema.String),
+	tools: Schema.Array(Schema.String),
+	skills: Schema.Array(Schema.String),
+	automations: Schema.Array(Schema.String),
+	envoys: Schema.Array(Schema.String),
+	integrations: Schema.Array(Schema.String)
+});
+type DescribeWorkspaceResult = Schema.Schema.Type<typeof DescribeWorkspaceResult>;
+
+/**
+ * The workspace's declared surface — its name, version and every group it declares, projected to
+ * the names a model is told about. This is the half of `describe_workspace` every caller shares,
+ * read from the definition in one place.
+ */
+const declaredSurface = (
+	definition: WorkspaceDefinition
+): Pick<
+	DescribeWorkspaceResult,
+	'name' | 'version' | 'collections' | 'apps' | 'automations' | 'envoys' | 'integrations'
+> => ({
+	name: definition.name,
+	version: definition.version,
+	collections: definition.collections.map((collection) => collection.name),
+	apps: definition.apps.map((app) => app.name),
+	automations: definition.automations.map((automation) => automation.name),
+	envoys: definition.envoys.map((envoy) => envoy.name),
+	integrations: definition.integrations.map((integration) => integration.name)
+});
 
 /** Executes one platform tool against workspace, collection, and skill facilities. */
 export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(function* (
@@ -88,35 +138,19 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 		case 'describe_workspace': {
 			const definition = context.workspace.definition;
 			return {
-				name: definition.name,
-				version: definition.version,
-				collections: definition.collections.map((collection) => collection.name),
-				apps: definition.apps.map((app) => app.name),
+				...declaredSurface(definition),
 				// What *this* subject may call, not what the workspace declares. Two people asking the
 				// same web agent to describe the workspace get different answers, because they hold
 				// different policies — which is the honest reading of "what can I do here".
 				tools: context.toolNames,
-				skills: context.skills,
-				automations: definition.automations.map((automation) => automation.name),
-				envoys: definition.envoys.map((envoy) => envoy.name),
-				integrations: definition.integrations.map((integration) => integration.name)
-			};
+				skills: context.skills.map(({ name: skill }) => skill)
+			} satisfies DescribeWorkspaceResult;
 		}
 		case 'list_skills':
-			return { skills: context.skills };
+			return { skills: context.skills.map(({ name: skill }) => skill) };
 		case 'read_skill': {
 			const parsed = yield* decode(SkillNameInput, input);
-			if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(parsed.name)) {
-				return yield* new SkillError({ name: parsed.name, reason: 'invalid-name' });
-			}
-			const response = yield* context.files.execute(context.effectId, {
-				_tag: 'Read',
-				key: `skills/${parsed.name}/SKILL.md`
-			});
-			if (response.bytes === undefined) {
-				return yield* new SkillError({ name: parsed.name, reason: 'missing' });
-			}
-			return { name: parsed.name, body: new TextDecoder().decode(response.bytes) };
+			return { name: parsed.name, body: yield* readSkillBody(context.skills, parsed.name) };
 		}
 		case 'read_collection': {
 			const parsed = yield* decode(CollectionReadInput, input);

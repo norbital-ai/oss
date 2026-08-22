@@ -11,7 +11,7 @@ import {
 	setHtmlLang,
 	translate
 } from '@norbital-ai/std/i18n';
-import { uiMessages, type UiKeys } from './messages/index.js';
+import { uiMessages } from '#lib/i18n/messages';
 
 /** The translation API a component consumes. `Keys` is the catalog key union. */
 export interface I18nApi<Keys extends string = string> {
@@ -78,10 +78,6 @@ class I18nState<C extends LocaleCatalogs> {
  */
 const I18N_CONTEXT_KEY = Symbol('@norbital-ai/ui/i18n');
 
-function useI18nContext(): (() => I18nState<LocaleCatalogs> | null) | undefined {
-	return getContext(I18N_CONTEXT_KEY);
-}
-
 /**
  * Install the application's catalog pair and initial locale for the whole
  * component subtree. Call once from an application root during component init;
@@ -114,7 +110,9 @@ export function provideI18n<C extends LocaleCatalogs>(
  * mechanism still switch the shared ui chrome.
  */
 export function useI18n<Keys extends string = string>(): I18nApi<Keys> {
-	const state = useI18nContext()?.() ?? ensureGlobalState();
+	const state =
+		getContext<(() => I18nState<LocaleCatalogs> | null) | undefined>(I18N_CONTEXT_KEY)?.() ??
+		fallbackI18nState;
 	return state as I18nApi<Keys>;
 }
 
@@ -122,25 +120,21 @@ export function useI18n<Keys extends string = string>(): I18nApi<Keys> {
 // Fallback path: no provider installed.
 // ---------------------------------------------------------------------------
 
-let globalI18nState: I18nState<typeof uiMessages> | undefined;
-
-function ensureGlobalState(): I18nState<typeof uiMessages> {
-	if (!globalI18nState) {
-		globalI18nState = new I18nState(uiMessages, 'en');
-	}
-	return globalI18nState;
-}
+/**
+ * The ui package's own catalog at the default locale, for components rendered
+ * without a provider. Created eagerly so the state never belongs to a hidden
+ * lazy initializer; it has no side effects until `setLocale` is called.
+ */
+const fallbackI18nState = new I18nState(uiMessages, 'en');
 
 /**
  * Switch the ui package's fallback locale for apps that do not install a
  * provider (only possible once `@norbital-ai/ui` ships the i18n module).
  */
 export function setGlobalLocale(locale: Locale): void {
-	ensureGlobalState().setLocale(locale);
+	fallbackI18nState.setLocale(locale);
 }
 
 export function getGlobalLocale(): Locale {
-	return ensureGlobalState().locale;
+	return fallbackI18nState.locale;
 }
-
-export type { UiKeys };

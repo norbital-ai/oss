@@ -1,4 +1,5 @@
 <script lang="ts" generics="TData extends Record<string, unknown>, TCondition = unknown">
+	import { Array as Array_, Effect, Result } from 'effect';
 	import Icon from '@iconify/svelte';
 	import * as Alert from '#lib/alert';
 	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
@@ -159,15 +160,18 @@
 	// Table API (single source of truth)
 	// ----------------------------------------------------------------------------------
 
-	const tableApi = $derived(table);
-
 	// ----------------------------------------------------------------------------------
 	// Derived helpers for layout/virtualization
 	// ----------------------------------------------------------------------------------
 
-	const layouts = $derived(tableApi.columnLayouts as ColumnLayout<TData, TCondition>[]);
-	const pinnedLayouts = $derived(layouts.filter((l) => l.isPinned));
-	const scrollLayouts = $derived(layouts.filter((l) => !l.isPinned));
+	const layouts = $derived(table.columnLayouts as ColumnLayout<TData, TCondition>[]);
+	const layoutPartition = $derived.by(() =>
+		Array_.partition(layouts, (layout) =>
+			layout.isPinned ? Result.fail(layout) : Result.succeed(layout)
+		)
+	);
+	const pinnedLayouts = $derived(layoutPartition[0]);
+	const scrollLayouts = $derived(layoutPartition[1]);
 	const pinnedWidth = $derived(pinnedLayouts.reduce((a, l) => a + l.width, 0));
 	const scrollTotalWidth = $derived(scrollLayouts.reduce((a, l) => a + l.width, 0));
 	const totalTableWidth = $derived(pinnedWidth + scrollTotalWidth);
@@ -186,7 +190,7 @@
 	function handleSort(inst: ColumnAPI<TData, TCondition>) {
 		if (!sortingEnabled || !inst.enableSorting) return;
 		// Re-ordering the set invalidates the page you are on, but the grid does not own the page:
-		// the surface watches `tableApi.sort` and resets its query model.
+		// the surface watches `table.sort` and resets its query model.
 		inst.toggleSort();
 	}
 
@@ -210,12 +214,8 @@
 	function handleColumnReorder(reorderedIds: string[]) {
 		const scrollableIds = scrollLayouts.map((l) => l.id);
 		const next = reorderedIds.filter((id) => scrollableIds.includes(id));
-		tableApi.columnOrder.current = next;
+		table.columnOrder.current = next;
 		onColumnReorder?.(next);
-	}
-
-	function isRecordDetailActive(rowId: string): boolean {
-		return activeRecordId === rowId;
 	}
 
 	function rowSurfaceClass(detailActive: boolean, expanded: boolean): string {
@@ -270,27 +270,25 @@
 	}
 
 	const resizer = $derived.by(() =>
-		tableApi.createColumnResizer({
+		table.createColumnResizer({
 			containerElement: () => bodyScrollElement,
 			tableHeaderElement: () => tableHeaderElement,
 			onColumnResize: ({ columnId, newSize }) => {
-				tableApi.setColumnSize(columnId, newSize);
+				table.setColumnSize(columnId, newSize);
 			},
 			getIndexById: (id) => layouts.findIndex((l) => l.id === id)
 		})
 	);
 
 	onMount(() => {
-		if (defaultExpanded && tableApi.rowInstances.length > 0) {
-			for (const r of tableApi.rowInstances) {
+		if (defaultExpanded && table.rowInstances.length > 0) {
+			for (const r of table.rowInstances) {
 				const hasChildren = getRowHasChildren?.(r.raw) ?? Boolean(subComponent);
-				if (hasChildren) tableApi.toggleRowExpanded(r.id);
+				if (hasChildren) table.toggleRowExpanded(r.id);
 			}
 		}
 
-		tick().then(() => {
-			syncScrollState();
-		});
+		void Effect.runPromise(Effect.promise(() => tick()).pipe(Effect.map(() => syncScrollState())));
 
 		const resizeObserver =
 			typeof ResizeObserver !== 'undefined'
@@ -309,11 +307,11 @@
 	// Using custom Svelte 5 virtualizer - no store workarounds needed
 	const measuredRowHeights = new Map<string, number>();
 	const rowVirtualizer = createVirtualizer({
-		count: () => tableApi.data.length,
+		count: () => table.data.length,
 		scrollElement: () => bodyScrollElement,
-		estimateSize: (i: number) => measuredRowHeights.get(tableApi.rowIds[i] ?? '') ?? ROW_HEIGHT,
+		estimateSize: (i: number) => measuredRowHeights.get(table.rowIds[i] ?? '') ?? ROW_HEIGHT,
 		overscan: ROW_OVERSCAN,
-		getItemKey: (i: number) => tableApi.rowIds[i] ?? `idx:${i}`
+		getItemKey: (i: number) => table.rowIds[i] ?? `idx:${i}`
 	});
 
 	const mountedRowElements = new Set<HTMLElement>();
@@ -324,7 +322,7 @@
 		const measuredHeight = recordId ? measuredRowHeights.get(recordId) : undefined;
 		const expanded =
 			rowElement.getAttribute('aria-expanded') === 'true' ||
-			(!!recordId && !!tableApi.expanded.current[recordId]);
+			(!!recordId && !!table.expanded.current[recordId]);
 
 		// During a same-key polling reconciliation Svelte can refresh this attachment before the
 		// expanded snippet has been committed. Keep the last expanded extent through that transient
@@ -349,11 +347,15 @@
 		// Clear only the index-keyed measurements when the data snapshot changes. Stable-id height
 		// estimates bridge the reconciliation without changing the scroll offset.
 		rowVirtualizer.measure();
-		void tick().then(() => {
-			for (const rowElement of mountedRowElements) {
-				measureRowElement(rowElement);
-			}
-		});
+		void Effect.runPromise(
+			Effect.promise(() => tick()).pipe(
+				Effect.map(() => {
+					for (const rowElement of mountedRowElements) {
+						measureRowElement(rowElement);
+					}
+				})
+			)
+		);
 	}
 
 	const virtualRows = $derived(rowVirtualizer.virtualItems);
@@ -379,7 +381,7 @@
 	);
 
 	watch(
-		() => tableApi.data,
+		() => table.data,
 		() => {
 			// A polling result normally replaces row objects while retaining the same stable record ids.
 			// Watching ids alone misses that refresh. If the virtualizer reconciles its cache back to the
@@ -396,7 +398,7 @@
 			const measure = () => measureRowElement(rowElement);
 			mountedRowElements.add(rowElement);
 			measure();
-			void tick().then(measure);
+			void Effect.runPromise(Effect.promise(() => tick()).pipe(Effect.map(measure)));
 
 			// Row details are mounted after the disclosure control changes state. Measuring only when the
 			// attachment is installed can therefore capture the collapsed 48px row and leave the expanded
@@ -426,7 +428,7 @@
 	class={className}
 	style={bounded ? undefined : 'height: auto; max-height: none;'}
 	role="grid"
-	aria-rowcount={tableApi.totalRows}
+	aria-rowcount={table.totalRows}
 	aria-colcount={layouts.length}
 	aria-busy={isLoading}
 >
@@ -518,7 +520,7 @@
 	{@const isCheckbox = layout.isCheckbox}
 	{@const dir = inst.sortDirection}
 	{@const isSorted = Boolean(dir)}
-	{@const headerContent = inst.header({ table: tableApi })}
+	{@const headerContent = inst.header({ table: table })}
 	{@const headerLabel =
 		typeof headerContent === 'string' || typeof headerContent === 'number'
 			? String(headerContent)
@@ -619,7 +621,7 @@
 				{/if}
 
 				{#if !disabled}
-					<CollectionTableColumnActions {inst} table={tableApi} />
+					<CollectionTableColumnActions {inst} {table} />
 				{/if}
 			</Inline>
 
@@ -667,7 +669,7 @@
 			{@render renderLoadingSkeleton()}
 		{:else if error}
 			{@render renderError()}
-		{:else if tableApi.data.length === 0}
+		{:else if table.data.length === 0}
 			{@render renderEmptyState()}
 		{:else}
 			{@render renderDataRows()}
@@ -753,11 +755,11 @@
 	<Sortable.Root
 		element={bodySortableElement}
 		direction="vertical"
-		items={tableApi.rowIds}
+		items={table.rowIds}
 		handle={rowDragClass}
 		disabled={!enableRowReordering || isLoading}
 		onSort={(orderedIds) => {
-			const map = new Map(tableApi.data.map((r, i) => [tableApi.rowIds[i], r]));
+			const map = new Map(table.data.map((r, i) => [table.rowIds[i], r]));
 			const reordered: TData[] = [];
 			for (const id of orderedIds) {
 				const r = map.get(String(id));
@@ -775,12 +777,12 @@
 					style="position: absolute; top: {paddingTop}px; left: 0; right: 0;"
 				>
 					{#each items as vi (vi.key)}
-						{@const row = tableApi.data.at(vi.index)}
-						{@const rowObj = tableApi.rowInstances[vi.index]}
+						{@const row = table.data.at(vi.index)}
+						{@const rowObj = table.rowInstances[vi.index]}
 						{@const rowId = rowObj?.id ?? String(vi.key)}
-						{@const isRowSelected = !!tableApi.rowSelection.current[rowId]}
-						{@const isRowExpanded = !!tableApi.expanded.current[rowId]}
-						{@const isDetailActive = isRecordDetailActive(rowId)}
+						{@const isRowSelected = !!table.rowSelection.current[rowId]}
+						{@const isRowExpanded = !!table.expanded.current[rowId]}
+						{@const isDetailActive = activeRecordId === rowId}
 						{@const rowLeadingAccent = row ? (getRowLeadingAccent?.(row) ?? null) : null}
 						{#if row && rowObj}
 							<Sortable.Item id={String(vi.key)} isDragging={draggedItemId === String(vi.key)}>
@@ -870,7 +872,7 @@
 														<div class="pointer-events-auto">
 															{@render action({
 																row: rowObj,
-																table: tableApi,
+																table: table,
 																hovered: hoveredRowId === rowObj.id
 															})}
 														</div>
@@ -881,7 +883,7 @@
 
 										{#if subComponent && enableRowExpansion && isRowExpanded}
 											<div id={expandedRegionId(rowObj.id)} class="border-b bg-muted/30 p-4">
-												{@render subComponent({ row: rowObj, table: tableApi })}
+												{@render subComponent({ row: rowObj, table: table })}
 											</div>
 										{/if}
 									</div>
@@ -954,7 +956,7 @@
 					row,
 					index,
 					false,
-					!!tableApi.expanded.current[tableApi.rowInstances[index]!.id] ? 'bg-muted/50' : 'bg-card',
+					!!table.expanded.current[table.rowInstances[index]!.id] ? 'bg-muted/50' : 'bg-card',
 					firstDataColumn?.id ?? null
 				)}
 			{/if}
@@ -972,7 +974,7 @@
 )}
 	{#if layout && row}
 		{@const inst = layout.instance}
-		{@const rowObj = tableApi.rowInstances[index]!}
+		{@const rowObj = table.rowInstances[index]!}
 		{@const value = inst.accessor ? inst.accessor(rowObj) : row[inst.id]}
 		{@const hasRowControls = enableRowExpansion || enableRowReordering}
 
@@ -986,13 +988,13 @@
 		>
 			{#if layout.id === firstDataColumnId && hasRowControls}
 				{#if enableRowExpansion && (getRowHasChildren?.(row) ?? Boolean(subComponent))}
-					{@const isExpanded = !!tableApi.expanded.current[rowObj.id]}
+					{@const isExpanded = !!table.expanded.current[rowObj.id]}
 					<button
 						type="button"
 						class="absolute top-1/2 left-1 flex size-7 -translate-y-1/2 items-center justify-center rounded-md border border-border bg-background text-muted-foreground shadow-xs transition-colors hover:bg-muted hover:text-secondary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 						onclick={(event) => {
 							event.stopPropagation();
-							tableApi.toggleRowExpanded(rowObj.id);
+							table.toggleRowExpanded(rowObj.id);
 						}}
 						aria-expanded={isExpanded}
 						aria-controls={expandedRegionId(rowObj.id)}

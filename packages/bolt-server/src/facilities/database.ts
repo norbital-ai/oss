@@ -1,45 +1,39 @@
 import { PGlite } from '@electric-sql/pglite';
 import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
-import { vector } from '@electric-sql/pglite/vector';
+import { vector } from '@electric-sql/pglite-pgvector';
 import {
 	DatabaseRequest,
 	DatabaseResponse,
-	FacilityCall,
-	failure,
-	makeWireError,
-	success,
 	type FacilityBinding
 } from '@norbital-ai/bolt-protocol';
-import { Config, Effect, Redacted, Schema } from 'effect';
-import { Client } from 'pg';
+import { Config, Effect, Redacted } from 'effect';
+import { Client, type QueryResultRow } from 'pg';
+import { makeWireBinding } from '../config.js';
 
-// stupidity:allow AL10 -- database SPI stays beside its wire adapter in the required 14-file architecture
+/** The database SPI stays beside its wire adapter. */
 export interface LocalDatabase {
 	readonly binding: FacilityBinding<DatabaseRequest, DatabaseResponse>;
 	readonly close: () => Promise<void>;
 }
 
-// stupidity:allow AL10 -- local database options stay beside their constructor in the required 14-file architecture
+/** The local database options stay beside their constructor. */
 export interface LocalDatabaseOptions {
 	/** Use `memory://` only for explicitly non-durable development. */
 	readonly dataDirectory: string;
 }
 
-// stupidity:allow AL10 -- Postgres options stay beside their constructor in the required 14-file architecture
+/** The Postgres options stay beside their constructor. */
 export interface PostgresDatabaseOptions {
 	readonly connectionString: string;
 	readonly ssl?: boolean;
 }
 
-// stupidity:allow AL10 -- database provider lifecycle stays beside its constructors in the required 14-file architecture
+/** The database provider lifecycle stays beside its constructors. */
 export interface DatabaseProvider {
 	readonly binding: FacilityBinding<DatabaseRequest, DatabaseResponse>;
 	readonly close: () => Promise<void>;
 }
-
-// stupidity:allow AL10 -- private decoded row carrier stays beside the Postgres boundary in the required 14-file architecture
-type PostgresRow = Record<string, unknown>;
 
 /** Converts driver-specific row values into Schema.Json-safe data. */
 const jsonSafe = (value: unknown): unknown => {
@@ -63,30 +57,20 @@ export const makePostgresDatabase = ({
 		...(ssl ? { ssl: { rejectUnauthorized: true } } : {})
 	};
 
-	const runQuery = (signal: AbortSignal, input: Extract<DatabaseRequest, { _tag: 'Query' }>) =>
+	const runQuery = (input: Extract<DatabaseRequest, { _tag: 'Query' }>) =>
 		Effect.gen(function* () {
 			const client = new Client(clientOptions);
 			yield* Effect.acquireRelease(
 				Effect.tryPromise(() => client.connect()),
-				() =>
-					Effect.tryPromise(() => client.end()).pipe(Effect.catch(() => Effect.succeed(undefined)))
+				() => Effect.tryPromise(() => client.end()).pipe(Effect.ignore)
 			);
 			const result = yield* Effect.tryPromise(() =>
-				client.query<PostgresRow>(input.sql, Array.from(input.parameters))
+				client.query<QueryResultRow>(input.sql, Array.from(input.parameters))
 			);
-			if (signal.aborted) {
-				return yield* Effect.fail(
-					makeWireError('database.cancelled', 'Database result is unknown after cancellation', {
-						outcome: 'unknown'
-					})
-				);
-			}
-			return success(
-				yield* Schema.decodeUnknownEffect(DatabaseResponse)({
-					rows: result.rows.map(jsonSafe),
-					affectedRows: result.rowCount ?? 0
-				})
-			);
+			return {
+				rows: result.rows.map(jsonSafe),
+				affectedRows: result.rowCount ?? 0
+			};
 		});
 
 	const runTransaction = (
@@ -97,20 +81,19 @@ export const makePostgresDatabase = ({
 			const client = new Client(clientOptions);
 			yield* Effect.acquireRelease(
 				Effect.tryPromise(() => client.connect()),
-				() =>
-					Effect.tryPromise(() => client.end()).pipe(Effect.catch(() => Effect.succeed(undefined)))
+				() => Effect.tryPromise(() => client.end()).pipe(Effect.ignore)
 			);
 			const completed = yield* Effect.gen(function* () {
 				yield* Effect.tryPromise(() => client.query('begin'));
 				const initial: {
-					readonly rows: ReadonlyArray<PostgresRow>;
+					readonly rows: ReadonlyArray<QueryResultRow>;
 					readonly affectedRows: number;
 				} = { rows: [], affectedRows: 0 };
 				const settled = yield* Effect.forEach(input.statements, (statement) =>
 					Effect.gen(function* () {
 						if (signal.aborted) return yield* Effect.fail(signal.reason);
 						const result = yield* Effect.tryPromise(() =>
-							client.query<PostgresRow>(statement.sql, Array.from(statement.parameters))
+							client.query<QueryResultRow>(statement.sql, Array.from(statement.parameters))
 						);
 						return { rows: result.rows, affectedRows: result.rowCount ?? 0 };
 					})
@@ -126,50 +109,35 @@ export const makePostgresDatabase = ({
 			}).pipe(
 				Effect.catch((cause) =>
 					Effect.tryPromise(() => client.query('rollback'))
-						.pipe(Effect.catch(() => Effect.succeed(undefined)))
+						.pipe(Effect.ignore)
 						.pipe(Effect.andThen(() => Effect.fail(cause)))
 				)
 			);
-			return success(
-				yield* Schema.decodeUnknownEffect(DatabaseResponse)({
-					rows: completed.rows.map(jsonSafe),
-					affectedRows: completed.affectedRows
-				})
-			);
+			return {
+				rows: completed.rows.map(jsonSafe),
+				affectedRows: completed.affectedRows
+			};
 		});
 
-	const binding: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
-		call: (unsafeMetadata, unsafeInput, signal) =>
+	const binding: FacilityBinding<DatabaseRequest, DatabaseResponse> = makeWireBinding({
+		request: DatabaseRequest,
+		response: DatabaseResponse,
+		cancelled: { code: 'database.cancelled', message: 'Database call was cancelled' },
+		failed: {
+			code: 'database.failed',
+			// A managed database fails for driver reasons only the driver knows. Keep that diagnostic so
+			// an unreachable host and a wrong password do not collapse into the same sentence.
+			message: (cause) =>
+				`PostgreSQL operation failed: ${cause instanceof Error ? cause.message : String(cause)}`
+		},
+		checkCancellationAfterInvoke: true,
+		invoke: (_metadata, input, signal) =>
 			Effect.runPromise(
-				Effect.gen(function* () {
-					yield* Schema.decodeUnknownEffect(FacilityCall)(unsafeMetadata);
-					const input = yield* Schema.decodeUnknownEffect(DatabaseRequest)(unsafeInput);
-					if (signal.aborted) {
-						return failure(makeWireError('database.cancelled', 'Database call was cancelled'));
-					}
-					if (input._tag === 'Query') return yield* Effect.scoped(runQuery(signal, input));
-					return yield* Effect.scoped(runTransaction(signal, input));
-				}).pipe(
-					Effect.catch((cause) => {
-						// The PGlite adapter reported its cause and this one did not, which is backwards: PGlite
-						// fails for reasons the calling code chose, while a managed database fails for reasons only
-						// the driver knows. Without the detail an unreachable host and a wrong password are the
-						// same sentence, so a misconfigured connection reads as a broken query.
-						const detail = cause instanceof Error ? cause.message : String(cause);
-						return Effect.succeed(
-							failure(
-								makeWireError('database.failed', `PostgreSQL operation failed: ${detail}`, {
-									retryable: !signal.aborted,
-									outcome: signal.aborted ? 'unknown' : 'known'
-								})
-							)
-						);
-					})
-				)
+				Effect.scoped(input._tag === 'Query' ? runQuery(input) : runTransaction(signal, input))
 			)
-	};
+	});
 
-	return { binding, close: async () => undefined };
+	return { binding, close: () => Effect.runPromise(Effect.void) };
 };
 
 /** Loads production PostgreSQL settings without exposing the connection URL in config errors. */
@@ -200,110 +168,91 @@ export const makeDatabaseFromConfig = Effect.fn('BoltServer.Database.makeDatabas
 );
 
 /** Creates the explicitly local PGlite adapter used by deterministic development and tests. */
-export const makeLocalDatabase = async ({
+export const makeLocalDatabase = ({
 	dataDirectory
-}: LocalDatabaseOptions): Promise<LocalDatabase> => {
-	// PGlite ships these but registers none by default, so `create extension` answered "not
-	// available" and the schema plan could install nothing. That silently cost two features: free-text
-	// search fell back to a sequential `ilike` because no trigram index could exist, and the
-	// effective-dating EXCLUDE constraints could not be created at all — leaving the local database
-	// willing to hold overlapping temporal rows the application assumes are impossible.
-	//
-	// Registering them here rather than per-caller keeps local development honest about what the
-	// deployed database can do; a test that cannot express a constraint cannot prove one.
-	const database = await PGlite.create(dataDirectory, {
-		extensions: { pg_trgm, btree_gist, vector }
-	});
+}: LocalDatabaseOptions): Promise<LocalDatabase> =>
+	Effect.runPromise(
+		Effect.gen(function* () {
+			// PGlite ships these but registers none by default, so `create extension` answered "not
+			// available" and the schema plan could install nothing. That silently cost two features:
+			// free-text search fell back to a sequential `ilike` because no trigram index could exist,
+			// and the effective-dating EXCLUDE constraints could not be created at all — leaving the
+			// local database willing to hold overlapping temporal rows the application assumes are
+			// impossible.
+			//
+			// Registering them here rather than per-caller keeps local development honest about what
+			// the deployed database can do; a test that cannot express a constraint cannot prove one.
+			const database = yield* Effect.tryPromise(() =>
+				PGlite.create(dataDirectory, {
+					extensions: { pg_trgm, btree_gist, vector }
+				})
+			);
 
-	const binding: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
-		call: (unsafeMetadata, unsafeInput, signal) =>
-			Effect.runPromise(
-				Effect.gen(function* () {
-					yield* Schema.decodeUnknownEffect(FacilityCall)(unsafeMetadata);
-					const input = yield* Schema.decodeUnknownEffect(DatabaseRequest)(unsafeInput);
-					if (signal.aborted) {
-						return failure(makeWireError('database.cancelled', 'Database call was cancelled'));
-					}
+			const binding: FacilityBinding<DatabaseRequest, DatabaseResponse> = makeWireBinding({
+				request: DatabaseRequest,
+				response: DatabaseResponse,
+				cancelled: { code: 'database.cancelled', message: 'Database call was cancelled' },
+				failed: {
+					code: 'database.failed',
+					message: (cause) =>
+						`Local database operation failed: ${cause instanceof Error ? cause.message : String(cause)}`
+				},
+				checkCancellationAfterInvoke: true,
+				invoke: (_metadata, input, signal) =>
+					Effect.runPromise(
+						Effect.gen(function* () {
+							if (input._tag === 'Query') {
+								const result = yield* Effect.tryPromise(() =>
+									database.query<Record<string, unknown>>(input.sql, Array.from(input.parameters))
+								);
+								return {
+									rows: result.rows.map(jsonSafe),
+									affectedRows: result.affectedRows ?? 0
+								};
+							}
 
-					if (input._tag === 'Query') {
-						const result = yield* Effect.tryPromise(() =>
-							database.query<Record<string, unknown>>(input.sql, Array.from(input.parameters))
-						);
-						if (signal.aborted) {
-							return failure(
-								makeWireError(
-									'database.cancelled',
-									'Database result is unknown after cancellation',
-									{
-										outcome: 'unknown'
-									}
-								)
-							);
-						}
-						return success(
-							yield* Schema.decodeUnknownEffect(DatabaseResponse)({
-								rows: result.rows.map(jsonSafe),
-								affectedRows: result.affectedRows ?? 0
-							})
-						);
-					}
-
-					const response = yield* Effect.tryPromise(() =>
-						database.transaction(async (transaction) => {
-							const initial: {
-								readonly rows: ReadonlyArray<Record<string, unknown>>;
-								readonly affectedRows: number;
-							} = { rows: [], affectedRows: 0 };
-							const completed = await Effect.runPromise(
-								Effect.forEach(input.statements, (statement) =>
-									Effect.gen(function* () {
-										if (signal.aborted) return yield* Effect.fail(signal.reason);
-										const result = yield* Effect.tryPromise(() =>
-											transaction.query<Record<string, unknown>>(
-												statement.sql,
-												Array.from(statement.parameters)
-											)
-										);
-										return {
-											rows: result.rows,
-											affectedRows: result.affectedRows ?? 0
-										};
-									})
-								)
-							);
-							return Schema.decodeUnknownSync(DatabaseResponse)({
-								rows: completed.at(-1)?.rows.map(jsonSafe) ?? initial.rows,
-								affectedRows: completed.reduce(
-									(total, entry) => total + entry.affectedRows,
-									initial.affectedRows
-								)
-							});
-						})
-					);
-
-					return success(response);
-				}).pipe(
-					Effect.catch((cause) => {
-						const detail = cause instanceof Error ? cause.message : String(cause);
-						return Effect.succeed(
-							failure(
-								makeWireError('database.failed', `Local database operation failed: ${detail}`, {
-									retryable: !signal.aborted,
-									outcome: signal.aborted ? 'unknown' : 'known'
+							// PGlite's transaction API is callback-shaped; the driver callback is the
+							// one physical boundary this binding cannot flatten.
+							const response = yield* Effect.tryPromise(() =>
+								database.transaction(async (transaction) => {
+									const initial: {
+										readonly rows: ReadonlyArray<Record<string, unknown>>;
+										readonly affectedRows: number;
+									} = { rows: [], affectedRows: 0 };
+									const completed = await Effect.runPromise(
+										Effect.forEach(input.statements, (statement) =>
+											Effect.gen(function* () {
+												if (signal.aborted) return yield* Effect.fail(signal.reason);
+												const result = yield* Effect.tryPromise(() =>
+													transaction.query<Record<string, unknown>>(
+														statement.sql,
+														Array.from(statement.parameters)
+													)
+												);
+												return {
+													rows: result.rows,
+													affectedRows: result.affectedRows ?? 0
+												};
+											})
+										)
+									);
+									return {
+										rows: completed.at(-1)?.rows.map(jsonSafe) ?? initial.rows,
+										affectedRows: completed.reduce(
+											(total, entry) => total + entry.affectedRows,
+											initial.affectedRows
+										)
+									};
 								})
-							)
-						);
-					})
-				)
-			)
-	};
+							);
 
-	return { binding, close: () => database.close() };
-};
+							return response;
+						})
+					)
+			});
 
-/** Exposes local, production, and Config-selected database construction. */
-export const DatabaseFacilities = {
-	local: makeLocalDatabase,
-	postgres: makePostgresDatabase,
-	fromConfig: makeDatabaseFromConfig
-};
+			return { binding, close: () => database.close() };
+		})
+	);
+
+/** Loads production PostgreSQL settings without exposing the connection URL in config errors. */

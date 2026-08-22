@@ -6,26 +6,28 @@
  * left to right, which is what keeps sibling branches from overlapping as the tree deepens.
  */
 
-export type TeamNode = Readonly<{
-	readonly id: string;
-	readonly name: string;
-	readonly parentId?: string | null;
+export const TeamNodeSchema = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	parentId: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	/** What the team is for, as an operator wrote it. Carried for the chart; the layout ignores it. */
-	readonly description?: string;
-}>;
+	description: Schema.optionalKey(Schema.String)
+});
 
-export type HierarchyPosition = Readonly<{
+export type TeamNode = typeof TeamNodeSchema.Type;
+
+type HierarchyPosition = Readonly<{
 	readonly id: string;
 	readonly x: number;
 	readonly y: number;
 }>;
 
-export type HierarchyEdge = Readonly<{
+type HierarchyEdge = Readonly<{
 	readonly parentId: string;
 	readonly childId: string;
 }>;
 
-export type TeamHierarchy = Readonly<{
+type TeamHierarchy = Readonly<{
 	readonly positions: ReadonlyArray<HierarchyPosition>;
 	readonly edges: ReadonlyArray<HierarchyEdge>;
 	readonly width: number;
@@ -101,3 +103,4 @@ export const layoutTeamHierarchy = (
 		height: ordered.reduce((tallest, position) => Math.max(tallest, position.y), 0)
 	};
 };
+import { Schema } from 'effect';

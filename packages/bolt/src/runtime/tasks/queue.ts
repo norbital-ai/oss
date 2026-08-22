@@ -1,9 +1,11 @@
 import { and, asc, eq, inArray, lte, notInArray, or, sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/pg-proxy';
-import type { Schema } from 'effect';
-import { Cron } from './cron.js';
-import { boltSchedule, boltTask } from './tables.js';
+import { Effect, Result, Schema } from 'effect';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
+import * as Cron from '#lib/runtime/tasks/cron.js';
+
+const { bolt_schedule: boltSchedule, bolt_task: boltTask } = SYSTEM_MODEL_TABLES;
 
 /**
  * The four operations scheduled and background work is made of, over two tables.
@@ -35,11 +37,11 @@ import { boltSchedule, boltTask } from './tables.js';
 /** One statement, in the shape the database facility takes them. */
 export type Statement = Readonly<{
 	readonly sql: string;
-	readonly parameters: ReadonlyArray<unknown>;
+	readonly parameters: ReadonlyArray<Schema.Json>;
 }>;
 
-/** A row as the facility answers it: named columns, and every value already JSON-safe. */
-export type Row = Readonly<Record<string, unknown>>;
+/** A row as the executor answers it; operation-specific schemas decode it before any field is read. */
+type Row = Readonly<Record<string, unknown>>;
 
 /**
  * The one capability this module needs from its host, and the reason it takes a *list*.
@@ -47,9 +49,9 @@ export type Row = Readonly<Record<string, unknown>>;
  * A single statement is a list of one. Everything above that is a unit of atomicity the caller asked
  * for, and it has to be declared up front because the facility cannot be asked to decide mid-flight.
  */
-export type ExecuteStatements = (
+export type ExecuteStatements<E = never> = (
 	statements: ReadonlyArray<Statement>
-) => Promise<ReadonlyArray<Row>>;
+) => Effect.Effect<ReadonlyArray<Row>, E>;
 
 /** A task as `take` hands it back — what the runner needs to run it and to decide its fate. */
 export type TaskRow = Readonly<{
@@ -96,7 +98,7 @@ export type Enqueue = Readonly<{
 }>;
 
 /** What one `roll` found, kept apart from what it will write so the write can ride another batch. */
-export type Roll = Readonly<{
+type Roll = Readonly<{
 	readonly statements: ReadonlyArray<Statement>;
 	readonly rejections: ReadonlyArray<Rejection>;
 	readonly rolled: number;
@@ -132,7 +134,7 @@ const RetrySchedule = {
 };
 
 /** The default a row carries when nobody says otherwise. Mirrored by `bolt:task` in the schema plan. */
-export const MAX_ATTEMPTS = 12;
+const MAX_ATTEMPTS = 12;
 
 /** `done` is pruned after this many days, `failed` after the second — the row is the audit trail. */
 const RETENTION_DAYS = { done: 7, failed: 30 } as const;
@@ -149,27 +151,48 @@ const PRUNE_LIMIT = 200;
  * rules above — better a thrown error at the first test than a statement that silently commits
  * alone.
  */
-const composer = drizzle(async () => {
-	throw new Error('bolt tasks: statements are composed here and executed by the caller');
-});
+const composer = drizzle(() =>
+	Effect.runPromise(
+		Effect.die(new Error('bolt tasks: statements are composed here and executed by the caller'))
+	)
+);
 
 /** Renders a bare `sql` fragment, for the two statements no builder expresses. */
 const dialect = new PgDialect();
 
+const jsonParameter = (value: unknown): Schema.Json =>
+	value instanceof Date ? value.toISOString() : Schema.decodeUnknownSync(Schema.Json)(value);
+
 const toStatement = (query: { readonly sql: string; readonly params: ReadonlyArray<unknown> }) => ({
 	sql: query.sql,
-	parameters: query.params
+	parameters: query.params.map(jsonParameter)
 });
 
+const DatabaseNumber = Schema.Union([Schema.Number, Schema.NumberFromString]);
+const DueScheduleRow = Schema.Struct({
+	key: Schema.String,
+	command: Schema.String,
+	crontab: Schema.String,
+	input: Schema.Json,
+	next_run_at: Schema.String
+});
+const ClaimedTaskRow = Schema.Struct({
+	id: Schema.String,
+	command: Schema.String,
+	input: Schema.Json,
+	attempts: DatabaseNumber,
+	max_attempts: DatabaseNumber,
+	effect_id: Schema.String
+});
+const NextDueRow = Schema.Struct({ next_due_at: Schema.NullOr(Schema.String) });
+const decodeDueScheduleRow = Schema.decodeUnknownResult(DueScheduleRow);
+const decodeClaimedTaskRow = Schema.decodeUnknownResult(ClaimedTaskRow);
+
 /** Reads a timestamp the facility answered with. Every value crossing that seam is JSON-safe. */
-const epochMsOf = (value: unknown): number | undefined => {
-	if (typeof value !== 'string') return undefined;
+const epochMsOf = (value: string): number | undefined => {
 	const parsed = Date.parse(value);
 	return Number.isFinite(parsed) ? parsed : undefined;
 };
-
-const numberOf = (value: unknown, fallback: number): number =>
-	typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 
 /**
  * The `effect_id` a cron occurrence is inserted under.
@@ -199,16 +222,16 @@ export const enqueueStatements = (enqueues: ReadonlyArray<Enqueue>): ReadonlyArr
 				.values({
 					command: enqueue.command,
 					input: enqueue.input,
-					effectId: enqueue.effectId,
-					...(enqueue.runAtEpochMs === undefined ? {} : { runAt: new Date(enqueue.runAtEpochMs) })
+					effect_id: enqueue.effectId,
+					...(enqueue.runAtEpochMs === undefined ? {} : { run_at: new Date(enqueue.runAtEpochMs) })
 				})
-				.onConflictDoNothing({ target: boltTask.effectId })
+				.onConflictDoNothing({ target: boltTask.effect_id })
 				.toSQL()
 		)
 	);
 
 /** Owns the two tables, and nothing else in the runtime touches them. */
-export const makeQueue = (execute: ExecuteStatements) => {
+export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 	/**
 	 * Brings the schedule table into line with what this release declares, and says when next.
 	 *
@@ -221,62 +244,66 @@ export const makeQueue = (execute: ExecuteStatements) => {
 	 * stops firing on a day with enough deploys in it. When the expression itself changed, the stored
 	 * instant is an answer to a question nobody asked any more, and it is replaced.
 	 */
-	const declare = async (
+	const declare = (
 		declarations: ReadonlyArray<Declaration>,
 		nowEpochMs: number
-	): Promise<{
-		readonly rejections: ReadonlyArray<Rejection>;
-		readonly nextDueAtEpochMs: number | undefined;
-	}> => {
-		const rejections: Array<Rejection> = [];
-		const accepted: Array<Declaration & { readonly nextRunAt: Date }> = [];
-		for (const declaration of declarations) {
-			const next = Cron.nextRunAfter(declaration.crontab, nowEpochMs);
-			if (next._tag === 'Rejected') {
-				rejections.push({
-					key: declaration.key,
-					crontab: declaration.crontab,
-					reason: next.reason
-				});
-				continue;
-			}
-			accepted.push({ ...declaration, nextRunAt: new Date(next.epochMs) });
-		}
-		const upserts = accepted.map((declaration) =>
-			toStatement(
-				composer
-					.insert(boltSchedule)
-					.values({
+	): Effect.Effect<
+		{
+			readonly rejections: ReadonlyArray<Rejection>;
+			readonly nextDueAtEpochMs: number | undefined;
+		},
+		E
+	> =>
+		Effect.gen(function* () {
+			const rejections: Array<Rejection> = [];
+			const accepted: Array<Declaration & { readonly nextRunAt: Date }> = [];
+			for (const declaration of declarations) {
+				const next = Cron.nextRunAfter(declaration.crontab, nowEpochMs);
+				if (next._tag === 'Rejected') {
+					rejections.push({
 						key: declaration.key,
-						command: declaration.command,
 						crontab: declaration.crontab,
-						input: declaration.input,
-						nextRunAt: declaration.nextRunAt
-					})
-					.onConflictDoUpdate({
-						target: boltSchedule.key,
-						set: {
-							command: sql`excluded.command`,
-							input: sql`excluded.input`,
-							crontab: sql`excluded.crontab`,
-							nextRunAt: sql`case when ${boltSchedule.crontab} is distinct from excluded.crontab then excluded.next_run_at else ${boltSchedule.nextRunAt} end`
-						}
-					})
+						reason: next.reason
+					});
+					continue;
+				}
+				accepted.push({ ...declaration, nextRunAt: new Date(next.epochMs) });
+			}
+			const upserts = accepted.map((declaration) =>
+				toStatement(
+					composer
+						.insert(boltSchedule)
+						.values({
+							key: declaration.key,
+							command: declaration.command,
+							crontab: declaration.crontab,
+							input: declaration.input,
+							next_run_at: declaration.nextRunAt
+						})
+						.onConflictDoUpdate({
+							target: boltSchedule.key,
+							set: {
+								command: sql`excluded.command`,
+								input: sql`excluded.input`,
+								crontab: sql`excluded.crontab`,
+								next_run_at: sql`case when ${boltSchedule.crontab} is distinct from excluded.crontab then excluded.next_run_at else ${boltSchedule.next_run_at} end`
+							}
+						})
+						.toSQL()
+				)
+			);
+			// A key this release does not declare is a key that no longer exists. Deleting rather than
+			// disabling is what keeps the table readable as "everything this workspace runs".
+			const declaredKeys = accepted.map(({ key }) => key);
+			const retire = toStatement(
+				composer
+					.delete(boltSchedule)
+					.where(declaredKeys.length === 0 ? sql`true` : notInArray(boltSchedule.key, declaredKeys))
 					.toSQL()
-			)
-		);
-		// A key this release does not declare is a key that no longer exists. Deleting rather than
-		// disabling is what keeps the table readable as "everything this workspace runs".
-		const declaredKeys = accepted.map(({ key }) => key);
-		const retire = toStatement(
-			composer
-				.delete(boltSchedule)
-				.where(declaredKeys.length === 0 ? sql`true` : notInArray(boltSchedule.key, declaredKeys))
-				.toSQL()
-		);
-		const rows = await execute([...upserts, retire, whenStatement()]);
-		return { rejections, nextDueAtEpochMs: readWhen(rows) };
-	};
+			);
+			const rows = yield* execute([...upserts, retire, whenStatement()]);
+			return { rejections, nextDueAtEpochMs: readWhen(rows) };
+		});
 
 	/**
 	 * Due schedules become task rows — read now, written with whatever batch comes next.
@@ -292,77 +319,82 @@ export const makeQueue = (execute: ExecuteStatements) => {
 	 * that still due, and fire three times; with it, the missed slot fires exactly once and the
 	 * schedule rejoins its own rhythm. A missed occurrence is late, not multiplied.
 	 */
-	const roll = async (nowEpochMs: number): Promise<Roll> => {
-		const due = await execute([
-			toStatement(
-				composer
-					.select()
-					.from(boltSchedule)
-					.where(lte(boltSchedule.nextRunAt, sql`now()`))
-					.orderBy(asc(boltSchedule.nextRunAt))
-					.toSQL()
-			)
-		]);
-		const statements: Array<Statement> = [];
-		const rejections: Array<Rejection> = [];
-		const retired: Array<string> = [];
-		let rolled = 0;
-		for (const row of due) {
-			const key = String(row['key'] ?? '');
-			const crontab = String(row['crontab'] ?? '');
-			const slotEpochMs = epochMsOf(row['next_run_at']);
-			if (key === '' || slotEpochMs === undefined) continue;
-			const next = Cron.nextRunAfter(crontab, Math.max(nowEpochMs, slotEpochMs));
-			// Two ways to reach one state, and the state is the expensive one. A schedule that cannot
-			// advance — because its expression will not parse, or because the instant it names is not
-			// later than the one already stored — goes on satisfying `next_run_at <= now()`, so `when`
-			// goes on answering "due now", so the host re-arms immediately and ticks forever against a
-			// row that does nothing. That is the exact cost this design exists to avoid, reached from
-			// the inside.
-			//
-			// Retiring costs nothing that is not recovered: activation re-declares every key this
-			// release names and rejects a bad one *there*, where a person is watching a deploy. The
-			// second condition guards against a future cron edge case rather than against anything
-			// reachable today — the point of it is that such a case degrades to a retired schedule
-			// rather than to a bill.
-			if (next._tag === 'Rejected' || next.epochMs <= slotEpochMs) {
-				rejections.push({
-					key,
-					crontab,
-					reason:
-						next._tag === 'Rejected'
-							? next.reason
-							: `names no instant after ${new Date(slotEpochMs).toISOString()}, which it already stands at`
-				});
-				retired.push(key);
-				continue;
-			}
-			rolled += 1;
-			statements.push(
-				...enqueueStatements([
-					{
-						command: String(row['command'] ?? ''),
-						input: (row['input'] ?? {}) as Schema.Json,
-						effectId: slotEffectId(key, slotEpochMs),
-						runAtEpochMs: slotEpochMs
-					}
-				]),
+	const roll = (nowEpochMs: number): Effect.Effect<Roll, E> =>
+		Effect.gen(function* () {
+			const due = yield* execute([
 				toStatement(
 					composer
-						.update(boltSchedule)
-						.set({ nextRunAt: new Date(next.epochMs), lastFiredAt: sql`now()` })
-						.where(eq(boltSchedule.key, key))
+						.select()
+						.from(boltSchedule)
+						.where(lte(boltSchedule.next_run_at, sql`now()`))
+						.orderBy(asc(boltSchedule.next_run_at))
 						.toSQL()
 				)
-			);
-		}
-		if (retired.length > 0) {
-			statements.push(
-				toStatement(composer.delete(boltSchedule).where(inArray(boltSchedule.key, retired)).toSQL())
-			);
-		}
-		return { statements, rejections, rolled };
-	};
+			]);
+			const statements: Array<Statement> = [];
+			const rejections: Array<Rejection> = [];
+			const retired: Array<string> = [];
+			let rolled = 0;
+			for (const row of due.flatMap((entry) => {
+				const decoded = decodeDueScheduleRow(entry);
+				return Result.isSuccess(decoded) ? [decoded.success] : [];
+			})) {
+				const { key, command, crontab, input } = row;
+				const slotEpochMs = epochMsOf(row.next_run_at);
+				if (key === '' || slotEpochMs === undefined) continue;
+				const next = Cron.nextRunAfter(crontab, Math.max(nowEpochMs, slotEpochMs));
+				// Two ways to reach one state, and the state is the expensive one. A schedule that cannot
+				// advance — because its expression will not parse, or because the instant it names is not
+				// later than the one already stored — goes on satisfying `next_run_at <= now()`, so `when`
+				// goes on answering "due now", so the host re-arms immediately and ticks forever against a
+				// row that does nothing. That is the exact cost this design exists to avoid, reached from
+				// the inside.
+				//
+				// Retiring costs nothing that is not recovered: activation re-declares every key this
+				// release names and rejects a bad one *there*, where a person is watching a deploy. The
+				// second condition guards against a future cron edge case rather than against anything
+				// reachable today — the point of it is that such a case degrades to a retired schedule
+				// rather than to a bill.
+				if (next._tag === 'Rejected' || next.epochMs <= slotEpochMs) {
+					rejections.push({
+						key,
+						crontab,
+						reason:
+							next._tag === 'Rejected'
+								? next.reason
+								: `names no instant after ${new Date(slotEpochMs).toISOString()}, which it already stands at`
+					});
+					retired.push(key);
+					continue;
+				}
+				rolled += 1;
+				statements.push(
+					...enqueueStatements([
+						{
+							command,
+							input,
+							effectId: slotEffectId(key, slotEpochMs),
+							runAtEpochMs: slotEpochMs
+						}
+					]),
+					toStatement(
+						composer
+							.update(boltSchedule)
+							.set({ next_run_at: new Date(next.epochMs), last_fired_at: sql`now()` })
+							.where(eq(boltSchedule.key, key))
+							.toSQL()
+					)
+				);
+			}
+			if (retired.length > 0) {
+				statements.push(
+					toStatement(
+						composer.delete(boltSchedule).where(inArray(boltSchedule.key, retired)).toSQL()
+					)
+				);
+			}
+			return { statements, rejections, rolled };
+		});
 
 	/**
 	 * Hands out due tasks, hiding them while they run — one statement, and it has to be one.
@@ -389,61 +421,60 @@ export const makeQueue = (execute: ExecuteStatements) => {
 	 * a time, so the oldest due row is the one it gets; a caller that batches must not read the
 	 * returned order as priority.
 	 */
-	const take = async (
+	const take = (
 		before: ReadonlyArray<Statement>,
 		options: Readonly<{ readonly hideForMillis: number; readonly batchSize: number }>
-	): Promise<ReadonlyArray<TaskRow>> => {
-		if (options.batchSize <= 0) {
-			// Nothing may be handed out, but `roll`'s writes still have to land: a schedule that has
-			// advanced in memory and not on disk fires twice.
-			if (before.length > 0) await execute(before);
-			return [];
-		}
-		const claimed = composer
-			.select({ id: boltTask.id })
-			.from(boltTask)
-			.where(and(eq(boltTask.status, 'pending'), lte(boltTask.runAt, sql`now()`)))
-			.orderBy(asc(boltTask.runAt))
-			.limit(options.batchSize)
-			.for('update', { skipLocked: true });
-		const rows = await execute([
-			...before,
-			toStatement(
-				composer
-					.update(boltTask)
-					.set({
-						attempts: sql`${boltTask.attempts} + 1`,
-						runAt: sql`now() + make_interval(secs => ${options.hideForMillis / 1000})`,
-						updatedAt: sql`now()`
-					})
-					.where(inArray(boltTask.id, claimed))
-					.returning({
-						id: boltTask.id,
-						command: boltTask.command,
-						input: boltTask.input,
-						attempts: boltTask.attempts,
-						maxAttempts: boltTask.maxAttempts,
-						effectId: boltTask.effectId
-					})
-					.toSQL()
-			)
-		]);
-		return rows.flatMap((row) => {
-			const id = row['id'];
-			const command = row['command'];
-			if (typeof id !== 'string' || typeof command !== 'string') return [];
-			return [
-				{
-					id,
-					command,
-					input: (row['input'] ?? null) as Schema.Json,
-					attempts: numberOf(row['attempts'], 1),
-					maxAttempts: numberOf(row['max_attempts'], MAX_ATTEMPTS),
-					effectId: String(row['effect_id'] ?? id)
-				}
-			];
+	): Effect.Effect<ReadonlyArray<TaskRow>, E> =>
+		Effect.gen(function* () {
+			if (options.batchSize <= 0) {
+				// Nothing may be handed out, but `roll`'s writes still have to land: a schedule that has
+				// advanced in memory and not on disk fires twice.
+				if (before.length > 0) yield* execute(before);
+				return [];
+			}
+			const claimed = composer
+				.select({ id: boltTask.id })
+				.from(boltTask)
+				.where(and(eq(boltTask.status, 'pending'), lte(boltTask.run_at, sql`now()`)))
+				.orderBy(asc(boltTask.run_at))
+				.limit(options.batchSize)
+				.for('update', { skipLocked: true });
+			const rows = yield* execute([
+				...before,
+				toStatement(
+					composer
+						.update(boltTask)
+						.set({
+							attempts: sql`${boltTask.attempts} + 1`,
+							run_at: sql`now() + make_interval(secs => ${options.hideForMillis / 1000})`,
+							updated_at: sql`now()`
+						})
+						.where(inArray(boltTask.id, claimed))
+						.returning({
+							id: boltTask.id,
+							command: boltTask.command,
+							input: boltTask.input,
+							attempts: boltTask.attempts,
+							maxAttempts: boltTask.max_attempts,
+							effectId: boltTask.effect_id
+						})
+						.toSQL()
+				)
+			]);
+			return rows
+				.flatMap((entry) => {
+					const decoded = decodeClaimedTaskRow(entry);
+					return Result.isSuccess(decoded) ? [decoded.success] : [];
+				})
+				.map((row) => ({
+					id: row.id,
+					command: row.command,
+					input: row.input,
+					attempts: row.attempts,
+					maxAttempts: row.max_attempts,
+					effectId: row.effect_id
+				}));
 		});
-	};
 
 	/**
 	 * Records what happened, prunes what nobody will read again, and reports when to come back.
@@ -460,42 +491,44 @@ export const makeQueue = (execute: ExecuteStatements) => {
 	 * `when` rides the same batch for the same reason: the connection is open and the transaction is
 	 * happening anyway, so the number the host arms its timer to is free.
 	 */
-	const finish = async (
+	const finish = (
 		outcomes: ReadonlyArray<Outcome>,
 		random: () => number = Math.random
-	): Promise<number | undefined> => {
-		const statements = outcomes.map((outcome) => {
-			if (outcome._tag === 'Done') {
+	): Effect.Effect<number | undefined, E> =>
+		Effect.gen(function* () {
+			const statements = outcomes.map((outcome) => {
+				if (outcome._tag === 'Done') {
+					return toStatement(
+						composer
+							.update(boltTask)
+							.set({ status: 'done', result: outcome.result, error: null, updated_at: sql`now()` })
+							.where(eq(boltTask.id, outcome.task.id))
+							.toSQL()
+					);
+				}
+				const exhausted = outcome.task.attempts >= outcome.task.maxAttempts;
 				return toStatement(
 					composer
 						.update(boltTask)
-						.set({ status: 'done', result: outcome.result, error: null, updatedAt: sql`now()` })
+						.set({
+							error: outcome.error,
+							updated_at: sql`now()`,
+							...(exhausted
+								? { status: 'failed' as const }
+								: {
+										run_at: sql`now() + make_interval(secs => ${RetrySchedule.secondsAfter(outcome.task.attempts, random)})`
+									})
+						})
 						.where(eq(boltTask.id, outcome.task.id))
 						.toSQL()
 				);
-			}
-			const exhausted = outcome.task.attempts >= outcome.task.maxAttempts;
-			return toStatement(
-				composer
-					.update(boltTask)
-					.set({
-						error: outcome.error,
-						updatedAt: sql`now()`,
-						...(exhausted
-							? { status: 'failed' as const }
-							: {
-									runAt: sql`now() + make_interval(secs => ${RetrySchedule.secondsAfter(outcome.task.attempts, random)})`
-								})
-					})
-					.where(eq(boltTask.id, outcome.task.id))
-					.toSQL()
-			);
+			});
+			const rows = yield* execute([...statements, pruneStatement(), whenStatement()]);
+			return readWhen(rows);
 		});
-		const rows = await execute([...statements, pruneStatement(), whenStatement()]);
-		return readWhen(rows);
-	};
 
-	const when = async (): Promise<number | undefined> => readWhen(await execute([whenStatement()]));
+	const when = (): Effect.Effect<number | undefined, E> =>
+		execute([whenStatement()]).pipe(Effect.map(readWhen));
 
 	return { declare, enqueueStatements, roll, take, finish, when };
 };
@@ -506,14 +539,18 @@ const whenStatement = (): Statement =>
 		dialect.sqlToQuery(
 			// `least` ignores nulls, so an empty queue with a schedule, a schedule-free queue with work,
 			// and a workspace with neither all answer correctly without three cases.
-			sql`select least((select min(${boltTask.runAt}) from ${boltTask} where ${boltTask.status} = 'pending'), (select min(${boltSchedule.nextRunAt}) from ${boltSchedule})) as next_due_at`
+			sql`select least((select min(${boltTask.run_at}) from ${boltTask} where ${boltTask.status} = 'pending'), (select min(${boltSchedule.next_run_at}) from ${boltSchedule})) as next_due_at`
 		)
 	);
 
 /** The last row of a tick's final batch, which is the only row that batch returns. */
 const readWhen = (rows: ReadonlyArray<Row>): number | undefined => {
 	const last = rows[rows.length - 1];
-	return last === undefined ? undefined : epochMsOf(last['next_due_at']);
+	if (last === undefined) return undefined;
+	const decoded = Schema.decodeUnknownResult(NextDueRow)(last);
+	return Result.isFailure(decoded) || decoded.success.next_due_at === null
+		? undefined
+		: epochMsOf(decoded.success.next_due_at);
 };
 
 const pruneStatement = (): Statement =>
@@ -531,14 +568,14 @@ const pruneStatement = (): Statement =>
 								and(
 									eq(boltTask.status, 'done'),
 									lte(
-										boltTask.updatedAt,
+										boltTask.updated_at,
 										sql`now() - make_interval(days => ${RETENTION_DAYS.done})`
 									)
 								),
 								and(
 									eq(boltTask.status, 'failed'),
 									lte(
-										boltTask.updatedAt,
+										boltTask.updated_at,
 										sql`now() - make_interval(days => ${RETENTION_DAYS.failed})`
 									)
 								)
@@ -549,5 +586,3 @@ const pruneStatement = (): Statement =>
 			)
 			.toSQL()
 	);
-
-export * as Queue from './queue.js';

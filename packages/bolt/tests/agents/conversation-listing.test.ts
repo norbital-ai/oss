@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
-import { envoy } from '../../src/authoring/index.js';
-import { Agents } from '../../src/runtime/agents/agents.js';
-import type { Identity } from '../../src/runtime/identity/identity.js';
+import { envoy } from '../../src/authoring/workspace-schema.js';
+import * as Agents from '../../src/runtime/agents/agents.js';
+import type * as Identity from '../../src/runtime/identity/identity.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -139,8 +139,8 @@ describe('agent conversation inbox authority', () => {
 		harness = await makeBoltTestRuntime(testWorkspace({ envoys: [publicDesk, memberDesk] }));
 		for (const row of fixtures) {
 			await harness.database.query(
-				`insert into bolt_conversations
-					(id, agent_name, user_id, title, visibility, envoy_key, parent_id)
+				`insert into chat_session
+					(conversation_id, agent_name, user_id, title, visibility, envoy_key, parent_id)
 				 values ($1, $2, $3, $4, $5, $6, $7)`,
 				[
 					row.id,
@@ -154,7 +154,7 @@ describe('agent conversation inbox authority', () => {
 			);
 		}
 		await harness.database.query(
-			"insert into bolt_agent_messages (conversation_id, role, content) values ($1, 'user', $2::jsonb)",
+			"insert into chat_message (conversation_id, role, content) values ($1, 'user', $2::jsonb)",
 			['public-dm', JSON.stringify('Can I get a quote?')]
 		);
 

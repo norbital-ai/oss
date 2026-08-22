@@ -5,16 +5,19 @@
  * entry was a sentence. Everything the surfaces are for (who holds which role, whether an invitation
  * has expired, who changed what and when) had nowhere to live.
  */
+import { Schema } from 'effect';
+import { TeamNodeSchema } from '#lib/client/ui/settings/team-hierarchy.js';
 
-export type MemberRole = 'admin' | 'manager' | 'basic';
-export type MemberStatus = 'active' | 'suspended' | 'invited';
+const MemberRoleSchema = Schema.Literals(['admin', 'manager', 'basic']);
+type MemberRole = typeof MemberRoleSchema.Type;
+const MemberStatusSchema = Schema.Literals(['active', 'suspended', 'invited']);
 
-export type MemberRow = Readonly<{
-	readonly id: string;
-	readonly email: string;
-	readonly name: string;
-	readonly role: MemberRole;
-	readonly status: MemberStatus;
+const MemberRowSchema = Schema.Struct({
+	id: Schema.String,
+	email: Schema.String,
+	name: Schema.String,
+	role: MemberRoleSchema,
+	status: MemberStatusSchema,
 	/**
 	 * The one team this person belongs to, absent for somebody nobody has placed.
 	 *
@@ -23,29 +26,53 @@ export type MemberRow = Readonly<{
 	 * decoder read a key that is not on the wire, every member rendered with an em dash, and the
 	 * surface said the workspace had nobody on any team.
 	 */
-	readonly team?: string;
-}>;
+	team: Schema.optionalKey(Schema.String)
+});
+export type MemberRow = typeof MemberRowSchema.Type;
 
-export type InvitationStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
+const InvitationStatusSchema = Schema.Literals(['pending', 'accepted', 'revoked', 'expired']);
+type InvitationStatus = typeof InvitationStatusSchema.Type;
 
-export type InvitationRow = Readonly<{
-	readonly id: string;
-	readonly email: string;
-	readonly role: MemberRole;
-	readonly status: InvitationStatus;
-	readonly invitedBy?: string;
+const InvitationRowSchema = Schema.Struct({
+	id: Schema.String,
+	email: Schema.String,
+	role: MemberRoleSchema,
+	status: InvitationStatusSchema,
+	invitedBy: Schema.optionalKey(Schema.String),
 	/** ISO instant; absent when the invitation never expires. */
-	readonly expiresAt?: string;
-}>;
+	expiresAt: Schema.optionalKey(Schema.String)
+});
+export type InvitationRow = typeof InvitationRowSchema.Type;
 
-export type AuditRow = Readonly<{
-	readonly id: string;
-	readonly action: string;
-	readonly actor: string;
-	readonly subject?: string;
+const AuditRowSchema = Schema.Struct({
+	id: Schema.String,
+	action: Schema.String,
+	actor: Schema.String,
+	subject: Schema.optionalKey(Schema.String),
 	/** ISO instant. */
-	readonly at: string;
-}>;
+	at: Schema.String
+});
+export type AuditRow = typeof AuditRowSchema.Type;
+
+/**
+ * The People surface's one payload: who is a member, which invitations are open, the distinct
+ * teams those members carry, and the access events the runtime has recorded.
+ */
+export const WorkspaceAccessSchema = Schema.Struct({
+	members: Schema.Array(MemberRowSchema),
+	invitations: Schema.Array(InvitationRowSchema),
+	teams: Schema.Array(TeamNodeSchema),
+	events: Schema.Array(AuditRowSchema)
+});
+
+export type WorkspaceAccess = typeof WorkspaceAccessSchema.Type;
+
+export const EMPTY_WORKSPACE_ACCESS: WorkspaceAccess = {
+	members: [],
+	invitations: [],
+	teams: [],
+	events: []
+};
 
 /**
  * An invitation is expired once its deadline has passed, whatever the stored status says.

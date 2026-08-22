@@ -5,15 +5,15 @@
 	import { basicSetup } from 'codemirror';
 	import type { Action } from 'svelte/action';
 	import { fromAction } from 'svelte/attachments';
-	import { languageExtension } from './languages.js';
-	import { buildCodeEditorTheme, codeEditorShellClass } from './theme.js';
-	import type { CodeEditorLanguage } from './code-editor.types.js';
+	import { languageExtension } from '#lib/code-editor/languages';
+	import { buildCodeEditorTheme, codeEditorShellClass } from '#lib/code-editor/theme';
+	import type { CodeEditorLanguage } from '#lib/code-editor/languages';
 
 	const ExternalSyncAnnotation = Annotation.define<boolean>();
 
 	let {
 		value = '',
-		language = 'plaintext' as CodeEditorLanguage,
+		language = 'plaintext',
 		readonly = false,
 		invalid = false,
 		minHeight = '7rem',

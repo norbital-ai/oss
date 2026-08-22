@@ -5,7 +5,10 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
 	import { Inline, Stack } from '#lib/layout';
-	import { fromLocalDateTimeParts, toLocalDateTimeParts } from '../timestamp.utils.js';
+	import {
+		fromLocalDateTimeParts,
+		toLocalDateTimeParts
+	} from '#lib/data-renderer/time_stamp/timestamp.utils';
 
 	const { t } = useI18n<UiKeys>();
 

@@ -1,3 +1,5 @@
+import { Schema } from 'effect';
+
 export const PRODUCT_LAYER_ICON_NAMES = ['model', 'security', 'logic', 'interface'] as const;
 
 export const PRODUCT_SUBMODULE_ICON_NAMES = [
@@ -38,19 +40,38 @@ export type ProductLayerIconName = (typeof PRODUCT_LAYER_ICON_NAMES)[number];
 export type ProductSubmoduleIconName = (typeof PRODUCT_SUBMODULE_ICON_NAMES)[number];
 export type ProductIconReference = `product:${ProductIconName}`;
 
-export type ProductIconPrimitive =
-	| { kind: 'path'; d: string; accent?: true }
-	| { kind: 'ellipse'; cx: number; cy: number; rx: number; ry: number; accent?: true }
-	| { kind: 'circle'; cx: number; cy: number; r: number; accent?: true }
-	| {
-			kind: 'rect';
-			x: number;
-			y: number;
-			width: number;
-			height: number;
-			rx: number;
-			accent?: true;
-	  };
+const ProductIconPrimitiveSchema = Schema.Union([
+	Schema.Struct({
+		kind: Schema.Literal('path'),
+		d: Schema.String,
+		accent: Schema.optional(Schema.Literal(true))
+	}),
+	Schema.Struct({
+		kind: Schema.Literal('ellipse'),
+		cx: Schema.Number,
+		cy: Schema.Number,
+		rx: Schema.Number,
+		ry: Schema.Number,
+		accent: Schema.optional(Schema.Literal(true))
+	}),
+	Schema.Struct({
+		kind: Schema.Literal('circle'),
+		cx: Schema.Number,
+		cy: Schema.Number,
+		r: Schema.Number,
+		accent: Schema.optional(Schema.Literal(true))
+	}),
+	Schema.Struct({
+		kind: Schema.Literal('rect'),
+		x: Schema.Number,
+		y: Schema.Number,
+		width: Schema.Number,
+		height: Schema.Number,
+		rx: Schema.Number,
+		accent: Schema.optional(Schema.Literal(true))
+	})
+]);
+export type ProductIconPrimitive = typeof ProductIconPrimitiveSchema.Type;
 
 /** Canonical layer geometry shared by SVG icons and procedural product illustrations. */
 export const PRODUCT_LAYER_ICON_GEOMETRY = {
@@ -75,23 +96,28 @@ export const PRODUCT_LAYER_ICON_GEOMETRY = {
 	]
 } as const satisfies Record<ProductLayerIconName, readonly ProductIconPrimitive[]>;
 
-const productIconNames = new Set<string>(PRODUCT_ICON_NAMES);
-const productLayerIconNames = new Set<string>(PRODUCT_LAYER_ICON_NAMES);
+const productLayerIconGeometryByName = new Map<string, readonly ProductIconPrimitive[]>(
+	PRODUCT_LAYER_ICON_NAMES.map<[string, readonly ProductIconPrimitive[]]>((name) => [
+		name,
+		PRODUCT_LAYER_ICON_GEOMETRY[name]
+	])
+);
+
+const productIconNameByReference = new Map<string, ProductIconName>(
+	PRODUCT_ICON_NAMES.map<[string, ProductIconName]>((name) => [name, name])
+);
 
 export function productLayerIconGeometry(
 	name: ProductIconName
 ): readonly ProductIconPrimitive[] | null {
-	return productLayerIconNames.has(name)
-		? PRODUCT_LAYER_ICON_GEOMETRY[name as ProductLayerIconName]
-		: null;
+	return productLayerIconGeometryByName.get(name) ?? null;
 }
 
 export function productIconNameFromReference(
 	reference: string | null | undefined
 ): ProductIconName | null {
 	if (!reference?.startsWith('product:')) return null;
-	const name = reference.slice('product:'.length);
-	return productIconNames.has(name) ? (name as ProductIconName) : null;
+	return productIconNameByReference.get(reference.slice('product:'.length)) ?? null;
 }
 
 export function productIconReference(name: ProductIconName): ProductIconReference {

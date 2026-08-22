@@ -70,11 +70,11 @@ describe('boundary audit', () => {
 });
 
 /**
- * Proves the `norbital_*` rule can tell its two halves apart.
+ * Proves the system-column rule can tell its two halves apart.
  *
- * The rule is narrow and the temptation is to widen it: a guard that reported every `norbital_*` in
+ * The rule is narrow and the temptation is to widen it: a guard that reported every system field in
  * authored source would be trivially satisfiable and catastrophically wrong, because filtering on
- * `norbital_approval_id` is how a workspace decides what "live" means, and there are dozens of
+ * `approval_id` is how a workspace decides what "live" means, and there are dozens of
  * legitimate predicates, list keys and joins to prove it. So both halves are asserted here — the
  * violations must fire, and the legitimate shapes must stay silent. Half of this suite failing is
  * how a widened rule announces itself before it reaches a tenant's build.
@@ -83,7 +83,7 @@ describe('authored system-column audit', () => {
 	it('reports the identity a surface hands back to the component that mounted it', () => {
 		expect(
 			auditAuthoredSystemColumns({
-				'a.svelte': '<CollectionForm recordId={record?.norbital_id} />'
+				'a.svelte': '<CollectionForm recordId={record?.id} />'
 			})
 		).toEqual([
 			{
@@ -91,7 +91,7 @@ describe('authored system-column audit', () => {
 				line: 1,
 				component: 'CollectionForm',
 				prop: 'recordId',
-				column: 'norbital_id'
+				column: 'id'
 			}
 		]);
 	});
@@ -99,7 +99,7 @@ describe('authored system-column audit', () => {
 	it('reports an identity smuggled through string interpolation, which no prop type can refuse', () => {
 		expect(
 			auditAuthoredSystemColumns({
-				'a.svelte': '<CollectionTable view={`employees:employments:${record.norbital_id}`} />'
+				'a.svelte': '<CollectionTable view={`employees:employments:${record.id}`} />'
 			})
 		).toEqual([
 			{
@@ -107,37 +107,31 @@ describe('authored system-column audit', () => {
 				line: 1,
 				component: 'CollectionTable',
 				prop: 'view',
-				column: 'norbital_id'
+				column: 'id'
 			}
 		]);
 	});
 
 	it('reports every system column, not just the primary key', () => {
 		const source = [
-			'<A a={record.norbital_created_at} />',
-			'<B b={record.norbital_updated_at} />',
-			'<C c={record.norbital_sys_period} />',
-			'<D d={record.norbital_row_version} />',
-			'<E e={record.norbital_approval_id} />'
+			'<A a={record.created_at} />',
+			'<B b={record.updated_at} />',
+			'<C c={record.sys_period} />',
+			'<D d={record.row_version} />',
+			'<E e={record.approval_id} />'
 		].join('\n');
 		expect(
 			auditAuthoredSystemColumns({ 'a.svelte': source }).map(
 				({ column, line }) => `${line}:${column}`
 			)
-		).toEqual([
-			'1:norbital_created_at',
-			'2:norbital_updated_at',
-			'3:norbital_sys_period',
-			'4:norbital_row_version',
-			'5:norbital_approval_id'
-		]);
+		).toEqual(['1:created_at', '2:updated_at', '3:sys_period', '4:row_version', '5:approval_id']);
 	});
 
 	it('reports the spellings that route around a property-name check', () => {
 		expect(
 			auditAuthoredSystemColumns({
 				'a.svelte':
-					"<A id={String(record.norbital_id)} b={record['norbital_id']} c={record.norbital_id ?? 'none'} d={a ? record.norbital_id : b} />"
+					"<A id={String(record.id)} b={record['id']} c={record.id ?? 'none'} d={a ? record.id : b} />"
 			}).map(({ prop }) => prop)
 		).toEqual(['id', 'b', 'c', 'd']);
 	});
@@ -146,7 +140,7 @@ describe('authored system-column audit', () => {
 		expect(
 			auditAuthoredSystemColumns({
 				'a.svelte':
-					'<CollectionTable query={{ where: { norbital_approval_id: { isNull: true } }, orderBy: { norbital_created_at: "desc" }, columns: { norbital_id: true } }} />'
+					'<CollectionTable query={{ where: { approval_id: { isNull: true } }, orderBy: { created_at: "desc" }, columns: { id: true } }} />'
 			})
 		).toEqual([]);
 	});
@@ -154,13 +148,12 @@ describe('authored system-column audit', () => {
 	it('does not report a predicate that joins on a parent record, or a list key', () => {
 		expect(
 			auditAuthoredSystemColumns({
-				'a.svelte':
-					'<CollectionTable query={{ where: { employee_id: { eq: record.norbital_id } } }} />'
+				'a.svelte': '<CollectionTable query={{ where: { employee_id: { eq: record.id } } }} />'
 			})
 		).toEqual([]);
 		expect(
 			auditAuthoredSystemColumns({
-				'a.svelte': '{#each rows as row (row.norbital_id)}<Card />{/each}'
+				'a.svelte': '{#each rows as row (row.id)}<Card />{/each}'
 			})
 		).toEqual([]);
 	});
@@ -168,14 +161,23 @@ describe('authored system-column audit', () => {
 	it('does not report authored behavior that closes over a record', () => {
 		expect(
 			auditAuthoredSystemColumns({
-				'a.svelte': '<Combobox onValueChange={(value) => select(value, record.norbital_id)} />'
+				'a.svelte': '<Combobox onValueChange={(value) => select(value, record.id)} />'
+			})
+		).toEqual([]);
+	});
+
+	it('does not confuse a function result with an identifier passed to that function', () => {
+		expect(
+			auditAuthoredSystemColumns({
+				'a.svelte':
+					'<InfoHint text={surfaceNote(i18n, layer.id, fallback)} label={translate(item.id)} />'
 			})
 		).toEqual([]);
 	});
 
 	it('does not report a plain element, which carries DOM attributes rather than framework props', () => {
 		expect(
-			auditAuthoredSystemColumns({ 'a.svelte': '<div data-record-id={record.norbital_id}></div>' })
+			auditAuthoredSystemColumns({ 'a.svelte': '<div data-record-id={record.id}></div>' })
 		).toEqual([]);
 	});
 
@@ -212,10 +214,10 @@ describe('workspace build guard', () => {
 	it('fails the build on an authored violation, naming the file, the prop and the column', () => {
 		expect(() =>
 			audit(
-				'<CollectionForm recordId={record?.norbital_id} />',
+				'<CollectionForm recordId={record?.id} />',
 				'/w/src/collections/employees/+representation.svelte'
 			)
-		).toThrow(/\+representation\.svelte:1 — <CollectionForm recordId=\{… norbital_id …\}>/);
+		).toThrow(/\+representation\.svelte:1 — <CollectionForm recordId=\{… id …\}>/);
 	});
 
 	it('runs before the Svelte compiler, the last point at which a prop is still a syntactic position', () => {
@@ -225,10 +227,10 @@ describe('workspace build guard', () => {
 	it('leaves framework source and non-markup alone', () => {
 		expect(
 			audit(
-				'<CollectionForm recordId={record?.norbital_id} />',
+				'<CollectionForm recordId={record?.id} />',
 				'/w/node_modules/@norbital-ai/ui/src/x.svelte'
 			)
 		).toBeNull();
-		expect(audit('const id = record.norbital_id;', '/w/src/lib/join.ts')).toBeNull();
+		expect(audit('const id = record.id;', '/w/src/lib/join.ts')).toBeNull();
 	});
 });

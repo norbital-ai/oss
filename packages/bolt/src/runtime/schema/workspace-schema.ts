@@ -1,14 +1,11 @@
-import { Context, Effect, Layer, Schema } from 'effect';
+import { Array, Context, Effect, Layer, Result, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
-import {
-	SYSTEM_COLUMN_NAMES,
-	buildSchemaPlan,
-	planTableNames,
-	type SchemaPlan
-} from '../../compiler/schema-plan.js';
-import { Database } from '../facilities/database.js';
-import { Workspace } from '../workspace.js';
-import { withSystemCollections } from './system-collections.js';
+import { buildSchemaPlan, planTableNames, type SchemaPlan } from '#lib/compiler/schema-plan.js';
+export { fingerprintSchemaSteps } from '#lib/compiler/schema-plan.js';
+import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import * as Workspace from '#lib/runtime/workspace.js';
+import { withSystemCollections } from '#lib/runtime/schema/system-collections.js';
 
 export interface Interface {
 	readonly plan: () => SchemaPlan;
@@ -23,7 +20,7 @@ export interface Interface {
 	readonly fingerprint: () => string;
 }
 /** Carries schema validation error through the typed schema failure channel without losing diagnostic context. */
-export class SchemaValidationError extends Schema.TaggedError<SchemaValidationError>()(
+class SchemaValidationError extends Schema.TaggedError<SchemaValidationError>()(
 	'Bolt.WorkspaceSchema.ValidationError',
 	{
 		message: Schema.NonEmptyString
@@ -69,7 +66,7 @@ export const layer = Layer.effect(
 		 * value compared was the value inserted a moment earlier by the same process, so `verified` was
 		 * true whatever shape the tables were in. The plan is `create table if not exists` throughout, so a
 		 * table that predates the current plan keeps its old columns and is silently accepted — which is
-		 * exactly how a collection table with no `norbital_sys_period` survived a green verify. Reading
+		 * exactly how a collection table with no `sys_period` survived a green verify. Reading
 		 * `information_schema` is the only answer that can be wrong, so it is the only one worth asking.
 		 */
 		const verify = Effect.fn('WorkspaceSchema.verify')(function* (effectId: EffectId) {
@@ -289,8 +286,9 @@ export const layer = Layer.effect(
 				 * is the same module that decides they belong to a collection.
 				 */
 				const isExclusion = (id: string) => id.includes(':exclusion:');
-				const planSteps = schemaPlan.steps.filter((step) => !isExclusion(step.id));
-				const exclusionSteps = schemaPlan.steps.filter((step) => isExclusion(step.id));
+				const [exclusionSteps, planSteps] = Array.partition(schemaPlan.steps, (step) =>
+					isExclusion(step.id) ? Result.fail(step) : Result.succeed(step)
+				);
 				yield* database.execute(effectId, {
 					_tag: 'Transaction',
 					statements: [
@@ -301,8 +299,8 @@ export const layer = Layer.effect(
 						}
 					]
 				});
-				// The lineage runs after the plan, never before: its DDL calls `norbital_date` and
-				// `norbital_daterange` and indexes with `gin_trgm_ops`, all of which the plan's foundation
+				// The lineage runs after the plan, never before: its DDL calls `bolt_date` and
+				// `bolt_daterange` and indexes with `gin_trgm_ops`, all of which the plan's foundation
 				// installs, and it records itself in a ledger the plan creates.
 				//
 				// This fork is why two definitions of every collection table exist — the plan's
@@ -357,4 +355,3 @@ export const layer = Layer.effect(
 		});
 	})
 );
-export * as WorkspaceSchema from './workspace-schema.js';

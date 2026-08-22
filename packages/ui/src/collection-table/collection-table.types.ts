@@ -1,3 +1,4 @@
+import { Effect, Schema } from 'effect';
 import type {
 	CollectionDbClient,
 	CollectionField,
@@ -5,12 +6,17 @@ import type {
 	CollectionRegistry,
 	CollectionRow
 } from '@norbital-ai/std/collection';
-import type { Component, Snippet } from 'svelte';
+import type {
+	ComponentConstructorOptions,
+	ComponentInternals,
+	Snippet,
+	SvelteComponent
+} from 'svelte';
 import type {
 	CollectionRecordMetadataResolver,
 	ResolvedCollectionRecordMetadata
-} from '../collection-record-metadata/index.js';
-import type { CollectionFilterOperator } from './collection-table-filter-operators.js';
+} from '#lib/collection-record-metadata';
+import type { CollectionFilterOperator } from '#lib/collection-table/collection-table-filter-operators';
 
 export type CollectionName<TCollections extends CollectionRegistry> = Extract<
 	keyof TCollections,
@@ -43,10 +49,11 @@ export type CollectionTableRow<
 	TName extends CollectionName<TCollections>
 > = CollectionRow<TCollections[TName]>;
 
-export type CollectionTableFieldName<TRow extends object> = Extract<keyof TRow, string>;
+type CollectionTableFieldName<TRow extends object> = Extract<keyof TRow, string>;
 
+const collectionTableCardRoleSchema = Schema.Literals(['title', 'subtitle', 'badge']);
 /** The card slot a column feeds when the mobile/kanban card is auto-derived (RFC V.2c). */
-export type CollectionTableCardRole = 'title' | 'subtitle' | 'badge';
+type CollectionTableCardRole = typeof collectionTableCardRoleSchema.Type;
 
 export interface CollectionTableColumn<TRow extends object> {
 	key: CollectionTableFieldName<TRow>;
@@ -79,7 +86,7 @@ const COLLECTION_TABLE_SCALAR_SORT_KINDS = new Set([
 	'uuid'
 ]);
 
-export interface CollectionTableSortability {
+interface CollectionTableSortability {
 	readonly sortable?: boolean;
 }
 
@@ -108,8 +115,25 @@ export interface CollectionTableRowActionContext<TRow extends object> {
 	metadata: readonly ResolvedCollectionRecordMetadata[];
 }
 
+/** Svelte snippets construct component parameters; retain the row type through that constructor. */
+interface CollectionTableColumnComponent<TRow extends object> {
+	new (
+		options: ComponentConstructorOptions<CollectionTableColumnPrimitiveProps<TRow>>
+	): SvelteComponent<CollectionTableColumnPrimitiveProps<TRow>>;
+	(
+		this: void,
+		internals: ComponentInternals,
+		props: CollectionTableColumnPrimitiveProps<TRow>
+	): {
+		$on?(type: string, callback: (event: unknown) => void): () => void;
+		$set?(props: Partial<CollectionTableColumnPrimitiveProps<TRow>>): void;
+	};
+	element?: typeof HTMLElement;
+	z_$$bindings?: string;
+}
+
 export interface CollectionTableColumnsComposition<TRow extends object> {
-	Column: Component<CollectionTableColumnPrimitiveProps<TRow>>;
+	Column: CollectionTableColumnComponent<TRow>;
 }
 
 export interface CollectionTableFeatures {
@@ -122,7 +146,7 @@ export interface CollectionTableFeatures {
 export interface CollectionTablePipelineContext<TRow extends object> {
 	readonly collectionName: string;
 	readonly selectedRows: readonly TRow[];
-	refresh(): Promise<void>;
+	refresh(): Effect.Effect<void, unknown>;
 }
 
 export interface CollectionTablePipeline<TRow extends object> {
@@ -134,19 +158,26 @@ export interface CollectionTablePipeline<TRow extends object> {
 	readonly requiresSelection?: boolean;
 	/** Returns user-facing copy when the current selection cannot run this pipeline. */
 	readonly getDisabledReason?: (selectedRows: readonly TRow[]) => string | null;
-	run(context: CollectionTablePipelineContext<TRow>): unknown | Promise<unknown>;
+	run(context: CollectionTablePipelineContext<TRow>): Effect.Effect<unknown, unknown>;
 }
 
-export type CollectionTableIntegrationState =
-	'connected' | 'configured' | 'degraded' | 'error' | 'disabled';
+const collectionTableIntegrationStateSchema = Schema.Literals([
+	'connected',
+	'configured',
+	'degraded',
+	'error',
+	'disabled'
+]);
+export type CollectionTableIntegrationState = typeof collectionTableIntegrationStateSchema.Type;
 
-export interface CollectionTableIntegrationStatus {
-	readonly id: string;
-	readonly label: string;
-	readonly description?: string;
-	readonly state: CollectionTableIntegrationState;
-	readonly statusLabel?: string;
-}
+const collectionTableIntegrationStatusSchema = Schema.Struct({
+	id: Schema.String,
+	label: Schema.String,
+	description: Schema.optionalKey(Schema.String),
+	state: collectionTableIntegrationStateSchema,
+	statusLabel: Schema.optionalKey(Schema.String)
+});
+export type CollectionTableIntegrationStatus = typeof collectionTableIntegrationStatusSchema.Type;
 
 interface CollectionTableBaseProps<
 	TCollections extends CollectionRegistry,

@@ -6,9 +6,9 @@ const read = (path: string): string => readFileSync(new URL(path, import.meta.ur
 /**
  * That the id a workspace keys its own rows by is an id.
  *
- * `PlatformUser.norbital_id` was published as `user?.name`, and `name` is
+ * `PlatformUser.id` was published as `user?.name`, and `name` is
  * `email.split('@')[0]`. So every authored query of the shape
- * `where: { user_id: { eq: user.norbital_id } }` sent `'dion.neo'` to a `uuid` column, Postgres
+ * `where: { user_id: { eq: user.id } }` sent `'dion.neo'` to a `uuid` column, Postgres
  * refused it as 22P02, and the surface rendered "Could not load your contractor profile."
  *
  * It read as a permissions problem and was reported as one. It was not: the same failure happened
@@ -23,8 +23,8 @@ const read = (path: string): string => readFileSync(new URL(path, import.meta.ur
 describe('the id the platform context publishes', () => {
 	it('is the viewer’s record key, never their display name', () => {
 		const shell = read('../../src/client/ui/shell/shell.svelte');
-		expect(shell).toMatch(/norbital_id: user\?\.id \?\? 'unknown'/);
-		expect(shell).not.toMatch(/norbital_id: user\?\.name/);
+		expect(shell).toMatch(/id: user\?\.id \?\? 'unknown'/);
+		expect(shell).not.toMatch(/id: user\?\.name/);
 	});
 
 	it('is carried from the workspace view, which is where the real id lives', () => {
@@ -45,7 +45,7 @@ describe('the id the platform context publishes', () => {
 			// Bounded by the two fields that open and close the shape rather than by braces: the doc
 			// comment above `id` quotes `where: { user_id: { eq: … } }`, and a brace-matching regex
 			// stops inside the prose. Which this test did, on its first run.
-			const start = source.indexOf('user?: {');
+			const start = source.indexOf('user?:');
 			const end = source.indexOf('teamLabels: string[];', start);
 			expect(start, path).toBeGreaterThan(-1);
 			expect(end, path).toBeGreaterThan(start);

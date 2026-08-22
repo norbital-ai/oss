@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { cn, type WithElementRef } from '#lib/utils';
 	import type { HTMLAttributes } from 'svelte/elements';
-	import { getEmblaContext } from './context.js';
+	import { getEmblaContext } from '#lib/carousel/context';
 
 	let {
 		ref = $bindable(null),

@@ -1,16 +1,9 @@
 <script lang="ts" module>
-	import { getContext, hasContext, setContext } from 'svelte';
+	import { setContext } from 'svelte';
 
 	const COMMAND_GROUP_KEY = Symbol('command-group-id');
 
-	export function getCommandGroupId(): string | undefined {
-		if (!hasContext(COMMAND_GROUP_KEY)) {
-			return undefined;
-		}
-		return getContext<() => string>(COMMAND_GROUP_KEY)();
-	}
-
-	export function setCommandGroupId(getter: () => string) {
+	function setCommandGroupId(getter: () => string) {
 		setContext(COMMAND_GROUP_KEY, getter);
 	}
 </script>
@@ -18,7 +11,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 
-	import type { CommandGroupProps } from './types.js';
+	import type { CommandGroupProps } from '#lib/command/types';
 
 	let {
 		ref = $bindable(null),

@@ -1,6 +1,6 @@
-import { Context, Effect, Layer } from 'effect';
+import { Context, Effect, Layer, Option, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
-import { Transport } from '../facilities/services.js';
+import { Transport } from '#lib/runtime/facilities/services.js';
 
 /**
  * Telling the replicas that something changed.
@@ -33,9 +33,27 @@ import { Transport } from '../facilities/services.js';
 /** The topic every workspace replica listens on. */
 export const SYNC_TOPIC = 'bolt.sync';
 
-export type WakeFrame = Readonly<{ readonly collections: ReadonlyArray<string> }>;
+/**
+ * The frame, decoded.
+ *
+ * It is the one wire shape this module owns and its producer is first-party, so a frame that does
+ * not decode to exactly this shape is treated as an empty one: the engine still works, the replica
+ * just drains normally.
+ */
+const WakeFrame = Schema.Struct({
+	collections: Schema.Array(Schema.String)
+});
+type WakeFrame = Schema.Schema.Type<typeof WakeFrame>;
 
-export type Interface = Readonly<{
+const decodeFrame = Schema.decodeUnknownOption(Schema.fromJsonString(WakeFrame));
+
+const encodeWake = (frame: WakeFrame): Uint8Array =>
+	new TextEncoder().encode(JSON.stringify(frame));
+
+export const decodeWake = (bytes: Uint8Array): WakeFrame =>
+	Option.getOrElse(decodeFrame(new TextDecoder().decode(bytes)), () => ({ collections: [] }));
+
+type Interface = Readonly<{
 	/** Announces that these collections changed. Never fails, and never blocks the caller's result. */
 	readonly announce: (
 		effectId: EffectId,
@@ -44,22 +62,6 @@ export type Interface = Readonly<{
 }>;
 
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/SyncWake');
-
-export const encodeWake = (frame: WakeFrame): Uint8Array =>
-	new TextEncoder().encode(JSON.stringify(frame));
-
-export const decodeWake = (bytes: Uint8Array): WakeFrame => {
-	const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
-	const collections =
-		parsed !== null &&
-		typeof parsed === 'object' &&
-		Array.isArray(Reflect.get(parsed, 'collections'))
-			? (Reflect.get(parsed, 'collections') as ReadonlyArray<unknown>).filter(
-					(entry): entry is string => typeof entry === 'string'
-				)
-			: [];
-	return { collections };
-};
 
 export const layer = Layer.effect(
 	Service,
@@ -85,5 +87,3 @@ export const layer = Layer.effect(
 		});
 	})
 );
-
-export * as SyncWake from './wake.js';

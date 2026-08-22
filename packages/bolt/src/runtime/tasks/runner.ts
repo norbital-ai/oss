@@ -1,5 +1,11 @@
-import { Effect } from 'effect';
-import type { makeQueue, Outcome, Rejection, Statement, TaskRow } from './queue.js';
+import { Clock, Effect } from 'effect';
+import type {
+	makeQueue,
+	Outcome,
+	Rejection,
+	Statement,
+	TaskRow
+} from '#lib/runtime/tasks/queue.js';
 
 /**
  * One tick: roll, take, run, finish, and say when to come back.
@@ -11,8 +17,8 @@ import type { makeQueue, Outcome, Rejection, Statement, TaskRow } from './queue.
  * generic over that requirement instead costs nothing: a test supplies a `run` needing no services,
  * and `dispatch` supplies one needing all of them.
  *
- * The queue below stays promise-shaped and Effect-free, which is where the testability actually
- * lives — `makeQueue` is a function of `execute` and nothing else.
+ * The queue below is Effect-native and remains a function of `execute` and nothing else, so tests
+ * can still supply an in-memory executor without creating a host.
  */
 
 /** How a task is actually executed. The runner never learns what a command means. */
@@ -61,31 +67,14 @@ export type TickReport = Readonly<{
  */
 const RUN_ALLOWANCE_MILLIS = 5_000;
 
-export type Tick = Readonly<{
+type Tick = Readonly<{
 	/** The instant the tick believes it is. Read only for cron arithmetic; due times come from SQL. */
 	readonly nowEpochMs: number;
 	/** How long this invocation has left. Both the hide interval and the floor above read it. */
 	readonly remainingMillis: number;
 }>;
 
-/**
- * How a rejected queue call becomes a typed failure.
- *
- * The runner cannot know what `execute` is, so it cannot know what its failures are — but it must
- * not answer `unknown` either, because `unknown` unions with the run's own error type and swallows
- * it whole. Whoever built the queue does know, so they narrow it here: `tasks.ts` passes the mapper
- * that recovers the facility error its bridge rethrew.
- */
-export type OnQueueFailure<QE> = (cause: unknown) => QE;
-
-export const makeRunner = <E, R, QE>(
-	queue: ReturnType<typeof makeQueue>,
-	run: Run<E, R>,
-	onQueueFailure: OnQueueFailure<QE>
-) => {
-	const attempt = <A>(operation: () => Promise<A>): Effect.Effect<A, QE> =>
-		Effect.tryPromise({ try: operation, catch: onQueueFailure });
-
+export const makeRunner = <E, R, QE>(queue: ReturnType<typeof makeQueue<QE>>, run: Run<E, R>) => {
 	/**
 	 * Runs one tick to completion.
 	 *
@@ -103,35 +92,33 @@ export const makeRunner = <E, R, QE>(
 	 */
 	const tick = (moment: Tick): Effect.Effect<TickReport, E | QE, R> =>
 		Effect.gen(function* () {
-			const startedAt = Date.now();
-			const rolled = yield* attempt(() => queue.roll(moment.nowEpochMs));
+			const startedAt = yield* Clock.currentTimeMillis;
+			const rolled = yield* queue.roll(moment.nowEpochMs);
 			// What one facility round trip costs, measured on the one this tick has already paid for.
-			const roundTripMillis = Math.max(0, Date.now() - startedAt);
+			const roundTripMillis = Math.max(0, (yield* Clock.currentTimeMillis) - startedAt);
 			const outcomes: Array<Outcome> = [];
 			let pending: ReadonlyArray<Statement> = rolled.statements;
 			let taken = 0;
 			let declined = false;
 			for (;;) {
-				const remaining = moment.remainingMillis - (Date.now() - startedAt);
+				const remaining = moment.remainingMillis - ((yield* Clock.currentTimeMillis) - startedAt);
 				if (remaining < RUN_ALLOWANCE_MILLIS + 2 * roundTripMillis) {
 					declined = taken === 0;
 					// `roll`'s writes still have to land even when nothing may be taken: a schedule that
 					// advanced in memory and not on disk fires its next occurrence twice.
 					if (pending.length > 0) {
-						yield* attempt(() => queue.take(pending, { hideForMillis: 0, batchSize: 0 }));
+						yield* queue.take(pending, { hideForMillis: 0, batchSize: 0 });
 					}
 					break;
 				}
-				const tasks = yield* attempt(() =>
-					queue.take(pending, { hideForMillis: remaining, batchSize: 1 })
-				);
+				const tasks = yield* queue.take(pending, { hideForMillis: remaining, batchSize: 1 });
 				pending = [];
 				const task = tasks[0];
 				if (task === undefined) break;
 				taken += 1;
 				outcomes.push(yield* run(task, `${task.effectId}:${task.attempts}`));
 			}
-			const nextDueAtEpochMs = yield* attempt(() => queue.finish(outcomes));
+			const nextDueAtEpochMs = yield* queue.finish(outcomes);
 			return {
 				ran: outcomes.length,
 				rolled: rolled.rolled,
@@ -142,5 +129,3 @@ export const makeRunner = <E, R, QE>(
 		});
 	return { tick };
 };
-
-export * as Runner from './runner.js';

@@ -9,7 +9,7 @@ import {
 import metadata from 'libphonenumber-js/metadata.min.json';
 import examples from 'libphonenumber-js/examples.mobile.json';
 
-export interface PhoneCountryOption {
+interface PhoneCountryOption {
 	readonly country: CountryCode;
 	readonly name: string;
 	readonly callingCode: string;
@@ -23,7 +23,7 @@ export function phoneCountryFromLocale(locale: string): CountryCode {
 	return PHONE_COUNTRIES.find((country) => country === region) ?? 'US';
 }
 
-export function phoneCountryFlag(country: CountryCode): string {
+function phoneCountryFlag(country: CountryCode): string {
 	return String.fromCodePoint(...[...country].map((letter) => 127397 + letter.charCodeAt(0)));
 }
 

@@ -5,6 +5,7 @@
 	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { humanize } from '@norbital-ai/std';
+	import { Effect } from 'effect';
 	import { isEqual } from 'es-toolkit/predicate';
 	import { tick } from 'svelte';
 	import TagsInputTag from './tags-input-tag.svelte';
@@ -13,7 +14,7 @@
 		type ColoredTag,
 		type ColoredTagsInputProps,
 		type TagColor
-	} from './types.js';
+	} from '#lib/tags-input/types';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -107,7 +108,7 @@
 			value: color,
 			label: humanize(color),
 			disabled,
-			_color: color as TagColor
+			_color: color
 		}))
 	);
 
@@ -179,12 +180,16 @@
 		isInputInvalid = false;
 	};
 
-	const cancelColorSelection = async () => {
+	const cancelColorSelection = () => {
 		isSelectingColor = false;
 		validatedInput = '';
 		colorSearchValue = '';
-		await tick();
-		inputElement?.focus();
+		void Effect.runPromise(
+			Effect.gen(function* () {
+				yield* Effect.promise(() => tick());
+				inputElement?.focus();
+			})
+		);
 	};
 
 	const deleteTag = (tagToDelete: ColoredTag) => {

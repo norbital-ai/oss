@@ -4,8 +4,8 @@
 	import { cn } from '#lib/utils';
 	import { buttonVariants } from '#lib/button';
 	import { Inline } from '#lib/layout';
-	import { navigateView } from '../utils.js';
-	import type { CalendarView } from '../types.js';
+	import { navigateView } from '#lib/event-calendar/utils';
+	import type { CalendarView } from '#lib/event-calendar/types';
 
 	const { t } = useI18n<UiKeys>();
 	const intlLocale = $derived(useI18n<UiKeys>().intlLocale);

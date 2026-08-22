@@ -1,4 +1,4 @@
-import { Schema } from 'effect';
+import { Option, Schema } from 'effect';
 
 /**
  * The tag an authored refusal is recognised by, as a string constant.
@@ -13,7 +13,7 @@ import { Schema } from 'effect';
  * refusal falls through to the defect branch and reports as a 500 again, which is the whole thing
  * this change exists to stop. A tag comparison cannot fail that way.
  */
-export const AUTHORED_REFUSAL_TAG = 'Bolt.Authored.Refusal';
+const AUTHORED_REFUSAL_TAG = 'Bolt.Authored.Refusal';
 
 /**
  * A business rule said no.
@@ -48,31 +48,22 @@ export type RefusalSite = Readonly<{
 	readonly action?: string;
 }>;
 
-const named = (value: unknown): string | undefined =>
-	typeof value === 'string' && value.trim() !== '' ? value : undefined;
+/** A refusal field value, admitted only when it is a non-blank string. */
+const NamedNonEmpty = Schema.NonEmptyString.check(
+	Schema.makeFilter((value: string) => value.trim() !== '' || 'must not be blank')
+);
+
+const decodeNamed = (value: unknown): string | undefined =>
+	Option.getOrUndefined(Schema.decodeUnknownOption(NamedNonEmpty)(value));
 
 /**
  * The refusal a thrown value carries, or `undefined` if it carries none.
  *
- * Normalising rather than returning the caught object matters: the value that arrives may be an
- * `AuthoredRefusal` from a *different* module instance (see `AUTHORED_REFUSAL_TAG`), and everything
- * downstream — the `instanceof` in `runtime/app.ts`, the error channel's type — is written against
- * this module's class. So a recognised refusal is rebuilt here, and what comes back is always one
- * this package can reason about.
+ * The class is the schema. Decoding it once validates the complete tagged value and returns the
+ * canonical error type, without a parallel object schema, field-by-field guards, or `instanceof`.
  */
 export const refusalOf = (cause: unknown): AuthoredRefusal | undefined => {
-	if (cause === null || typeof cause !== 'object') return undefined;
-	if (Reflect.get(cause, '_tag') !== AUTHORED_REFUSAL_TAG) return undefined;
-	const message = named(Reflect.get(cause, 'message'));
-	if (message === undefined) return undefined;
-	if (cause instanceof AuthoredRefusal) return cause;
-	const collection = named(Reflect.get(cause, 'collection'));
-	const action = named(Reflect.get(cause, 'action'));
-	return new AuthoredRefusal({
-		message,
-		...(collection === undefined ? {} : { collection }),
-		...(action === undefined ? {} : { action })
-	});
+	return Option.getOrUndefined(Schema.decodeUnknownOption(AuthoredRefusal)(cause));
 };
 
 /**
@@ -83,8 +74,8 @@ export const refusalOf = (cause: unknown): AuthoredRefusal | undefined => {
  * outer seam must not relabel it with whichever table the write happened to land on.
  */
 export const refusalAt = (refusal: AuthoredRefusal, site: RefusalSite): AuthoredRefusal => {
-	const collection = refusal.collection ?? named(site.collection);
-	const action = refusal.action ?? named(site.action);
+	const collection = refusal.collection ?? decodeNamed(site.collection);
+	const action = refusal.action ?? decodeNamed(site.action);
 	if (collection === refusal.collection && action === refusal.action) return refusal;
 	return new AuthoredRefusal({
 		message: refusal.message,
@@ -115,7 +106,7 @@ const DeclarationRefusals = {
 		// trap `DispatchError.from` documents. An author who called `refuse()` with nothing still
 		// meant to refuse, so the refusal survives and only the sentence is substituted.
 		throw new AuthoredRefusal({
-			message: named(message) ?? 'This operation was refused by a workspace rule.'
+			message: decodeNamed(message) ?? 'This operation was refused by a workspace rule.'
 		});
 	}
 };

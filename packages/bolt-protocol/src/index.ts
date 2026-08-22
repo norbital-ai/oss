@@ -56,7 +56,7 @@ export {
 } from './facilities.js';
 export type { FacilityBinding, FacilityBindings } from './facilities.js';
 
-export { Activation, Invocation, InvocationScope } from './invocation.js';
+export { Activation, Invocation, InvocationScope, PluginTrustedContext } from './invocation.js';
 
 export {
 	EffectId,

@@ -1,5 +1,15 @@
 import { Config, Effect, Option, Redacted, Schema } from 'effect';
-import { EnvironmentName, InvocationScope, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
+import {
+	EnvironmentName,
+	FacilityCall,
+	InvocationScope,
+	ReleaseId,
+	TenantId,
+	failure,
+	makeWireError,
+	success,
+	type FacilityBinding
+} from '@norbital-ai/bolt-protocol';
 
 export const ServerConfiguration = Schema.Struct({
 	host: Schema.NonEmptyString,
@@ -23,14 +33,18 @@ export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()
 	}
 ) {}
 
-// stupidity:allow AL10 -- provider configuration is owned by this Config module in the required 14-file architecture
-export interface ConfiguredProviderSettings {
-	readonly name: string;
-	readonly endpoint?: string;
-	readonly credential?: Redacted.Redacted<string>;
-}
+export const ConfiguredProviderSettingsSchema = Schema.Struct({
+	name: Schema.NonEmptyString,
+	endpoint: Schema.optional(Schema.String),
+	credential: Schema.optional(Schema.Redacted(Schema.String))
+});
 
-// stupidity:allow AL10 -- provider factory SPI is owned by this Config module in the required 14-file architecture
+/** The settings one configured provider is constructed from, owned by the schema above for the Factories that consume it. */
+export interface ConfiguredProviderSettings extends Schema.Schema.Type<
+	typeof ConfiguredProviderSettingsSchema
+> {}
+
+// The factory SPI stays an Effect service rather than a schema: `make` is a live construction boundary.
 export interface ConfiguredProviderFactory<Provider, Error = never> {
 	readonly make: (settings: ConfiguredProviderSettings) => Effect.Effect<Provider, Error>;
 }
@@ -71,6 +85,69 @@ export const selectConfiguredProvider = <Provider, Error>(
 			...(Option.isSome(values.credential) ? { credential: values.credential.value } : {})
 		});
 	});
+
+type WireFailureDescription = Readonly<{
+	readonly code: string;
+	readonly message: string | ((cause: unknown) => string);
+	readonly retryable?: boolean;
+}>;
+
+/** Owns schema checking, cancellation, and failure envelopes for every configured facility. */
+export const makeWireBinding = <
+	RequestSchema extends Schema.ConstraintDecoder<unknown>,
+	ResponseSchema extends Schema.ConstraintDecoder<unknown>
+>(
+	options: Readonly<{
+		readonly request: RequestSchema;
+		readonly response: ResponseSchema;
+		readonly cancelled: Readonly<{ readonly code: string; readonly message: string }>;
+		readonly failed: WireFailureDescription;
+		readonly invoke: (
+			metadata: FacilityCall,
+			input: RequestSchema['Type'],
+			signal: AbortSignal
+		) => Promise<unknown>;
+		/** A completed database operation can become unknown while its result crosses cancellation. */
+		readonly checkCancellationAfterInvoke?: boolean;
+	}>
+): FacilityBinding<RequestSchema['Type'], ResponseSchema['Type']> => ({
+	call: (unsafeMetadata, unsafeInput, signal) =>
+		Effect.runPromise(
+			Effect.gen(function* () {
+				const metadata = yield* Schema.decodeUnknownEffect(FacilityCall)(unsafeMetadata);
+				const input = yield* Schema.decodeUnknownEffect(options.request)(unsafeInput);
+				if (signal.aborted) {
+					return failure(makeWireError(options.cancelled.code, options.cancelled.message));
+				}
+				const output = yield* Effect.tryPromise(() => options.invoke(metadata, input, signal));
+				if (options.checkCancellationAfterInvoke === true && signal.aborted) {
+					return failure(
+						makeWireError(options.cancelled.code, options.cancelled.message, {
+							outcome: 'unknown'
+						})
+					);
+				}
+				return success(yield* Schema.decodeUnknownEffect(options.response)(output));
+			}).pipe(
+				Effect.catch((cause) =>
+					Effect.succeed(
+						failure(
+							makeWireError(
+								options.failed.code,
+								typeof options.failed.message === 'function'
+									? options.failed.message(cause)
+									: options.failed.message,
+								{
+									retryable: options.failed.retryable ?? !signal.aborted,
+									outcome: signal.aborted ? 'unknown' : 'known'
+								}
+							)
+						)
+					)
+				)
+			)
+		)
+});
 
 /** Reads process configuration through Effect's current ConfigProvider. */
 export const loadConfiguration = Effect.fn('BoltServer.Configuration.load')(

@@ -1,4 +1,5 @@
 import { textSearchMatches } from '@norbital-ai/std/string';
+import { Schema } from 'effect';
 import type { CollectionFilter } from '@norbital-ai/std/collection';
 
 /**
@@ -12,11 +13,14 @@ import type { CollectionFilter } from '@norbital-ai/std/collection';
  * answers `[]`, and `[].every(...)` is `true` — so two different instants would compare equal and a
  * filter would match rows it must not.
  */
-export const isPlainRecord = (value: unknown): value is Record<string, unknown> => {
-	if (typeof value !== 'object' || value === null) return false;
-	const prototype = Object.getPrototypeOf(value) as object | null;
-	return prototype === Object.prototype || prototype === null;
-};
+const PlainRecordSchema = Schema.Record(Schema.String, Schema.Unknown).check(
+	Schema.makeFilter((value) => {
+		const prototype = Object.getPrototypeOf(value);
+		return prototype === Object.prototype || prototype === null;
+	})
+);
+
+export const isPlainRecord = Schema.is(PlainRecordSchema);
 
 /**
  * A filter whose path cannot be resolved against the row in hand.
@@ -57,9 +61,17 @@ function flattenCandidates(values: readonly unknown[]): unknown[] {
 	return flattened;
 }
 
-type PathResolution =
-	| { readonly resolved: true; readonly values: readonly unknown[] }
-	| { readonly resolved: false; readonly segment: string };
+const pathResolutionSchema = Schema.Union([
+	Schema.Struct({
+		resolved: Schema.Literal(true),
+		values: Schema.Array(Schema.Unknown)
+	}),
+	Schema.Struct({
+		resolved: Schema.Literal(false),
+		segment: Schema.String
+	})
+]);
+type PathResolution = typeof pathResolutionSchema.Type;
 
 /**
  * Every value a filter path selects on one row.

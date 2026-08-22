@@ -1,11 +1,11 @@
 import { defineMessages, type KeysOf } from '@norbital-ai/std/i18n';
-import { commonMessages } from './common.messages.js';
-import { tableMessages } from './table.messages.js';
-import { kanbanMessages } from './kanban.messages.js';
-import { formMessages } from './form.messages.js';
-import { dataRendererMessages } from './data-renderer.messages.js';
-import { miscMessages } from './misc.messages.js';
-import { recordMetadataMessages } from './record-metadata.messages.js';
+import { commonMessages } from '#lib/i18n/messages/common.messages';
+import { tableMessages } from '#lib/i18n/messages/table.messages';
+import { kanbanMessages } from '#lib/i18n/messages/kanban.messages';
+import { formMessages } from '#lib/i18n/messages/form.messages';
+import { dataRendererMessages } from '#lib/i18n/messages/data-renderer.messages';
+import { miscMessages } from '#lib/i18n/messages/misc.messages';
+import { recordMetadataMessages } from '#lib/i18n/messages/record-metadata.messages';
 
 /**
  * The complete `@norbital-ai/ui` catalog: English source of truth plus the

@@ -9,7 +9,7 @@ import {
 	type IdentityHookRequest,
 	type IdentityHookResponse
 } from '@norbital-ai/bolt-protocol';
-import { Identity } from '../../src/runtime/identity/identity.js';
+import * as Identity from '../../src/runtime/identity/identity.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 
 let harness: BoltTestRuntime | undefined;
@@ -106,7 +106,7 @@ describe('identity lifecycle hooks', () => {
 		// to exist before a session can be started for them. That refusal is the point: the previous
 		// implementation would issue a live credential for any user id it was handed.
 		await harness.database.query(
-			`insert into bolt_auth_user ("norbital_id", "name", "tenantId") values (md5($1::text)::uuid, $1, 'test-tenant') on conflict ("norbital_id") do nothing`,
+			`insert into bolt_auth_user ("id", "name", "tenantId") values (md5($1::text)::uuid, $1, 'test-tenant') on conflict ("id") do nothing`,
 			['u1']
 		);
 		await harness.runtime.runPromise(
@@ -134,7 +134,7 @@ describe('identity lifecycle hooks', () => {
 		// to exist before a session can be started for them. That refusal is the point: the previous
 		// implementation would issue a live credential for any user id it was handed.
 		await harness.database.query(
-			`insert into bolt_auth_user ("norbital_id", "name", "tenantId") values (md5($1::text)::uuid, $1, 'test-tenant') on conflict ("norbital_id") do nothing`,
+			`insert into bolt_auth_user ("id", "name", "tenantId") values (md5($1::text)::uuid, $1, 'test-tenant') on conflict ("id") do nothing`,
 			['u2']
 		);
 		const result = await harness.runtime.runPromise(

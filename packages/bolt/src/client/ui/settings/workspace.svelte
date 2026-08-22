@@ -2,15 +2,16 @@
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
 	import { Bound, Cluster, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import type {
-		CollectionDefinition,
-		CollectionRecord,
-		CollectionType
-	} from '@norbital-ai/std/collection';
-	import { EMPTY_WORKSPACE_ACCESS, type WorkspaceAccess } from './access.js';
+	import type { CollectionDefinition, CollectionRecord } from '@norbital-ai/std/collection';
+	import {
+		EMPTY_WORKSPACE_ACCESS,
+		invitationStatusAt,
+		sortAudit,
+		sortMembers,
+		type WorkspaceAccess
+	} from '#lib/client/ui/settings/rows.js';
 	import TeamChart from './teams-flow.svelte';
-	import { inMemoryCollectionClient } from './table-client.js';
-	import { invitationStatusAt, sortAudit, sortMembers } from './rows.js';
+	import { inMemoryCollectionClient } from '#lib/client/ui/settings/table-client.js';
 
 	/**
 	 * The People surface: who is a member, how the teams nest, which invitations are outstanding,
@@ -108,21 +109,21 @@
 	const memberRows = $derived(
 		sortMembers(access.members).map((member) => ({
 			...member,
-			norbital_id: member.id
-		})) as unknown as ReadonlyArray<CollectionRecord>
+			id: member.id
+		})) satisfies ReadonlyArray<CollectionRecord>
 	);
 	const invitationRows = $derived(
 		access.invitations.map((invitation) => ({
 			...invitation,
-			norbital_id: invitation.id,
+			id: invitation.id,
 			status: invitationStatusAt(invitation, now)
-		})) as unknown as ReadonlyArray<CollectionRecord>
+		})) satisfies ReadonlyArray<CollectionRecord>
 	);
 	const eventRows = $derived(
 		sortAudit(access.events).map((event) => ({
 			...event,
-			norbital_id: event.id
-		})) as unknown as ReadonlyArray<CollectionRecord>
+			id: event.id
+		})) satisfies ReadonlyArray<CollectionRecord>
 	);
 
 	/**
@@ -131,11 +132,7 @@
 	 * session no matter how many times the tables remounted.
 	 */
 	const peopleClient = $derived(
-		inMemoryCollectionClient<{
-			readonly [MEMBERS_COLLECTION]: CollectionType;
-			readonly [INVITATIONS_COLLECTION]: CollectionType;
-			readonly [EVENTS_COLLECTION]: CollectionType;
-		}>(DEFINITIONS, {
+		inMemoryCollectionClient(DEFINITIONS, {
 			[MEMBERS_COLLECTION]: memberRows,
 			[INVITATIONS_COLLECTION]: invitationRows,
 			[EVENTS_COLLECTION]: eventRows

@@ -5,7 +5,8 @@ import type {
 	UploadOptions,
 	UploadResult
 } from '@norbital-ai/ui/file-upload';
-import { workspaceSession } from '../../session.js';
+import { Effect } from 'effect';
+import { workspaceSession } from '#lib/client/session.js';
 
 /**
  * The design system's file-upload contract, over the host's file store.
@@ -30,28 +31,35 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 	 * type of what it serves back from that extension — a key without one reads back as an octet
 	 * stream and the renderer shows a download instead of an image.
 	 */
-	async upload(file: File, options: UploadOptions = {}): Promise<UploadResult> {
-		const { id, promise } = this.beginUpload(file, {
-			...(options.stream === undefined ? {} : { stream: options.stream }),
-			...(options.onProgress === undefined
-				? {}
-				: { onProgress: (stage: UploadEntry['stage']) => options.onProgress?.(stage) })
+	upload(file: File, options: UploadOptions = {}): Effect.Effect<UploadResult, unknown> {
+		const { id, effect } = this.beginUpload(file, {
+			stream: options.stream,
+			onProgress: (stage: UploadEntry['stage']) => options.onProgress?.(stage)
 		});
-		options.signal?.addEventListener('abort', () => this.cancel(id), { once: true });
-		return promise;
+		const abort = (): void => this.cancel(id);
+		options.signal?.addEventListener('abort', abort, { once: true });
+		if (options.signal?.aborted === true) abort();
+		return effect.pipe(
+			Effect.onInterrupt(() => Effect.sync(() => this.cancel(id))),
+			Effect.ensuring(
+				Effect.sync(() => options.signal?.removeEventListener('abort', abort))
+			)
+		);
 	}
 
-	async uploadMany(
+	uploadMany(
 		files: File[],
 		options: Pick<UploadOptions, 'stream'> = {}
-	): Promise<UploadResult[]> {
-		return Promise.all(files.map((file) => this.upload(file, options)));
+	): Effect.Effect<UploadResult[], unknown> {
+		return Effect.forEach(files, (file) => this.upload(file, options), {
+			concurrency: 'unbounded'
+		});
 	}
 
 	beginUpload(
 		file: File,
 		options: BeginUploadOptions = {}
-	): { id: string; promise: Promise<UploadResult> } {
+	): { id: string; effect: Effect.Effect<UploadResult, unknown> } {
 		const id = options.uploadId ?? crypto.randomUUID();
 		const controller = new AbortController();
 		this.#controllers.set(id, controller);
@@ -60,40 +68,42 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 		options.onProgress?.('uploading');
 		const extension = file.name.includes('.') ? `.${file.name.split('.').at(-1)}` : '';
 		const storageKey = `${id}${extension}`;
-		const promise = workspaceSession()
-			.files.store(
-				storageKey,
-				file,
-				({ loaded, total }) => {
-					entry.percent = total === 0 ? 100 : Math.round((loaded / total) * 100);
-				},
-				controller.signal
-			)
-			.then((url) => {
-				const result: UploadResult = {
-					norbital_id: id,
-					storageKey,
-					url,
-					name: file.name,
-					type: file.type,
-					size: file.size
-				};
-				entry.stage = 'complete';
-				entry.percent = 100;
-				entry.result = result;
-				options.onProgress?.('complete');
-				return result;
-			})
-			.catch((cause: unknown) => {
-				entry.stage = controller.signal.aborted ? 'aborted' : 'error';
-				entry.error = cause instanceof Error ? cause.message : String(cause);
-				options.onProgress?.(entry.stage);
-				throw cause;
-			})
-			.finally(() => {
-				this.#controllers.delete(id);
-			});
-		return { id, promise };
+		const effect = Effect.tryPromise({
+				try: () =>
+					workspaceSession().files.store(
+						storageKey,
+						file,
+						({ loaded, total }) => {
+							entry.percent = total === 0 ? 100 : Math.round((loaded / total) * 100);
+						},
+						controller.signal
+					),
+				catch: (cause) => cause
+			}).pipe(
+				Effect.map((url) => {
+					const result: UploadResult = {
+						id: id,
+						storageKey,
+						url,
+						name: file.name,
+						type: file.type,
+						size: file.size
+					};
+					entry.stage = 'complete';
+					entry.percent = 100;
+					entry.result = result;
+					options.onProgress?.('complete');
+					return result;
+				}),
+				Effect.catch((cause) => {
+					entry.stage = controller.signal.aborted ? 'aborted' : 'error';
+					entry.error = String(cause);
+					options.onProgress?.(entry.stage);
+					return Effect.fail(cause);
+				}),
+				Effect.ensuring(Effect.sync(() => this.#controllers.delete(id)))
+			);
+		return { id, effect };
 	}
 
 	/**
@@ -104,12 +114,13 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 	 * deriving a key by string-slicing a URL is how one host's routing shape gets written into a
 	 * framework, and how a delete lands on the wrong object when that shape changes.
 	 */
-	async delete(fileUrl: string): Promise<void> {
+	delete(fileUrl: string): Effect.Effect<void, unknown> {
 		const entry = this.uploads.find((candidate) => candidate.result?.url === fileUrl);
-		if (entry?.result === undefined) return;
-		const extension = entry.file.name.includes('.') ? `.${entry.file.name.split('.').at(-1)}` : '';
-		await workspaceSession().files.remove(`${entry.result.norbital_id}${extension}`);
-		this.clear(entry.id);
+		const result = entry?.result;
+		if (entry === undefined || result === undefined) return Effect.void;
+		return Effect.tryPromise(() => workspaceSession().files.remove(result.storageKey)).pipe(
+			Effect.tap(() => Effect.sync(() => this.clear(entry.id)))
+		);
 	}
 
 	readonly cancel = (entryId: string): void => {

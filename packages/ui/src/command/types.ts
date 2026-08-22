@@ -1,3 +1,4 @@
+import { Schema } from 'effect';
 import type { WithElementRef } from 'bits-ui';
 import type { Snippet } from 'svelte';
 import type { HTMLAttributes } from 'svelte/elements';
@@ -6,23 +7,29 @@ import type { HTMLAttributes } from 'svelte/elements';
 // Core Data Types
 // ============================================================================
 
-export interface CommandItemData {
-	value: string;
-	disabled?: boolean;
-	keywords?: string[];
-	groupId?: string;
-	label?: string;
-	description?: string;
-	href?: string;
-	// Additional custom data
-	[key: string]: unknown;
-}
+const CommandItemDataSchema = Schema.StructWithRest(
+	Schema.Struct({
+		value: Schema.mutableKey(Schema.String),
+		disabled: Schema.mutableKey(Schema.optionalKey(Schema.Boolean)),
+		keywords: Schema.mutableKey(Schema.optionalKey(Schema.Array(Schema.String))),
+		groupId: Schema.mutableKey(Schema.optionalKey(Schema.String)),
+		label: Schema.mutableKey(Schema.optionalKey(Schema.String)),
+		description: Schema.mutableKey(Schema.optional(Schema.String)),
+		href: Schema.mutableKey(Schema.optionalKey(Schema.String))
+	}),
+	[Schema.Record(Schema.String, Schema.Unknown)]
+);
+export type CommandItemData = typeof CommandItemDataSchema.Type;
 
 // ============================================================================
 // Filter Function
 // ============================================================================
 
-export type FilterFunction = (value: string, search: string, keywords?: string[]) => number;
+export type FilterFunction = (
+	value: string,
+	search: string,
+	keywords?: readonly string[]
+) => number;
 
 // ============================================================================
 // Loading & Data Fetching Configs
@@ -61,7 +68,7 @@ export interface CommandStateProps {
 	readonly items?: CommandItemData[];
 	readonly searchValue?: string;
 	readonly value?: string | string[];
-	readonly activeValue?: string;
+	readonly activeValue?: string | undefined;
 	// Configuration
 	shouldFilter: boolean;
 	filterFn?: FilterFunction;
@@ -79,7 +86,7 @@ export interface CommandRootProps extends WithElementRef<HTMLAttributes<HTMLDivE
 	// Selected value(s)
 	value?: string | string[];
 	// Currently highlighted/indicator value
-	activeValue?: string;
+	activeValue?: string | undefined;
 	// Search input value (for filtering)
 	searchValue?: string;
 	shouldFilter?: boolean;
@@ -139,10 +146,11 @@ export interface CommandGroupItemsProps extends WithElementRef<HTMLAttributes<HT
 }
 
 export interface CommandInputProps extends WithElementRef<
-	Omit<HTMLAttributes<HTMLInputElement>, 'prefix'>
+	Omit<HTMLAttributes<HTMLInputElement>, 'prefix' | 'aria-label'>
 > {
 	value?: string;
-	placeholder?: string;
+	placeholder?: string | undefined;
+	'aria-label'?: string | undefined;
 	disabled?: boolean;
 	prefix?: Snippet;
 	suffix?: Snippet;

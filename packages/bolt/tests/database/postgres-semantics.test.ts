@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
-import { vector } from '@electric-sql/pglite/vector';
+import { vector } from '@electric-sql/pglite-pgvector';
 import { Result } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { uuid } from 'drizzle-orm/pg-core';
@@ -12,7 +12,7 @@ import { collection, field, workspace } from '../../src/authoring/workspace-sche
 import { provisioningStatements } from '../support/bolt-test-layer.js';
 import { compileWhere, makeWhereContext } from '../../src/runtime/collections/where.js';
 
-/** A stable UUID for a readable fixture name — records are keyed by `norbital_id uuid`. */
+/** A stable UUID for a readable fixture name — records are keyed by `id uuid`. */
 const rid = (name: string): string => {
 	const digest = createHash('sha1').update(name).digest('hex').slice(0, 32);
 	return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
@@ -101,7 +101,7 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 							name: 'jurisdictions_code_effective_range_no_overlap',
 							elements: [
 								{ expr: 'code', with: '=' },
-								{ expr: 'norbital_daterange(effective_range)', with: '&&' }
+								{ expr: 'bolt_daterange(effective_range)', with: '&&' }
 							]
 						}
 					]
@@ -138,6 +138,7 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 		await database.exec(`insert into jurisdictions (code, name, effective_range)
 			select 'C' || generate_series, 'Jurisdiction ' || generate_series, '{}'::jsonb from generate_series(1, 2000)`);
 		await database.exec('analyze jurisdictions');
+		await database.exec('set enable_seqscan = off');
 		const explain = await database.query<{ 'QUERY PLAN': string }>(
 			`explain (costs off) select * from jurisdictions where name ilike '%1234%'`
 		);
@@ -170,11 +171,11 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 	/**
 	 * The relation filter, against the tables the plan actually builds.
 	 *
-	 * `norbital_id` is `uuid`, and a foreign key that points at it was planned as `text` because
+	 * `id` is `uuid`, and a foreign key that points at it was planned as `text` because
 	 * `describeModelColumns` flattened Drizzle's `PgUUID` to `string`. Nothing noticed while filters
 	 * only compared a column with a bind parameter — Postgres coerces an untyped parameter — but a
 	 * relation filter compiles to `EXISTS (... WHERE "leave_requests"."employment_id" =
-	 * "employments"."norbital_id")`, a column-to-column comparison with no parameter to coerce, and
+	 * "employments"."id")`, a column-to-column comparison with no parameter to coerce, and
 	 * Postgres answers `operator does not exist: text = uuid`. That is what took Leave → Overview down:
 	 * every seasonality read scoped to a company failed, and only the unscoped one worked.
 	 *
@@ -205,7 +206,7 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 					target: 'employments',
 					cardinality: 'one',
 					from: { collection: 'leave_requests', column: 'employment_id' },
-					to: { collection: 'employments', column: 'norbital_id' }
+					to: { collection: 'employments', column: 'id' }
 				}
 			],
 			apps: [],
@@ -230,25 +231,25 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 		const employment = rid('employment-1');
 		const company = rid('company-1');
 		await database.query(
-			'insert into employments (norbital_id, company_id, employee_number) values ($1, $2, $3)',
+			'insert into employments (id, company_id, employee_number) values ($1, $2, $3)',
 			[employment, company, 'E-1']
 		);
-		await database.query(
-			'insert into leave_requests (norbital_id, employment_id) values ($1, $2)',
-			[rid('leave-1'), employment]
-		);
+		await database.query('insert into leave_requests (id, employment_id) values ($1, $2)', [
+			rid('leave-1'),
+			employment
+		]);
 		// The excluded row now points at a real employment in a different company. It used to dangle,
 		// which the schema plan permitted because it rendered no foreign keys at all; the lineage does,
 		// so a reference to nothing is refused by the database rather than quietly stored.
 		const otherEmployment = rid('employment-2');
 		await database.query(
-			'insert into employments (norbital_id, company_id, employee_number) values ($1, $2, $3)',
+			'insert into employments (id, company_id, employee_number) values ($1, $2, $3)',
 			[otherEmployment, rid('company-2'), 'E-2']
 		);
-		await database.query(
-			'insert into leave_requests (norbital_id, employment_id) values ($1, $2)',
-			[rid('leave-2'), otherEmployment]
-		);
+		await database.query('insert into leave_requests (id, employment_id) values ($1, $2)', [
+			rid('leave-2'),
+			otherEmployment
+		]);
 
 		const compiled = compileWhere(
 			{ leave_request_employment: { company_id: { eq: company } } },
@@ -256,11 +257,11 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 		);
 		if (Result.isFailure(compiled))
 			throw new Error(`compileWhere failed: ${compiled.failure.message}`);
-		const matched = await database.query<{ norbital_id: string }>(
-			`select norbital_id from leave_requests where ${compiled.success.sql}`,
+		const matched = await database.query<{ id: string }>(
+			`select id from leave_requests where ${compiled.success.sql}`,
 			[...compiled.success.parameters]
 		);
-		expect(matched.rows.map(({ norbital_id }) => norbital_id)).toEqual([rid('leave-1')]);
+		expect(matched.rows.map(({ id }) => id)).toEqual([rid('leave-1')]);
 	});
 
 	it('uses the primary-key index and permits only one competing approval decision', async () => {

@@ -14,7 +14,7 @@
 	import { cn } from '@norbital-ai/ui/utils';
 	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
 	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
-	import type { AgentOrbState } from '../agent/agent-orb-state.js';
+	import type { ThinkingOrbState } from '@norbital-ai/ui/thinking-orb';
 
 	let {
 		state,
@@ -23,7 +23,7 @@
 		expanded = true,
 		onclick
 	}: {
-		state: AgentOrbState;
+		state: ThinkingOrbState;
 		/** The visible name of the action, e.g. "Ask agent". */
 		label: string;
 		/** Rendered shortcut, e.g. "⌘K". */

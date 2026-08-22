@@ -3,18 +3,21 @@ import { Effect } from 'effect';
 import { sql } from 'drizzle-orm';
 import type { AnyPgColumnBuilder } from 'drizzle-orm/pg-core';
 import {
-	collection,
 	date,
+	bytea,
 	defineModel,
 	integer,
 	numeric,
+	reference,
 	text,
-	workspace
+	uuid
 } from '../../src/authoring/index.js';
+import { collection, workspace } from '../../src/authoring/workspace-schema.js';
 import { describeModelColumns } from '../../src/authoring/model-introspection.js';
 import type { ModelDeclaration } from '../../src/authoring/models-schema.js';
 import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
 import {
+	compileHostModelSchema,
 	planWorkspaceMigration,
 	type WorkspaceSnapshot
 } from '../../src/compiler/schema-migrations.js';
@@ -45,6 +48,24 @@ const snapshotOf = async (
 		throw new Error('a schema built from nothing must produce a migration');
 	return migration.snapshot;
 };
+
+describe('host-owned model schema', () => {
+	it('uses the same compiled system columns and Drizzle DDL as workspace models', async () => {
+		const statements = await Effect.runPromise(
+			compileHostModelSchema(
+				'colony_control_store',
+				defineModel({ key: text().notNull().unique(), value: bytea().notNull() })
+			)
+		);
+		const ddl = statements.join('\n');
+		expect(ddl).toContain('CREATE TABLE "colony_control_store"');
+		expect(ddl).toContain('"id" uuid PRIMARY KEY');
+		expect(ddl).toContain('"updated_at" timestamp with time zone');
+		expect(ddl).toContain('"key" text NOT NULL UNIQUE');
+		expect(ddl).toContain('"value" bytea NOT NULL');
+		expect(ddl).not.toContain('colony_control_store_key_idx');
+	});
+});
 
 /**
  * The plan no longer renders workspace collection DDL at all, so the drift it used to be checked for
@@ -105,14 +126,26 @@ describe('schema plan scope', () => {
 
 	it('still renders the foundation every lineage depends on', () => {
 		const ids = planStepIds('component_entries');
-		// The lineage calls `norbital_date` in generated columns and indexes with `gin_trgm_ops`; both
+		// The lineage calls `bolt_date` in generated columns and indexes with `gin_trgm_ops`; both
 		// come from here, and `bolt:` ids sort before `collection:` ids so they exist first.
 		expect(ids.some((id) => id.startsWith('bolt:extension-'))).toBe(true);
-		expect(ids).toContain('bolt:sync-outbox');
+		expect(ids).toContain('collection:bolt_sync_outbox');
 	});
 });
 
 describe('Bolt Drizzle-driven schema migration', () => {
+	it('refuses a model that redeclares a platform column', async () => {
+		await expect(
+			Effect.runPromise(
+				planWorkspaceMigration({
+					models: { invalid: defineModel({ id: text(), name: text() }) },
+					relations: [],
+					previous: undefined
+				})
+			)
+		).rejects.toThrow('A model cannot redeclare platform columns: id');
+	});
+
 	it('drops a removed column', async () => {
 		const previous = await snapshotOf(withColumn({ leave_year_start_month: numeric() }));
 		const migration = await Effect.runPromise(
@@ -240,5 +273,159 @@ describe('Bolt Drizzle-driven schema migration', () => {
 			})
 		);
 		expect(created?.statements.join('\n')).not.toContain('gin_trgm_ops');
+	});
+
+	it('renders a polymorphic reference as an exclusive arc with direct foreign keys', async () => {
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: {
+					time_entries: defineModel({ note: text() }),
+					leave_requests: defineModel({ note: text() }),
+					payslip_sources: defineModel(
+						{
+							payslip_id: uuid().notNull(),
+							source: reference({
+								TIME_ENTRY: 'time_entries',
+								LEAVE_REQUEST: 'leave_requests'
+							})
+								.notNull()
+								.unique()
+						},
+						{ indexes: [{ columns: ['payslip_id', 'source'], unique: true }] }
+					)
+				},
+				relations: [],
+				previous: undefined
+			})
+		);
+		const ddl = migration?.statements.join('\n') ?? '';
+		expect(ddl).toContain('"source__time_entry_id" uuid');
+		expect(ddl).toContain('"source__leave_request_id" uuid');
+		expect(ddl).not.toContain('"source" jsonb');
+		expect(ddl).toContain('num_nonnulls("source__time_entry_id", "source__leave_request_id") = 1');
+		expect(ddl).toContain('REFERENCES "time_entries"("id")');
+		expect(ddl).toContain('REFERENCES "leave_requests"("id")');
+		expect(ddl).toContain('WHERE "source__time_entry_id" is not null');
+		expect(ddl).toContain(
+			'("payslip_id","source__time_entry_id") WHERE "source__time_entry_id" is not null'
+		);
+		expect(ddl).toContain(
+			'("payslip_id","source__leave_request_id") WHERE "source__leave_request_id" is not null'
+		);
+	});
+
+	it('renders optional self-references and delete behavior without redundant indexes', async () => {
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: {
+					groups: defineModel({ name: text() }),
+					nodes: defineModel({
+						owner: reference({ NODE: 'nodes', GROUP: 'groups' }).onDelete('cascade')
+					})
+				},
+				relations: [],
+				previous: undefined
+			})
+		);
+		const ddl = migration?.statements.join('\n') ?? '';
+		expect(ddl).toContain('num_nonnulls("owner__node_id", "owner__group_id") <= 1');
+		expect(ddl).toContain(
+			'FOREIGN KEY ("owner__node_id") REFERENCES "nodes"("id") ON DELETE CASCADE'
+		);
+		expect(ddl).toContain(
+			'CREATE INDEX "nodes_owner_node_ref_idx" ON "nodes" ("owner__node_id") WHERE "owner__node_id" is not null'
+		);
+		expect(ddl).not.toContain('CREATE UNIQUE INDEX "nodes_owner_node_ref_idx"');
+	});
+
+	it('rejects impossible delete semantics and undeclared targets', async () => {
+		await expect(
+			Effect.runPromise(
+				planWorkspaceMigration({
+					models: {
+						time_entries: defineModel({}),
+						leave_requests: defineModel({}),
+						claims: defineModel({
+							source: reference({
+								TIME_ENTRY: 'time_entries',
+								LEAVE_REQUEST: 'leave_requests'
+							})
+								.notNull()
+								.onDelete('set null')
+						})
+					},
+					relations: [],
+					previous: undefined
+				})
+			)
+		).rejects.toThrow('cannot use ON DELETE SET NULL');
+
+		await expect(
+			Effect.runPromise(
+				planWorkspaceMigration({
+					models: {
+						claims: defineModel({
+							source: reference({
+								TIME_ENTRY: 'time_entries',
+								LEAVE_REQUEST: 'leave_requests'
+							})
+						})
+					},
+					relations: [],
+					previous: undefined
+				})
+			)
+		).rejects.toThrow('targets undeclared collection');
+	});
+
+	it('diffs a changed closed target set through ordinary lineage DDL', async () => {
+		const base = {
+			time_entries: defineModel({}),
+			leave_requests: defineModel({}),
+			adjustments: defineModel({})
+		};
+		const previousModels = {
+			...base,
+			claims: defineModel({
+				source: reference({ TIME_ENTRY: 'time_entries', LEAVE_REQUEST: 'leave_requests' })
+			})
+		};
+		const previous = await snapshotOf(previousModels);
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: {
+					...base,
+					claims: defineModel({
+						source: reference({
+							TIME_ENTRY: 'time_entries',
+							LEAVE_REQUEST: 'leave_requests',
+							ADJUSTMENT: 'adjustments'
+						})
+					})
+				},
+				relations: [],
+				previous
+			})
+		);
+		const ddl = migration?.statements.join('\n') ?? '';
+		expect(ddl).toContain('ADD COLUMN "source__adjustment_id" uuid');
+		expect(ddl).toContain('REFERENCES "adjustments"("id")');
+		expect(ddl).toContain(
+			'num_nonnulls("source__time_entry_id", "source__leave_request_id", "source__adjustment_id") <= 1'
+		);
+		if (migration === undefined)
+			throw new Error('adding a reference target must produce a migration');
+		const removed = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: previousModels,
+				relations: [],
+				previous: migration.snapshot
+			})
+		);
+		const removalDdl = removed?.statements.join('\n') ?? '';
+		expect(removalDdl).toContain('DROP COLUMN "source__adjustment_id"');
+		expect(removalDdl).toContain(
+			'num_nonnulls("source__time_entry_id", "source__leave_request_id") <= 1'
+		);
 	});
 });

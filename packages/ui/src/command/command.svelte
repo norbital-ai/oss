@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { CommandState, setCommandState } from './command-state.svelte.js';
-	import type { CommandRootProps } from './types.js';
+	import type { CommandRootProps } from '#lib/command/types';
 
 	let {
 		ref = $bindable(null),
@@ -53,7 +53,7 @@
 		if (disableNavigation) return;
 		if (!commandState.isInputFocused) return;
 
-		const isWithinCommand = ref?.contains(e.target as Node);
+		const isWithinCommand = e.target instanceof Node && ref?.contains(e.target);
 		if (!isWithinCommand) return;
 
 		const navigationKeys = [

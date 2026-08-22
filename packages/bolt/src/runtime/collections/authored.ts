@@ -1,13 +1,14 @@
-import { Context, Duration, Effect, Schema } from 'effect';
+import { Context, Duration, Effect, Option, Result, Schema, SchemaIssue } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
-import { AuthoredRefusal, refusalOf } from '../../authoring/refusal.js';
-import type { FileRef } from '../../authoring/models-schema.js';
-import type { AuthoredIntegrationModule } from '../../authoring/integration-introspection.js';
-import type { Identity, Subject } from '../identity/identity.js';
-import type { Collections } from './collections.js';
-import type { Automations } from '../automations/automations.js';
-import type { AI, Files } from '../facilities/services.js';
-import { Database } from '../facilities/database.js';
+import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
+import type { FileRef } from '#lib/authoring/models-schema.js';
+import type { AuthoredIntegrationModule } from '#lib/authoring/integration-introspection.js';
+import type * as Identity from '#lib/runtime/identity/identity.js';
+import type { Subject } from '#lib/runtime/identity/identity.js';
+import type * as Collections from '#lib/runtime/collections/collections.js';
+import type * as Automations from '#lib/runtime/automations/automations.js';
+import type { AIInterface, FilesInterface } from '#lib/runtime/facilities/services.js';
+import * as Database from '#lib/runtime/facilities/database.js';
 
 /**
  * The runtime carrier for a workspace's authored business logic.
@@ -20,13 +21,13 @@ import { Database } from '../facilities/database.js';
  */
 
 /** One authored hook point: an optional description and the handler the runtime invokes. */
-export type AuthoredHookPoint = Readonly<{
+type AuthoredHookPoint = Readonly<{
 	readonly description?: string;
 	readonly handler: (context: unknown, api: unknown) => unknown;
 }>;
 
 /** The per-record halves of one operation. Both run once per record, whatever the batch size. */
-export type AuthoredPerRecord = Readonly<{
+type AuthoredPerRecord = Readonly<{
 	readonly before?: AuthoredHookPoint;
 	readonly after?: AuthoredHookPoint;
 }>;
@@ -47,7 +48,7 @@ export type AuthoredCollectionHookModule = Readonly<{
 	}>;
 }>;
 
-export type AuthoredPipelineModule = Readonly<{
+type AuthoredPipelineModule = Readonly<{
 	readonly export?: Readonly<{
 		readonly description: string;
 		readonly handler: (context: unknown, api: unknown) => unknown;
@@ -59,7 +60,7 @@ export type AuthoredPipelineModule = Readonly<{
 	}>;
 }>;
 
-export type AuthoredAutomationModule = Readonly<{
+type AuthoredAutomationModule = Readonly<{
 	readonly name: string;
 	readonly trigger: Readonly<
 		| { readonly _tag: 'Schedule'; readonly cron: string }
@@ -94,6 +95,24 @@ export const emptyAuthoredRuntime: AuthoredRuntime = {
 	integrations: {}
 };
 
+/** The rows a collections read answers with, decoded once per read as the record-array the ops surface declares. */
+const JsonObjectRows = Schema.Array(Schema.JsonObject);
+
+/**
+ * Carries a read's rows across the Json-typed collections boundary as plain records.
+ *
+ * A database row is always an object; the collections interface types rows as JSON, which admits
+ * primitives. This single decode is what makes handing them to an authored handler honest: a JSON
+ * value that is not an object is refused here rather than arriving down there as a "row" that is a
+ * number.
+ */
+export const objectRowsOf = (
+	rows: ReadonlyArray<Schema.Json>
+): Effect.Effect<
+	ReadonlyArray<Readonly<Record<string, Schema.Json>>>,
+	Schema.SchemaError
+> => Schema.decodeUnknownEffect(JsonObjectRows)(rows);
+
 /** Identifies the authored-runtime carrier in Effect's context so wiring remains explicit and type checked. */
 export const AuthoredRuntimeService = Context.Service<AuthoredRuntime>(
 	'@norbital-ai/bolt/AuthoredRuntime'
@@ -125,39 +144,21 @@ const raise = <A>(cause: unknown): Effect.Effect<A, AuthoredRefusal> => {
  * every recovery written here, and out through whichever generator happened to be running. Passing
  * `() => handler(context, api)` moves the call inside `Effect.suspend`, where it can be caught.
  *
- * Three arrival paths, because a refusal can be raised from any of the three worlds the surface
- * admits, and each delivers it differently:
+ * Two arrival paths, because a refusal can be raised from either world the surface admits:
  *
  * - a plain handler throws **synchronously**, caught by the `try` below;
- * - an `async` handler **rejects**, caught off the promise;
  * - an `Effect.gen` handler throws inside the generator, which Effect converts to a **defect**
  *   before anyone else sees it, caught by `catchDefect`.
- *
- * A non-refusal keeps its existing treatment on every path, including the `catch` on the promise
- * branch: the bare one-argument `tryPromise` wraps a rejection in `UnknownError`, whose message is
- * the literal "An error occurred in Effect.tryPromise", and what the handler actually threw is the
- * only useful part of the failure.
  */
 export const runAuthoredHandler = <A>(
-	handler: () => A | Promise<A> | Effect.Effect<A>
+	handler: () => A | Effect.Effect<A>
 ): Effect.Effect<A, AuthoredRefusal> =>
 	Effect.suspend((): Effect.Effect<A, AuthoredRefusal> => {
-		let produced: A | Promise<A> | Effect.Effect<A>;
-		try {
-			produced = handler();
-		} catch (cause) {
-			return raise<A>(cause);
-		}
+		const attempted = Result.try(handler);
+		if (Result.isFailure(attempted)) return raise<A>(attempted.failure);
+		const produced = attempted.success;
 		if (Effect.isEffect(produced))
-			return produced.pipe(Effect.catchDefect((defect) => raise<A>(defect))) as Effect.Effect<
-				A,
-				AuthoredRefusal
-			>;
-		if (produced instanceof Promise)
-			return Effect.tryPromise({
-				try: () => produced as Promise<A>,
-				catch: (cause) => cause
-			}).pipe(Effect.catch((cause: unknown) => raise<A>(cause)));
+			return produced.pipe(Effect.catchDefect((defect) => raise<A>(defect)));
 		return Effect.succeed(produced);
 	});
 
@@ -214,17 +215,7 @@ export type AuthoredCollectionOps = Readonly<{
 	readonly approvalFindFirst: (
 		input: Readonly<Record<string, unknown>>
 	) => Effect.Effect<Readonly<Record<string, unknown>> | undefined, unknown, never>;
-	readonly infer: (
-		input: Readonly<{
-			readonly schema: Schema.Codec<unknown, unknown>;
-			readonly prompt: string;
-			readonly model?: string;
-			readonly images?: ReadonlyArray<{
-				readonly file: FileRef;
-				readonly detail?: 'auto' | 'low' | 'high';
-			}>;
-		}>
-	) => Effect.Effect<unknown, unknown, never>;
+	readonly infer: (input: InferenceRequest) => Effect.Effect<unknown, unknown, never>;
 	readonly readFileAsset: (file: FileRef) => Effect.Effect<
 		{
 			readonly id: string;
@@ -246,7 +237,7 @@ export type AuthoredCollectionOps = Readonly<{
  * shape closes: an id that named a row, a row that named a key, and an upload path that wrote the
  * key and never the row.
  */
-export type AuthoredFileAsset = Readonly<{
+type AuthoredFileAsset = Readonly<{
 	readonly id: string;
 	readonly name: string;
 	readonly mimeType: string | null;
@@ -255,9 +246,24 @@ export type AuthoredFileAsset = Readonly<{
 }>;
 
 /** One image an authored `api.infer` attached to its turn, taken straight from a `file()` column. */
-export type AuthoredInferenceImage = Readonly<{
+type AuthoredInferenceImage = Readonly<{
 	readonly file: FileRef;
 	readonly detail?: 'auto' | 'low' | 'high';
+}>;
+
+/**
+ * One authored inference as the ops surface carries it: the schema the answer must decode to, and
+ * the picture words to judge against.
+ *
+ * Named rather than inline because `AuthoredCollectionOps.infer` and the object literal behind the
+ * authored `api.infer` must carry the same shape, and that shape is the contract between the
+ * authoring surface and the AI facility.
+ */
+export type InferenceRequest = Readonly<{
+	readonly schema: Schema.Codec<unknown, unknown>;
+	readonly prompt: string;
+	readonly model?: string;
+	readonly images?: ReadonlyArray<AuthoredInferenceImage>;
 }>;
 
 /**
@@ -303,7 +309,7 @@ export const inferenceTurnContent = (
 	readAsset: (file: FileRef) => Effect.Effect<AuthoredFileAsset, Database.FacilityError>
 ): Effect.Effect<Schema.Json, Database.FacilityError> =>
 	Effect.gen(function* () {
-		if (images === undefined || images.length === 0) return prompt as Schema.Json;
+		if (images === undefined || images.length === 0) return prompt;
 		const refuse = (code: string, message: string) =>
 			new Database.FacilityError({
 				operation: 'ai.turn',
@@ -343,20 +349,27 @@ export const inferenceTurnContent = (
 				}
 			});
 		}
-		return parts as Schema.Json;
+		return parts;
 	});
 
 /**
- * The delay `api.automations.run(..., { after })` asked for, in milliseconds.
+ * The delay `api.automations.run(..., { after })` asked for, in milliseconds, or `undefined` when
+ * the value is not one.
  *
  * A number is already milliseconds. A string goes to `Duration`, which accepts `'1 hour'`,
- * `'30 seconds'` and the rest of the vocabulary durations are written in everywhere else here — and
- * refuses anything else by throwing, at the line the author wrote, which is where a mistyped
- * duration should surface. The alternative, silently treating an unreadable string as "no delay",
- * would turn a typo into work that ran immediately and looked deliberate.
+ * `'30 seconds'` and the rest of the vocabulary durations are written in everywhere else here. An
+ * unreadable string answers `undefined` — the caller refuses the automation through its typed
+ * channel, naming the string, which is where a mistyped duration surfaces rather than being read
+ * as "no delay" or swallowed as a defect. The single `as Duration.Input` is the boundary assert:
+ * `Duration.Input` types a duration string as `${number} Unit`, which TypeScript cannot prove from a
+ * value an authored handler passed, and `Duration.fromInput` is the decode that checks it at run
+ * time.
  */
-export const afterMillisOf = (after: string | number): number =>
-	typeof after === 'number' ? after : Duration.toMillis(after as Duration.Input);
+export const afterMillisOf = (after: string | number): number | undefined => {
+	if (typeof after === 'number') return after;
+	const decoded = Duration.fromInput(after as Duration.Input);
+	return Option.isSome(decoded) ? Duration.toMillis(decoded.value) : undefined;
+};
 
 const asQueryInput = (
 	input: Readonly<Record<string, unknown>>
@@ -370,7 +383,9 @@ const asQueryInput = (
  */
 export const makeAuthoringApi = (
 	ops: AuthoredCollectionOps,
-	options: { readonly elevated?: boolean } = {}
+	options: { readonly elevated?: boolean } = {},
+	/** Minted for a create whose payload carries no id; the platform RNG unless a host injects one. */
+	randomId: () => string = () => globalThis.crypto.randomUUID()
 ): unknown => {
 	const collectionApi = (collection: string): Readonly<Record<string, unknown>> => ({
 		findMany: (input: Readonly<Record<string, unknown>> = {}) =>
@@ -383,9 +398,7 @@ export const makeAuthoringApi = (
 			ops.findNearest(collection, asQueryInput(input)),
 		create: (input: Readonly<Record<string, unknown>>) => {
 			const identifier =
-				typeof input['norbital_id'] === 'string'
-					? input['norbital_id']
-					: globalThis.crypto.randomUUID();
+				typeof input['id'] === 'string' ? input['id'] : randomId();
 			return ops.create(collection, identifier, input as Readonly<Record<string, Schema.Json>>);
 		},
 		update: (id: string, input: Readonly<Record<string, unknown>>) =>
@@ -462,42 +475,53 @@ export const makeAuthoringApi = (
 				options?: Readonly<{ readonly after?: string | number }>
 			) => ops.runAutomation(name, input, options)
 		},
-		infer: (
-			input: Readonly<{
-				readonly schema: Schema.Codec<unknown, unknown>;
-				readonly prompt: string;
-				readonly model?: string;
-				readonly images?: ReadonlyArray<{
-					readonly file: FileRef;
-					readonly detail?: 'auto' | 'low' | 'high';
-				}>;
-			}>
-		) => ops.infer(input),
+		infer: (input: InferenceRequest) => ops.infer(input),
 		readFileAsset: (file: FileRef) => ops.readFileAsset(file)
 	};
 };
+
+/**
+ * The nearest-neighbour spelling, named field by field so the required ones are *present*.
+ *
+ * Every operand is unknown by design — authored code, and the place that compiles the SQL owns
+ * what a vector search may be given — but `findNearest` needs them to exist: the fields were
+ * previously spread into an ordinary `findMany`, which knows no `column`, no `probe` and no
+ * `metric`, and dropped the whole configuration on the floor.
+ */
+export const nearestInputOf = (
+	collection: string,
+	input: Readonly<Record<string, unknown>>
+): Parameters<Collections.Interface['findNearest']>[2] => ({
+	collection,
+	column: input['column'],
+	probe: input['probe'],
+	metric: input['metric'],
+	limit: input['limit'],
+	...(input.maxDistance === undefined ? {} : { maxDistance: input.maxDistance }),
+	...(input.excludeIds === undefined ? {} : { excludeIds: input.excludeIds })
+});
 
 /** Binds the invocation-scoped authoring ops to the runtime services, for callers outside the collections layer. */
 export const makeBoundAuthoringOps = (
 	effectId: EffectIdType,
 	subject: Subject,
 	collections: Collections.Interface,
-	ai: AI.Interface,
-	files: Files.Interface,
-	automations: Automations.Interface
+	ai: AIInterface,
+	files: FilesInterface,
+	automations: Automations.Interface,
+	randomId: () => string = () => globalThis.crypto.randomUUID()
 ): AuthoredCollectionOps => {
 	type QueryInput = Parameters<Collections.Interface['findMany']>[2];
-	type NearestInput = Parameters<Collections.Interface['findNearest']>[2];
-	const query = (collection: string, input: Readonly<Record<string, unknown>>): QueryInput =>
-		({ collection, ...input }) as QueryInput;
-	const nearest = (collection: string, input: Readonly<Record<string, unknown>>): NearestInput =>
-		({ collection, ...input }) as NearestInput;
+	const query = (collection: string, input: Readonly<Record<string, unknown>>): QueryInput => ({
+		collection,
+		...input
+	});
 	/**
 	 * The bytes and description behind a `file()` column's value.
 	 *
 	 * The value *is* the description — `{storage_key, file_name, file_size, mime_type}` — so this
 	 * asks the Files facility for the key it names and attaches the rest. There is nothing to look
-	 * up, which is the point: a `file()` column used to hold the `norbital_id` of a `document_asset`
+	 * up, which is the point: a `file()` column used to hold the `id` of a `document_asset`
 	 * row, that row was the only thing naming the object-store key, and the upload path never wrote
 	 * one. So every authored `readFileAsset` resolved against a row that did not exist, and
 	 * `mimeType` came back `null` because there was no row to read it from.
@@ -528,7 +552,7 @@ export const makeBoundAuthoringOps = (
 		findMany: (collection, input) =>
 			collections
 				.findMany(effectId, subject, query(collection, input))
-				.pipe(Effect.map((rows) => rows as ReadonlyArray<Readonly<Record<string, unknown>>>)),
+				.pipe(Effect.flatMap(objectRowsOf)),
 		findFirst: (collection, input) =>
 			collections
 				.findFirst(effectId, subject, query(collection, input))
@@ -536,17 +560,17 @@ export const makeBoundAuthoringOps = (
 		count: (collection, input) => collections.count(effectId, subject, query(collection, input)),
 		findNearest: (collection, input) =>
 			collections
-				.findNearest(effectId, subject, nearest(collection, input))
-				.pipe(Effect.map((rows) => rows as ReadonlyArray<Readonly<Record<string, unknown>>>)),
+				.findNearest(effectId, subject, nearestInputOf(collection, input))
+				.pipe(Effect.flatMap(objectRowsOf)),
 		create: (collection, id, values) =>
 			Effect.gen(function* () {
 				yield* collections.create(effectId, subject, { collection, id, values });
 				const row = yield* collections.findFirst(effectId, subject, {
 					collection,
-					where: { norbital_id: { eq: id } }
+					where: { id: { eq: id } }
 				});
 				return row === undefined
-					? ({ norbital_id: id, ...values } as Readonly<Record<string, unknown>>)
+					? ({ id: id, ...values } as Readonly<Record<string, unknown>>)
 					: (row as Readonly<Record<string, unknown>>);
 			}),
 		update: (collection, id, values) =>
@@ -554,10 +578,10 @@ export const makeBoundAuthoringOps = (
 				yield* collections.update(effectId, subject, { collection, id, values });
 				const row = yield* collections.findFirst(effectId, subject, {
 					collection,
-					where: { norbital_id: { eq: id } }
+					where: { id: { eq: id } }
 				});
 				return row === undefined
-					? ({ norbital_id: id, ...values } as Readonly<Record<string, unknown>>)
+					? ({ id: id, ...values } as Readonly<Record<string, unknown>>)
 					: (row as Readonly<Record<string, unknown>>);
 			}),
 		delete: (collection, id) => collections.delete(effectId, subject, collection, id),
@@ -565,10 +589,7 @@ export const makeBoundAuthoringOps = (
 			Effect.all(
 				payloads.map((payload) =>
 					Effect.gen(function* () {
-						const identifier =
-							typeof payload['norbital_id'] === 'string'
-								? payload['norbital_id']
-								: globalThis.crypto.randomUUID();
+						const identifier = typeof payload['id'] === 'string' ? payload['id'] : randomId();
 						yield* collections.create(effectId, subject, {
 							collection,
 							id: identifier,
@@ -576,10 +597,10 @@ export const makeBoundAuthoringOps = (
 						});
 						const row = yield* collections.findFirst(effectId, subject, {
 							collection,
-							where: { norbital_id: { eq: identifier } }
+							where: { id: { eq: identifier } }
 						});
 						return row === undefined
-							? ({ norbital_id: identifier, ...payload } as Readonly<Record<string, unknown>>)
+							? ({ id: identifier, ...payload } as Readonly<Record<string, unknown>>)
 							: (row as Readonly<Record<string, unknown>>);
 					})
 				),
@@ -600,18 +621,19 @@ export const makeBoundAuthoringOps = (
 		runAutomation: (name, input, options) =>
 			Effect.gen(function* () {
 				const after = options?.after;
-				const taskId = yield* automations.start(effectId, name, input, {
-					// `Duration.toMillis` accepts `'1 hour'`, `'30 seconds'` and a bare number of millis
-					// alike, so an author writes a delay the way durations are written everywhere else in
-					// this codebase rather than learning a second vocabulary for one field.
-					...(after === undefined ? {} : { afterMillis: afterMillisOf(after) })
-				});
+				const afterMillis = after === undefined ? undefined : afterMillisOf(after);
+				if (afterMillis === undefined) {
+					return yield* new AuthoredRefusal({
+						message: `"${String(after)}" is not a delay ${name} can wait — pass milliseconds, '5 seconds', '1 hour', or another Effect duration.`
+					});
+				}
+				const taskId = yield* automations.start(effectId, name, input, { afterMillis });
 				return { taskId };
 			}),
 		approvalFindMany: (input) =>
 			collections
 				.findMany(effectId, subject, { collection: 'approval_request', ...input })
-				.pipe(Effect.map((rows) => rows as ReadonlyArray<Readonly<Record<string, unknown>>>)),
+				.pipe(Effect.flatMap(objectRowsOf)),
 		approvalFindFirst: (input) =>
 			collections
 				.findFirst(effectId, subject, { collection: 'approval_request', ...input })

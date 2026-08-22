@@ -1,6 +1,11 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap, LayoutPad } from './layout.shared.js';
+	import type {
+		LayoutAttributes,
+		LayoutElement,
+		LayoutGap,
+		LayoutPad
+	} from '#lib/layout/layout.shared';
 
 	export interface CoverProps extends LayoutAttributes {
 		as?: LayoutElement;
@@ -18,7 +23,7 @@
 
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import { GAP_CLASSES, PAD_CLASSES } from './layout.shared.js';
+	import { GAP_CLASSES, PAD_CLASSES } from '#lib/layout/layout.shared';
 
 	let {
 		as = 'div',

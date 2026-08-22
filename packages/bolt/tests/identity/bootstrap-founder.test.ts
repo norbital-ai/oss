@@ -15,9 +15,9 @@ import {
 	HostConfig,
 	SYSTEM_SIGNATURE_HEADER,
 	SYSTEM_TIMESTAMP_HEADER,
-	systemSignature,
 	systemSignaturePayload
 } from '../../src/runtime/access/system-principal.js';
+import { systemSignature } from '../../src/host.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 import { seedSession } from '../support/fixture-identity.js';
@@ -66,14 +66,21 @@ const peopleWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [policy({ name: 'Employee', effect: 'allow', actions: ['read'], capabilities: { apps: ['people'] } })],
+	policies: [
+		policy({
+			name: 'Employee',
+			effect: 'allow',
+			actions: ['read'],
+			capabilities: { apps: ['people'] }
+		})
+	],
 	teams: { Employee: ['Employee'] },
 	automations: [],
 	envoys: [],
 	integrations: [],
-		prompt: 'You are the test workspace agent.',
-		tools: [],
-		skills: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
 	requiredFacilities: []
 });
 
@@ -156,7 +163,7 @@ const read = (value: unknown, key: string): unknown =>
 const founderRow = (runtime: BoltTestRuntime, email: string) =>
 	runtime.database
 		.query(
-			'select "norbital_id"::text as "id", "status", "tenantId" from bolt_auth_user where "email" = $1',
+			'select "id"::text as "id", "status", "tenantId" from bolt_auth_user where "email" = $1',
 			[email]
 		)
 		.then((rows) => rows[0]);
@@ -353,7 +360,13 @@ describe('which workspace a founder lands in', () => {
 			asPerson('identity.bootstrapFounder', 'no-such-token', {
 				email: 'victim@example.com',
 				claimId: 'claim-x',
-				subject: { userId: 'colony-system', tenantId: 'test-tenant', system: true, policies: [], teamPath: [] }
+				subject: {
+					userId: 'colony-system',
+					tenantId: 'test-tenant',
+					system: true,
+					policies: [],
+					teamPath: []
+				}
 			})
 		);
 		expect(read(failure, 'code') ?? read(failure, '_tag')).toBeTruthy();

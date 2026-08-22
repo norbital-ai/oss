@@ -1,5 +1,7 @@
-import type { CollectionTableProps } from '@norbital-ai/ui/collection-table';
 import type { CollectionField } from '@norbital-ai/ui/data-renderer';
+import type { CollectionClient } from '@norbital-ai/std/collection';
+import type { CollectionRegistryFor, PlatformSchema } from '#lib/authoring/internals.js';
+import type { SystemClientApi } from '#lib/client/runtime.js';
 
 /** A record of an unknown collection: this surface renders whichever workspace it was compiled into. */
 type ErasedRecord = Readonly<Record<string, unknown>>;
@@ -19,6 +21,9 @@ type ErasedCollections = Readonly<
 	>
 >;
 
+/** Runtime-owned collections retain their generated row types even on the workspace shell seam. */
+type WorkspaceCollections = ErasedCollections & CollectionRegistryFor<PlatformSchema>;
+
 /**
  * The compiled workspace's own collection client.
  *
@@ -32,7 +37,8 @@ type ErasedCollections = Readonly<
  * ships inside the tenant's own bundle, so the client it reads is that workspace's and no lookup can
  * pick the wrong one.
  */
-export type WorkspaceClient = CollectionTableProps<ErasedCollections>['client'] & {
+export type WorkspaceClient = CollectionClient<WorkspaceCollections> & {
+	readonly system: SystemClientApi;
 	readonly collections: Readonly<
 		Record<
 			string,

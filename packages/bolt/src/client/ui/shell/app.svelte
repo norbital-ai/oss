@@ -4,8 +4,9 @@
 	import { Toaster } from '@norbital-ai/ui/sonner';
 	import type { WorkspaceImpersonation } from '@norbital-ai/ui/workspace-shell';
 	import Shell from './shell.svelte';
-	import type { TenantMessageCatalogs } from '../agent/i18n.js';
-	import type { HostPlugin } from './workspace-navigation.js';
+	import type { TenantMessageCatalogs } from '#lib/client/ui/agent/i18n.js';
+	import type { HostPlugin } from '#lib/client/ui/shell/workspace-navigation.js';
+	import type { Effect } from 'effect';
 
 	let {
 		title = 'Bolt',
@@ -38,10 +39,10 @@
 			| {
 					name: string;
 					label: string;
-					icon?: string;
-					description?: string;
-					banner?: string;
-					parent?: string;
+					icon?: string | undefined;
+					description?: string | undefined;
+					banner?: string | undefined;
+					parent?: string | undefined;
 			  }
 		>;
 		/**
@@ -62,14 +63,14 @@
 		search?: string;
 		loading?: boolean;
 		error?: string;
-		organization?: { id: string; name: string; logoUrl?: string | null };
+		organization?: { id: string; name: string; logoUrl?: string | null } | undefined;
 		organizations?: ReadonlyArray<{
 			readonly organizationId: string;
 			readonly organizationName: string;
 			readonly logoUrl: string | null;
 		}>;
 		user?: {
-			/** The viewer's `norbital_id`, forwarded so the platform context can publish a real key. */
+			/** The viewer's `id`, forwarded so the platform context can publish a real key. */
 			id: string;
 			name: string;
 			email: string;
@@ -94,16 +95,16 @@
 		 * nor defaults it. `null` is "no picker", which is what every host that supplies nothing gets.
 		 */
 		impersonation?: WorkspaceImpersonation | null;
-		onImpersonate?: (teamId: string) => void | Promise<void>;
-		onStopImpersonating?: () => void | Promise<void>;
-		tenantMessages?: TenantMessageCatalogs;
+		onImpersonate?: ((teamId: string) => void | Effect.Effect<void, unknown>) | undefined;
+		onStopImpersonating?: (() => void | Effect.Effect<void, unknown>) | undefined;
+		tenantMessages?: TenantMessageCatalogs | undefined;
 		/** App-contributed header controls, rendered inside the banner rather than above the tabs. */
-		headerActions?: Snippet;
-		children?: Snippet;
-		onNavigate?: (href: string) => void;
-		onOrganizationChange?: (id: string) => void;
-		onSignOut?: () => void;
-		onretry?: () => void;
+		headerActions?: Snippet | undefined;
+		children?: Snippet | undefined;
+		onNavigate?: ((href: string) => void) | undefined;
+		onOrganizationChange?: ((id: string) => void) | undefined;
+		onSignOut?: (() => void) | undefined;
+		onretry?: (() => void) | undefined;
 	} = $props();
 
 	const status = $derived(error !== undefined ? 'error' : loading ? 'syncing' : 'ready');

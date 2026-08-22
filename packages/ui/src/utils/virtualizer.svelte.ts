@@ -72,22 +72,12 @@ export type ScrollAlignment = 'start' | 'center' | 'end' | 'auto';
 // ============================================================================
 
 export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
-	const {
-		count: getCount,
-		scrollElement: getScrollElement,
-		estimateSize,
-		overscan: overscanOption = 3,
-		horizontal = false,
-		getItemKey = (index) => index,
-		onChange,
-		initialOffset = 0,
-		indexAttribute = 'data-index'
-	} = options;
-
-	const getOverscan = typeof overscanOption === 'function' ? overscanOption : () => overscanOption;
+	const overscan = options.overscan;
+	const getOverscan =
+		typeof overscan === 'function' ? overscan : () => overscan ?? 3;
 
 	// Reactive state
-	let scrollOffset = $state(initialOffset);
+	let scrollOffset = $state(options.initialOffset ?? 0);
 	let viewportSize = $state(0);
 	let measureVersion = $state(0);
 
@@ -100,7 +90,7 @@ export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
 
 	// Computed measurements
 	const measurements = $derived.by(() => {
-		const count = getCount();
+		const count = options.count();
 		void measureVersion; // Dependency for re-computation
 
 		const result: Array<{
@@ -112,7 +102,7 @@ export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
 		let offset = 0;
 
 		for (let i = 0; i < count; i++) {
-			const size = measuredSizes.get(i) ?? estimateSize(i);
+			const size = measuredSizes.get(i) ?? options.estimateSize(i);
 			result.push({ index: i, start: offset, size, end: offset + size });
 			offset += size;
 		}
@@ -168,7 +158,7 @@ export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
 			if (measurement) {
 				items.push({
 					index: i,
-					key: getItemKey(i),
+					key: options.getItemKey?.(i) ?? i,
 					start: measurement.start,
 					end: measurement.end,
 					size: measurement.size
@@ -180,7 +170,7 @@ export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
 
 	// Watch scroll element changes and set up listeners
 	watch(
-		() => getScrollElement(),
+		() => options.scrollElement(),
 		(el) => {
 			// Cleanup previous listeners
 			cleanup?.();
@@ -193,7 +183,7 @@ export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
 
 			const syncScrollOffset = () => {
 				scrollFrame = null;
-				scrollOffset = horizontal ? el.scrollLeft : el.scrollTop;
+				scrollOffset = options.horizontal ? el.scrollLeft : el.scrollTop;
 			};
 
 			const handleScroll = () => {
@@ -203,12 +193,12 @@ export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
 
 			// Update viewport size
 			const updateViewport = () => {
-				viewportSize = horizontal ? el.clientWidth : el.clientHeight;
+				viewportSize = options.horizontal ? el.clientWidth : el.clientHeight;
 			};
 
 			// Initial values
 			updateViewport();
-			scrollOffset = horizontal ? el.scrollLeft : el.scrollTop;
+			scrollOffset = options.horizontal ? el.scrollLeft : el.scrollTop;
 
 			// Set up listeners
 			el.addEventListener('scroll', handleScroll, { passive: true });
@@ -236,8 +226,8 @@ export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
 				items.length !== previousItems.length ||
 				items.some((item, i) => item.index !== previousItems[i]?.index);
 
-			if (hasChanged && onChange) {
-				onChange(virtualizer);
+			if (hasChanged && options.onChange) {
+				options.onChange(virtualizer);
 			}
 			previousItems = items;
 		}
@@ -245,11 +235,11 @@ export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
 
 	// Methods
 	function scrollToOffset(offset: number, opts?: ScrollToOffsetOptions) {
-		const el = getScrollElement();
+		const el = options.scrollElement();
 		if (!el) return;
 
 		el.scrollTo({
-			[horizontal ? 'left' : 'top']: offset,
+			[options.horizontal ? 'left' : 'top']: offset,
 			behavior: opts?.behavior ?? 'auto'
 		});
 	}
@@ -294,13 +284,13 @@ export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
 	function measureElement(element: HTMLElement | null) {
 		if (!element) return;
 
-		const indexStr = element.getAttribute(indexAttribute);
+		const indexStr = element.getAttribute(options.indexAttribute ?? 'data-index');
 		if (indexStr == null) return;
 
 		const index = parseInt(indexStr, 10);
 		if (isNaN(index)) return;
 
-		const size = horizontal ? element.offsetWidth : element.offsetHeight;
+		const size = options.horizontal ? element.offsetWidth : element.offsetHeight;
 		if (measuredSizes.get(index) !== size) {
 			measuredSizes.set(index, size);
 			measureVersion++;

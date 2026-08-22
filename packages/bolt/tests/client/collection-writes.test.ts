@@ -47,11 +47,11 @@ const clientAnswering = (answer: unknown) => {
 
 /** One row as the database holds it: the columns that were posted, plus the ones only it can fill. */
 const storedOrder = {
-	norbital_id: '0f5f0f6e-2c2e-4f3f-9b3a-9b9c9d9e9f00',
+	id: '0f5f0f6e-2c2e-4f3f-9b3a-9b9c9d9e9f00',
 	reference: 'ORD-1-normalised',
 	status: 'draft',
-	norbital_row_version: 1,
-	norbital_created_at: '2026-08-20T00:00:00.000Z'
+	row_version: 1,
+	created_at: '2026-08-20T00:00:00.000Z'
 };
 
 describe('a create from the browser', () => {
@@ -78,7 +78,7 @@ describe('a create from the browser', () => {
 		// is a separate reason the old return value was wrong.
 		expect(record['reference']).toBe('ORD-1-normalised');
 		expect(record['status']).toBe('draft');
-		expect(record['norbital_row_version']).toBe(1);
+		expect(record['row_version']).toBe(1);
 	});
 
 	it('carries a nested graph to the server untouched', async () => {
@@ -115,25 +115,25 @@ describe('a create from the browser', () => {
 
 describe('an update from the browser', () => {
 	it('answers with the stored row, because an update runs hooks too', async () => {
-		const updated = { ...storedOrder, reference: 'ORD-2-normalised', norbital_row_version: 2 };
+		const updated = { ...storedOrder, reference: 'ORD-2-normalised', row_version: 2 };
 		const { sent, orders } = clientAnswering({ updated: true, records: [updated] });
 
-		const record = await orders.update(storedOrder.norbital_id, { reference: 'ORD-2' });
+		const record = await orders.update(storedOrder.id, { reference: 'ORD-2' });
 
 		expect(sent[0]?.input).toEqual({
 			collection: 'orders',
-			id: storedOrder.norbital_id,
+			id: storedOrder.id,
 			values: { reference: 'ORD-2' }
 		});
 		expect(record).toEqual(updated);
 		// The version the database bumped, which no submission has ever been able to report.
-		expect(record['norbital_row_version']).toBe(2);
+		expect(record['row_version']).toBe(2);
 	});
 
 	it('throws when the answer carries no row', async () => {
 		const { orders } = clientAnswering({ updated: true, records: [] });
 
-		await expect(orders.update(storedOrder.norbital_id, { reference: 'ORD-2' })).rejects.toThrow(
+		await expect(orders.update(storedOrder.id, { reference: 'ORD-2' })).rejects.toThrow(
 			/stored row/
 		);
 	});

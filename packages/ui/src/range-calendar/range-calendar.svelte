@@ -12,9 +12,6 @@
 	import NextButton from './range-calendar-next-button.svelte';
 	import PrevButton from './range-calendar-prev-button.svelte';
 
-	const GridHead = RangeCalendarPrimitive.GridHead;
-	const GridBody = RangeCalendarPrimitive.GridBody;
-
 	let {
 		ref = $bindable(null),
 		value = $bindable(),
@@ -42,7 +39,7 @@
 		<Months>
 			{#each months as month}
 				<Grid>
-					<GridHead>
+					<RangeCalendarPrimitive.GridHead>
 						<GridRow class="flex">
 							{#each weekdays as weekday}
 								<HeadCell>
@@ -50,8 +47,8 @@
 								</HeadCell>
 							{/each}
 						</GridRow>
-					</GridHead>
-					<GridBody>
+					</RangeCalendarPrimitive.GridHead>
+					<RangeCalendarPrimitive.GridBody>
 						{#each month.weeks as weekDates}
 							<GridRow class="mt-2 w-full">
 								{#each weekDates as date}
@@ -61,7 +58,7 @@
 								{/each}
 							</GridRow>
 						{/each}
-					</GridBody>
+					</RangeCalendarPrimitive.GridBody>
 				</Grid>
 			{/each}
 		</Months>

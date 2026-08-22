@@ -11,7 +11,7 @@ name; the module default-exports `{ description, grants, capabilities?, limits? 
 action on a collection, optionally narrowed to matching rows:
 
 ```ts
-{ collection: 'quotes', action: 'read', where: { owner_id: '${requestor.norbital_id}' } }
+{ collection: 'quotes', action: 'read', where: { owner_id: '${requestor.id}' } }
 ```
 
 - Actions are `create`, `read`, `update`, `delete`.
@@ -112,7 +112,7 @@ When a mutation matches a gated grant:
    only what the form posted — a collection that derives six `not null` columns in
    `create.perRecord.before` produced an operation that could not satisfy its own schema when it was
    replayed, and its `after` hook never ran at all.
-2. The row is stamped with `norbital_approval_id`, which is the lock.
+2. The row is stamped with `approval_id`, which is the lock.
 3. An `approval_request` record is created with status `ONGOING`.
 4. Any further write to that row is refused as an approval conflict naming the request that holds
    it, until the request closes.
@@ -120,7 +120,7 @@ When a mutation matches a gated grant:
    a refusal. A tool or a screen that reports this as an error is reporting success as a failure.
 
 So a pending row **is** in the table and will appear in queries. The convention across workspaces is
-that `norbital_approval_id IS NULL` means the row is live and approved, and a non-null value means
+that `approval_id IS NULL` means the row is live and approved, and a non-null value means
 it is held by an open approval. Reports and dashboards filter on that.
 
 There is no separate "submit for approval" action. A gated write creates the request by itself. An
@@ -137,10 +137,8 @@ request, which a reviewer has to decide on separately.
 | Approved               | The lock clears. For a create the row was already there, so approval releases it **and runs `create.perRecord.after` then** — that is what "approved" means for a created record. An update applies its stored values; a delete performs the delete. |
 | Rejected, or withdrawn | For a create the row is deleted, because it only ever existed under the request. For an update or delete the lock is simply released and the record stands as it was.                                                                                |
 
-There is no request-for-change flow. The client's `approvals.process` still accepts
-`REQUEST_FOR_CHANGE` in its action union and does nothing with it — it issues no decision and
-returns — so a surface that offers it as a button offers a button that silently does nothing. Treat
-that union member as absent.
+There is no request-for-change flow. The client's `approvals.process` accepts only `APPROVED` and
+`REJECTED`; a surface must not invent a third action that the runtime cannot decide.
 
 **Who may decide.** A subject may act on a step only if **their own team's name** is in that step's
 `approvers`, matched case-insensitively. Eligibility does **not** walk `teamPath`: a parent team does
@@ -154,7 +152,7 @@ nobody else, including every rung above it.
 | ---------------------------------------------- | -------------------------------------------------------------------------------- |
 | `approval_request`                             | Status, the steps, which record it holds, the operation to apply, when it closed |
 | `requestor`                                    | Links a request to the user who raised it                                        |
-| `norbital_approval_id` on every collection row | The stamp identifying the open request holding it — **this is the lock**         |
+| `approval_id` on every collection row | The stamp identifying the open request holding it — **this is the lock**         |
 | `bolt_team`                                    | The teams themselves; `approvers` entries are matched against `name`             |
 | `bolt_auth_user.team_id`                       | Which single team a person belongs to                                            |
 

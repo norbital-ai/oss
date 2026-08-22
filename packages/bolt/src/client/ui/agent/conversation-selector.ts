@@ -1,4 +1,5 @@
-import type { PlatformEnvoy } from '../state/platform.js';
+import type { CollectionRegistryFor, PlatformSchema } from '#lib/authoring/internals.js';
+import type { PlatformEnvoy } from '#lib/client/ui/state/platform.js';
 
 /**
  * The web agent's own tab, and a name `envoy()` refuses so nothing can shadow it.
@@ -13,7 +14,7 @@ const SELECTOR_LABEL_KEYS = ['web', 'users', 'groups', 'envoyFallback'] as const
 /**
  * The three kinds of thread, and the column that finally carries them.
  *
- * `bolt_conversations` had neither `visibility` nor `envoy_key` — so every session read as
+ * `chat_session` had neither `visibility` nor `envoy_key` — so every session read as
  * `undefined`, the group bucket was permanently empty, and a public envoy's threads never reached
  * the admin inbox this file routes them to. Both columns exist now and `Agents.openConversation`
  * writes them, which is what makes every branch below reachable.
@@ -22,15 +23,18 @@ const CONVERSATION_VISIBILITIES = new Set<string>(['personal', 'envoy_dm', 'envo
 
 type SelectorLabels = Record<(typeof SELECTOR_LABEL_KEYS)[number], string>;
 
-export type ConversationSession = {
-	readonly norbital_id: string;
-	readonly title: string | null;
-	readonly user_id: string;
-	readonly visibility: string;
-	readonly platform?: string | null;
-	readonly envoy_key?: string | null;
-	readonly external_thread_id?: string | null;
-};
+/**
+ * The `chat_session` fields the web agent's selector reads.
+ *
+ * Composed from the platform row rather than redeclared: the wire already types this row, and a
+ * second shape beside it would drift (it once promised `platform` and `external_thread_id`, which
+ * the model never carried — so every tab there fell back to the default glyph, and every search
+ * appended two always-empty parts).
+ */
+type ConversationSession = Pick<
+	CollectionRegistryFor<PlatformSchema>['chat_session']['row'],
+	'conversation_id' | 'user_id' | 'title' | 'visibility' | 'envoy_key'
+>;
 
 /** Tab id for a session: personal stays on web, otherwise the envoy it arrived on. */
 export function sessionEnvoyId(
@@ -86,7 +90,10 @@ export function listAccessibleEnvoys(input: {
 		string,
 		{ readonly id: string; readonly label: string; readonly icon: string }
 	>([
-		[WEB_AGENT_ID, { id: WEB_AGENT_ID, label: input.labels.web, icon: envoyIcon(WEB_AGENT_ID, null) }]
+		[
+			WEB_AGENT_ID,
+			{ id: WEB_AGENT_ID, label: input.labels.web, icon: envoyIcon(WEB_AGENT_ID, null) }
+		]
 	]);
 
 	for (const envoy of input.declaredEnvoys) {
@@ -108,7 +115,7 @@ export function listAccessibleEnvoys(input: {
 		tabs.set(id, {
 			id,
 			label: id === WEB_AGENT_ID ? input.labels.web : id,
-			icon: envoyIcon(id, session.platform ?? null)
+			icon: envoyIcon(id, null)
 		});
 	}
 
@@ -132,10 +139,10 @@ export function buildConversationSelector(input: {
 	}
 
 	const tabs = [...byEnvoy.entries()]
-		.map(([id, sessions]) => ({
+		.map(([id]) => ({
 			id,
 			label: id === WEB_AGENT_ID ? input.labels.web : id,
-			icon: envoyIcon(id, sessions[0]?.platform ?? null)
+			icon: envoyIcon(id, null)
 		}))
 		.sort((left, right) => {
 			if (left.id === WEB_AGENT_ID) return -1;
@@ -174,15 +181,10 @@ export function buildConversationSelector(input: {
 					: []),
 				...audience.sessions.map((session) => ({
 					kind: 'conversation' as const,
-					id: session.norbital_id,
+					id: session.conversation_id,
 					title: session.title,
 					icon: audience.audience === 'group' ? 'lucide:users-round' : 'lucide:message-square',
-					searchText: [
-						session.title,
-						session.envoy_key,
-						session.external_thread_id,
-						session.platform
-					]
+					searchText: [session.title, session.envoy_key]
 						.filter((part): part is string => Boolean(part && part.length > 0))
 						.join(' '),
 					audience: audience.audience

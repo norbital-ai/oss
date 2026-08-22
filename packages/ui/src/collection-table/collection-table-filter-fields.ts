@@ -1,14 +1,17 @@
 import type {
 	CollectionField,
 	CollectionFilter,
+	CollectionRecord,
+	CollectionRelationOptions,
 	CollectionRelationship
 } from '@norbital-ai/std/collection';
+import { resolveRecordLabel } from '@norbital-ai/std/collection';
 import { humanize } from '@norbital-ai/std/string';
-import { isSystemField } from './collection-card-derivation.js';
-import { ENTITY_ICONS } from '../icon-wrapper/entity-icons.js';
+import { isSystemField } from '#lib/collection-table/collection-card-derivation';
+import { ENTITY_ICONS } from '#lib/icon-wrapper/entity-icons';
 import type { BaseTreeItem } from '#lib/tree-select';
-import { calendarDateToInstant } from '../data-renderer/time_stamp/date.utils.js';
-import type { Translate } from '../data-renderer/index.js';
+import { calendarDateToInstant } from '#lib/data-renderer/time_stamp/date.utils';
+import type { Translate } from '#lib/data-renderer';
 
 export interface FilterCollectionDefinition {
 	readonly name: string;
@@ -112,10 +115,8 @@ export function collectionFilterFieldTree(
 			continue;
 		}
 
-		// The same predicate the table and the card derivation already use for this, rather than a
-		// second one imported from the transport package: `norbital_*` is the framework's reserved
-		// namespace, so a definition field carrying that prefix is system-owned whether or not it is
-		// one of the six columns the DDL currently names.
+		// The same canonical predicate the table and card derivation use. The compiler owns exactly
+		// these fields; an authored name is never classified by a prefix convention.
 		if (isSystemField(field.name)) systemFields.push(filterField);
 		else directFields.push(filterField);
 	}
@@ -239,5 +240,16 @@ export function collectionFilterClause(
 			: [filterField.field.name],
 		operator,
 		operand: wireOperand
+	};
+}
+
+/** Record keys need the target collection's record-label contract, not a UUID text input. */
+export function relationLabelOptions(
+	target: { readonly recordLabel?: string | null } | undefined,
+	targetName: string
+): CollectionRelationOptions {
+	return {
+		label: (record: CollectionRecord) =>
+			resolveRecordLabel(target?.recordLabel ?? null, record) ?? humanize(targetName)
 	};
 }

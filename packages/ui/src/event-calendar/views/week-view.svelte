@@ -4,29 +4,19 @@
 	import { Scroll, Stack } from '#lib/layout';
 	import { pixelDrag } from '#lib/utils/pixel-drag';
 	import {
+		addDays,
 		assignLanes,
 		dateToPixels,
-		getColumnDate,
 		isSameDay,
 		isWeekend,
 		startOfWeek
-	} from '../utils.js';
-	import type { CalendarEvent, CreateSlot, EventRenderContext } from '../types.js';
+	} from '#lib/event-calendar/utils';
+	import type { CalendarEvent, CreateSlot, EventRenderContext } from '#lib/event-calendar/types';
 	import type { Snippet } from 'svelte';
 	import EventBox from '../parts/event-box.svelte';
 	import AllDaySection from '../parts/all-day-section.svelte';
 	import NowLine from '../parts/now-line.svelte';
-	import {
-		getDragState,
-		isDragging,
-		beginMove,
-		beginResize,
-		beginCreate,
-		updateDrag,
-		endDrag,
-		cancelDrag,
-		getOverlayRect
-	} from '../drag-state.svelte.js';
+	import { useDragState } from '../drag-state.svelte.js';
 
 	let {
 		date,
@@ -60,6 +50,8 @@
 
 	const { t } = useI18n<UiKeys>();
 
+	const drag = useDragState();
+
 	const weekStart = $derived(startOfWeek(date));
 	const totalHeight = $derived((endHour - startHour) * hourHeight);
 	const timedEvents = $derived(events.filter((e) => !e.allDay && isSameDay(e.start, e.end)));
@@ -68,7 +60,7 @@
 		const cols: CalendarEvent[][] = Array.from({ length: 7 }, () => []);
 		for (const event of timedEvents) {
 			for (let i = 0; i < 7; i++) {
-				if (isSameDay(event.start, getColumnDate(weekStart, i))) {
+				if (isSameDay(event.start, addDays(weekStart, i))) {
 					cols[i].push(event);
 					break;
 				}
@@ -85,12 +77,12 @@
 	);
 
 	function eventTop(event: CalendarEvent, col: number): number {
-		return dateToPixels(event.start, getColumnDate(weekStart, col), hourHeight, startHour);
+		return dateToPixels(event.start, addDays(weekStart, col), hourHeight, startHour);
 	}
 
 	function eventHeight(event: CalendarEvent, col: number): number {
 		return Math.max(
-			dateToPixels(event.end, getColumnDate(weekStart, col), hourHeight, startHour) -
+			dateToPixels(event.end, addDays(weekStart, col), hourHeight, startHour) -
 				eventTop(event, col),
 			12
 		);
@@ -110,15 +102,15 @@
 
 	const today = $derived(new Date());
 	const todayIndex = $derived.by(() => {
-		for (let i = 0; i < 7; i++) if (isSameDay(getColumnDate(weekStart, i), today)) return i;
+		for (let i = 0; i < 7; i++) if (isSameDay(addDays(weekStart, i), today)) return i;
 		return -1;
 	});
 
 	function commitDrop(): void {
-		const ds = getDragState();
+		const ds = drag.getDragState();
 		const col = ds.mode !== 'idle' ? ds.column : 0;
-		const colDate = getColumnDate(weekStart, col);
-		const result = endDrag(colDate, hourHeight, startHour, snapMinutes);
+		const colDate = addDays(weekStart, col);
+		const result = drag.endDrag(colDate, hourHeight, startHour, snapMinutes);
 		if (!result) return;
 		if (result.mode === 'create' && result.slot) {
 			oncreate?.(result.slot);
@@ -127,8 +119,8 @@
 		}
 	}
 
-	const overlay = $derived(getOverlayRect());
-	const ds = $derived(getDragState());
+	const overlay = $derived(drag.getOverlayRect());
+	const ds = $derived(drag.getDragState());
 	const overlayColumn = $derived(ds.mode !== 'idle' ? ds.column : 0);
 	const overlayLeft = $derived(overlayColumn * colWidth + 2);
 	const overlayWidth = $derived(colWidth - 4);
@@ -140,7 +132,7 @@
 	<Scroll axis="y" name={t('misc.weekEvents')} class="bg-background relative">
 		<div style="height: {totalHeight}px; position: relative; min-width: {7 * colWidth}px">
 			{#each Array.from({ length: 7 }) as _, col (col)}
-				{@const colDate = getColumnDate(weekStart, col)}
+				{@const colDate = addDays(weekStart, col)}
 				{@const isTodayColumn = col === todayIndex}
 				{@const isWeekendCol = isWeekend(colDate)}
 				<div
@@ -164,14 +156,14 @@
 							class="absolute inset-0"
 							use:pixelDrag={{
 								onStart: (event) => {
-									if (!isDragging() && event.currentTarget instanceof HTMLElement) {
+									if (!drag.isDragging() && event.currentTarget instanceof HTMLElement) {
 										const top = event.clientY - event.currentTarget.getBoundingClientRect().top;
-										beginCreate(col, top);
+										drag.beginCreate(col, top);
 									}
 								},
-								onMove: (_e, _dx, dy) => updateDrag(dy),
+								onMove: (_e, _dx, dy) => drag.updateDrag(dy),
 								onEnd: commitDrop,
-								onCancel: cancelDrag,
+								onCancel: drag.cancelDrag,
 								axis: 'y',
 								cursor: 'crosshair'
 							}}
@@ -201,7 +193,7 @@
 						title={!editable ? event.lockedReason : undefined}
 						use:pixelDrag={{
 							onStart: () => {
-								if (editable) beginMove(event, col, top, h);
+								if (editable) drag.beginMove(event, col, top, h);
 							},
 							onMove: (pointerEvent, _dx, dy) => {
 								const targetColumn = Number(
@@ -210,10 +202,10 @@
 										?.closest('[data-calendar-column]')
 										?.getAttribute('data-calendar-column')
 								);
-								updateDrag(dy, Number.isInteger(targetColumn) ? targetColumn : col);
+								drag.updateDrag(dy, Number.isInteger(targetColumn) ? targetColumn : col);
 							},
 							onEnd: commitDrop,
-							onCancel: cancelDrag,
+							onCancel: drag.cancelDrag,
 							axis: 'both'
 						}}
 					>
@@ -231,11 +223,11 @@
 								use:pixelDrag={{
 									onStart: (e) => {
 										e.stopPropagation();
-										beginResize(event, col, top, h);
+										drag.beginResize(event, col, top, h);
 									},
-									onMove: (_e, _dx, dy) => updateDrag(dy),
+									onMove: (_e, _dx, dy) => drag.updateDrag(dy),
 									onEnd: commitDrop,
-									onCancel: cancelDrag,
+									onCancel: drag.cancelDrag,
 									axis: 'y'
 								}}
 								role="none"

@@ -14,7 +14,7 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { EnvironmentName, InvocationId, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import { Effect, Schema } from 'effect';
-import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
 
@@ -125,11 +125,11 @@ const turnInvocation = (conversationId: string, message: string): Invocation => 
 /** The rewritten turn rows, newest last — the loop rewrites one row as each step lands. */
 const turnRewrites = (statements: ReadonlyArray<Statement>) =>
 	statements
-		.filter((entry) => entry.sql.startsWith('update bolt_agent_messages'))
+		.filter((entry) => entry.sql.startsWith('update chat_message'))
 		.map((entry) => JSON.parse(String(entry.parameters[2])) as Record<string, unknown>);
 
 const usageWrite = (statements: ReadonlyArray<Statement>) =>
-	statements.find((entry) => entry.sql.includes('update bolt_conversations set'));
+	statements.find((entry) => entry.sql.includes('update chat_session set'));
 
 describe('agent turn usage', () => {
 	it('folds every round of a turn into one figure and rolls it onto the session', async () => {
@@ -195,7 +195,7 @@ describe('agent turn usage', () => {
 		// Walked up `parent_id` rather than written to one row, so a delegated session's spend reaches
 		// the conversation the person is looking at however deep it happened.
 		expect(rollup?.sql).toContain('with recursive lineage');
-		expect(rollup?.sql).toContain('above.id = lineage.parent_id');
+		expect(rollup?.sql).toContain('above.conversation_id = lineage.parent_id');
 	});
 
 	it('counts a turn its host priced at nothing as unreported, not as free', async () => {
@@ -250,7 +250,7 @@ describe('agent turn usage', () => {
 		// Its rows carry the turn that produced them, or the reader's projection cannot tell a delegated
 		// agent's messages from ones the person typed into the session it is nested in.
 		const appended = statements.filter((entry) =>
-			entry.sql.startsWith('insert into bolt_agent_messages')
+			entry.sql.startsWith('insert into chat_message')
 		);
 		expect(appended.length).toBeGreaterThan(0);
 		expect(appended.every((entry) => typeof entry.parameters[3] === 'string')).toBe(true);

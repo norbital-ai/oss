@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Effect } from 'effect';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Label } from '@norbital-ai/ui/label';
@@ -10,7 +11,7 @@
 		identityFailureMessage,
 		type IdentityLocale,
 		type SignInTransport
-	} from './i18n.js';
+	} from '#lib/client/ui/identity/i18n.js';
 
 	let {
 		locale = 'en',
@@ -29,32 +30,46 @@
 	let submitting = $state(false);
 	let errorMessage = $state<string | undefined>(undefined);
 
-	const send = async (): Promise<void> => {
-		if (submitting) return;
-		submitting = true;
-		errorMessage = undefined;
-		const result = await transport.sendCode(email.trim().toLowerCase());
-		submitting = false;
-		if (!result.ok) {
-			errorMessage = identityFailureMessage(locale, result.reason);
-			return;
-		}
-		code = '';
-		step = 'code';
-	};
+	const send = (): Effect.Effect<void> =>
+		Effect.gen(function* () {
+			if (submitting) return;
+			submitting = true;
+			errorMessage = undefined;
+			const result = yield* Effect.tryPromise(() => transport.sendCode(email.trim().toLowerCase()));
+			if (!result.ok) {
+				errorMessage = identityFailureMessage(locale, result.reason);
+				return;
+			}
+			code = '';
+			step = 'code';
+		}).pipe(
+			Effect.catch(() => {
+				errorMessage = copy['bolt.identity.genericError'];
+				return Effect.void;
+			}),
+			Effect.ensuring(Effect.sync(() => (submitting = false)))
+		);
 
-	const verify = async (): Promise<void> => {
-		if (submitting || code.length !== 6) return;
-		submitting = true;
-		errorMessage = undefined;
-		const result = await transport.verifyCode(email.trim().toLowerCase(), code);
-		submitting = false;
-		if (!result.ok) {
-			errorMessage = identityFailureMessage(locale, result.reason);
-			return;
-		}
-		onAuthenticated();
-	};
+	const verify = (): Effect.Effect<void> =>
+		Effect.gen(function* () {
+			if (submitting || code.length !== 6) return;
+			submitting = true;
+			errorMessage = undefined;
+			const result = yield* Effect.tryPromise(() =>
+				transport.verifyCode(email.trim().toLowerCase(), code)
+			);
+			if (!result.ok) {
+				errorMessage = identityFailureMessage(locale, result.reason);
+				return;
+			}
+			onAuthenticated();
+		}).pipe(
+			Effect.catch(() => {
+				errorMessage = copy['bolt.identity.genericError'];
+				return Effect.void;
+			}),
+			Effect.ensuring(Effect.sync(() => (submitting = false)))
+		);
 
 	const changeEmail = (): void => {
 		code = '';
@@ -75,7 +90,7 @@
 		<form
 			onsubmit={(event) => {
 				event.preventDefault();
-				void send();
+				void Effect.runPromise(send());
 			}}
 		>
 			<Stack gap="md">
@@ -121,7 +136,7 @@
 		<form
 			onsubmit={(event) => {
 				event.preventDefault();
-				void verify();
+				void Effect.runPromise(verify());
 			}}
 		>
 			<Stack gap="md">

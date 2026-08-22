@@ -11,11 +11,12 @@ import {
 	type FacilityBinding,
 	type FacilityBindings,
 	type Invocation,
+	PluginTrustedContext,
 	type TaskRequest,
 	type TaskResponse
 } from '@norbital-ai/bolt-protocol';
 import { EnvironmentName, InvocationId, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
-import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
 
@@ -212,7 +213,7 @@ const invoke = async (command: string, input: Schema.Json): Promise<BundleResult
 const invokePlugin = async (
 	command: string,
 	input: Schema.Json,
-	trustedContext: Schema.Json = {},
+	trustedContext: unknown = {},
 	credential: string | null = 'test-session'
 ): Promise<BundleResult> => {
 	const invocation: Invocation = {
@@ -225,7 +226,7 @@ const invokePlugin = async (
 		command,
 		input,
 		headers: credential === null ? {} : { authorization: [`Bearer ${credential}`] },
-		trustedContext
+		trustedContext: Schema.decodeUnknownSync(PluginTrustedContext)(trustedContext)
 	};
 	return bundle.dispatch(invocation, facilities, new AbortController().signal);
 };

@@ -4,7 +4,7 @@
 	import { cn, type WithElementRef } from '#lib/utils';
 	import type { Attachment } from 'svelte/attachments';
 	import type { HTMLAttributes } from 'svelte/elements';
-	import { SIDEBAR_WIDTH_MOBILE } from './constants.js';
+	import { SIDEBAR_WIDTH_MOBILE } from '#lib/sidebar/constants';
 
 	const { t } = useI18n<UiKeys>();
 	import { useSidebar } from './context.svelte.js';

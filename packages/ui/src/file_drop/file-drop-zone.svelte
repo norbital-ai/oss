@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Effect } from 'effect';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn, formatFileSize } from '#lib/utils';
 	import { useId } from 'bits-ui';
@@ -54,7 +55,7 @@
 				({
 					id: `uploaded-${file.name}-${file.url}`,
 					file: new File([], file.name, { type: file.type }),
-					stage: 'complete' as UploadStage,
+					stage: 'complete',
 					result: file,
 					isUploaded: true
 				}) satisfies UploadItem
@@ -66,7 +67,7 @@
 					file: u.file,
 					stage: u.stage,
 					error: u.error,
-					result: u.result as TFileValue | undefined,
+					result: u.result,
 					isUploaded: false
 				}) satisfies UploadItem
 		);
@@ -88,7 +89,7 @@
 		return undefined;
 	}
 
-	async function processUploads(files: File[]) {
+	const processUploads = Effect.fn(function* (files: File[]) {
 		if (!isInteractive) return;
 		onUploadStart?.(files);
 
@@ -103,10 +104,10 @@
 		}
 		if (validFiles.length === 0) return;
 
-		const results = await client.uploadMany(validFiles);
-		if (results.length > 0) onUploadSuccess?.(results as TFileValue[]);
+		const results = yield* client.uploadMany(validFiles);
+		if (results.length > 0) onUploadSuccess?.(results);
 		clearCompletedUploadEntries();
-	}
+	});
 
 	function clearCompletedUploadEntries() {
 		for (const entry of client.uploads) {
@@ -114,25 +115,25 @@
 		}
 	}
 
-	async function handleDrop(e: DragEvent) {
+	function handleDrop(e: DragEvent) {
 		if (!canUpload) return;
 		e.preventDefault();
 		const files = Array.from(e.dataTransfer?.files ?? []);
-		if (files.length > 0) await processUploads(files);
+		if (files.length > 0) Effect.runFork(processUploads(files));
 	}
 
-	async function handleFileSelect(e: Event) {
+	function handleFileSelect(e: Event & { currentTarget: HTMLInputElement }) {
 		if (!canUpload) return;
-		const input = e.target as HTMLInputElement;
+		const input = e.currentTarget;
 		const files = Array.from(input.files ?? []);
-		if (files.length > 0) await processUploads(files);
+		if (files.length > 0) Effect.runFork(processUploads(files));
 		input.value = ''; // Reset input to allow selecting the same file again
 	}
 
 	function removeFile(item: UploadItem) {
 		if (!isInteractive) return;
 		if (item.isUploaded && item.result) {
-			void client.delete(item.result.url);
+			Effect.runFork(client.delete(item.result.url));
 			const uploadedIndex = uploadedFiles.findIndex((f) => f.url === item.result?.url);
 			if (uploadedIndex !== -1) onRemoveFile?.(uploadedIndex);
 		} else {
@@ -140,22 +141,28 @@
 		}
 	}
 
-	async function retryUpload(item: UploadItem) {
+	function retryUpload(item: UploadItem) {
 		if (!isInteractive) return;
 		client.clear(item.id);
-		const { promise } = client.beginUpload(item.file);
-		try {
-			const result = await promise;
-			onUploadSuccess?.([result as TFileValue]);
-			clearCompletedUploadEntries();
-		} catch (error) {
-			if ((error as Error).name !== 'AbortError') {
-				onUploadError?.(
-					error instanceof Error ? error.message : t('dataRenderer.uploadFailed'),
-					item.file
-				);
-			}
-		}
+		const { id: uploadId, effect } = client.beginUpload(item.file);
+		Effect.runFork(
+			effect.pipe(
+				Effect.tap((result) =>
+					Effect.sync(() => {
+						onUploadSuccess?.([result]);
+						clearCompletedUploadEntries();
+					})
+				),
+				Effect.catch((error) =>
+					Effect.sync(() => {
+						const upload = client.uploads.find(({ id }) => id === uploadId);
+						if (upload?.stage !== 'aborted') {
+							onUploadError?.(error instanceof Error ? error.message : String(error), item.file);
+						}
+					})
+				)
+			)
+		);
 	}
 
 	function getFileIcon(type: string): string {

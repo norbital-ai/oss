@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '#lib/button';
 	import { cn } from '#lib/utils';
+	import { Effect } from 'effect';
 	import { tick, type ComponentProps } from 'svelte';
 	import Input from './input.svelte';
 
@@ -39,11 +40,15 @@
 	/**
 	 * Toggles the editing state when the Edit/Done button is clicked.
 	 */
-	const toggleEditing = async () => {
+	const toggleEditing = () => {
 		isEditing = !isEditing;
 		if (!isEditing) return;
-		await tick();
-		ref?.focus();
+		void Effect.runPromise(
+			Effect.gen(function* () {
+				yield* Effect.promise(() => tick());
+				ref?.focus();
+			})
+		);
 	};
 </script>
 

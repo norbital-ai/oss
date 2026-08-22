@@ -2,8 +2,18 @@
  * Client-agnostic upload contract. A concrete host adapter supplies the implementation.
  */
 
-export type UploadStage =
-	'uploading' | 'converting' | 'summarizing' | 'complete' | 'error' | 'aborted';
+import { Effect, Schema } from 'effect';
+import { FileValueSchema } from '../file-value/file-value.types.js';
+
+const UploadStageSchema = Schema.Literals([
+	'uploading',
+	'converting',
+	'summarizing',
+	'complete',
+	'error',
+	'aborted'
+]);
+export type UploadStage = typeof UploadStageSchema.Type;
 
 export const UPLOAD_STAGE_MESSAGES: Record<UploadStage, string> = {
 	uploading: 'Uploading...',
@@ -21,37 +31,31 @@ export function isActiveUploadStage(stage: UploadStage): boolean {
 }
 
 export interface UploadOptions {
-	signal?: AbortSignal;
+	signal?: AbortSignal | undefined;
 	/** Streaming multipart + SSE progress (default true in app implementation). */
-	stream?: boolean;
-	onProgress?: (stage: UploadStage, percent?: number) => void;
+	stream?: boolean | undefined;
+	onProgress?: ((stage: UploadStage, percent?: number) => void) | undefined;
 }
 
 export interface BeginUploadOptions {
-	stream?: boolean;
-	uploadId?: string;
-	onProgress?: (stage: UploadStage) => void;
+	stream?: boolean | undefined;
+	uploadId?: string | undefined;
+	onProgress?: ((stage: UploadStage) => void) | undefined;
 }
 
 /** Result of a successful upload (matches app JSON + `TFileValue`). */
-export interface UploadResult {
-	norbital_id: string;
+const UploadResultSchema = Schema.Struct({
+	...FileValueSchema.fields,
 	/**
 	 * The object store's key for these bytes, which is what a `file()` column persists.
 	 *
-	 * Not the same string as `norbital_id`: the workspace client stores under `<uuid><extension>`
+	 * Not the same string as `id`: the workspace client stores under `<uuid><extension>`
 	 * and returns the bare uuid as the id. Reconstructing one from the other by string surgery is
 	 * how a read lands on a key nothing was ever written under, so the key is carried.
 	 */
-	storageKey: string;
-	url: string;
-	name: string;
-	type: string;
-	size: number;
-	metadata?: Record<string, unknown>;
-	indexed_status?: 'pending' | 'indexing' | 'ready' | 'failed' | 'not_indexable';
-	indexed_error?: string | null;
-}
+	storageKey: Schema.String,
+});
+export type UploadResult = typeof UploadResultSchema.Type;
 
 export interface UploadEntry {
 	id: string;
@@ -65,16 +69,19 @@ export interface UploadEntry {
 export interface IFileUploadClient {
 	readonly uploads: UploadEntry[];
 
-	upload(file: File, options?: UploadOptions): Promise<UploadResult>;
+	upload(file: File, options?: UploadOptions): Effect.Effect<UploadResult, unknown>;
 
-	uploadMany(files: File[], options?: Pick<UploadOptions, 'stream'>): Promise<UploadResult[]>;
+	uploadMany(
+		files: File[],
+		options?: Pick<UploadOptions, 'stream'>
+	): Effect.Effect<UploadResult[], unknown>;
 
 	beginUpload(
 		file: File,
 		options?: BeginUploadOptions
-	): { id: string; promise: Promise<UploadResult> };
+	): { id: string; effect: Effect.Effect<UploadResult, unknown> };
 
-	delete(fileUrl: string): Promise<void>;
+	delete(fileUrl: string): Effect.Effect<void, unknown>;
 
 	cancel(entryId: string): void;
 

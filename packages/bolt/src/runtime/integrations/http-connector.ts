@@ -1,11 +1,16 @@
 import {
 	ConnectorRequest,
 	ConnectorResponse,
+	failure,
 	makeWireError,
+	success,
 	type FacilityBinding
 } from '@norbital-ai/bolt-protocol';
-import { Schema } from 'effect';
-import { INTEGRATION_HTTP_OPERATION, IntegrationHttpRequest } from './http.js';
+import { Effect, Schema } from 'effect';
+import {
+	INTEGRATION_HTTP_OPERATION,
+	IntegrationHttpRequest
+} from '#lib/runtime/integrations/http.js';
 
 /**
  * A host-side connector binding that performs `http.request`, and nothing else.
@@ -35,27 +40,24 @@ export const makeHttpConnectorBinding = (
 		call: async (_metadata, unsafeInput, signal) => {
 			const decoded = Schema.decodeUnknownExit(ConnectorRequest)(unsafeInput);
 			if (decoded._tag !== 'Success') {
-				return {
-					_tag: 'Failure',
-					error: makeWireError('connector.invalid_request', 'Connector request is malformed')
-				};
+				return failure(
+					makeWireError('connector.invalid_request', 'Connector request is malformed')
+				);
 			}
 			const input = decoded.value;
 			if (input.operation !== INTEGRATION_HTTP_OPERATION) {
-				return {
-					_tag: 'Failure',
-					error: makeWireError(
+				return failure(
+					makeWireError(
 						'connector.unsupported_operation',
 						`This connector performs ${INTEGRATION_HTTP_OPERATION} only, not ${input.operation}`
 					)
-				};
+				);
 			}
 			const request = Schema.decodeUnknownExit(IntegrationHttpRequest)(input.input);
 			if (request._tag !== 'Success') {
-				return {
-					_tag: 'Failure',
-					error: makeWireError('connector.invalid_request', 'HTTP request descriptor is malformed')
-				};
+				return failure(
+					makeWireError('connector.invalid_request', 'HTTP request descriptor is malformed')
+				);
 			}
 			const { method, url, headers, body } = request.value;
 			const target = URL.parse(url);
@@ -65,55 +67,47 @@ export const makeHttpConnectorBinding = (
 					target.hostname !== 'localhost' &&
 					target.hostname !== '127.0.0.1')
 			) {
-				return {
-					_tag: 'Failure',
-					error: makeWireError(
-						'connector.refused',
-						'Integration requests must be HTTPS outside localhost'
-					)
-				};
+				return failure(
+					makeWireError('connector.refused', 'Integration requests must be HTTPS outside localhost')
+				);
 			}
 			if (options.allowedHosts !== undefined && !options.allowedHosts.includes(target.host)) {
-				return {
-					_tag: 'Failure',
-					error: makeWireError(
-						'connector.refused',
-						`${target.host} is not an allowed integration host`
-					)
-				};
+				return failure(
+					makeWireError('connector.refused', `${target.host} is not an allowed integration host`)
+				);
 			}
 			const sends = body !== undefined && method !== 'GET';
-			try {
-				const response = await perform(target.toString(), {
-					method,
-					// `content-type` is stated by whoever serialises, which is this function — an outbound
-					// delivery that posted JSON without saying so is a delivery most receivers answer 415 to,
-					// and a 415 is a 4xx, so it would never be retried. Both defaults sit before the declared
-					// headers so a binding that names either one still wins.
-					headers: {
-						accept: 'application/json',
-						...(sends ? { 'content-type': 'application/json' } : {}),
-						...headers
-					},
-					...(sends ? { body: JSON.stringify(body) } : {}),
-					signal
-				});
-				const text = await response.text();
-				if (text.length > maxResponseBytes) {
-					return {
-						_tag: 'Failure',
-						error: makeWireError(
-							'connector.too_large',
-							`Integration response exceeded ${maxResponseBytes} bytes`
-						)
-					};
-				}
-				// A non-JSON body is not a transport failure — a 502 from a proxy arrives as HTML, and the
-				// runtime's retry policy needs to see the 502 rather than a decode error standing in for it.
-				const parsed: Schema.Json = text === '' ? null : jsonOrText(text);
-				return {
-					_tag: 'Success',
-					value: {
+			return await Effect.runPromise(
+				Effect.gen(function* () {
+					const response = yield* Effect.tryPromise(() =>
+						perform(target.toString(), {
+							method,
+							// `content-type` is stated by whoever serialises, which is this function — an outbound
+							// delivery that posted JSON without saying so is a delivery most receivers answer 415 to,
+							// and a 415 is a 4xx, so it would never be retried. Both defaults sit before the declared
+							// headers so a binding that names either one still wins.
+							headers: {
+								accept: 'application/json',
+								...(sends ? { 'content-type': 'application/json' } : {}),
+								...headers
+							},
+							...(sends ? { body: JSON.stringify(body) } : {}),
+							signal
+						})
+					);
+					const text = yield* Effect.tryPromise(() => response.text());
+					if (text.length > maxResponseBytes) {
+						return failure(
+							makeWireError(
+								'connector.too_large',
+								`Integration response exceeded ${maxResponseBytes} bytes`
+							)
+						);
+					}
+					// A non-JSON body is not a transport failure — a 502 from a proxy arrives as HTML, and the
+					// runtime's retry policy needs to see the 502 rather than a decode error standing in for it.
+					const parsed: Schema.Json = text === '' ? null : jsonOrText(text);
+					return success({
 						output: {
 							status: response.status,
 							headers: Object.fromEntries(
@@ -121,21 +115,20 @@ export const makeHttpConnectorBinding = (
 							),
 							body: parsed
 						}
-					}
-				};
-			} catch (cause) {
-				return {
-					_tag: 'Failure',
-					error: makeWireError(
-						'connector.transport',
-						cause instanceof Error ? cause.message : String(cause),
-						{
-							retryable: !signal.aborted,
-							outcome: 'unknown'
-						}
+					});
+				}).pipe(
+					Effect.catch((cause) =>
+						Effect.succeed(
+							failure(
+								makeWireError('connector.transport', String(cause), {
+									retryable: !signal.aborted,
+									outcome: 'unknown'
+								})
+							)
+						)
 					)
-				};
-			}
+				)
+			);
 		}
 	};
 };

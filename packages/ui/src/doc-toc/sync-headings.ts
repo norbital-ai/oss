@@ -1,4 +1,4 @@
-import type { DocTocItem } from './types';
+import type { DocTocItem } from '#lib/doc-toc/types';
 
 export const DEFAULT_DOC_TOC_HEADINGS = 'h1[id], h2[id], h3[id]';
 export const FEATURE_DOC_TOC_HEADINGS = 'h2[id], h3[id]';

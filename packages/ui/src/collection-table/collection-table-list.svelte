@@ -7,7 +7,7 @@
 	import { cn } from '#lib/utils';
 	import { CollectionRecordMetadataView } from '#lib/collection-record-metadata';
 	import type { ResolvedCollectionRecordMetadata } from '#lib/collection-record-metadata';
-	import type { CollectionTableRowActionContext } from './collection-table.types.js';
+	import type { CollectionTableRowActionContext } from '#lib/collection-table/collection-table.types';
 
 	const { t } = useI18n<UiKeys>();
 

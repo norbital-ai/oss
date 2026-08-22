@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { cn, type WithElementRef, type WithoutChildren } from '#lib/utils';
 	import { Stack } from '#lib/layout';
-	import { getChartContext, Tooltip as TooltipPrimitive } from 'layerchart';
+	import { getChartContext, Tooltip as TooltipPrimitive, type Tooltip } from 'layerchart';
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
-	import { getPayloadConfigFromPayload, useChart, type TooltipPayload } from './chart-utils.js';
+	import { getPayloadConfigFromPayload, useChart } from '#lib/chart/chart-utils';
 
-	function defaultFormatter(value: string | number, _payload: TooltipPayload[]) {
+	function defaultFormatter(value: string | number, _payload: Tooltip.TooltipSeries[]) {
 		return `${value}`;
 	}
 
@@ -33,15 +33,16 @@
 		hideIndicator?: boolean;
 		labelClassName?: string;
 		labelFormatter?:
-			((value: string | number, payload: TooltipPayload[]) => string | number | Snippet) | null;
+			| ((value: string | number, payload: Tooltip.TooltipSeries[]) => string | number | Snippet)
+			| null;
 		formatter?: Snippet<
 			[
 				{
 					value: unknown;
 					name: string;
-					item: TooltipPayload;
+					item: Tooltip.TooltipSeries;
 					index: number;
-					payload: TooltipPayload[];
+					payload: Tooltip.TooltipSeries[];
 				}
 			]
 		>;

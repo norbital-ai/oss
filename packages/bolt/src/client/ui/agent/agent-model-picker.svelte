@@ -9,13 +9,11 @@
 	import { Combobox } from '@norbital-ai/ui/combobox';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
-	import type { AiModelOption } from './models.js';
-	import type { AgentModelCatalogStatus } from './agent-model-state.svelte.js';
-	import { AGENT_COMPOSER_CONTROL_TEXT_CLASS } from './composer-chrome.js';
+	import type { AgentModelCatalogStatus, AiModelOption } from './agent-model-state.svelte.js';
+	import { AGENT_COMPOSER_CONTROL_TEXT_CLASS } from '#lib/client/ui/agent/composer-chrome.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import type { BoltUiKeys } from './i18n.js';
 
-	const { t } = useI18n<BoltUiKeys>();
+	const { t } = useI18n();
 
 	interface ModelFamily {
 		id: string;
@@ -44,7 +42,7 @@
 
 	/** Strips the OpenRouter-style variant suffix so catalog entries group by model family. */
 	function baseModelId(modelId: string): string {
-		// stupidity:allow Q4 -- named helper
+		// repository-health:allow Q4 -- named helper
 		return modelId.split(':', 1)[0] ?? modelId;
 	}
 
@@ -128,12 +126,14 @@
 			itemHeight={36}
 			maxHeight={360}
 			class="min-w-0"
-			triggerClass={compact
-				? cn(
-						'border-0 bg-transparent shadow-none hover:bg-muted',
-						AGENT_COMPOSER_CONTROL_TEXT_CLASS
-					)
-				: undefined}
+			{...compact
+				? {
+						triggerClass: cn(
+							'border-0 bg-transparent shadow-none hover:bg-muted',
+							AGENT_COMPOSER_CONTROL_TEXT_CLASS
+						)
+					}
+				: {}}
 			minWidth={compact ? 280 : 320}
 			sameWidth={!compact}
 			{disabled}
@@ -149,13 +149,15 @@
 				onValueChange={selectModel}
 				searchable={false}
 				class="min-w-0"
-				triggerClass={compact
-					? cn(
-							'border-0 bg-transparent shadow-none hover:bg-muted',
-							AGENT_COMPOSER_CONTROL_TEXT_CLASS
-						)
-					: undefined}
-				minWidth={compact ? 112 : undefined}
+				{...compact
+					? {
+							triggerClass: cn(
+								'border-0 bg-transparent shadow-none hover:bg-muted',
+								AGENT_COMPOSER_CONTROL_TEXT_CLASS
+							),
+							minWidth: 112
+						}
+					: {}}
 				sameWidth={!compact}
 				{disabled}
 			/>
@@ -168,7 +170,7 @@
 		{@render fields()}
 	</Inline>
 {:else}
-	<!-- stupidity:allow UI6 -- Model/Variant field pair is a viewport sm:grid-cols-[1fr_9rem] row that Grid minimum cannot express. -->
+	<!-- repository-health:allow UI6 -- Model/Variant field pair is a viewport sm:grid-cols-[1fr_9rem] row that Grid minimum cannot express. -->
 	<div class={cn('grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_9rem]', className)}>
 		{@render fields()}
 	</div>

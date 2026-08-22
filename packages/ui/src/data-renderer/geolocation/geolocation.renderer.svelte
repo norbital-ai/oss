@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
-	import type { DataRendererRuntime } from '../data-renderer-runtime.js';
-	import type { DataRendererProps } from '../data-renderer.types.js';
+	import type { DataRendererRuntime } from '#lib/data-renderer/data-renderer-runtime';
+	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
+	import GeolocationPicker from './geolocation.input.svelte';
 	import {
-		GeolocationPicker,
 		parseGeolocationPickerValues,
 		type TGeolocationPickerValue
-	} from './geolocation.internal.js';
+	} from '#lib/data-renderer/geolocation/geolocation.utils';
 
 	const { t } = useI18n<UiKeys>();
 

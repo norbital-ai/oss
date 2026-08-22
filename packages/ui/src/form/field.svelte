@@ -2,9 +2,9 @@
 	import type { FieldOrientation } from '#lib/field';
 	import * as FieldPrimitive from '#lib/field';
 	import type { Snippet } from 'svelte';
-	import { setField, type FieldProps } from './context';
+	import { setField, type FieldProps } from '#lib/form/context';
 	import type { FormState, FormSchema, InferSchema } from './form_state.svelte';
-	import type { Get } from './path';
+	import type { Get } from '#lib/form/path';
 
 	let {
 		name,

@@ -7,7 +7,7 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
 	import { Sortable } from '#lib/sortable';
-	import { badgeColorClass } from '../collection-table/collection-card-colors.js';
+	import { badgeColorClass } from '#lib/collection-table/collection-card-colors';
 	import { cn } from '#lib/utils';
 	import { humanize } from '@norbital-ai/std/string';
 

@@ -86,7 +86,9 @@ if (command === 'help') {
 			);
 		}
 	});
-	await Effect.runPromise(program).catch((error) => fail('migrate', error));
+	await Effect.runPromise(
+		program.pipe(Effect.catch((error) => Effect.sync(() => fail('migrate', error))))
+	);
 	/**
 	 * One command, because there was only ever one thing to run.
 	 *
@@ -102,14 +104,19 @@ if (command === 'help') {
 		if (!watch) return;
 		const { watch: watchDirectory } = yield* Effect.promise(() => import('node:fs'));
 		const watcher = watchDirectory(resolve(workspaceRoot, 'src'), { recursive: true }, () => {
-			Effect.runPromise(syncWorkspace(workspaceRoot))
-				.then((next) => report('sync', next))
-				.catch((error: unknown) => fail('sync', error));
+			void Effect.runPromise(
+				syncWorkspace(workspaceRoot).pipe(
+					Effect.tap((next) => Effect.sync(() => report('sync', next))),
+					Effect.catch((error) => Effect.sync(() => fail('sync', error)))
+				)
+			);
 		});
 		yield* Effect.addFinalizer(() => Effect.sync(() => watcher.close()));
 		yield* Effect.never;
 	});
-	await Effect.runPromise(Effect.scoped(program)).catch((error) => fail(command, error));
+	await Effect.runPromise(
+		Effect.scoped(program).pipe(Effect.catch((error) => Effect.sync(() => fail(command, error))))
+	);
 } else {
 	process.stderr.write(`Unknown Bolt command: ${command}. Run "bolt help" for usage.\n`);
 	process.exitCode = 1;

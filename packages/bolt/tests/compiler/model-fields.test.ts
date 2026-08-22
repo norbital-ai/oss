@@ -8,18 +8,20 @@ import {
 describe('extractModelFields', () => {
 	it('reads builder types and notNull from an authored model', () => {
 		const fields = extractModelFields(`
-import { date, defineModel, integer, text } from '@norbital-ai/bolt/authoring';
+import { date, defineModel, integer, reference, text } from '@norbital-ai/bolt/authoring';
 
 export default defineModel({
 	name: text({ search: true }).notNull(),
 	date_of_birth: date(),
-	dependents_count: integer().notNull().default(0)
+	dependents_count: integer().notNull().default(0),
+	source: reference({ TIME_ENTRY: 'time_entries', LEAVE_REQUEST: 'leave_requests' }).notNull()
 });
 `);
 		expect(fields).toEqual({
 			name: { type: 'string', required: true, indexed: false },
 			date_of_birth: { type: 'string', required: false, indexed: false },
-			dependents_count: { type: 'number', required: true, indexed: false }
+			dependents_count: { type: 'number', required: true, indexed: false },
+			source: { type: 'reference', required: true, indexed: false }
 		});
 	});
 
@@ -33,11 +35,11 @@ export default ((r) => ({
 	employments: {
 		employment_employee: r.one.employees({
 			from: r.employments.employee_id,
-			to: r.employees.norbital_id
+			to: r.employees.id
 		}),
 		employment_company: r.one.companies({
 			from: r.employments.company_id,
-			to: r.companies.norbital_id
+			to: r.companies.id
 		})
 	}
 })) satisfies Relationships;
@@ -55,7 +57,7 @@ export default ((r) => ({
 				target: 'employees',
 				cardinality: 'one',
 				from: { collection: 'employments', column: 'employee_id' },
-				to: { collection: 'employees', column: 'norbital_id' }
+				to: { collection: 'employees', column: 'id' }
 			},
 			{
 				name: 'employment_company',
@@ -63,7 +65,7 @@ export default ((r) => ({
 				target: 'companies',
 				cardinality: 'one',
 				from: { collection: 'employments', column: 'company_id' },
-				to: { collection: 'companies', column: 'norbital_id' }
+				to: { collection: 'companies', column: 'id' }
 			}
 		]);
 	});
@@ -169,7 +171,8 @@ describe('built-in catalog kinds', () => {
 				photo: file(),
 				embedding: vector({ dimensions: 8 }),
 				blob: jsonb(),
-				pay: custom('money')
+				pay: custom('money'),
+				source: reference({ TIME_ENTRY: 'time_entries', LEAVE_REQUEST: 'leave_requests' })
 			});`,
 			[]
 		);
@@ -189,7 +192,8 @@ describe('built-in catalog kinds', () => {
 			photo: 'file',
 			embedding: 'json',
 			blob: 'json',
-			pay: 'money'
+			pay: 'money',
+			source: 'reference'
 		});
 	});
 });

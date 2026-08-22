@@ -22,7 +22,7 @@
 		type ReleaseControls,
 		type SourceSnapshot,
 		type UsageObservation
-	} from './studio-state.js';
+	} from '#lib/client/ui/studio/studio-state.js';
 
 	/**
 	 * Command panel: what this tenant's runtime is, what it is holding, and what may still be done to it.

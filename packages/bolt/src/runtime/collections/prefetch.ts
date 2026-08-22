@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import type { RelationDefinition, WorkspaceDefinition } from '../../authoring/workspace-schema.js';
+import type { RelationDefinition, WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 
 /**
  * Resolves a query's `with` clause: the related records a surface needs to show a label instead of
@@ -17,20 +17,18 @@ import type { RelationDefinition, WorkspaceDefinition } from '../../authoring/wo
  */
 
 /** What a caller asked to load: `true`, or a nested spec that may narrow columns and recurse. */
-export type WithSpec = Readonly<Record<string, unknown>>;
+type WithSpec = Readonly<Record<string, unknown>>;
 
-export type PrefetchRead = (
+type PrefetchRead = (
 	collection: string,
 	column: string,
 	values: ReadonlyArray<Schema.Json>
 ) => Effect.Effect<ReadonlyArray<Schema.Json>, never>;
 
-const isObject = (value: unknown): value is Readonly<Record<string, unknown>> =>
-	value !== null && typeof value === 'object' && !Array.isArray(value);
+const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
-/** Written as a predicate: `Array.isArray` does not narrow the readonly-array arm of `Json` away. */
-const isRow = (value: Schema.Json): value is Readonly<Record<string, Schema.Json>> =>
-	value !== null && typeof value === 'object' && !Array.isArray(value);
+/** Decodes a `Json` value as the readonly row arm, in one pass. */
+const isRow = Schema.is(Schema.JsonObject);
 
 const asRow = (value: Schema.Json): Readonly<Record<string, Schema.Json>> | undefined =>
 	isRow(value) ? value : undefined;
@@ -53,24 +51,30 @@ const orientation = (
 	return undefined;
 };
 
-/** Narrows a related record to the columns a caller asked for, keeping its identity either way. */
+type ColumnSelection = Readonly<Record<string, boolean>>;
+
+/** Narrows a related record with the same inclusive/exclusive rules as a base collection query. */
 const project = (
 	row: Readonly<Record<string, Schema.Json>>,
-	columns: ReadonlyArray<string> | undefined
+	columns: ColumnSelection | undefined
 ): Readonly<Record<string, Schema.Json>> => {
-	if (columns === undefined || columns.length === 0) return row;
-	const keep = new Set([...columns, 'id', 'norbital_id']);
-	return Object.fromEntries(Object.entries(row).filter(([name]) => keep.has(name)));
+	if (columns === undefined) return row;
+	const entries = Object.entries(columns);
+	if (entries.some(([, enabled]) => enabled))
+		return Object.fromEntries(Object.entries(row).filter(([name]) => columns[name] === true));
+	const excluded = new Set(entries.filter(([, enabled]) => !enabled).map(([name]) => name));
+	return Object.fromEntries(Object.entries(row).filter(([name]) => !excluded.has(name)));
 };
 
-const requestedColumns = (spec: unknown): ReadonlyArray<string> | undefined => {
+const requestedColumns = (spec: unknown): ColumnSelection | undefined => {
 	if (!isObject(spec)) return undefined;
 	const columns = spec['columns'];
 	if (!isObject(columns)) return undefined;
-	const names = Object.entries(columns)
-		.filter(([, enabled]) => enabled === true)
-		.map(([name]) => name);
-	return names.length === 0 ? undefined : names;
+	const selected: Record<string, boolean> = {};
+	for (const [name, enabled] of Object.entries(columns)) {
+		if (typeof enabled === 'boolean') selected[name] = enabled;
+	}
+	return Object.keys(selected).length === 0 ? undefined : selected;
 };
 
 const nestedWith = (spec: unknown): WithSpec | undefined => {
@@ -115,6 +119,61 @@ export const attachRelations = (
 		}
 
 		for (const name of names) {
+			const reference = definition.collections?.find((entry) => entry.name === collection)?.fields[
+				name
+			]?.reference;
+			if (reference !== undefined) {
+				const entry = isObject(spec) ? spec[name] : undefined;
+				yield* Effect.forEach(
+					reference.targets,
+					(target) =>
+						Effect.gen(function* () {
+							const ids = [
+								...new Set(
+									attached.flatMap((row) => {
+										const handle = row[name];
+										return isObject(handle) &&
+											handle['kind'] === target.tag &&
+											typeof handle['id'] === 'string'
+											? [handle['id']]
+											: [];
+									})
+								)
+							];
+							if (ids.length === 0) return;
+							const targetSpec = isObject(entry) ? entry[target.tag] : entry;
+							const related = yield* read(target.collection, 'id', ids);
+							const deeper = nestedWith(targetSpec);
+							const resolved =
+								deeper === undefined
+									? related
+									: yield* attachRelations(definition, target.collection, related, deeper, read);
+							const columns = requestedColumns(targetSpec);
+							const byId = new Map<string, Readonly<Record<string, Schema.Json>>>();
+							for (const value of resolved) {
+								const record = asRow(value);
+								if (record !== undefined && typeof record['id'] === 'string')
+									byId.set(record['id'], project(record, columns));
+							}
+							for (const row of attached) {
+								const handle = row[name];
+								if (
+									!isObject(handle) ||
+									handle['kind'] !== target.tag ||
+									typeof handle['id'] !== 'string'
+								)
+									continue;
+								row[name] = {
+									kind: target.tag,
+									id: handle['id'],
+									record: byId.get(handle['id']) ?? null
+								};
+							}
+						}),
+					{ concurrency: 'unbounded', discard: true }
+				);
+				continue;
+			}
 			const relation = definition.relations.find(
 				(candidate) => candidate.source === collection && candidate.name === name
 			);
@@ -124,9 +183,10 @@ export const attachRelations = (
 
 			const keys = [
 				...new Set(
-					attached
-						.map((row) => row[sides.sourceColumn])
-						.filter((value): value is Schema.Json => value !== undefined && value !== null)
+					attached.flatMap((row) => {
+						const value = row[sides.sourceColumn];
+						return value == null ? [] : [value];
+					})
 				)
 			];
 			if (keys.length === 0) continue;

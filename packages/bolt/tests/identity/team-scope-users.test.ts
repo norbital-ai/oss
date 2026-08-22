@@ -28,7 +28,7 @@ import {
  * against a predicate matching only the subject's own team, and would prove nothing about the walk.
  *
  * It also exists because `bolt_team` descent alone does not produce this. Descent hands a manager
- * every *policy* their reports hold, but a grant scoped `${requestor.norbital_id}` re-evaluates
+ * every *policy* their reports hold, but a grant scoped `${requestor.id}` re-evaluates
  * against whoever is asking — so inheriting a self-scoped policy shows the manager their own records
  * and nobody else's. The hierarchy has to be in the predicate, which is what this token puts there.
  *
@@ -110,7 +110,7 @@ const place = async (runtime: BoltTestRuntime) => {
 	] as const) {
 		await seedSession(runtime, { token: `${person}-token`, user: person, team });
 		await runtime.database.query(
-			`insert into deals ("norbital_id", "label", "owner_id") values (gen_random_uuid(), $1, $2)`,
+			`insert into deals ("id", "label", "owner_id") values (gen_random_uuid(), $1, $2)`,
 			[`${person}'s deal`, fixtureUserId(person)]
 		);
 	}
@@ -160,7 +160,7 @@ describe('team_scope_users', () => {
 		await seedTeam(harness, 'Support', { parent: 'Director' });
 		await seedSession(harness, { token: 'support-token', user: 'support', team: 'Support' });
 		await harness.database.query(
-			`insert into deals ("norbital_id", "label", "owner_id") values (gen_random_uuid(), $1, $2)`,
+			`insert into deals ("id", "label", "owner_id") values (gen_random_uuid(), $1, $2)`,
 			["support's deal", fixtureUserId('support')]
 		);
 		expect(await dealsVisibleTo(harness, 'support-token')).toEqual(["support's deal"]);

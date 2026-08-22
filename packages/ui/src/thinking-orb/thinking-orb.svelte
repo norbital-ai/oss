@@ -1,5 +1,6 @@
 <script lang="ts">
-	import type { ThinkingOrbState } from './types.js';
+	import { ThinkingOrbStateSchema, type ThinkingOrbState } from '#lib/thinking-orb';
+	import { Number as Number_, Schema } from 'effect';
 
 	type OrbPoint = {
 		x: number;
@@ -26,8 +27,6 @@
 		class?: string;
 	} = $props();
 
-	const ORB_STATES: readonly ThinkingOrbState[] = ['ready', 'working', 'error'];
-
 	/** The drawn mark's radius as a fraction of the box. See the note at its use. */
 	const ORB_OPTICAL_RADIUS = 0.33;
 
@@ -45,15 +44,12 @@
 	function liveOrbState(root: Element): ThinkingOrbState {
 		// stupidity:allow Q4 -- named helper
 		const value = root.getAttribute('data-state');
-		return value !== null && ORB_STATES.includes(value as ThinkingOrbState)
-			? (value as ThinkingOrbState)
-			: 'ready';
+		return value !== null && Schema.is(ThinkingOrbStateSchema)(value) ? value : 'ready';
 	}
 
 	/** Clamps a numeric value to the inclusive range between min and max. */
 	function clamp(value: number, min = 0, max = 1): number {
-		// stupidity:allow Q4 -- named helper
-		return Math.min(max, Math.max(min, value));
+		return Number_.clamp(value, { minimum: min, maximum: max });
 	}
 
 	/** Returns the shortest signed angular distance between two radians. */

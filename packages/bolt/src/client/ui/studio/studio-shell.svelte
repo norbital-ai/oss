@@ -13,12 +13,10 @@
 	import { Bound, Cluster, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
 	import * as Sheet from '@norbital-ai/ui/sheet';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import { workspaceSession } from '../../session.js';
-	import type { WorkspaceClient } from './workspace-client.js';
+	import { workspaceSession } from '#lib/client/session.js';
+	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 	import {
-		EnvironmentStatusSchema,
 		LIVE_READ_ONLY_NOTICE,
-		ManifestSchema,
 		manifestSections,
 		releaseControls,
 		studioEnvironments,
@@ -26,11 +24,9 @@
 		workspaceEnvoys,
 		workspaceTools,
 		type AuthoringView,
-		type EnvironmentVariable,
 		type StudioReviewTab,
-		type StudioRootTab,
-		type WorkspaceManifest
-	} from './studio-state.js';
+		type StudioRootTab
+	} from '#lib/client/ui/studio/studio-state.js';
 
 	/**
 	 * Workspace Studio: Authoring, Review and the Command panel over one tenant.
@@ -114,16 +110,27 @@
 	});
 	/** The file open in the Editor and its working copy; a commit writes exactly this pair. */
 	let editor = $state({ path: '', value: '' });
-	/** The workspace's own declaration, or why it could not be read. Never both. */
-	let workspace = $state<{
-		manifest: WorkspaceManifest | undefined;
-		error: string | undefined;
-	}>({ manifest: undefined, error: undefined });
-	/** The declared environment names and whether each is set, or why the vault did not answer. */
-	let vault = $state<{
-		entries: ReadonlyArray<EnvironmentVariable>;
-		error: string | undefined;
-	}>({ entries: [], error: undefined });
+	let mounted = $state(false);
+	const manifestQuery = $derived(mounted ? client.system.workspace.manifest({}) : undefined);
+	const workspace = $derived({
+		manifest: manifestQuery?.current,
+		error:
+			manifestQuery?.error === undefined
+				? undefined
+				: manifestQuery.error instanceof Error
+					? manifestQuery.error.message
+					: String(manifestQuery.error)
+	});
+	const environmentQuery = $derived(mounted ? client.system.secrets.status({}) : undefined);
+	const vault = $derived({
+		entries: environmentQuery?.current ?? [],
+		error:
+			environmentQuery?.error === undefined
+				? undefined
+				: environmentQuery.error instanceof Error
+					? environmentQuery.error.message
+					: String(environmentQuery.error)
+	});
 	/** The last thing the host said, and whether a command it was told to run is still running. */
 	let host = $state({ status: 'Loading managed host state…', busy: false });
 	/**
@@ -143,9 +150,6 @@
 	 * transport and one host operations seam, and this page uses exactly those.
 	 */
 	const session = workspaceSession();
-	const command = (name: string, input: Readonly<Record<string, string>>): Promise<unknown> =>
-		session.transport.command(name, input);
-
 	const sections = $derived(manifestSections(workspace.manifest, vault.entries));
 	const sourceFiles = $derived(snapshot?.source.files ?? {});
 	const files = $derived(Object.keys(sourceFiles).sort());
@@ -182,37 +186,6 @@
 		editor = { path, value: snapshot?.source.files[path] ?? '' };
 	};
 
-	/** The manifest is the workspace's own declaration, so the tenant runtime answers for it. */
-	const loadManifest = async (): Promise<void> => {
-		try {
-			workspace = {
-				manifest: await Effect.runPromise(
-					Schema.decodeUnknownEffect(ManifestSchema)(await command('workspace.manifest', {}))
-				),
-				error: undefined
-			};
-		} catch (cause) {
-			workspace = {
-				manifest: undefined,
-				error: cause instanceof Error ? cause.message : String(cause)
-			};
-		}
-	};
-
-	/** One vault read serves both the Environment branch's count and its panel. */
-	const loadEnvironment = async (): Promise<void> => {
-		try {
-			vault = {
-				entries: await Effect.runPromise(
-					Schema.decodeUnknownEffect(EnvironmentStatusSchema)(await command('secrets.status', {}))
-				),
-				error: undefined
-			};
-		} catch (cause) {
-			vault = { entries: [], error: cause instanceof Error ? cause.message : String(cause) };
-		}
-	};
-
 	const actions = {
 		/**
 		 * Reads host state. It deliberately does not claim `busy`.
@@ -221,31 +194,33 @@
 		 * greyed out Commit and Build every five seconds and flashed "a command is already running"
 		 * under them, for a poll nobody asked for.
 		 */
-		reload: async () => {
-			try {
-				snapshot = await Effect.runPromise(
-					Schema.decodeUnknownEffect(OperationsStateSchema)(await session.operations.read())
-				);
+		reload: (): Effect.Effect<void> =>
+			Effect.gen(function* () {
+				const raw = yield* Effect.tryPromise(() => session.operations.read());
+				snapshot = yield* Schema.decodeUnknownEffect(OperationsStateSchema)(raw);
 				host.status = snapshot.readiness.accepting ? 'Ready' : 'Draining';
-			} catch (cause) {
-				const message = String(cause);
-				host.status = message.includes('trusted Colony routing headers are required')
-					? message
-					: `Unavailable: ${message}`;
-			}
-		},
-		operation: async (body: Schema.Json, describe: () => string) => {
-			host.busy = true;
-			try {
-				await session.operations.run(body);
+			}).pipe(
+				Effect.catch((cause) => {
+					const message = String(cause);
+					host.status = message.includes('trusted Colony routing headers are required')
+						? message
+						: `Unavailable: ${message}`;
+					return Effect.void;
+				})
+			),
+		operation: (body: Schema.Json, describe: () => string): Effect.Effect<void> =>
+			Effect.gen(function* () {
+				host.busy = true;
+				yield* Effect.tryPromise(() => session.operations.run(body));
 				host.status = describe();
-				await actions.reload();
-			} catch (cause) {
-				host.status = `Failed: ${cause instanceof Error ? cause.message : String(cause)}`;
-			} finally {
-				host.busy = false;
-			}
-		},
+				yield* actions.reload();
+			}).pipe(
+				Effect.catch((cause) => {
+					host.status = `Failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+					return Effect.void;
+				}),
+				Effect.ensuring(Effect.sync(() => (host.busy = false)))
+			),
 		build: () =>
 			actions.operation({ action: 'build' }, () => 'Compiled the source and routed the release'),
 		rollback: () =>
@@ -262,11 +237,10 @@
 	};
 
 	onMount(() => {
-		void actions.reload();
-		void loadManifest();
-		void loadEnvironment();
+		mounted = true;
+		void Effect.runPromise(actions.reload());
 		const interval = setInterval(() => {
-			void actions.reload();
+			void Effect.runPromise(actions.reload());
 		}, 5_000);
 		return () => clearInterval(interval);
 	});
@@ -320,7 +294,11 @@
 			<Cluster gap="sm" align="center" shrink={false}>
 				<Tabs
 					value={view.rootTab}
-					onValueChange={(next) => (view.rootTab = next as StudioRootTab)}
+					onValueChange={(next) => {
+						if (next === 'authoring' || next === 'review' || next === 'command') {
+							view.rootTab = next;
+						}
+					}}
 					showContent={false}
 					animate={false}
 					variant="default"
@@ -362,7 +340,7 @@
 						commitReason={controls.reason ?? 'Open a file in the Editor to commit it.'}
 						onenvironment={(id) => (view.environmentId = id)}
 						onview={(next) => (view.authoring = next)}
-						oncommit={() => void actions.commit()}
+						oncommit={() => void Effect.runPromise(actions.commit())}
 					/>
 				{:else}
 					<!-- Row 2b: Review chrome -->
@@ -375,7 +353,11 @@
 					>
 						<Tabs
 							value={view.review}
-							onValueChange={(next) => (view.review = next as StudioReviewTab)}
+							onValueChange={(next) => {
+								if (next === 'requests' || next === 'history' || next === 'schema') {
+									view.review = next;
+								}
+							}}
 							showContent={false}
 							animate={false}
 							variant="underline"
@@ -444,9 +426,9 @@
 					{snapshot}
 					{controls}
 					busy={host.busy}
-					onrefresh={() => void actions.reload()}
-					onbuild={() => void actions.build()}
-					onrollback={() => void actions.rollback()}
+					onrefresh={() => void Effect.runPromise(actions.reload())}
+					onbuild={() => void Effect.runPromise(actions.build())}
+					onrollback={() => void Effect.runPromise(actions.rollback())}
 				/>
 			</Bound>
 		{:else}
@@ -467,7 +449,7 @@
 				data-testid="studio-viewport"
 			>
 				{#if isReview}
-					<ReviewPane tab={view.review} source={snapshot?.source} {command} />
+					<ReviewPane tab={view.review} source={snapshot?.source} system={client.system} />
 				{:else if view.authoring === 'manifest'}
 					<ManifestPane
 						manifest={workspace.manifest}
@@ -475,8 +457,8 @@
 						{envoys}
 						{tools}
 						{client}
+						system={client.system}
 						{files}
-						{command}
 						selected={view.selected}
 						environment={vault.entries}
 						environmentError={vault.error}

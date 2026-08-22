@@ -7,7 +7,7 @@
  * fall back to a neutral chip.
  * Class strings are spelled out in full so Tailwind's JIT scanner picks them up.
  */
-export const BADGE_COLOR_CLASSES: Record<string, string> = {
+const BADGE_COLOR_CLASSES: Record<string, string> = {
 	slate:
 		'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-400/25 dark:bg-slate-400/12 dark:text-slate-200',
 	gray: 'border-gray-200 bg-gray-50 text-gray-700 dark:border-gray-400/25 dark:bg-gray-400/12 dark:text-gray-200',
@@ -41,7 +41,7 @@ export const BADGE_COLOR_CLASSES: Record<string, string> = {
 };
 
 /** Neutral chip used when no colour (or an unknown colour) is supplied. */
-export const BADGE_COLOR_FALLBACK =
+const BADGE_COLOR_FALLBACK =
 	'border-border bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground';
 
 export function badgeColorClass(color?: string): string {

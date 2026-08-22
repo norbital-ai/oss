@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { Effect } from 'effect';
 import { EnvironmentName, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '../../src/client.js';
 import { createWorkspaceApiProxy } from '../../src/client/runtime.js';
@@ -60,8 +61,8 @@ describe('the sync engine read cache', () => {
 
 		// The remote entry goes too: it declared it could have read anything.
 		expect(cache.invalidate(['leave_requests']).toSorted()).toEqual(['a', 'c']);
-		expect(await cache.read('b')).toBe(2);
-		expect(await cache.read('a')).toBeUndefined();
+		expect(await Effect.runPromise(cache.read('b'))).toBe(2);
+		expect(await Effect.runPromise(cache.read('a'))).toBeUndefined();
 	});
 
 	it('paints the previous answer before the wire replies, then stops once the change lands', async () => {
@@ -80,15 +81,13 @@ describe('the sync engine read cache', () => {
 		// First read: nothing cached, so the answer only exists once the wire replies.
 		const cold = employees.findMany({ limit: 20 });
 		expect(cold.current).toBeUndefined();
-		held.resolve({ rows: [{ norbital_id: 'e1', name: 'Ada' }], nextCursor: null });
-		expect(await (cold as unknown as PromiseLike<unknown>)).toEqual([
-			{ norbital_id: 'e1', name: 'Ada' }
-		]);
+		held.resolve({ rows: [{ id: 'e1', name: 'Ada' }], nextCursor: null });
+		expect(await (cold as unknown as PromiseLike<unknown>)).toEqual([{ id: 'e1', name: 'Ada' }]);
 
 		// Second read of the same question, with the wire held open: the cache is what paints.
 		held = deferred();
 		const warm = employees.findMany({ limit: 20 });
-		await vi.waitFor(() => expect(warm.current).toEqual([{ norbital_id: 'e1', name: 'Ada' }]));
+		await vi.waitFor(() => expect(warm.current).toEqual([{ id: 'e1', name: 'Ada' }]));
 
 		// A write to that collection falsifies it, so the next read is cold again.
 		cache.invalidate(['employees']);
@@ -96,6 +95,44 @@ describe('the sync engine read cache', () => {
 		await new Promise((settle) => setTimeout(settle, 10));
 		expect(afterChange.current).toBeUndefined();
 		held.resolve({ rows: [], nextCursor: null });
+	});
+
+	it('keeps schema-owned system reads reactive while decoding both cache and wire answers', async () => {
+		const cache = createQueryCache('tenant::test');
+		const queries = createLiveQueryRegistry();
+		const held = deferred();
+		cache.write(
+			cacheKeyFor('schema.plan', {}),
+			{ fingerprint: 'cached', steps: [{ id: 'cached-step', sql: 'select 1' }] },
+			[ANY_COLLECTION]
+		);
+		const bolt = createBoltClient(scope, { command: () => held.promise });
+		const proxy = createWorkspaceApiProxy({ bolt, db: {}, cache, queries });
+
+		const plan = proxy.system.schema.plan({});
+		await vi.waitFor(() => expect(plan.current?.fingerprint).toBe('cached'));
+		expect(plan.loading).toBe(true);
+
+		held.resolve({ fingerprint: 'fresh', steps: [{ id: 'fresh-step', sql: 'select 2' }] });
+		await expect(Promise.resolve(plan)).resolves.toEqual({
+			fingerprint: 'fresh',
+			steps: [{ id: 'fresh-step', sql: 'select 2' }]
+		});
+		expect(plan.current?.fingerprint).toBe('fresh');
+		expect(plan.loading).toBe(false);
+	});
+
+	it('rejects a system read whose wire answer does not satisfy its owned schema', async () => {
+		const bolt = createBoltClient(scope, {
+			command: async () => ({ fingerprint: 42, steps: 'not a schema plan' })
+		});
+		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
+
+		const plan = proxy.system.schema.plan({});
+		await expect(Promise.resolve(plan)).rejects.toThrow();
+		expect(plan.current).toBeUndefined();
+		expect(plan.error).toBeInstanceOf(Error);
+		expect(plan.loading).toBe(false);
 	});
 });
 

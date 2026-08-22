@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement } from './layout.shared.js';
+	import type { LayoutAttributes, LayoutElement } from '#lib/layout/layout.shared';
 
 	/** Named media crops. `banner` is the compact overview / sheet hero (2:1). */
 	export type FrameRatio = 'square' | 'portrait' | 'landscape' | 'widescreen' | 'banner';

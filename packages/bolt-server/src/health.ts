@@ -26,8 +26,8 @@ interface State extends HealthSnapshot {
 	readonly idle: Deferred.Deferred<void>;
 }
 
-// stupidity:allow AL10 -- service shape stays beside its Context.Service owner in the required 14-file architecture
-export interface Interface {
+/** The service shape: admission and drain are one machine, so one interface owns all four operations. */
+interface Interface {
 	readonly snapshot: () => Effect.Effect<HealthSnapshot>;
 	readonly markReady: () => Effect.Effect<void>;
 	readonly stopAdmission: () => Effect.Effect<void>;

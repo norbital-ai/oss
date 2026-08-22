@@ -9,7 +9,7 @@ import {
 	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { collection, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { Collections } from '../../src/runtime/collections/collections.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	adminSubject,
@@ -46,7 +46,9 @@ const people = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+	],
 	teams: {
 		admin: ['admin']
 	},
@@ -67,7 +69,7 @@ const people = workspace({
 /**
  * Ordered, valid record ids.
  *
- * Records are keyed by `norbital_id uuid`, so `pid(1)` is not an identifier a database will accept —
+ * Records are keyed by `id uuid`, so `pid(1)` is not an identifier a database will accept —
  * it only ever worked against the `id text` column Bolt used to invent. These sort in declaration
  * order, which matters here: the point of the suite is that the primary-key tiebreaker breaks ties
  * the same way every statement, so an arbitrary hash would test nothing.
@@ -153,7 +155,7 @@ const walk = async (harness: BoltTestRuntime, input: Record<string, unknown>) =>
 	let after: string | null = null;
 	for (let turn = 0; turn < 20; turn += 1) {
 		const answer: Page = await page(harness, { ...input, ...(after === null ? {} : { after }) });
-		ids.push(...answer.rows.map((row) => String(row['norbital_id'])));
+		ids.push(...answer.rows.map((row) => String(row['id'])));
 		cursors.push(answer.nextCursor);
 		if (answer.nextCursor === null) return { ids, cursors, pages: turn + 1 };
 		after = answer.nextCursor;

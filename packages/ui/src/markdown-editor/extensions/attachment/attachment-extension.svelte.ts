@@ -1,8 +1,5 @@
-import type { IFileUploadClient, UploadStage } from '../../../file-upload/index.js';
-import type {
-	AllowedFileType as TAllowedFileType,
-	FileMetadata as TFileMetadata
-} from '../../../file-value/index.js';
+import type { IFileUploadClient, UploadStage } from '#lib/file-upload';
+import { FileMetadataSchema } from '#lib/file-value/file-value.types';
 import { safeParse } from '@norbital-ai/std';
 import type { MessageVars } from '@norbital-ai/std/i18n';
 import type { Command, CommandProps, NodeViewRenderer, NodeViewRendererProps } from '@tiptap/core';
@@ -13,43 +10,26 @@ import type { Node as ProsemirrorNode } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import { mount } from 'svelte';
 import { toast } from 'svelte-sonner';
-import { Schema } from 'effect';
+import { Effect, Result, Schema } from 'effect';
 import AttachmentView from './attachment-view.svelte';
 
-/**
- * The annotation is what makes this a contract rather than a second opinion.
- *
- * It replaces `z.ZodType<TFileMetadata>`, which pinned the schema to the declared type so a field
- * added to `FileMetadata` could not be forgotten here. Effect states the same pin as the decoder's
- * return type: drop `summary` from the struct and this stops compiling, which is the whole reason
- * the annotation was written in the first place.
- */
-const fileMetadataSchema: Schema.Codec<TFileMetadata> = Schema.Struct({
-	summary: Schema.String,
-	structure_hint: Schema.String
+const decodeFileMetadata = Schema.decodeUnknownResult(FileMetadataSchema);
+
+/** Node attribute shape for the fileAttachment node, decoded once at the parser/attribution edge. */
+const fileAttachmentAttrsSchema = Schema.Struct({
+	name: Schema.String,
+	url: Schema.NullishOr(Schema.String),
+	type: Schema.String,
+	size: Schema.Number,
+	metadata: Schema.optionalKey(Schema.NullishOr(FileMetadataSchema)),
+	id: Schema.optionalKey(Schema.NullishOr(Schema.String)),
+	indexed_status: Schema.optionalKey(Schema.NullishOr(Schema.String))
 });
-const decodeFileMetadata = Schema.decodeUnknownResult(fileMetadataSchema);
-
-export interface FileAttachmentMetadata {
-	name: string;
-	url: string;
-	type: TAllowedFileType;
-	size: number;
-	metadata?: TFileMetadata;
-	norbital_id?: string;
-	indexed_status?: string;
-}
-
-export interface FileAttachmentAttributes extends FileAttachmentMetadata {
-	id: string | null;
-	uploading: boolean;
-	uploadError: boolean;
-	stage: UploadStage | null;
-}
+type FileAttachmentMetadata = typeof fileAttachmentAttrsSchema.Type;
 
 interface FileAttachmentOptions {
 	HTMLAttributes: Record<string, unknown>;
-	allowedFiletypes: TAllowedFileType[];
+	allowedFiletypes: string[];
 	translate?: (key: string, vars?: MessageVars) => string;
 }
 
@@ -65,8 +45,8 @@ type FileAttachmentStorage = {
 	uploadClient: IFileUploadClient;
 };
 
-function getUploadClient(storage: unknown): IFileUploadClient {
-	return (storage as FileAttachmentStorage).uploadClient;
+function getUploadClient(storage: FileAttachmentStorage): IFileUploadClient {
+	return storage.uploadClient;
 }
 
 function findFileAttachmentPosition(
@@ -93,11 +73,10 @@ function createAttachmentAttrs(
 	return {
 		id,
 		name: file.name,
-		type: file.type as TAllowedFileType,
+		type: file.type,
 		size: file.size,
 		url: null,
 		metadata: null,
-		norbital_id: null,
 		indexed_status: null,
 		uploading: true,
 		uploadError: false,
@@ -106,50 +85,58 @@ function createAttachmentAttrs(
 	};
 }
 
-function startAttachmentUpload(args: {
-	uploadClient: IFileUploadClient;
-	file: File;
-	id: string;
-	updateNode: (attrs: Record<string, unknown>) => void;
-}): void {
-	const { uploadClient, file, id, updateNode } = args;
-	const { promise } = uploadClient.beginUpload(file, { uploadId: id });
+function startAttachmentUpload(
+	uploadClient: IFileUploadClient,
+	file: File,
+	id: string,
+	updateNode: (attrs: Record<string, unknown>) => void
+): void {
+	const uploadRun = uploadClient.beginUpload(file, { uploadId: id }).effect;
 
-	void promise
-		.then((result) => {
-			updateNode(
-				createAttachmentAttrs(id, file, {
-					url: result.url,
-					metadata: result.metadata as TFileMetadata | undefined,
-					norbital_id: result.norbital_id ?? null,
-					indexed_status: result.indexed_status ?? null,
-					uploading: false,
-					uploadError: false,
-					stage: 'complete'
-				})
-			);
-		})
-		.catch((error: unknown) => {
-			if (error instanceof Error && error.name === 'AbortError') {
-				updateNode(
-					createAttachmentAttrs(id, file, {
-						uploading: false,
-						uploadError: false,
-						stage: 'aborted'
-					})
-				);
-				return;
-			}
-
-			console.error('File upload error:', error);
-			updateNode(
-				createAttachmentAttrs(id, file, {
-					uploading: false,
-					uploadError: true,
-					stage: 'error'
-				})
-			);
-		});
+	void Effect.runPromise(
+		uploadRun.pipe(
+			Effect.matchEffect({
+				onSuccess: (result) =>
+					Effect.sync(() =>
+						updateNode(
+							createAttachmentAttrs(id, file, {
+								url: result.url,
+								metadata: Result.getOrUndefined(decodeFileMetadata(result.metadata)),
+								id: result.id ?? null,
+								indexed_status: result.indexed_status ?? null,
+								uploading: false,
+								uploadError: false,
+								stage: 'complete'
+							})
+						)
+					),
+				onFailure: (cause) =>
+					cause instanceof Error && cause.name === 'AbortError'
+						? Effect.sync(() =>
+								updateNode(
+									createAttachmentAttrs(id, file, {
+										uploading: false,
+										uploadError: false,
+										stage: 'aborted'
+									})
+								)
+							)
+						: Effect.logError(`File upload error: ${String(cause)}`).pipe(
+								Effect.andThen(() =>
+									Effect.sync(() =>
+										updateNode(
+											createAttachmentAttrs(id, file, {
+												uploading: false,
+												uploadError: true,
+												stage: 'error'
+											})
+										)
+									)
+								)
+							)
+			})
+		)
+	);
 }
 
 declare module '@tiptap/core' {
@@ -163,15 +150,7 @@ declare module '@tiptap/core' {
 export function extractFileMetadata(node: ProsemirrorNode): FileAttachmentMetadata | null {
 	if (node.type.name !== 'fileAttachment') return null;
 
-	return {
-		name: node.attrs.name,
-		url: node.attrs.url,
-		type: node.attrs.type as TAllowedFileType,
-		size: node.attrs.size,
-		metadata: node.attrs.metadata,
-		norbital_id: node.attrs.norbital_id,
-		indexed_status: node.attrs.indexed_status
-	};
+	return Schema.decodeUnknownSync(fileAttachmentAttrsSchema)(node.attrs);
 }
 
 export function createFileAttachmentExtension(options: {
@@ -196,10 +175,8 @@ export function createFileAttachmentExtension(options: {
 					renderHTML: (attributes) => ({ 'data-name': attributes.name })
 				},
 				type: {
-					default: 'application/octet-stream' as TAllowedFileType,
-					parseHTML: (element) =>
-						(element.getAttribute('data-type') as TAllowedFileType) ||
-						('application/octet-stream' as TAllowedFileType),
+					default: 'application/octet-stream',
+					parseHTML: (element) => element.getAttribute('data-type') || 'application/octet-stream',
 					renderHTML: (attributes) => ({ 'data-type': attributes.type })
 				},
 				size: {
@@ -226,10 +203,10 @@ export function createFileAttachmentExtension(options: {
 						'data-metadata': attributes.metadata ? JSON.stringify(attributes.metadata) : null
 					})
 				},
-				norbital_id: {
+				id: {
 					default: null,
 					parseHTML: (element) => element.getAttribute('data-norbital-id') || null,
-					renderHTML: (attributes) => ({ 'data-norbital-id': attributes.norbital_id })
+					renderHTML: (attributes) => ({ 'data-norbital-id': attributes.id })
 				},
 				indexed_status: {
 					default: null,
@@ -237,9 +214,6 @@ export function createFileAttachmentExtension(options: {
 					renderHTML: (attributes) => ({
 						'data-indexed-status': attributes.indexed_status
 					})
-				},
-				id: {
-					default: null
 				},
 				uploading: {
 					default: true
@@ -273,7 +247,7 @@ export function createFileAttachmentExtension(options: {
 					'image/png',
 					'image/jpeg',
 					'image/webp'
-				] as TAllowedFileType[]
+				]
 			};
 		},
 
@@ -326,7 +300,7 @@ export function createFileAttachmentExtension(options: {
 						const { file } = attrs;
 						const uploadClient = getUploadClient(this.storage);
 
-						if (!this.options.allowedFiletypes.includes(file.type as TAllowedFileType)) {
+						if (!this.options.allowedFiletypes.includes(file.type)) {
 							toast.error(
 								this.options.translate?.('misc.fileTypeNotAllowed', { type: file.type }) ??
 									`File type ${file.type} is not allowed.`
@@ -355,7 +329,7 @@ export function createFileAttachmentExtension(options: {
 							.run();
 
 						if (insertResult) {
-							startAttachmentUpload({ uploadClient, file, id, updateNode });
+							startAttachmentUpload(uploadClient, file, id, updateNode);
 						}
 
 						return insertResult;
@@ -427,7 +401,7 @@ export function createFileAttachmentExtension(options: {
 
 							const files = Array.from(event.dataTransfer.files);
 							files.forEach((file) => {
-								if (!extension.options.allowedFiletypes.includes(file.type as TAllowedFileType)) {
+								if (!extension.options.allowedFiletypes.includes(file.type)) {
 									toast.warning(
 										extension.options.translate?.('misc.fileTypeNotAllowed', { type: file.type }) ??
 											`File type ${file.type} is not allowed.`
@@ -450,7 +424,7 @@ export function createFileAttachmentExtension(options: {
 
 								view.dispatch(view.state.tr.insert(coords.pos, node));
 
-								startAttachmentUpload({ uploadClient, file, id, updateNode });
+								startAttachmentUpload(uploadClient, file, id, updateNode);
 							});
 
 							return true;

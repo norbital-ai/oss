@@ -16,7 +16,7 @@
 	import { isEqual } from 'es-toolkit/predicate';
 	import ComboboxTrigger from './combobox-trigger.svelte';
 	import ComboboxSelection from './combobox-selection.svelte';
-	import type { TComboboxCommandItem, TComboboxProps, TOption } from './index.js';
+	import type { TComboboxCommandItem, TComboboxProps, TOption } from '#lib/combobox';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -304,7 +304,7 @@
 		onValueChange?.(value);
 	}
 
-	async function handleOptionSelect(option: TOption<T, TAdditionalProps>) {
+	function handleOptionSelect(option: TOption<T, TAdditionalProps>) {
 		if (readonly) return;
 
 		if (multiple) {
@@ -319,12 +319,12 @@
 			if (allowClickToSetNull && isEqual(option.value, value as T)) {
 				value = null as TMultiple extends true ? T[] | null : T | null;
 				onValueChange?.(value);
-				await handleOpenChange(false);
+				handleOpenChange(false);
 				return;
 			}
 			value = option.value as TMultiple extends true ? T[] | null : T | null;
 			onValueChange?.(value);
-			await handleOpenChange(false);
+			handleOpenChange(false);
 		}
 	}
 
@@ -338,16 +338,16 @@
 		}
 	}
 
-	async function handleClear(event: Event) {
+	function handleClear(event: Event) {
 		if (readonly) return;
 		event.preventDefault();
 		event.stopPropagation();
 		value = (multiple ? [] : null) as TMultiple extends true ? T[] | null : T | null;
-		await handleOpenChange(false);
+		handleOpenChange(false);
 		onValueChange?.(value);
 	}
 
-	async function handleInlineCreateSuccess(newOption: TOption<T, TAdditionalProps>) {
+	function handleInlineCreateSuccess(newOption: TOption<T, TAdditionalProps>) {
 		if (readonly) return;
 		options = [...options, newOption];
 		if (multiple) {
@@ -355,7 +355,7 @@
 			value = [...currentValue, newOption.value] as TMultiple extends true ? T[] | null : T | null;
 		} else {
 			value = newOption.value as TMultiple extends true ? T[] | null : T | null;
-			await handleOpenChange(false);
+			handleOpenChange(false);
 		}
 		ui.submitting = false;
 		ui.showCreateForm = false;

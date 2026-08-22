@@ -53,10 +53,12 @@
 		const map = new Map<string | undefined, MentionItem[]>();
 		items.forEach((item) => {
 			const parentId = item.parentId;
-			if (!map.has(parentId)) {
-				map.set(parentId, []);
+			let siblings = map.get(parentId);
+			if (siblings === undefined) {
+				siblings = [];
+				map.set(parentId, siblings);
 			}
-			map.get(parentId)!.push(item);
+			siblings.push(item);
 		});
 		return map;
 	});
@@ -125,7 +127,7 @@
 
 	function scrollToIndex(index: number) {
 		if (!scrollContainerRef) return;
-		const button = scrollContainerRef.querySelector(`[data-index="${index}"]`) as HTMLElement;
+		const button = scrollContainerRef.querySelector<HTMLElement>(`[data-index="${index}"]`);
 		if (button) {
 			button.scrollIntoView({ block: 'nearest' });
 		}

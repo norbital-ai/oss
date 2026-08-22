@@ -1,31 +1,9 @@
 <script lang="ts" module>
-	/**
-	 * The organization record this form edits, declared where the form is.
-	 *
-	 * It used to be a mapped type over the host's own `OrganizationProfile` schema, which is a module
-	 * inside Colony — so this surface could only compile inside Colony. The five fields are what the
-	 * host's operations endpoint reads and writes, and the decoding at the seam is already by field
-	 * name, so restating them here costs nothing that the seam was not already paying.
-	 */
-	export type OrganizationDraft = {
-		name: string;
-		description: string;
-		countryCode: string;
-		companySize: string;
-		logoKey: string | null;
-	};
-
-	/** What an organization reads as before anyone has saved one, so there is a single empty shape. */
-	export const EMPTY_ORGANIZATION_DRAFT: OrganizationDraft = {
-		name: '',
-		description: '',
-		countryCode: '',
-		companySize: '',
-		logoKey: null
-	};
+	export { EMPTY_ORGANIZATION_DRAFT, type OrganizationDraft } from './organization-state.js';
 </script>
 
 <script lang="ts">
+	import { Effect } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { Button, buttonVariants } from '@norbital-ai/ui/button';
 	import { Combobox } from '@norbital-ai/ui/combobox';
@@ -33,7 +11,8 @@
 	import { Input } from '@norbital-ai/ui/input';
 	import { Bound, Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Textarea } from '@norbital-ai/ui/textarea';
-	import { workspaceSession } from '../../session.js';
+	import { workspaceSession } from '#lib/client/session.js';
+	import type { OrganizationDraft } from './organization-state.js';
 
 	/**
 	 * The organization's own attributes, as the host holds them.
@@ -92,17 +71,20 @@
 	);
 
 	/** Stores the whole record, including cleared fields, and reports the failure if it does not land. */
-	const saveProfile = async (next: OrganizationDraft): Promise<boolean> => {
-		writeFailure = null;
-		try {
-			await workspaceSession().operations.run({ action: 'organization', profile: next });
+	const saveProfile = (next: OrganizationDraft): Effect.Effect<boolean> =>
+		Effect.gen(function* () {
+			writeFailure = null;
+			yield* Effect.tryPromise(() =>
+				workspaceSession().operations.run({ action: 'organization', profile: next })
+			);
 			profile = next;
 			return true;
-		} catch (cause) {
-			writeFailure = cause instanceof Error ? cause.message : 'Unable to save the organization.';
-			return false;
-		}
-	};
+		}).pipe(
+			Effect.catch((cause) => {
+				writeFailure = cause instanceof Error ? cause.message : 'Unable to save the organization.';
+				return Effect.succeed(false);
+			})
+		);
 
 	/**
 	 * Points the record at a logo object and drops the bytes it no longer references.
@@ -112,18 +94,18 @@
 	 * still metered, so the orphan is deleted — silently, because the record is already correct and
 	 * the operator has no action to take about an object they cannot see.
 	 */
-	const pointLogoAt = async (key: string | null): Promise<void> => {
-		const previous = profile.logoKey;
-		busy = 'logo';
-		if (await saveProfile({ ...profile, logoKey: key })) {
-			if (previous !== null && previous !== key) {
-				await workspaceSession()
-					.files.remove(previous)
-					.catch(() => undefined);
+	const pointLogoAt = (key: string | null): Effect.Effect<void> =>
+		Effect.gen(function* () {
+			const previous = profile.logoKey;
+			busy = 'logo';
+			const saved = yield* saveProfile({ ...profile, logoKey: key });
+			if (saved && previous !== null && previous !== key) {
+				yield* Effect.tryPromise(() => workspaceSession().files.remove(previous)).pipe(
+					Effect.catch(() => Effect.void)
+				);
 			}
-		}
-		busy = null;
-	};
+			busy = null;
+		});
 </script>
 
 <Bound size="full">
@@ -153,11 +135,13 @@
 					class="rounded-lg border border-border bg-card p-4 sm:p-6"
 					onsubmit={(event) => {
 						event.preventDefault();
-						void (async () => {
-							busy = 'profile';
-							await saveProfile({ ...profile, name: profile.name.trim() });
-							busy = null;
-						})();
+						void Effect.runPromise(
+							Effect.gen(function* () {
+								busy = 'profile';
+								yield* saveProfile({ ...profile, name: profile.name.trim() });
+								busy = null;
+							})
+						);
 					}}
 				>
 					<Stack gap="sm">
@@ -193,7 +177,7 @@
 								ariaLabel="Company size"
 								value={profile.companySize}
 								onValueChange={(value) => {
-									profile.companySize = value ?? '';
+									profile = { ...profile, companySize: value ?? '' };
 								}}
 								searchable={false}
 								class="w-full"
@@ -240,7 +224,7 @@
 										class="sr-only"
 										accept={Object.keys(LOGO_TYPES).join(',')}
 										disabled={busy !== null}
-										onchange={async (event) => {
+										onchange={(event) => {
 											const input = event.currentTarget;
 											const file = input.files?.[0];
 											input.value = '';
@@ -258,15 +242,23 @@
 											// Each upload takes a fresh key rather than overwriting a fixed one, so a
 											// new URL is never served from a cache still holding the old image.
 											const key = `org-branding/logo-${crypto.randomUUID()}.${extension}`;
-											try {
-												await workspaceSession().files.store(key, file);
-											} catch (cause) {
-												writeFailure =
-													cause instanceof Error ? cause.message : 'Unable to store the logo.';
-												busy = null;
-												return;
-											}
-											await pointLogoAt(key);
+											void Effect.runPromise(
+												Effect.gen(function* () {
+													const stored = yield* Effect.tryPromise(() =>
+														workspaceSession().files.store(key, file)
+													).pipe(
+														Effect.catch((cause) => {
+															writeFailure =
+																cause instanceof Error
+																	? cause.message
+																	: 'Unable to store the logo.';
+															busy = null;
+															return Effect.succeed(null);
+														})
+													);
+													if (stored !== null) yield* pointLogoAt(key);
+												})
+											);
 										}}
 									/>
 								</label>
@@ -275,7 +267,7 @@
 										type="button"
 										variant="ghost"
 										disabled={busy !== null}
-										onclick={() => pointLogoAt(null)}
+										onclick={() => void Effect.runPromise(pointLogoAt(null))}
 									>
 										Remove logo
 									</Button>

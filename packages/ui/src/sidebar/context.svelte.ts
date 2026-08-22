@@ -1,10 +1,10 @@
-import { IsMobile } from './is-mobile.svelte.js';
 import { createContext } from 'svelte';
-import { SIDEBAR_KEYBOARD_SHORTCUT } from './constants.js';
+import { MediaQuery } from 'svelte/reactivity';
+import { SIDEBAR_KEYBOARD_SHORTCUT } from '#lib/sidebar/constants';
 
 type Getter<T> = () => T;
 
-export type SidebarStateProps = {
+type SidebarStateProps = {
 	/**
 	 * A getter function that returns the current open state of the sidebar.
 	 * We use a getter function here to support `bind:open` on the `Sidebar.Provider`
@@ -77,4 +77,12 @@ export function setSidebar(props: SidebarStateProps): SidebarState {
 	const sidebarState = new SidebarState(props);
 	setSidebarContext(() => sidebarState);
 	return sidebarState;
+}
+
+const DEFAULT_MOBILE_BREAKPOINT = 768;
+
+class IsMobile extends MediaQuery {
+	constructor(breakpoint: number = DEFAULT_MOBILE_BREAKPOINT) {
+		super(`max-width: ${breakpoint - 1}px`);
+	}
 }

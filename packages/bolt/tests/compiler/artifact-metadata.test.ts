@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defineModel, text } from '../../src/authoring/models-schema.js';
-import { describeHooks, describeModel } from '../../src/authoring/model-introspection.js';
+import { compileModel, describeHooks } from '../../src/authoring/model-introspection.js';
 import { renderArtifact } from '../../src/compiler/sync.js';
 
 /**
@@ -28,19 +28,19 @@ const collectionDescriptors = (
 	}
 ): ReadonlyArray<Record<string, unknown>> => {
 	const start = artifact.indexOf('const collections = declaredWorkspace.collections.map(');
-	const end = artifact.indexOf('\n});\n', start);
+	const end = artifact.indexOf('\n// The authored module is the authority', start);
 	if (start < 0 || end < 0)
 		throw new Error('the artifact no longer maps collections in one statement');
-	const source = `${artifact.slice(start, end + '\n});'.length)}\nreturn collections;`;
+	const source = `${artifact.slice(start, end)}\nreturn collections;`;
 	return new Function(
 		'declaredWorkspace',
 		'declaredModels',
 		'declaredHooks',
 		'collectionSourcePaths',
-		'describeModel',
+		'compileModel',
 		'describeHooks',
 		source
-	)(declaredWorkspace, declaredModels, {}, {}, describeModel, describeHooks) as ReadonlyArray<
+	)(declaredWorkspace, declaredModels, {}, {}, compileModel, describeHooks) as ReadonlyArray<
 		Record<string, unknown>
 	>;
 };

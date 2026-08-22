@@ -1,11 +1,11 @@
 import { mount, unmount } from 'svelte';
 import BoltWorkspace from './workspace.svelte';
-import { setWorkspaceSession } from '../../session.js';
+import { setWorkspaceSession } from '#lib/client/session.js';
 import type {
 	MountWorkspaceOptions,
 	WorkspaceHandle,
 	WorkspaceView
-} from './workspace-contract.js';
+} from '#lib/client/ui/shell/workspace-contract.js';
 
 /**
  * Mounts a compiled workspace into a host-owned element and hands back a grip on it.

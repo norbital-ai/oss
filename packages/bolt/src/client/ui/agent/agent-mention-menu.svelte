@@ -1,20 +1,19 @@
 <script lang="ts">
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { Stack } from '@norbital-ai/ui/layout';
-	import type { BoltUiKeys } from './i18n.js';
 	import {
 		commandPrefixChar,
 		type MentionCommand,
 		type MentionMenuItem
-	} from './mention-sources.js';
-	import type { FinderEntity, FinderRow } from '../finder/finder-entity.js';
+	} from '#lib/client/ui/agent/mention-sources.js';
+	import type { FinderEntity, FinderRow } from '#lib/client/ui/finder/finder-entity.js';
 	import FinderPalette from '../finder/finder-palette.svelte';
 
-	const { t } = useI18n<BoltUiKeys>();
+	const { t } = useI18n();
 
 	/** Icon for a prefix command in the mention menu. */
 	function commandIcon(command: MentionCommand): string {
-		// stupidity:allow Q3 -- named helper
+		// repository-health:allow Q3 -- named helper
 		switch (command) {
 			case 'record':
 				return 'lucide:search';
@@ -30,7 +29,7 @@
 	}
 
 	/** i18n key for a prefix command's menu label. */
-	function commandLabelKey( // stupidity:allow Q3 -- named helper
+	function commandLabelKey( // repository-health:allow Q3 -- named helper
 		command: MentionCommand
 	): 'bolt.agent.prefixSearch' | 'bolt.agent.prefixPlan' | 'bolt.agent.prefixApps' {
 		switch (command) {
@@ -49,7 +48,7 @@
 
 	/** Maps a mention menu item onto a finder row. */
 	function toRow(item: MentionMenuItem): FinderRow {
-		// stupidity:allow Q3 -- named helper
+		// repository-health:allow Q3 -- named helper
 		switch (item.kind) {
 			case 'record':
 				return {
@@ -155,7 +154,7 @@
 
 	/** Forwards a palette pick to the parent highlight/select callbacks. */
 	function handlePick(entity: FinderEntity): void {
-		// stupidity:allow Q3 -- template handler
+		// repository-health:allow Q3 -- template handler
 		const index = rows.findIndex((row) => row.entity === entity || sameEntity(row.entity, entity));
 		if (index >= 0) {
 			onhighlight(index);
@@ -165,7 +164,7 @@
 
 	/** True when two finder entities name the same workspace object. */
 	function sameEntity(left: FinderEntity | undefined, right: FinderEntity): boolean {
-		// stupidity:allow Q3 -- named helper
+		// repository-health:allow Q3 -- named helper
 		if (!left || left.kind !== right.kind) return false;
 		switch (left.kind) {
 			case 'record':

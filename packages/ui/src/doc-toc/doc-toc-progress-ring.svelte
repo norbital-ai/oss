@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { Number as Number_ } from 'effect';
 
 	let {
 		value,
@@ -15,7 +16,9 @@
 
 	const radius = $derived((size - strokeWidth) / 2);
 	const circumference = $derived(2 * Math.PI * radius);
-	const dashOffset = $derived(circumference * (1 - Math.min(Math.max(value, 0), 1)));
+	const dashOffset = $derived(
+		circumference * (1 - Number_.clamp(value, { minimum: 0, maximum: 1 }))
+	);
 </script>
 
 <svg

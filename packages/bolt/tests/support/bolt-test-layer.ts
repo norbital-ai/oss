@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
-import { vector } from '@electric-sql/pglite/vector';
+import { vector } from '@electric-sql/pglite-pgvector';
 import { ConfigProvider, Effect, Layer, ManagedRuntime, Schema } from 'effect';
 import {
 	EffectId,
@@ -125,7 +125,7 @@ export const provisioningStatements = async (
 		})
 	);
 	return [
-		// Extensions, functions and `bolt_*` tables: generated columns call `norbital_date` and the
+		// Extensions, functions and `bolt_*` tables: generated columns call `bolt_date` and the
 		// trigram indexes need `pg_trgm`.
 		...plan.filter(({ id }) => id.startsWith('bolt:')),
 		...(migration?.statements ?? []).map((sql, index) => ({ id: `lineage:${index}`, sql })),
@@ -134,22 +134,23 @@ export const provisioningStatements = async (
 	];
 };
 
-import { AccessControl } from '../../src/runtime/access/access-control.js';
+import * as AccessControl from '../../src/runtime/access/access-control.js';
 import * as Agents from '../../src/runtime/agents/agents.js';
-import { Automations } from '../../src/runtime/automations/automations.js';
-import { Envoys } from '../../src/runtime/envoys/envoys.js';
-import { Integrations } from '../../src/runtime/integrations/integrations.js';
-import { Notifications } from '../../src/runtime/notifications/notifications.js';
-import { WorkspaceSchema } from '../../src/runtime/schema/workspace-schema.js';
-import { Approvals } from '../../src/runtime/approvals/approvals.js';
-import { Collections } from '../../src/runtime/collections/collections.js';
-import { SyncWake } from '../../src/runtime/sync/wake.js';
+import * as Automations from '../../src/runtime/automations/automations.js';
+import * as Envoys from '../../src/runtime/envoys/envoys.js';
+import * as Integrations from '../../src/runtime/integrations/integrations.js';
+import * as Notifications from '../../src/runtime/notifications/notifications.js';
+import * as WorkspaceSchema from '../../src/runtime/schema/workspace-schema.js';
+import * as Approvals from '../../src/runtime/approvals/approvals.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
+import * as SyncWake from '../../src/runtime/sync/wake.js';
 import {
 	AuthoredRuntimeService,
 	emptyAuthoredRuntime,
 	type AuthoredRuntime
 } from '../../src/runtime/collections/authored.js';
-import { Database, type CallContext } from '../../src/runtime/facilities/database.js';
+import * as Database from '../../src/runtime/facilities/database.js';
+import type { CallContext } from '../../src/runtime/facilities/database.js';
 import {
 	AI,
 	Communication,
@@ -160,17 +161,17 @@ import {
 	Tasks,
 	Transport
 } from '../../src/runtime/facilities/services.js';
-import { Identity } from '../../src/runtime/identity/identity.js';
+import * as Identity from '../../src/runtime/identity/identity.js';
 import { remoteRegistryLayer } from '../../src/runtime/remotes.js';
-import { InvocationBudget } from '../../src/runtime/budget.js';
-import { RateLimits } from '../../src/runtime/rate-limits.js';
-import { TenantScope } from '../../src/runtime/tenant.js';
+import * as InvocationBudget from '../../src/runtime/budget.js';
+import * as RateLimits from '../../src/runtime/rate-limits.js';
+import * as TenantScope from '../../src/runtime/tenant.js';
 import { Secrets } from '../../src/runtime/secrets/secrets.js';
 import { PersonalSecrets } from '../../src/runtime/secrets/personal-secrets.js';
 import { SECRET_KEY_VARIABLE, SecretCipher } from '@norbital-ai/std/secret';
-import { Sync } from '../../src/runtime/sync/sync.js';
-import { TaskQueue } from '../../src/runtime/tasks/tasks.js';
-import { Workspace } from '../../src/runtime/workspace.js';
+import * as Sync from '../../src/runtime/sync/sync.js';
+import * as TaskQueue from '../../src/runtime/tasks/tasks.js';
+import * as Workspace from '../../src/runtime/workspace.js';
 
 /**
  * A whole Bolt runtime over real SQL, without a host.
@@ -344,7 +345,7 @@ export type TestWorkspaceInput = Readonly<{
 	readonly prompt?: string;
 	/** The workspace's authored tools; a policy still has to name one for anybody to reach it. */
 	readonly tools?: WorkspaceDefinition['tools'];
-	readonly skills?: ReadonlyArray<string>;
+	readonly skills?: WorkspaceDefinition['skills'];
 	readonly envoys?: WorkspaceDefinition['envoys'];
 	readonly automations?: WorkspaceDefinition['automations'];
 	/** The `.norbital/migrations` lineage the artifact would have carried, oldest first. */
@@ -654,7 +655,7 @@ export type BoltTestRuntime = Awaited<ReturnType<typeof makeBoltTestRuntime>>;
 /**
  * A stable UUID for a readable fixture name.
  *
- * Records are keyed by `norbital_id uuid`, so `'order-2'` is not a usable identifier — it was only
+ * Records are keyed by `id uuid`, so `'order-2'` is not a usable identifier — it was only
  * ever accepted because Bolt used to invent an `id text` primary key, which took any string. Tests
  * built rows a real database would have rejected, and passed.
  *

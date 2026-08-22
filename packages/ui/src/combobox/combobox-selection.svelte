@@ -8,7 +8,7 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import { isEqual } from 'es-toolkit/predicate';
-	import type { TComboboxProps, TOption } from './index.js';
+	import type { TComboboxProps, TOption } from '#lib/combobox';
 
 	const { t } = useI18n<UiKeys>();
 

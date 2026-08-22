@@ -1,6 +1,16 @@
-import type { Schema } from 'effect';
-import type { SyncChange } from '../../runtime/sync/sync.js';
-import type { LocalSql } from './replica.js';
+import { Cache, Effect, Result, Schema } from 'effect';
+import type { SyncChange } from '#lib/runtime/sync/sync.js';
+import type { FieldDefinition } from '#lib/authoring/workspace-schema.js';
+import { encodeReferenceValues } from '#lib/runtime/collections/references.js';
+
+export type LocalSql = Readonly<{
+	readonly query: (
+		sql: string,
+		parameters: ReadonlyArray<Schema.Json>
+	) => Effect.Effect<ReadonlyArray<Schema.Json>, unknown>;
+	readonly applyChange: (change: SyncChange) => Effect.Effect<void, unknown>;
+	readonly reset: () => Effect.Effect<void, unknown>;
+}>;
 
 /**
  * The browser replica's actual PostgreSQL.
@@ -15,23 +25,42 @@ import type { LocalSql } from './replica.js';
  * The schema is not derived here either. It arrives as the ordered DDL the tenant's own database was
  * provisioned with — `sync.provisioning`, which is the schema plan's foundation plus the drizzle
  * lineage — so a column's type in the replica is the column's type on the server by construction.
+ *
+ * ## Why this module holds raw SQL
+ *
+ * SQL1 exception: this module is itself the replica's database infrastructure. There is no query
+ * builder over PGlite to route statements through, and no per-statement contract to type against —
+ * the commands are `information_schema` introspection, `pg_notify` plumbing, and table maintenance
+ * (upsert/truncate) the server never sees. The statements are parameterised, identifiers quoted
+ * here rather than interpolated raw, and the collection names come from the wire, not from author
+ * input, which is what keeps them from being a path for injection.
  */
 
-/** The subset of PGlite this module uses, so a test can supply one without the wasm bundle. */
-export type PGliteLike = Readonly<{
-	readonly query: <T>(
+/**
+ * The subset of PGlite this module uses, so a test can supply one without the wasm bundle.
+ *
+ * The actual PGlite Promise API is adapted once in `pglite-loader.ts`. Everything downstream sees
+ * Effects, so interruption, failure and concurrent startup remain in one control model.
+ */
+export interface PGliteLike {
+	query<T>(
 		sql: string,
 		parameters?: ReadonlyArray<unknown>
-	) => Promise<{ readonly rows: ReadonlyArray<T> }>;
-	readonly exec: (sql: string) => Promise<unknown>;
-	readonly close?: () => Promise<void>;
+	): Effect.Effect<
+		{
+			readonly rows: ReadonlyArray<T>;
+		},
+		unknown
+	>;
+	exec(sql: string): Effect.Effect<unknown, unknown>;
+	close(): Effect.Effect<void, unknown>;
 	/**
 	 * Whether this tab holds the shared database, when the engine is shared at all.
 	 *
 	 * Absent for a plain in-process engine — the test harness, a single-tab fallback — which is the
 	 * same thing as "this tab is the only one", so a missing value reads as leader.
 	 */
-	readonly isLeader?: boolean;
+	readonly isLeader: boolean;
 	/**
 	 * Postgres `LISTEN`, which crosses tabs because the database does.
 	 *
@@ -39,15 +68,16 @@ export type PGliteLike = Readonly<{
 	 * the database rather than a `BroadcastChannel` means the notification cannot arrive before the
 	 * rows it describes: it is emitted by the same connection that wrote them.
 	 */
-	readonly listen?: (
+	listen(
 		channel: string,
 		callback: (payload: string) => void
-	) => Promise<() => Promise<void>>;
+	): Effect.Effect<() => Effect.Effect<void, unknown>, unknown>;
 	/** Fires when leadership moves, so the tab that inherits the database also inherits the sync loop. */
-	readonly onLeaderChange?: (callback: () => void) => () => void;
-}>;
+	onLeaderChange(callback: () => void): () => void;
+}
 
-export type ProvisioningStep = Readonly<{ readonly id: string; readonly sql: string }>;
+export const ProvisioningStep = Schema.Struct({ id: Schema.String, sql: Schema.String });
+export interface ProvisioningStep extends Schema.Schema.Type<typeof ProvisioningStep> {}
 
 /**
  * What the replica remembers about itself between sessions.
@@ -63,26 +93,30 @@ export type ProvisioningStep = Readonly<{ readonly id: string; readonly sql: str
  * a lineage forward would require knowing which entries this browser had already seen, and a wrong
  * answer there is a local database that silently disagrees with the server.
  */
-const STATE_TABLE = 'bolt_replica_state';
+const SCHEMA_STATE_TABLE = 'bolt_schema_state';
+const SYNC_HORIZON_TABLE = 'bolt_sync_horizon';
 
-const ensureStateTable = async (database: PGliteLike): Promise<void> => {
-	await database.exec(
-		`create table if not exists ${STATE_TABLE} (id boolean primary key default true check (id), fingerprint text not null, xid bigint not null default 0, sequence bigint not null default 0)`
-	);
-};
-
-export type ReplicaState = Readonly<{
+type ReplicaState = Readonly<{
 	readonly fingerprint: string;
 	readonly cursor: { readonly xid: number; readonly sequence: number };
 }>;
 
-export const readReplicaState = async (database: PGliteLike): Promise<ReplicaState | undefined> => {
-	await ensureStateTable(database);
-	const result = await database.query<{
+export const readReplicaState = Effect.fn('ReplicaSql.readState')(function* (database: PGliteLike) {
+	const catalogue = yield* database.query<{
+		schema_state: string | null;
+		sync_horizon: string | null;
+	}>(
+		`select to_regclass('public.${SCHEMA_STATE_TABLE}')::text as schema_state, to_regclass('public.${SYNC_HORIZON_TABLE}')::text as sync_horizon`
+	);
+	if (catalogue.rows[0]?.schema_state == null || catalogue.rows[0]?.sync_horizon == null)
+		return undefined;
+	const result = yield* database.query<{
 		fingerprint: string;
 		xid: string | number;
 		sequence: string | number;
-	}>(`select fingerprint, xid, sequence from ${STATE_TABLE} where id`);
+	}>(
+		`select state.fingerprint, horizon.xid, horizon.sequence from ${SCHEMA_STATE_TABLE} state cross join ${SYNC_HORIZON_TABLE} horizon where horizon.singleton order by state.applied_at desc limit 1`
+	);
 	const row = result.rows[0];
 	return row === undefined
 		? undefined
@@ -90,18 +124,19 @@ export const readReplicaState = async (database: PGliteLike): Promise<ReplicaSta
 				fingerprint: row.fingerprint,
 				cursor: { xid: Number(row.xid), sequence: Number(row.sequence) }
 			};
-};
+});
 
 /** Records how far the replica has streamed, so the next session resumes instead of re-snapshotting. */
-export const writeReplicaCursor = async (
+export const writeReplicaCursor = (
 	database: PGliteLike,
 	cursor: { readonly xid: number; readonly sequence: number }
-): Promise<void> => {
-	await database.query(`update ${STATE_TABLE} set xid = $1, sequence = $2 where id`, [
-		cursor.xid,
-		cursor.sequence
-	]);
-};
+): Effect.Effect<void, unknown> =>
+	database
+		.query(`update ${SYNC_HORIZON_TABLE} set xid = $1, sequence = $2 where singleton`, [
+			cursor.xid,
+			cursor.sequence
+		])
+		.pipe(Effect.asVoid);
 
 /**
  * Applies the provisioning DDL, stopping at the first statement that fails.
@@ -115,12 +150,12 @@ export const writeReplicaCursor = async (
  * Returns whether it actually provisioned. `false` means the local database already matched this
  * fingerprint, and the caller can resume streaming rather than taking a fresh snapshot.
  */
-export const provision = async (
+export const provision = Effect.fn('ReplicaSql.provision')(function* (
 	database: PGliteLike,
 	steps: ReadonlyArray<ProvisioningStep>,
 	fingerprint?: string
-): Promise<boolean> => {
-	const state = fingerprint === undefined ? undefined : await readReplicaState(database);
+): Effect.fn.Return<boolean, unknown> {
+	const state = fingerprint === undefined ? undefined : yield* readReplicaState(database);
 	if (fingerprint !== undefined && state?.fingerprint === fingerprint) return false;
 	if (fingerprint !== undefined) {
 		// Cleared whenever the recorded fingerprint is not this one — including when there is no record
@@ -129,19 +164,19 @@ export const provision = async (
 		// steps ran again and the lineage's own `create table "companies"` refused. A local database
 		// nothing vouches for is not a database to build on, and the replica is reconstructible, so it
 		// is dropped rather than reasoned about.
-		await database.exec('drop schema public cascade; create schema public;');
+		yield* database.exec('drop schema public cascade; create schema public;');
 	}
 	for (const step of steps) {
-		try {
-			await database.exec(step.sql);
-		} catch (cause) {
-			throw new Error(
-				`Replica provisioning failed at ${step.id}: ${cause instanceof Error ? cause.message : String(cause)}`
+		yield* database
+			.exec(step.sql)
+			.pipe(
+				Effect.mapError(
+					(cause) => new Error(`Replica provisioning failed at ${step.id}: ${String(cause)}`)
+				)
 			);
-		}
 	}
 	return true;
-};
+});
 
 /**
  * Records that the replica is both provisioned *and* populated.
@@ -152,63 +187,67 @@ export const provision = async (
  * database and reports a workspace with nothing in it. The row means "this replica holds the
  * workspace", so it is written once that is true.
  */
-export const markProvisioned = async (
+export const markProvisioned = Effect.fn('ReplicaSql.markProvisioned')(function* (
 	database: PGliteLike,
 	fingerprint: string,
 	cursor: { readonly xid: number; readonly sequence: number }
-): Promise<void> => {
-	await ensureStateTable(database);
-	await database.query(
-		`insert into ${STATE_TABLE} (id, fingerprint, xid, sequence) values (true, $1, $2, $3) on conflict (id) do update set fingerprint = excluded.fingerprint, xid = excluded.xid, sequence = excluded.sequence`,
-		[fingerprint, cursor.xid, cursor.sequence]
+): Effect.fn.Return<void, unknown> {
+	yield* database.query(`delete from ${SCHEMA_STATE_TABLE}`);
+	yield* database.query(`insert into ${SCHEMA_STATE_TABLE} (fingerprint) values ($1)`, [
+		fingerprint
+	]);
+	yield* database.query(
+		`insert into ${SYNC_HORIZON_TABLE} (singleton, xid, sequence) values (true, $1, $2) on conflict (singleton) do update set xid = excluded.xid, sequence = excluded.sequence`,
+		[cursor.xid, cursor.sequence]
 	);
-};
+});
 
 const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
 
-const asRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-	value !== null && typeof value === 'object' && !Array.isArray(value)
-		? (value as Readonly<Record<string, unknown>>)
-		: undefined;
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
 
 /**
- * Writes one row, as an upsert keyed by `norbital_id`.
+ * Writes one row, as an upsert keyed by `id`.
  *
  * Upsert rather than insert because the stream is at-least-once by construction: a snapshot is paged
  * while the workspace is being written, so a row that commits mid-page arrives once from the snapshot
  * and once from the log. Insisting on exactly-once across those two would mean tracking which of them
  * had already seen each row — state that can be wrong — where an upsert simply converges.
  *
- * Columns are restricted to those the local table actually has. A change carries whatever the server
- * wrote, and a replica provisioned from an older lineage would otherwise fail the whole batch on one
- * unknown column rather than storing what it can understand.
+ * Columns are restricted to those the local table can write. Snapshot rows include database-generated
+ * values, and logical reference fields encode into hidden arm columns; neither public input belongs in
+ * the insert after that transformation.
  */
-const upsert = async (
+const upsert = (
 	database: PGliteLike,
 	columns: ReadonlySet<string>,
 	collection: string,
 	recordId: string,
-	record: Readonly<Record<string, unknown>>
-): Promise<void> => {
-	const entries = Object.entries({ ...record, norbital_id: recordId }).filter(([name]) =>
+	record: Readonly<Record<string, unknown>>,
+	fields: Readonly<Record<string, FieldDefinition>>
+): Effect.Effect<void, unknown> => {
+	const physical = encodeReferenceValues(record, fields);
+	const entries = Object.entries({ ...physical, id: recordId }).filter(([name]) =>
 		columns.has(name)
 	);
-	if (entries.length === 0) return;
+	if (entries.length === 0) return Effect.void;
 	const names = entries.map(([name]) => quoteIdentifier(name));
 	const placeholders = entries.map((_entry, index) => `$${index + 1}`);
-	// `norbital_id` is the conflict target and must not be in the update list: assigning a row's key to
+	// `id` is the conflict target and must not be in the update list: assigning a row's key to
 	// itself is noise, and an update list that ends up empty is a syntax error rather than a no-op.
 	const assignments = entries
-		.filter(([name]) => name !== 'norbital_id')
+		.filter(([name]) => name !== 'id')
 		.map(([name]) => `${quoteIdentifier(name)} = excluded.${quoteIdentifier(name)}`);
 	const conflict =
 		assignments.length === 0
-			? 'on conflict (norbital_id) do nothing'
-			: `on conflict (norbital_id) do update set ${assignments.join(', ')}`;
-	await database.query(
-		`insert into ${quoteIdentifier(collection)} (${names.join(', ')}) values (${placeholders.join(', ')}) ${conflict}`,
-		entries.map(([, value]) => value)
-	);
+			? 'on conflict (id) do nothing'
+			: `on conflict (id) do update set ${assignments.join(', ')}`;
+	return database
+		.query(
+			`insert into ${quoteIdentifier(collection)} (${names.join(', ')}) values (${placeholders.join(', ')}) ${conflict}`,
+			entries.map(([, value]) => value)
+		)
+		.pipe(Effect.asVoid);
 };
 
 /**
@@ -220,19 +259,18 @@ const upsert = async (
  * them for the same reason. The replica loses nothing by it: the schema came from the tenant's
  * lineage, so the same expression recomputes the same value locally.
  *
- * Restricting to known columns also means a change naming a column this replica does not have is
- * trimmed rather than failing the batch.
+ * Restricting to known writable columns keeps generated and logical-only values out of SQL.
  */
-const columnsOf = async (
+const columnsOf = (
 	database: PGliteLike,
 	collection: string
-): Promise<ReadonlySet<string>> => {
-	const result = await database.query<{ column_name: string }>(
-		"select column_name from information_schema.columns where table_schema = current_schema() and table_name = $1 and is_generated <> 'ALWAYS' and coalesce(identity_generation, '') <> 'ALWAYS'",
-		[collection]
-	);
-	return new Set(result.rows.map((row) => row.column_name));
-};
+): Effect.Effect<ReadonlySet<string>, unknown> =>
+	database
+		.query<{ column_name: string }>(
+			"select column_name from information_schema.columns where table_schema = current_schema() and table_name = $1 and is_generated <> 'ALWAYS' and coalesce(identity_generation, '') <> 'ALWAYS'",
+			[collection]
+		)
+		.pipe(Effect.map((result) => new Set(result.rows.map((row) => row.column_name))));
 
 /**
  * Writes a whole page of snapshot rows in one statement.
@@ -246,50 +284,49 @@ const columnsOf = async (
  * source actually sent, and every row is padded to it, because a single `values` list has to be
  * rectangular even where the source omitted a null.
  */
-export const bulkUpsert = async (
+export const bulkUpsert = (
 	database: PGliteLike,
 	columns: ReadonlySet<string>,
 	collection: string,
-	rows: ReadonlyArray<Readonly<Record<string, unknown>>>
-): Promise<number> => {
-	if (rows.length === 0) return 0;
+	rows: ReadonlyArray<Readonly<Record<string, unknown>>>,
+	fields: Readonly<Record<string, FieldDefinition>>
+): Effect.Effect<number, unknown> => {
+	if (rows.length === 0) return Effect.succeed(0);
+	const physicalRows = rows.map((row) => encodeReferenceValues(row, fields));
 	const present = new Set<string>();
-	for (const row of rows)
+	for (const row of physicalRows)
 		for (const name of Object.keys(row)) if (columns.has(name)) present.add(name);
-	if (!present.has('norbital_id')) return 0;
+	if (!present.has('id')) return Effect.succeed(0);
 	const names = [...present];
 	const parameters: Array<unknown> = [];
-	const tuples = rows.map((row) => {
+	const tuples = physicalRows.map((row) => {
 		const placeholders = names.map((name) => `$${parameters.push(row[name] ?? null)}`);
 		return `(${placeholders.join(', ')})`;
 	});
 	const assignments = names
-		.filter((name) => name !== 'norbital_id')
+		.filter((name) => name !== 'id')
 		.map((name) => `${quoteIdentifier(name)} = excluded.${quoteIdentifier(name)}`);
 	const conflict =
 		assignments.length === 0
-			? 'on conflict (norbital_id) do nothing'
-			: `on conflict (norbital_id) do update set ${assignments.join(', ')}`;
-	await database.query(
-		`insert into ${quoteIdentifier(collection)} (${names.map(quoteIdentifier).join(', ')}) values ${tuples.join(', ')} ${conflict}`,
-		parameters
-	);
-	return rows.length;
+			? 'on conflict (id) do nothing'
+			: `on conflict (id) do update set ${assignments.join(', ')}`;
+	return database
+		.query(
+			`insert into ${quoteIdentifier(collection)} (${names.map(quoteIdentifier).join(', ')}) values ${tuples.join(', ')} ${conflict}`,
+			parameters
+		)
+		.pipe(Effect.as(rows.length));
 };
 
 /** The writable columns of a local table, or an empty set when the replica has no such table. */
 export const writableColumns = (
 	database: PGliteLike
-): ((collection: string) => Promise<ReadonlySet<string>>) => {
-	const cache = new Map<string, ReadonlySet<string>>();
-	return async (collection) => {
-		const cached = cache.get(collection);
-		if (cached !== undefined) return cached;
-		const columns = await columnsOf(database, collection);
-		cache.set(collection, columns);
-		return columns;
-	};
-};
+): Effect.Effect<(collection: string) => Effect.Effect<ReadonlySet<string>, unknown>> =>
+	Cache.make({
+		capacity: 1_000,
+		timeToLive: 'Infinity',
+		lookup: (collection: string) => columnsOf(database, collection)
+	}).pipe(Effect.map((cache) => (collection: string) => Cache.get(cache, collection)));
 
 /**
  * Binds a PGlite instance as the replica's local SQL.
@@ -298,52 +335,61 @@ export const writableColumns = (
  * change while it exists: a workspace whose lineage moved on produces a new provisioning fingerprint,
  * and the caller rebuilds rather than migrating a cache in place.
  */
-export const createPGliteSql = (database: PGliteLike): LocalSql => {
-	const columnCache = new Map<string, ReadonlySet<string>>();
-	const columnsFor = async (collection: string): Promise<ReadonlySet<string>> => {
-		const cached = columnCache.get(collection);
-		if (cached !== undefined) return cached;
-		const columns = await columnsOf(database, collection);
-		columnCache.set(collection, columns);
-		return columns;
-	};
-
-	return {
-		query: async (sql, parameters) => {
-			const result = await database.query<Schema.Json>(sql, [...parameters]);
-			return result.rows;
-		},
-		applyChange: async (change) => {
-			const entry = asRecord(change) as SyncChange | undefined;
-			if (entry === undefined) return;
-			if (entry.operation === 'reset') return;
-			const columns = await columnsFor(entry.collection);
-			// A collection the replica has no table for is skipped rather than failing the batch. That is
-			// what a policy granted after provisioning looks like from here, and the rebuild that follows
-			// a changed fingerprint is what makes it visible.
-			if (columns.size === 0) return;
-			if (entry.operation === 'delete') {
-				await database.query(
-					`delete from ${quoteIdentifier(entry.collection)} where norbital_id = $1`,
-					[entry.recordId]
-				);
-				return;
-			}
-			const record = asRecord(entry.record);
-			if (record === undefined) return;
-			await upsert(database, columns, entry.collection, entry.recordId, record);
-		},
-		reset: async () => {
-			// Truncating every collection table rather than dropping the database: the schema came from
-			// the server's own provisioning and is still correct, and rebuilding it would cost a second
-			// round trip for DDL that has not changed.
-			const tables = await database.query<{ table_name: string }>(
-				"select table_name from information_schema.tables where table_schema = current_schema() and table_type = 'BASE TABLE' and table_name not like 'bolt_%' and table_name not like '\\_\\_%'"
-			);
-			if (tables.rows.length === 0) return;
-			await database.query(
-				`truncate ${tables.rows.map((row) => quoteIdentifier(row.table_name)).join(', ')} cascade`
-			);
-		}
-	};
-};
+export const createPGliteSql = (
+	database: PGliteLike,
+	fieldsByCollection: Readonly<Record<string, Readonly<Record<string, FieldDefinition>>>>
+): Effect.Effect<LocalSql> =>
+	Effect.gen(function* () {
+		const columnsFor = yield* writableColumns(database);
+		return {
+			query: (sql, parameters) =>
+				database.query<Schema.Json>(sql, parameters).pipe(Effect.map((result) => result.rows)),
+			applyChange: (change) =>
+				Effect.gen(function* () {
+					// `change` is already the typed sync change, so nothing here re-derives its shape.
+					if (change.operation === 'reset') return;
+					const columns = yield* columnsFor(change.collection);
+					// A collection the replica has no table for is skipped rather than failing the batch. That is
+					// what a policy granted after provisioning looks like from here, and the rebuild that follows
+					// a changed fingerprint is what makes it visible.
+					if (columns.size === 0) return;
+					if (change.operation === 'delete') {
+						yield* database.query(
+							`delete from ${quoteIdentifier(change.collection)} where id = $1`,
+							[change.recordId]
+						);
+						return;
+					}
+					const decoded = Schema.decodeUnknownResult(JsonObject)(change.record);
+					if (Result.isFailure(decoded)) return;
+					const fields = fieldsByCollection[change.collection];
+					if (fields === undefined)
+						return yield* Effect.fail(
+							new Error(
+								`Sync change named collection ${change.collection} without provisioning metadata`
+							)
+						);
+					yield* upsert(
+						database,
+						columns,
+						change.collection,
+						change.recordId,
+						decoded.success,
+						fields
+					);
+				}),
+			reset: () =>
+				Effect.gen(function* () {
+					// Truncating every collection table rather than dropping the database: the schema came from
+					// the server's own provisioning and is still correct, and rebuilding it would cost a second
+					// round trip for DDL that has not changed.
+					const tables = yield* database.query<{ table_name: string }>(
+						"select table_name from information_schema.tables where table_schema = current_schema() and table_type = 'BASE TABLE' and table_name not like 'bolt_%' and table_name not like '\\_\\_%'"
+					);
+					if (tables.rows.length === 0) return;
+					yield* database.query(
+						`truncate ${tables.rows.map((row) => quoteIdentifier(row.table_name)).join(', ')} cascade`
+					);
+				})
+		};
+	});

@@ -12,29 +12,8 @@
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
 	import type SortablePrimitive from 'sortablejs';
 	import { fade } from 'svelte/transition';
-	import type {
-		KanbanCardMove,
-		TCardSnippet,
-		TColumnHeaderActionSnippet,
-		TColumnTitleSnippet,
-		TKanbanColumnData,
-		TKanbanItem
-	} from './index.js';
-
-	export interface KanbanColumnProps {
-		column: TKanbanColumnData;
-		cardSnippet: TCardSnippet;
-		onCardMove?: (move: KanbanCardMove) => void;
-		onLoadMore: (columnId: string, lastVirtualIndex: number) => Promise<void>;
-		itemHeight: number;
-		minColumnWidth: number;
-		groupName: string;
-		sortable: boolean;
-		sortWithinColumn: boolean;
-		dragHandleClass?: string;
-		columnHeaderActionSnippet?: TColumnHeaderActionSnippet;
-		columnTitleSnippet?: TColumnTitleSnippet;
-	}
+	import type { KanbanColumnProps, TCardSnippet, TKanbanItem } from '#lib/kanban';
+	import { Effect } from 'effect';
 
 	let {
 		column,
@@ -77,13 +56,12 @@
 	);
 
 	const stableCount = $derived(column.totalCount ?? column.items.length);
-	const virtualRowCount = $derived(stableCount);
 	const loadedCount = $derived(column.items.length);
 
 	const getItemKey = (index: number) => column.items[index]?._id ?? `skel:${column._id}:${index}`;
 
 	const virtualizer = createVirtualizer({
-		count: () => virtualRowCount,
+		count: () => stableCount,
 		scrollElement: () => containerRef,
 		estimateSize: () => rowSize,
 		overscan: OVERSCAN,
@@ -99,7 +77,7 @@
 				!column.isFetchingNextPage &&
 				last.index >= loadedCount - LOAD_THRESHOLD
 			) {
-				void onLoadMore(column._id, last.index);
+				Effect.runFork(onLoadMore(column._id, last.index));
 			}
 		}
 	});

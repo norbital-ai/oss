@@ -54,10 +54,9 @@ export type AIRequest = typeof AIRequest.Type;
 /**
  * What one model call consumed, as the host that paid for it reported.
  *
- * Carried on the wire as `Schema.Json` rather than as this struct, because the field predates the
- * shape and a host that answers with its provider's own spelling must not have its turn rejected.
- * This is the shape Norbital hosts emit and the one `readAIUsage` normalises to, so a consumer reads
- * one record instead of guessing at six provider dialects.
+ * Provider adapters normalise their dialect before crossing the facility boundary. The wire uses
+ * this schema directly, so every consumer receives the same typed record and no downstream caller
+ * has to repair an `unknown` provider response.
  *
  * `costUsd` is the provider's own charge, never a figure derived from token counts and a price list:
  * a number a reader takes for a bill has to be the bill. Token counts travel beside it because they
@@ -65,23 +64,25 @@ export type AIRequest = typeof AIRequest.Type;
  * the context window a conversation is occupying.
  */
 export const AIUsage = Schema.Struct({
-	model: Schema.optionalKey(Schema.String),
-	inputTokens: Schema.optionalKey(
+	// Non-exact optional so the normaliser can hold an absent field as an explicit `undefined`; the
+	// wire never carries those, and it is the normaliser that decides presence, not the reader.
+	model: Schema.optional(Schema.String),
+	inputTokens: Schema.optional(
 		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
 	),
-	cachedInputTokens: Schema.optionalKey(
+	cachedInputTokens: Schema.optional(
 		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
 	),
-	outputTokens: Schema.optionalKey(
+	outputTokens: Schema.optional(
 		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
 	),
-	reasoningTokens: Schema.optionalKey(
+	reasoningTokens: Schema.optional(
 		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
 	),
-	totalTokens: Schema.optionalKey(
+	totalTokens: Schema.optional(
 		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
 	),
-	costUsd: Schema.optionalKey(
+	costUsd: Schema.optional(
 		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
 	),
 	/**
@@ -95,11 +96,11 @@ export const AIUsage = Schema.Struct({
 	 * Absent when the host has no rate card of its own, in which case the provider charge is the only
 	 * honest figure there is and consumers fall back to it.
 	 */
-	costMicroUnits: Schema.optionalKey(
+	costMicroUnits: Schema.optional(
 		Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0))
 	),
-	/** ISO 4217 code the charge above is denominated in. Meaningless, and omitted, without it. */
-	costCurrency: Schema.optionalKey(Schema.String)
+	/** ISO 4217 code the charge above is denominated in. Meaningless without the micro-unit amount. */
+	costCurrency: Schema.optional(Schema.String)
 });
 export interface AIUsage extends Schema.Schema.Type<typeof AIUsage> {}
 
@@ -121,13 +122,12 @@ const usageRecord = (value: unknown): Readonly<Record<string, unknown>> | undefi
 		: undefined;
 
 /**
- * Reads whatever a host put in `AIResponse.usage` as the canonical record above.
+ * Normalises a provider response to the canonical record above.
  *
  * Providers spell the same three numbers at least three ways each, and OpenAI-compatible endpoints
  * nest them under `usage` while some gateways hoist them to the top level. Normalising here is what
  * lets the runtime, the meter, and the panel agree on one record instead of each learning the
- * dialects separately — and it is why `usage` can stay `Json` on the wire without every consumer
- * having to be tolerant.
+ * dialects separately. Only the provider adapter calls this; the facility wire itself is typed.
  *
  * Returns `undefined` when nothing usage-shaped is present. That is not zero: a turn whose usage was
  * never reported is a turn whose cost is unknown, and the two must not read alike.
@@ -178,17 +178,19 @@ export const readAIUsage = (value: unknown): AIUsage | undefined => {
 				? outer['model']
 				: undefined;
 	const usage: AIUsage = {
-		...(model === undefined ? {} : { model }),
-		...(inputTokens === undefined ? {} : { inputTokens }),
-		...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-		...(outputTokens === undefined ? {} : { outputTokens }),
-		...(reasoningTokens === undefined ? {} : { reasoningTokens }),
-		...(totalTokens === undefined ? {} : { totalTokens }),
-		...(costUsd === undefined ? {} : { costUsd }),
-		...(costMicroUnits === undefined ? {} : { costMicroUnits }),
-		...(costMicroUnits === undefined || costCurrency === undefined ? {} : { costCurrency })
+		model,
+		inputTokens,
+		cachedInputTokens,
+		outputTokens,
+		reasoningTokens,
+		totalTokens,
+		costUsd,
+		costMicroUnits,
+		// The charge's denomination is only meaningful beside the charge itself; without a rate card
+		// there is nothing to label.
+		costCurrency: costMicroUnits === undefined ? undefined : costCurrency
 	};
-	return Object.keys(usage).length === 0 ? undefined : usage;
+	return Object.values(usage).every((value) => value === undefined) ? undefined : usage;
 };
 
 /**
@@ -224,20 +226,20 @@ export const addAIUsage = (
 				? total.costCurrency
 				: undefined;
 	return {
-		...(inputTokens === undefined ? {} : { inputTokens }),
-		...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-		...(outputTokens === undefined ? {} : { outputTokens }),
-		...(reasoningTokens === undefined ? {} : { reasoningTokens }),
-		...(totalTokens === undefined ? {} : { totalTokens }),
-		...(costUsd === undefined ? {} : { costUsd }),
-		...(costMicroUnits === undefined ? {} : { costMicroUnits }),
-		...(costMicroUnits === undefined || costCurrency === undefined ? {} : { costCurrency })
+		inputTokens,
+		cachedInputTokens,
+		outputTokens,
+		reasoningTokens,
+		totalTokens,
+		costUsd,
+		costMicroUnits,
+		costCurrency: costMicroUnits === undefined ? undefined : costCurrency
 	};
 };
 
 export const AIResponse = Schema.Struct({
 	output: Schema.Json,
-	usage: Schema.optionalKey(Schema.Json)
+	usage: Schema.optionalKey(AIUsage)
 });
 export interface AIResponse extends Schema.Schema.Type<typeof AIResponse> {}
 

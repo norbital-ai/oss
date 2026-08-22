@@ -22,8 +22,8 @@ export class BundleLoadError extends Schema.TaggedError<BundleLoadError>()(
 	}
 ) {}
 
-// stupidity:allow AL10 -- service shape stays beside its Context.Service owner in the required 14-file architecture
-export interface Interface {
+/** The service shape: one cached, checksum-verified bundle for the application lifetime. */
+interface Interface {
 	readonly load: () => Effect.Effect<BoltBundle, BundleLoadError>;
 	readonly dispose: () => Effect.Effect<void>;
 }
@@ -33,7 +33,7 @@ export class BundleLoader extends Context.Service<BundleLoader, Interface>()(
 	'@norbital-ai/bolt-server/BundleLoader'
 ) {}
 
-// stupidity:allow AL10 -- layer options stay beside their sole runtime constructor in the required 14-file architecture
+/** Layer construction options; `importModule` is the host's own module-loading edge. */
 export interface LayerOptions {
 	readonly bundlePath: string;
 	readonly facilities: FacilityBindings;
@@ -147,6 +147,3 @@ export const makeLayer = ({
 			return BundleLoader.of({ load, dispose });
 		})
 	);
-
-/** Names the bundle-loader Layer constructor for host composition tooling. */
-export const BundleLoaderLayers = { make: makeLayer };

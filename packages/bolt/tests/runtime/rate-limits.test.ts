@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { Effect, Exit, Option } from 'effect';
 import {
 	anonymousLimits,
@@ -6,7 +6,7 @@ import {
 	resolvePolicyLimits,
 	validatePolicyLimits
 } from '../../src/authoring/rate-limits-schema.js';
-import { make, RateLimited, resetRateLimits } from '../../src/runtime/rate-limits.js';
+import { make, RateLimited } from '../../src/runtime/rate-limits.js';
 
 /**
  * The limiter that replaces one bucket keyed on `getClientAddress()`.
@@ -40,10 +40,13 @@ const held = resolvePolicyLimits({
 	]
 });
 
-const admit = (
-	command: string,
-	subject: { tenantId: string; userId?: string; address?: string; sender?: string }
-) => Effect.runPromiseExit(make(spec).admit(command, subject, held));
+const makeAdmit = () => {
+	const limiter = make(spec);
+	return (
+		command: string,
+		subject: { tenantId: string; userId?: string; address?: string; sender?: string }
+	) => Effect.runPromiseExit(limiter.admit(command, subject, held));
+};
 
 const refusal = (exit: Exit.Exit<void, RateLimited>): RateLimited | undefined => {
 	const error = Option.getOrUndefined(Exit.findErrorOption(exit));
@@ -51,9 +54,23 @@ const refusal = (exit: Exit.Exit<void, RateLimited>): RateLimited | undefined =>
 };
 
 describe('the workspace rate limiter', () => {
-	afterEach(() => resetRateLimits());
+	it('owns buckets per limiter instance', async () => {
+		const first = makeAdmit();
+		const second = makeAdmit();
+		for (let attempt = 0; attempt < 2; attempt += 1)
+			expect(refusal(await first('identity.sendCode', { tenantId: 'a', address: 'x@y.z' }))).toBe(
+				undefined
+			);
+		expect(
+			refusal(await first('identity.sendCode', { tenantId: 'a', address: 'x@y.z' }))
+		).toBeDefined();
+		expect(
+			refusal(await second('identity.sendCode', { tenantId: 'a', address: 'x@y.z' }))
+		).toBeUndefined();
+	});
 
 	it('does not let one tenant spend another tenant’s admissions', async () => {
+		const admit = makeAdmit();
 		// The multi-tenant form of the exact defect this replaces. If the tenant were not in the key,
 		// the busiest workspace on a deployment would lock out the quietest.
 		expect(refusal(await admit('identity.sendCode', { tenantId: 'a', address: 'x@y.z' }))).toBe(
@@ -72,6 +89,7 @@ describe('the workspace rate limiter', () => {
 	});
 
 	it('counts two addresses separately, and does not apply an address rule without one', async () => {
+		const admit = makeAdmit();
 		expect(refusal(await admit('identity.sendCode', { tenantId: 'a', address: 'one@y.z' }))).toBe(
 			undefined
 		);
@@ -98,6 +116,7 @@ describe('the workspace rate limiter', () => {
 	 * the surface as a whole is full, which is exactly what a public envoy's ceiling is for.
 	 */
 	it('gives each sender their own bucket and the envoy one of its own', async () => {
+		const admit = makeAdmit();
 		const from = (sender: string) =>
 			admit('envoys.receive', { tenantId: 'a', userId: 'envoy:desk', sender });
 		// Two per sender.
@@ -121,6 +140,7 @@ describe('the workspace rate limiter', () => {
 	 * to refuse, and refusing on absence would close the door on everybody.
 	 */
 	it('never matches a sender-keyed rule against a human holder of the same policy', async () => {
+		const admit = makeAdmit();
 		for (let attempt = 0; attempt < 3; attempt += 1)
 			expect(
 				refusal(await admit('envoys.receive', { tenantId: 'a', userId: 'person-1' }))
@@ -132,6 +152,7 @@ describe('the workspace rate limiter', () => {
 	});
 
 	it('admits a command no rule matches rather than inventing a default', async () => {
+		const admit = makeAdmit();
 		// A default here would throttle every command a workspace never thought about, at a number
 		// nobody chose. The edge ceiling still applies to it.
 		for (let attempt = 0; attempt < 50; attempt += 1)
@@ -141,6 +162,7 @@ describe('the workspace rate limiter', () => {
 	});
 
 	it('says how long to wait, in whole seconds, rather than only that it refused', async () => {
+		const admit = makeAdmit();
 		await admit('collections.create', { tenantId: 'a', userId: 'u' });
 		const refused = refusal(await admit('collections.create', { tenantId: 'a', userId: 'u' }));
 		expect(refused?.retryAfterSeconds).toBeGreaterThan(0);

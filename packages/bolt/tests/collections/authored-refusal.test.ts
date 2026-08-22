@@ -3,7 +3,7 @@ import { Effect, Exit, Option, Result } from 'effect';
 import { refuse, AuthoredRefusal } from '../../src/authoring/refusal.js';
 import { runAuthoredHandler } from '../../src/runtime/collections/authored.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
-import { Collections } from '../../src/runtime/collections/collections.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,

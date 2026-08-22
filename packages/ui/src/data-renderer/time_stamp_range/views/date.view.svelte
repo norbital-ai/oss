@@ -5,6 +5,7 @@
 	// ==================================================================================
 	import { buttonVariants } from '#lib/button';
 	import { cn } from '#lib/utils';
+	import { Schema } from 'effect';
 	import Icon from '@iconify/svelte';
 	import {
 		toTime as extractTime,
@@ -35,7 +36,11 @@
 
 	const { t } = useI18n<UiKeys>();
 
-	type StringDateRange = { start?: string; end?: string };
+	const stringDateRangeSchema = Schema.Struct({
+		start: Schema.optionalKey(Schema.String),
+		end: Schema.optionalKey(Schema.String)
+	});
+	type StringDateRange = typeof stringDateRangeSchema.Type;
 	type ValueType<T extends boolean> = T extends true ? StringDateRange[] : StringDateRange;
 	type OnValueChangeType<T extends boolean> = T extends true
 		? (value: StringDateRange[]) => void

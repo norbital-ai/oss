@@ -7,24 +7,23 @@
 		CollectionField,
 		CollectionFieldName,
 		CollectionOperations,
-		CollectionPageQuery,
 		CollectionQuery,
 		CollectionRegistry,
 		CollectionType,
 		CollectionRecord,
-		CollectionUpdateInput,
-		RemoteQuery
+		CollectionUpdateInput
 	} from '@norbital-ai/std/collection';
 	import { resolveRecordLabel } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
+	import { Effect, Number as Number_ } from 'effect';
 	import { onMount } from 'svelte';
 	import * as Popover from '#lib/popover';
 	import * as Sheet from '#lib/sheet';
 	import { cn, renderSnippet, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { DataRenderer } from '../data-renderer/index.js';
-	import { formatDataValue, type Translate } from '../data-renderer/index.js';
+	import { DataRenderer } from '#lib/data-renderer';
+	import { formatDataValue, type Translate } from '#lib/data-renderer';
 	import { Cover, Inline, Stack, Bound } from '#lib/layout';
 	import { CollectionQueryState } from '#lib/collection-query';
 	import {
@@ -32,14 +31,13 @@
 		CollectionPagination,
 		type CollectionToolbarComposition
 	} from '#lib/collection-toolbar';
-	import { CollectionForm } from '../collection-form/index.js';
+	import { CollectionForm } from '#lib/collection-form';
 	import {
 		collectionRecordMetadataDescription,
 		collectionRecordMutationReason,
-		resolveCollectionRecordMetadata,
 		type CollectionRecordMutation,
 		type ResolvedCollectionRecordMetadata
-	} from '../collection-record-metadata/index.js';
+	} from '#lib/collection-record-metadata';
 	import {
 		collectionRecordId,
 		createActionLabel,
@@ -48,8 +46,9 @@
 		formatAutoCardField,
 		formatAutoCardSubtitle,
 		isSystemField,
+		resolvedRecordMetadataFor,
 		type AutoCardModel
-	} from './collection-card-derivation.js';
+	} from '#lib/collection-table/collection-card-derivation';
 	import { toast } from 'svelte-sonner';
 	import { watch } from 'runed';
 	import CollectionTablePart, {
@@ -75,10 +74,44 @@
 		CollectionTableProps,
 		CollectionTableRow,
 		CollectionTableRowActionContext
-	} from './collection-table.types.js';
-	import { collectionTableColumnCanSort } from './collection-table.types.js';
-	import { fitCollectionColumnWidth } from './collection-table-fit.js';
-	import { badgeColorClass } from './collection-card-colors.js';
+	} from '#lib/collection-table/collection-table.types';
+	import { collectionTableColumnCanSort } from '#lib/collection-table/collection-table.types';
+	import { badgeColorClass } from '#lib/collection-table/collection-card-colors';
+
+	const COLUMN_WIDTH_BOUNDS: Readonly<Record<string, readonly [number, number]>> = {
+		boolean: [72, 112],
+		clock_time: [96, 144],
+		date: [120, 168],
+		timestamp: [168, 240],
+		timestamptz: [168, 240],
+		datetime: [168, 240],
+		money: [120, 184],
+		numeric: [88, 168],
+		number: [88, 168],
+		integer: [80, 144],
+		enum: [104, 224],
+		file: [144, 288],
+		uuid: [160, 288],
+		text: [120, 360],
+		string: [120, 360],
+		phone: [128, 208]
+	};
+
+	function fitCollectionColumnWidth(
+		field: CollectionField,
+		formattedValues: readonly string[],
+		header: string,
+		measure: (text: string) => number = (text) => text.length * 7.5
+	): number {
+		const [kindMin, kindMax] = field.relation
+			? [144, 288]
+			: (COLUMN_WIDTH_BOUNDS[field.kind] ?? [120, 320]);
+		const widest = Math.max(
+			measure(header) + 64,
+			...formattedValues.map((value) => measure(value) + 32)
+		);
+		return Math.ceil(Number_.clamp({ minimum: kindMin, maximum: kindMax })(widest));
+	}
 	import {
 		getCollectionClientForSurface,
 		getCollectionRecordScope,
@@ -95,12 +128,6 @@
 	interface GridRow extends Record<string, unknown> {
 		__collectionTableRowId: string;
 		record: Row;
-	}
-
-	interface CollectionTableQueries {
-		rows: CollectionPageQuery<Row> | null;
-		count: RemoteQuery<number> | null;
-		cursors: Array<string | undefined>;
 	}
 
 	let {
@@ -143,7 +170,7 @@
 	const operations = $derived(
 		client.db[collection] as CollectionOperations<CollectionType<Row, object, object>> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row.
 	);
-	const recordIdField = 'norbital_id';
+	const recordIdField = 'id';
 	const recordScope = getCollectionRecordScope();
 	const resolvedView = $derived(
 		resolveCollectionViewKey(
@@ -170,13 +197,8 @@
 	);
 	let registeredColumns: readonly ColumnConfig[] = $state([]);
 	let initialFitApplied = $state(false);
-	let queries = $state<CollectionTableQueries>({
-		rows: null,
-		count: null,
-		cursors: [undefined]
-	});
+	let cursors = $state<Array<string | undefined>>([undefined]);
 	const configuredColumns = new Map<object, ColumnConfig>();
-	const activeColumns = $derived(registeredColumns);
 
 	// svelte-ignore state_referenced_locally
 	const tableApi = new TableAPI<GridRow, unknown>({
@@ -191,10 +213,7 @@
 	});
 
 	function resolvedRecordMetadata(record: Row): readonly ResolvedCollectionRecordMetadata[] {
-		return resolveCollectionRecordMetadata(record, recordMetadata?.(record), {
-			pendingApprovalLabel: t('recordMetadata.pendingApproval'),
-			pendingApprovalReason: t('recordMetadata.pendingApprovalReason')
-		});
+		return resolvedRecordMetadataFor(record, recordMetadata, t as Translate);
 	}
 	/**
 	 * The one search + filter + page model this table runs on.
@@ -227,7 +246,9 @@
 	});
 
 	const metadataError = $derived(
-		activeColumns.length === 0 ? t('table.metadataError', { collection: String(collection) }) : ''
+		registeredColumns.length === 0
+			? t('table.metadataError', { collection: String(collection) })
+			: ''
 	);
 
 	function metadataFor(column: ColumnConfig): CollectionField<Extract<keyof Row, string>> {
@@ -258,7 +279,7 @@
 
 	const gridColumns = $derived.by((): TCreateColumnProps<GridRow, unknown>[] =>
 		withSelectionColumn(
-			activeColumns.map((column) => {
+			registeredColumns.map((column) => {
 				const field = metadataFor(column);
 				return {
 					id: column.key,
@@ -294,12 +315,15 @@
 
 	const orderBy = $derived.by((): CollectionQuery<Row>['orderBy'] => {
 		if (tableApi.sort.current.length === 0) return undefined;
+		// Index the registered columns once per derived computation instead of re-searching the
+		// list for every entry in the sort array.
+		const columnsByKey = new Map(registeredColumns.map((column) => [String(column.key), column]));
 		return tableApi.sort.current.reduce<NonNullable<CollectionQuery<Row>['orderBy']>>(
 			(result, entry) => {
 				const fieldName = entry.field.startsWith('default.')
 					? entry.field.slice('default.'.length)
 					: entry.field;
-				const column = activeColumns.find((candidate) => candidate.key === fieldName);
+				const column = columnsByKey.get(fieldName);
 				return column ? { ...result, [column.key]: entry.order } : result;
 			},
 			{}
@@ -310,16 +334,16 @@
 
 	// Auto card-role hints from column annotations, filled by field structure where unset (RFC V.2d).
 	const cardRoles = $derived({
-		title: activeColumns.find((column) => column.card === 'title')?.key as string | undefined,
-		subtitle: activeColumns
+		title: registeredColumns.find((column) => column.card === 'title')?.key as string | undefined,
+		subtitle: registeredColumns
 			.filter((column) => column.card === 'subtitle')
 			.map((column) => String(column.key)),
-		badge: activeColumns.find((column) => column.card === 'badge')?.key as string | undefined
+		badge: registeredColumns.find((column) => column.card === 'badge')?.key as string | undefined
 	});
 	const autoCard: AutoCardModel = $derived(
 		deriveAutoCard(
 			definition.fields,
-			activeColumns.map((column) => String(column.key)),
+			registeredColumns.map((column) => String(column.key)),
 			{ roles: cardRoles, hasRecordLabel: Boolean(definition.recordLabel) }
 		)
 	);
@@ -347,7 +371,7 @@
 	 * resolves to the default cell snippet, which is exactly the case the schema formatter covers.
 	 */
 	function cardText(name: string, record: Row): string {
-		const column = activeColumns.find((candidate) => String(candidate.key) === name);
+		const column = registeredColumns.find((candidate) => String(candidate.key) === name);
 		const rendered = column ? renderCell(column, record) : undefined;
 		if (typeof rendered === 'string' && rendered !== '') return rendered;
 		return formatAutoCardField(definition.fields, name, record, t as Translate);
@@ -373,7 +397,7 @@
 		() =>
 			JSON.stringify([queryState.search, queryState.filters, queryState.pageSize, orderBy ?? null]),
 		() => {
-			queries.cursors = [undefined];
+			cursors = [undefined];
 			queryState.setPageIndex(0);
 		}
 	);
@@ -387,23 +411,17 @@
 				search: queryState.search || undefined,
 				orderBy: orderBy ?? defaultOrderBy,
 				limit: queryState.pageSize,
-				after: queries.cursors[queryState.pageIndex]
+				after: cursors[queryState.pageIndex]
 			},
 			filterOptions: queryState.queryOptions
 		};
 	});
-	watch(
-		() => rowsQueryInput,
-		(input) => {
-			if (!input) {
-				queries.rows = null;
-				return;
-			}
-			queries.rows = input.operations.findMany(input.query, input.filterOptions);
-		},
-		{ lazy: false }
+	const rowsQuery = $derived(
+		rowsQueryInput
+			? rowsQueryInput.operations.findMany(rowsQueryInput.query, rowsQueryInput.filterOptions)
+			: null
 	);
-	const pageRows = $derived(queries.rows?.current);
+	const pageRows = $derived(rowsQuery?.current);
 
 	/**
 	 * The cursor for the next page is learned as soon as this one loads, rather than at the moment
@@ -411,9 +429,9 @@
 	 * cursors — it should not have to.
 	 */
 	watch(
-		() => ({ pageIndex: queryState.pageIndex, cursor: queries.rows?.nextCursor }),
+		() => ({ pageIndex: queryState.pageIndex, cursor: rowsQuery?.nextCursor }),
 		({ pageIndex, cursor }) => {
-			if (cursor) queries.cursors[pageIndex + 1] = cursor;
+			if (cursor) cursors[pageIndex + 1] = cursor;
 		},
 		{ lazy: false }
 	);
@@ -431,22 +449,16 @@
 			filterOptions: queryState.queryOptions
 		};
 	});
-	watch(
-		() => countQueryInput,
-		(input) => {
-			if (!input) {
-				queries.count = null;
-				return;
-			}
-			queries.count = input.operations.count(input.query, input.filterOptions);
-		},
-		{ lazy: false }
+	const countQuery = $derived(
+		countQueryInput
+			? countQueryInput.operations.count(countQueryInput.query, countQueryInput.filterOptions)
+			: null
 	);
 
 	function recordId(row: Row): string {
 		const value = Reflect.get(row, recordIdField);
 		if (typeof value !== 'string' || value.length === 0) {
-			throw new Error('CollectionTable records require a norbital_id.');
+			throw new Error('CollectionTable records require a id.');
 		}
 		return value;
 	}
@@ -465,7 +477,7 @@
 	);
 
 	watch(
-		() => ({ rows: pageRows, columns: activeColumns }),
+		() => ({ rows: pageRows, columns: registeredColumns }),
 		({ rows, columns }) => {
 			if (initialFitApplied || !rows || columns.length === 0) return;
 			const canvas = typeof document === 'undefined' ? null : document.createElement('canvas');
@@ -501,7 +513,7 @@
 	);
 
 	watch(
-		() => queries.count?.current,
+		() => countQuery?.current,
 		(total) => tableApi.setTotalRows(total ?? 0),
 		{ lazy: false }
 	);
@@ -511,7 +523,7 @@
 		...(rowActions?.length ? [gridRowAction] : [])
 	]);
 	const errorMessage = $derived(
-		queries.rows?.error?.message ?? queries.count?.error?.message ?? metadataError
+		rowsQuery?.error?.message ?? countQuery?.error?.message ?? metadataError
 	);
 	const activeRecordId = $derived(
 		detailNavigation?.resolveRecordId({
@@ -523,8 +535,7 @@
 	// collection. Keep the loader visible until the first locally-synced or server-proven result
 	// arrives; only a resolved [] may render the empty state.
 	const tableLoading = $derived(
-		!disabled &&
-			(queries.rows == null || (queries.rows.current === undefined && queries.rows.error == null))
+		!disabled && (rowsQuery == null || (rowsQuery.current === undefined && rowsQuery.error == null))
 	);
 	const selectedRecords = $derived(
 		tableApi.data
@@ -616,20 +627,8 @@
 		};
 	}
 
-	function isRecordDetailActive(rowId: string): boolean {
-		return activeRecordId === rowId;
-	}
-
 	function recordActionTabIndex(hovered: boolean, active: boolean): 0 | -1 {
 		return hovered || active ? 0 : -1;
-	}
-
-	function recordActionClass(hovered: boolean, active: boolean): string {
-		return cn(
-			'inline-flex size-8 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-xs outline-none transition-colors hover:bg-muted hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-			active && 'border-brand/40 bg-accent text-accent-foreground',
-			!active && !hovered && 'opacity-0'
-		);
 	}
 
 	function recordTitle(record: Row): string {
@@ -675,50 +674,73 @@
 		return fallback ?? t('table.recordDescription', { name: humanize(String(collection)) });
 	}
 
-	async function refreshRows(): Promise<void> {
-		await queries.rows?.refresh();
-	}
-
-	async function refresh(): Promise<void> {
-		await Promise.all([refreshRows(), queries.count?.refresh()]);
-	}
-
-	async function refreshData(): Promise<void> {
-		if (disabled) return;
-		try {
-			await refresh();
-		} catch (error) {
-			toast.error(error instanceof Error ? error.message : t('table.refreshFailed'));
-		}
-	}
-
-	async function updateSelectedRecords(
-		fieldName: string,
-		value: unknown,
-		rows: readonly Row[]
-	): Promise<void> {
-		const unavailable = mutationReason(rows, 'update');
-		if (unavailable) {
-			throw new Error(t('recordMetadata.selectedUpdateRestricted', { reason: unavailable }));
-		}
-		const updateMany = operations?.updateMany;
-		if (!updateMany) throw new Error('This collection does not allow bulk updates.');
-		await updateMany(
-			rows.map((record) => ({
-				recordId: collectionRecordId(record),
-				input: { [fieldName]: value } as CollectionUpdateInput<CollectionType<Row, object, object>> // stupidity: boundary-cast — schema-selected writable fields and DataRenderer constrain the dynamic patch.
-			}))
+	function refresh(): Effect.Effect<void, unknown> {
+		return Effect.all(
+			[
+				rowsQuery ? Effect.tryPromise(() => rowsQuery.refresh()) : Effect.void,
+				countQuery ? Effect.tryPromise(() => countQuery.refresh()) : Effect.void
+			],
+			{ discard: true }
 		);
 	}
 
-	async function deleteSelectedRecords(rows: readonly Row[]): Promise<void> {
-		const unavailable = mutationReason(rows, 'delete');
-		if (unavailable) {
-			throw new Error(t('recordMetadata.selectedDeleteRestricted', { reason: unavailable }));
-		}
-		const deleteRecord = operations?.delete;
-		if (!deleteRecord) throw new Error('This collection does not allow deletion.');
-		await Promise.all(rows.map((record) => deleteRecord(collectionRecordId(record))));
+	function refreshData(): void {
+		if (disabled) return;
+		Effect.runFork(
+			refresh().pipe(
+				Effect.catch((error) =>
+					Effect.sync(() => {
+						toast.error(error instanceof Error ? error.message : t('table.refreshFailed'));
+					})
+				)
+			)
+		);
+	}
+
+	function updateSelectedRecords(
+		fieldName: string,
+		value: unknown,
+		rows: readonly Row[]
+	): Effect.Effect<void, unknown> {
+		return Effect.gen(function* () {
+			const unavailable = mutationReason(rows, 'update');
+			if (unavailable) {
+				return yield* Effect.fail(
+					new Error(t('recordMetadata.selectedUpdateRestricted', { reason: unavailable }))
+				);
+			}
+			const updateMany = operations?.updateMany;
+			if (!updateMany)
+				return yield* Effect.fail(new Error('This collection does not allow bulk updates.'));
+			yield* Effect.tryPromise(() =>
+				updateMany(
+					rows.map((record) => ({
+						recordId: collectionRecordId(record),
+						input: { [fieldName]: value } as CollectionUpdateInput<
+							CollectionType<Row, object, object>
+						> // stupidity: boundary-cast — schema-selected writable fields and DataRenderer constrain the dynamic patch.
+					}))
+				)
+			);
+		});
+	}
+
+	function deleteSelectedRecords(rows: readonly Row[]): Effect.Effect<void, unknown> {
+		return Effect.gen(function* () {
+			const unavailable = mutationReason(rows, 'delete');
+			if (unavailable) {
+				return yield* Effect.fail(
+					new Error(t('recordMetadata.selectedDeleteRestricted', { reason: unavailable }))
+				);
+			}
+			const deleteRecord = operations?.delete;
+			if (!deleteRecord)
+				return yield* Effect.fail(new Error('This collection does not allow deletion.'));
+			yield* Effect.all(
+				rows.map((record) => Effect.tryPromise(() => deleteRecord(collectionRecordId(record)))),
+				{ discard: true }
+			);
+		});
 	}
 
 	const listRows = $derived(
@@ -754,13 +776,17 @@
 {/snippet}
 
 {#snippet openRecordAction({ row, hovered }: { row: RowAPI<GridRow, unknown>; hovered: boolean })}
-	{@const isDetailActive = isRecordDetailActive(row.id)}
+	{@const isDetailActive = activeRecordId === row.id}
 	<button
 		type="button"
 		aria-label={t('table.detailOpen')}
 		aria-pressed={isDetailActive}
 		tabindex={recordActionTabIndex(hovered, isDetailActive)}
-		class={recordActionClass(hovered, isDetailActive)}
+		class={cn(
+			'inline-flex size-8 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-xs outline-none transition-colors hover:bg-muted hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+			isDetailActive && 'border-brand/40 bg-accent text-accent-foreground',
+			!isDetailActive && !hovered && 'opacity-0'
+		)}
 		onclick={(event) => {
 			event.preventDefault();
 			event.stopPropagation();
@@ -836,7 +862,7 @@
 	<CollectionPagination
 		query={queryState}
 		total={tableApi.totalRows}
-		hasNextPage={Boolean(queries.rows?.nextCursor)}
+		hasNextPage={Boolean(rowsQuery?.nextCursor)}
 		{disabled}
 		selectedCount={effectiveSelectable ? selectedRecords.length : undefined}
 	/>
@@ -944,7 +970,7 @@
 					record={null}
 					refresh
 					close={() => {
-						void refresh();
+						Effect.runFork(refresh());
 						createOpen = false;
 					}}
 				/>
@@ -952,10 +978,8 @@
 				<CollectionForm
 					{client}
 					{collection}
-					onAfterSubmit={() => {
-						void refresh();
-						createOpen = false;
-					}}
+					onAfterSubmit={() =>
+						refresh().pipe(Effect.tap(() => Effect.sync(() => (createOpen = false))))}
 				/>
 			{/if}
 		</div>

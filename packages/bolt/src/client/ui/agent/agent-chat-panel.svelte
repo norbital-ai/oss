@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Effect, Option, Result, Schema } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { onMount, tick } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
@@ -9,22 +10,17 @@
 	import { Textarea } from '@norbital-ai/ui/textarea';
 	import { Bound, Center, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Spinner } from '@norbital-ai/ui/spinner';
-	import { getWorkspaceRemoteTransport } from './remote-transport.js';
-	import {
-		getInitializedWorkspaceClient,
-		startInteractiveAgent,
-		updateAgentVerifier
-	} from './client.js';
-	import { getPlatformStateContext } from '../state/platform.js';
+	import { useAgentClient } from './client.svelte.js';
+	import { getPlatformStateContext } from '#lib/client/ui/state/platform.js';
 	import {
 		formatSessionCost,
+		projectStoredChatMessages,
 		toPanelMessages,
 		toPanelUsage,
 		toSessionTotals,
 		withPendingEcho
-	} from './transcript.js';
+	} from '#lib/client/ui/agent/transcript.js';
 	import AgentModelPicker from './agent-model-picker.svelte';
-	import { getAgentModelState, loadAgentModelCatalog } from './agent-model-state.svelte.js';
 	import AgentMentionMenu from './agent-mention-menu.svelte';
 	import AgentTranscriptItem from './agent-transcript-item.svelte';
 	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
@@ -35,14 +31,13 @@
 		publicEnvoyNames,
 		sessionEnvoyId,
 		sessionVisibleInScope
-	} from './conversation-selector.js';
-	import { writeAgentSurface } from './agent-activity-state.svelte.js';
+	} from '#lib/client/ui/agent/conversation-selector.js';
 	import {
 		AGENT_TURN_STALE_MS,
 		agentOrbBusyStatusKey,
 		agentOrbState,
 		agentOrbStatusKey
-	} from './agent-orb-state.js';
+	} from '#lib/client/ui/agent/agent-orb-state.js';
 	import {
 		consumeTrigger,
 		findMentionTrigger,
@@ -53,14 +48,13 @@
 		serializeMentions,
 		type ComposerMention,
 		type MentionTrigger
-	} from './composer-mentions.js';
+	} from '#lib/client/ui/agent/composer-mentions.js';
 	import {
 		AGENT_COMPOSER_CONTROL_TEXT_CLASS,
 		AGENT_COMPOSER_EDITOR_CLASS,
 		AGENT_COMPOSER_FOCUS_EVENT,
-		AGENT_COMPOSER_SHELL_CLASS,
-		type AgentComposerSeed
-	} from './composer-chrome.js';
+		AGENT_COMPOSER_SHELL_CLASS
+	} from '#lib/client/ui/agent/composer-chrome.js';
 	import {
 		buildMentionMenuEntries,
 		commandPrefixChar,
@@ -70,20 +64,26 @@
 		shouldSearchRecords,
 		type MentionMenuItem,
 		type MentionSources
-	} from './mention-sources.js';
-	import { createDebouncedRecordSearch } from './debounced-record-search.js';
-	import { readBoltMentionCatalog } from './mention-catalog.js';
-	import { formatFinderEntityForPrompt } from '../finder/finder-entity.js';
+	} from '#lib/client/ui/agent/mention-sources.js';
+	import { createDebouncedRecordSearch } from '#lib/client/ui/agent/debounced-record-search.js';
+	import { formatFinderEntityForPrompt } from '#lib/client/ui/finder/finder-entity.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
-	import type { BoltUiKeys } from './i18n.js';
-	import { resolveAgentIntent } from './intent.js';
+	import { resolveAgentIntent } from '#lib/client/ui/agent/intent.js';
 
-	const { t } = useI18n<BoltUiKeys>();
+	const { t } = useI18n();
+	const agentClient = useAgentClient();
+	const runtime = agentClient.runtime;
+	const decodeComposerSeed = Schema.decodeUnknownOption(
+		Schema.Struct({
+			message: Schema.optionalKey(Schema.String),
+			planMode: Schema.optionalKey(Schema.Boolean)
+		})
+	);
 
 	let { headerOrb = true }: { headerOrb?: boolean } = $props();
 
 	let draft = $state('');
-	const modelState = getAgentModelState();
+	const modelState = agentClient.models.state;
 	let session = $state<{
 		runId: string | undefined;
 		chatId: string | undefined;
@@ -111,13 +111,7 @@
 	 * A component test or a host surface that never provided the context throws on the read, and the
 	 * envoy-derived features are then simply absent rather than half-alive.
 	 */
-	const readPlatformState = (() => {
-		try {
-			return getPlatformStateContext();
-		} catch {
-			return null;
-		}
-	})();
+	const readPlatformState = Result.getOrElse(Result.try(getPlatformStateContext), () => null);
 	const declaredEnvoys = $derived(readPlatformState?.().envoys ?? []);
 
 	// ── "@" mentions ────────────────────────────────────────────────────────────────────────────
@@ -150,7 +144,7 @@
 	const mentionSearch = createDebouncedRecordSearch({
 		search: (text, collection) => {
 			const sources = mention.sources;
-			if (!sources) return Promise.resolve([]);
+			if (!sources) return Effect.succeed([]);
 			return sources.search(text, collection);
 		},
 		onLoading: (loading) => {
@@ -162,10 +156,10 @@
 	});
 
 	function refreshMentionSources(): void {
-		const catalog = readBoltMentionCatalog();
 		mention.sources = createMentionSources({
-			getCollections: () => catalog.collections,
-			getApps: () => catalog.apps
+			getCollections: () => agentClient.catalog.collections,
+			getApps: () => agentClient.catalog.apps,
+			findRecords: runtime.client.records.findMany
 		});
 	}
 
@@ -229,7 +223,7 @@
 
 	/** Reconciles mention chip ranges after the writer edits the composer draft. */
 	function onComposerInput(): void {
-		// stupidity:allow Q3 -- event handler
+		// repository-health:allow Q3 -- event handler
 		const element = mention.textarea;
 		if (!element) return;
 		mention.mentions = reconcileAfterEdit(mention.mentions, mention.lastDraft, element.value);
@@ -359,51 +353,42 @@
 	}
 	// ─────────────────────────────────────────────────────────────────────────────────────────────
 
-	const sessionQuery = $derived.by(() => {
-		try {
-			return getInitializedWorkspaceClient('chat_session').db.chat_session.findMany({
-				orderBy: { norbital_updated_at: 'desc' },
-				limit: 100
-			});
-		} catch {
-			return undefined;
-		}
-	});
-	/** The live query row is the conversation. Do not copy or rekey it into a second client model. */
-	const sessions = $derived(sessionQuery?.current ?? []);
+	const sessionQuery = $derived(
+		runtime.client.db.chat_session.findMany({
+			orderBy: { updated_at: 'desc' },
+			limit: 5_000
+		})
+	);
+	const allSessions = $derived(sessionQuery.current ?? []);
+	/** Delegated sessions render beneath their parent call, never as conversations somebody opened. */
+	const sessions = $derived(
+		allSessions.filter(
+			(row) => row.parent_id === null && !row.conversation_id.startsWith('subagent:')
+		)
+	);
 	// The status the host reports, not a role. `roles.includes('admin')` was the old spelling and it
 	// never matched anything: `admin` is not a role any workspace declares, so the agent's cross-user
 	// scope picker was invisible to the administrators it exists for.
 	const isAdmin = $derived(readPlatformState?.().user.admin === true);
-	const currentUserId = $derived(readPlatformState?.().user.norbital_id ?? null);
+	const currentUserId = $derived(readPlatformState?.().user.id ?? null);
 	let scopeUserId = $state<string | null>(null);
 	let selectedEnvoy = $state<string | null>(null);
 	const resolvedScopeUserId = $derived(scopeUserId ?? currentUserId);
-	const usersQuery = $derived.by(() => {
-		if (!isAdmin) return undefined;
-		try {
-			// `bolt_auth_user` is the only description of a person the runtime has, and the system read
-			// grant masks it down to `norbital_id` and `name` — which is exactly what a picker needs.
-			// There is no `kind` filter: it distinguished a person from a host provisioner's service
-			// row, and a static identity is minted in memory now and never written here, so every row
-			// this reaches is a person.
-			return getInitializedWorkspaceClient().db.bolt_auth_user.findMany({
-				orderBy: { name: 'asc' },
-				limit: 500
-			});
-		} catch {
-			return undefined;
-		}
-	});
+	// The system read policy masks this collection to the two fields the picker needs.
+	const usersQuery = $derived(
+		runtime.client.db.bolt_auth_user.findMany({
+			orderBy: { name: 'asc' },
+			limit: 500
+		})
+	);
 	const userLabels = $derived.by(() => {
 		const labels = new SvelteMap<string, string>();
-		for (const row of usersQuery?.current ?? []) {
-			if (typeof row.norbital_id !== 'string') continue;
-			// Name or nothing: the read grant's field mask is `['norbital_id', 'name']`, so an address
+		if (!isAdmin) return labels;
+		for (const row of usersQuery.current ?? []) {
+			// Name or nothing: the read grant's field mask is `['id', 'name']`, so an address
 			// is not merely unselected here — it cannot be read through this grant at all.
-			const label =
-				typeof row.name === 'string' && row.name.trim() ? row.name : t('bolt.agent.unknownMember');
-			labels.set(row.norbital_id, label);
+			const label = row.name.trim() ? row.name : t('bolt.agent.unknownMember');
+			labels.set(row.id, label);
 		}
 		return labels;
 	});
@@ -415,7 +400,6 @@
 			envoyFallback: t('bolt.agent.envoy')
 		})
 	);
-	const selectorSessions = $derived(sessions);
 	const publicEnvoyKeys = $derived(publicEnvoyNames(declaredEnvoys));
 	const conversationScope = $derived({
 		scopeUserId: resolvedScopeUserId,
@@ -424,7 +408,7 @@
 		publicEnvoyKeys
 	});
 	const scopedSelectorSessions = $derived(
-		selectorSessions.filter((row) => sessionVisibleInScope(row, conversationScope))
+		sessions.filter((row) => sessionVisibleInScope(row, conversationScope))
 	);
 	const accessibleEnvoys = $derived(
 		listAccessibleEnvoys({
@@ -439,15 +423,13 @@
 			return selectedEnvoy;
 		}
 		const open = session.chatId
-			? selectorSessions.find((row) => row.norbital_id === session.chatId)
+			? sessions.find((row) => row.conversation_id === session.chatId)
 			: undefined;
 		if (open) return sessionEnvoyId(open, selectorLabels);
 		return accessibleEnvoys[0]?.id ?? WEB_AGENT_ID;
 	});
 	const envoySelectorSessions = $derived(
-		scopedSelectorSessions.filter(
-			(row) => sessionEnvoyId(row, selectorLabels) === resolvedEnvoy
-		)
+		scopedSelectorSessions.filter((row) => sessionEnvoyId(row, selectorLabels) === resolvedEnvoy)
 	);
 	const showEnvoyPicker = $derived(accessibleEnvoys.length > 1);
 	const envoyOptions = $derived(
@@ -486,22 +468,48 @@
 		session.chatId ??
 			(session.composingNew || envoySelectorSessions.length === 0
 				? undefined
-				: envoySelectorSessions[0].norbital_id)
+				: envoySelectorSessions[0]?.conversation_id)
 	);
-	const activeRunId = $derived.by(() => {
-		if (!activeChatId) return session.runId;
-		return (
-			sessions.find((row) => row.norbital_id === activeChatId)?.automation_run_id ?? session.runId
-		);
-	});
+	const activeRunId = $derived(activeChatId ?? session.runId);
 
-	/** One replicated tenant row is the complete live conversation aggregate. */
-	const activeSession = $derived(sessions.find((row) => row.norbital_id === activeChatId));
-	const activeMessages = $derived(activeSession?.messages ?? []);
-	const activeTurns = $derived(activeSession?.turns ?? []);
-	const activeSessionIsEnvoy = $derived(
-		activeSession?.visibility.startsWith('envoy_') ?? false
+	const activeSession = $derived(sessions.find((row) => row.conversation_id === activeChatId));
+	const activeConversationIds = $derived.by(() => {
+		if (activeChatId === undefined) return [];
+		const ids = new Set([activeChatId]);
+		let added = true;
+		while (added) {
+			added = false;
+			for (const candidate of allSessions) {
+				if (
+					candidate.parent_id !== null &&
+					ids.has(candidate.parent_id) &&
+					!ids.has(candidate.conversation_id)
+				) {
+					ids.add(candidate.conversation_id);
+					added = true;
+				}
+			}
+		}
+		return [...ids];
+	});
+	/**
+	 * The selected conversation's messages are another standard live collection query. Sync refreshes
+	 * it when `chat_message` advances; selecting a different conversation creates the corresponding
+	 * keyed query rather than fetching history through an agent command.
+	 */
+	const messageQuery = $derived(
+		activeConversationIds.length > 0
+			? runtime.client.db.chat_message.findMany({
+					where: { conversation_id: { in: activeConversationIds } },
+					orderBy: { sequence: 'asc' },
+					limit: 5_000
+				})
+			: undefined
 	);
+	const activeConversation = $derived(projectStoredChatMessages(messageQuery?.current ?? []));
+	const activeMessages = $derived(activeConversation.messages);
+	const activeTurns = $derived(activeConversation.turns);
+	const activeSessionIsEnvoy = $derived(activeSession?.visibility.startsWith('envoy_') ?? false);
 	const activeSessionIsOtherUsersPersonal = $derived(
 		isAdmin &&
 			activeSession?.visibility === 'personal' &&
@@ -582,12 +590,7 @@
 	 * Occupancy above is genuinely a property of the current window, so summing the transcript is
 	 * right for it. Spend is not: the counter is what survives someone deleting a message.
 	 */
-	const totals = $derived(
-		toSessionTotals(
-			(sessionQuery?.current ?? []).find((row) => row.norbital_id === activeChatId) as
-				Record<string, unknown> | undefined
-		)
-	);
+	const totals = $derived(toSessionTotals(activeSession));
 	const tokenLabel = $derived(
 		totals && totals.totalTokens > 0
 			? t('bolt.agent.tokens', { count: totals.totalTokens.toLocaleString() })
@@ -631,7 +634,7 @@
 		if (!composerLocked || agentHasSpoken) return;
 		const timer = window.setTimeout(() => {
 			session.waitedTooLong = true;
-			writeAgentSurface({
+			agentClient.writeSurface({
 				chatId: session.chatId,
 				composingNew: session.composingNew,
 				pending: false,
@@ -643,7 +646,7 @@
 
 	/** Pushes composer identity into the shared shell and FAB activity store. */
 	function syncAgentSurface(): void {
-		writeAgentSurface({
+		agentClient.writeSurface({
 			chatId: session.chatId,
 			composingNew: session.composingNew,
 			pending: session.pending,
@@ -657,13 +660,14 @@
 	 * full-page /agent surface, and the shell must not know which.
 	 */
 	onMount(() => {
-		void loadAgentModelCatalog(getWorkspaceRemoteTransport());
 		refreshMentionSources();
 
 		/** Seeds and focuses the composer when the shell broadcasts a focus request. */
 		function onFocusRequest(event: Event): void {
 			const seed =
-				event instanceof CustomEvent ? (event.detail as AgentComposerSeed | undefined) : undefined;
+				event instanceof CustomEvent
+					? Option.getOrUndefined(decodeComposerSeed(event.detail))
+					: undefined;
 			if (seed?.planMode) planMode = true;
 			if (seed?.message) {
 				draft = seed.message;
@@ -679,32 +683,33 @@
 	});
 
 	/** Starts an agent turn with the current draft, mentions, and model selection. */
-	async function send(): Promise<void> {
-		const { message, references } = serializeMentions(draft, mention.mentions);
-		if (!message || composerLocked || activeSessionIsReadOnly) return;
-		const { verify, verifierPrompt: resolvedVerifierPrompt } = previewIntent;
-		if (!activeChatId) session.composingNew = true;
-		session.pending = true;
-		session.sendFailure = null;
-		session.waitedTooLong = false;
-		session.echo = message;
-		draft = '';
-		mention.lastDraft = '';
-		mention.mentions = [];
-		mention.trigger = null;
-		mention.suppressedTriggerStart = null;
-		mention.highlightIdentity = '';
-		mention.menuItems = [];
-		mention.menuLoading = false;
-		mentionSearch.invalidate();
-		syncAgentSurface();
-		try {
-			const result = await startInteractiveAgent({
+	function send(): Effect.Effect<void> {
+		return Effect.gen(function* () {
+			const { message, references } = serializeMentions(draft, mention.mentions);
+			if (!message || composerLocked || activeSessionIsReadOnly) return;
+			const { verify, verifierPrompt: resolvedVerifierPrompt } = previewIntent;
+			if (!activeChatId) session.composingNew = true;
+			session.pending = true;
+			session.sendFailure = null;
+			session.waitedTooLong = false;
+			session.echo = message;
+			draft = '';
+			mention.lastDraft = '';
+			mention.mentions = [];
+			mention.trigger = null;
+			mention.suppressedTriggerStart = null;
+			mention.highlightIdentity = '';
+			mention.menuItems = [];
+			mention.menuLoading = false;
+			mentionSearch.invalidate();
+			syncAgentSurface();
+			const result = yield* agentClient.start({
 				message,
 				// Only chips the picker created. An `@` that never matched is already in the text.
 				...(references.length > 0 ? { mentions: references } : {}),
 				...(activeRunId ? { runId: activeRunId } : {}),
-				...(planMode ? { planMode: true, intent: 'plan' as const } : { intent: 'do' as const }),
+				intent: planMode ? 'plan' : 'do',
+				...(planMode ? { planMode: true } : {}),
 				...(verify ? { verifierPrompt: resolvedVerifierPrompt } : {}),
 				// Only when the host offered a choice. Sending back its own default would turn a display
 				// value into a caller assertion, and the host would stop being free to change it.
@@ -720,25 +725,28 @@
 			// Interactive start returns before inference; the replicated root turn owns in-flight after this.
 			session.pending = false;
 			syncAgentSurface();
-		} catch (cause) {
-			const message = cause instanceof Error ? cause.message : String(cause);
-			session.sendFailure =
-				!message || message === 'INTERNAL_ERROR' || message === t('bolt.server.internalError')
-					? t('bolt.agent.couldNotStart')
-					: message;
-			session.pending = false;
-			syncAgentSurface();
-		}
+		}).pipe(
+			Effect.catch((cause) => {
+				const reason = cause instanceof Error ? cause.message : String(cause);
+				session.sendFailure =
+					!reason || reason === 'INTERNAL_ERROR' || reason === t('bolt.server.internalError')
+						? t('bolt.agent.couldNotStart')
+						: reason;
+				session.pending = false;
+				syncAgentSurface();
+				return Effect.void;
+			})
+		);
 	}
 
 	/** Switches the panel to an existing replicated session. */
 	function selectConversation(value: string | null): void {
-		// stupidity:allow Q3 -- event handler
+		// repository-health:allow Q3 -- event handler
 		if (!value) return;
-		const row = sessions.find((candidate) => candidate.norbital_id === value);
+		const row = sessions.find((candidate) => candidate.conversation_id === value);
 		if (!row) return;
-		session.chatId = row.norbital_id;
-		session.runId = row.automation_run_id ?? undefined;
+		session.chatId = row.conversation_id;
+		session.runId = row.conversation_id;
 		session.composingNew = false;
 		session.echo = null;
 		session.sendFailure = null;
@@ -749,10 +757,10 @@
 
 	/** Filters the conversation list to one member and drops a thread outside that scope. */
 	function selectScope(userId: string): void {
-		// stupidity:allow Q3 -- event handler
+		// repository-health:allow Q3 -- event handler
 		scopeUserId = userId;
-		if (session.chatId && sessions.some((row) => row.norbital_id === session.chatId)) {
-			const current = sessions.find((row) => row.norbital_id === session.chatId);
+		if (session.chatId && sessions.some((row) => row.conversation_id === session.chatId)) {
+			const current = sessions.find((row) => row.conversation_id === session.chatId);
 			if (
 				current &&
 				!sessionVisibleInScope(current, {
@@ -775,7 +783,7 @@
 	function selectEnvoy(envoyId: string): void {
 		selectedEnvoy = envoyId;
 		if (session.chatId) {
-			const current = sessions.find((row) => row.norbital_id === session.chatId);
+			const current = sessions.find((row) => row.conversation_id === session.chatId);
 			if (current && sessionEnvoyId(current, selectorLabels) !== envoyId) {
 				session.chatId = undefined;
 				session.runId = undefined;
@@ -790,7 +798,7 @@
 
 	/** Clears the active thread so the next send creates a new conversation. */
 	function startConversation(): void {
-		// stupidity:allow Q3 -- event handler
+		// repository-health:allow Q3 -- event handler
 		scopeUserId = currentUserId;
 		selectedEnvoy = WEB_AGENT_ID;
 		session.chatId = undefined;
@@ -804,7 +812,7 @@
 
 	/** Routes keyboard input between the mention menu and the send action. */
 	function onKeydown(event: KeyboardEvent): void {
-		// stupidity:allow Q3 -- event handler
+		// repository-health:allow Q3 -- event handler
 		if (menuOpen) {
 			if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
 				event.preventDefault();
@@ -863,7 +871,7 @@
 		}
 		if (event.key === 'Enter' && !event.shiftKey) {
 			event.preventDefault();
-			void send();
+			void Effect.runPromise(send());
 		}
 	}
 </script>
@@ -987,10 +995,10 @@
 				{#each messages as message (message.key)}
 					<AgentTranscriptItem
 						{message}
-						onVerifierPrompt={async (prompt) => {
+						onVerifierPrompt={(prompt) => {
 							const id = activeRunId;
 							if (!id) return;
-							await updateAgentVerifier({ runId: id, prompt });
+							void Effect.runPromise(agentClient.updateVerifier({ runId: id, prompt }));
 						}}
 					/>
 				{/each}
@@ -1073,7 +1081,7 @@
 					class={AGENT_COMPOSER_SHELL_CLASS}
 					onsubmit={(event) => {
 						event.preventDefault();
-						void send();
+						void Effect.runPromise(send());
 					}}
 				>
 					<div class="px-3 pt-3 pb-1 sm:px-4 sm:pt-4" data-agent-composer>
@@ -1110,7 +1118,7 @@
 
 					{#if previewIntent.verify}
 						<details class="group/verifier px-2.5 sm:px-3" data-testid="agent-verifier">
-							<!-- stupidity:allow UI6 -- verifier disclosure is a clickable control row. -->
+							<!-- repository-health:allow UI6 -- verifier disclosure is a clickable control row. -->
 							<summary
 								class={`flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-md px-1.5 py-1 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}
 							>
@@ -1146,7 +1154,7 @@
 						</details>
 					{/if}
 
-					<!-- stupidity:allow UI6 -- Composer action bar keeps its wrapping left controls pinned beside the send cluster; Cluster would push send below the fold on narrow widths. -->
+					<!-- repository-health:allow UI6 -- Composer action bar keeps its wrapping left controls pinned beside the send cluster; Cluster would push send below the fold on narrow widths. -->
 					<div
 						class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-1 gap-y-1 px-2.5 pt-1 pb-[max(0.625rem,env(safe-area-inset-bottom))]"
 					>

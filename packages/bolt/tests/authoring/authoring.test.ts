@@ -2,13 +2,12 @@ import { Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
 import {
 	clockTime,
-	defineAgentTool,
 	defineCommandHandler,
 	defineConnection,
-	defineMcpServer,
 	hexToBinaryEmbedding,
 	vector
 } from '../../src/authoring/index.js';
+import { defineAgentTool } from '../../src/authoring/agent-tools.js';
 
 describe('Bolt authoring contracts', () => {
 	it('builds the missing temporal and vector column primitives', () => {
@@ -72,10 +71,9 @@ describe('Bolt authoring contracts', () => {
 	 * with the one library bolt happened to import. It now names Effect `Schema` outright, and this
 	 * asserts what that is worth: a raw `Schema.Struct` type-checks without any adapter the author
 	 * writes, `run` still receives the schema's *output* type rather than `unknown`, and the
-	 * authoring boundary has adapted the declaration to a Standard Schema — the compiled dispatcher
-	 * validates through `~standard`, so the schema still rejects.
+	 * compiler validates directly with Effect Schema, so the schema still rejects.
 	 */
-	it('accepts a tool input schema declared as Effect Schema, with its output type intact', async () => {
+	it('accepts a tool input schema declared as Effect Schema, with its output type intact', () => {
 		const tool = defineAgentTool({
 			description: 'Summarize open tickets',
 			input: Schema.Struct({ limit: Schema.Int }),
@@ -83,20 +81,7 @@ describe('Bolt authoring contracts', () => {
 			// point: the assertion is that inference survived, not merely that the call compiled.
 			run: (_api, input) => input.limit * 2
 		});
-		const accepted = await tool.input['~standard'].validate({ limit: 21 });
-		expect(accepted.issues).toBeUndefined();
-		const refused = await tool.input['~standard'].validate({ limit: 'all of them' });
-		expect(refused.issues ?? []).not.toHaveLength(0);
-	});
-
-	it('declares an MCP server with a URL and allowed tools', () => {
-		const server = defineMcpServer({
-			name: 'search',
-			url: 'https://mcp.example',
-			tools: ['lookup'],
-			description: 'Search index'
-		});
-		expect(server.tools).toEqual(['lookup']);
-		expect(() => defineMcpServer({ name: 'search', url: '', tools: ['lookup'] })).toThrow(/URL/);
+		expect(Schema.decodeUnknownExit(tool.input)({ limit: 21 })._tag).toBe('Success');
+		expect(Schema.decodeUnknownExit(tool.input)({ limit: 'all of them' })._tag).toBe('Failure');
 	});
 });

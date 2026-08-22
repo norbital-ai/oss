@@ -1,4 +1,4 @@
-import type { CalendarEvent, CalendarView, EventChunk, LaneAssignment } from './types.js';
+import type { CalendarEvent, CalendarView, LaneAssignment } from '#lib/event-calendar/types';
 
 const MS_PER_DAY = 86_400_000;
 const MS_PER_MINUTE = 60_000;
@@ -20,11 +20,7 @@ export function endOfMonth(date: Date): Date {
 	return new Date(date.getFullYear(), date.getMonth() + 1, 0);
 }
 
-export function daysInMonth(date: Date): number {
-	return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-}
-
-export function weeksInMonth(date: Date): number {
+function weeksInMonth(date: Date): number {
 	const start = startOfWeek(startOfMonth(date));
 	const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
 	const endWeekStart = startOfWeek(end);
@@ -131,49 +127,6 @@ export function assignLanes(events: CalendarEvent[]): LaneAssignment[] {
 	return result;
 }
 
-export function chunkWeekEvents(events: CalendarEvent[], weekStart: Date): EventChunk[] {
-	const chunks: EventChunk[] = [];
-
-	for (const event of events) {
-		if (event.allDay || isMultiDayEvent(event)) {
-			const evStart = new Date(Math.max(event.start.getTime(), weekStart.getTime()));
-			const weekEnd = new Date(weekStart.getTime() + 7 * MS_PER_DAY);
-			const evEnd = new Date(Math.min(event.end.getTime(), weekEnd.getTime()));
-
-			let cursor = new Date(evStart);
-			let col = 0;
-			while (cursor < evEnd && col < 7) {
-				const dayStart = new Date(weekStart);
-				dayStart.setDate(dayStart.getDate() + col);
-				dayStart.setHours(0, 0, 0, 0);
-
-				const dayEnd = new Date(dayStart);
-				dayEnd.setDate(dayEnd.getDate() + 1);
-
-				const chunkStart = new Date(Math.max(cursor.getTime(), dayStart.getTime()));
-				const chunkEnd = new Date(Math.min(evEnd.getTime(), dayEnd.getTime()));
-
-				if (chunkStart < chunkEnd) {
-					chunks.push({
-						id: `${event.id}#${col}`,
-						event,
-						start: chunkStart,
-						end: chunkEnd,
-						column: col,
-						isEdgeStart: col === 0 || !event.allDay,
-						isEdgeEnd: col === 6 || chunkEnd.getTime() >= evEnd.getTime()
-					});
-				}
-
-				cursor = new Date(dayEnd);
-				col++;
-			}
-		}
-	}
-
-	return chunks;
-}
-
 export function getMonthGrid(date: Date): { days: Date[]; weekCount: number } {
 	const monthStart = startOfMonth(date);
 	const gridStart = startOfWeek(monthStart);
@@ -187,10 +140,6 @@ export function getMonthGrid(date: Date): { days: Date[]; weekCount: number } {
 	}
 
 	return { days, weekCount: days.length / 7 };
-}
-
-export function getColumnDate(weekStart: Date, column: number): Date {
-	return addDays(weekStart, column);
 }
 
 export function generateTimeSlots(

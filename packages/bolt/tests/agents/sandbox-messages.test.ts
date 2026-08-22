@@ -13,7 +13,7 @@ import {
 	type TaskResponse
 } from '@norbital-ai/bolt-protocol';
 import { EnvironmentName, InvocationId, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
-import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
 import { parseAgentMessage } from '../../src/runtime/agents/agent-message.js';
@@ -85,15 +85,15 @@ const store = (transcript: ReadonlyArray<Row>) => {
 			if (request._tag !== 'Query') return answer([]);
 			const id = String(request.parameters[0] ?? '');
 			if (request.sql.includes('bolt_auth_session')) return answer([subject]);
-			if (request.sql.includes('from bolt_conversations')) {
+			if (request.sql.includes('from chat_session')) {
 				const title = titles[id];
 				if (title === undefined) return answer([]);
 				return answer([{ id, user_id: subject.userId, agent_name: 'web', title }]);
 			}
-			if (request.sql.includes('from bolt_agent_messages')) {
+			if (request.sql.includes('from chat_message')) {
 				return answer(id === sender ? transcript : []);
 			}
-			if (request.sql.startsWith('insert into bolt_agent_messages')) {
+			if (request.sql.startsWith('insert into chat_message')) {
 				writes.push(request.parameters);
 			}
 			return answer([]);

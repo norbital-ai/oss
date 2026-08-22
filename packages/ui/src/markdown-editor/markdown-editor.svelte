@@ -6,8 +6,10 @@
 	import TaskItem from '@tiptap/extension-task-item';
 	import TaskList from '@tiptap/extension-task-list';
 	import StarterKit from '@tiptap/starter-kit';
-	import { onDestroy, onMount, tick } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import * as Command from '#lib/command';
+	import * as Dialog from '#lib/dialog';
+	import { Input } from '#lib/input';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { MessageVars } from '@norbital-ai/std/i18n';
 	import { Inline } from '#lib/layout';
@@ -100,23 +102,49 @@
 
 	// ─── Element refs ─────────────────────────────────────────────────
 	let editor: Editor | null = $state(null);
-	let editorMountEl: HTMLDivElement | null = $state(null);
-	let commandMenuRef: HTMLDivElement | null = $state(null);
-	let bubbleMenuRef: HTMLDivElement | null = $state(null);
-	let mentionMenuRef: HTMLDivElement | null = $state(null);
-	let mentionCommand: ((item: MentionItem) => void) | null = $state(null);
+	const refs = $state({
+		editorMount: null as HTMLDivElement | null,
+		commandMenu: null as HTMLDivElement | null,
+		bubbleMenu: null as HTMLDivElement | null,
+		mentionMenu: null as HTMLDivElement | null
+	});
 
 	// ─── Bubble menu state ────────────────────────────────────────────
 	let activeMarks = $state<Partial<Record<MarkName, boolean>>>({});
 
+	// ─── Link dialog state ────────────────────────────────────────────
+	let linkDialogOpen = $state(false);
+	let linkDraft = $state('');
+
+	function openLinkDialog(): void {
+		const href = editor?.getAttributes('link').href;
+		linkDraft = typeof href === 'string' ? href : '';
+		linkDialogOpen = true;
+	}
+
+	function applyLink(): void {
+		const url = linkDraft;
+		linkDialogOpen = false;
+		if (url === '') {
+			editor?.chain().focus().extendMarkRange('link').unsetLink().run();
+		} else {
+			editor?.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
+		}
+	}
+
 	// ─── Mention state ────────────────────────────────────────────────
-	let mentionQuery = $state('');
-	let mentionMenuVisible = $state(false);
-	let mentionKeyHandler: ((key: string) => boolean) | null = $state(null);
+	const mention = $state({
+		query: '',
+		visible: false,
+		keyHandler: null as ((key: string) => boolean) | null,
+		command: null as ((item: MentionItem) => void) | null
+	});
 
 	// ─── Command menu state ───────────────────────────────────────────
-	let commandSelectedIndex = $state(0);
-	let visibleFlags = $state<boolean[]>([]);
+	const commandMenu = $state({
+		selectedIndex: 0,
+		visibleFlags: [] as boolean[]
+	});
 
 	type CommandGroup = { title: string; items: CommandItem[] };
 
@@ -147,8 +175,8 @@
 								const input = document.createElement('input');
 								input.type = 'file';
 								input.accept = 'image/*';
-								input.onchange = (e) => {
-									const file = (e.target as HTMLInputElement).files?.[0];
+								input.onchange = () => {
+									const file = input.files?.[0];
 									if (!file) return;
 									editor.chain().focus().deleteRange(range).setFileAttachment({ file }).run();
 								};
@@ -162,8 +190,8 @@
 								const input = document.createElement('input');
 								input.type = 'file';
 								input.multiple = true;
-								input.onchange = (e) => {
-									const files = (e.target as HTMLInputElement).files;
+								input.onchange = () => {
+									const files = input.files;
 									if (!files?.length) return;
 									editor.chain().focus().deleteRange(range).run();
 									Array.from(files).forEach((file) => {
@@ -266,7 +294,9 @@
 	});
 
 	const groupVisible = $derived(
-		COMMAND_GROUPS.map((g, gi) => g.items.some((_, ii) => visibleFlags[groupStartIndices[gi] + ii]))
+		COMMAND_GROUPS.map((g, gi) =>
+			g.items.some((_, ii) => commandMenu.visibleFlags[groupStartIndices[gi] + ii])
+		)
 	);
 
 	const commandItems = $derived.by(() => {
@@ -291,7 +321,7 @@
 			});
 			group.items.forEach((item, ii) => {
 				const idx = groupStartIndices[gi] + ii;
-				if (!visibleFlags[idx]) return;
+				if (!commandMenu.visibleFlags[idx]) return;
 				items.push({
 					value: String(idx),
 					label: item.title,
@@ -315,10 +345,10 @@
 
 	function handleCommandSelect(val: string) {
 		const item = commandItems.find((i) => i.value === val && i._type === 'item');
-		if (item?._item && editor && commandMenuRef) {
+		if (item?._item && editor && refs.commandMenu) {
 			const { from, to } = editor.state.selection;
 			item._item.command({ editor, range: { from, to } });
-			commandMenuRef.style.display = 'none';
+			refs.commandMenu.style.display = 'none';
 		}
 	}
 
@@ -327,15 +357,15 @@
 		createSlashCommands({
 			get: () => ({
 				flatItems,
-				visibleFlags,
-				selectedIndex: commandSelectedIndex,
-				menuRef: commandMenuRef
+				visibleFlags: commandMenu.visibleFlags,
+				selectedIndex: commandMenu.selectedIndex,
+				menuRef: refs.commandMenu
 			}),
 			setFlags: (flags: boolean[]) => {
-				visibleFlags = flags;
+				commandMenu.visibleFlags = flags;
 			},
 			setIndex: (index: number) => {
-				commandSelectedIndex = index;
+				commandMenu.selectedIndex = index;
 			}
 		})
 	);
@@ -380,16 +410,16 @@
 
 		base.push(
 			BubbleMenu.configure({
-				element: bubbleMenuRef,
+				element: refs.bubbleMenu,
 				shouldShow: ({ editor, state }) => {
 					if (!editor.isFocused || !editor.isEditable || state.selection.empty) {
-						if (bubbleMenuRef) bubbleMenuRef.style.display = 'none';
+						if (refs.bubbleMenu) refs.bubbleMenu.style.display = 'none';
 						return false;
 					}
 					const { from } = state.selection;
 					const name = state.doc.nodeAt(from)?.type.name ?? '';
 					const hide = name === 'customCodeBlock' || name === 'fileAttachment';
-					if (bubbleMenuRef) bubbleMenuRef.style.display = hide ? 'none' : 'flex';
+					if (refs.bubbleMenu) refs.bubbleMenu.style.display = hide ? 'none' : 'flex';
 					return !hide;
 				}
 			})
@@ -402,11 +432,11 @@
 		if (enableMentions && !isInput) {
 			base.push(
 				ConfiguredMention.configure({
-					menuElement: mentionMenuRef,
-					onQueryChange: (q: string) => (mentionQuery = q),
-					onCommandReady: (cmd) => (mentionCommand = cmd),
-					onMenuVisibilityChange: (v: boolean) => (mentionMenuVisible = v),
-					onKeyDown: (key: string) => mentionKeyHandler?.(key) ?? false,
+					menuElement: refs.mentionMenu,
+					onQueryChange: (q: string) => (mention.query = q),
+					onCommandReady: (cmd) => (mention.command = cmd),
+					onMenuVisibilityChange: (v: boolean) => (mention.visible = v),
+					onKeyDown: (key: string) => mention.keyHandler?.(key) ?? false,
 					metadataItems: mentionItems
 				})
 			);
@@ -417,23 +447,23 @@
 
 	// ─── Editor initialization ────────────────────────────────────────
 	onMount(() => {
-		if (!editorMountEl || !bubbleMenuRef) throw new Error('Editor elements not found');
-		if (!isInput && !commandMenuRef) throw new Error('Command menu element not found');
-		if (enableMentions && !isInput && !mentionMenuRef)
+		if (!refs.editorMount || !refs.bubbleMenu) throw new Error('Editor elements not found');
+		if (!isInput && !refs.commandMenu) throw new Error('Command menu element not found');
+		if (enableMentions && !isInput && !refs.mentionMenu)
 			throw new Error('Mention menu element not found');
 
-		if (commandMenuRef) commandMenuRef.style.display = 'none';
-		bubbleMenuRef.style.display = 'none';
-		if (mentionMenuRef) mentionMenuRef.style.display = 'none';
+		if (refs.commandMenu) refs.commandMenu.style.display = 'none';
+		refs.bubbleMenu.style.display = 'none';
+		if (refs.mentionMenu) refs.mentionMenu.style.display = 'none';
 
 		editor = new Editor({
-			element: editorMountEl,
+			element: refs.editorMount,
 			editable: !readonly,
 			contentType: 'markdown',
 			editorProps: {
 				attributes: { class: cn('tiptap h-full max-w-none', !isInput && 'overflow-auto') },
 				handleKeyDown: (_view, event) => {
-					if (mentionMenuVisible || commandMenuRef?.style.display === 'block') return false;
+					if (mention.visible || refs.commandMenu?.style.display === 'block') return false;
 					return editorKeyDownBridge.handler?.(event) === true;
 				}
 			},
@@ -448,8 +478,7 @@
 				}
 				if (autofocus) createdEditor.commands.focus('end');
 			},
-			onTransaction: async (props) => {
-				await tick();
+			onTransaction: (props) => {
 				const next: Partial<Record<MarkName, boolean>> = {};
 				for (const name of MARK_NAMES) next[name] = props.editor.isActive(name);
 				activeMarks = next;
@@ -526,8 +555,8 @@
 	<Command.Root
 		shouldFilter={false}
 		class="hidden w-[min(30rem,calc(100vw-2rem))] rounded-xl border bg-popover p-1 shadow-deep"
-		bind:ref={commandMenuRef}
-		value={String(commandSelectedIndex)}
+		bind:ref={refs.commandMenu}
+		value={String(commandMenu.selectedIndex)}
 		items={commandItems}
 		onValueChange={handleCommandSelect}
 	>
@@ -596,12 +625,12 @@
 		className
 	)}
 >
-	<div bind:this={editorMountEl} class="h-full w-full"></div>
+	<div bind:this={refs.editorMount} class="h-full w-full"></div>
 </div>
 
 <!-- ─── Bubble Menu (inline formatting toolbar) ──────────────────── -->
 <ToggleGroup.Root
-	bind:ref={bubbleMenuRef}
+	bind:ref={refs.bubbleMenu}
 	type="multiple"
 	class="hidden rounded-md border bg-background p-1 shadow-md"
 	value={Object.entries(activeMarks)
@@ -648,14 +677,7 @@
 		value="link"
 		onclick={(e: MouseEvent) => {
 			e.preventDefault();
-			const prev = editor?.getAttributes('link').href;
-			const url = window.prompt('URL', prev);
-			if (url === null) return;
-			if (url === '') {
-				editor?.chain().focus().extendMarkRange('link').unsetLink().run();
-			} else {
-				editor?.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
-			}
+			openLinkDialog();
 		}}
 		class={buttonVariants({ variant: 'ghost', size: 'icon' })}
 		><Icon icon="lucide:link" /></ToggleGroup.Item
@@ -664,19 +686,45 @@
 
 <!-- ─── Mention Menu (hidden by default, shown by Tippy.js) ──────── -->
 {#if enableMentions && !isInput}
-	<div bind:this={mentionMenuRef} class="hidden">
+	<div bind:this={refs.mentionMenu} class="hidden">
 		<MentionTreeMenu
 			items={mentionItems}
-			query={mentionQuery}
-			{mentionCommand}
-			isVisible={mentionMenuVisible}
-			onKeyHandlerReady={(handler) => (mentionKeyHandler = handler)}
+			query={mention.query}
+			mentionCommand={mention.command}
+			isVisible={mention.visible}
+			onKeyHandlerReady={(handler) => (mention.keyHandler = handler)}
 			onSelect={() => {
 				/* handled by ConfiguredMention */
 			}}
 		/>
 	</div>
 {/if}
+
+<!-- ─── Link dialog (app-surface dialog instead of a native prompt) ── -->
+<Dialog.Root bind:open={linkDialogOpen}>
+	<Dialog.Content class="max-w-sm">
+		<Dialog.Header>
+			<Dialog.Title>{t('misc.markdownInsertLink')}</Dialog.Title>
+		</Dialog.Header>
+		<Input
+			type="url"
+			placeholder="https://…"
+			bind:value={linkDraft}
+			onkeydown={(event: KeyboardEvent) => {
+				if (event.key === 'Enter') {
+					event.preventDefault();
+					applyLink();
+				}
+			}}
+		/>
+		<Dialog.Footer>
+			<Dialog.Close>{t('common.cancel')}</Dialog.Close>
+			<button type="button" class={buttonVariants()} onclick={() => applyLink()}>
+				{t('common.apply')}
+			</button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <style>
 	:global(.rich-text-editor-wrapper .tiptap) {

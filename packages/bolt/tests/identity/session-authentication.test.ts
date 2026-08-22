@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 import { fixtureUserId } from '../support/fixture-identity.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { Identity } from '../../src/runtime/identity/identity.js';
+import * as Identity from '../../src/runtime/identity/identity.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 
 let harness: BoltTestRuntime | undefined;
@@ -23,7 +23,7 @@ describe('session authentication', () => {
 		// to exist before a session can be started for them. That refusal is the point: the previous
 		// implementation would issue a live credential for any user id it was handed.
 		await harness.database.query(
-			`insert into bolt_auth_user ("norbital_id", "name", "tenantId") values (md5($1::text)::uuid, $1, 'test-tenant') on conflict ("norbital_id") do nothing`,
+			`insert into bolt_auth_user ("id", "name", "tenantId") values (md5($1::text)::uuid, $1, 'test-tenant') on conflict ("id") do nothing`,
 			['u1']
 		);
 		const subject = await harness.runtime.runPromise(
@@ -51,7 +51,7 @@ describe('session authentication', () => {
 	it('resolves an external subject whose email column is null', async () => {
 		harness = await makeBoltTestRuntime();
 		await harness.database.query(
-			`insert into bolt_team ("norbital_id", "name") values (md5('Platform'::text)::uuid, 'Platform')`,
+			`insert into bolt_team ("id", "name") values (md5('Platform'::text)::uuid, 'Platform')`,
 			[]
 		);
 		await harness.database.query(
@@ -79,7 +79,7 @@ describe('session authentication', () => {
 	it('carries the email through when the session row has one', async () => {
 		harness = await makeBoltTestRuntime();
 		await harness.database.query(
-			`with person as (insert into bolt_auth_user ("norbital_id", "name", "email", "tenantId") values (md5('u3'::text)::uuid, 'u3', 'ada@example.test', 'test-tenant') on conflict ("norbital_id") do update set "email" = excluded."email", "tenantId" = excluded."tenantId" returning "norbital_id" as id) insert into bolt_auth_session ("norbital_id", "token", "userId", "expiresAt") select gen_random_uuid(), 'token-u3', person.id, now() + interval '1 hour' from person`,
+			`with person as (insert into bolt_auth_user ("id", "name", "email", "tenantId") values (md5('u3'::text)::uuid, 'u3', 'ada@example.test', 'test-tenant') on conflict ("id") do update set "email" = excluded."email", "tenantId" = excluded."tenantId" returning "id" as id) insert into bolt_auth_session ("id", "token", "userId", "expiresAt") select gen_random_uuid(), 'token-u3', person.id, now() + interval '1 hour' from person`,
 			[]
 		);
 

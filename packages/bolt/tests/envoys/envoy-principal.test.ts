@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { envoy, policy, workspace } from '../../src/authoring/index.js';
+import { envoy, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
 import {
 	automationSubject,
@@ -53,7 +53,7 @@ describe('An envoy decides who answers, never what they may reach', () => {
 	 * The invariant, asserted from both directions.
 	 *
 	 * An envoy's declared policies are the complete answer to what any turn on it may reach. Matching
-	 * a sender to an account changes who the turn *is* — so that `${requestor.norbital_id}` narrows
+	 * a sender to an account changes who the turn *is* — so that `${requestor.id}` narrows
 	 * to their own rows — and must change nothing about capability. `policies` and `teamPath` are the
 	 * only fields `AccessControl` resolves authority from, which is why they are what this asserts on.
 	 */
@@ -225,57 +225,37 @@ describe('Transport identities recognise a sender without granting them anything
 		expect(canonicalTransportIdentity('telegram', '@alice')).toBe('alice'));
 });
 
-describe('The schema plan orders the identity column after the table it lands on', () => {
-	/**
-	 * `buildSchemaPlan` sorts every step by id, so an `alter table bolt_auth_user` step named
-	 * `bolt:…` would sort ahead of `collection:bolt_auth_user` — the step that creates the table —
-	 * and a fresh provision would fail on a relation that does not exist yet. The id is the ordering,
-	 * so the ordering is what this asserts.
-	 */
-	it('applies the channels column after bolt_auth_user is created', () => {
+describe('The schema plan builds the canonical greenfield schema', () => {
+	it('creates channels directly on bolt_auth_user', () => {
 		const steps = buildSchemaPlan(envoyWorkspace()).steps;
-		const table = steps.findIndex((step) => step.id === 'collection:bolt_auth_user');
-		const column = steps.findIndex(
-			(step) => step.id === 'collection:bolt_auth_user:column:channels'
+		expect(steps.find((step) => step.id === 'collection:bolt_auth_user')?.sql).toContain(
+			'"channels" jsonb'
 		);
-		expect(table).toBeGreaterThanOrEqual(0);
-		expect(column).toBeGreaterThan(table);
 	});
 
-	it('creates the column jsonb, matching what field.json renders', () => {
-		const steps = buildSchemaPlan(envoyWorkspace()).steps;
-		expect(
-			steps.find((step) => step.id === 'collection:bolt_auth_user:column:channels')?.sql
-		).toContain('channels jsonb');
-	});
-
-	/**
-	 * The rename runs before the creates, and that ordering is the whole of why it is safe.
-	 *
-	 * Every step is applied in lexical id order, so a `create table if not exists bolt_envoy_*` that
-	 * sorted first would win the race against the rename and leave an existing deployment with its
-	 * data in a table nothing reads any more, beside an empty new one.
-	 */
-	it('renames the channel tables before it would create the envoy ones', () => {
+	it('creates envoy tables without compatibility steps', () => {
 		const ids = buildSchemaPlan(envoyWorkspace()).steps.map(({ id }) => id);
-		const rename = ids.indexOf('bolt:envoy-0000-rename-from-channel');
-		expect(rename).toBeGreaterThanOrEqual(0);
-		for (const created of ['bolt:envoy-registrations', 'bolt:envoy-receipts', 'bolt:envoy-inbound'])
-			expect(ids.indexOf(created)).toBeGreaterThan(rename);
+		expect(ids.some((id) => id.includes('rename-from-channel'))).toBe(false);
+		for (const created of [
+			'collection:bolt_envoy_registrations',
+			'collection:bolt_envoy_receipts',
+			'collection:bolt_envoy_inbound'
+		])
+			expect(ids).toContain(created);
 	});
 
 	/**
 	 * The two columns `conversation-selector.ts` has always read and nothing ever wrote.
 	 *
-	 * `bolt_conversations` carried neither, so `visibility` was always `undefined`, the group bucket
+	 * `chat_session` carried neither, so `visibility` was always `undefined`, the group bucket
 	 * was permanently empty, and a public envoy's threads never reached the admin inbox they were
 	 * routed to. A default of `personal` *is* the backfill: every conversation that already exists is
 	 * a web-agent one.
 	 */
-	it('adds visibility and envoy_key to bolt_conversations, defaulting to personal', () => {
+	it('creates visibility and envoy_key on chat_session, defaulting to personal', () => {
 		const steps = buildSchemaPlan(envoyWorkspace()).steps;
-		const sql = steps.find(({ id }) => id === 'bolt:agent-conversations-visibility')?.sql ?? '';
-		expect(sql).toContain("visibility text not null default 'personal'");
-		expect(sql).toContain('envoy_key text');
+		const sql = steps.find(({ id }) => id === 'collection:chat_session')?.sql ?? '';
+		expect(sql).toContain('"visibility" text default \'personal\' not null');
+		expect(sql).toContain('"envoy_key" text');
 	});
 });

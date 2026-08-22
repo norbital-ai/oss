@@ -2,27 +2,36 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Effect } from 'effect';
-import { getTableColumns, sql } from 'drizzle-orm';
-import { boltAuthUser } from '../runtime/identity/auth-tables.js';
+import { Effect, Result, Schema } from 'effect';
+import { getColumns, sql } from 'drizzle-orm';
+import { AUTH_MODELS, SYSTEM_MODEL_TABLES } from '../authoring/system-models.js';
 import {
-	customType,
+	check,
 	foreignKey,
 	index,
-	integer,
-	pgTable,
-	timestamp,
 	uniqueIndex,
-	uuid,
-	type AnyPgColumnBuilder,
 	type ExtraConfigColumn,
-	type PgTable
+	type PgTable,
+	type PgTableExtraConfigValue
 } from 'drizzle-orm/pg-core';
-import { generateDrizzleJson, generateMigration } from 'drizzle-kit/api-postgres';
+import { generateDrizzleJson, generateMigration, up } from 'drizzle-kit/api-postgres';
 import { collectionSearchTrigramIndexName } from '@norbital-ai/std/collection';
-import { describeModelColumns, searchableColumns } from '../authoring/model-introspection.js';
-import type { ModelDeclaration, ModelIndex } from '../authoring/models-schema.js';
-import type { RelationDefinition, WorkspaceMigrationEntry } from '../authoring/workspace-schema.js';
+import {
+	compileModelTable,
+	describeModelColumns,
+	searchableColumns
+} from '../authoring/model-introspection.js';
+import {
+	referenceDatabaseIdentifier,
+	type AnyModelFieldBuilder,
+	type ModelDeclaration,
+	type ModelIndex
+} from '../authoring/models-schema.js';
+import type {
+	FieldDefinition,
+	RelationDefinition,
+	WorkspaceMigrationEntry
+} from '../authoring/workspace-schema.js';
 import { extractRelationships } from './model-fields.js';
 import { collectionIndexName } from './schema-plan.js';
 import { STATEMENT_BREAKPOINT, discoverAuthoredSource } from './sync.js';
@@ -35,11 +44,8 @@ import { STATEMENT_BREAKPOINT, discoverAuthoredSource } from './sync.js';
  * Migration is a *difference* between two shapes, and Drizzle already models both halves — authored
  * models are Drizzle column builders, and drizzle-kit can serialise a schema to a snapshot and diff
  * two snapshots into DDL.
- *
- * The diff runs in this process through `drizzle-kit/api-postgres`. The legacy generator wrote a
- * throwaway config file and shelled out to `drizzle-kit generate`; Bolt may not even import
- * `node:child_process` (see `quality/audit.ts`), and the subprocess bought nothing but a TTY prompt
- * that could not be answered in CI.
+ * The diff runs in this process through `drizzle-kit/api-postgres`; generation is deterministic and
+ * has no subprocess or interactive prompt.
  */
 
 /** drizzle-kit's own snapshot shape, taken from the function that produces it rather than restated. */
@@ -54,53 +60,84 @@ export type WorkspaceSnapshot = Awaited<ReturnType<typeof generateDrizzleJson>>;
 export type WorkspaceMigration = WorkspaceMigrationEntry &
 	Readonly<{ readonly snapshot: WorkspaceSnapshot }>;
 
-/**
- * The columns every collection table carries.
- *
- * The same six `schema-plan.ts` writes into its `create table if not exists`, because the plan and
- * this generator create the same tables and a database gets whichever ran first. They are kept in
- * step by `SYSTEM_COLUMN_DEFINITIONS` there and this list here saying the same thing; the tests in
- * `tests/compiler/schema-migrations.test.ts` are what hold the two to it.
- *
- * Rebuilt per table because a Drizzle column builder is mutable and carries the name it was bound
- * under.
- */
-const systemColumns = (): Readonly<Record<string, AnyPgColumnBuilder>> => ({
-	norbital_id: uuid().primaryKey().defaultRandom(),
-	norbital_created_at: timestamp({ withTimezone: true }).defaultNow(),
-	norbital_updated_at: timestamp({ withTimezone: true }).defaultNow(),
-	norbital_sys_period: customType<{ data: string; driverData: string }>({
-		dataType: () => 'tstzrange'
-	})()
-		.notNull()
-		.default(sql`tstzrange(CURRENT_TIMESTAMP, NULL, '[)')`),
-	norbital_row_version: integer().default(1),
-	norbital_approval_id: uuid()
-});
-
 /** Renders one authored index declaration as the Drizzle index the snapshot compares against. */
 const authoredIndex = (
 	collectionName: string,
 	self: Readonly<Record<string, ExtraConfigColumn>>,
-	declaration: ModelIndex
-) => {
-	const members = declaration.columns.map((member) => {
-		if (typeof member !== 'string') return sql.raw(member.expr);
+	declaration: ModelIndex,
+	fields: Readonly<Record<string, FieldDefinition>>
+): Array<PgTableExtraConfigValue> => {
+	type Variant = Readonly<{
+		readonly members: ReadonlyArray<
+			ExtraConfigColumn | ReturnType<ExtraConfigColumn['op']> | ReturnType<typeof sql.raw>
+		>;
+		readonly predicates: ReadonlyArray<ReturnType<typeof sql>>;
+		readonly tags: ReadonlyArray<string>;
+	}>;
+	let variants: ReadonlyArray<Variant> = [{ members: [], predicates: [], tags: [] }];
+	for (const member of declaration.columns) {
+		if (typeof member !== 'string') {
+			variants = variants.map((variant) => ({
+				...variant,
+				members: [...variant.members, sql.raw(member.expr)]
+			}));
+			continue;
+		}
+		const reference = fields[member]?.reference;
+		if (reference !== undefined) {
+			if (declaration.opclass?.[member] !== undefined)
+				throw new Error(
+					`Index on "${collectionName}.${member}" cannot apply one operator class to every reference arm.`
+				);
+			variants = variants.flatMap((variant) =>
+				reference.targets.map((target) => {
+					const column = self[target.storageColumn];
+					if (column === undefined)
+						throw new Error(
+							`Unknown reference index column "${collectionName}.${target.storageColumn}"`
+						);
+					return {
+						members: [...variant.members, column],
+						predicates: [...variant.predicates, sql`${column} is not null`],
+						tags: [...variant.tags, target.tag.toLowerCase()]
+					};
+				})
+			);
+			continue;
+		}
 		const column = self[member];
 		if (column === undefined) throw new Error(`Unknown index column "${collectionName}.${member}"`);
 		const opclass = declaration.opclass?.[member];
-		return opclass === undefined ? column : column.op(opclass);
+		variants = variants.map((variant) => ({
+			...variant,
+			members: [...variant.members, opclass === undefined ? column : column.op(opclass)]
+		}));
+	}
+	return variants.map((variant) => {
+		const [first, ...rest] = variant.members;
+		if (first === undefined)
+			throw new Error(`Index on "${collectionName}" must declare at least one column`);
+		const name =
+			variant.tags.length === 0
+				? declaration.name
+				: referenceDatabaseIdentifier(
+						declaration.name ??
+							`${collectionName}_${declaration.columns
+								.map((column) => (typeof column === 'string' ? column : 'expression'))
+								.join('_')}_${declaration.unique === true ? 'uidx' : 'idx'}`,
+						...variant.tags
+					);
+		const builder = declaration.unique === true ? uniqueIndex(name) : index(name);
+		const built =
+			declaration.method === undefined
+				? builder.on(first, ...rest)
+				: builder.using(declaration.method, first, ...rest);
+		const predicates = [
+			...(declaration.where === undefined ? [] : [sql.raw(declaration.where)]),
+			...variant.predicates
+		];
+		return predicates.length === 0 ? built : built.where(sql.join(predicates, sql` and `));
 	});
-	const [first, ...rest] = members;
-	if (first === undefined)
-		throw new Error(`Index on "${collectionName}" must declare at least one column`);
-	const builder =
-		declaration.unique === true ? uniqueIndex(declaration.name) : index(declaration.name);
-	const built =
-		declaration.method === undefined
-			? builder.on(first, ...rest)
-			: builder.using(declaration.method, first, ...rest);
-	return declaration.where === undefined ? built : built.where(sql.raw(declaration.where));
 };
 
 /**
@@ -117,11 +154,17 @@ const authoredIndex = (
  */
 const declaredIndexes = (
 	collectionName: string,
-	columns: Readonly<Record<string, AnyPgColumnBuilder>>,
+	columns: Readonly<Record<string, AnyModelFieldBuilder>>,
 	self: Readonly<Record<string, ExtraConfigColumn>>
 ) =>
 	Object.entries(describeModelColumns(columns))
-		.filter(([, field]) => field.indexed)
+		.filter(
+			([, field]) =>
+				field.indexed &&
+				field.primaryKey !== true &&
+				field.unique !== true &&
+				field.reference === undefined
+		)
 		.map(([columnName]) => columnName)
 		.toSorted()
 		.map((columnName) => {
@@ -145,7 +188,7 @@ const declaredIndexes = (
  */
 const searchIndexes = (
 	collectionName: string,
-	columns: Readonly<Record<string, AnyPgColumnBuilder>>,
+	columns: Readonly<Record<string, AnyModelFieldBuilder>>,
 	self: Readonly<Record<string, ExtraConfigColumn>>
 ) =>
 	searchableColumns(describeModelColumns(columns)).map((columnName) => {
@@ -157,6 +200,69 @@ const searchIndexes = (
 			column.op('gin_trgm_ops')
 		);
 	});
+
+/** Exclusive-arc constraints and per-arm indexes for every logical polymorphic reference. */
+const referenceEntities = (
+	collectionName: string,
+	columns: Readonly<Record<string, AnyModelFieldBuilder>>,
+	self: Readonly<Record<string, ExtraConfigColumn>>,
+	tables: Readonly<Record<string, PgTable>>
+): Array<PgTableExtraConfigValue> => {
+	const entities: Array<PgTableExtraConfigValue> = [];
+	for (const [fieldName, field] of Object.entries(describeModelColumns(columns))) {
+		const reference = field.reference;
+		if (reference === undefined) continue;
+		if (field.required && reference.onDelete === 'set null')
+			throw new TypeError(
+				`Required reference "${collectionName}.${fieldName}" cannot use ON DELETE SET NULL.`
+			);
+		const arms = reference.targets.map((target) => {
+			const column = self[target.storageColumn];
+			if (column === undefined)
+				throw new Error(
+					`Reference "${collectionName}.${fieldName}" is missing generated column "${target.storageColumn}".`
+				);
+			return { ...target, column };
+		});
+		const count = sql`num_nonnulls(${sql.join(
+			arms.map((arm) => arm.column),
+			sql`, `
+		)})`;
+		entities.push(
+			check(
+				referenceDatabaseIdentifier(collectionName, fieldName, 'reference', 'check'),
+				field.required ? sql`${count} = 1` : sql`${count} <= 1`
+			)
+		);
+		for (const arm of arms) {
+			const targetTable = tables[arm.collection];
+			const targetId = targetTable === undefined ? undefined : getColumns(targetTable).id;
+			if (targetId === undefined)
+				throw new Error(
+					`Reference "${collectionName}.${fieldName}" targets undeclared collection "${arm.collection}".`
+				);
+			const constraint = foreignKey({
+				columns: [arm.column],
+				foreignColumns: [targetId],
+				name: referenceDatabaseIdentifier(collectionName, fieldName, arm.tag.toLowerCase(), 'fk')
+			});
+			entities.push(constraint.onDelete(reference.onDelete));
+			const indexName = referenceDatabaseIdentifier(
+				collectionName,
+				fieldName,
+				arm.tag.toLowerCase(),
+				'ref',
+				'idx'
+			);
+			entities.push(
+				(field.unique === true ? uniqueIndex(indexName) : index(indexName))
+					.on(arm.column)
+					.where(sql`${arm.column} is not null`)
+			);
+		}
+	}
+	return entities;
+};
 
 /**
  * The `one` relation endpoints that become foreign keys, keyed by the collection that holds the key.
@@ -196,20 +302,9 @@ const authoredForeignKey = (
 		);
 	}
 	const column = self[from.column];
-	/**
-	 * Relations name a database column; `getTableColumns` is keyed by the Drizzle property.
-	 *
-	 * For a workspace collection the two are the same string, so the direct lookup is right and cheap.
-	 * Identity is the exception, and deliberately so: Better Auth requires a model with `id`, while a
-	 * Bolt collection is keyed by `norbital_id`, and one table satisfies both only because Drizzle
-	 * names the property and the column separately. A relation pointing at `user.norbital_id` — which
-	 * is what every other collection is pointed at by — would otherwise find nothing, because the
-	 * property there is called `id`.
-	 */
-	const targetColumns = getTableColumns(target);
-	const foreignColumn =
-		targetColumns[to.column] ??
-		Object.values(targetColumns).find((candidate) => candidate.name === to.column);
+	/** Relations name the same application property and database column on every compiled model. */
+	const targetColumns = getColumns(target);
+	const foreignColumn = targetColumns[to.column];
 	if (column === undefined || foreignColumn === undefined) {
 		throw new Error(`Relation "${relation.name}" names a column no collection declares`);
 	}
@@ -233,7 +328,9 @@ const authoredForeignKey = (
  * `user` collection wrapping it: the auth provider *is* the user, and a second table claiming to
  * describe the same people is the arrangement identity was moved into bolt to remove.
  */
-const REFERENCE_ONLY_TABLES: Readonly<Record<string, PgTable>> = { user: boltAuthUser };
+const REFERENCE_ONLY_TABLES: Readonly<Record<string, PgTable>> = {
+	user: SYSTEM_MODEL_TABLES[AUTH_MODELS.user]
+};
 
 /**
  * The Drizzle tables a workspace's authored models describe, as drizzle-kit serialises them.
@@ -251,12 +348,13 @@ export const workspaceMigrationTables = (
 	const tables: Record<string, PgTable> = {};
 	const targets: Record<string, PgTable> = { ...REFERENCE_ONLY_TABLES };
 	for (const [name, model] of Object.entries(models)) {
-		const table = pgTable(name, { ...systemColumns(), ...model.columns }, (self) => [
-			...(model.metadata?.indexes ?? []).map((declaration) =>
-				authoredIndex(name, self, declaration)
+		const table = compileModelTable(name, model, (self) => [
+			...(model.metadata?.indexes ?? []).flatMap((declaration) =>
+				authoredIndex(name, self, declaration, describeModelColumns(model.columns))
 			),
 			...declaredIndexes(name, model.columns, self),
 			...searchIndexes(name, model.columns, self),
+			...referenceEntities(name, model.columns, self, targets),
 			// Read when Drizzle asks for the table config rather than now, so a relation may point at a
 			// collection declared later in the same pass.
 			...(byCollection.get(name) ?? []).map((relation) =>
@@ -273,6 +371,15 @@ export const workspaceMigrationTables = (
 export const migrationTag = (name: string, at = new Date()): string =>
 	`${at.toISOString().replace(/[-:T]/g, '').slice(0, 14)}_${name}`;
 
+/** The plan input: what the workspace authored, the lineage's previous snapshot, and what to name it. */
+type WorkspaceMigrationPlanInput = Readonly<{
+	readonly models: Readonly<Record<string, ModelDeclaration>>;
+	readonly relations: ReadonlyArray<RelationDefinition>;
+	readonly previous: WorkspaceSnapshot | undefined;
+	readonly name?: string;
+	readonly at?: Date;
+}>;
+
 /**
  * Diffs the authored models against the previous snapshot and returns the migration, or `undefined`
  * when the two already agree.
@@ -281,13 +388,7 @@ export const migrationTag = (name: string, at = new Date()): string =>
  * cache: the legacy path kept one to avoid paying for a subprocess, and a cache that disagrees with
  * the schema is how a changed column reaches the client with no migration behind it.
  */
-export const planWorkspaceMigration = (input: {
-	readonly models: Readonly<Record<string, ModelDeclaration>>;
-	readonly relations: ReadonlyArray<RelationDefinition>;
-	readonly previous: WorkspaceSnapshot | undefined;
-	readonly name?: string;
-	readonly at?: Date;
-}) =>
+export const planWorkspaceMigration = (input: WorkspaceMigrationPlanInput) =>
 	Effect.gen(function* () {
 		const tables = workspaceMigrationTables(input.models, input.relations);
 		// The previous snapshot is used whole. It used to be filtered to the tables the current models
@@ -303,6 +404,21 @@ export const planWorkspaceMigration = (input: {
 		if (statements.length === 0) return undefined;
 		return { tag: migrationTag(input.name ?? 'auto', input.at), statements, snapshot };
 	});
+
+/**
+ * Compiles one host-owned model through the same Drizzle diff that owns workspace table DDL.
+ *
+ * Host control data does not join the workspace definition, sync, policies, or approvals. It still
+ * needs one model declaration and one table compiler, though: keeping a handwritten `CREATE TABLE`
+ * beside a `defineModel` would recreate the split schema path this compiler exists to remove.
+ */
+export const compileHostModelSchema = (name: string, model: ModelDeclaration) =>
+	planWorkspaceMigration({
+		models: { [name]: model },
+		relations: [],
+		previous: undefined,
+		name
+	}).pipe(Effect.map((migration) => migration?.statements ?? []));
 
 /**
  * Imports one authored `+model.ts` for its declaration.
@@ -324,17 +440,17 @@ const importModel = (modelFile: string) =>
 			)
 	}).pipe(
 		Effect.flatMap((module) => {
-			const declaration =
-				module !== null && typeof module === 'object' ? Reflect.get(module, 'default') : undefined;
-			if (
-				declaration === null ||
-				typeof declaration !== 'object' ||
-				Reflect.get(declaration, '__kind') !== 'model'
-			) {
+			const imported = Schema.decodeUnknownResult(Schema.Struct({ default: Schema.Unknown }))(
+				module
+			);
+			const declaration = Result.isSuccess(imported) ? imported.success.default : undefined;
+			if (!Schema.is(Schema.Struct({ __kind: Schema.Literal('model') }))(declaration)) {
 				return Effect.fail(
 					new Error(`${modelFile} does not default-export a defineModel() declaration`)
 				);
 			}
+			// The envelope is schema-checked above. Its columns are opaque Drizzle builder instances, so
+			// their generic witness is the one compile-time cast this dynamic-import boundary must retain.
 			return Effect.succeed(declaration as ModelDeclaration);
 		})
 	);
@@ -344,7 +460,7 @@ export const latestSnapshot = (migrationsRoot: string) =>
 	Effect.gen(function* () {
 		const entries = yield* Effect.tryPromise(() =>
 			readdir(migrationsRoot, { withFileTypes: true })
-		).pipe(Effect.catch(() => Effect.succeed([] as Array<Dirent>)));
+		).pipe(Effect.catch(() => Effect.succeed<Array<Dirent>>([])));
 		const tags = entries
 			.filter((entry) => entry.isDirectory())
 			.map((entry) => entry.name)
@@ -352,8 +468,21 @@ export const latestSnapshot = (migrationsRoot: string) =>
 		for (const tag of tags.toReversed()) {
 			const source = yield* Effect.tryPromise(() =>
 				readFile(join(migrationsRoot, tag, 'snapshot.json'), 'utf8')
-			).pipe(Effect.catch(() => Effect.succeed(undefined as string | undefined)));
-			if (source !== undefined) return JSON.parse(source) as WorkspaceSnapshot;
+			).pipe(Effect.catch(() => Effect.succeed<string | undefined>(undefined)));
+			if (source !== undefined) {
+				// The snapshot is a drizzle-kit JSON document; parse it through the JSON schema so a
+				// truncated file is a named failure of this read rather than a value the differ trusts.
+				const parsed = Schema.decodeUnknownSync(
+					Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))
+				)(source);
+				return yield* Effect.try({
+					try: () => up(parsed).snapshot,
+					catch: (cause) =>
+						new Error(`Could not read drizzle snapshot ${join(migrationsRoot, tag)}.`, {
+							cause
+						})
+				});
+			}
 		}
 		return undefined;
 	});
@@ -383,7 +512,7 @@ export const generateWorkspaceMigration = (workspaceRoot: string, name?: string)
 		}
 		const relationshipSource = yield* Effect.tryPromise(() =>
 			readFile(join(root, 'src', 'collections', '+relationship.ts'), 'utf8')
-		).pipe(Effect.catch(() => Effect.succeed(undefined as string | undefined)));
+		).pipe(Effect.catch(() => Effect.succeed<string | undefined>(undefined)));
 		const migration = yield* planWorkspaceMigration({
 			models,
 			relations: relationshipSource === undefined ? [] : extractRelationships(relationshipSource),

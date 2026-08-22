@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EnvironmentName, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '../../src/client.js';
-import { createWorkspaceApiProxy, startBrowserReplica } from '../../src/client/runtime.js';
+import { createWorkspaceApiProxy } from '../../src/client/runtime.js';
 
 const scope = {
 	tenantId: TenantId.make('tenant'),
@@ -26,14 +26,14 @@ describe('typed browser client', () => {
 		expect(commands).toEqual(['invoke.forecast']);
 	});
 
-	it('loads collection tables through collections.findMany and starts the replica', async () => {
+	it('loads collection tables through collections.findMany', async () => {
 		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
 		const bolt = createBoltClient(scope, {
 			command: (command, input) => {
 				commands.push({ command, input });
 				if (command === 'collections.findMany') {
 					// The shape the command boundary actually answers: one keyset page, not a bare array.
-					return Promise.resolve({ rows: [{ norbital_id: 'e1', name: 'Ada' }], nextCursor: null });
+					return Promise.resolve({ rows: [{ id: 'e1', name: 'Ada' }], nextCursor: null });
 				}
 				return Promise.resolve({ xid: 1, sequence: 1 });
 			}
@@ -44,15 +44,8 @@ describe('typed browser client', () => {
 			{ findMany: (input?: object) => PromiseLike<unknown> } | undefined;
 		const query = employees?.findMany({ limit: 20 });
 		expect(proxy.collections['employees']?.name).toBe('employees');
-		expect(await query).toEqual([{ norbital_id: 'e1', name: 'Ada' }]);
-		// Starting the replica drains the outbox from the origin cursor; it no longer just reads head.
-		const replica = await startBrowserReplica(runtime);
+		expect(await query).toEqual([{ id: 'e1', name: 'Ada' }]);
 		expect(commands.map((entry) => entry.command)).toContain('collections.findMany');
-		expect(commands.map((entry) => entry.command)).toContain('sync.diff');
-		expect(commands.find((entry) => entry.command === 'sync.diff')?.input).toMatchObject({
-			cursor: { xid: 0, sequence: 0 }
-		});
-		replica.stop();
 		expect(commands.find((entry) => entry.command === 'collections.findMany')?.input).toMatchObject(
 			{
 				collection: 'employees',

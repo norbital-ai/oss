@@ -1,10 +1,10 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import type { PolicyDeclaration, WorkspaceDefinition } from '../../authoring/workspace-schema.js';
-import { Database } from '../facilities/database.js';
-import { Workspace } from '../workspace.js';
-import type { Identity } from '../identity/identity.js';
-import { rateLimitWindowMillis, type RateLimitRule } from '../../authoring/rate-limits-schema.js';
+import type { PolicyDeclaration, WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import * as Workspace from '#lib/runtime/workspace.js';
+import type * as Identity from '#lib/runtime/identity/identity.js';
+import { rateLimitWindowMillis, type RateLimitRule } from '#lib/authoring/rate-limits-schema.js';
 
 /**
  * Everything a subject may call, as opposed to everything it may read.
@@ -29,8 +29,8 @@ export type RowPredicate = Readonly<{
 	readonly reason: string;
 	readonly sql: string;
 	readonly parameters: ReadonlyArray<Schema.Json>;
-	readonly fields?: ReadonlyArray<string>;
-	readonly approval?: Schema.Json;
+	readonly fields?: ReadonlyArray<string> | undefined;
+	readonly approval?: Schema.Json | undefined;
 }>;
 
 /**
@@ -45,6 +45,12 @@ export const unrestricted: RowPredicate = {
 	sql: 'true',
 	parameters: []
 };
+
+/** The `Schema.Json` predicate, built once: it is consulted for every clause and every approval value. */
+const isJson = Schema.is(Schema.Json);
+
+/** The `NonEmptyString` predicate, built once: it is evaluated for every team-tree row. */
+const isNonEmptyString = Schema.is(Schema.NonEmptyString);
 
 /** Carries access denied through the typed access failure channel without losing diagnostic context. */
 export class AccessDenied extends Schema.TaggedError<AccessDenied>()(
@@ -72,15 +78,6 @@ export class AccessDenied extends Schema.TaggedError<AccessDenied>()(
 export const isAdministrator = (subject: Identity.Subject): boolean => subject.admin === true;
 
 /**
- * Every `(team, policy)` pair already reported as unresolvable, so one stale name is one line.
- *
- * Module-scoped rather than per-request: this is read on the authorization path, which runs on every
- * command, and a workspace whose `+teams.ts` names a policy that no longer exists would otherwise
- * emit the same warning thousands of times a minute and bury everything else in the log.
- */
-const reportedStalePolicies = new Set<string>();
-
-/**
  * Every policy this subject holds, resolved against what the release actually declares.
  *
  * Two sources, one union, and one rule: **a holder names an array of policies; a subject's authority
@@ -98,13 +95,12 @@ const reportedStalePolicies = new Set<string>();
  * Refusing the request would take a workspace down over a stale string; granting it is unthinkable.
  * So the name is dropped — the subject holds the policies that do exist and none that do not — and
  * the runtime says so once, naming both halves so somebody can go and fix the map.
- *
- * The warning is `console.warn` rather than an Effect log because this is a synchronous predicate on
- * the authorization path. It reaches an operator: the isolate forwards guest output to the host.
  */
 export const policiesHeld = (
 	definition: WorkspaceDefinition,
-	subject: Identity.Subject
+	subject: Identity.Subject,
+	/** Layer-owned deduplication keeps one stale `(team, policy)` from burying authorization logs. */
+	reportedStalePolicies: Set<string> = new Set()
 ): ReadonlySet<string> => {
 	const held = new Set<string>();
 	const path = subject.teamPath ?? [];
@@ -129,8 +125,10 @@ export const policiesHeld = (
 		const key = `declaration:${policyName}`;
 		if (reportedStalePolicies.has(key)) continue;
 		reportedStalePolicies.add(key);
-		console.warn(
-			`[bolt.access] subject "${subject.userId}" names policy "${policyName}" directly, which this release does not declare — ignoring it.`
+		Effect.runSync(
+			Effect.logWarning(
+				`[bolt.access] subject "${subject.userId}" names policy "${policyName}" directly, which this release does not declare — ignoring it.`
+			)
 		);
 	}
 	for (const teamName of path) {
@@ -147,9 +145,11 @@ export const policiesHeld = (
 			const key = `${teamName}:${policyName}`;
 			if (reportedStalePolicies.has(key)) continue;
 			reportedStalePolicies.add(key);
-			console.warn(
-				`[bolt.access] team "${teamName}" names policy "${policyName}", which this release does not declare — ignoring it. ` +
-					`Either the policy was renamed or removed, or the team map in +teams.ts is stale.`
+			Effect.runSync(
+				Effect.logWarning(
+					`[bolt.access] team "${teamName}" names policy "${policyName}", which this release does not declare — ignoring it. ` +
+						`Either the policy was renamed or removed, or the team map in +teams.ts is stale.`
+				)
 			);
 		}
 	}
@@ -191,7 +191,8 @@ const PolicyEvaluation = {
 	): boolean => {
 		if (!PolicyEvaluation.subjectHasPolicy(policy, subject, held)) return false;
 		const grants = policy.grants ?? [];
-		if (grants.length > 0 && action === 'agent') return (policy.capabilities?.apps ?? []).length > 0;
+		if (grants.length > 0 && action === 'agent')
+			return (policy.capabilities?.apps ?? []).length > 0;
 		if (grants.length > 0)
 			return grants.some((grant) => grant.collection === resource && grant.action === action);
 		const actions = policy.actions ?? [];
@@ -202,7 +203,7 @@ const PolicyEvaluation = {
 		);
 	},
 	subjectValue: (subject: Identity.Subject, path: string): Schema.Json | undefined => {
-		if (path === 'requestor.norbital_id' || path === 'requestor.userId') return subject.userId;
+		if (path === 'requestor.id' || path === 'requestor.userId') return subject.userId;
 		if (path === 'requestor.tenantId') return subject.tenantId;
 		if (path === 'requestor.email') return subject.email;
 		return undefined;
@@ -238,13 +239,13 @@ export const decide = (
 /**
  * Tokens that expand to a *subquery* rather than to a bound value.
  *
- * `${requestor.norbital_id}` and its siblings are values: the compiler binds each as a parameter,
+ * `${requestor.id}` and its siblings are values: the compiler binds each as a parameter,
  * which is the only safe way to put an identity into SQL. A hierarchy is not a value — "everybody at
  * or below my team" is a set the database has to walk — so it cannot be expressed that way, and an
  * author trying to write it by hand would be hand-rolling a recursive CTE inside a policy string.
  *
  * **This exists because inheriting a policy is not inheriting its rows.** Descent gives a manager
- * every policy their reports hold, but a grant scoped `${requestor.norbital_id}` re-evaluates
+ * every policy their reports hold, but a grant scoped `${requestor.id}` re-evaluates
  * against whoever is asking — so the manager holding a report's self-scoped policy sees their *own*
  * records and nobody else's. The hierarchy has to enter the predicate, not just the policy set.
  *
@@ -273,16 +274,16 @@ export const decide = (
 const SCOPE_FRAGMENTS: Readonly<Record<string, string>> = {
 	'requestor.team_scope_users': `(
 		with recursive scope as (
-			select t."norbital_id" as id, 1 as depth
+			select t."id" as id, 1 as depth
 			  from bolt_team t
-			  join bolt_auth_user me on me."team_id" = t."norbital_id"
-			 where me."norbital_id"::text = $SUBJECT
+			  join bolt_auth_user me on me."team_id" = t."id"
+			 where me."id"::text = $SUBJECT
 			union all
-			select c."norbital_id", p.depth + 1
+			select c."id", p.depth + 1
 			  from bolt_team c join scope p on c."parent_id" = p.id
 			 where p.depth < 8
 		)
-		select u."norbital_id"::text from bolt_auth_user u where u."team_id" in (select id from scope)
+		select u."id"::text from bolt_auth_user u where u."team_id" in (select id from scope)
 	)`
 };
 
@@ -315,16 +316,16 @@ const approvalReadTerm = (
 	subject: Identity.Subject,
 	firstParameterIndex: number
 ): Readonly<{ sql: string; parameters: ReadonlyArray<Schema.Json> }> | undefined => {
-	const id = PolicyEvaluation.subjectValue(subject, 'requestor.norbital_id');
+	const id = PolicyEvaluation.subjectValue(subject, 'requestor.id');
 	if (id === undefined) return undefined;
 	const collectionParameter = `$${firstParameterIndex}`;
 	const subjectParameter = `$${firstParameterIndex + 1}`;
 	const sql =
-		'"norbital_id"::text in (' +
+		'"id"::text in (' +
 		'select approved."record_id" from approval_request approved ' +
 		`where approved."collection_name" = ${collectionParameter} ` +
 		'and approved."closed_at" is null ' +
-		'and approved."norbital_id"::text in (' +
+		'and approved."id"::text in (' +
 		'select approval.request_id from bolt_approvals approval ' +
 		'cross join lateral jsonb_array_elements(' +
 		"case when jsonb_typeof(approval.state #> '{operation,approval,steps}') = 'array' " +
@@ -336,8 +337,8 @@ const approvalReadTerm = (
 		') as approver(team_name) ' +
 		'where lower(team_name) = (' +
 		'select lower(subject_team."name") from bolt_auth_user subject_user ' +
-		'join bolt_team subject_team on subject_team."norbital_id" = subject_user."team_id" ' +
-		`where subject_user."norbital_id"::text = ${subjectParameter}` +
+		'join bolt_team subject_team on subject_team."id" = subject_user."team_id" ' +
+		`where subject_user."id"::text = ${subjectParameter}` +
 		')))';
 	return { sql, parameters: [resource, id] };
 };
@@ -358,7 +359,7 @@ const compileWhereOwner = {
 				// number, never with the id itself.
 				const fragment = SCOPE_FRAGMENTS[path];
 				if (fragment !== undefined) {
-					const id = PolicyEvaluation.subjectValue(subject, 'requestor.norbital_id');
+					const id = PolicyEvaluation.subjectValue(subject, 'requestor.id');
 					if (id === undefined) return '(select null where false)';
 					parameters.push(id);
 					return fragment.replaceAll('$SUBJECT', `$${parameters.length}`);
@@ -378,7 +379,7 @@ const compileWhereOwner = {
 					? PolicyEvaluation.subjectValue(subject, value.slice(2, -1))
 					: value;
 			if (resolved === undefined) return ['false'];
-			parameters.push(Schema.is(Schema.Json)(resolved) ? resolved : String(resolved));
+			parameters.push(isJson(resolved) ? resolved : String(resolved));
 			return [`"${field.replaceAll('"', '""')}" = $${parameters.length}`];
 		});
 		return { sql: clauses.length === 0 ? 'true' : clauses.join(' and '), parameters };
@@ -426,10 +427,8 @@ const rowPredicate = (
 			reason: 'matching authored grant',
 			sql: 'true',
 			parameters: [],
-			...(fields.length === 0 ? {} : { fields: [...new Set(fields)] }),
-			...(approval === undefined
-				? {}
-				: { approval: Schema.is(Schema.Json)(approval) ? approval : String(approval) })
+			fields: fields.length === 0 ? undefined : [...new Set(fields)],
+			approval: approval === undefined ? undefined : isJson(approval) ? approval : String(approval)
 		};
 	}
 	const parameters: Array<Schema.Json> = [];
@@ -455,10 +454,8 @@ const rowPredicate = (
 		reason: 'matching authored grant',
 		sql,
 		parameters,
-		...(fields.length === 0 ? {} : { fields: [...new Set(fields)] }),
-		...(approval === undefined
-			? {}
-			: { approval: Schema.is(Schema.Json)(approval) ? approval : String(approval) })
+		fields: fields.length === 0 ? undefined : [...new Set(fields)],
+		approval: approval === undefined ? undefined : isJson(approval) ? approval : String(approval)
 	};
 };
 
@@ -495,15 +492,15 @@ export type ImpersonationTeam = Readonly<{ readonly id: string; readonly name: s
  * it simply never returns.
  */
 const TEAM_TREE_LOOKUP_SQL = `with recursive tree as (
-	select "norbital_id" as id, "name", 1 as depth from bolt_team where "norbital_id" = $1::uuid
+	select "id" as id, "name", 1 as depth from bolt_team where "id" = $1::uuid
 	union all
-	select c."norbital_id", c."name", p.depth + 1
+	select c."id", c."name", p.depth + 1
 	  from bolt_team c join tree p on c."parent_id" = p.id
 	 where p.depth < 8
 )
 select "name" from tree order by depth`;
 
-const TEAM_LOOKUP_SQL = `select "norbital_id"::text as id, "name"
+const TEAM_LOOKUP_SQL = `select "id"::text as id, "name"
 	from bolt_team
 	where $1::text is null or lower("name") = lower($1::text)
 	order by "name"`;
@@ -518,6 +515,22 @@ const TEAM_LOOKUP_SQL = `select "norbital_id"::text as id, "name"
  * and the role ladder holds only roles a workspace actually declares.
  */
 const mayImpersonate = (actor: Identity.Subject): boolean => isAdministrator(actor);
+
+/**
+ * Merges one rule into a pattern's bucket: the more permissive wins.
+ *
+ * Keyed by the bucket's key, so two policies naming `envoys.receive` — one per sender, one per
+ * subject — compose into both rather than one winning. "More permissive" is admissions per
+ * millisecond, so a comparison between different windows is still a comparison of the same quantity.
+ */
+const mergeLimitRule = (
+	byKey: Map<string, RateLimitRule>,
+	rule: RateLimitRule,
+	rate: (rule: RateLimitRule) => number
+): void => {
+	const existing = byKey.get(rule.key);
+	if (existing === undefined || rate(rule) > rate(existing)) byKey.set(rule.key, rule);
+};
 
 export type Interface = Readonly<{
 	readonly authorize: (
@@ -582,7 +595,7 @@ export type Interface = Readonly<{
 	readonly resolveScope: (subject: Identity.Subject) => {
 		readonly tenantId: string;
 		readonly userId: string;
-		readonly team?: string;
+		readonly team: string | null;
 		readonly teamPath: ReadonlyArray<string>;
 	};
 	readonly predicate: (subject: Identity.Subject, action: string, resource: string) => RowPredicate;
@@ -603,6 +616,7 @@ export const layer = Layer.effect(
 	Effect.gen(function* () {
 		const workspace = yield* Workspace.Service;
 		const database = yield* Database.Service;
+		const reportedStalePolicies = new Set<string>();
 		/**
 		 * The policies this subject's team confers, resolved once per question.
 		 *
@@ -611,7 +625,7 @@ export const layer = Layer.effect(
 		 * this whole seam exists to prevent.
 		 */
 		const held = (subject: Identity.Subject): ReadonlySet<string> =>
-			policiesHeld(workspace.definition, subject);
+			policiesHeld(workspace.definition, subject, reportedStalePolicies);
 		const authorize = Effect.fn('AccessControl.authorize')(function* (
 			subject: Identity.Subject,
 			action: string,
@@ -664,11 +678,11 @@ export const layer = Layer.effect(
 				sql: TEAM_TREE_LOOKUP_SQL,
 				parameters: [Reflect.get(row, 'id')]
 			});
-			const path = descendants.rows
-				.map((entry) =>
-					entry !== null && typeof entry === 'object' ? Reflect.get(entry, 'name') : undefined
-				)
-				.filter((entry): entry is string => typeof entry === 'string');
+			const path = descendants.rows.flatMap((entry): ReadonlyArray<string> => {
+				const name =
+					entry !== null && typeof entry === 'object' ? Reflect.get(entry, 'name') : undefined;
+				return isNonEmptyString(name) ? [name] : [];
+			});
 			return { name: teamName, path: path.length === 0 ? [teamName] : path };
 		});
 		const subjectAsTeam = Effect.fn('AccessControl.subjectAsTeam')(function* (
@@ -728,7 +742,7 @@ export const layer = Layer.effect(
 			resolveScope: ({ tenantId, userId, teamPath }) => ({
 				tenantId,
 				userId,
-				...(teamPath[0] === undefined ? {} : { team: teamPath[0] }),
+				team: teamPath[0] ?? null,
 				teamPath
 			}),
 			predicate: (subject, action, resource) =>
@@ -785,12 +799,7 @@ export const layer = Layer.effect(
 					if (!PolicyEvaluation.subjectHasPolicy(policy, subject, holds)) continue;
 					for (const [pattern, rules] of Object.entries(policy.limits ?? {})) {
 						const byKey = merged.get(pattern) ?? new Map<string, RateLimitRule>();
-						// Keyed by the bucket's key, so two policies naming `envoys.receive` — one per
-						// sender, one per subject — compose into both rather than one winning.
-						for (const rule of rules) {
-							const existing = byKey.get(rule.key);
-							if (existing === undefined || rate(rule) > rate(existing)) byKey.set(rule.key, rule);
-						}
+						for (const rule of rules) mergeLimitRule(byKey, rule, rate);
 						merged.set(pattern, byKey);
 					}
 				}
@@ -826,12 +835,11 @@ export const layer = Layer.effect(
 					})
 					.pipe(
 						Effect.map((result) =>
-							result.rows
-								.map((row) =>
-									row !== null && typeof row === 'object' ? Reflect.get(row, 'name') : undefined
-								)
-								.filter((name): name is string => typeof name === 'string')
-								.map((name) => ({ id: name, name }))
+							result.rows.flatMap((row): ReadonlyArray<ImpersonationTeam> => {
+								const name =
+									row !== null && typeof row === 'object' ? Reflect.get(row, 'name') : undefined;
+								return isNonEmptyString(name) ? [{ id: name, name }] : [];
+							})
 						)
 					),
 			mayImpersonate,
@@ -874,5 +882,3 @@ export const layer = Layer.effect(
 		});
 	})
 );
-
-export * as AccessControl from './access-control.js';

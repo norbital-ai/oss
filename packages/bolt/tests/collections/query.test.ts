@@ -6,12 +6,11 @@ import {
 	compileOrderTerms,
 	compileWhere,
 	renderOrderBy,
-	type CompiledQuery,
 	type WhereContext
 } from '../../src/runtime/collections/where.js';
 
 /** Unwraps a where compilation the test expects to succeed. */
-const whereSql = (where: unknown, context: WhereContext): CompiledQuery => {
+const whereSql = (where: unknown, context: WhereContext) => {
 	const result = compileWhere(where, context);
 	if (Result.isFailure(result)) throw new Error(`compileWhere failed: ${result.failure.message}`);
 	return result.success;
@@ -37,7 +36,7 @@ const context = (collection: string, extras: Partial<WhereContext> = {}): WhereC
 			target: 'employees',
 			cardinality: 'one',
 			from: { collection: 'employments', column: 'employee_id' },
-			to: { collection: 'employees', column: 'norbital_id' }
+			to: { collection: 'employees', column: 'id' }
 		}
 	],
 	collections: ['companies', 'employees', 'employments'],
@@ -65,19 +64,17 @@ describe('Collections query owner', () => {
 	it('escapes identifier quotes', () => expect(quoteIdentifier('a"b')).toBe('"a""b"'));
 
 	it('compiles isNull against a system column', () => {
-		const compiled = whereSql({ norbital_approval_id: { isNull: true } }, context('companies'));
-		expect(compiled.sql).toBe('"companies"."norbital_approval_id" is null');
+		const compiled = whereSql({ approval_id: { isNull: true } }, context('companies'));
+		expect(compiled.sql).toBe('"companies"."approval_id" is null');
 		expect(compiled.parameters).toEqual([]);
 	});
 
 	it('compiles eq AND isNull as a conjunction', () => {
 		const compiled = whereSql(
-			{ name: { eq: 'Acme' }, norbital_approval_id: { isNull: true } },
+			{ name: { eq: 'Acme' }, approval_id: { isNull: true } },
 			context('companies')
 		);
-		expect(compiled.sql).toBe(
-			'"companies"."name" = $1 AND "companies"."norbital_approval_id" is null'
-		);
+		expect(compiled.sql).toBe('"companies"."name" = $1 AND "companies"."approval_id" is null');
 		expect(compiled.parameters).toEqual(['Acme']);
 	});
 
@@ -92,9 +89,9 @@ describe('Collections query owner', () => {
 		expect(compiled.parameters).toEqual(['2026-08-15T16:00:00.000Z']);
 	});
 
-	it('maps norbital_id to the persisted id column', () => {
-		const compiled = whereSql({ norbital_id: { eq: 'seed-company' } }, context('companies'));
-		expect(compiled.sql).toBe('"companies"."norbital_id" = $1');
+	it('maps id to the persisted id column', () => {
+		const compiled = whereSql({ id: { eq: 'seed-company' } }, context('companies'));
+		expect(compiled.sql).toBe('"companies"."id" = $1');
 		expect(compiled.parameters).toEqual(['seed-company']);
 	});
 
@@ -102,14 +99,14 @@ describe('Collections query owner', () => {
 		const compiled = whereSql(
 			{
 				employment_employee: {
-					norbital_approval_id: { isNull: true },
+					approval_id: { isNull: true },
 					company_id: { eq: 'seed-company' }
 				}
 			},
 			context('employees')
 		);
 		expect(compiled.sql).toBe(
-			'exists (select 1 from "employments" where "employments"."employee_id" = "employees"."norbital_id" AND ("employments"."norbital_approval_id" is null AND "employments"."company_id" = $1))'
+			'exists (select 1 from "employments" where "employments"."employee_id" = "employees"."id" AND ("employments"."approval_id" is null AND "employments"."company_id" = $1))'
 		);
 		expect(compiled.parameters).toEqual(['seed-company']);
 	});
@@ -120,7 +117,7 @@ describe('Collections query owner', () => {
 			context('employees', { relations: [] })
 		);
 		expect(compiled.sql).toContain('exists (select 1 from "employments"');
-		expect(compiled.sql).toContain('"employments"."employee_id" = "employees"."norbital_id"');
+		expect(compiled.sql).toContain('"employments"."employee_id" = "employees"."id"');
 		expect(compiled.parameters).toEqual(['seed-company']);
 	});
 
@@ -137,10 +134,10 @@ describe('Collections query owner', () => {
 
 	it('binds a Date operand as a UTC instant', () => {
 		const compiled = whereSql(
-			{ norbital_created_at: { gte: new Date('2026-01-01T00:00:00.000Z') } },
+			{ created_at: { gte: new Date('2026-01-01T00:00:00.000Z') } },
 			context('companies')
 		);
-		expect(compiled.sql).toBe('"companies"."norbital_created_at" >= $1');
+		expect(compiled.sql).toBe('"companies"."created_at" >= $1');
 		expect(compiled.parameters).toEqual(['2026-01-01T00:00:00.000Z']);
 	});
 
@@ -151,6 +148,43 @@ describe('Collections query owner', () => {
 		const excluded = whereSql({ name: { notIn: ['Acme'] } }, context('companies'));
 		expect(excluded.sql).toBe('"companies"."name" not in ($1)');
 		expect(excluded.parameters).toEqual(['Acme']);
+	});
+
+	it('compiles polymorphic reference handles to their selected exclusive-arc arms', () => {
+		const referenceContext = context('payslip_sources', {
+			fields: {
+				source: {
+					type: 'reference',
+					required: true,
+					indexed: true,
+					unique: true,
+					reference: {
+						onDelete: 'restrict',
+						targets: [
+							{
+								tag: 'TIME_ENTRY',
+								collection: 'time_entries',
+								storageColumn: 'source__time_entry_id'
+							},
+							{
+								tag: 'LEAVE_REQUEST',
+								collection: 'leave_requests',
+								storageColumn: 'source__leave_request_id'
+							}
+						]
+					}
+				}
+			}
+		});
+		const id = '018f9f89-6cb2-7b3c-8fc8-832ea10c46d1';
+		expect(whereSql({ source: { eq: { kind: 'TIME_ENTRY', id } } }, referenceContext)).toEqual({
+			sql: '"payslip_sources"."source__time_entry_id" is not distinct from $1',
+			parameters: [id]
+		});
+		expect(whereSql({ source: { kind: { eq: 'LEAVE_REQUEST' } } }, referenceContext)).toEqual({
+			sql: '"payslip_sources"."source__leave_request_id" is not null',
+			parameters: []
+		});
 	});
 
 	it('answers an empty membership set as a constant instead of invalid SQL', () => {
@@ -204,13 +238,13 @@ describe('Collections query owner', () => {
 		// The tiebreaker is not decoration: keyset paging seeks past the last row's ordering tuple, so a
 		// sort that is not total repeats or skips rows at every page boundary.
 		expect(renderOrderBy(compileOrderTerms({ name: 'asc' }, context('companies')))).toBe(
-			' order by "name" asc, "norbital_id" asc'
+			' order by "name" asc, "id" asc'
 		);
 		expect(renderOrderBy(compileOrderTerms({ unknown: 'asc' }, context('companies')))).toBe(
-			' order by "norbital_id" asc'
+			' order by "id" asc'
 		);
-		expect(renderOrderBy(compileOrderTerms({ norbital_id: 'desc' }, context('companies')))).toBe(
-			' order by "norbital_id" desc'
+		expect(renderOrderBy(compileOrderTerms({ id: 'desc' }, context('companies')))).toBe(
+			' order by "id" desc'
 		);
 	});
 });

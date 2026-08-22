@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { AddressInfo } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { Effect, Schema } from 'effect';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -28,11 +28,11 @@ import {
 } from '../../src/authoring/workspace-schema.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
-import { Collections } from '../../src/runtime/collections/collections.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
-import type { Identity } from '../../src/runtime/identity/identity.js';
+import type * as Identity from '../../src/runtime/identity/identity.js';
 import { makeHttpConnectorBinding } from '../../src/runtime/integrations/http-connector.js';
-import { Integrations } from '../../src/runtime/integrations/integrations.js';
+import * as Integrations from '../../src/runtime/integrations/integrations.js';
 import { Secrets } from '../../src/runtime/secrets/secrets.js';
 import {
 	adminSubject,
@@ -134,7 +134,7 @@ afterAll(async () => {
  * ---------------------------------------------------------------------------------------------- */
 
 type Order = Readonly<{
-	readonly norbital_id: string;
+	readonly id: string;
 	readonly external_id: string;
 	readonly status: string;
 	readonly amount: number;
@@ -218,7 +218,9 @@ const definitionFor = (integrations: WorkspaceDefinition['integrations']): Works
 			})
 		],
 		apps: [],
-		policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+		policies: [
+			policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+		],
 		teams: {
 			admin: ['admin']
 		},
@@ -456,7 +458,8 @@ describe('a write queues a delivery and does not wait for it', () => {
 			{
 				userId: 'integration:orders.partner',
 				tenantId: 'system',
-				teamPath: ['admin'], policies: []
+				teamPath: ['admin'],
+				policies: []
 			}
 		);
 		expect(await outbox()).toEqual([]);

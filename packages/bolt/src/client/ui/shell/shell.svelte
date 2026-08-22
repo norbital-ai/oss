@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { onMount, tick, untrack } from 'svelte';
+	import { Effect, Result, Schema } from 'effect';
 	import { provideI18n, uiMessages, useI18n } from '@norbital-ai/ui/i18n';
 	import * as Sheet from '@norbital-ai/ui/sheet';
 	import { detectShortcutModifier, formatShortcut, shortcut } from '@norbital-ai/ui/keybindings';
@@ -16,21 +17,18 @@
 	import AgentChatPanel from '../agent/agent-chat-panel.svelte';
 	import { ThinkingOrb as NorbitalThinkingOrb } from '@norbital-ai/ui/thinking-orb';
 	import AgentTrigger from './agent-trigger.svelte';
-	import { requestAgentComposerFocus, type AgentComposerSeed } from '../agent/composer-chrome.js';
-	import { getAgentSurface } from '../agent/agent-activity-state.svelte.js';
-	import { agentOrbState, agentOrbStatusKey } from '../agent/agent-orb-state.js';
-	import { getAgentRuntime } from '../agent/client.js';
-	import { setBoltMentionCatalog } from '../agent/mention-catalog.js';
-	import { mergeBoltAgentMessages, type TenantMessageCatalogs } from '../agent/i18n.js';
+	import {
+		requestAgentComposerFocus,
+		type AgentComposerSeed
+	} from '#lib/client/ui/agent/composer-chrome.js';
+	import { useAgentClient } from '../agent/client.svelte.js';
+	import { agentOrbState, agentOrbStatusKey } from '#lib/client/ui/agent/agent-orb-state.js';
+	import { mergeBoltAgentMessages, type TenantMessageCatalogs } from '#lib/client/ui/agent/i18n.js';
 	import {
 		setAppHeaderActionsSlot,
 		type AppHeaderActionsSlot
 	} from './app-header-actions.svelte.js';
-	import {
-		setPlatformStateContext,
-		type PlatformEnvoy,
-		type PlatformState
-	} from '../state/platform.js';
+	import { setPlatformStateContext, type PlatformState } from '#lib/client/ui/state/platform.js';
 	import { CollectionTableNavigationSurface } from '@norbital-ai/ui/collection-table';
 	import BillingBanner from './billing-banner.svelte';
 	import OmniFinder from './omni-finder.svelte';
@@ -46,7 +44,7 @@
 		resolveWorkspaceOrganizationOptions,
 		WORKSPACE_SETTINGS_PATH,
 		type HostPlugin
-	} from './workspace-navigation.js';
+	} from '#lib/client/ui/shell/workspace-navigation.js';
 
 	let {
 		app = 'Bolt',
@@ -81,39 +79,41 @@
 		app?: string;
 		status?: 'starting' | 'syncing' | 'ready' | 'error';
 		offline?: boolean;
-		tenantMessages?: TenantMessageCatalogs;
-		organization?: { id: string; name: string; logoUrl?: string | null };
+		tenantMessages?: TenantMessageCatalogs | undefined;
+		organization?: { id: string; name: string; logoUrl?: string | null } | undefined;
 		organizations?: ReadonlyArray<{
 			readonly organizationId: string;
 			readonly organizationName: string;
 			readonly logoUrl: string | null;
 		}>;
-		user?: {
-			/**
-			 * The viewer's `norbital_id`, and the only thing a workspace can key its own rows by.
-			 *
-			 * Carried explicitly because the platform context published `norbital_id: user.name` —
-			 * the local part of an email address — and every authored query of the shape
-			 * `where: { user_id: { eq: user.norbital_id } }` therefore sent `'dion.neo'` to a `uuid`
-			 * column and failed with 22P02. It read as "could not load your profile", so the surface
-			 * had never worked for anybody, contractor or administrator.
-			 */
-			id: string;
-			name: string;
-			email: string;
-			role: string;
-			avatarUrl?: string | null;
-			teamLabels: string[];
-		};
+		user?:
+			| {
+					/**
+					 * The viewer's `id`, and the only thing a workspace can key its own rows by.
+					 *
+					 * Carried explicitly because the platform context published `id: user.name` —
+					 * the local part of an email address — and every authored query of the shape
+					 * `where: { user_id: { eq: user.id } }` therefore sent `'dion.neo'` to a `uuid`
+					 * column and failed with 22P02. It read as "could not load your profile", so the surface
+					 * had never worked for anybody, contractor or administrator.
+					 */
+					id: string;
+					name: string;
+					email: string;
+					role: string;
+					avatarUrl?: string | null;
+					teamLabels: string[];
+			  }
+			| undefined;
 		apps?: ReadonlyArray<
 			| string
 			| {
 					name: string;
 					label: string;
-					icon?: string;
-					description?: string | null;
-					banner?: string;
-					parent?: string;
+					icon?: string | undefined;
+					description?: string | null | undefined;
+					banner?: string | undefined;
+					parent?: string | undefined;
 			  }
 		>;
 		/**
@@ -130,7 +130,7 @@
 		 */
 		accessibleApps?: ReadonlyArray<string> | null;
 		current?: string;
-		path?: string;
+		path?: string | undefined;
 		/**
 		 * The live query string. The detail stack lives in `?stack=`, and `window.location.search` is
 		 * not reactive — without the host passing it, the detail surface never saw a record open.
@@ -151,22 +151,22 @@
 		 */
 		impersonation?: WorkspaceImpersonation | null;
 		/** Preview the workspace under one team's policy. The host owns storing and applying it. */
-		onImpersonate?: (teamId: string) => void | Promise<void>;
+		onImpersonate?: ((teamId: string) => void | Effect.Effect<void, unknown>) | undefined;
 		/** Return to the real subject. */
-		onStopImpersonating?: () => void | Promise<void>;
-		headerTitle?: string;
-		headerDescription?: string | null;
-		headerIcon?: string;
+		onStopImpersonating?: (() => void | Effect.Effect<void, unknown>) | undefined;
+		headerTitle?: string | undefined;
+		headerDescription?: string | null | undefined;
+		headerIcon?: string | undefined;
 		/** Authored `bolt:banner` image for the active app; the header renders flat without one. */
-		headerBanner?: string | null;
+		headerBanner?: string | null | undefined;
 		/** App-contributed header controls — the entity picker lands here rather than in its own bar. */
-		headerActions?: Snippet;
-		children?: Snippet;
-		onNavigate?: (href: string) => void;
-		onOrganizationChange?: (id: string) => void;
-		onSignOut?: () => void;
-		onSearch?: () => void;
-		onOpenRecord?: (target: { collectionName: string; recordId: string }) => void;
+		headerActions?: Snippet | undefined;
+		children?: Snippet | undefined;
+		onNavigate?: ((href: string) => void) | undefined;
+		onOrganizationChange?: ((id: string) => void) | undefined;
+		onSignOut?: (() => void) | undefined;
+		onSearch?: (() => void) | undefined;
+		onOpenRecord?: ((target: { collectionName: string; recordId: string }) => void) | undefined;
 	} = $props();
 
 	provideI18n(untrack(() => mergeBoltAgentMessages(uiMessages, tenantMessages)));
@@ -185,8 +185,8 @@
 	setPlatformStateContext((): PlatformState => ({
 		user: {
 			// The row's key, not a label. A name here is what made `user_id = 'dion.neo'` reach a uuid.
-			norbital_id: user?.id ?? 'unknown',
-			...(user?.email === undefined ? {} : { email: user.email }),
+			id: user?.id ?? 'unknown',
+			email: user?.email,
 			/**
 			 * Administration, taken from the runtime rather than from the host's `user` summary.
 			 *
@@ -210,9 +210,6 @@
 		apps: visibleApps.map(({ name }) => name),
 		envoys: declaredEnvoys
 	}));
-
-	// Loaded after mount, which is why the context above is a getter over this rather than a snapshot.
-	let declaredEnvoys = $state<ReadonlyArray<PlatformEnvoy>>([]);
 
 	const { t, has } = useI18n();
 
@@ -311,7 +308,8 @@
 		currentPath === AGENT_PATH || currentPath.startsWith(`${AGENT_PATH}/`)
 	);
 
-	const agentSurface = getAgentSurface();
+	const agentClient = useAgentClient();
+	const agentSurface = agentClient.surface;
 	const fabAgentState = $derived(
 		agentOrbState({
 			pending: agentSurface.pending,
@@ -323,145 +321,67 @@
 
 	let finderOpen = $state(false);
 	let agentSheetOpen = $state(false);
-	let finderCollections = $state<readonly string[]>([]);
 	let shortcutModifier = $state(detectShortcutModifier());
-	let notificationItems = $state<
-		ReadonlyArray<{ readonly id: string; readonly text: string; readonly read: boolean }>
-	>([]);
-	let notificationsLoading = $state(false);
-	let notificationsError = $state<string | undefined>(undefined);
+	const runtime = agentClient.runtime;
+	const notificationsQuery = $derived(
+		runtime.client.db.bolt_notifications.findMany({
+			where: { recipient: { eq: runtime.subject.userId } },
+			orderBy: { created_at: 'desc' },
+			limit: 500
+		})
+	);
+	const manifestQuery = $derived(runtime.client.system.workspace.manifest({}));
+	const declaredEnvoys = $derived(manifestQuery.current?.envoys ?? []);
+	const finderCollectionsQuery = $derived(runtime.client.system.sync.shape({}));
+	const finderCollections = $derived(finderCollectionsQuery.current ?? []);
 
-	const isRecord = (value: unknown): value is Record<string, unknown> =>
-		value !== null && typeof value === 'object' && !Array.isArray(value);
-
-	const stringField = (value: Record<string, unknown>, key: string): string | undefined => {
-		const field = value[key];
-		return typeof field === 'string' && field.length > 0 ? field : undefined;
-	};
+	const NotificationText = Schema.Union([
+		Schema.NonEmptyString,
+		Schema.Struct({
+			text: Schema.optionalKey(Schema.NonEmptyString),
+			message: Schema.optionalKey(Schema.NonEmptyString),
+			title: Schema.optionalKey(Schema.NonEmptyString)
+		})
+	]);
 
 	const notificationText = (payload: unknown): string => {
-		if (typeof payload === 'string' && payload.length > 0) return payload;
-		if (!isRecord(payload)) return 'Notification';
-		return (
-			stringField(payload, 'text') ??
-			stringField(payload, 'message') ??
-			stringField(payload, 'title') ??
-			'Notification'
+		const decoded = Result.getOrElse(
+			Schema.decodeUnknownResult(NotificationText)(payload),
+			() => undefined
 		);
+		if (typeof decoded === 'string') return decoded;
+		return decoded?.text ?? decoded?.message ?? decoded?.title ?? 'Notification';
 	};
 
-	const parseNotificationItems = (
-		value: unknown
-	): ReadonlyArray<{ readonly id: string; readonly text: string; readonly read: boolean }> => {
-		if (!Array.isArray(value)) return [];
-		const items: Array<{ readonly id: string; readonly text: string; readonly read: boolean }> = [];
-		for (const entry of value) {
-			if (!isRecord(entry)) continue;
-			const id = stringField(entry, 'id');
-			if (id === undefined) continue;
-			items.push({
-				id,
-				text: notificationText(entry.payload),
-				read: entry.read === true
-			});
-		}
-		return items;
-	};
-
-	/**
-	 * The envoys out of `workspace.manifest`, dropped rather than defaulted when a field is missing.
-	 *
-	 * An envoy whose `audience` did not arrive is not a private one, and guessing would put
-	 * an outsider's thread into every member's conversation list. The manifest always carries all
-	 * three, so an entry missing one is a projection that changed underneath this reader.
-	 */
-	const parseDeclaredEnvoys = (value: unknown): ReadonlyArray<PlatformEnvoy> => {
-		if (!Array.isArray(value)) return [];
-		const declared: Array<PlatformEnvoy> = [];
-		for (const entry of value) {
-			if (!isRecord(entry)) continue;
-			const name = stringField(entry, 'name');
-			const transport = stringField(entry, 'transport');
-			const audience = stringField(entry, 'audience');
-			if (name === undefined || transport === undefined || audience === undefined) continue;
-			declared.push({ name, transport, audience });
-		}
-		return declared;
-	};
-
-	const loadDeclaredEnvoys = async (): Promise<void> => {
-		const runtime = getAgentRuntime();
-		if (runtime === undefined) return;
-		try {
-			const summary = await runtime.transport.command('workspace.manifest', {});
-			declaredEnvoys = parseDeclaredEnvoys(isRecord(summary) ? summary.envoys : undefined);
-		} catch {
-			// An unread envoy list is an absent one. The conversation selector then offers only the
-			// threads that exist, which is what it did before any envoy was published at all.
-			declaredEnvoys = [];
-		}
-	};
-
-	const loadNotifications = async (): Promise<void> => {
-		const runtime = getAgentRuntime();
-		if (runtime === undefined) {
-			notificationItems = [];
-			notificationsError = undefined;
-			return;
-		}
-		notificationsLoading = true;
-		notificationsError = undefined;
-		try {
-			notificationItems = parseNotificationItems(
-				await runtime.transport.command('notifications.list', { recipient: runtime.userId })
-			);
-		} catch (cause) {
-			notificationsError = cause instanceof Error ? cause.message : 'Could not load notifications';
-		} finally {
-			notificationsLoading = false;
-		}
-	};
+	const notificationItems = $derived(
+		(notificationsQuery.current ?? []).map(({ id, payload, read }) => ({
+			id,
+			text: notificationText(payload),
+			read
+		}))
+	);
+	const notificationsError = $derived(
+		notificationsQuery.error === undefined
+			? undefined
+			: notificationsQuery.error instanceof Error
+				? notificationsQuery.error.message
+				: 'Could not load notifications'
+	);
 
 	const markNotificationRead = (id: string): void => {
-		const runtime = getAgentRuntime();
-		notificationItems = notificationItems.map((item) =>
-			item.id === id ? { ...item, read: true } : item
-		);
-		if (runtime === undefined) return;
-		void runtime.transport
-			.command('notifications.markRead', { recipient: runtime.userId, id })
-			.catch(() => undefined);
+		const update = runtime.client.db.bolt_notifications.update;
+		if (update) void update(id, { read: true });
 	};
 
 	const syncMentionCatalog = (): void => {
-		setBoltMentionCatalog({
-			collections: finderCollections,
-			apps: visibleApps.map((app) => ({
-				key: app.name,
-				label: app.label,
-				href: `/app/${app.name}`,
-				// `'x' in app` is a presence test that leaves the value as `{}`; the type check narrows it.
-				description: app.description
-			}))
-		});
-	};
-
-	const loadFinderCollections = async (): Promise<void> => {
-		const runtime = getAgentRuntime();
-		if (runtime === undefined) {
-			finderCollections = [];
-			syncMentionCatalog();
-			return;
-		}
-		try {
-			const shape = await runtime.transport.command('sync.shape', { subject: runtime.subject });
-			finderCollections = Array.isArray(shape)
-				? shape.filter((entry): entry is string => typeof entry === 'string')
-				: [];
-		} catch {
-			finderCollections = [];
-		}
-		syncMentionCatalog();
+		agentClient.catalog.collections = finderCollections;
+		agentClient.catalog.apps = visibleApps.map((app) => ({
+			key: app.name,
+			label: app.label,
+			href: `/app/${app.name}`,
+			// `'x' in app` is a presence test that leaves the value as `{}`; the type check narrows it.
+			description: app.description
+		}));
 	};
 
 	$effect(() => {
@@ -470,9 +390,6 @@
 
 	onMount(() => {
 		shortcutModifier = detectShortcutModifier();
-		void loadNotifications();
-		void loadFinderCollections();
-		void loadDeclaredEnvoys();
 	});
 
 	$effect(() => {
@@ -483,10 +400,6 @@
 
 	const agentShortcut = $derived(formatShortcut(shortcutModifier, 'K'));
 	const searchShortcut = $derived(formatShortcut(shortcutModifier, '/'));
-
-	function navigate(href: string): void {
-		onNavigate?.(href);
-	}
 
 	function toggleFinder(): void {
 		finderOpen = !finderOpen;
@@ -505,22 +418,19 @@
 	function closeAgentSheet(next: boolean): void {
 		agentSheetOpen = next;
 		if (!next && onAgentPath) {
-			navigate('/');
+			onNavigate?.('/');
 		}
-	}
-
-	function openRecord(target: { collectionName: string; recordId: string }): void {
-		onOpenRecord?.(target);
 	}
 </script>
 
 {#snippet activeAppBanner()}
+	{@const resolvedHeaderActions = headerActions ?? appHeaderActions.current}
 	<AppMediaHeader
 		src={headerBanner ?? null}
 		icon={headerIcon ?? 'lucide:layout-grid'}
 		title={resolvedHeaderTitle ?? ''}
 		description={resolvedHeaderDescription ?? null}
-		actions={headerActions ?? appHeaderActions.current ?? undefined}
+		{...resolvedHeaderActions == null ? {} : { actions: resolvedHeaderActions }}
 	/>
 {/snippet}
 
@@ -530,7 +440,7 @@
 		class="group w-[17rem] shrink-0 snap-start overflow-hidden rounded-xl border bg-card shadow-card outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
 		onclick={(event) => {
 			event.preventDefault();
-			navigate(app.href);
+			onNavigate?.(app.href);
 		}}
 	>
 		<Stack gap="none">
@@ -579,7 +489,7 @@
 
 <WorkspaceShell
 	model={navigationModel}
-	onNavigate={navigate}
+	{onNavigate}
 	{onOrganizationChange}
 	{onSignOut}
 	onSearch={toggleFinder}
@@ -602,12 +512,9 @@
 		<Notifications
 			{expanded}
 			items={notificationItems}
-			loading={notificationsLoading}
+			loading={notificationsQuery.loading}
 			error={notificationsError}
 			onread={markNotificationRead}
-			onretry={() => {
-				void loadNotifications();
-			}}
 		/>
 	{/snippet}
 	<Bound size="full" clip>
@@ -711,7 +618,7 @@
 				on the pixel the artwork ended. The banner is a header, not a border: the content below it
 				needs the same separation any other section gets.
 			-->
-			<Cover gap="md" top={resolvedHeaderTitle ? activeAppBanner : undefined}>
+			<Cover gap="md" {...resolvedHeaderTitle ? { top: activeAppBanner } : {}}>
 				<Bound size="full" clip data-workspace-app-surface class="[container-name:bolt-app]">
 					<CollectionTableNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
 						{@render children?.()}
@@ -746,9 +653,9 @@
 	collections={finderCollections}
 	{navigationModel}
 	agentAvailable={true}
-	onNavigate={navigate}
+	{onNavigate}
 	onAskAgent={openAgent}
-	onOpenRecord={openRecord}
+	{onOpenRecord}
 />
 
 <BillingBanner fixed />

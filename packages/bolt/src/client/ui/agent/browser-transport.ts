@@ -1,4 +1,5 @@
-import type { BoltTransport } from '../../../client.js';
+import { Effect, Schema } from 'effect';
+import type { BoltTransport } from '#lib/client.js';
 
 export type HttpBoltTransportOptions = Readonly<{
 	/**
@@ -16,7 +17,7 @@ export type HttpBoltTransportOptions = Readonly<{
 /** A string field of an object, or nothing — the shape checks every branch below would repeat. */
 const textField = (value: unknown, field: string): string | undefined => {
 	if (value === null || typeof value !== 'object') return undefined;
-	const held = (value as Record<string, unknown>)[field];
+	const held = Reflect.get(value, field);
 	return typeof held === 'string' && held.trim() !== '' ? held : undefined;
 };
 
@@ -56,23 +57,30 @@ const refusalMessage = (command: string, status: number, payload: unknown): stri
 export function createHttpBoltTransport(options: HttpBoltTransportOptions): BoltTransport {
 	const endpoint = options.endpoint.replace(/\/$/, '');
 	return {
-		command: async (command, input, signal) => {
-			const response = await fetch(`${endpoint}/${encodeURIComponent(command)}`, {
-				method: 'POST',
-				credentials: 'same-origin',
-				headers: {
-					'content-type': 'application/json',
-					authorization: `Bearer ${options.credential}`
-				},
-				body: JSON.stringify(input),
-				signal
-			});
-			const text = await response.text();
-			const payload = text.length === 0 ? null : JSON.parse(text);
-			if (!response.ok) {
-				throw new Error(refusalMessage(command, response.status, payload));
-			}
-			return payload;
-		}
+		command: (command, input, signal) =>
+			Effect.runPromise(
+				Effect.gen(function* () {
+					const response = yield* Effect.tryPromise(() =>
+						fetch(`${endpoint}/${encodeURIComponent(command)}`, {
+							method: 'POST',
+							credentials: 'same-origin',
+							headers: {
+								'content-type': 'application/json',
+								authorization: `Bearer ${options.credential}`
+							},
+							body: JSON.stringify(input),
+							signal: signal ?? null
+						})
+					);
+					const text = yield* Effect.tryPromise(() => response.text());
+					const payload = yield* Schema.decodeUnknownEffect(
+						Schema.NullOr(Schema.fromJsonString(Schema.Json))
+					)(text);
+					if (!response.ok) {
+						return yield* Effect.fail(new Error(refusalMessage(command, response.status, payload)));
+					}
+					return payload;
+				})
+			)
 	};
 }

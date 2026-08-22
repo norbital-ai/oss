@@ -2,16 +2,17 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
-import { vector } from '@electric-sql/pglite/vector';
+import { vector } from '@electric-sql/pglite-pgvector';
 import { createHash } from 'node:crypto';
+import { Effect } from 'effect';
 import {
 	createPGliteSql,
 	markProvisioned,
 	provision,
 	readReplicaState,
-	writeReplicaCursor,
-	type PGliteLike
+	writeReplicaCursor
 } from '../../src/client/replica/pglite-sql.js';
+import { adaptPGlite } from '../../src/client/replica/pglite-loader.js';
 import { provisioningStatements, testWorkspace } from '../support/bolt-test-layer.js';
 
 /**
@@ -38,9 +39,18 @@ const provisionedReplica = async () => {
 		extensions: { pg_trgm, btree_gist, vector }
 	});
 	databases.push(database);
+	const driver = adaptPGlite(database);
 	const definition = testWorkspace();
-	await provision(database as unknown as PGliteLike, await provisioningStatements(definition));
-	return { database, sql: createPGliteSql(database as unknown as PGliteLike) };
+	await Effect.runPromise(provision(driver, await provisioningStatements(definition)));
+	return {
+		database,
+		sql: await Effect.runPromise(
+			createPGliteSql(
+				driver,
+				Object.fromEntries(definition.collections.map(({ name, fields }) => [name, fields]))
+			)
+		)
+	};
 };
 
 describe('the browser replica on PGlite', () => {
@@ -52,19 +62,23 @@ describe('the browser replica on PGlite', () => {
 			"select column_name from information_schema.columns where table_name = 'people'"
 		);
 		expect(columns.rows.map((row) => row.column_name)).toEqual(
-			expect.arrayContaining(['norbital_id', 'norbital_sys_period', 'name', 'team'])
+			expect.arrayContaining(['id', 'sys_period', 'name', 'team'])
 		);
 
-		await sql.applyChange({
-			cursor: { xid: 1, sequence: 1 },
-			collection: 'people',
-			recordId: rid('p1'),
-			operation: 'create',
-			record: { name: 'Ada', team: 'core' }
-		});
+		await Effect.runPromise(
+			sql.applyChange({
+				cursor: { xid: 1, sequence: 1 },
+				collection: 'people',
+				recordId: rid('p1'),
+				operation: 'create',
+				record: { name: 'Ada', team: 'core' }
+			})
+		);
 		// An ordinary `where` + `order by`, which the `Map` projection could never have answered.
 		expect(
-			await sql.query('select name from people where team = $1 order by name', ['core'])
+			await Effect.runPromise(
+				sql.query('select name from people where team = $1 order by name', ['core'])
+			)
 		).toEqual([{ name: 'Ada' }]);
 	});
 
@@ -79,65 +93,75 @@ describe('the browser replica on PGlite', () => {
 		};
 		// A snapshot is paged while the workspace is being written, so a row that commits mid-page is
 		// delivered by both the snapshot and the log. That has to converge rather than raise.
-		await sql.applyChange(change);
-		await sql.applyChange(change);
-		expect(await sql.query('select count(*)::int as count from people', [])).toEqual([
-			{ count: 1 }
-		]);
+		await Effect.runPromise(sql.applyChange(change));
+		await Effect.runPromise(sql.applyChange(change));
+		expect(
+			await Effect.runPromise(sql.query('select count(*)::int as count from people', []))
+		).toEqual([{ count: 1 }]);
 	});
 
 	it('merges an update onto the row it already holds rather than replacing it', async () => {
 		const { sql } = await provisionedReplica();
-		await sql.applyChange({
-			cursor: { xid: 1, sequence: 1 },
-			collection: 'people',
-			recordId: rid('p1'),
-			operation: 'create',
-			record: { name: 'Ada', team: 'core' }
-		});
+		await Effect.runPromise(
+			sql.applyChange({
+				cursor: { xid: 1, sequence: 1 },
+				collection: 'people',
+				recordId: rid('p1'),
+				operation: 'create',
+				record: { name: 'Ada', team: 'core' }
+			})
+		);
 		// An update carries the columns that changed, not the whole row.
-		await sql.applyChange({
-			cursor: { xid: 1, sequence: 2 },
-			collection: 'people',
-			recordId: rid('p1'),
-			operation: 'update',
-			record: { name: 'Ada Lovelace' }
-		});
-		expect(await sql.query('select name, team from people', [])).toEqual([
+		await Effect.runPromise(
+			sql.applyChange({
+				cursor: { xid: 1, sequence: 2 },
+				collection: 'people',
+				recordId: rid('p1'),
+				operation: 'update',
+				record: { name: 'Ada Lovelace' }
+			})
+		);
+		expect(await Effect.runPromise(sql.query('select name, team from people', []))).toEqual([
 			{ name: 'Ada Lovelace', team: 'core' }
 		]);
 	});
 
 	it('applies a delete, and drops everything on a reset', async () => {
 		const { sql } = await provisionedReplica();
-		await sql.applyChange({
-			cursor: { xid: 1, sequence: 1 },
-			collection: 'people',
-			recordId: rid('p1'),
-			operation: 'create',
-			record: { name: 'Ada', team: 'core' }
-		});
-		await sql.applyChange({
-			cursor: { xid: 1, sequence: 2 },
-			collection: 'people',
-			recordId: rid('p1'),
-			operation: 'delete'
-		});
-		expect(await sql.query('select count(*)::int as count from people', [])).toEqual([
-			{ count: 0 }
-		]);
+		await Effect.runPromise(
+			sql.applyChange({
+				cursor: { xid: 1, sequence: 1 },
+				collection: 'people',
+				recordId: rid('p1'),
+				operation: 'create',
+				record: { name: 'Ada', team: 'core' }
+			})
+		);
+		await Effect.runPromise(
+			sql.applyChange({
+				cursor: { xid: 1, sequence: 2 },
+				collection: 'people',
+				recordId: rid('p1'),
+				operation: 'delete'
+			})
+		);
+		expect(
+			await Effect.runPromise(sql.query('select count(*)::int as count from people', []))
+		).toEqual([{ count: 0 }]);
 
-		await sql.applyChange({
-			cursor: { xid: 1, sequence: 3 },
-			collection: 'people',
-			recordId: rid('p2'),
-			operation: 'create',
-			record: { name: 'Grace', team: 'core' }
-		});
-		await sql.reset();
-		expect(await sql.query('select count(*)::int as count from people', [])).toEqual([
-			{ count: 0 }
-		]);
+		await Effect.runPromise(
+			sql.applyChange({
+				cursor: { xid: 1, sequence: 3 },
+				collection: 'people',
+				recordId: rid('p2'),
+				operation: 'create',
+				record: { name: 'Grace', team: 'core' }
+			})
+		);
+		await Effect.runPromise(sql.reset());
+		expect(
+			await Effect.runPromise(sql.query('select count(*)::int as count from people', []))
+		).toEqual([{ count: 0 }]);
 	});
 
 	it('skips provisioning when the local database already matches the fingerprint', async () => {
@@ -145,21 +169,24 @@ describe('the browser replica on PGlite', () => {
 			extensions: { pg_trgm, btree_gist, vector }
 		});
 		databases.push(database);
+		const driver = adaptPGlite(database);
 		const steps = await provisioningStatements(testWorkspace());
 		// A persisted replica opens an already-provisioned database on the second visit. Re-running the
 		// lineage there fails on its own unguarded `CREATE TABLE`, which is the lineage being correct.
-		expect(await provision(database as unknown as PGliteLike, steps, 'fnv1a32:abc')).toBe(true);
+		expect(await Effect.runPromise(provision(driver, steps, 'fnv1a32:abc'))).toBe(true);
 		// Not yet skippable: provisioning alone does not mean the replica holds the workspace.
-		expect(await provision(database as unknown as PGliteLike, steps, 'fnv1a32:abc')).toBe(true);
-		await markProvisioned(database as unknown as PGliteLike, 'fnv1a32:abc', {
-			xid: 0,
-			sequence: 0
-		});
-		expect(await provision(database as unknown as PGliteLike, steps, 'fnv1a32:abc')).toBe(false);
+		expect(await Effect.runPromise(provision(driver, steps, 'fnv1a32:abc'))).toBe(true);
+		await Effect.runPromise(
+			markProvisioned(driver, 'fnv1a32:abc', {
+				xid: 0,
+				sequence: 0
+			})
+		);
+		expect(await Effect.runPromise(provision(driver, steps, 'fnv1a32:abc'))).toBe(false);
 
 		// A changed schema rebuilds rather than migrating: the replica is a reconstructible cache.
-		await database.query("insert into people (norbital_id, name) values ($1, 'Ada')", [rid('p1')]);
-		expect(await provision(database as unknown as PGliteLike, steps, 'fnv1a32:changed')).toBe(true);
+		await database.query("insert into people (id, name) values ($1, 'Ada')", [rid('p1')]);
+		expect(await Effect.runPromise(provision(driver, steps, 'fnv1a32:changed'))).toBe(true);
 		expect(await database.query('select count(*)::int as count from people')).toMatchObject({
 			rows: [{ count: 0 }]
 		});
@@ -170,18 +197,21 @@ describe('the browser replica on PGlite', () => {
 			extensions: { pg_trgm, btree_gist, vector }
 		});
 		databases.push(database);
+		const driver = adaptPGlite(database);
 		const steps = await provisioningStatements(testWorkspace());
-		await provision(database as unknown as PGliteLike, steps, 'fnv1a32:abc');
-		await markProvisioned(database as unknown as PGliteLike, 'fnv1a32:abc', {
+		await Effect.runPromise(provision(driver, steps, 'fnv1a32:abc'));
+		await Effect.runPromise(
+			markProvisioned(driver, 'fnv1a32:abc', {
+				xid: 0,
+				sequence: 0
+			})
+		);
+		expect((await Effect.runPromise(readReplicaState(driver)))?.cursor).toEqual({
 			xid: 0,
 			sequence: 0
 		});
-		expect((await readReplicaState(database as unknown as PGliteLike))?.cursor).toEqual({
-			xid: 0,
-			sequence: 0
-		});
-		await writeReplicaCursor(database as unknown as PGliteLike, { xid: 42, sequence: 7 });
-		expect(await readReplicaState(database as unknown as PGliteLike)).toEqual({
+		await Effect.runPromise(writeReplicaCursor(driver, { xid: 42, sequence: 7 }));
+		expect(await Effect.runPromise(readReplicaState(driver))).toEqual({
 			fingerprint: 'fnv1a32:abc',
 			cursor: { xid: 42, sequence: 7 }
 		});
@@ -192,12 +222,15 @@ describe('the browser replica on PGlite', () => {
 			extensions: { pg_trgm, btree_gist, vector }
 		});
 		databases.push(database);
+		const driver = adaptPGlite(database);
 		await expect(
-			provision(database as unknown as PGliteLike, [
-				{ id: 'lineage:20260101_baseline:0', sql: 'create table valid (x int)' },
-				{ id: 'lineage:20260101_baseline:1', sql: 'this is not sql' },
-				{ id: 'lineage:20260101_baseline:2', sql: 'create table never_reached (x int)' }
-			])
+			Effect.runPromise(
+				provision(driver, [
+					{ id: 'lineage:20260101_baseline:0', sql: 'create table valid (x int)' },
+					{ id: 'lineage:20260101_baseline:1', sql: 'this is not sql' },
+					{ id: 'lineage:20260101_baseline:2', sql: 'create table never_reached (x int)' }
+				])
+			)
 		).rejects.toThrow(/lineage:20260101_baseline:1/);
 		// Stopped rather than continued: the steps are dependency-ordered, so what follows a failure
 		// would be built against a shape that does not exist.

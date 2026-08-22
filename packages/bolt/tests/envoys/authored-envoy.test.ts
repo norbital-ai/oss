@@ -85,13 +85,10 @@ const compileEnvoyDeclaration = () => {
 	const mergeEnd = artifact.indexOf('\n', mergeStart);
 	const source = `${artifact.slice(declarationStart, artifact.indexOf('\n};\n', declarationStart) + '\n};'.length)}\n${artifact.slice(mergeStart, mergeEnd)}\nreturn envoys;`;
 
-	const compiled = new Function(
-		'declaredEnvoys',
-		'describeEnvoy',
-		source
-	)({ sales_desk: authoredModule }, describeEnvoy) as ReadonlyArray<
-		ReturnType<typeof describeEnvoy>
-	>;
+	const compiled = new Function('declaredEnvoys', 'describeEnvoy', source)(
+		{ sales_desk: authoredModule },
+		describeEnvoy
+	) as ReadonlyArray<ReturnType<typeof describeEnvoy>>;
 	const [declaration] = compiled;
 	if (declaration === undefined) throw new Error('the compiler produced no envoy at all');
 	return declaration;
@@ -187,7 +184,7 @@ describe('an authored envoy declaration', () => {
 		expect([...ownInbox.publicEnvoyKeys]).toEqual(['sales_desk']);
 
 		const outsiderThread = {
-			norbital_id: 'session-1',
+			conversation_id: 'session-1',
 			title: 'Quote for 40 seats',
 			user_id: 'outsider-1',
 			visibility: 'envoy_dm',
@@ -254,8 +251,8 @@ describe('an authored envoy declaration', () => {
 
 	/** An envoy naming no policies would hold nothing, which is never what an envoy is for. */
 	it('refuses an envoy that names no policies', () => {
-		expect(() =>
-			envoy({ ...authoredModule, name: 'sales_desk', policies: [] })
-		).toThrow(/names no policies/);
+		expect(() => envoy({ ...authoredModule, name: 'sales_desk', policies: [] })).toThrow(
+			/names no policies/
+		);
 	});
 });

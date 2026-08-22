@@ -1,19 +1,19 @@
 import { Context, Effect, Layer, Schema } from 'effect';
-import type { FileRef } from '../authoring/models-schema.js';
+import type { FileRef } from '#lib/authoring/models-schema.js';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { Collections } from './collections/collections.js';
-import { AI, Files } from './facilities/services.js';
-import { Automations } from './automations/automations.js';
-import type { Identity } from './identity/identity.js';
-import { DispatchError } from './workspace.js';
-import { AuthoredRefusal } from '../authoring/refusal.js';
+import * as Collections from '#lib/runtime/collections/collections.js';
+import { AI, Files } from '#lib/runtime/facilities/services.js';
+import * as Automations from '#lib/runtime/automations/automations.js';
+import type * as Identity from '#lib/runtime/identity/identity.js';
+import { DispatchError } from '#lib/runtime/workspace.js';
+import { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import {
 	makeAuthoringApi,
 	makeBoundAuthoringOps,
 	runAuthoredHandler
-} from './collections/authored.js';
+} from '#lib/runtime/collections/authored.js';
 
-export type RuntimeRemoteApi = Readonly<{
+type RuntimeRemoteApi = Readonly<{
 	readonly db: object;
 	readonly infer: (input: {
 		readonly schema: Schema.Codec<unknown, unknown>;
@@ -30,16 +30,15 @@ export type RuntimeRemoteApi = Readonly<{
 }>;
 
 export type RuntimeRemoteHandler = ReturnType<
-	() => (input: unknown, api: RuntimeRemoteApi) => Promise<unknown>
+	() => (input: unknown, api: RuntimeRemoteApi) => unknown
 >;
-export type RuntimeToolHandler = RuntimeRemoteHandler;
 
 export const mergeRuntimeHandlers = (
 	remotes: Readonly<Record<string, RuntimeRemoteHandler>>,
-	tools: Readonly<Record<string, RuntimeToolHandler>>
+	tools: Readonly<Record<string, RuntimeRemoteHandler>>
 ): Readonly<Record<string, RuntimeRemoteHandler>> => ({ ...remotes, ...tools });
 
-type RuntimeRemoteRegistry = Readonly<{
+export type RuntimeRemoteRegistry = Readonly<{
 	readonly invoke: (
 		name: string,
 		input: unknown,
@@ -52,36 +51,6 @@ type RuntimeRemoteRegistry = Readonly<{
 export const RemoteRegistry = Context.Service<RuntimeRemoteRegistry>(
 	'@norbital-ai/bolt/RemoteRegistry'
 );
-
-const RemoteValues = Schema.Record(Schema.String, Schema.Json);
-/** Decodes remote mutation values before they reach privileged collection operations. */
-const RemoteInputs = {
-	decode: (input: unknown): Promise<Readonly<Record<string, Schema.Json>>> =>
-		Schema.decodeUnknownPromise(RemoteValues)(input ?? {}),
-	/**
-	 * Reads the query shape an authored handler passed. `where`/`orderBy` stay unvalidated here and
-	 * are handed to the where compiler, which owns the operator vocabulary and can bind operands —
-	 * such as `Date` — that never survive a JSON decode.
-	 */
-	query: (input: unknown): QueryOptions => {
-		if (input === null || typeof input !== 'object' || Array.isArray(input)) return {};
-		const limit = Reflect.get(input, 'limit');
-		const where = Reflect.get(input, 'where');
-		const orderBy = Reflect.get(input, 'orderBy');
-		return {
-			...(typeof limit === 'number' ? { limit } : {}),
-			...(where === undefined ? {} : { where }),
-			...(orderBy === undefined ? {} : { orderBy })
-		};
-	}
-};
-type QueryOptions = Readonly<{
-	readonly limit?: number;
-	readonly where?: unknown;
-	readonly orderBy?: unknown;
-}>;
-const remoteValues = RemoteInputs.decode;
-const remoteQuery = RemoteInputs.query;
 
 /** Builds the runtime-owned remote registry and prevents authored handlers from escaping JSON across the artifact boundary. */
 const RemoteRegistries = {

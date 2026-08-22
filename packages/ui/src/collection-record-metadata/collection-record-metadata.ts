@@ -1,25 +1,38 @@
-export type CollectionRecordMutation = 'update' | 'delete';
+import { Schema } from 'effect';
 
-export type CollectionRecordFlagTone = 'neutral' | 'info' | 'success' | 'warning' | 'danger';
+const CollectionRecordMutationSchema = Schema.Literals(['update', 'delete']);
+export type CollectionRecordMutation = typeof CollectionRecordMutationSchema.Type;
 
-export interface CollectionRecordRestrictionMetadata {
-	readonly kind: 'restriction';
+const CollectionRecordFlagToneSchema = Schema.Literals([
+	'neutral',
+	'info',
+	'success',
+	'warning',
+	'danger'
+]);
+export type CollectionRecordFlagTone = typeof CollectionRecordFlagToneSchema.Type;
+
+const CollectionRecordRestrictionMetadataSchema = Schema.Struct({
+	kind: Schema.Literal('restriction'),
 	/** The mutations this record refuses. Reading, opening, selecting, and exporting remain available. */
-	readonly operations: readonly [CollectionRecordMutation, ...CollectionRecordMutation[]];
+	operations: Schema.NonEmptyArray(CollectionRecordMutationSchema),
 	/** Concise operator-facing explanation of the rule. */
-	readonly reason: string;
+	reason: Schema.String,
 	/** Optional short label; surfaces otherwise use their standard read-only label. */
-	readonly label?: string;
-}
+	label: Schema.optional(Schema.String)
+});
+export type CollectionRecordRestrictionMetadata =
+	typeof CollectionRecordRestrictionMetadataSchema.Type;
 
-export interface CollectionRecordFlagMetadata {
-	readonly kind: 'flag';
-	readonly tone: CollectionRecordFlagTone;
-	readonly label: string;
-	readonly description?: string;
+const CollectionRecordFlagMetadataSchema = Schema.Struct({
+	kind: Schema.Literal('flag'),
+	tone: CollectionRecordFlagToneSchema,
+	label: Schema.String,
+	description: Schema.optional(Schema.String),
 	/** Iconify icon name. Omit to use the tone's standard icon. */
-	readonly icon?: string;
-}
+	icon: Schema.optional(Schema.String)
+});
+export type CollectionRecordFlagMetadata = typeof CollectionRecordFlagMetadataSchema.Type;
 
 /**
  * Metadata an application may attach to a record surface.
@@ -28,8 +41,11 @@ export interface CollectionRecordFlagMetadata {
  * behaviour means adding another explicit variant and teaching every generic collection surface
  * what it means. Data that has no generic behaviour belongs in the authored card/representation.
  */
-export type CollectionRecordMetadata =
-	CollectionRecordRestrictionMetadata | CollectionRecordFlagMetadata;
+const CollectionRecordMetadataSchema = Schema.Union([
+	CollectionRecordRestrictionMetadataSchema,
+	CollectionRecordFlagMetadataSchema
+]);
+export type CollectionRecordMetadata = typeof CollectionRecordMetadataSchema.Type;
 
 /**
  * Pure, synchronous projection over an already-read row. Related facts must be batch-loaded by the
@@ -39,16 +55,19 @@ export type CollectionRecordMetadataResolver<TRow extends object> = (
 	record: TRow
 ) => readonly CollectionRecordMetadata[];
 
-export type CollectionRecordMetadataSource = 'system' | 'application';
+const CollectionRecordMetadataSourceSchema = Schema.Literals(['system', 'application']);
+export type CollectionRecordMetadataSource = typeof CollectionRecordMetadataSourceSchema.Type;
 
-export type ResolvedCollectionRecordMetadata = (
-	CollectionRecordRestrictionMetadata | CollectionRecordFlagMetadata
-) & { readonly source: CollectionRecordMetadataSource };
+export type ResolvedCollectionRecordMetadata = CollectionRecordMetadata & {
+	readonly source: CollectionRecordMetadataSource;
+};
 
-export interface CollectionRecordSystemMetadataCopy {
-	readonly pendingApprovalLabel: string;
-	readonly pendingApprovalReason: string;
-}
+const CollectionRecordSystemMetadataCopySchema = Schema.Struct({
+	pendingApprovalLabel: Schema.String,
+	pendingApprovalReason: Schema.String
+});
+export type CollectionRecordSystemMetadataCopy =
+	typeof CollectionRecordSystemMetadataCopySchema.Type;
 
 /**
  * Projects protected Bolt state and authored metadata into the one contract collection UIs consume.
@@ -61,7 +80,7 @@ export function resolveCollectionRecordMetadata(
 ): readonly ResolvedCollectionRecordMetadata[] {
 	const resolved: ResolvedCollectionRecordMetadata[] = [];
 
-	const approvalId = record == null ? undefined : Reflect.get(record, 'norbital_approval_id');
+	const approvalId = record == null ? undefined : Reflect.get(record, 'approval_id');
 	if (typeof approvalId === 'string' && approvalId.length > 0) {
 		resolved.push({
 			kind: 'restriction',
@@ -83,14 +102,12 @@ export function collectionRecordRestriction(
 	metadata: readonly ResolvedCollectionRecordMetadata[],
 	operation: CollectionRecordMutation
 ): Extract<ResolvedCollectionRecordMetadata, { readonly kind: 'restriction' }> | null {
-	return (
-		metadata.find(
-			(
-				entry
-			): entry is Extract<ResolvedCollectionRecordMetadata, { readonly kind: 'restriction' }> =>
-				entry.kind === 'restriction' && entry.operations.includes(operation)
-		) ?? null
-	);
+	for (const entry of metadata) {
+		if (entry.kind === 'restriction' && entry.operations.includes(operation)) {
+			return entry;
+		}
+	}
+	return null;
 }
 
 export function collectionRecordMutationReason(

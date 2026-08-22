@@ -12,9 +12,9 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { defineEnvironment } from '../../src/authoring/environment-schema.js';
-import { AccessControl } from '../../src/runtime/access/access-control.js';
+import * as AccessControl from '../../src/runtime/access/access-control.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
-import { Identity } from '../../src/runtime/identity/identity.js';
+import * as Identity from '../../src/runtime/identity/identity.js';
 import { PersonalSecrets } from '../../src/runtime/secrets/personal-secrets.js';
 import { Secrets } from '../../src/runtime/secrets/secrets.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
@@ -64,7 +64,7 @@ const task = (name: string, input: unknown = {}) =>
 	});
 
 // The readable name is hashed the same way the fixture's SQL hashes it, because identity is keyed
-// by `norbital_id uuid` and a subject has to name the row the session actually points at.
+// by `id uuid` and a subject has to name the row the session actually points at.
 //
 // `teamPath` is the team plus whatever it inherits, and these fixtures inherit nothing — so a single
 // team name is the whole path. It names a team the workspace below declares, because a name the
@@ -72,7 +72,8 @@ const task = (name: string, input: unknown = {}) =>
 const subjectFor = (userId: string, team: string): Identity.Subject => ({
 	userId: fixtureUserId(userId),
 	tenantId: 'test-tenant',
-	teamPath: [team], policies: []
+	teamPath: [team],
+	policies: []
 });
 
 const userA = subjectFor('user-a', 'employee');
@@ -271,7 +272,7 @@ describe('personal secrets', () => {
 					// owner field the boundary does not mint and so never overwrites.
 					userId: 'user-b',
 					owner: 'user-b',
-					subject: { userId: 'user-b', tenantId: 'test-tenant', policies: [], teamPath: ['admin'],  }
+					subject: { userId: 'user-b', tenantId: 'test-tenant', policies: [], teamPath: ['admin'] }
 				})
 			)
 		);

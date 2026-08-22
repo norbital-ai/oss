@@ -29,7 +29,6 @@ import {
 	chmodSync,
 	existsSync,
 	readdirSync,
-	readFileSync,
 	realpathSync,
 	renameSync,
 	rmSync
@@ -37,6 +36,7 @@ import {
 import path from 'node:path';
 import process from 'node:process';
 import { assertDeclarationEmit } from './lib/declaration-emit.mjs';
+import { readManifest } from './lib/package-release.mjs';
 
 const [command, ...commandArguments] = process.argv.slice(2);
 if (!command) {
@@ -48,7 +48,7 @@ const packageRoot = process.cwd();
 const output = path.join(packageRoot, 'build');
 const staging = path.join(packageRoot, 'build.staging');
 const retired = path.join(packageRoot, 'build.retired');
-const manifest = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+const manifest = readManifest(path.join(packageRoot, 'package.json'));
 
 /**
  * Refuse to compile against a workspace dependency that has not been built.
@@ -74,9 +74,7 @@ function assertWorkspaceDependenciesBuilt() {
 			process.exit(1);
 		}
 		const dependencyRoot = realpathSync(link);
-		const dependencyManifest = JSON.parse(
-			readFileSync(path.join(dependencyRoot, 'package.json'), 'utf8')
-		);
+		const dependencyManifest = readManifest(path.join(dependencyRoot, 'package.json'));
 		if (!dependencyManifest.scripts?.build) continue;
 		const dependencyOutput = path.join(dependencyRoot, 'build');
 		if (existsSync(dependencyOutput) && readdirSync(dependencyOutput).length > 0) continue;

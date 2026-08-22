@@ -1,21 +1,18 @@
-import { Schema } from 'effect';
-import { createLocalStore, type LocalStore } from './replica/local-sql.js';
-import {
-	compareCursors,
-	createSyncClient,
-	decodeChanges,
-	decodeCursor,
-	type SyncClient
-} from './replica/sync-client.js';
+import { Effect, Result, Schema } from 'effect';
+import { ApprovalState } from '#lib/runtime/approvals/approvals.js';
+import { createSyncClient, decodeChanges, decodeCursor } from '#lib/client/replica/sync-client.js';
 import {
 	ANY_COLLECTION,
 	cacheKeyFor,
 	collectionsFor,
 	createQueryCache,
 	type QueryCache
-} from './replica/query-cache.js';
-import { createLiveQueryRegistry, type LiveQueryRegistry } from './replica/live-queries.js';
-import type { SyncChange, SyncCursor } from '../runtime/sync/sync.js';
+} from '#lib/client/replica/query-cache.js';
+import {
+	createLiveQueryRegistry,
+	type LiveQueryRegistry
+} from '#lib/client/replica/live-queries.js';
+import type { SyncChange } from '#lib/runtime/sync/sync.js';
 import {
 	EnvironmentName,
 	InvocationScope,
@@ -23,15 +20,17 @@ import {
 	storedRecordsOf,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
-import { createBoltClient, type BoltClient, type BoltTransport } from '../client.js';
+import { createBoltClient, type BoltClient, type BoltTransport } from '#lib/client.js';
 import { createRemoteQuery } from './remote-query.svelte.js';
-import { workspaceSession } from './session.js';
-import { openLocalDatabase, type BootstrapTransport } from './replica/bootstrap.js';
-import { createLocalReader, type LocalReader } from './replica/local-reads.js';
-import { subscribeToChanges, type Subscription } from './replica/subscribe.js';
-import type { PGliteLike, ProvisioningStep } from './replica/pglite-sql.js';
-import { openPGlite } from './replica/pglite-loader.js';
-import type { LocalSql } from './replica/replica.js';
+import { workspaceSession } from '#lib/client/session.js';
+import { openLocalDatabase, type BootstrapTransport } from '#lib/client/replica/bootstrap.js';
+import { createLocalReader, type LocalReader } from '#lib/client/replica/local-reads.js';
+import { subscribeToChanges, type Subscription } from '#lib/client/replica/subscribe.js';
+import type { PGliteLike, ProvisioningStep } from '#lib/client/replica/pglite-sql.js';
+import { openPGlite } from '#lib/client/replica/pglite-loader.js';
+import type { LocalSql } from '#lib/client/replica/pglite-sql.js';
+import { createSystemClient } from '#lib/client/system-client.js';
+export type { SystemClientApi } from '#lib/client/system-client.js';
 
 export interface RemoteQuery<Value> extends PromiseLike<Value> {
 	readonly current: Value | undefined;
@@ -192,13 +191,36 @@ const cursorFrom = (value: Schema.Json | undefined): string | null => {
 	return null;
 };
 
+/** Adapts the Promise-based public Bolt client once at the Effect-native runtime boundary. */
+const commandEffect = (
+	runtime: WorkspaceClientRuntime,
+	command: string,
+	input: Schema.Json
+): Effect.Effect<Schema.Json, unknown> =>
+	Effect.tryPromise(() => runtime.bolt.command(command, input, Schema.Json));
+
+const decodedCommandEffect = <Output extends Schema.ConstraintDecoder<Schema.Json>>(
+	runtime: WorkspaceClientRuntime,
+	command: string,
+	input: Schema.Json,
+	output: Output,
+	signal?: AbortSignal
+): Effect.Effect<Output['Type'], unknown> =>
+	Effect.tryPromise(() => runtime.bolt.command(command, input, output, signal));
+
 /** Owns stateful remote-query construction without introducing a module-global runtime singleton. */
 const RemoteQueries = {
-	make: (
+	make: <
+		Input extends Schema.ConstraintDecoder<Schema.Json>,
+		Output extends Schema.ConstraintDecoder<Schema.Json>
+	>(
 		runtime: WorkspaceClientRuntime,
 		command: string,
-		input: Schema.Json
-	): RemoteQuery<Schema.Json> => {
+		input: Input['Type'],
+		inputSchema: Input,
+		outputSchema: Output,
+		signal?: AbortSignal
+	): RemoteQuery<Output['Type']> => {
 		const cache = runtime.cache;
 		const registry = runtime.queries;
 		// Every read goes through here — `db.*`, `invoke.*`, `records`, `history`, `approvals` — which
@@ -218,11 +240,20 @@ const RemoteQueries = {
 		 * this is exactly the request it always was. The cache still sits in front of both, so a local
 		 * answer is cached on the same terms a remote one is and invalidated by the same collections.
 		 */
-		return createRemoteQuery(async () => {
-			const reader = runtime.local?.current;
-			const answered = reader === undefined ? undefined : await reader.answer(command, input);
-			return answered ?? (await runtime.bolt.command(command, input, Schema.Json));
-		}, caching);
+		return createRemoteQuery(
+			() =>
+				Effect.gen(function* () {
+					const checked = yield* Schema.decodeUnknownEffect(inputSchema)(input);
+					const reader = runtime.local?.current;
+					const answered =
+						reader === undefined ? undefined : yield* reader.answer(command, checked);
+					if (answered !== undefined)
+						return yield* Schema.decodeUnknownEffect(outputSchema)(answered);
+					return yield* decodedCommandEffect(runtime, command, checked, outputSchema, signal);
+				}),
+			caching,
+			outputSchema
+		);
 	}
 };
 
@@ -232,7 +263,7 @@ const PageQueries = {
 		command: string,
 		input: Schema.Json
 	): CollectionPageQuery<ReadonlyArray<Schema.Json>> => {
-		const query = RemoteQueries.make(runtime, command, input);
+		const query = RemoteQueries.make(runtime, command, input, Schema.Json, Schema.Json);
 		const page: CollectionPageQuery<ReadonlyArray<Schema.Json>> = {
 			get current() {
 				return rowsFrom(query.current);
@@ -258,7 +289,7 @@ const PageQueries = {
 				query.then((value) => {
 					const rows = rowsFrom(value) ?? [];
 					return onfulfilled === undefined || onfulfilled === null
-						? (rows as unknown as TResult1)
+						? (rows as TResult1)
 						: onfulfilled(rows);
 				}, onrejected)
 		};
@@ -268,7 +299,7 @@ const PageQueries = {
 
 const CountQueries = {
 	make: (runtime: WorkspaceClientRuntime, input: Schema.Json): RemoteQuery<number> => {
-		const query = RemoteQueries.make(runtime, 'collections.count', input);
+		const query = RemoteQueries.make(runtime, 'collections.count', input, Schema.Json, Schema.Json);
 		return {
 			get current() {
 				return countFrom(query.current);
@@ -288,7 +319,7 @@ const CountQueries = {
 					const count = countFrom(value);
 					if (count === undefined) throw new Error('Collection count completed without a value');
 					return onfulfilled === undefined || onfulfilled === null
-						? (count as unknown as TResult1)
+						? (count as TResult1)
 						: onfulfilled(count);
 				}, onrejected)
 		};
@@ -301,12 +332,22 @@ type InvokeMethod = ReturnType<() => (input: Schema.Json) => RemoteQuery<Schema.
 const WorkspaceApis = {
 	create: (runtime: WorkspaceClientRuntime, catalog: CollectionCatalog = {}) => ({
 		db: ClientDatabase.database(runtime),
+		system: createSystemClient(runtime, (command, input, inputSchema, outputSchema, signal) =>
+			RemoteQueries.make(runtime, command, input, inputSchema, outputSchema, signal)
+		),
 		invoke: new Proxy<Record<string, InvokeMethod>>(
 			{},
 			{
 				get: (_target, property) =>
 					typeof property === 'string'
-						? (input: Schema.Json) => RemoteQueries.make(runtime, `invoke.${property}`, { input })
+						? (input: Schema.Json) =>
+								RemoteQueries.make(
+									runtime,
+									`invoke.${property}`,
+									{ input },
+									Schema.Json,
+									Schema.Json
+								)
 						: undefined
 			}
 		),
@@ -325,49 +366,58 @@ const WorkspaceApis = {
 		},
 		history: {
 			findMany: (collection: string, recordId: string) =>
-				RemoteQueries.make(runtime, 'collections.history', { collection, id: recordId })
+				RemoteQueries.make(
+					runtime,
+					'collections.history',
+					{ collection, id: recordId },
+					Schema.Json,
+					Schema.Json
+				)
 		},
 		approvals: {
 			findMany: (approvalId: string) =>
-				RemoteQueries.make(runtime, 'approvals.timeline', { requestId: approvalId }),
-			process: async (input: {
+				RemoteQueries.make(
+					runtime,
+					'approvals.timeline',
+					{ requestId: approvalId },
+					Schema.Json,
+					Schema.Json
+				),
+			process: (input: {
 				readonly approvalRequestId: string;
-				readonly action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE';
+				readonly action: 'APPROVED' | 'REJECTED';
 				readonly comments?: string;
-			}) => {
-				const state = await runtime.bolt.command(
-					'approvals.status',
-					{ requestId: input.approvalRequestId },
-					Schema.Json
-				);
-				const decision =
-					input.action === 'APPROVED'
-						? 'approve'
-						: input.action === 'REJECTED'
-							? 'reject'
-							: undefined;
-				if (decision === undefined || state === null || typeof state !== 'object') return;
-				await runtime.bolt.command(
-					'approvals.decide',
-					{
-						state,
-						decision,
-						...(input.comments === undefined ? {} : { reason: input.comments })
-					},
-					Schema.Json
-				);
-				invalidateApproval(runtime);
-			},
-			withdraw: async (approvalRequestId: string) => {
-				const state = await runtime.bolt.command(
-					'approvals.status',
-					{ requestId: approvalRequestId },
-					Schema.Json
-				);
-				if (state === null || typeof state !== 'object') return;
-				await runtime.bolt.command('approvals.withdraw', { state }, Schema.Json);
-				invalidateApproval(runtime);
-			}
+			}) =>
+				Effect.runPromise(
+					Effect.gen(function* () {
+						const state = yield* commandEffect(runtime, 'approvals.status', {
+							requestId: input.approvalRequestId
+						});
+						const decision = input.action === 'APPROVED' ? 'approve' : 'reject';
+						const decodedState = Schema.decodeUnknownResult(ApprovalState)(state);
+						if (Result.isFailure(decodedState)) return;
+						yield* commandEffect(runtime, 'approvals.decide', {
+							state: decodedState.success,
+							decision,
+							...(input.comments === undefined ? {} : { reason: input.comments })
+						});
+						yield* Effect.sync(() => invalidateApproval(runtime));
+					})
+				),
+			withdraw: (approvalRequestId: string) =>
+				Effect.runPromise(
+					Effect.gen(function* () {
+						const state = yield* commandEffect(runtime, 'approvals.status', {
+							requestId: approvalRequestId
+						});
+						const decodedState = Schema.decodeUnknownResult(ApprovalState)(state);
+						if (Result.isFailure(decodedState)) return;
+						yield* commandEffect(runtime, 'approvals.withdraw', {
+							state: decodedState.success
+						});
+						yield* Effect.sync(() => invalidateApproval(runtime));
+					})
+				)
 		}
 	})
 };
@@ -422,7 +472,13 @@ const ClientDatabase = {
 				...mergeWhere(asJsonRecord(input), options)
 			}),
 		findFirst: (input: Schema.Json = {}) =>
-			RemoteQueries.make(runtime, 'collections.findFirst', { collection, ...asJsonRecord(input) }),
+			RemoteQueries.make(
+				runtime,
+				'collections.findFirst',
+				{ collection, ...asJsonRecord(input) },
+				Schema.Json,
+				Schema.Json
+			),
 		count: (input: Schema.Json = {}, options?: QueryOptions) =>
 			CountQueries.make(runtime, { collection, ...mergeWhere(asJsonRecord(input), options) }),
 		/**
@@ -446,39 +502,51 @@ const ClientDatabase = {
 		 * honest fallback: "the write succeeded and I do not know what it stored" is not a record,
 		 * and inventing one is exactly the failure this replaced.
 		 */
-		create: async (input: Schema.Json) => {
-			const response = await runtime.bolt.command(
-				'collections.create',
-				{ collection, values: asJsonRecord(input) },
-				Schema.Json
-			);
-			invalidateWrite(runtime, collection);
-			const stored = storedRecordsOf(response)?.[0];
-			if (stored === undefined)
-				throw new Error(
-					`Creating a ${collection} record answered without the stored row, so there is nothing to return. The command reported: ${JSON.stringify(response)}`
-				);
-			return stored;
-		},
+		create: (input: Schema.Json) =>
+			Effect.runPromise(
+				Effect.gen(function* () {
+					const response = yield* commandEffect(runtime, 'collections.create', {
+						collection,
+						values: asJsonRecord(input)
+					});
+					yield* Effect.sync(() => invalidateWrite(runtime, collection));
+					const stored = storedRecordsOf(response)?.[0];
+					if (stored === undefined)
+						return yield* Effect.fail(
+							new Error(
+								`Creating a ${collection} record answered without the stored row, so there is nothing to return. The command reported: ${JSON.stringify(response)}`
+							)
+						);
+					return stored;
+				})
+			),
 		/** Answers with the stored row for the same reason `create` does — an update runs hooks too. */
-		update: async (recordId: string, input: Schema.Json) => {
-			const response = await runtime.bolt.command(
-				'collections.update',
-				{ collection, id: recordId, values: asJsonRecord(input) },
-				Schema.Json
-			);
-			invalidateWrite(runtime, collection);
-			const stored = storedRecordsOf(response)?.[0];
-			if (stored === undefined)
-				throw new Error(
-					`Updating ${collection} ${recordId} answered without the stored row, so there is nothing to return. The command reported: ${JSON.stringify(response)}`
-				);
-			return stored;
-		},
-		delete: async (recordId: string) => {
-			await runtime.bolt.command('collections.delete', { collection, id: recordId }, Schema.Json);
-			invalidateWrite(runtime, collection);
-		}
+		update: (recordId: string, input: Schema.Json) =>
+			Effect.runPromise(
+				Effect.gen(function* () {
+					const response = yield* commandEffect(runtime, 'collections.update', {
+						collection,
+						id: recordId,
+						values: asJsonRecord(input)
+					});
+					yield* Effect.sync(() => invalidateWrite(runtime, collection));
+					const stored = storedRecordsOf(response)?.[0];
+					if (stored === undefined)
+						return yield* Effect.fail(
+							new Error(
+								`Updating ${collection} ${recordId} answered without the stored row, so there is nothing to return. The command reported: ${JSON.stringify(response)}`
+							)
+						);
+					return stored;
+				})
+			),
+		delete: (recordId: string) =>
+			Effect.runPromise(
+				commandEffect(runtime, 'collections.delete', { collection, id: recordId }).pipe(
+					Effect.tap(() => Effect.sync(() => invalidateWrite(runtime, collection))),
+					Effect.asVoid
+				)
+			)
 	}),
 	database: (runtime: WorkspaceClientRuntime): Readonly<Record<string, unknown>> =>
 		new Proxy<Record<string, unknown>>(
@@ -488,137 +556,6 @@ const ClientDatabase = {
 					typeof property === 'string' ? ClientDatabase.collection(runtime, property) : undefined
 			}
 		)
-};
-
-/**
- * Where the replica left off, kept next to the cache it explains.
- *
- * `localStorage` rather than the IndexedDB the answers live in, because this is read *before* the
- * first diff and a synchronous read is what lets the resume happen without a round trip's delay. It
- * is one small value per scope; losing it costs a replay from the origin, never correctness.
- */
-const readStoredCursor = (key: string): SyncCursor | undefined => {
-	if (typeof localStorage === 'undefined') return undefined;
-	try {
-		const raw = localStorage.getItem(key);
-		if (raw === null) return undefined;
-		const parsed: unknown = JSON.parse(raw);
-		if (parsed === null || typeof parsed !== 'object') return undefined;
-		const xid = Reflect.get(parsed, 'xid');
-		const sequence = Reflect.get(parsed, 'sequence');
-		return typeof xid === 'number' && typeof sequence === 'number' ? { xid, sequence } : undefined;
-	} catch {
-		return undefined;
-	}
-};
-
-const writeStoredCursor = (key: string, cursor: SyncCursor): void => {
-	if (typeof localStorage === 'undefined') return;
-	try {
-		localStorage.setItem(key, JSON.stringify(cursor));
-	} catch {
-		// A full or disabled store costs a replay from the origin next boot, which is the behaviour
-		// this replaced. Nothing above needs to know.
-	}
-};
-
-export type BrowserReplica = Readonly<{
-	readonly store: LocalStore;
-	readonly client: SyncClient;
-	/** Pulls everything the server has for this subject and applies it locally. */
-	readonly refresh: () => Promise<number>;
-	readonly stop: () => void;
-}>;
-
-/**
- * Starts the reconstructible browser replica.
- *
- * The replica is a client projection of the sync outbox, never authority: it is rebuilt from the
- * server on demand and dropped whenever the server says the cursor fell off retained history.
- * Callers read from it for immediate answers and still issue writes through commands, which come
- * back through the same outbox.
- */
-export const startBrowserReplica = async (
-	runtime: WorkspaceClientRuntime,
-	options: {
-		readonly onAdvance?: (cursor: SyncCursor) => void;
-		readonly onError?: (cause: unknown) => void;
-	} = {}
-): Promise<BrowserReplica> => {
-	const store = createLocalStore();
-	const cache = runtime.cache;
-	const registry = runtime.queries;
-	const cursorKey = `bolt-sync-cursor::${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}`;
-	const storedCursor = readStoredCursor(cursorKey);
-
-	/**
-	 * Turns one applied batch into the invalidation it implies.
-	 *
-	 * A `reset` means the client fell off retained history, so nothing it holds is reconstructible and
-	 * the whole cache goes — the same conclusion the local store reaches for its rows.
-	 */
-	const invalidateNamed = (collections: ReadonlyArray<string>): void => {
-		if (cache === undefined || registry === undefined) return;
-		cache.invalidate(collections);
-		registry.refreshAffected(collections);
-	};
-
-	const collectionsIn = (changes: ReadonlyArray<SyncChange>): ReadonlyArray<string> =>
-		changes.some((change) => change.operation === 'reset')
-			? [ANY_COLLECTION]
-			: [...new Set(changes.map((change) => change.collection))];
-
-	const invalidateFor = (changes: ReadonlyArray<SyncChange>): void =>
-		invalidateNamed(collectionsIn(changes));
-
-	const client = createSyncClient({
-		transport: {
-			head: async () => decodeCursor(await runtime.bolt.command('sync.head', null, Schema.Json)),
-			diff: async (cursor, limit) =>
-				decodeChanges(await runtime.bolt.command('sync.diff', { cursor, limit }, Schema.Json))
-		},
-		sink: {
-			apply: async (changes) => {
-				await store.apply(changes);
-				invalidateFor(changes);
-			},
-			reset: async () => {
-				// The sync client calls this *instead of* `apply` for a reset batch, so the wildcard
-				// invalidation has to happen here rather than falling out of the change list. Everything
-				// cached predates a point the server no longer remembers, so none of it is trustworthy.
-				await store.reset();
-				cache?.clear();
-				registry?.refreshAffected([ANY_COLLECTION]);
-			}
-		},
-		// Resuming rather than replaying: the persisted cache already reflects everything up to this
-		// cursor, so a boot only needs what happened since. Replaying from the origin on every load was
-		// a full outbox read racing the page's own queries for the same connection.
-		...(storedCursor === undefined ? {} : { initialCursor: storedCursor }),
-		onAdvance: (cursor) => {
-			writeStoredCursor(cursorKey, cursor);
-			options.onAdvance?.(cursor);
-		},
-		...(options.onError === undefined ? {} : { onError: options.onError })
-	});
-	// A stored cursor can outlive the database it described — an environment reset, a reseed, a fork
-	// restored to an earlier point all leave the outbox shorter than the cursor claims. Resuming from
-	// it would ask for changes after a position that no longer exists and quietly receive nothing
-	// forever, which presents as "sync stopped working" with no error anywhere. Comparing against the
-	// server's head is one round trip and turns that into a rebuild.
-	if (storedCursor !== undefined) {
-		const head = await runtime.bolt
-			.command('sync.head', null, Schema.Json)
-			.then(decodeCursor)
-			.catch(() => undefined);
-		if (head !== undefined && compareCursors(storedCursor, head) > 0) {
-			cache?.clear();
-			await store.reset();
-			client.reset();
-		}
-	}
-	await client.drain();
-	return { store, client, refresh: client.drain, stop: client.stop };
 };
 
 /**
@@ -650,7 +587,7 @@ const REPLICA_CHANNEL = 'bolt_replica_changed';
  * Keyed by scope rather than by runtime, because the storage a replica opens is keyed by scope: two
  * runtimes for one workspace would otherwise collide in exactly the place this is protecting.
  */
-const runningReplicas = new Map<string, Promise<LocalReplica>>();
+const runningReplicas = new Map<string, Effect.Effect<LocalReplica, unknown>>();
 
 type RuntimeAccessState = {
 	current: string;
@@ -685,13 +622,13 @@ export const switchWorkspaceAccessScope = (
 	if (state.current === next) return;
 	state.current = next;
 	state.cache = createQueryCache(state.cacheNamespace(next));
-	if (runtime.local !== undefined) runtime.local.current = undefined;
+	if (runtime.local !== undefined) delete runtime.local.current;
 	runtime.queries?.refreshAffected([ANY_COLLECTION]);
 };
 
-export const startLocalReplica = async (
+export const startLocalReplica = (
 	runtime: WorkspaceClientRuntime,
-	open?: (steps: ReadonlyArray<ProvisioningStep>) => Promise<PGliteLike>,
+	open?: (steps: ReadonlyArray<ProvisioningStep>) => Effect.Effect<PGliteLike, unknown>,
 	options: {
 		readonly accessScope?: string;
 		readonly onChange?: (applied: number) => void;
@@ -701,249 +638,271 @@ export const startLocalReplica = async (
 	const accessScope = normalizedAccessScope(options.accessScope ?? accessScopeFor(runtime));
 	switchWorkspaceAccessScope(runtime, accessScope);
 	const key = `${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}::${accessScope}`;
-	const running = runningReplicas.get(key);
-	if (running !== undefined) return running;
-	// `stop` forgets the entry as well as closing the engine, so a caller that tears one down and
-	// mounts again gets a new replica rather than the corpse of the last one.
-	const started = startReplica(runtime, open, { ...options, accessScope }).then((replica) => ({
-		...replica,
-		stop: () => {
-			runningReplicas.delete(key);
-			replica.stop();
-		}
-	}));
-	runningReplicas.set(key, started);
-	// A failed start must not be remembered as a running replica: the usual reason to fail is that
-	// nobody had signed in yet, and the next caller is the one that just did.
-	void started.catch(() => runningReplicas.delete(key));
-	return started;
+	let running = runningReplicas.get(key);
+	if (running === undefined) {
+		// Cache the Effect, not a Promise: callers share the startup fiber while internal control flow
+		// remains in Effect. `runPromise` below is only the exported browser API adapter.
+		running = Effect.runSync(
+			Effect.cached(
+				startReplica(runtime, open, { ...options, accessScope }).pipe(
+					Effect.map((replica) => ({
+						...replica,
+						stop: () => {
+							runningReplicas.delete(key);
+							replica.stop();
+						}
+					})),
+					Effect.tapError(() => Effect.sync(() => runningReplicas.delete(key)))
+				)
+			)
+		);
+		runningReplicas.set(key, running);
+	}
+	return Effect.runPromise(running);
 };
 
-const startReplica = async (
+const startReplica = (
 	runtime: WorkspaceClientRuntime,
-	open: ((steps: ReadonlyArray<ProvisioningStep>) => Promise<PGliteLike>) | undefined,
+	open:
+		((steps: ReadonlyArray<ProvisioningStep>) => Effect.Effect<PGliteLike, unknown>) | undefined,
 	options: {
 		readonly accessScope: string;
 		readonly onChange?: (applied: number) => void;
 		readonly onError?: (cause: unknown) => void;
 	}
-): Promise<LocalReplica> => {
-	const cache = runtime.cache;
-	const registry = runtime.queries;
-	// Scoped to the workspace, because browser storage is shared across every workspace this browser
-	// has signed into and two built from the same template share a fingerprint.
-	const scope = `${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}::${options.accessScope}`;
-	const openEngine = open ?? ((steps: ReadonlyArray<ProvisioningStep>) => openPGlite(steps, scope));
-	const transport: BootstrapTransport = {
-		command: (command, input) => {
-			if (accessScopeFor(runtime) !== options.accessScope) {
-				return Promise.reject(new Error('Local replica access scope changed during startup'));
-			}
-			return runtime.bolt.command(command, input, Schema.Json);
+): Effect.Effect<LocalReplica, unknown> =>
+	Effect.gen(function* () {
+		const cache = runtime.cache;
+		const registry = runtime.queries;
+		// Scoped to the workspace, because browser storage is shared across every workspace this browser
+		// has signed into and two built from the same template share a fingerprint.
+		const scope = `${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}::${options.accessScope}`;
+		const openEngine =
+			open ?? ((steps: ReadonlyArray<ProvisioningStep>) => openPGlite(steps, scope));
+		const transport: BootstrapTransport = {
+			command: (command, input) =>
+				accessScopeFor(runtime) === options.accessScope
+					? commandEffect(runtime, command, input)
+					: Effect.fail(new Error('Local replica access scope changed during startup'))
+		};
+		const local = yield* openLocalDatabase(transport, openEngine);
+		if (accessScopeFor(runtime) !== options.accessScope) {
+			yield* local.close();
+			return yield* Effect.fail(new Error('Local replica access scope changed during startup'));
 		}
-	};
-	const local = await openLocalDatabase(transport, openEngine);
-	if (accessScopeFor(runtime) !== options.accessScope) {
-		await local.close();
-		throw new Error('Local replica access scope changed during startup');
-	}
-	// The snapshot brought in rows no cursor accounts for, so everything cached predates it.
-	cache?.clear();
-	registry?.refreshAffected([ANY_COLLECTION]);
+		// The snapshot brought in rows no cursor accounts for, so everything cached predates it.
+		cache?.clear();
+		registry?.refreshAffected([ANY_COLLECTION]);
 
-	const invalidateNamed = (collections: ReadonlyArray<string>): void => {
-		if (cache === undefined || registry === undefined) return;
-		cache.invalidate(collections);
-		registry.refreshAffected(collections);
-	};
+		const invalidateNamed = (collections: ReadonlyArray<string>): void => {
+			if (cache === undefined || registry === undefined) return;
+			cache.invalidate(collections);
+			registry.refreshAffected(collections);
+		};
 
-	const collectionsIn = (changes: ReadonlyArray<SyncChange>): ReadonlyArray<string> =>
-		changes.some((change) => change.operation === 'reset')
-			? [ANY_COLLECTION]
-			: [...new Set(changes.map((change) => change.collection))];
+		const collectionsIn = (changes: ReadonlyArray<SyncChange>): ReadonlyArray<string> =>
+			changes.some((change) => change.operation === 'reset')
+				? [ANY_COLLECTION]
+				: [...new Set(changes.map((change) => change.collection))];
 
-	const invalidateFor = (changes: ReadonlyArray<SyncChange>): void =>
-		invalidateNamed(collectionsIn(changes));
+		/**
+		 * Tells the other tabs what this one just applied.
+		 *
+		 * Only the leader streams, so without this a second tab would hold a database moving quietly
+		 * underneath it while its own cache and rendered queries stayed on the old rows — stale in exactly
+		 * the way the replica exists to prevent, and invisible because nothing errored.
+		 *
+		 * `pg_notify` rather than a `BroadcastChannel`: the notification travels with the database, so it
+		 * cannot outrun the rows it describes, and a tab with no shared engine simply has no listener and
+		 * loses nothing.
+		 */
+		// `pg_notify` is the replica's own channel infrastructure — SQL1 exception: this is the
+		// transport the engine's `listen` is bound to, and there is no builder for it. The collections
+		// are JSON-stringified into the payload, never used as statements.
+		const announceToTabs = (collections: ReadonlyArray<string>): Effect.Effect<void> =>
+			collections.length === 0
+				? Effect.void
+				: local.engine
+						.query('select pg_notify($1, $2)', [REPLICA_CHANNEL, JSON.stringify(collections)])
+						.pipe(
+							Effect.catch(() => Effect.void),
+							Effect.asVoid
+						);
 
-	/**
-	 * Tells the other tabs what this one just applied.
-	 *
-	 * Only the leader streams, so without this a second tab would hold a database moving quietly
-	 * underneath it while its own cache and rendered queries stayed on the old rows — stale in exactly
-	 * the way the replica exists to prevent, and invisible because nothing errored.
-	 *
-	 * `pg_notify` rather than a `BroadcastChannel`: the notification travels with the database, so it
-	 * cannot outrun the rows it describes, and a tab with no shared engine simply has no listener and
-	 * loses nothing.
-	 */
-	const announceToTabs = async (collections: ReadonlyArray<string>): Promise<void> => {
-		if (local.engine.listen === undefined || collections.length === 0) return;
-		await local.engine
-			.query('select pg_notify($1, $2)', [REPLICA_CHANNEL, JSON.stringify(collections)])
-			.catch(() => undefined);
-	};
-
-	const client = createSyncClient({
-		transport: {
-			head: async () => decodeCursor(await runtime.bolt.command('sync.head', null, Schema.Json)),
-			diff: async (cursor, limit) =>
-				decodeChanges(await runtime.bolt.command('sync.diff', { cursor, limit }, Schema.Json))
-		},
-		sink: {
-			apply: async (changes) => {
-				for (const change of changes) await local.sql.applyChange(change as unknown as Schema.Json);
-				const collections = collectionsIn(changes);
-				invalidateNamed(collections);
-				await announceToTabs(collections);
+		const client = yield* createSyncClient({
+			transport: {
+				head: () => commandEffect(runtime, 'sync.head', null).pipe(Effect.map(decodeCursor)),
+				diff: (cursor, limit) =>
+					commandEffect(runtime, 'sync.diff', { cursor, limit }).pipe(Effect.map(decodeChanges))
 			},
-			reset: async () => {
-				await local.sql.reset();
-				cache?.clear();
-				registry?.refreshAffected([ANY_COLLECTION]);
-				await announceToTabs([ANY_COLLECTION]);
-			}
-		},
-		initialCursor: local.cursor,
-		// Recorded in the replica's own database, in the same place as the rows it explains, so a reload
-		// resumes exactly where this session stopped rather than re-reading the whole workspace.
-		onAdvance: (cursor) => void local.record(cursor).catch(() => undefined),
-		...(options.onError === undefined ? {} : { onError: options.onError })
-	});
-	/**
-	 * One drain in flight at a time, and one more queued behind it.
-	 *
-	 * A burst of writes produces a burst of frames, and starting a drain per frame would have several
-	 * reading the same cursor and applying the same batch. `drain()` already collapses concurrent
-	 * callers, so this only has to make sure a frame that arrives mid-drain is not lost: the trailing
-	 * pass picks up whatever the in-flight one did not see.
-	 */
-	let draining: Promise<void> | undefined;
-	let pending = false;
-	const catchUp = (): void => {
-		if (draining !== undefined) {
-			pending = true;
-			return;
-		}
-		draining = client
-			.drain()
-			.then((applied) => {
-				if (applied > 0) options.onChange?.(applied);
-			})
-			.catch((cause: unknown) => options.onError?.(cause))
-			.finally(() => {
-				draining = undefined;
-				if (!pending) return;
-				pending = false;
-				catchUp();
-			});
-	};
-
-	/**
-	 * Exactly one tab streams.
-	 *
-	 * The database is shared, so a per-tab sync loop would have every open tab fetching the same
-	 * diffs and applying them to the same rows — N times the requests and N times the writes to reach
-	 * one outcome, with the cursor being advanced by whichever tab got there first. Leadership is
-	 * already decided for us: the tab holding the database is the one that should feed it.
-	 *
-	 * A tab that is not the leader opens no stream at all, which is the point — one SSE connection
-	 * per browser instead of one per tab. Browsers cap concurrent connections per host, so tabs used
-	 * to compete for that budget with the very requests the pages were waiting on.
-	 */
-	// An absent `isLeader` means an unshared engine — the test harness, or a browser without workers —
-	// which is the same thing as being the only tab.
-	const leads = (): boolean => local.engine.isLeader !== false;
-
-	let subscription: Subscription | undefined;
-	const streamIfLeading = (): void => {
-		if (!leads() || subscription !== undefined) return;
-		// The host tells us when to look; nothing here asks on a timer. A frame names the collections
-		// that changed, but the cursor decides what is actually fetched, so the names are not read
-		// here — acting on them would be a second, weaker version of the ordering `sync.diff` gives.
-		subscription = subscribeToChanges({
-			onChange: () => catchUp(),
-			// A reconnect can span a gap in which anything might have happened, so every open catches
-			// up rather than waiting for the next write to arrive.
-			onOpen: () => catchUp(),
-			...(options.onError === undefined ? {} : { onError: options.onError })
+			sink: {
+				apply: (changes) =>
+					Effect.gen(function* () {
+						yield* Effect.forEach(changes, local.sql.applyChange, { discard: true });
+						const collections = collectionsIn(changes);
+						yield* Effect.sync(() => invalidateNamed(collections));
+						yield* announceToTabs(collections);
+					}),
+				reset: () =>
+					Effect.gen(function* () {
+						yield* local.sql.reset();
+						yield* Effect.sync(() => {
+							cache?.clear();
+							registry?.refreshAffected([ANY_COLLECTION]);
+						});
+						yield* announceToTabs([ANY_COLLECTION]);
+					})
+			},
+			initialCursor: local.cursor,
+			// Recorded in the replica's own database, in the same place as the rows it explains, so a reload
+			// resumes exactly where this session stopped rather than re-reading the whole workspace.
+			onAdvance: (cursor) => local.record(cursor).pipe(Effect.catch(() => Effect.void)),
+			onError: options.onError
 		});
-	};
-	streamIfLeading();
-
-	/**
-	 * Leadership moves when the leading tab closes, and the sync loop has to move with it.
-	 *
-	 * Without this, closing the one tab that happened to be elected would leave every remaining tab
-	 * holding a live database that nothing was feeding: no stream, no drain, and no error — the
-	 * workspace would simply stop updating until someone reloaded. The inherited stream catches up on
-	 * open, so the gap between the old leader dying and the new one connecting is closed by the
-	 * cursor rather than lost.
-	 */
-	/**
-	 * From here on, reads this replica can answer identically are answered from it.
-	 *
-	 * Installed after the snapshot rather than before: until the rows are in, a local answer would be
-	 * a confident empty result, which is worse than a slow correct one.
-	 */
-	if (runtime.local !== undefined && accessScopeFor(runtime) === options.accessScope) {
-		runtime.local.current = createLocalReader(local.engine, local.shape, local.readable);
-	}
-
-	const stopWatchingLeader = local.engine.onLeaderChange?.(() => {
-		if (leads()) {
-			streamIfLeading();
-			catchUp();
-			return;
-		}
-		// Demotion is possible in principle; drop the stream rather than stream in duplicate.
-		subscription?.stop();
-		subscription = undefined;
-	});
-
-	/**
-	 * Every tab listens, including the leader's followers who never fetch anything themselves.
-	 *
-	 * This is what makes a second tab correct rather than merely cheap: it holds no stream and runs
-	 * no drain, so the only way it learns that its rendered queries are stale is the leader saying so
-	 * through the database they share.
-	 */
-	const stopListening = await local.engine
-		.listen?.(REPLICA_CHANNEL, (payload) => {
-			// The leader already invalidated its own; this is for everybody else.
-			if (leads()) return;
-			try {
-				const named: unknown = JSON.parse(payload);
-				invalidateNamed(
-					Array.isArray(named)
-						? named.filter((entry): entry is string => typeof entry === 'string')
-						: [ANY_COLLECTION]
-				);
-			} catch {
-				// An unreadable announcement still means something changed, and refreshing everything is
-				// the safe reading of it.
-				invalidateNamed([ANY_COLLECTION]);
+		/**
+		 * One drain in flight at a time, and one more queued behind it.
+		 *
+		 * A burst of writes produces a burst of frames, and starting a drain per frame would have several
+		 * reading the same cursor and applying the same batch. `drain()` already collapses concurrent
+		 * callers, so this only has to make sure a frame that arrives mid-drain is not lost: the trailing
+		 * pass picks up whatever the in-flight one did not see.
+		 */
+		let draining = false;
+		let pending = false;
+		const catchUp = (): void => {
+			if (draining) {
+				pending = true;
+				return;
 			}
-		})
-		.catch(() => undefined);
+			draining = true;
+			Effect.runFork(
+				client.drain().pipe(
+					Effect.tap((applied) =>
+						Effect.sync(() => {
+							if (applied > 0) options.onChange?.(applied);
+						})
+					),
+					Effect.catch((cause) => Effect.sync(() => options.onError?.(cause))),
+					Effect.ensuring(
+						Effect.sync(() => {
+							draining = false;
+							if (!pending) return;
+							pending = false;
+							catchUp();
+						})
+					)
+				)
+			);
+		};
 
-	return {
-		sql: local.sql,
-		fingerprint: local.fingerprint,
-		rows: local.rows,
-		poke: catchUp,
-		leader: leads,
-		stop: () => {
-			// Withdrawn first: a closed database that is still being asked would fail every read that
-			// had been succeeding, rather than quietly going back to the wire.
-			if (runtime.local !== undefined) runtime.local.current = undefined;
-			stopWatchingLeader?.();
-			void stopListening?.();
-			subscription?.stop();
-			client.stop();
-			void local.close();
+		/**
+		 * Exactly one tab streams.
+		 *
+		 * The database is shared, so a per-tab sync loop would have every open tab fetching the same
+		 * diffs and applying them to the same rows — N times the requests and N times the writes to reach
+		 * one outcome, with the cursor being advanced by whichever tab got there first. Leadership is
+		 * already decided for us: the tab holding the database is the one that should feed it.
+		 *
+		 * A tab that is not the leader opens no stream at all, which is the point — one SSE connection
+		 * per browser instead of one per tab. Browsers cap concurrent connections per host, so tabs used
+		 * to compete for that budget with the very requests the pages were waiting on.
+		 */
+		// An absent `isLeader` means an unshared engine — the test harness, or a browser without workers —
+		// which is the same thing as being the only tab.
+		const leads = (): boolean => local.engine.isLeader !== false;
+
+		let subscription: Subscription | undefined;
+		const streamIfLeading = (): void => {
+			if (!leads() || subscription !== undefined) return;
+			// The host tells us when to look; nothing here asks on a timer. A frame names the collections
+			// that changed, but the cursor decides what is actually fetched, so the names are not read
+			// here — acting on them would be a second, weaker version of the ordering `sync.diff` gives.
+			subscription = subscribeToChanges({
+				onChange: () => catchUp(),
+				// A reconnect can span a gap in which anything might have happened, so every open catches
+				// up rather than waiting for the next write to arrive.
+				onOpen: () => catchUp(),
+				onError: options.onError
+			});
+		};
+		streamIfLeading();
+
+		/**
+		 * Leadership moves when the leading tab closes, and the sync loop has to move with it.
+		 *
+		 * Without this, closing the one tab that happened to be elected would leave every remaining tab
+		 * holding a live database that nothing was feeding: no stream, no drain, and no error — the
+		 * workspace would simply stop updating until someone reloaded. The inherited stream catches up on
+		 * open, so the gap between the old leader dying and the new one connecting is closed by the
+		 * cursor rather than lost.
+		 */
+		/**
+		 * From here on, reads this replica can answer identically are answered from it.
+		 *
+		 * Installed after the snapshot rather than before: until the rows are in, a local answer would be
+		 * a confident empty result, which is worse than a slow correct one.
+		 */
+		if (runtime.local !== undefined && accessScopeFor(runtime) === options.accessScope) {
+			runtime.local.current = createLocalReader(local.engine, local.shape, local.readable);
 		}
-	};
-};
+
+		const stopWatchingLeader = local.engine.onLeaderChange(() => {
+			if (leads()) {
+				streamIfLeading();
+				catchUp();
+				return;
+			}
+			// Demotion is possible in principle; drop the stream rather than stream in duplicate.
+			subscription?.stop();
+			subscription = undefined;
+		});
+
+		/**
+		 * Every tab listens, including the leader's followers who never fetch anything themselves.
+		 *
+		 * This is what makes a second tab correct rather than merely cheap: it holds no stream and runs
+		 * no drain, so the only way it learns that its rendered queries are stale is the leader saying so
+		 * through the database they share.
+		 */
+		const stopListening = yield* local.engine
+			.listen(REPLICA_CHANNEL, (payload) => {
+				// The leader already invalidated its own; this is for everybody else.
+				if (leads()) return;
+				// The payload is `JSON.stringify(collections)`, and an unreadable announcement still means
+				// something changed — refreshing everything is the safe reading of it.
+				const named = Result.getOrElse(
+					Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Array(Schema.String)))(payload),
+					() => null
+				);
+				invalidateNamed(named ?? [ANY_COLLECTION]);
+			})
+			.pipe(Effect.catch(() => Effect.succeed(() => Effect.void)));
+
+		return {
+			sql: local.sql,
+			fingerprint: local.fingerprint,
+			rows: local.rows,
+			poke: catchUp,
+			leader: leads,
+			stop: () => {
+				// Withdrawn first: a closed database that is still being asked would fail every read that
+				// had been succeeding, rather than quietly going back to the wire.
+				if (runtime.local !== undefined) delete runtime.local.current;
+				stopWatchingLeader?.();
+				subscription?.stop();
+				client.stop();
+				Effect.runFork(
+					Effect.all(
+						[
+							stopListening().pipe(Effect.catch(() => Effect.void)),
+							local.close().pipe(Effect.catch(() => Effect.void))
+						],
+						{ concurrency: 'unbounded', discard: true }
+					)
+				);
+			}
+		};
+	});
 
 export type LocalReplica = Readonly<{
 	readonly sql: LocalSql;

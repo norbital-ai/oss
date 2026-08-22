@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import type { Side } from './index.js';
+	import type { Side } from '#lib/sheet';
+	import { Number as Number_ } from 'effect';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -37,15 +38,27 @@
 		onHeightChange
 	}: SheetContentResizeProps = $props();
 
-	let resizing = $state<'width' | 'height' | null>(null);
-	let startX = 0;
-	let startY = 0;
-	let startWidth = 0;
-	let startHeight = 0;
-	let activePointerId: number | null = null;
-	let activeHandleElement: HTMLElement | null = null;
-	let maxDragHeight = 0;
-	let liveHeight: number | null = null;
+	let resizeState = $state<{
+		mode: 'width' | 'height' | null;
+		startX: number;
+		startY: number;
+		startWidth: number;
+		startHeight: number;
+		pointerId: number | null;
+		handleElement: HTMLElement | null;
+		maxDragHeight: number;
+		liveHeight: number | null;
+	}>({
+		mode: null,
+		startX: 0,
+		startY: 0,
+		startWidth: 0,
+		startHeight: 0,
+		pointerId: null,
+		handleElement: null,
+		maxDragHeight: 0,
+		liveHeight: null
+	});
 
 	function containerWidth(): number {
 		return contained ? (ref.parentElement?.clientWidth ?? window.innerWidth) : window.innerWidth;
@@ -59,15 +72,35 @@
 	 * Reset transient resize state and restore document affordances.
 	 */
 	function cleanupResizeState(): void {
-		const pointerId = activePointerId;
-		resizing = null;
-		activePointerId = null;
-		if (pointerId !== null && activeHandleElement?.hasPointerCapture(pointerId)) {
-			activeHandleElement.releasePointerCapture(pointerId);
+		const pointerId = resizeState.pointerId;
+		const handleElement = resizeState.handleElement;
+		resizeState.mode = null;
+		resizeState.pointerId = null;
+		resizeState.handleElement = null;
+		resizeState.liveHeight = null;
+		if (pointerId !== null && handleElement?.hasPointerCapture(pointerId)) {
+			handleElement.releasePointerCapture(pointerId);
 		}
-		activeHandleElement = null;
 		document.body.style.cursor = '';
 		document.body.style.userSelect = '';
+	}
+
+	function beginResize(mode: 'width' | 'height', event: PointerEvent): void {
+		const handleElement = event.currentTarget;
+		if (!(handleElement instanceof HTMLElement)) return;
+		resizeState.mode = mode;
+		resizeState.pointerId = event.pointerId;
+		resizeState.handleElement = handleElement;
+		if (mode === 'width') {
+			resizeState.startX = event.clientX;
+			resizeState.startWidth = ref.offsetWidth;
+		} else {
+			resizeState.startY = event.clientY;
+			resizeState.startHeight = ref.offsetHeight;
+			resizeState.maxDragHeight = containerHeight() * 0.95;
+			resizeState.liveHeight = resizeState.startHeight;
+		}
+		handleElement.setPointerCapture(event.pointerId);
 	}
 
 	/**
@@ -79,12 +112,7 @@
 		}
 		if (!(event.currentTarget instanceof HTMLElement)) return;
 		event.preventDefault();
-		resizing = 'width';
-		activePointerId = event.pointerId;
-		activeHandleElement = event.currentTarget;
-		startX = event.clientX;
-		startWidth = ref.offsetWidth;
-		activeHandleElement.setPointerCapture(event.pointerId);
+		beginResize('width', event);
 		document.body.style.cursor = 'ew-resize';
 		document.body.style.userSelect = 'none';
 	}
@@ -98,21 +126,14 @@
 		}
 		if (!(event.currentTarget instanceof HTMLElement)) return;
 		event.preventDefault();
-		resizing = 'height';
-		activePointerId = event.pointerId;
-		activeHandleElement = event.currentTarget;
-		startY = event.clientY;
-		startHeight = ref.offsetHeight;
-		maxDragHeight = containerHeight() * 0.95;
-		liveHeight = startHeight;
-		activeHandleElement.setPointerCapture(event.pointerId);
+		beginResize('height', event);
 		document.body.style.cursor = 'ns-resize';
 		document.body.style.userSelect = 'none';
 	}
 
 	function clampHeight(height: number, maxHeight = containerHeight() * 0.95): number {
 		const minHeight = 200;
-		return Math.max(minHeight, Math.min(height, maxHeight));
+		return Number_.clamp(height, { minimum: minHeight, maximum: maxHeight });
 	}
 
 	function renderHeight(height: number, maxHeight = containerHeight() * 0.95): number {
@@ -121,7 +142,7 @@
 		// custom property lets the browser paint the sheet at pointer speed without
 		// invalidating every child component.
 		ref.style.setProperty('--sheet-height', `${nextHeight}px`);
-		liveHeight = nextHeight;
+		resizeState.liveHeight = nextHeight;
 		return nextHeight;
 	}
 
@@ -148,29 +169,29 @@
 	 * Handle pointer move during resizing.
 	 */
 	function handlePointerMove(event: PointerEvent): void {
-		if (activePointerId !== event.pointerId) return;
+		if (resizeState.pointerId !== event.pointerId) return;
 		event.preventDefault();
 
-		if (resizing === 'width') {
-			const deltaX = event.clientX - startX;
+		if (resizeState.mode === 'width') {
+			const deltaX = event.clientX - resizeState.startX;
 			let newWidth: number;
 
 			if (side === 'right') {
-				newWidth = startWidth - deltaX;
+				newWidth = resizeState.startWidth - deltaX;
 			} else {
-				newWidth = startWidth + deltaX;
+				newWidth = resizeState.startWidth + deltaX;
 			}
 
 			const minWidth = 300;
 			const maxWidth = containerWidth() * 0.9;
-			newWidth = Math.max(minWidth, Math.min(newWidth, maxWidth));
+			newWidth = Number_.clamp(newWidth, { minimum: minWidth, maximum: maxWidth });
 			ref.style.width = `${newWidth}px`;
 			return;
 		}
 
-		if (resizing === 'height') {
-			const deltaY = startY - event.clientY;
-			renderHeight(startHeight + deltaY, maxDragHeight);
+		if (resizeState.mode === 'height') {
+			const deltaY = resizeState.startY - event.clientY;
+			renderHeight(resizeState.startHeight + deltaY, resizeState.maxDragHeight);
 		}
 	}
 
@@ -178,30 +199,22 @@
 	 * Stop resizing when the active pointer ends or is cancelled.
 	 */
 	function finishResize(event?: PointerEvent): void {
-		if (!resizing) {
+		if (!resizeState.mode) {
 			return;
 		}
-		if (event && activePointerId !== null && event.pointerId !== activePointerId) {
+		if (event && resizeState.pointerId !== null && event.pointerId !== resizeState.pointerId) {
 			return;
 		}
-		const wasResizingWidth = resizing === 'width';
-		const finalHeight = resizing === 'height' ? (liveHeight ?? ref.offsetHeight) : null;
+		const wasResizingWidth = resizeState.mode === 'width';
+		const finalHeight =
+			resizeState.mode === 'height' ? (resizeState.liveHeight ?? ref.offsetHeight) : null;
 		cleanupResizeState();
 		if (wasResizingWidth) onResize();
 		if (finalHeight !== null) onHeightChange?.(finalHeight);
-		liveHeight = null;
 	}
 
 	function handleWindowBlur(): void {
-		if (!resizing) {
-			return;
-		}
-		const wasResizingWidth = resizing === 'width';
-		const finalHeight = resizing === 'height' ? (liveHeight ?? ref.offsetHeight) : null;
-		cleanupResizeState();
-		if (wasResizingWidth) onResize();
-		if (finalHeight !== null) onHeightChange?.(finalHeight);
-		liveHeight = null;
+		finishResize();
 	}
 
 	/**
@@ -228,7 +241,7 @@
 		onkeydown={handleHeightKeyDown}
 	>
 		<div
-			class="h-1 w-10 rounded-full bg-border transition-colors duration-150 hover:bg-input active:bg-input {resizing ===
+			class="h-1 w-10 rounded-full bg-border transition-colors duration-150 hover:bg-input active:bg-input {resizeState.mode ===
 			'height'
 				? 'bg-input'
 				: ''}"
@@ -255,7 +268,7 @@
 	<div
 		class="h-12 w-1.5 rounded-full bg-border transition-colors duration-150
 			   hover:bg-input active:bg-input
-			   {resizing === 'width' ? 'bg-input' : ''}"
+			   {resizeState.mode === 'width' ? 'bg-input' : ''}"
 	>
 		<!-- Optional: Add subtle pattern/texture -->
 		<div class="h-full w-full rounded-full bg-linear-to-b from-white/10 to-transparent"></div>

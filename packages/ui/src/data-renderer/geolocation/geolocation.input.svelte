@@ -9,7 +9,8 @@
 	import { StaticMap } from '#lib/static-map';
 	import { Cluster, Inline, Stack } from '#lib/layout';
 	import { resource } from 'runed';
-	import type { TGeolocationPickerValue } from './geolocation.utils.js';
+	import { Effect } from 'effect';
+	import type { TGeolocationPickerValue } from '#lib/data-renderer/geolocation/geolocation.utils';
 
 	type LocationOption = TOption<TGeolocationPickerValue, Record<string, never>>;
 
@@ -29,7 +30,7 @@
 		readonly?: boolean;
 		searchPlaceholder?: string;
 		sameWidth?: boolean;
-		autocomplete: (query: string) => Promise<TGeolocationPickerValue[]>;
+		autocomplete: (query: string) => Effect.Effect<TGeolocationPickerValue[], unknown>;
 	};
 
 	type GeolocationPickerProps =
@@ -69,18 +70,16 @@
 
 	const searchResource = resource(
 		() => searchText,
-		(query) => autocomplete(query),
+		(query) => Effect.runPromise(autocomplete(query)),
 		{
 			debounce: 300,
 			initialValue: []
 		}
 	);
 
-	const displayValue = $derived(value);
-
 	const selectedLocations = $derived.by((): TGeolocationPickerValue[] => {
-		if (!displayValue) return [];
-		return Array.isArray(displayValue) ? displayValue : [displayValue];
+		if (!value) return [];
+		return Array.isArray(value) ? value : [value];
 	});
 
 	const hasValidValues = $derived(selectedLocations.length > 0);
@@ -88,16 +87,16 @@
 	const locationOptions = $derived.by((): LocationOption[] => {
 		const uniqueByAddress: Record<string, TGeolocationPickerValue> = {};
 
-		if (displayValue) {
-			if (multiple && Array.isArray(displayValue)) {
-				displayValue.forEach((selectedValue) => {
+		if (value) {
+			if (multiple && Array.isArray(value)) {
+				value.forEach((selectedValue) => {
 					if (selectedValue?.formatted_address) {
 						uniqueByAddress[selectedValue.formatted_address] = selectedValue;
 					}
 				});
-			} else if (!multiple && !Array.isArray(displayValue)) {
-				if (displayValue.formatted_address) {
-					uniqueByAddress[displayValue.formatted_address] = displayValue;
+			} else if (!multiple && !Array.isArray(value)) {
+				if (value.formatted_address) {
+					uniqueByAddress[value.formatted_address] = value;
 				}
 			}
 		}
@@ -364,7 +363,7 @@
 <Combobox
 	type="server"
 	class={className ? `${className} group` : 'group'}
-	value={displayValue}
+	{value}
 	align="start"
 	minWidth={readonly ? 400 : undefined}
 	{sameWidth}

@@ -1,28 +1,34 @@
-import { Schema } from 'effect';
-import { workspaceSession } from '../../session.js';
+import { Effect, Schema } from 'effect';
+import { workspaceSession } from '#lib/client/session.js';
 
-export type CollectionExportInput = Readonly<
-	(
-		| { readonly collection: string; readonly collection_name?: never }
-		| { readonly collection?: never; readonly collection_name: string }
-	) & {
-		readonly records?: ReadonlyArray<string>;
-		readonly record_ids?: ReadonlyArray<string>;
-		readonly pipeline?: string;
-		readonly scope?: unknown;
-	}
->;
-export type ExportAttachment = Readonly<{
-	readonly name: string;
-	readonly contentType: string;
-	readonly content: unknown;
-}>;
-export type ExportAction = Readonly<{
-	readonly label: string;
-	readonly attachments: ReadonlyArray<ExportAttachment>;
-	readonly metadata?: Readonly<Record<string, unknown>>;
-}>;
-export type ExportManifest = Readonly<ReadonlyArray<ExportAction>>;
+const ExportSelectionSchema = {
+	records: Schema.optionalKey(Schema.Array(Schema.String)),
+	record_ids: Schema.optionalKey(Schema.Array(Schema.String)),
+	pipeline: Schema.optionalKey(Schema.String),
+	scope: Schema.optionalKey(Schema.Json)
+};
+const CollectionExportInputSchema = Schema.Union([
+	Schema.Struct({ collection: Schema.String, ...ExportSelectionSchema }),
+	Schema.Struct({ collection_name: Schema.String, ...ExportSelectionSchema })
+]);
+export type CollectionExportInput = typeof CollectionExportInputSchema.Type;
+
+const ExportAttachmentSchema = Schema.Struct({
+	name: Schema.String,
+	contentType: Schema.String,
+	content: Schema.Unknown
+});
+export type ExportAttachment = typeof ExportAttachmentSchema.Type;
+
+const ExportActionSchema = Schema.Struct({
+	label: Schema.String,
+	attachments: Schema.Array(ExportAttachmentSchema),
+	metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown))
+});
+export type ExportAction = typeof ExportActionSchema.Type;
+
+const ExportManifestSchema = Schema.Array(ExportActionSchema);
+export type ExportManifest = typeof ExportManifestSchema.Type;
 export type CollectionExportOptions = Readonly<{
 	readonly includeAction?: (action: ExportAction) => boolean;
 }>;
@@ -35,17 +41,7 @@ export type CollectionExportOptions = Readonly<{
  * that has to surface here rather than as `undefined.length` inside a download button. Decoding also
  * strips keys the manifest does not declare, which is what the zod schemas these replaced did.
  */
-const decodeExportManifest = Schema.decodeUnknownSync(
-	Schema.Array(
-		Schema.Struct({
-			label: Schema.String,
-			attachments: Schema.Array(
-				Schema.Struct({ name: Schema.String, contentType: Schema.String, content: Schema.Unknown })
-			),
-			metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown))
-		})
-	)
-);
+const decodeExportManifest = Schema.decodeUnknownEffect(ExportManifestSchema);
 /**
  * The import command answers with a count, not with the records it wrote.
  *
@@ -55,7 +51,7 @@ const decodeExportManifest = Schema.decodeUnknownSync(
  * own row count, and so the only number a caller can honestly put in front of a person. This used to
  * decode an array of records, which no version of the command has ever sent.
  */
-const decodeImportResult = Schema.decodeUnknownSync(Schema.Struct({ imported: Schema.Number }));
+const decodeImportResult = Schema.decodeUnknownEffect(Schema.Struct({ imported: Schema.Number }));
 
 /**
  * Export and import over the session's transport, not over a third `fetch`.
@@ -65,22 +61,29 @@ const decodeImportResult = Schema.decodeUnknownSync(Schema.Struct({ imported: Sc
  * disagree with the other two about where a command goes and who is issuing it.
  */
 const CollectionTransfer = {
-	download: async (
+	download: (
 		input: CollectionExportInput,
 		options: CollectionExportOptions = {}
-	): Promise<ExportManifest> => {
-		const manifest = decodeExportManifest(
-			await workspaceSession().transport.command(
-				'collections.export',
-				input as unknown as Schema.Json
+	): Promise<ExportManifest> =>
+		Effect.runPromise(
+			Effect.tryPromise(() =>
+				workspaceSession().transport.command('collections.export', input)
+			).pipe(
+				Effect.flatMap(decodeExportManifest),
+				Effect.map((manifest) =>
+					options.includeAction === undefined ? manifest : manifest.filter(options.includeAction)
+				)
 			)
-		);
-		return options.includeAction === undefined ? manifest : manifest.filter(options.includeAction);
-	},
-	importRecords: async (input: CollectionImportInput): Promise<number> =>
-		decodeImportResult(
-			await workspaceSession().transport.command('collections.import', input as Schema.Json)
-		).imported
+		),
+	importRecords: (input: CollectionImportInput): Promise<number> =>
+		Effect.runPromise(
+			Effect.tryPromise(() =>
+				workspaceSession().transport.command('collections.import', input)
+			).pipe(
+				Effect.flatMap(decodeImportResult),
+				Effect.map((result) => result.imported)
+			)
+		)
 };
 export const downloadCollectionExport = CollectionTransfer.download;
 
@@ -103,11 +106,12 @@ export const downloadCollectionExport = CollectionTransfer.download;
  * builds it, while an import posts a document whose id is a handle on the posted file rather than
  * on any row, and the pipeline decides what rows the file becomes.
  */
-export type CollectionImportRecord = Readonly<{
-	readonly collection: string;
-	readonly id: string;
-	readonly values: Readonly<Record<string, unknown>>;
-}>;
+const CollectionImportRecordSchema = Schema.Struct({
+	collection: Schema.String,
+	id: Schema.String,
+	values: Schema.Record(Schema.String, Schema.Json)
+});
+export type CollectionImportRecord = typeof CollectionImportRecordSchema.Type;
 /**
  * The command's declared body, and nothing besides.
  *
@@ -120,8 +124,9 @@ export type CollectionImportRecord = Readonly<{
  * other tenant-data command: a body that could name its own subject is a body that could write into
  * someone else's tenant.
  */
-export type CollectionImportInput = Readonly<{
-	readonly records: ReadonlyArray<CollectionImportRecord>;
-}>;
+const CollectionImportInputSchema = Schema.Struct({
+	records: Schema.Array(CollectionImportRecordSchema)
+});
+export type CollectionImportInput = typeof CollectionImportInputSchema.Type;
 /** Owns import collection records behavior at the state boundary so validation and typed semantics stay consistent for every caller. */
 export const importCollectionRecords = CollectionTransfer.importRecords;

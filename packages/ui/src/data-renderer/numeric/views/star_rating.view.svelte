@@ -1,11 +1,12 @@
 <script lang="ts">
+	import { Number as Number_ } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import { Star, StarRating } from '#lib/star-rating';
 	import { cn } from '#lib/utils';
-	import type { DataRendererProps } from '../../data-renderer.types.js';
+	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 
 	interface Props extends DataRendererProps {
 		max: number;
@@ -30,7 +31,7 @@
 	const scalarValue = $derived(typeof value === 'number' ? value : null);
 
 	function normalized(next: number): number {
-		return Math.min(max, Math.max(0, next));
+		return Number_.clamp({ minimum: 0, maximum: max })(next);
 	}
 
 	function updateArrayItem(index: number, nextValue: number): void {

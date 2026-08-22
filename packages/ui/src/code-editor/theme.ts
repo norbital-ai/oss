@@ -2,7 +2,7 @@ import { tags as t } from '@lezer/highlight';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import type { Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import type { CodeEditorLanguage } from './code-editor.types.js';
+import type { CodeEditorLanguage } from '#lib/code-editor/languages';
 
 const editorFont = 'var(--font-mono)';
 const proseFont = 'var(--font-sans)';

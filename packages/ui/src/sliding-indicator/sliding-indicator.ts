@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { tick } from 'svelte';
 
 /** Shared duration for sliding selection indicators (tabs, file tree, sidebar rail). */
@@ -34,8 +35,10 @@ export function formatSlidingIndicatorStyle(
 
 export type SlidingIndicatorPositioned = { current: boolean };
 
-export function bindSlidingIndicatorMeasure(config: {
+/** Wiring a sliding indicator to a DOM measure: where the target lives and how its rect lands on a style string. */
+type SlidingIndicatorMeasureConfig = {
 	getTarget: () => HTMLElement | null;
+	getRect?: (target: HTMLElement) => SlidingIndicatorRect | null;
 	whenHidden?: () => boolean;
 	onStyle: (style: string) => void;
 	positioned: SlidingIndicatorPositioned;
@@ -43,7 +46,11 @@ export function bindSlidingIndicatorMeasure(config: {
 		rect: SlidingIndicatorRect,
 		options: { useTransition: boolean; hasPositioned: boolean }
 	) => string;
-}): (animate: boolean) => void {
+};
+
+export function bindSlidingIndicatorMeasure(
+	config: SlidingIndicatorMeasureConfig
+): (animate: boolean) => void {
 	const formatStyle = config.formatStyle ?? formatSlidingIndicatorStyle;
 
 	function measure(useTransition: boolean): void {
@@ -56,8 +63,14 @@ export function bindSlidingIndicatorMeasure(config: {
 			config.onStyle('opacity: 0;');
 			return;
 		}
+		const rect =
+			config.getRect === undefined ? rectFromOffsetElement(target) : config.getRect(target);
+		if (rect === null) {
+			config.onStyle('opacity: 0;');
+			return;
+		}
 		config.onStyle(
-			formatStyle(rectFromOffsetElement(target), {
+			formatStyle(rect, {
 				useTransition,
 				hasPositioned: config.positioned.current
 			})
@@ -126,7 +139,12 @@ export function createSlidingIndicatorScheduler(
 			raf = 0;
 			const shouldAnimate = animateNext;
 			animateNext = false;
-			void tick().then(() => runMeasure(shouldAnimate));
+			void Effect.runPromise(
+				Effect.gen(function* () {
+					yield* Effect.promise(() => tick());
+					runMeasure(shouldAnimate);
+				})
+			);
 		};
 
 		if (animateNext) {

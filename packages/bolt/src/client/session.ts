@@ -1,4 +1,4 @@
-import type { BoltTransport } from '../client.js';
+import type { BoltTransport } from '#lib/client.js';
 
 /**
  * The host capabilities a workspace surface may use, named one by one.

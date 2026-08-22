@@ -1,5 +1,5 @@
 import type { Schema } from 'effect';
-import type { FieldDefinition } from '../../authoring/workspace-schema.js';
+import type { FieldDefinition } from '#lib/authoring/workspace-schema.js';
 
 /**
  * Checks `custom()` column values against the schema their type declares.

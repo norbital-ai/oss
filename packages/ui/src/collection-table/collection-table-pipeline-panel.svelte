@@ -4,7 +4,7 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
-	import type { CollectionTablePipeline } from './collection-table.types.js';
+	import type { CollectionTablePipeline } from '#lib/collection-table/collection-table.types';
 
 	const { t } = useI18n<UiKeys>();
 

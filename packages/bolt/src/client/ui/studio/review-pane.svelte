@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Effect, Schema } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Cluster, Scroll, Stack } from '@norbital-ai/ui/layout';
-	import type { SourceSnapshot, StudioReviewTab } from './studio-state.js';
+	import type { SourceSnapshot, StudioReviewTab } from '#lib/client/ui/studio/studio-state.js';
+	import type { SystemClientApi } from '#lib/client/system-client.js';
 
 	/**
 	 * Review's main viewport: where a proposed release would be read before it is let into Live.
@@ -19,54 +19,32 @@
 	let {
 		tab = 'requests',
 		source,
-		command
+		system
 	}: {
 		tab?: StudioReviewTab;
 		source?: SourceSnapshot | undefined;
-		command: (name: string, input: Readonly<Record<string, string>>) => Promise<unknown>;
+		system: SystemClientApi;
 	} = $props();
 
 	const fileCount = $derived(Object.keys(source?.files ?? {}).length);
 
-	const PlanSchema = Schema.Struct({
-		fingerprint: Schema.String,
-		steps: Schema.Array(Schema.Struct({ id: Schema.String, sql: Schema.String }))
-	});
-
-	let plan = $state<typeof PlanSchema.Type | undefined>();
-	let planError = $state<string | undefined>();
-	let checking = $state(false);
-	let checkResult = $state<string | undefined>();
-
-	/** The DDL a release would apply, read once when the tab opens rather than on a timer. */
-	const loadPlan = async (): Promise<void> => {
-		try {
-			plan = await Effect.runPromise(
-				Schema.decodeUnknownEffect(PlanSchema)(await command('schema.plan', {}))
-			);
-			planError = undefined;
-		} catch (cause) {
-			plan = undefined;
-			planError = cause instanceof Error ? cause.message : String(cause);
-		}
+	let mounted = $state(false);
+	let selectedCheck = $state<'schema.validate' | 'schema.verify' | undefined>();
+	const planQuery = $derived(mounted && tab === 'schema' ? system.schema.plan({}) : undefined);
+	const plan = $derived(planQuery?.current);
+	const checkQuery = $derived(
+		selectedCheck === 'schema.validate'
+			? system.schema.validate({})
+			: selectedCheck === 'schema.verify'
+				? system.schema.verify({})
+				: undefined
+	);
+	const check = (name: 'schema.validate' | 'schema.verify'): void => {
+		if (selectedCheck === name) void checkQuery?.refresh();
+		else selectedCheck = name;
 	};
 
-	/** `validate` checks the plan is coherent; `verify` checks the live database matches it. */
-	const check = async (name: 'schema.validate' | 'schema.verify'): Promise<void> => {
-		checking = true;
-		checkResult = undefined;
-		try {
-			checkResult = `${name}: ${JSON.stringify(await command(name, {}))}`;
-		} catch (cause) {
-			checkResult = `${name} failed: ${cause instanceof Error ? cause.message : String(cause)}`;
-		} finally {
-			checking = false;
-		}
-	};
-
-	onMount(() => {
-		if (tab === 'schema') void loadPlan();
-	});
+	onMount(() => (mounted = true));
 </script>
 
 {#snippet unavailable(icon: string, heading: string, body: string, detail: string)}
@@ -103,8 +81,12 @@
 					through.
 				</p>
 			</Stack>
-			{#if planError !== undefined}
-				<p class="text-xs text-destructive">Plan unavailable: {planError}</p>
+			{#if planQuery?.error !== undefined}
+				<p class="text-xs text-destructive">
+					Plan unavailable: {planQuery.error instanceof Error
+						? planQuery.error.message
+						: String(planQuery.error)}
+				</p>
 			{:else if plan === undefined}
 				<p class="text-meta">Reading the schema plan…</p>
 			{:else}
@@ -118,8 +100,8 @@
 					type="button"
 					size="sm"
 					variant="outline"
-					disabled={checking}
-					onclick={() => void check('schema.validate')}
+					disabled={checkQuery?.loading === true}
+					onclick={() => check('schema.validate')}
 				>
 					Validate
 				</Button>
@@ -127,14 +109,22 @@
 					type="button"
 					size="sm"
 					variant="outline"
-					disabled={checking}
-					onclick={() => void check('schema.verify')}
+					disabled={checkQuery?.loading === true}
+					onclick={() => check('schema.verify')}
 				>
 					Verify against database
 				</Button>
 			</Cluster>
-			{#if checkResult !== undefined}
-				<p class="text-micro break-all text-muted-foreground" aria-live="polite">{checkResult}</p>
+			{#if selectedCheck !== undefined && checkQuery?.error !== undefined}
+				<p class="text-micro break-all text-destructive" aria-live="polite">
+					{selectedCheck} failed: {checkQuery.error instanceof Error
+						? checkQuery.error.message
+						: String(checkQuery.error)}
+				</p>
+			{:else if selectedCheck !== undefined && checkQuery?.current !== undefined}
+				<p class="text-micro break-all text-muted-foreground" aria-live="polite">
+					{selectedCheck}: {JSON.stringify(checkQuery.current)}
+				</p>
 			{/if}
 		</Stack>
 		{#if plan !== undefined && plan.steps.length > 0}

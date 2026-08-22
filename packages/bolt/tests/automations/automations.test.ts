@@ -1,14 +1,15 @@
 import { Effect, Exit, Layer, Option } from 'effect';
 import { describe, expect, it } from 'vitest';
 import { EffectId, type TaskRequest } from '@norbital-ai/bolt-protocol';
-import { Automations } from '../../src/runtime/automations/automations.js';
+import * as Automations from '../../src/runtime/automations/automations.js';
 import { Tasks } from '../../src/runtime/facilities/services.js';
-import { Database } from '../../src/runtime/facilities/database.js';
-import { TaskQueue } from '../../src/runtime/tasks/tasks.js';
-import { Workspace } from '../../src/runtime/workspace.js';
-import { InvocationBudget } from '../../src/runtime/budget.js';
-import { TenantScope } from '../../src/runtime/tenant.js';
-import { automation, workspace } from '../../src/authoring/index.js';
+import * as Database from '../../src/runtime/facilities/database.js';
+import * as TaskQueue from '../../src/runtime/tasks/tasks.js';
+import * as Workspace from '../../src/runtime/workspace.js';
+import * as InvocationBudget from '../../src/runtime/budget.js';
+import * as TenantScope from '../../src/runtime/tenant.js';
+import { workspace } from '../../src/authoring/workspace-schema.js';
+import { automation } from '../../src/authoring/automations-schema.js';
 import { testCallContext } from '../support/bolt-test-layer.js';
 
 describe('Automations owner', () => {
@@ -77,11 +78,7 @@ describe('Automations owner', () => {
 		);
 		const taskId = await Effect.runPromise(
 			Effect.gen(function* () {
-				return yield* (yield* Automations.Service).start(
-					EffectId.make('e1'),
-					'daily',
-					{}
-				);
+				return yield* (yield* Automations.Service).start(EffectId.make('e1'), 'daily', {});
 			}).pipe(Effect.provide(layer))
 		);
 		// The id a caller gets back is the task's effect id, which is also its idempotency key — a
@@ -174,11 +171,7 @@ describe('Automations owner', () => {
 		);
 		const outcome = await Effect.runPromiseExit(
 			Effect.gen(function* () {
-				return yield* (yield* Automations.Service).start(
-					EffectId.make('e1'),
-					'daily',
-					{}
-				);
+				return yield* (yield* Automations.Service).start(EffectId.make('e1'), 'daily', {});
 			}).pipe(Effect.provide(layer))
 		);
 		const failure = Option.getOrUndefined(Exit.findErrorOption(outcome));

@@ -4,7 +4,7 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Input } from '#lib/input';
 	import { Inline, Stack } from '#lib/layout';
-	import type { DataRendererProps } from '../data-renderer.types.js';
+	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 
 	const { t } = useI18n<UiKeys>();
 

@@ -130,7 +130,7 @@ describe('approval bindings', () => {
 				{
 					collection: 'variation_requests',
 					action: 'update',
-					where: { assignee_user_id: { eq: '${requestor.norbital_id}' } }
+					where: { assignee_user_id: { eq: '${requestor.id}' } }
 				}
 			]
 		} as unknown as WorkspaceDefinition['policies'][number];
@@ -156,7 +156,7 @@ describe('approval bindings', () => {
 				{
 					collection: 'variation_requests',
 					action: 'update',
-					where: { assignee_user_id: { eq: '${requestor.norbital_id}' } }
+					where: { assignee_user_id: { eq: '${requestor.id}' } }
 				}
 			]
 		} as unknown as WorkspaceDefinition['policies'][number];
@@ -187,7 +187,7 @@ describe('approval bindings', () => {
 				{
 					collection: 'jobs',
 					action: 'read',
-					where: { assignee_user_id: { eq: '${requestor.norbital_id}' } }
+					where: { assignee_user_id: { eq: '${requestor.id}' } }
 				}
 			]
 		} as unknown as WorkspaceDefinition['policies'][number];
@@ -218,13 +218,15 @@ describe('approval bindings', () => {
 				{
 					collection: 'jobs',
 					action: 'read',
-					where: { assignee_user_id: { eq: '${requestor.norbital_id}' } }
+					where: { assignee_user_id: { eq: '${requestor.id}' } }
 				},
 				{ collection: 'jobs', action: 'read' }
 			]
 		} as unknown as WorkspaceDefinition['policies'][number];
-		const other = { name: 'controller', grants: [] } as unknown as
-			WorkspaceDefinition['policies'][number];
+		const other = {
+			name: 'controller',
+			grants: []
+		} as unknown as WorkspaceDefinition['policies'][number];
 		const definition = workspace([both, other], { Contractor: ['contractor', 'controller'] });
 		expect(rules(definition)).toEqual(['composition-widens-grant']);
 		expect(approvalDiagnostics(definition)[0]?.message).toContain('Policy "contractor"');

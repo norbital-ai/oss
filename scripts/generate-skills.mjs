@@ -1,379 +1,151 @@
-import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readlinkSync,
+	readdirSync,
+	rmSync,
+	symlinkSync
+} from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { Result, Schema } from 'effect';
+import { parseDocument } from 'yaml';
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repositoryRoot = path.resolve(scriptDir, '..');
-const skillsRoot = path.join(repositoryRoot, 'skills');
-const outputFile = path.join(repositoryRoot, 'packages/bolt/src/skills/skills.generated.ts');
+const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = path.resolve(scriptDirectory, '..');
+const canonicalSkillsRoot = path.join(repositoryRoot, 'skills');
+const agentSkillsRoot = path.join(repositoryRoot, '.agents', 'skills');
 
-const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const FRONTMATTER_KEYS = new Set(['name', 'description', 'license', 'compatibility', 'metadata']);
+const SkillFrontmatter = Schema.Struct({
+	name: Schema.String,
+	description: Schema.String,
+	license: Schema.optionalKey(Schema.String),
+	compatibility: Schema.optionalKey(Schema.String),
+	metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.String))
+});
+const decodeSkillFrontmatter = Schema.decodeUnknownResult(SkillFrontmatter, {
+	onExcessProperty: 'error'
+});
+const skillNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-function fail(message) {
+const fail = (message) => {
 	throw new Error(message);
-}
+};
 
-function readArguments(argv) {
-	const check = argv.includes('--check');
-	const unknown = argv.filter((argument) => argument !== '--check');
-	if (unknown.length > 0) {
-		fail(`Unknown argument: ${unknown[0]}`);
-	}
-	return { check };
-}
+/** Parse one Agent Skills document with YAML owning syntax and Effect owning its shape. */
+export const parseSkillMarkdown = (content, filePath) => {
+	const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
+	if (match === null) fail(`${filePath}: SKILL.md must contain closed YAML frontmatter`);
 
-function leadingWhitespace(line) {
-	const match = line.match(/^(\s*)/);
-	return match ? match[1].length : 0;
-}
-
-function parseQuotedScalar(value) {
-	if (value.startsWith("'") && value.endsWith("'")) {
-		return value.slice(1, -1).replaceAll("''", "'");
-	}
-	if (value.startsWith('"') && value.endsWith('"')) {
-		return value
-			.slice(1, -1)
-			.replaceAll('\\"', '"')
-			.replaceAll('\\n', '\n')
-			.replaceAll('\\t', '\t')
-			.replaceAll('\\\\', '\\');
-	}
-	return value;
-}
-
-function parseBlockScalar(lines, startIndex, contentIndent, indicator) {
-	const folded = indicator.startsWith('>');
-	let index = startIndex;
-	const chunks = [];
-
-	while (index < lines.length) {
-		const line = lines[index];
-		if (line.trim() === '') {
-			if (folded) {
-				chunks.push('\n');
-			} else {
-				chunks.push('');
-			}
-			index += 1;
-			continue;
-		}
-
-		const indent = leadingWhitespace(line);
-		if (indent <= contentIndent) {
-			break;
-		}
-
-		chunks.push(line.slice(indent));
-		index += 1;
-	}
-
-	let value;
-	if (folded) {
-		value = '';
-		for (const chunk of chunks) {
-			if (chunk === '\n') {
-				value += '\n';
-			} else if (value === '' || value.endsWith('\n')) {
-				value += chunk.trimEnd();
-			} else {
-				value += ` ${chunk.trimEnd()}`;
-			}
-		}
-		if (indicator.endsWith('-')) {
-			value = value.trimEnd();
-		}
-	} else {
-		value = chunks.join('\n');
-		if (indicator.endsWith('-')) {
-			value = value.replace(/\n+$/, '');
-		}
-	}
-
-	return { value, nextIndex: index };
-}
-
-function parseScalarValue(rest, lines, lineIndex, filePath) {
-	const trimmed = rest.trim();
-	if (trimmed === '' || /^([>|])([-+]?)$/.test(trimmed)) {
-		const indicator = trimmed === '' ? '|' : trimmed;
-		const contentIndent = leadingWhitespace(lines[lineIndex]);
-		return parseBlockScalar(lines, lineIndex + 1, contentIndent, indicator);
-	}
-
-	if (
-		(trimmed.startsWith("'") && trimmed.endsWith("'")) ||
-		(trimmed.startsWith('"') && trimmed.endsWith('"'))
-	) {
-		return { value: parseQuotedScalar(trimmed), nextIndex: lineIndex + 1 };
-	}
-
-	return { value: trimmed, nextIndex: lineIndex + 1 };
-}
-
-function parseFrontmatterMap(text, filePath) {
-	const lines = text.split(/\r?\n/);
-	const result = {};
-	let index = 0;
-
-	while (index < lines.length) {
-		const line = lines[index];
-		if (line.trim() === '') {
-			index += 1;
-			continue;
-		}
-
-		const keyMatch = line.match(/^([a-z][a-z0-9_]*):\s*(.*)$/);
-		if (!keyMatch) {
-			fail(`${filePath}: invalid frontmatter line: ${line}`);
-		}
-
-		const key = keyMatch[1];
-		if (!FRONTMATTER_KEYS.has(key)) {
-			fail(`${filePath}: unsupported frontmatter key: ${key}`);
-		}
-
-		const rest = keyMatch[2];
-		if (key === 'metadata') {
-			if (rest.trim() !== '') {
-				fail(`${filePath}: metadata must be a map`);
-			}
-			const metadata = {};
-			index += 1;
-			while (index < lines.length && leadingWhitespace(lines[index]) > 0) {
-				const metaMatch = lines[index].match(/^\s+([a-z][a-z0-9_]*):\s*(.*)$/);
-				if (!metaMatch) {
-					fail(`${filePath}: invalid metadata entry: ${lines[index]}`);
-				}
-				const parsed = parseScalarValue(metaMatch[2], lines, index, filePath);
-				metadata[metaMatch[1]] = parsed.value;
-				index = parsed.nextIndex;
-			}
-			result.metadata = metadata;
-			continue;
-		}
-
-		const parsed = parseScalarValue(rest, lines, index, filePath);
-		result[key] = parsed.value;
-		index = parsed.nextIndex;
-	}
-
-	return result;
-}
-
-function parseSkillMarkdown(content, filePath) {
-	if (!content.startsWith('---\n') && !content.startsWith('---\r\n')) {
-		fail(`${filePath}: SKILL.md must start with frontmatter (---)`);
-	}
-
-	const openLength = content.startsWith('---\r\n') ? 5 : 4;
-	const closeMatch = content.slice(openLength).match(/\r?\n---(?:\r?\n|$)/);
-	if (!closeMatch || closeMatch.index === undefined) {
-		fail(`${filePath}: SKILL.md frontmatter is not closed with ---`);
-	}
-
-	const frontmatterText = content.slice(openLength, openLength + closeMatch.index);
-	let body = content.slice(openLength + closeMatch.index + closeMatch[0].length);
-	body = body.replace(/^(\s*\r?\n)+/, '');
+	const document = parseDocument(match[1], { prettyErrors: true, strict: true, uniqueKeys: true });
+	if (document.errors.length > 0) fail(`${filePath}: ${document.errors[0].message}`);
+	const decoded = decodeSkillFrontmatter(document.toJS());
+	if (Result.isFailure(decoded)) fail(`${filePath}: ${decoded.failure.message}`);
 
 	return {
-		...parseFrontmatterMap(frontmatterText, filePath),
-		body
+		frontmatter: decoded.success,
+		body: content.slice(match[0].length).replace(/^(\s*\r?\n)+/, '')
 	};
-}
+};
 
-function validateSkillFrontmatter(parsed, directoryName, filePath) {
-	if (!parsed.name || parsed.name.trim() === '') {
-		fail(`${filePath}: frontmatter requires non-empty name`);
-	}
-	if (!parsed.description || parsed.description.trim() === '') {
+const validateSkill = ({ frontmatter }, directoryName, filePath) => {
+	if (frontmatter.name.trim() === '') fail(`${filePath}: frontmatter requires non-empty name`);
+	if (frontmatter.description.trim() === '') {
 		fail(`${filePath}: frontmatter requires non-empty description`);
 	}
-	if (parsed.name.length > 64 || !SKILL_NAME_PATTERN.test(parsed.name)) {
+	if (frontmatter.name.length > 64 || !skillNamePattern.test(frontmatter.name)) {
 		fail(`${filePath}: name must be lowercase hyphenated and at most 64 characters`);
 	}
-	if (parsed.name !== directoryName) {
-		fail(`${filePath}: name "${parsed.name}" must match directory "${directoryName}"`);
+	if (frontmatter.name !== directoryName) {
+		fail(`${filePath}: name "${frontmatter.name}" must match directory "${directoryName}"`);
 	}
-	if (parsed.description.length > 1024) {
+	if (frontmatter.description.length > 1024) {
 		fail(`${filePath}: description exceeds 1024 characters`);
 	}
-	if (parsed.compatibility && parsed.compatibility.length > 500) {
+	if ((frontmatter.compatibility?.length ?? 0) > 500) {
 		fail(`${filePath}: compatibility exceeds 500 characters`);
 	}
-}
+};
 
-function collectSkillFiles(skillDirectory) {
-	const files = [];
-
-	function walk(directory) {
-		for (const entry of readdirSync(directory, { withFileTypes: true })) {
-			const fullPath = path.join(directory, entry.name);
-			if (entry.isDirectory()) {
-				walk(fullPath);
-				continue;
-			}
-			if (!entry.isFile()) {
-				continue;
-			}
-
-			const relativePath = path.relative(skillDirectory, fullPath).split(path.sep).join('/');
-			if (relativePath === 'SKILL.md') {
-				continue;
-			}
-
-			files.push({
-				path: relativePath,
-				text: readFileSync(fullPath, 'utf8')
-			});
-		}
-	}
-
-	walk(skillDirectory);
-	files.sort((left, right) => left.path.localeCompare(right.path));
-	return files;
-}
-
-function discoverSkillDirectories() {
-	return readdirSync(skillsRoot, { withFileTypes: true })
+/** Validate and return the skills delivered directly from the canonical skill tree. */
+export const loadSkills = (skillsRoot = canonicalSkillsRoot) =>
+	readdirSync(skillsRoot, { withFileTypes: true })
 		.filter((entry) => entry.isDirectory())
-		.map((entry) => entry.name)
-		.sort((left, right) => left.localeCompare(right));
-}
+		.map(({ name }) => {
+			const filePath = path.join(skillsRoot, name, 'SKILL.md');
+			if (!existsSync(filePath)) fail(`${filePath}: every skill directory requires SKILL.md`);
+			const parsed = parseSkillMarkdown(readFileSync(filePath, 'utf8'), filePath);
+			validateSkill(parsed, name, filePath);
+			return { name, directory: path.join(skillsRoot, name) };
+		})
+		.sort((left, right) => left.name.localeCompare(right.name));
 
-function loadSkills() {
-	return discoverSkillDirectories().map((directoryName) => {
-		const skillDirectory = path.join(skillsRoot, directoryName);
-		const skillFile = path.join(skillDirectory, 'SKILL.md');
-		const parsed = parseSkillMarkdown(readFileSync(skillFile, 'utf8'), skillFile);
-		validateSkillFrontmatter(parsed, directoryName, skillFile);
+const expectedLink = (skillsRoot, linksRoot, name) =>
+	path.relative(linksRoot, path.join(skillsRoot, name)).split(path.sep).join('/');
 
-		const skill = {
-			name: parsed.name,
-			description: parsed.description,
-			body: parsed.body,
-			files: collectSkillFiles(skillDirectory),
-			origin: 'host'
-		};
-
-		if (parsed.license) {
-			skill.license = parsed.license;
+/** Prove agent discovery points directly at every canonical skill and nowhere stale. */
+export const checkSkillLinks = ({ skills, skillsRoot, linksRoot }) => {
+	const expectedNames = new Set(skills.map(({ name }) => name));
+	const entries = existsSync(linksRoot) ? readdirSync(linksRoot, { withFileTypes: true }) : [];
+	for (const entry of entries) {
+		if (!expectedNames.has(entry.name)) fail(`${path.join(linksRoot, entry.name)} is stale`);
+		if (!entry.isSymbolicLink())
+			fail(`${path.join(linksRoot, entry.name)} must be a symbolic link`);
+		const expected = expectedLink(skillsRoot, linksRoot, entry.name);
+		if (readlinkSync(path.join(linksRoot, entry.name)) !== expected) {
+			fail(`${path.join(linksRoot, entry.name)} must point to ${expected}`);
 		}
-		if (parsed.compatibility) {
-			skill.compatibility = parsed.compatibility;
-		}
-		if (parsed.metadata && Object.keys(parsed.metadata).length > 0) {
-			skill.metadata = parsed.metadata;
-		}
+		expectedNames.delete(entry.name);
+	}
+	if (expectedNames.size > 0) {
+		fail(`${linksRoot} is missing skill links: ${[...expectedNames].sort().join(', ')}`);
+	}
+};
 
-		return skill;
+/** Reconcile only project-owned symlinks; ordinary files are never overwritten. */
+export const syncSkillLinks = ({ skills, skillsRoot, linksRoot }) => {
+	mkdirSync(linksRoot, { recursive: true });
+	const expectedNames = new Set(skills.map(({ name }) => name));
+	for (const entry of readdirSync(linksRoot, { withFileTypes: true })) {
+		const linkPath = path.join(linksRoot, entry.name);
+		if (!entry.isSymbolicLink()) fail(`${linkPath} is not a generated symbolic link`);
+		const expected = expectedNames.has(entry.name)
+			? expectedLink(skillsRoot, linksRoot, entry.name)
+			: undefined;
+		if (expected === undefined || readlinkSync(linkPath) !== expected) rmSync(linkPath);
+	}
+	const linkedNames = new Set(
+		readdirSync(linksRoot, { withFileTypes: true }).map(({ name }) => name)
+	);
+	for (const { name } of skills) {
+		if (linkedNames.has(name)) continue;
+		symlinkSync(expectedLink(skillsRoot, linksRoot, name), path.join(linksRoot, name), 'dir');
+	}
+	checkSkillLinks({ skills, skillsRoot, linksRoot });
+};
+
+export const main = (argv = process.argv.slice(2)) => {
+	const { values } = parseArgs({
+		args: argv,
+		options: { check: { type: 'boolean', default: false } },
+		allowPositionals: false,
+		strict: true
 	});
-}
-
-function emitMetadata(metadata) {
-	const entries = Object.entries(metadata).sort(([left], [right]) => left.localeCompare(right));
-	const lines = ['\t\tmetadata: {'];
-	for (const [key, value] of entries) {
-		lines.push(`\t\t\t${key}: ${JSON.stringify(value)},`);
-	}
-	lines.push('\t\t},');
-	return lines.join('\n');
-}
-
-function emitSkill(skill) {
-	const lines = ['\t{'];
-	lines.push(`\t\tname: ${JSON.stringify(skill.name)},`);
-	lines.push(`\t\tdescription: ${JSON.stringify(skill.description)},`);
-	if (skill.license) {
-		lines.push(`\t\tlicense: ${JSON.stringify(skill.license)},`);
-	}
-	if (skill.compatibility) {
-		lines.push(`\t\tcompatibility: ${JSON.stringify(skill.compatibility)},`);
-	}
-	if (skill.metadata) {
-		lines.push(emitMetadata(skill.metadata));
-	}
-	lines.push(`\t\tbody: ${JSON.stringify(skill.body)},`);
-	lines.push('\t\tfiles: [');
-	for (const file of skill.files) {
-		lines.push('\t\t\t{');
-		lines.push(`\t\t\t\tpath: ${JSON.stringify(file.path)},`);
-		lines.push(`\t\t\t\ttext: ${JSON.stringify(file.text)}`);
-		lines.push('\t\t\t},');
-	}
-	lines.push('\t\t],');
-	lines.push("\t\torigin: 'host'");
-	lines.push('\t}');
-	return lines.join('\n');
-}
-
-function generateSource(skills) {
-	const header = [
-		'// Generated by scripts/generate-skills.mjs from skills/. Do not edit.',
-		'// Run `pnpm skills:generate` after changing any file under skills/.',
-		'',
-		"import type { Skill } from './types.js';",
-		'',
-		'export const HOST_SKILLS: readonly Skill[] = ['
-	];
-
-	const body = skills.map((skill) => emitSkill(skill)).join(',\n');
-	return `${header.join('\n')}\n${body}\n];\n`;
-}
-
-/**
- * Formats through prettier's own binary, not through `pnpm exec`.
- *
- * This captures stdout and writes it to the bundle, so anything else that speaks on stdout ends up
- * *inside* the generated file. `pnpm exec` does: on a cold store it prints its scope and
- * supply-chain banner there, and six lines of it were written into the head of
- * `skills.generated.ts`, breaking the parse with twenty-three syntax errors. It reproduces only on a
- * machine whose pnpm has not spoken yet — a fresh clone, or CI — which is the worst shape of bug to
- * leave in a generator: invisible everywhere it was written, and failing on the machine nobody is
- * watching.
- *
- * Calling the binary directly removes the layer that can speak rather than filtering what it says.
- */
-function formatSource(source) {
-	const prettier = path.join(repositoryRoot, 'node_modules', '.bin', 'prettier');
-	try {
-		return execFileSync(prettier, ['--stdin-filepath', path.relative(repositoryRoot, outputFile)], {
-			cwd: repositoryRoot,
-			input: source,
-			encoding: 'utf8',
-			stdio: ['pipe', 'pipe', 'pipe']
+	const skills = loadSkills(canonicalSkillsRoot);
+	if (values.check) {
+		checkSkillLinks({
+			skills,
+			skillsRoot: canonicalSkillsRoot,
+			linksRoot: agentSkillsRoot
 		});
-	} catch (cause) {
-		const detail = cause?.stderr?.toString().trim();
-		fail(`prettier failed${detail ? `: ${detail}` : ''}`);
-	}
-}
-
-function main() {
-	const options = readArguments(process.argv.slice(2));
-	const skills = loadSkills();
-	const source = formatSource(generateSource(skills));
-
-	if (options.check) {
-		let existing;
-		try {
-			existing = readFileSync(outputFile, 'utf8');
-		} catch {
-			fail(`${outputFile} is missing. Run \`pnpm skills:generate\`.`);
-		}
-		if (existing !== source) {
-			console.error(`${outputFile} is out of date. Run \`pnpm skills:generate\`.`);
-			process.exit(1);
-		}
-		console.log('skills.generated.ts is up to date.');
+		console.log(`Validated ${skills.length} canonical skills and direct agent links.`);
 		return;
 	}
+	syncSkillLinks({ skills, skillsRoot: canonicalSkillsRoot, linksRoot: agentSkillsRoot });
+	console.log(`Synchronized ${skills.length} canonical skills for direct agent discovery.`);
+};
 
-	writeFileSync(outputFile, source, 'utf8');
-	console.log(`Wrote ${path.relative(repositoryRoot, outputFile)} (${skills.length} skills).`);
-}
-
-main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) main();

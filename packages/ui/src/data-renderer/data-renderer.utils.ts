@@ -1,10 +1,15 @@
+import { MoneyValueSchema } from '@norbital-ai/std/finance';
+import { Effect, Option, Schema } from 'effect';
 import type { CollectionField } from '@norbital-ai/std/collection';
 import type { MessageVars } from '@norbital-ai/std/i18n';
 import { intlLocale } from '@norbital-ai/std/i18n';
 import { formatDateRangeLocal } from '@norbital-ai/std/date';
 import { humanize } from '@norbital-ai/std/string';
 import { getGlobalLocale } from '#lib/i18n';
-import { formatPhoneDisplay, phoneCountryFromLocale } from './phone_number/phone_number.utils.js';
+import {
+	formatPhoneDisplay,
+	phoneCountryFromLocale
+} from '#lib/data-renderer/phone_number/phone_number.utils';
 
 type Translate = (key: string, vars?: MessageVars) => string;
 export type { Translate };
@@ -30,15 +35,22 @@ function objectProperty(input: unknown, key: string): unknown {
 	return input != null && typeof input === 'object' ? Reflect.get(input, key) : undefined;
 }
 
+const decodeMoneyValue = Schema.decodeUnknownOption(MoneyValueSchema);
+
 export function formatStructuredValue(value: unknown, pretty = false): string {
 	if (value == null) return '—';
 	if (typeof value !== 'object') return String(value);
-	try {
-		return JSON.stringify(value, null, pretty ? 2 : undefined) ?? String(value);
-	} catch (cause) {
-		console.warn('Could not serialize a structured field value.', cause);
-		return String(value);
-	}
+	return Effect.runSync(
+		Effect.try(() => JSON.stringify(value, null, pretty ? 2 : undefined)).pipe(
+			Effect.match({
+				onFailure: (cause): string => {
+					Effect.runSync(Effect.logWarning('Could not serialize a structured field value.', cause));
+					return String(value);
+				},
+				onSuccess: (text): string => text ?? String(value)
+			})
+		)
+	);
 }
 
 function formatTimestampRange(value: unknown, locale: string, t?: Translate): string {
@@ -64,17 +76,22 @@ function formatTimestampRange(value: unknown, locale: string, t?: Translate): st
 function formatDateRange(value: unknown, locale: string): string {
 	const start = objectProperty(value, 'start');
 	const end = objectProperty(value, 'end');
-	try {
-		return formatDateRangeLocal(
-			{
-				start: typeof start === 'string' ? start : null,
-				end: typeof end === 'string' ? end : null
-			},
-			{ locale, dateStyle: 'medium' }
-		);
-	} catch {
-		return formatStructuredValue(value);
-	}
+	return Effect.runSync(
+		Effect.try(() =>
+			formatDateRangeLocal(
+				{
+					start: typeof start === 'string' ? start : null,
+					end: typeof end === 'string' ? end : null
+				},
+				{ locale, dateStyle: 'medium' }
+			)
+		).pipe(
+			Effect.match({
+				onFailure: () => formatStructuredValue(value),
+				onSuccess: (text) => text
+			})
+		)
+	);
 }
 
 function formatScalar(
@@ -102,15 +119,20 @@ function formatScalar(
 				: String(value);
 		}
 		case 'money': {
-			const amount = objectProperty(value, 'value');
-			const currency = objectProperty(value, 'currency');
-			if (typeof amount !== 'number' || typeof currency !== 'string')
-				return resolveText(t, 'dataRenderer.null');
-			try {
-				return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(amount);
-			} catch {
-				return `${currency} ${new Intl.NumberFormat(locale).format(amount)}`;
-			}
+			return Option.match(decodeMoneyValue(value), {
+				onNone: () => resolveText(t, 'dataRenderer.null'),
+				onSome: ({ value: amount, currency }) =>
+					Effect.runSync(
+						Effect.try(() =>
+							new Intl.NumberFormat(locale, { style: 'currency', currency }).format(amount)
+						).pipe(
+							Effect.match({
+								onFailure: () => `${currency} ${new Intl.NumberFormat(locale).format(amount)}`,
+								onSuccess: (text) => text
+							})
+						)
+					)
+			});
 		}
 		case 'date': {
 			const date = dateValue(value);

@@ -5,20 +5,11 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { assertDeclarationEmit } from './lib/declaration-emit.mjs';
 import { inspectPackageArchive, packedArchiveFilename } from './lib/package-archive.mjs';
-import { publicPackageDirectories } from './lib/package-release.mjs';
+import { publicPackageDirectories, readManifest } from './lib/package-release.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectory = path.join(repositoryRoot, '.tmp', 'publication-check');
 const repositoryLicense = readFileSync(path.join(repositoryRoot, 'LICENSE'), 'utf8');
-
-/**
- * `prepack` is the only hook every pack path goes through — `changeset publish` in the release
- * workflow, a developer's `pnpm pack`, and this check. It must therefore build through turbo rather
- * than call the package's own `build` directly: turbo's `^build` is what guarantees the workspace
- * dependencies exist before the compiler reads them, and a compiler that reads a missing one emits
- * `any` and exits 0.
- */
-const expectedPrepack = (name) => `pnpm exec turbo run build --filter=${name}`;
 
 function fail(message) {
 	throw new Error(message);
@@ -56,9 +47,14 @@ mkdirSync(outputDirectory, { recursive: true });
 try {
 	for (const directory of publicPackageDirectories) {
 		const packageDirectory = path.join(repositoryRoot, 'packages', directory);
-		const manifest = JSON.parse(readFileSync(path.join(packageDirectory, 'package.json'), 'utf8'));
+		const manifest = readManifest(path.join(packageDirectory, 'package.json'));
 		if (manifest.scripts?.build) {
-			if (manifest.scripts.prepack !== expectedPrepack(manifest.name)) {
+			// `prepack` is the only hook every pack path goes through — `changeset publish` in the
+			// release workflow, a developer's `pnpm pack`, and this check. It must therefore build
+			// through turbo rather than call the package's own `build` directly: turbo's `^build` is
+			// what guarantees the workspace dependencies exist before the compiler reads them, and a
+			// compiler that reads a missing one emits `any` and exits 0.
+			if (manifest.scripts.prepack !== `pnpm exec turbo run build --filter=${manifest.name}`) {
 				fail(`${manifest.name} must build through turbo during prepack.`);
 			}
 			rmSync(path.join(packageDirectory, 'build'), { recursive: true, force: true });

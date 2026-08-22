@@ -8,6 +8,7 @@
 	import type { Snippet } from 'svelte';
 	import type { FormSchema } from '../form/form_state.svelte';
 	import type { StepFormState } from './step-form-state.svelte';
+	import { Effect } from 'effect';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -29,9 +30,14 @@
 	let currentStepTitle: string | Snippet = $derived.by(() => {
 		return stepFormState.steps[stepFormState.currentStep].title;
 	});
+
+	function handleSubmit(event: SubmitEvent): void {
+		const submission = stepFormState.submission.handleSubmit(event);
+		if (submission) Effect.runFork(submission);
+	}
 </script>
 
-<form class={cn('w-full', className)} onsubmit={stepFormState.submission.handleSubmit}>
+<form class={cn('w-full', className)} onsubmit={handleSubmit}>
 	<Card class="w-full border-0 p-0 shadow-none">
 		<CardHeader>
 			<CardTitle class="flex w-full flex-row justify-between">

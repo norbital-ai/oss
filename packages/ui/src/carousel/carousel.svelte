@@ -7,7 +7,7 @@
 		type CarouselProps,
 		type EmblaContext,
 		setEmblaContext
-	} from './context.js';
+	} from '#lib/carousel/context';
 
 	let {
 		ref = $bindable(null),
@@ -62,7 +62,7 @@
 		carouselState.selectedIndex = api.selectedScrollSnap();
 	}
 
-	let attachedApi: CarouselAPI | undefined;
+	let attachedApi = $state<CarouselAPI | undefined>();
 
 	function attachApi() {
 		if (!carouselState.api || carouselState.api === attachedApi) return;

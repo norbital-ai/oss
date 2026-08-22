@@ -27,11 +27,12 @@ const artifactWithEverything = (): string =>
 		policies: [`${root}/src/policies/+admin.policy.ts`],
 		functions: [`${root}/src/remotes/+summary.ts`],
 		toolFiles: [`${root}/src/tools/+summarize.tool.ts`],
+		mcpFiles: [`${root}/src/capabilities/mcp/+search.ts`],
 		envoyFiles: [],
 		automations: ['nightly'],
 		automationFiles: [`${root}/src/automations/+nightly.ts`],
 		pipelineFiles: [`${root}/src/collections/invoices/+pipelines.ts`],
-		skills: [],
+		skills: [{ name: 'payroll', body: '# Payroll\n\nUse the approved workflow.' }],
 		prompt: 'You are the test workspace agent.',
 		root,
 		assets: [],
@@ -72,6 +73,10 @@ describe('emitted artifact bindings', () => {
 		// pipelines and automations would simply never run.
 		expect(artifact).toContain('import pipelines0 from');
 		expect(artifact).toContain('import automation0 from');
+		expect(artifact).toContain('import mcp0 from');
+		expect(artifact).toContain('const declaredMcpServers = {"search": mcp0};');
+		expect(artifact).toContain('tools: agentTools(declaredWorkspace.tools, declaredMcpServers)');
+		expect(artifact).toContain('"body": "# Payroll\\n\\nUse the approved workflow."');
 		expect(artifact).toContain('"invoices": pipelines0');
 		expect(artifact).toContain('name: "nightly"');
 		expect(artifact).toContain('pipelines: declaredPipelines');
@@ -99,6 +104,8 @@ describe('emitted artifact bindings', () => {
 			'policies',
 			'declaredCustomTypes',
 			'describedIntegrations',
+			'agentTools',
+			'declaredMcpServers',
 			`${artifact.slice(start, end)}\nreturn workspace;`
 		)(
 			{
@@ -117,7 +124,9 @@ describe('emitted artifact bindings', () => {
 			[],
 			[],
 			{},
-			{ declarations: [] }
+			{ declarations: [] },
+			(tools: unknown) => tools,
+			{}
 		) as { readonly automations: ReadonlyArray<{ readonly policies: ReadonlyArray<string> }> };
 
 		// Activation mints each automation principal by spreading this exact array. The duplicate

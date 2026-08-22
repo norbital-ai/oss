@@ -1,4 +1,5 @@
 <script lang="ts" generics="T extends boolean">
+	import { Effect } from 'effect';
 	import Icon from '@iconify/svelte';
 	import { cn } from '#lib/utils';
 	import { Button, buttonVariants } from '#lib/button';
@@ -10,10 +11,7 @@
 	import * as Popover from '#lib/popover';
 	import { FileMetadataTooltip } from '#lib/file-value';
 	import FileThumbnail from './file-thumbnail.svelte';
-	import type {
-		AllowedFileType as TAllowedFileType,
-		FileValue as TFileValue
-	} from '#lib/file-value';
+	import type { FileValue as TFileValue } from '#lib/file-value';
 
 	interface Props<T extends boolean> {
 		multiple: T;
@@ -23,7 +21,7 @@
 		client: IFileUploadClient;
 		maxFiles?: number;
 		maxFileSize: number;
-		accept: TAllowedFileType[];
+		accept: string[];
 		style?: string;
 		class?: string;
 		disabled?: boolean;
@@ -76,7 +74,7 @@
 		return i === 0 ? `${Math.round(value)} ${units[i]}` : `${value.toFixed(1)} ${units[i]}`;
 	};
 
-	const validateFile = (file: File): { valid: boolean; reason?: string } => {
+	const validateFile = (file: File): { valid: true } | { valid: false; reason: string } => {
 		if (file.size > maxFileSize) {
 			return {
 				valid: false,
@@ -160,8 +158,8 @@
 		}
 	};
 
-	const handleFileSelection = async (files: FileList) => {
-		if (readonly) return;
+	const handleFileSelection = (files: FileList): Effect.Effect<void> => {
+		if (readonly) return Effect.void;
 
 		const validFiles: File[] = [];
 		const rejectedFiles: { file: File; reason: string }[] = [];
@@ -169,7 +167,7 @@
 		for (const file of Array.from(files)) {
 			const validation = validateFile(file);
 			if (!validation.valid) {
-				rejectedFiles.push({ file, reason: validation.reason! });
+				rejectedFiles.push({ file, reason: validation.reason });
 				continue;
 			}
 			if (editingFiles.length + activePendingCount + validFiles.length >= maxFiles) {
@@ -183,24 +181,39 @@
 		}
 
 		rejectedFiles.forEach(({ file, reason }) => onFileRejected?.({ file, reason }));
-		if (validFiles.length === 0) return;
+		if (validFiles.length === 0) return Effect.void;
 
 		onUploadStart?.(validFiles);
-		try {
-			const results = await client.uploadMany(validFiles);
-			if (results.length > 0) editingFiles = [...editingFiles, ...results];
-			notifyParent();
-		} catch (error) {
-			const message = error instanceof Error ? error.message : t('dataRenderer.uploadFailed');
-			onUploadError?.(message);
-		}
+		return Effect.asVoid(
+			client.uploadMany(validFiles).pipe(
+				Effect.tap((results) =>
+					Effect.sync(() => {
+						if (results.length > 0) editingFiles = [...editingFiles, ...results];
+						notifyParent();
+					})
+				),
+				Effect.catch((error) =>
+					Effect.sync(() => {
+						const message = error instanceof Error ? error.message : t('dataRenderer.uploadFailed');
+						onUploadError?.(message);
+					})
+				)
+			)
+		);
 	};
 
-	const handleFileInputChange = async (event: Event) => {
+	const handleFileInputChange = (event: Event) => {
 		const input = event.target as HTMLInputElement;
 		if (input.files && input.files.length > 0) {
-			await handleFileSelection(input.files);
-			input.value = '';
+			void Effect.runPromise(
+				handleFileSelection(input.files).pipe(
+					Effect.onExit(() =>
+						Effect.sync(() => {
+							input.value = '';
+						})
+					)
+				)
+			);
 		}
 	};
 
@@ -214,7 +227,7 @@
 
 		const file = editingFiles[index];
 		if (file?.url) {
-			void client.delete(file.url);
+			Effect.runFork(client.delete(file.url));
 		}
 
 		// For single mode, reset to empty instead of removing
@@ -229,15 +242,12 @@
 	const handleClear = () => {
 		if (readonly) return;
 		for (const file of editingFiles) {
-			if (file.url) void client.delete(file.url);
+			if (file.url) Effect.runFork(client.delete(file.url));
 		}
 		editingFiles = [];
 		client.clearAllUploads();
 		notifyParent();
 	};
-
-	const cancelPendingUpload = (id: string) => client.cancel(id);
-	const removePendingUpload = (id: string) => client.clear(id);
 </script>
 
 <!-- Hidden file input -->
@@ -257,7 +267,7 @@
 		<Inline gap="sm">
 			<!-- stupidity:allow UI6; stupidity:allow UI7; stupidity:allow UI13 -- overlapping file avatars are a deliberate visual pile, not a reusable sibling rhythm -->
 			<div class="flex items-center -space-x-1">
-				{#each displayFiles as file (file.norbital_id)}
+				{#each displayFiles as file (file.id)}
 					<div class="h-5 w-5 overflow-hidden rounded-full border border-border">
 						<FileThumbnail file_value={file} ratio={1} size="small" class="m-0 h-full w-full p-0" />
 					</div>
@@ -309,7 +319,7 @@
 	{#if hasValidFiles}
 		<Carousel.Root class="w-full">
 			<Carousel.Content>
-				{#each editingFiles as file, index (file.norbital_id)}
+				{#each editingFiles as file, index (file.id)}
 					<Carousel.Item>
 						<Stack gap="md">
 							<Inline gap="md" class="rounded-md bg-muted/40 p-3">
@@ -408,7 +418,7 @@
 							<Button
 								variant="ghost"
 								size="sm"
-								onclick={() => cancelPendingUpload(pending.id)}
+								onclick={() => client.cancel(pending.id)}
 								class="h-8 w-8 p-0 text-muted-foreground hover:bg-muted hover:text-secondary-foreground"
 								{disabled}
 								title={t('dataRenderer.cancelUpload')}
@@ -419,7 +429,7 @@
 							<Button
 								variant="ghost"
 								size="sm"
-								onclick={() => removePendingUpload(pending.id)}
+								onclick={() => client.clear(pending.id)}
 								class="h-8 w-8 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive-foreground"
 								{disabled}
 								title={t('common.remove')}

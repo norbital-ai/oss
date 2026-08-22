@@ -1,12 +1,13 @@
 import { Effect, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
-import type { AuthoredIntegrationBinding } from '../../authoring/integration-introspection.js';
+import type { AuthoredIntegrationBinding } from '#lib/authoring/integration-introspection.js';
 import type {
 	IntegrationDeclaration,
 	IntegrationWebhookDeclaration
-} from '../../authoring/workspace-schema.js';
-import { absorbRecords, type AbsorbDependencies, type Rejection } from './absorb.js';
-import { verifyDelivery } from './signature.js';
+} from '#lib/authoring/workspace-schema.js';
+import { absorbRecords, type AbsorbDependencies, type Rejection } from '#lib/runtime/integrations/absorb.js';
+import { walk } from '#lib/runtime/integrations/pull.js';
+import { verifyDelivery } from '#lib/runtime/integrations/signature.js';
 
 /**
  * One pushed delivery, from raw bytes to rows.
@@ -32,7 +33,8 @@ const REJECTIONS_REPORTED = 20;
  * redelivery that was supposed to finish the job. So a `pending` entry is absorbed again — safe,
  * because every write is an identity upsert — while an `absorbed` one is recognised and skipped.
  */
-export type LedgerState = 'new' | 'pending' | 'absorbed';
+const LedgerState = Schema.Literals(['new', 'pending', 'absorbed']);
+export type LedgerState = typeof LedgerState.Type;
 
 export type WebhookDependencies = AbsorbDependencies &
 	Readonly<{
@@ -48,24 +50,34 @@ export type WebhookDependencies = AbsorbDependencies &
 		 * concurrently — providers parallelise retries — and a read-then-write would let both see nothing
 		 * and both absorb. The insert's own conflict clause is the arbiter.
 		 */
-		readonly remember: (
-			effectId: EffectId,
-			entry: {
-				readonly integration: string;
-				readonly binding: string;
-				readonly receiptId: string;
-				readonly payload: Schema.Json;
-			}
-		) => Effect.Effect<LedgerState, { readonly message: string }>;
+		readonly remember: (effectId: EffectId, entry: InboxLedgerEntry) => Effect.Effect<
+			LedgerState,
+			{ readonly message: string }
+		>;
 		/** Marks a ledger entry absorbed, so a later redelivery of it is recognised as a repeat. */
 		readonly settle: (
 			effectId: EffectId,
 			entry: { readonly integration: string; readonly receiptId: string }
 		) => Effect.Effect<void, { readonly message: string }>;
-		readonly now: () => number;
+		readonly now: Effect.Effect<number>;
 	}>;
 
-export type DeliveryReport = Readonly<{
+/**
+ * One delivery's claim in `bolt_integration_inbox`, as an inbound delivery asks the ledger to
+ * remember it.
+ *
+ * `receiptId` is the key a redelivery is recognised by and `payload` is the verified body, so a
+ * repeat is seen before anything is written. Binding is carried too because one integration can own
+ * several bindings and the outbox ledger is keyed by name across the whole integration.
+ */
+type InboxLedgerEntry = Readonly<{
+	readonly integration: string;
+	readonly binding: string;
+	readonly receiptId: string;
+	readonly payload: Schema.Json;
+}>;
+
+type DeliveryReport = Readonly<{
 	readonly binding: string;
 	/** The ledger key this delivery was recognised by — the source's event id, or the digest. */
 	readonly deliveryId: string;
@@ -78,16 +90,6 @@ export type DeliveryReport = Readonly<{
 	readonly updated: number;
 	readonly rejected: ReadonlyArray<Rejection>;
 }>;
-
-/** Walks a body down a path of object keys, stopping at the first step that is not an object. */
-const walk = (body: Schema.Json, path: ReadonlyArray<string>): unknown => {
-	let cursor: unknown = body;
-	for (const step of path) {
-		if (cursor === null || typeof cursor !== 'object' || Array.isArray(cursor)) return undefined;
-		cursor = Reflect.get(cursor, step);
-	}
-	return cursor;
-};
 
 /**
  * The records inside a delivery.
@@ -148,7 +150,7 @@ export const runWebhookDelivery = (
 		// declaration carries, through the same vault read that resolves a pull's bearer token — so a
 		// route whose secret is not provisioned refuses every delivery rather than accepting them.
 		const secret = yield* dependencies.secret(effectId, binding.signature.secret.env);
-		const outcome = verifyDelivery(binding.signature, secret, delivery, dependencies.now());
+		const outcome = verifyDelivery(binding.signature, secret, delivery, yield* dependencies.now);
 		if (!outcome.verified) {
 			return yield* Effect.fail({
 				message: `${integration.name}.${binding.name} refused a delivery: ${outcome.refusal.reason}`
@@ -159,7 +161,8 @@ export const runWebhookDelivery = (
 		// a parser over anything the internet posted at the route, and it would tempt the digest to be
 		// taken over the reparsed document, which matches nothing the sender signed.
 		const parsed = yield* Effect.try({
-			try: (): Schema.Json => JSON.parse(delivery.body) as Schema.Json,
+			try: (): Schema.Json =>
+				Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(delivery.body),
 			catch: () => ({
 				message: `${integration.name}.${binding.name} received a correctly signed body that is not JSON.`
 			})

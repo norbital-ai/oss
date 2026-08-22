@@ -9,6 +9,7 @@ import {
 	vector as pgVector,
 	type AnyPgColumnBuilder
 } from 'drizzle-orm/pg-core';
+import type { WorkspaceAuthoringTypes } from './index.js';
 
 /**
  * One authored index on a collection's table.
@@ -71,19 +72,150 @@ export interface ModelMetadata {
 	readonly icon?: string;
 	readonly history?: boolean;
 	readonly approvalLock?: boolean;
+	/** Whether readable rows belong in the browser replica. Defaults to true. */
+	readonly sync?: boolean;
 	readonly indexes?: ReadonlyArray<ModelIndex>;
 	readonly exclusions?: ReadonlyArray<ModelExclusion>;
 }
 
 export interface ModelDeclaration<
-	TColumns extends Readonly<Record<string, AnyPgColumnBuilder>> = Readonly<
-		Record<string, AnyPgColumnBuilder>
+	TColumns extends Readonly<Record<string, AnyModelFieldBuilder>> = Readonly<
+		Record<string, AnyModelFieldBuilder>
 	>
 > {
 	readonly __kind: 'model';
 	readonly columns: TColumns;
 	readonly metadata?: ModelMetadata;
 }
+
+type ReferenceDeleteAction = 'restrict' | 'cascade' | 'set null';
+export type ReferenceTargets = Readonly<Record<string, string>>;
+
+/** The one logical value exposed for a polymorphic reference, discriminated by its authored tag. */
+export type ReferenceHandle<TTargets extends ReferenceTargets> = {
+	readonly [Kind in keyof TTargets & string]: Readonly<{
+		readonly kind: Kind;
+		readonly id: string;
+	}>;
+}[keyof TTargets & string];
+
+export interface ReferenceBuilder<
+	TTargets extends ReferenceTargets = ReferenceTargets,
+	TNotNull extends boolean = boolean,
+	TUnique extends boolean = boolean
+> {
+	readonly __kind: 'reference';
+	readonly targets: TTargets;
+	readonly config: Readonly<{
+		readonly notNull: TNotNull;
+		readonly isUnique: TUnique;
+		readonly onDelete: ReferenceDeleteAction;
+	}>;
+	/** Mirrors the part of a Drizzle builder's type witness consumed by the model contracts. */
+	readonly _: Readonly<{
+		readonly data: ReferenceHandle<TTargets>;
+		readonly notNull: TNotNull;
+		readonly hasDefault: false;
+	}>;
+	readonly notNull: () => ReferenceBuilder<TTargets, true, TUnique>;
+	readonly unique: () => ReferenceBuilder<TTargets, TNotNull, true>;
+	readonly onDelete: (
+		action: ReferenceDeleteAction
+	) => ReferenceBuilder<TTargets, TNotNull, TUnique>;
+}
+
+export type AnyModelFieldBuilder = AnyPgColumnBuilder | ReferenceBuilder;
+
+const REFERENCE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
+const REFERENCE_TAG = /^[A-Z][A-Z0-9_]*$/;
+
+const makeReferenceBuilder = <
+	const TTargets extends ReferenceTargets,
+	const TNotNull extends boolean,
+	const TUnique extends boolean
+>(
+	targets: TTargets,
+	notNull: TNotNull,
+	isUnique: TUnique,
+	onDelete: ReferenceDeleteAction
+): ReferenceBuilder<TTargets, TNotNull, TUnique> =>
+	Object.freeze({
+		__kind: 'reference' as const,
+		targets,
+		config: Object.freeze({ notNull, isUnique, onDelete }),
+		_: Object.freeze({
+			data: undefined as never as ReferenceHandle<TTargets>,
+			notNull,
+			hasDefault: false as const
+		}),
+		notNull: () => makeReferenceBuilder(targets, true, isUnique, onDelete),
+		unique: () => makeReferenceBuilder(targets, notNull, true, onDelete),
+		onDelete: (action: ReferenceDeleteAction) =>
+			makeReferenceBuilder(targets, notNull, isUnique, action)
+	});
+
+/**
+ * Declares one logical field that may point at exactly one of the named collections.
+ *
+ * Tags are the stable application discriminator; collection names are the physical FK targets.
+ * The database representation is generated later and never leaks into authored row types.
+ */
+export const reference = <const TTargets extends ReferenceTargets>(
+	targets: TTargets
+): ReferenceBuilder<TTargets, false, false> => {
+	const entries = Object.entries(targets);
+	if (entries.length < 2) throw new TypeError('reference() requires at least two targets.');
+	for (const [tag, collection] of entries) {
+		if (!REFERENCE_TAG.test(tag))
+			throw new TypeError(`Reference tag ${JSON.stringify(tag)} must be UPPER_SNAKE_CASE.`);
+		if (!REFERENCE_IDENTIFIER.test(collection))
+			throw new TypeError(
+				`Reference target ${JSON.stringify(collection)} must be a lower_snake_case collection name.`
+			);
+	}
+	const collections = entries.map(([, collection]) => collection);
+	if (new Set(collections).size !== collections.length)
+		throw new TypeError('reference() cannot map multiple tags to the same target collection.');
+	return makeReferenceBuilder<TTargets, false, false>(
+		Object.freeze({ ...targets }),
+		false,
+		false,
+		'restrict'
+	);
+};
+
+const isReferenceBuilderValue = Schema.is(Schema.Struct({ __kind: Schema.Literal('reference') }));
+export const isReferenceBuilder = (builder: AnyModelFieldBuilder): builder is ReferenceBuilder =>
+	isReferenceBuilderValue(builder);
+
+/** Small deterministic hash used to keep generated identifiers inside PostgreSQL's 63-byte limit. */
+const identifierHash = (value: string): string => {
+	let hash = 0x81_1c_9d_c5;
+	for (const byte of new TextEncoder().encode(value)) {
+		hash ^= byte;
+		hash = Math.imul(hash, 0x01_00_01_93);
+	}
+	return (hash >>> 0).toString(16).padStart(8, '0');
+};
+
+/** Keeps generated reference columns, constraints, and indexes inside PostgreSQL's identifier cap. */
+export const referenceDatabaseIdentifier = (...segments: ReadonlyArray<string>): string => {
+	const identifier = segments.join('_');
+	if (new TextEncoder().encode(identifier).length <= 63) return identifier;
+	let prefix = '';
+	for (const character of identifier) {
+		if (new TextEncoder().encode(prefix + character).length > 54) break;
+		prefix += character;
+	}
+	return `${prefix}_${identifierHash(identifier)}`;
+};
+
+/** Stable hidden UUID column used by the exclusive-arc storage representation. */
+export const referenceStorageColumn = (field: string, tag: string): string => {
+	if (!REFERENCE_IDENTIFIER.test(field))
+		throw new TypeError(`Reference field ${JSON.stringify(field)} must be lower_snake_case.`);
+	return referenceDatabaseIdentifier(`${field}__${tag.toLowerCase()}_id`);
+};
 
 /**
  * A `vector()` column's declared width, rejected at declaration time rather than at `CREATE TABLE`.
@@ -99,7 +231,7 @@ const decodeVectorDimensions = Schema.decodeUnknownSync(
 
 /** Keeps the Drizzle-backed column factories together so consumers retain native fluent builder identity. */
 const ColumnAuthoring = {
-	defineModel: <const TColumns extends Readonly<Record<string, AnyPgColumnBuilder>>>(
+	defineModel: <const TColumns extends Readonly<Record<string, AnyModelFieldBuilder>>>(
 		columns: TColumns,
 		metadata?: ModelMetadata
 	): ModelDeclaration<TColumns> => ({
@@ -194,7 +326,7 @@ const ColumnAuthoring = {
 /**
  * What a `file()` column holds.
  *
- * `storage_key` is the identity and there is deliberately no `norbital_id` beside it: the upload
+ * `storage_key` is the identity and there is deliberately no `id` beside it: the upload
  * client writes bytes under `<uuid>.<ext>` and the uuid *is* the key's stem, so a second identifier
  * would be one more thing that can disagree with the first — which is the defect this shape exists
  * to remove.
@@ -236,7 +368,8 @@ function fileColumn(
 	const builder = options.multiple === true ? manyFilesColumn() : oneFileColumn();
 	const config = Reflect.get(builder, 'config');
 	if (config !== null && typeof config === 'object') {
-		if (options.mimeTypes !== undefined) Reflect.set(config, 'boltMimeTypes', [...options.mimeTypes]);
+		if (options.mimeTypes !== undefined)
+			Reflect.set(config, 'boltMimeTypes', [...options.mimeTypes]);
 		Reflect.set(config, 'boltFile', true);
 		if (options.multiple === true) Reflect.set(config, 'boltFileMultiple', true);
 	}
@@ -281,8 +414,16 @@ export const vector = ColumnAuthoring.vector;
 export const hexToBinaryEmbedding = ColumnAuthoring.hexToBinaryEmbedding;
 /** Owns enums behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const enums = ColumnAuthoring.enums;
-export interface CustomTypeValueMap {}
-export interface CustomTypeOptionsMap {}
+type CustomTypeValueMap = WorkspaceAuthoringTypes extends {
+	readonly customTypeValues: infer Values;
+}
+	? Values
+	: Readonly<Record<never, never>>;
+type CustomTypeOptionsMap = WorkspaceAuthoringTypes extends {
+	readonly customTypeOptions: infer Options;
+}
+	? Options
+	: Readonly<Record<never, never>>;
 type CustomTypeValue<Name extends string> = Name extends keyof CustomTypeValueMap
 	? CustomTypeValueMap[Name]
 	: unknown;
@@ -339,7 +480,6 @@ const isRealCalendarDay = Schema.makeFilter(
 const utcInstant = Schema.String.check(Schema.isPattern(UTC_INSTANT), isRealCalendarDay);
 
 const dateRangeValueSchema = Schema.Struct({ start: utcInstant, end: utcInstant });
-export type DateRange = Schema.Schema.Type<typeof dateRangeValueSchema>;
 /**
  * The period a rule nested inside a custom type is in force for.
  *
@@ -368,21 +508,18 @@ export const dateRangeSchema: ReturnType<
 	parseOptions: { onExcessProperty: 'error' }
 });
 
-export interface CustomTypeDefinition<
+interface CustomTypeDefinition<
 	Name extends string,
-	S extends Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)
+	S extends Schema.Top | ((options: never) => Schema.Top)
 > {
 	readonly name: Name;
 	readonly description: string;
 	readonly schema: S;
 }
-export type CustomTypeResolvedSchema<
-	D extends CustomTypeDefinition<
-		string,
-		Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)
-	>
+type CustomTypeResolvedSchema<
+	D extends CustomTypeDefinition<string, Schema.Top | ((options: never) => Schema.Top)>
 > = D['schema'] extends (...arguments_: never[]) => infer S
-	? S extends Schema.Codec<unknown, unknown>
+	? S extends Schema.Top
 		? S
 		: never
 	: D['schema'];
@@ -392,20 +529,11 @@ export type CustomTypeResolvedSchema<
  * branch could only ever have matched a library nothing here uses.
  */
 export type CustomTypeOutput<
-	D extends CustomTypeDefinition<
-		string,
-		Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)
-	>
-> =
-	CustomTypeResolvedSchema<D> extends Schema.Codec<unknown, unknown>
-		? Schema.Schema.Type<CustomTypeResolvedSchema<D>>
-		: never;
+	D extends CustomTypeDefinition<string, Schema.Top | ((options: never) => Schema.Top)>
+> = Schema.Schema.Type<CustomTypeResolvedSchema<D>>;
 export type CustomTypeFactoryOptions<
-	D extends CustomTypeDefinition<
-		string,
-		Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)
-	>
-> = D['schema'] extends (options: infer O) => Schema.Codec<unknown, unknown> ? O : never;
+	D extends CustomTypeDefinition<string, Schema.Top | ((options: never) => Schema.Top)>
+> = D['schema'] extends (options: infer O) => Schema.Top ? O : never;
 
 const relationshipDelete = Symbol.for('@norbital-ai/bolt/relationship-on-delete');
 /**
@@ -420,8 +548,7 @@ const relationshipDelete = Symbol.for('@norbital-ai/bolt/relationship-on-delete'
 const CustomTypeAuthoring = {
 	define: <
 		const Name extends string,
-		const S extends
-			Schema.Codec<unknown, unknown> | ((options: never) => Schema.Codec<unknown, unknown>)
+		const S extends Schema.Top | ((options: never) => Schema.Top)
 	>(
 		definition: CustomTypeDefinition<Name, S>
 	): CustomTypeDefinition<Name, S> => {

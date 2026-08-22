@@ -23,10 +23,11 @@ export type StandardSchemaOf<S extends Schema.Codec<unknown, unknown>> = ReturnT
 	typeof Schema.toStandardSchemaV1<S>
 >;
 
-export type FieldAndFormErrors = {
+/** Errors grouped for the form state: per-field lists plus whole-form messages. */
+interface FieldAndFormErrors {
 	fieldErrors: Record<string, string[]>;
 	formErrors: string[];
-};
+}
 
 export function fieldAndFormErrorsFromStandardIssues(
 	issues: readonly StandardSchemaIssue[]

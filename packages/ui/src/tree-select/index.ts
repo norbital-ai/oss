@@ -1,3 +1,4 @@
+import { Schema } from 'effect';
 import type { RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 import type { Component } from 'svelte';
 import {
@@ -29,12 +30,11 @@ export type TreeNodes<TMetadata> =
 /**
  * Selection state interface defining which nodes are selected or disabled
  */
-export interface SelectionState {
-	/** Array of selected node IDs */
-	selected: string[];
-	/** Array of disabled node IDs */
-	disabled: string[];
-}
+export const SelectionStateSchema = Schema.Struct({
+	selected: Schema.Array(Schema.String),
+	disabled: Schema.Array(Schema.String)
+});
+export type SelectionState = typeof SelectionStateSchema.Type;
 
 /**
  * Callback type for node actions

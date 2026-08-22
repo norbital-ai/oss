@@ -9,7 +9,7 @@ import {
 	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { AccessControl } from '../../src/runtime/access/access-control.js';
+import * as AccessControl from '../../src/runtime/access/access-control.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, recordId, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 import { seedSession } from '../support/fixture-identity.js';
@@ -62,22 +62,24 @@ const secretWorkspace = workspace({
 	// `nobody` is deliberately absent from the teams below: a team the release does not declare holds
 	// no policies at all and is refused by default, which is the session a payload claiming
 	// `teamPath: ['admin']` would try to widen.
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+	],
 	teams: {
 		admin: ['admin']
 	},
 	automations: [],
 	envoys: [],
 	integrations: [],
-		prompt: 'You are the test workspace agent.',
-		tools: [],
-		skills: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
 	requiredFacilities: []
 });
 
 /** A row that exists, so "no rows" cannot be mistaken for "the read was stopped". */
 const seed = async (runtime: BoltTestRuntime) => {
-	await runtime.database.query('insert into people (norbital_id, name) values ($1, $2)', [
+	await runtime.database.query('insert into people (id, name) values ($1, $2)', [
 		recordId('person-1'),
 		'Ada'
 	]);

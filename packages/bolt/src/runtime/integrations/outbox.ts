@@ -1,14 +1,14 @@
-import { Schema } from 'effect';
+import { Result, Schema } from 'effect';
 import type {
 	AuthoredIntegrationSend,
 	IntegrationSendEventContext
-} from '../../authoring/integration-introspection.js';
+} from '#lib/authoring/integration-introspection.js';
 import type {
 	IntegrationDeclaration,
 	IntegrationSendDeclaration,
 	IntegrationSendEvent
-} from '../../authoring/workspace-schema.js';
-import type { Identity } from '../identity/identity.js';
+} from '#lib/authoring/workspace-schema.js';
+import type * as Identity from '#lib/runtime/identity/identity.js';
 
 /**
  * The enqueue half of outbound delivery: one collection write, turned into rows for the outbox.
@@ -48,7 +48,7 @@ export type SendSubscription = Readonly<{
  * anywhere. So the entry is still written — dead-lettered, naming the binding and the reason — and
  * the write proceeds. `payload` is `null` on such an entry because there is nothing to send.
  */
-export type OutboxEntry = Readonly<{
+type OutboxEntry = Readonly<{
 	readonly integration: string;
 	readonly binding: string;
 	readonly collection: string;
@@ -80,7 +80,7 @@ export type OutboxEntry = Readonly<{
  * `PUT /orders/` is a request against the collection endpoint and an API that accepts it does
  * something entirely unlike what the binding meant.
  */
-export const resolvePath = (
+const resolvePath = (
 	path: string,
 	record: Readonly<Record<string, unknown>>
 ): { readonly path: string } | { readonly refusal: string } => {
@@ -146,7 +146,7 @@ export const watchesOperation = (
  *
  * An update is the merge of what was stored and what is being written, because the predicate is
  * asked "is this record now interesting" and a bare patch cannot answer that — `{ status: 'shipped' }`
- * does not carry the customer the body wants to name. `norbital_id` is stamped last so a payload can
+ * does not carry the customer the body wants to name. `id` is stamped last so a payload can
  * always address the record, and stamped rather than trusted from the values for the same reason an
  * inbound identity column is: the record is data, not authority.
  */
@@ -157,8 +157,8 @@ export const eventRecord = (
 	previous: Readonly<Record<string, unknown>> | undefined
 ): Readonly<Record<string, unknown>> =>
 	operation === 'delete'
-		? { ...(previous ?? {}), norbital_id: id }
-		: { ...(previous ?? {}), ...values, norbital_id: id };
+		? { ...(previous ?? {}), id: id }
+		: { ...(previous ?? {}), ...values, id: id };
 
 const describe = (cause: unknown): string =>
 	cause instanceof Error && cause.message !== '' ? cause.message : String(cause);
@@ -183,6 +183,13 @@ const defaultBody = (
 });
 
 /**
+ * One collection write, as the outbox sees it: the row's id plus everything a trigger or body is
+ * told about the event.
+ */
+type OutboxEvent = IntegrationSendEventContext &
+	Readonly<{ readonly recordId: string }>;
+
+/**
  * Turns one collection write into the outbox rows it earns.
  *
  * Per binding, and each one isolated: a binding whose predicate throws dead-letters that binding's
@@ -201,18 +208,13 @@ const defaultBody = (
 export const outboxEntriesFor = (
 	subscriptions: ReadonlyArray<SendSubscription>,
 	writer: Identity.Subject,
-	event: {
-		readonly operation: IntegrationSendEvent;
-		readonly recordId: string;
-		readonly record: Readonly<Record<string, unknown>>;
-		readonly previous?: Readonly<Record<string, unknown>>;
-	}
+	event: OutboxEvent
 ): ReadonlyArray<OutboxEntry> => {
 	const entries: Array<OutboxEntry> = [];
 	const context: IntegrationSendEventContext = {
 		operation: event.operation,
 		record: event.record,
-		...(event.previous === undefined ? {} : { previous: event.previous })
+		previous: event.previous
 	};
 	for (const subscription of subscriptions) {
 		if (!subscription.declaration.events.includes(event.operation)) continue;
@@ -228,12 +230,12 @@ export const outboxEntriesFor = (
 			entries.push({ ...base, path: null, payload: null, refusal: reason });
 		};
 		let matched: boolean;
-		try {
-			matched = subscription.authored.matches(context);
-		} catch (cause) {
-			refuse(`the ${event.operation} trigger threw: ${describe(cause)}`);
+		const matchedAttempt = Result.try(() => subscription.authored.matches(context));
+		if (Result.isFailure(matchedAttempt)) {
+			refuse(`the ${event.operation} trigger threw: ${describe(matchedAttempt.failure)}`);
 			continue;
 		}
+		matched = matchedAttempt.success;
 		if (!matched) continue;
 		const target = resolvePath(subscription.declaration.path, event.record);
 		if (!('path' in target)) {
@@ -251,12 +253,12 @@ export const outboxEntriesFor = (
 			continue;
 		}
 		let produced: unknown;
-		try {
-			produced = build(context);
-		} catch (cause) {
-			refuse(`the body function threw: ${describe(cause)}`);
+		const buildAttempt = Result.try(() => build(context));
+		if (Result.isFailure(buildAttempt)) {
+			refuse(`the body function threw: ${describe(buildAttempt.failure)}`);
 			continue;
 		}
+		produced = buildAttempt.success;
 		if (!Schema.is(Schema.Json)(produced)) {
 			// Refused rather than coerced. A body silently stringified into `"[object Object]"` is a
 			// delivery a partner accepts and cannot use, which is worse than one that never left.

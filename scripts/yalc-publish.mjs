@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readManifest } from './lib/package-release.mjs';
 import { readJsonIfPresent, signatureField } from './lib/yalc-consumers.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -45,11 +46,11 @@ const requested = (() => {
 	const only = argumentValue('--only');
 	if (only === undefined) return undefined;
 	const names = new Set(
-		only
-			.split(',')
-			.map((entry) => entry.trim())
-			.filter((entry) => entry.length > 0)
-			.map((entry) => (entry.startsWith('@norbital-ai/') ? entry : `@norbital-ai/${entry}`))
+		only.split(',').flatMap((entry) => {
+			const trimmed = entry.trim();
+			if (trimmed.length === 0) return [];
+			return [trimmed.startsWith('@norbital-ai/') ? trimmed : `@norbital-ai/${trimmed}`];
+		})
 	);
 	const known = new Set(allPackages.map((entry) => entry.name));
 	for (const name of names) {
@@ -68,13 +69,11 @@ const run = (command, args, cwd = repositoryRoot) => {
 	execFileSync(command, args, { cwd, stdio: 'inherit' });
 };
 
-const readJson = (filePath) => JSON.parse(readFileSync(filePath, 'utf8'));
-
 const workspaceVersions = Object.fromEntries(
 	['bolt-protocol', 'bolt', 'bolt-server', 'std', 'ui', 'config'].flatMap((directory) => {
 		const manifestPath = path.join(repositoryRoot, 'packages', directory, 'package.json');
 		if (!existsSync(manifestPath)) return [];
-		const manifest = readJson(manifestPath);
+		const manifest = readManifest(manifestPath);
 		return typeof manifest.name === 'string' && typeof manifest.version === 'string'
 			? [[manifest.name, manifest.version]]
 			: [];
@@ -174,7 +173,7 @@ if (!existsSync(path.join(repositoryRoot, 'node_modules/.bin/yalc'))) {
  * of these are svelte-package runs and they contend badly.
  */
 const buildable = packages.filter(
-	({ directory }) => readJson(path.join(repositoryRoot, directory, 'package.json')).scripts?.build
+	({ directory }) => readManifest(path.join(repositoryRoot, directory, 'package.json')).scripts?.build
 );
 if (buildable.length > 0) {
 	run('pnpm', [
@@ -201,14 +200,14 @@ for (const { directory, name } of packages) {
 	const packageRoot = path.join(repositoryRoot, directory);
 	run('pnpm', ['exec', 'yalc', 'publish', '--private', '--no-scripts'], packageRoot);
 
-	const { version } = readJson(path.join(packageRoot, 'package.json'));
+	const { version } = readManifest(path.join(packageRoot, 'package.json'));
 	const storeDirectory = path.join(os.homedir(), '.yalc/packages', name, version);
 	const storeManifestPath = path.join(storeDirectory, 'package.json');
 	// yalc's own content hash of what it just stored. Reused rather than recomputed: it is the same
 	// string yalc records in every consumer's lockfile, which is what makes the comparison below
 	// exact rather than a guess.
 	const signature = readFileSync(path.join(storeDirectory, 'yalc.sig'), 'utf8').trim();
-	const manifest = consumerManifest(readJson(storeManifestPath), signature);
+	const manifest = consumerManifest(readManifest(storeManifestPath), signature);
 	writeManifest(storeManifestPath, manifest);
 
 	// Which checkouts are not already holding this build. Read before the push, because the push is
@@ -242,7 +241,7 @@ for (const { directory, name } of packages) {
 		if (!existsSync(installedManifestPath)) continue;
 		writeManifest(
 			installedManifestPath,
-			consumerManifest(readJson(installedManifestPath), signature)
+			consumerManifest(readManifest(installedManifestPath), signature)
 		);
 	}
 

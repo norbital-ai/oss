@@ -1,24 +1,24 @@
 import { Effect, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import type { ToolDeclaration } from '../../authoring/workspace-schema.js';
-import { Database } from '../facilities/database.js';
-import { TaskQueue } from '../tasks/tasks.js';
-import type { Identity } from '../identity/identity.js';
-import { ToolNotAllowed } from './agent-errors.js';
-import { encodeAgentMessage } from './agent-message.js';
-import { InvocationBudget } from '../budget.js';
+import type { ToolDeclaration } from '#lib/authoring/workspace-schema.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
+import type * as Identity from '#lib/runtime/identity/identity.js';
+import { ToolNotAllowed } from '#lib/runtime/agents/agent-errors.js';
+import { encodeAgentMessage } from '#lib/runtime/agents/agent-message.js';
+import * as InvocationBudget from '#lib/runtime/budget.js';
 
-export const sandboxToolNames = [
+const sandboxToolNames = [
 	'spawn_subagent',
 	'list_sandbox_agents',
 	'read_sandbox_agent',
 	'message_sandbox_agent',
 	'await_sandbox_agent'
 ] as const;
-export type SandboxToolName = (typeof sandboxToolNames)[number];
+const SandboxToolNames = Schema.Literals([...sandboxToolNames]);
+type SandboxToolName = Schema.Schema.Type<typeof SandboxToolNames>;
 
-export const isSandboxTool = (name: string): name is SandboxToolName =>
-	(sandboxToolNames as ReadonlyArray<string>).includes(name);
+export const isSandboxTool = Schema.is(SandboxToolNames);
 
 export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
@@ -50,7 +50,7 @@ export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	}
 ];
 
-export type SandboxContext = Readonly<{
+type SandboxContext = Readonly<{
 	readonly effectId: EffectId;
 	readonly subject: Identity.Subject;
 	/**
@@ -62,7 +62,7 @@ export type SandboxContext = Readonly<{
 	 * sandbox by being an administrator, for the same reason `bolt_personal_secrets` exists: bolting
 	 * a `user_id` column onto a shared store would have kept the access rule and lost the isolation.
 	 *
-	 * For a person it is their `norbital_id`. For an envoy it is the envoy's own principal id — and
+	 * For a person it is their `id`. For an envoy it is the envoy's own principal id — and
 	 * on a **public** envoy it is that plus the conversation, because an envoy is one principal and
 	 * without the partition every stranger who ever messaged it would share one tree, with a document
 	 * one uploaded sitting where the next could read it.
@@ -102,6 +102,9 @@ const decode = <S extends Schema.Top>(schema: S, input: unknown) =>
 		Effect.mapError(() => new ToolNotAllowed({ agent: 'sandbox', tool: 'invalid-input' }))
 	);
 
+/** The `ConversationRow` decoder, built once: it is evaluated for every listed session row. */
+const decodeConversationRow = Schema.decodeUnknownOption(ConversationRow);
+
 /**
  * The sibling session, once it is established that it belongs to this sandbox.
  *
@@ -115,7 +118,7 @@ const sameSandbox = Effect.fn('Agents.sameSandbox')(function* (
 ) {
 	const result = yield* context.database.execute(context.effectId, {
 		_tag: 'Query',
-		sql: 'select id, user_id, agent_name, title from bolt_conversations where id = $1',
+		sql: 'select conversation_id as id, user_id, agent_name, title from chat_session where conversation_id = $1',
 		parameters: [sessionId]
 	});
 	const row = result.rows[0];
@@ -141,7 +144,7 @@ const sameSandbox = Effect.fn('Agents.sameSandbox')(function* (
 const ownTitle = Effect.fn('Agents.ownTitle')(function* (context: SandboxContext) {
 	const result = yield* context.database.execute(EffectId.make(`${context.effectId}:sender`), {
 		_tag: 'Query',
-		sql: 'select title from bolt_conversations where id = $1',
+		sql: 'select title from chat_session where conversation_id = $1',
 		parameters: [context.conversationId]
 	});
 	const decoded = Schema.decodeUnknownOption(
@@ -170,7 +173,7 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 			// is actually looking at, however many levels of delegation lie between.
 			yield* context.database.execute(EffectId.make(`${context.effectId}:spawn`), {
 				_tag: 'Query',
-				sql: 'insert into bolt_conversations (id, agent_name, user_id, title, parent_id) values ($1, $2, $3, $4, $5) on conflict do nothing',
+				sql: 'insert into chat_session (conversation_id, agent_name, user_id, title, parent_id) values ($1, $2, $3, $4, $5) on conflict do nothing',
 				parameters: [
 					conversationId,
 					context.agentName,
@@ -200,12 +203,12 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 		case 'list_sandbox_agents': {
 			const result = yield* context.database.execute(context.effectId, {
 				_tag: 'Query',
-				sql: 'select id, agent_name, title from bolt_conversations where user_id = $1',
+				sql: 'select conversation_id as id, agent_name, title from chat_session where user_id = $1',
 				parameters: [context.sandboxKey]
 			});
 			return {
 				sessions: result.rows.flatMap((row) => {
-					const decoded = Schema.decodeUnknownOption(ConversationRow)(row);
+					const decoded = decodeConversationRow(row);
 					return decoded._tag === 'Some' ? [decoded.value] : [];
 				})
 			};
@@ -215,7 +218,7 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 			yield* sameSandbox(context, parsed.sessionId);
 			const result = yield* context.database.execute(context.effectId, {
 				_tag: 'Query',
-				sql: 'select role, content from bolt_agent_messages where conversation_id = $1 order by sequence',
+				sql: 'select role, content from chat_message where conversation_id = $1 order by sequence',
 				parameters: [parsed.sessionId]
 			});
 			return { sessionId: parsed.sessionId, messages: result.rows };
@@ -229,7 +232,7 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 			// rather than in the tool, so the sender was told it had landed.
 			yield* context.database.execute(context.effectId, {
 				_tag: 'Query',
-				sql: 'insert into bolt_agent_messages (conversation_id, role, content) values ($1, $2, $3::jsonb)',
+				sql: 'insert into chat_message (conversation_id, role, content) values ($1, $2, $3::jsonb)',
 				parameters: [
 					parsed.sessionId,
 					'user',

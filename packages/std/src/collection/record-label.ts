@@ -1,4 +1,5 @@
 import { Environment } from '@marcbachmann/cel-js';
+import { Effect, Option, Schema } from 'effect';
 
 /**
  * How a record reads as a name — the other half of `CollectionDefinition.recordLabel`.
@@ -82,19 +83,12 @@ const UUID_SHAPED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 /** Cheap gate before the parse, so ordinary prose never pays for it. */
 const JSON_SHAPED = /^[{[][\s\S]*[}\]]$/;
 
-/**
- * Whether the text really is a serialized object or array, rather than prose that merely opens with
- * a bracket. The parsed value is inspected and discarded — what it holds is irrelevant, only that it
- * is a container and therefore not a title.
- */
-function parsesAsJsonContainer(text: string): boolean {
-	try {
-		const parsed: unknown = JSON.parse(text);
-		return typeof parsed === 'object' && parsed !== null;
-	} catch {
-		return false;
-	}
-}
+/** A JSON object or array, which is never a title — the values inside are irrelevant. */
+const JsonContainerSchema = Schema.Union([
+	Schema.Record(Schema.String, Schema.Unknown),
+	Schema.Array(Schema.Unknown)
+]);
+const JsonContainerDecoded = Schema.decodeOption(Schema.fromJsonString(JsonContainerSchema));
 
 /**
  * Render one label term as text, or null when it has nothing to contribute.
@@ -123,8 +117,10 @@ export function labelTermText(value: unknown): string | null {
 	if (typeof value === 'object') return null;
 	const text = String(value).trim();
 	if (!text || UUID_SHAPED.test(text)) return null;
-	// The same blob, after a round trip through JSONB, arrives as its own serialization.
-	if (JSON_SHAPED.test(text) && parsesAsJsonContainer(text)) return null;
+	// The same blob, after a round trip through JSONB, arrives as its own serialization. The bracket
+	// gate alone is not proof — prose can open with one — so only an actual parse decides; the parsed
+	// value is inspected and discarded, what it holds is irrelevant, only that it is a container.
+	if (JSON_SHAPED.test(text) && Option.isSome(JsonContainerDecoded(text))) return null;
 	return text;
 }
 
@@ -135,11 +131,11 @@ export function labelTermText(value: unknown): string | null {
  * for, and the caller's whole point is to fall back to the terms that did produce something.
  */
 function evaluateLabelExpression(expression: string, record: object): unknown {
-	try {
-		return evaluateCelExpression(expression, { scope: { record } });
-	} catch {
-		return null;
-	}
+	return Effect.runSync(
+		Effect.try(() => evaluateCelExpression(expression, { scope: { record } })).pipe(
+			Effect.orElseSucceed(() => null)
+		)
+	);
 }
 
 /**
@@ -166,9 +162,10 @@ export function resolveRecordLabel(
 	// used to put a uuid on screen. A single-field label splits to one term, which is the same
 	// evaluation as `whole`, so this also covers `recordLabel: 'work_date'` — a value that was never
 	// a string to begin with.
-	const texts = recordLabelExpression
-		.split(LABEL_TERM_JOIN)
-		.map((term) => labelTermText(evaluateLabelExpression(term, record)))
-		.filter((text): text is string => text !== null);
+	const texts: string[] = [];
+	for (const term of recordLabelExpression.split(LABEL_TERM_JOIN)) {
+		const text = labelTermText(evaluateLabelExpression(term, record));
+		if (text !== null) texts.push(text);
+	}
 	return texts.length > 0 ? texts.join(LABEL_TERM_SEPARATOR) : null;
 }

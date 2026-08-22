@@ -10,8 +10,9 @@ import {
 	type FacilityCall
 } from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { Approvals } from '../../src/runtime/approvals/approvals.js';
-import { Collections, PendingApproval } from '../../src/runtime/collections/collections.js';
+import * as Approvals from '../../src/runtime/approvals/approvals.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
+import { PendingApproval } from '../../src/runtime/collections/collections.js';
 import { ADMIN_STATUS } from '../../src/runtime/identity/identity.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
@@ -90,16 +91,18 @@ const peopleWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+	],
 	teams: {
 		admin: ['admin']
 	},
 	automations: [],
 	envoys: [],
 	integrations: [],
-		prompt: 'You are the test workspace agent.',
-		tools: [],
-		skills: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
 	requiredFacilities: []
 });
 
@@ -115,7 +118,9 @@ const gatedWorkspace = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+	],
 	teams: {
 		admin: ['admin']
 	},
@@ -138,7 +143,7 @@ describe('the subject a facility call carries', () => {
 	 */
 	it('stamps the authenticated user on every facility call a command makes after authentication', async () => {
 		harness = await makeBoltTestRuntime(peopleWorkspace);
-		await harness.database.query('insert into people (norbital_id, name) values ($1, $2)', [
+		await harness.database.query('insert into people (id, name) values ($1, $2)', [
 			recordId('person-1'),
 			'Ada'
 		]);
@@ -182,7 +187,12 @@ describe('the subject a facility call carries', () => {
 			dispatchInvocation(
 				command('collections.findMany', 'admin-token', {
 					collection: 'people',
-					subject: { userId: 'user-victim', tenantId: 'test-tenant', policies: [], teamPath: ['admin'],  }
+					subject: {
+						userId: 'user-victim',
+						tenantId: 'test-tenant',
+						policies: [],
+						teamPath: ['admin']
+					}
 				})
 			)
 		);
@@ -278,7 +288,7 @@ describe('the subject a facility call carries', () => {
 	 */
 	it('exposes the impersonated target rather than the actor on the data browser path', async () => {
 		harness = await makeBoltTestRuntime(peopleWorkspace);
-		await harness.database.query('insert into people (norbital_id, name) values ($1, $2)', [
+		await harness.database.query('insert into people (id, name) values ($1, $2)', [
 			recordId('person-1'),
 			'Ada'
 		]);

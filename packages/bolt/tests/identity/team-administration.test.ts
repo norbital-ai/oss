@@ -10,8 +10,9 @@ import {
 	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { AccessControl } from '../../src/runtime/access/access-control.js';
-import { ADMIN_STATUS, Identity } from '../../src/runtime/identity/identity.js';
+import * as AccessControl from '../../src/runtime/access/access-control.js';
+import * as Identity from '../../src/runtime/identity/identity.js';
+import { ADMIN_STATUS } from '../../src/runtime/identity/identity.js';
 import { DispatchError, dispatchInvocation } from '../../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 import { fixtureUserId, seedSession, seedTeam } from '../support/fixture-identity.js';
@@ -56,14 +57,21 @@ const peopleWorkspace = workspace({
 	version: '1',
 	collections: [collection({ name: 'people', fields: { name: field.string({ required: true }) } })],
 	apps: [],
-	policies: [policy({ name: 'Employee', effect: 'allow', actions: ['read'], capabilities: { apps: ['people'] } })],
+	policies: [
+		policy({
+			name: 'Employee',
+			effect: 'allow',
+			actions: ['read'],
+			capabilities: { apps: ['people'] }
+		})
+	],
 	teams: { Employee: ['Employee'] },
 	automations: [],
 	envoys: [],
 	integrations: [],
-		prompt: 'You are the test workspace agent.',
-		tools: [],
-		skills: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
 	requiredFacilities: []
 });
 
@@ -101,13 +109,13 @@ const teamOf = (response: { readonly value?: unknown }): Record<string, unknown>
 
 const teamRows = (runtime: BoltTestRuntime) =>
 	runtime.database.query(
-		'select "norbital_id"::text as "id", "name", "parent_id"::text as "parentId" from bolt_team order by "name"'
+		'select "id"::text as "id", "name", "parent_id"::text as "parentId" from bolt_team order by "name"'
 	);
 
 const memberRow = (runtime: BoltTestRuntime, user: string) =>
 	runtime.database
 		.query(
-			'select "team_id"::text as "teamId", "status" from bolt_auth_user where "norbital_id" = $1::uuid',
+			'select "team_id"::text as "teamId", "status" from bolt_auth_user where "id" = $1::uuid',
 			[fixtureUserId(user)]
 		)
 		.then((rows) => rows[0]);

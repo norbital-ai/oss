@@ -1,13 +1,14 @@
 <!-- fallow-ignore-file unrendered-component -- exported package TOC root rendered by website docs layouts -->
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { Effect } from 'effect';
 	import { watch } from 'runed';
 	import { onMount, tick, type Snippet } from 'svelte';
 	import DocTocPanel from './doc-toc-panel.svelte';
 	import DocTocPopover from './doc-toc-popover.svelte';
 	import { DocTocState, setDocTocState } from './context.svelte';
-	import { buildDocTocRootMargin } from './anchor-observer';
-	import { DEFAULT_DOC_TOC_HEADINGS, syncDocTocHeadings } from './sync-headings';
+	import { buildDocTocRootMargin } from '#lib/doc-toc/anchor-observer';
+	import { DEFAULT_DOC_TOC_HEADINGS, syncDocTocHeadings } from '#lib/doc-toc/sync-headings';
 
 	let {
 		children,
@@ -34,7 +35,7 @@
 		asideWidthClass?: string;
 		asideClass?: string;
 		popoverClass?: string;
-		onSync?: () => void | Promise<void>;
+		onSync?: () => void | Effect.Effect<void, unknown>;
 	} = $props();
 
 	const tocState = setDocTocState(new DocTocState());
@@ -68,11 +69,14 @@
 		return () => tocState.observer.unwatch();
 	});
 
-	export async function refresh(): Promise<void> {
-		popoverOpen = false;
-		await tick();
-		if (articleElement) syncArticle(articleElement, headingSelector);
-		await onSync?.();
+	export function refresh(): Effect.Effect<void, unknown> {
+		return Effect.gen(function* () {
+			popoverOpen = false;
+			yield* Effect.promise(() => tick());
+			if (articleElement) syncArticle(articleElement, headingSelector);
+			const sync = onSync?.();
+			if (sync) yield* sync;
+		});
 	}
 </script>
 

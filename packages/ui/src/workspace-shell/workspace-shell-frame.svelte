@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
 
-	export interface WorkspaceShellFrameProps {
+	interface WorkspaceShellFrameProps {
 		navigation: Snippet;
 		children: Snippet;
 		mobileTitle: string;

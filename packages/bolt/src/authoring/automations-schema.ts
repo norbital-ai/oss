@@ -44,7 +44,7 @@ export type AutomationContext<T extends AutomationTrigger<S>, S extends AnySchem
 		? { readonly incoming_record: SchemaRow<S, N> }
 		: Readonly<Record<string, unknown>>;
 };
-export interface AutomationDefinition<
+interface AutomationDefinition<
 	S extends AnySchema = DefaultWorkspaceSchema,
 	T extends AutomationTrigger<S> = AutomationTrigger<S>
 > {
@@ -64,7 +64,6 @@ export interface AutomationDefinition<
 			context: AutomationContext<T, S>
 		) =>
 			| Effect.Effect<Readonly<Record<string, unknown>>, unknown, never>
-			| Promise<Readonly<Record<string, unknown>>>
 			| Readonly<Record<string, unknown>>;
 	};
 }

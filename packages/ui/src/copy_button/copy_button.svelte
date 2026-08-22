@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import Button, { type ButtonProps } from '../button/button.svelte';
-	import { useI18n, type UiKeys } from '../i18n/index.js';
+	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { onDestroy } from 'svelte';
 
 	const { t } = useI18n<UiKeys>();
@@ -17,7 +17,7 @@
 	} = $props();
 
 	let copied = $state(false);
-	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+	let timeoutId = $state<ReturnType<typeof setTimeout> | null>(null);
 
 	onDestroy(() => {
 		if (timeoutId) clearTimeout(timeoutId);

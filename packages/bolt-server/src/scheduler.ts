@@ -1,3 +1,6 @@
+import { TaskRequest, TaskResponse, type FacilityBinding } from '@norbital-ai/bolt-protocol';
+import { Effect } from 'effect';
+import { makeWireBinding } from './config.js';
 /**
  * One number and one timer — the whole of what a host owes the tenant's scheduler.
  *
@@ -27,7 +30,7 @@ export type SchedulerOptions = Readonly<{
 	 * The answer comes from the tick itself rather than from a query this module makes: the guest has
 	 * just been in the database and knows, so asking again would be paying twice for one fact.
 	 */
-	readonly tick: () => Promise<number | null>;
+	readonly tick: () => Effect.Effect<number | null, unknown>;
 	/** Reports a tick that failed. A tick is background work with nobody waiting, so silence is loss. */
 	readonly onFailure: (cause: unknown) => void;
 	/**
@@ -39,6 +42,10 @@ export type SchedulerOptions = Readonly<{
 	 * whatever it failed to read.
 	 */
 	readonly retryAfterMillis?: number;
+	/**
+	 * The host's clock, injected so the failure backoff is deterministic under a test clock.
+	 */
+	readonly nowMillis?: () => number;
 }>;
 
 export type Scheduler = Readonly<{
@@ -82,6 +89,7 @@ const MAX_TIMEOUT_MILLIS = 2_147_483_647;
 
 export const makeScheduler = (options: SchedulerOptions): Scheduler => {
 	const retryAfterMillis = options.retryAfterMillis ?? DEFAULT_RETRY_AFTER_MILLIS;
+	const nowMillis = options.nowMillis ?? Date.now;
 	let armedFor: number | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let running = false;
@@ -120,13 +128,12 @@ export const makeScheduler = (options: SchedulerOptions): Scheduler => {
 		disarm();
 		armedFor = instant;
 		if (stopped || instant === undefined) return;
-		const delay = Math.max(0, instant - Date.now());
+		const delay = Math.max(0, instant - nowMillis());
 		timer = setTimeout(
 			delay > MAX_TIMEOUT_MILLIS ? () => arm(instant) : fire,
 			Math.min(delay, MAX_TIMEOUT_MILLIS)
 		);
-		// A timer is not a reason to hold the process open. Everything durable is already in the
-		// database, so a server told to exit should exit rather than wait for a nightly digest.
+		// Durable work is in the database, so this timer must not hold the process open.
 		timer.unref?.();
 	};
 
@@ -141,38 +148,36 @@ export const makeScheduler = (options: SchedulerOptions): Scheduler => {
 		running = true;
 		announcedDuringRun = undefined;
 		armedFor = undefined;
-		void options
-			.tick()
-			.then((nextDueAtEpochMs) => {
+		void Effect.runPromise(
+			Effect.gen(function* () {
+				const nextDueAtEpochMs = yield* options.tick();
 				running = false;
 				consecutiveFailures = 0;
-				// `null` means nothing is pending, and the answer to that is to arm no timer at all — not
-				// to arm one far out. A far-future sentinel is how the 32-bit overflow above gets
-				// reintroduced by someone who has forgotten it exists. A scope with nothing pending comes
-				// back on the next `Wake`, the next boot, or a rescan.
+				// `null` means no timer; the next wake, boot, or rescan re-arms it.
 				arm(earliest(nextDueAtEpochMs === null ? undefined : nextDueAtEpochMs));
-			})
-			.catch((cause: unknown) => {
-				running = false;
-				consecutiveFailures += 1;
-				options.onFailure(cause);
-				// Exponential in the number of consecutive failures, capped, so a host that cannot reach
-				// its own database backs off instead of hammering it — and so a genuinely due job is not
-				// abandoned either. An announcement that arrived meanwhile still wins if it is earlier.
-				const backoff = Math.min(
-					retryAfterMillis * 2 ** Math.min(consecutiveFailures - 1, 5),
-					MAX_FAILURE_BACKOFF_MILLIS
-				);
-				arm(earliest(Date.now() + backoff));
-			});
+			}).pipe(
+				Effect.catch((cause: unknown) =>
+					Effect.sync(() => {
+						running = false;
+						consecutiveFailures += 1;
+						options.onFailure(cause);
+						// Capped exponential host backoff; an earlier concurrent wake still wins.
+						const backoff = Math.min(
+							retryAfterMillis * 2 ** Math.min(consecutiveFailures - 1, 5),
+							MAX_FAILURE_BACKOFF_MILLIS
+						);
+						arm(earliest(nowMillis() + backoff));
+					})
+				)
+			)
+		);
 	};
 
 	return {
 		announce: (notLaterThanEpochMs) => {
 			if (stopped) return;
 			if (running) {
-				// Remembered rather than armed, because the tick in flight is about to answer and the two
-				// are combined then. Arming here would be overwritten by that answer.
+				// Combine this with the in-flight tick's answer instead of letting either overwrite the other.
 				announcedDuringRun =
 					announcedDuringRun === undefined
 						? notLaterThanEpochMs
@@ -193,3 +198,22 @@ export const makeScheduler = (options: SchedulerOptions): Scheduler => {
 		}
 	};
 };
+
+export const makeTaskBinding = (
+	scheduler: Scheduler,
+	register: (command: string) => void = () => {}
+): FacilityBinding<TaskRequest, TaskResponse> =>
+	makeWireBinding({
+		request: TaskRequest,
+		response: TaskResponse,
+		cancelled: { code: 'tasks.cancelled', message: 'Task call was cancelled' },
+		failed: { code: 'tasks.failed', message: 'Task facility call failed' },
+		invoke: (_metadata, input) =>
+			Effect.runPromise(
+				Effect.sync(() => {
+					if (input._tag === 'Register') register(input.command);
+					else scheduler.announce(input.notLaterThanEpochMs);
+					return TaskResponse.make({});
+				})
+			)
+	});

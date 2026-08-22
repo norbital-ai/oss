@@ -1,26 +1,8 @@
-/**
- * The consumer half of the yalc loop: deciding whether a checkout's `node_modules` still holds the
- * package content that its `.yalc` directory now has.
- *
- * pnpm resolves `file:.yalc/<name>` through its virtual store — `node_modules/<name>` is a symlink
- * into `.pnpm/<name>@file+…`, whose contents were *copied* at install time. `yalc push` rewrites
- * `.yalc/<name>` and stops there, so a push on its own reaches nothing that imports the package.
- * That is the whole "fixed it, nothing changed" loop: the publish worked, the push worked, and the
- * running code was still the previous build. Only `pnpm install` re-materialises the store copy.
- *
- * Whether that install is needed is answered by `yalcSignature`, which yalc-publish stamps into
- * every manifest it writes. `.yalc/<name>/package.json` carries what was last pushed;
- * `node_modules/<name>/package.json` carries what pnpm last materialised. Equal strings mean there
- * is nothing to do — and unequal ones are the only reliable signal, because the yalc lockfile is
- * updated by the push itself and therefore claims to be current before any consumer has installed.
- *
- * The manifest is used as the carrier rather than yalc's own `yalc.sig` because pnpm packs a
- * `file:` directory dependency through its `files` field, which drops `yalc.sig` and keeps
- * `package.json`. It is the one file guaranteed to make the crossing.
- */
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+/** Consumer-side yalc linking; pnpm must reinstall whenever stamped package signatures differ. */
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { safeParse } from '@norbital-ai/std/json';
 import { readPublicPackageEntries } from './package-release.mjs';
 
 export const signatureField = 'yalcSignature';
@@ -30,100 +12,95 @@ const localPackageNames = new Set(readPublicPackageEntries(repositoryRoot).map((
 
 export const readJsonIfPresent = (file) => {
 	if (!existsSync(file)) return undefined;
-	try {
-		return JSON.parse(readFileSync(file, 'utf8'));
-	} catch {
-		return undefined;
-	}
+	return safeParse(readFileSync(file, 'utf8')) ?? undefined;
 };
 
-/**
- * The locally publishable packages this checkout consumes, read from its own manifest.
- *
- * This must include exact registry specifiers as well as existing `file:.yalc/` overlays. Filtering
- * only the latter made `yalc:link` capable of refreshing an old link but incapable of creating one
- * in a clean checkout — the ordinary state where the command is first needed.
- *
- * The producer set comes from `package-release.mjs`, so adding a publishable package cannot make
- * the producer and consumers silently disagree.
- */
+/** Locally publishable dependencies, whether clean registry pins or existing overlays. */
 export const managedPackages = (consumerDirectory) => {
 	const manifest = readJsonIfPresent(path.join(consumerDirectory, 'package.json'));
 	const sections = [manifest?.dependencies, manifest?.devDependencies];
-	return sections
-		.flatMap((section) => Object.entries(section ?? {}))
-		.filter(([name]) => localPackageNames.has(name))
-		.map(([name]) => name);
+	return sections.flatMap((section) =>
+		Object.entries(section ?? {}).flatMap(([name]) => (localPackageNames.has(name) ? [name] : []))
+	);
 };
 
 const manifestSignature = (manifestPath) => readJsonIfPresent(manifestPath)?.[signatureField];
 
-/** What the last push left in `.yalc/<name>` — the content this consumer is supposed to be running. */
-export const linkedSignature = (consumerDirectory, name) =>
-	manifestSignature(path.join(consumerDirectory, '.yalc', ...name.split('/'), 'package.json'));
-
-/** What pnpm actually materialised, read through the node_modules symlink. */
-export const installedSignature = (consumerDirectory, name) =>
-	manifestSignature(
-		path.join(consumerDirectory, 'node_modules', ...name.split('/'), 'package.json')
-	);
-
 /**
- * The packages this consumer would load a stale build of.
- *
- * A package that is linked but carries no signature is reported stale: it predates the stamp, so
- * there is no evidence either way and one extra install is cheaper than one missed propagation.
+ * What the last push left in `.yalc/<name>` versus what pnpm materialised through the
+ * node_modules symlink — the content this consumer is supposed to be running, and the proof.
+ * Missing signatures are stale because they provide no evidence that pnpm materialised the push.
  */
 export const stalePackages = (consumerDirectory, names) =>
 	names.filter((name) => {
 		if (!existsSync(path.join(consumerDirectory, '.yalc', ...name.split('/')))) return false;
-		const linked = linkedSignature(consumerDirectory, name);
-		return linked === undefined || linked !== installedSignature(consumerDirectory, name);
+		const linked = manifestSignature(
+			path.join(consumerDirectory, '.yalc', ...name.split('/'), 'package.json')
+		);
+		const installed = manifestSignature(
+			path.join(consumerDirectory, 'node_modules', ...name.split('/'), 'package.json')
+		);
+		return linked === undefined || linked !== installed;
 	});
 
-/**
- * Make every managed package in this checkout a *pure* yalc installation and manifest dependency.
- *
- * A non-pure installation is one where yalc writes the package into `node_modules/<name>` itself,
- * replacing pnpm's symlink with a real directory and moving whatever was there to `.ignored_<name>`.
- * Colony was in that state: every push overwrote the link, so `@norbital-ai/ui` no longer sat beside
- * its own dependencies in the virtual store and Colony's vite config had to reconstruct them by
- * hand. Templates were already pure, because yalc turns pure on by default wherever it finds a
- * `pnpm-workspace.yaml` — and Colony, being an app inside the workspace rather than its root, has
- * none.
- *
- * `yalc add --pure` alone is not enough: pure mode copies into `.yalc/` but deliberately leaves an
- * exact registry specifier unchanged. For a package not already addressed as `file:.yalc/`, first
- * add it normally so yalc records the replaced version and rewrites the manifest, then convert that
- * installation to pure. pnpm owns `node_modules`; the caller re-materialises it after this returns.
- */
+/** Link consumers without leaving publish-time dependency coordinates in source control. */
+export const linkConsumers = ({ consumers, force = false, install, run, yalcBin }) => {
+	const snapshots = new Map();
+	for (const file of new Set(
+		consumers.flatMap(({ directory, stateFiles = [] }) => [
+			path.join(directory, 'package.json'),
+			path.join(directory, 'pnpm-lock.yaml'),
+			path.join(directory, 'yalc.lock'),
+			...stateFiles
+		])
+	)) {
+		snapshots.set(file, existsSync(file) ? readFileSync(file) : undefined);
+	}
+	try {
+		const states = consumers.map((consumer) => {
+			const packages = managedPackages(consumer.directory);
+			const prepared = ensurePureInstallation({
+				consumerDirectory: consumer.directory,
+				names: packages,
+				yalcBin,
+				run
+			});
+			const stale = stalePackages(consumer.directory, packages);
+			return { ...consumer, packages, prepared, stale };
+		});
+		const changed = states.filter(
+			({ prepared, stale }) => force || prepared.length > 0 || stale.length > 0
+		);
+		if (changed.length > 0) install(changed);
+		return states;
+	} finally {
+		for (const [file, contents] of snapshots) {
+			if (contents === undefined) rmSync(file, { force: true });
+			else writeFileSync(file, contents);
+		}
+	}
+};
+
+/** Convert registry pins to pure overlays; pnpm remains the sole owner of node_modules. */
 export const ensurePureInstallation = ({ consumerDirectory, names, yalcBin, run }) => {
 	const manifest = readJsonIfPresent(path.join(consumerDirectory, 'package.json'));
 	const lockfile = readJsonIfPresent(path.join(consumerDirectory, 'yalc.lock'));
-	const specifierOf = (name) => manifest?.dependencies?.[name] ?? manifest?.devDependencies?.[name];
 	const unlinked = names.filter(
-		(name) => !String(specifierOf(name) ?? '').startsWith('file:.yalc/')
+		(name) =>
+			!String(manifest?.dependencies?.[name] ?? manifest?.devDependencies?.[name] ?? '').startsWith(
+				'file:.yalc/'
+			)
 	);
-	// Anything the lockfile does not record as pure, including anything it does not record at all.
-	//
-	// This used to require the entry to exist (`entry !== undefined && entry.pure !== true`), which
-	// left a state the script can itself produce unreachable: a consumer already pinned to
-	// `file:.yalc/` but with no `yalc.lock` — an interrupted link, or a manifest edited by hand — is
-	// not `unlinked` either, so it fell into neither bucket, was never converted, and then failed the
-	// completeness check below. The error blamed the store ("no usable build … rerun without
-	// --only"), which is a statement about the publisher and sent the reader to the wrong repository.
-	// A missing entry is the strongest possible evidence the installation is not pure.
+	// A missing lock entry is also an impure/incomplete installation.
 	const impure = names.filter((name) => lockfile?.packages?.[name]?.pure !== true);
 	if (unlinked.length > 0) {
-		// Non-pure add is the only yalc path that writes `file:.yalc/` and remembers the exact
-		// specifier it replaced. The pure conversion below immediately removes its node_modules copy.
+		// Plain add records the replaced registry pin; the pure pass then yields ownership to pnpm.
 		run(yalcBin, ['add', ...unlinked], consumerDirectory);
 	}
 	const prepared = [...new Set([...unlinked, ...impure])];
 	if (prepared.length > 0) run(yalcBin, ['add', '--pure', ...prepared], consumerDirectory);
 	for (const name of prepared) {
-		// The real directory yalc left behind, and the copy of pnpm's link it displaced. Both are
-		// dead once the installation is pure; leaving them means two resolutions for one specifier.
+		// Pure mode must leave neither yalc's directory nor its displaced copy of pnpm's link.
 		const segments = name.split('/');
 		const parent = path.join(consumerDirectory, 'node_modules', ...segments.slice(0, -1));
 		rmSync(path.join(parent, segments.at(-1)), { recursive: true, force: true });
@@ -131,19 +108,7 @@ export const ensurePureInstallation = ({ consumerDirectory, names, yalcBin, run 
 	}
 	const linkedManifest = readJsonIfPresent(path.join(consumerDirectory, 'package.json'));
 	const linkedLock = readJsonIfPresent(path.join(consumerDirectory, 'yalc.lock'));
-	// Purity is a property of the tree, not a word in the lockfile.
-	//
-	// `yalc add --pure` records `pure: true`, but a plain `add` records `file: true` and — for
-	// reasons that appear to be size-related — the `--pure` pass that follows can silently no-op on
-	// an already-installed signature, leaving the label at `file` forever. That label was the only
-	// thing checked here, so a consumer sitting in exactly the desired end state was reported as
-	// "the yalc store has no usable build", which blames the publisher for the consumer's bookkeeping
-	// and sends the reader to the wrong repository entirely.
-	//
-	// So test what this file's own doc comment says non-pure *is*: yalc having written the package
-	// into `node_modules/<name>` and displaced pnpm's link to `.ignored_<name>`. If the manifest
-	// points at `.yalc/`, the copy is there, and no displaced link was left behind, the installation
-	// is pure whichever word yalc wrote down.
+	// Some yalc versions leave `file: true`; the actual tree, not that label, proves purity.
 	const missing = names.filter((name) => {
 		const specifier =
 			linkedManifest?.dependencies?.[name] ?? linkedManifest?.devDependencies?.[name];

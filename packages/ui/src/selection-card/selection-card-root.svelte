@@ -8,7 +8,7 @@
 	};
 
 	// Moved types here if possible or just context
-	export type SelectionCardContext = SelectionContextValue;
+	type SelectionCardContext = SelectionContextValue;
 	export const [getSelectionCardContext, setSelectionCardContext] =
 		createContext<() => SelectionCardContext>();
 </script>

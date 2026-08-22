@@ -1,5 +1,12 @@
 import type { ModelDeclaration } from './models-schema.js';
-export { describeHooks, describeModel, describeModelColumns } from './model-introspection.js';
+import type { SYSTEM_COLLECTION_MODELS } from './system-models.js';
+export type { AutomationContext, AutomationTrigger } from './automations-schema.js';
+export {
+	describeHooks,
+	describeModel,
+	describeModelColumns,
+	compileModel
+} from './model-introspection.js';
 export {
 	approvalConfigurationId,
 	approvalStepId,
@@ -7,6 +14,7 @@ export {
 	describePolicy
 } from './policy-introspection.js';
 export { describeIntegrations, manifestIntegrations } from './integration-introspection.js';
+export { agentTools, describeMcpServer, describeSkill } from './workspace-schema.js';
 export type {
 	AuthoredIntegrationBinding,
 	AuthoredIntegrationModule,
@@ -17,7 +25,7 @@ export type {
 import type {
 	BeforeApi,
 	DefaultWorkspaceSchema,
-	SystemRow,
+	InputValuesForTables as ContractInputValuesForTables,
 	TableName,
 	TablesForModels
 } from './contracts-schema.js';
@@ -52,7 +60,7 @@ type RelationshipCollection<
 	Name extends keyof M & string
 > = {
 	readonly [Field in keyof M[Name]['columns']]: M[Name]['columns'][Field] & RelationshipColumn;
-} & { readonly norbital_id: RelationshipColumn };
+} & { readonly id: RelationshipColumn };
 type RelationFactories<M extends Readonly<Record<string, ModelDeclaration>>> = {
 	readonly [Name in keyof M & string]: (
 		input?: Readonly<Record<string, unknown>>
@@ -66,13 +74,13 @@ export type RelationshipHelpers<M extends Readonly<Record<string, ModelDeclarati
 	/**
 	 * The identity table, reachable as a foreign-key target and nothing else.
 	 *
-	 * `schema-migrations.ts` resolves this name to `boltAuthUser` so `r.one.user(...)` points an
+	 * `schema-migrations.ts` resolves this name to the compiled system user table so `r.one.user(...)` points an
 	 * ownership column at the only description of a person Bolt has. `team` and `team_members` sat
 	 * beside it until identity became runtime-owned: teams are a jsonb array on that same row now,
 	 * so those two named tables the migration compiler could not resolve, and `r.one.team(...)`
 	 * typechecked its way into a compiler crash.
 	 */
-	readonly user: { readonly norbital_id: RelationshipColumn };
+	readonly user: { readonly id: RelationshipColumn };
 }> & { readonly [Name in keyof M & string]: RelationshipCollection<M, Name> };
 export type PlatformRelationshipsFor<M extends Readonly<Record<string, ModelDeclaration>>> = (
 	helpers: RelationshipHelpers<M>
@@ -133,19 +141,11 @@ export type GroupDefinition = import('./models-schema.js').BoltGroupDefinition;
  * types, so `db.user.findMany(...)` went on typechecking in three workspace screens and failing at
  * run time against a table that is not in `information_schema`.
  */
-interface PlatformPersonRow extends SystemRow {
-	readonly name: string;
-}
-type PlatformTables = {
-	readonly bolt_auth_user: import('./contracts-schema.js').TableShape<
-		PlatformPersonRow,
-		Partial<PlatformPersonRow>
-	>;
-};
+type PlatformModelTables = TablesForModels<typeof SYSTEM_COLLECTION_MODELS>;
 export type PlatformSchema = {
-	readonly tables: PlatformTables;
+	readonly tables: PlatformModelTables;
 	readonly relations: Readonly<Record<string, unknown>>;
-	readonly inputs: InputValuesForTables<PlatformTables>;
+	readonly inputs: ContractInputValuesForTables<PlatformModelTables>;
 };
 export type CollectionRegistryFor<
 	S extends import('./contracts-schema.js').AnySchema,
@@ -162,8 +162,15 @@ export type InvokeClientApi<
 > = {
 	readonly [K in keyof Invoke]: (
 		input: Parameters<Invoke[K]['handler']>[0]
-	) => RemoteQuery<Awaited<ReturnType<Invoke[K]['handler']>>>;
+	) => RemoteQuery<HandlerSuccess<ReturnType<Invoke[K]['handler']>>>;
 };
+type HandlerSuccess<Value> = Value extends import('effect').Effect.Effect<
+	infer Success,
+	unknown,
+	never
+>
+	? Success
+	: Awaited<Value>;
 export interface RemoteQuery<Value> extends PromiseLike<Value> {
 	readonly current: Value | undefined;
 	readonly error: unknown;

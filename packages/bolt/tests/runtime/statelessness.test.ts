@@ -2,10 +2,10 @@ import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
 import { EffectId, InvocationId, type TransportRequest } from '@norbital-ai/bolt-protocol';
 import { testCallContext } from '../support/bolt-test-layer.js';
-import { app, workspace } from '../../src/authoring/index.js';
+import { app, workspace } from '../../src/authoring/workspace-schema.js';
 import { FacilityError } from '../../src/runtime/facilities/database.js';
 import { Transport } from '../../src/runtime/facilities/services.js';
-import { Workspace } from '../../src/runtime/workspace.js';
+import * as Workspace from '../../src/runtime/workspace.js';
 
 /**
  * One context per invocation, built the same way every time.
@@ -30,9 +30,9 @@ describe('artifact statelessness', () => {
 				automations: [],
 				envoys: [],
 				integrations: [],
-		prompt: 'You are the test workspace agent.',
-		tools: [],
-		skills: [],
+				prompt: 'You are the test workspace agent.',
+				tools: [],
+				skills: [],
 				requiredFacilities: []
 			});
 		const read = (name: string) =>

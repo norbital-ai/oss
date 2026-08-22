@@ -9,7 +9,7 @@ import {
 	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { field, policy } from '../../src/authoring/workspace-schema.js';
-import { AccessControl } from '../../src/runtime/access/access-control.js';
+import * as AccessControl from '../../src/runtime/access/access-control.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	makeBoltTestRuntime,

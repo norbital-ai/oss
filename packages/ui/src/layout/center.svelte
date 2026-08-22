@@ -1,9 +1,9 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
+	import type { LayoutAttributes, LayoutElement, LayoutGap } from '#lib/layout/layout.shared';
 
 	export type CenterMeasure = 'narrow' | 'reading' | 'wide' | 'full';
-	export type CenterLayout = 'block' | 'stack' | 'inline' | 'cluster' | 'grid';
+	type CenterLayout = 'block' | 'stack' | 'inline' | 'cluster' | 'grid';
 	export interface CenterProps extends LayoutAttributes {
 		as?: LayoutElement;
 		measure?: CenterMeasure;
@@ -18,7 +18,7 @@
 
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import { GAP_CLASSES } from './layout.shared.js';
+	import { GAP_CLASSES } from '#lib/layout/layout.shared';
 
 	let {
 		as = 'div',

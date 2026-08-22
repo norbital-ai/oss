@@ -9,7 +9,7 @@
 		RELEASE_REQUEST_UNAVAILABLE,
 		type AuthoringView,
 		type StudioEnvironment
-	} from './studio-state.js';
+	} from '#lib/client/ui/studio/studio-state.js';
 
 	/**
 	 * Authoring's chrome row: which environment is being read, what the host is, and what may be
@@ -144,7 +144,9 @@
 		<!-- Shared `Tabs`, not a second bordered pill; the studio uses the product's tab treatment. -->
 		<Tabs
 			value={view}
-			onValueChange={(next) => onview?.(next as AuthoringView)}
+			onValueChange={(next) => {
+				if (next === 'manifest' || next === 'editor') onview?.(next);
+			}}
 			showContent={false}
 			animate={false}
 			variant="underline"

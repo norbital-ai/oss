@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { app, collection, field, workspace } from '../../src/authoring/index.js';
+import { app, collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { generateWorkspaceTypes } from '../../src/compiler/compiler.js';
 
 describe('compiler template generation', () => {
@@ -19,9 +19,9 @@ describe('compiler template generation', () => {
 			automations: [],
 			envoys: [],
 			integrations: [],
-		prompt: 'You are the test workspace agent.',
-		tools: [],
-		skills: [],
+			prompt: 'You are the test workspace agent.',
+			tools: [],
+			skills: [],
 			requiredFacilities: []
 		});
 		const output = generateWorkspaceTypes(definition);

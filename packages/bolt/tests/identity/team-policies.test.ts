@@ -61,7 +61,8 @@ describe('policies held through a team', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 		try {
 			const workspace = definition({ 'HR Manager': ['employee', 'payroll_admin_removed'] });
-			const held = policiesHeld(workspace, subject(['HR Manager']));
+			const reported = new Set<string>();
+			const held = policiesHeld(workspace, subject(['HR Manager']), reported);
 			expect([...held]).toEqual(['employee']);
 			expect(warn).toHaveBeenCalledTimes(1);
 			const [line] = warn.mock.calls[0] as [string];
@@ -70,8 +71,8 @@ describe('policies held through a team', () => {
 
 			// Deduped across calls: this runs on the authorization path, so one stale name must be one
 			// line and not one line per request.
-			policiesHeld(workspace, subject(['HR Manager']));
-			policiesHeld(workspace, subject(['HR Manager']));
+			policiesHeld(workspace, subject(['HR Manager']), reported);
+			policiesHeld(workspace, subject(['HR Manager']), reported);
 			expect(warn).toHaveBeenCalledTimes(1);
 		} finally {
 			warn.mockRestore();

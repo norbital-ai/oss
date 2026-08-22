@@ -2,7 +2,7 @@
 	import { cn } from '#lib/utils';
 	import type { ButtonProps } from '#lib/button';
 
-	export interface ConversationScrollButtonProps extends ButtonProps {}
+	interface ConversationScrollButtonProps extends ButtonProps {}
 </script>
 
 <script lang="ts">

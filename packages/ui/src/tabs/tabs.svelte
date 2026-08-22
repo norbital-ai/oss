@@ -6,7 +6,7 @@
 	import { Tabs as TabsPrimitive } from 'bits-ui';
 	import TabsList from './tabs-list.svelte';
 	import TabsContent from './tabs-content.svelte';
-	import type { TabConfig, TabsProps } from './tabs.types.js';
+	import type { TabConfig, TabsProps } from '#lib/tabs/tabs.types';
 
 	let {
 		config,

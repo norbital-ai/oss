@@ -4,9 +4,14 @@ import type {
 	HttpConnection,
 	IntegrationDeclaration,
 	IntegrationSendDeclaration
-} from '../../authoring/workspace-schema.js';
-import { isRetryableStatus, retryDelayMs, type IntegrationHttpMethod } from './http.js';
-import { authenticationHeaders } from './pull.js';
+} from '#lib/authoring/workspace-schema.js';
+import {
+	IntegrationHttpRequest,
+	isRetryableStatus,
+	retryDelayMs,
+	type IntegrationHttpMethod
+} from '#lib/runtime/integrations/http.js';
+import { authenticationHeaders } from '#lib/runtime/integrations/pull.js';
 
 /**
  * The drain half of outbound delivery: queued rows out, HTTP requests away, outcomes recorded.
@@ -60,7 +65,7 @@ export type ClaimedDelivery = Readonly<{
 }>;
 
 /** How a delivery ended, as the ledger records it. */
-export type Settlement =
+type Settlement =
 	| Readonly<{ readonly _tag: 'Delivered'; readonly sequence: number; readonly status: number }>
 	| Readonly<{
 			readonly _tag: 'Retry';
@@ -98,12 +103,7 @@ export type DeliverDependencies = Readonly<{
 	readonly request: (
 		effectId: EffectId,
 		connector: string,
-		descriptor: {
-			readonly method: IntegrationHttpMethod;
-			readonly url: string;
-			readonly headers: Readonly<Record<string, string>>;
-			readonly body?: Schema.Json;
-		}
+		descriptor: Schema.Schema.Type<typeof IntegrationHttpRequest>
 	) => Effect.Effect<Answered, { readonly message: string; readonly retryable: boolean }>;
 	/** Reads a declared secret, or fails naming the variable that has no value. */
 	readonly secret: (
@@ -114,10 +114,10 @@ export type DeliverDependencies = Readonly<{
 		effectId: EffectId,
 		settlement: Settlement
 	) => Effect.Effect<void, { readonly message: string }>;
-	readonly now: () => number;
+	readonly now: Effect.Effect<number>;
 }>;
 
-export type DeliveryOutcome = Readonly<{
+type DeliveryOutcome = Readonly<{
 	readonly binding: string;
 	readonly recordId: string;
 	readonly operation: string;
@@ -128,7 +128,7 @@ export type DeliveryOutcome = Readonly<{
 	readonly reason: string | null;
 }>;
 
-export type FlushReport = Readonly<{
+type FlushReport = Readonly<{
 	readonly integration: string;
 	readonly collection: string;
 	readonly claimed: number;
@@ -167,7 +167,7 @@ const shorten = (reason: string): string =>
  * the payload, for the same reason an inbound receipt is derived from a header or the verified
  * digest: a key the message supplies is a key the message gets to choose.
  */
-export const deliveryKey = (integration: string, binding: string, sequence: number): string =>
+const deliveryKey = (integration: string, binding: string, sequence: number): string =>
 	`${integration}:${binding}:${sequence}`;
 
 /** Whether this method carries a body. `DELETE` does not: several APIs answer 400 to one that does. */
@@ -269,7 +269,7 @@ const attemptDelivery = (
 		// `Retry-After` belongs to the answer that just arrived, so it is read here rather than
 		// recomputed later: the receiver is the only party that knows when it will be ready.
 		const after = Result.isSuccess(answer) ? answer.success.headers['retry-after'] : undefined;
-		const delayMs = retryDelayMs(claimed.attempts - 1, backoff, after, dependencies.now());
+		const delayMs = retryDelayMs(claimed.attempts - 1, backoff, after, yield* dependencies.now);
 		return {
 			settlement: { _tag: 'Retry', sequence: claimed.sequence, status, reason, delayMs },
 			outcome: describe('retrying', status, reason)

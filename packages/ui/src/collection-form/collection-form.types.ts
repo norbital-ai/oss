@@ -8,9 +8,9 @@ import type {
 	CollectionRow,
 	CollectionUpdateInput
 } from '@norbital-ai/std/collection';
-import type { Schema } from 'effect';
-import type { StandardSchemaOf } from '../form/standard_schema_form_errors.js';
-import type { CollectionRecordMetadata } from '../collection-record-metadata/index.js';
+import { Effect, Schema } from 'effect';
+import type { StandardSchemaOf } from '#lib/form/standard_schema_form_errors';
+import type { CollectionRecordMetadata } from '#lib/collection-record-metadata';
 import type {
 	Component,
 	ComponentConstructorOptions,
@@ -26,10 +26,11 @@ export type CollectionFormName<TCollections extends CollectionRegistry> = Extrac
 
 export type CollectionFormValidationValues = Readonly<Record<string, unknown>>;
 
-export interface CollectionFormValidationIssue {
-	readonly message: string;
-	readonly path?: readonly (string | number)[];
-}
+const collectionFormValidationIssueSchema = Schema.Struct({
+	message: Schema.String,
+	path: Schema.optionalKey(Schema.Array(Schema.Union([Schema.String, Schema.Number])))
+});
+export type CollectionFormValidationIssue = typeof collectionFormValidationIssueSchema.Type;
 
 export interface CollectionFormValidation {
 	/** Effect schema validation, read through the schema's `~standard` adapter. */
@@ -37,19 +38,17 @@ export interface CollectionFormValidation {
 	/** Cross-field or domain validation that may perform asynchronous checks. */
 	readonly semantic?: (
 		values: CollectionFormValidationValues
-	) =>
-		| readonly CollectionFormValidationIssue[]
-		| void
-		| Promise<readonly CollectionFormValidationIssue[] | void>;
+	) => Effect.Effect<readonly CollectionFormValidationIssue[] | void, unknown>;
 }
 
+const collectionFormInjectedRendererKeySchema = Schema.Literals([
+	'value',
+	'field',
+	'row',
+	'onValueChange'
+]);
 /** Props CollectionFormField always injects; callers supply the rest via `rendererProps`. */
-export type CollectionFormInjectedRendererKey = 'value' | 'field' | 'row' | 'onValueChange';
-
-/** Re-map so interface prop bags satisfy Svelte's `Component` props bound without writing `any`. */
-type CollectionFormSvelteProps<T> = {
-	[K in keyof T]: T[K];
-};
+export type CollectionFormInjectedRendererKey = typeof collectionFormInjectedRendererKeySchema.Type;
 
 export type CollectionFormCallerRendererProps<TRendererProps> = Omit<
 	TRendererProps,
@@ -71,33 +70,39 @@ export interface CollectionFormRendererProps extends CollectionFormRendererOptio
 	onValueChange: (value: unknown) => void;
 }
 
+type RendererProps<TRenderer> = TRenderer extends Component<infer TProps>
+	? TProps extends never
+		? CollectionFormRendererProps
+		: TProps
+	: CollectionFormRendererProps;
+
 export interface CollectionFormFieldProps<
 	TFieldName extends string = string,
-	TRendererProps = CollectionFormRendererProps
+	TRenderer extends Component<never> = Component<CollectionFormRendererProps>
 > {
 	name: TFieldName;
 	label?: string;
 	class?: string;
-	renderer?: Component<CollectionFormSvelteProps<TRendererProps>>;
-	rendererProps?: CollectionFormCallerRendererProps<TRendererProps>;
+	renderer?: TRenderer;
+	rendererProps?: CollectionFormCallerRendererProps<RendererProps<TRenderer>>;
 }
 
 /**
- * `Field` as handed to form composition snippets. Isomorphic (construct + call) so svelte-check
- * accepts it as a component; the generic lets each usage instantiate `TRendererProps` from
- * `renderer={...}` so `rendererProps` stays typed.
+ * `Field` as handed to form composition snippets. Callable shape, so svelte-check accepts it as a
+ * component; the generic lets each usage instantiate `TRendererProps` from `renderer={...}` so
+ * `rendererProps` stays typed.
  */
 export interface CollectionFormFieldComponent<TFieldName extends string = string> {
-	new <TRendererProps = CollectionFormRendererProps>(
-		options: ComponentConstructorOptions<CollectionFormFieldProps<TFieldName, TRendererProps>>
-	): SvelteComponent<CollectionFormFieldProps<TFieldName, TRendererProps>>;
-	<TRendererProps = CollectionFormRendererProps>(
+	new <TRenderer extends Component<never> = Component<CollectionFormRendererProps>>(
+		options: ComponentConstructorOptions<CollectionFormFieldProps<TFieldName, TRenderer>>
+	): SvelteComponent<CollectionFormFieldProps<TFieldName, TRenderer>>;
+	<TRenderer extends Component<never> = Component<CollectionFormRendererProps>>(
 		this: void,
 		internals: ComponentInternals,
-		props: CollectionFormFieldProps<TFieldName, TRendererProps>
+		props: CollectionFormFieldProps<TFieldName, TRenderer>
 	): {
 		$on?(type: string, callback: (e: unknown) => void): () => void;
-		$set?(props: Partial<CollectionFormFieldProps<TFieldName, TRendererProps>>): void;
+		$set?(props: Partial<CollectionFormFieldProps<TFieldName, TRenderer>>): void;
 	};
 	element?: typeof HTMLElement;
 	z_$$bindings?: string;
@@ -111,7 +116,7 @@ export interface CollectionFormController {
 export interface CollectionFormDeleteAction {
 	readonly label?: string;
 	readonly disabled?: boolean;
-	readonly onDelete: () => void | Promise<void>;
+	readonly onDelete: () => void | Effect.Effect<void, unknown>;
 }
 
 export interface CollectionFormComposition<
@@ -135,7 +140,7 @@ export interface CollectionFormProps<
 	 * record, anything else is a draft. There is deliberately no `recordId` prop — it was always the
 	 * same id the caller had just dug out of this record, and every authored `+representation.svelte`
 	 * threaded it back by hand. An optional override would be an escape hatch that silently
-	 * re-legalises reaching into `norbital_*` from authored source.
+	 * re-legalises reaching into framework-owned fields from authored source.
 	 */
 	defaultValues?:
 		| Partial<CollectionRow<TCollections[TName]>>
@@ -145,7 +150,7 @@ export interface CollectionFormProps<
 	validation?: CollectionFormValidation;
 	onSubmit?: (
 		values: CollectionFormValidationValues
-	) => CollectionRow<TCollections[TName]> | Promise<CollectionRow<TCollections[TName]>>;
+	) => Effect.Effect<CollectionRow<TCollections[TName]>, unknown>;
 	deleteAction?: CollectionFormDeleteAction;
 	/** Application-authored behaviour and flags for this record. System metadata is injected. */
 	recordMetadata?: readonly CollectionRecordMetadata[];
@@ -153,7 +158,9 @@ export interface CollectionFormProps<
 	loading?: boolean;
 	skeletonRows?: number;
 	class?: string;
-	onAfterSubmit?: (record: CollectionRow<TCollections[TName]>) => void | Promise<void>;
+	onAfterSubmit?: (
+		record: CollectionRow<TCollections[TName]>
+	) => void | Effect.Effect<void, unknown>;
 	/**
 	 * Ordered field-name pick for the auto-emitted form (RFC V.4b). Wins over auto field emission;
 	 * ignored when a `children` composition is provided.

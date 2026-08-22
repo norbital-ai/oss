@@ -1,11 +1,11 @@
-import { deriveRecordId } from '../derive-record-id.js';
-import { Context, Effect, Layer, Schema } from 'effect';
+import { deriveRecordId } from '#lib/runtime/derive-record-id.js';
+import { Clock, Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { AccessControl } from '../access/access-control.js';
-import { Database } from '../facilities/database.js';
-import { TaskQueue } from '../tasks/tasks.js';
-import type { Identity } from '../identity/identity.js';
-import { Workspace } from '../workspace.js';
+import * as AccessControl from '#lib/runtime/access/access-control.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
+import type * as Identity from '#lib/runtime/identity/identity.js';
+import * as Workspace from '#lib/runtime/workspace.js';
 
 export const ApprovalState = Schema.TaggedUnion({
 	Pending: {
@@ -21,7 +21,7 @@ export const ApprovalState = Schema.TaggedUnion({
 	// The two terminal refusals carry the operation for the same reason `Approved` does: the record
 	// was already written when the request was opened, and it is still locked. Without the operation
 	// there is no way back to the row, so the lock outlived every decision that was not an approval —
-	// and since a workspace's liveness predicate is `norbital_approval_id is null`, a rejected record
+	// and since a workspace's liveness predicate is `approval_id is null`, a rejected record
 	// stayed invisible and could not be deleted either.
 	Rejected: {
 		requestId: Schema.NonEmptyString,
@@ -45,7 +45,7 @@ const APPROVAL_STATUS: Readonly<Record<ApprovalState['_tag'], string>> = {
 	Withdrawn: 'WITHDRAWN'
 };
 
-export const ApprovalTimelineEvent = Schema.Struct({
+const ApprovalTimelineEvent = Schema.Struct({
 	kind: Schema.NonEmptyString,
 	subjectId: Schema.NonEmptyString,
 	payload: Schema.Json
@@ -65,6 +65,9 @@ const ApprovalConfiguration = Schema.Struct({
 	)
 });
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
+
+/** The `JsonObject` predicate, built once: it is consulted for every operation value crossing the seam. */
+const isJsonObject = Schema.is(JsonObject);
 
 /** Carries approval conflict through the typed approvals failure channel without losing diagnostic context. */
 export class ApprovalConflict extends Schema.TaggedError<ApprovalConflict>()(
@@ -181,6 +184,7 @@ export const layer = Layer.effect(
 		const access = yield* AccessControl.Service;
 		const queue = yield* TaskQueue.Service;
 		const workspace = yield* Workspace.Service;
+		const reportedStalePolicies = new Set<string>();
 		/** Resolves the durable configuration embedded at request time, with authored grants as a legacy-state fallback. */
 		const approvalConfigurations = {
 			resolve: (state: ApprovalState) => {
@@ -286,11 +290,12 @@ export const layer = Layer.effect(
 		) {
 			const operation =
 				state._tag === 'Pending' || state._tag === 'Approved' ? state.operation : undefined;
-			const fields = Schema.is(JsonObject)(operation) ? operation : {};
+			const fields = isJsonObject(operation) ? operation : {};
 			const collectionName =
 				typeof fields['collection'] === 'string' ? fields['collection'] : 'unknown';
 			const recordId = typeof fields['id'] === 'string' ? fields['id'] : 'unknown';
 			const action = typeof fields['action'] === 'string' ? fields['action'] : 'update';
+			const nowEpochMs = yield* Clock.currentTimeMillis;
 			yield* database.execute(effectId, {
 				_tag: 'Query',
 				// `$6` and `$7` are cast, and their values are JSON text rather than arrays.
@@ -303,9 +308,9 @@ export const layer = Layer.effect(
 				// approval to find it by. Objects survive the same binding because a driver serialises
 				// those to JSON; only arrays take the other path, which is why this was invisible
 				// wherever a projection happened to carry none.
-				sql: `insert into approval_request (norbital_id, collection_name, record_id, action, status, steps, locked_record_refs, closed_at, closed_by)
+				sql: `insert into approval_request (id, collection_name, record_id, action, status, steps, locked_record_refs, closed_at, closed_by)
 					values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
-					on conflict (norbital_id) do update set status = excluded.status, closed_at = excluded.closed_at, closed_by = excluded.closed_by, norbital_updated_at = now()`,
+					on conflict (id) do update set status = excluded.status, closed_at = excluded.closed_at, closed_by = excluded.closed_by, updated_at = now()`,
 				parameters: [
 					state.requestId,
 					collectionName,
@@ -318,7 +323,7 @@ export const layer = Layer.effect(
 							? []
 							: [{ collection_name: collectionName, record_id: recordId }]
 					),
-					state._tag === 'Pending' ? null : new Date().toISOString(),
+					state._tag === 'Pending' ? null : new Date(nowEpochMs).toISOString(),
 					closedBy ?? null
 				]
 			});
@@ -326,25 +331,37 @@ export const layer = Layer.effect(
 		return Service.of({
 			request: Effect.fn('Approvals.request')(function* (effectId, subject, requestId, operation) {
 				let durableOperation = operation;
+				// One decode of the operation at the seam: a collection-gated write arrives as a
+				// `{ collection, ... }` object, and the data-browser command that posted it names the
+				// collection it gated. Anything else is some other operation shape and is not gated.
+				const gated = Schema.decodeUnknownOption(
+					Schema.Struct({
+						collection: Schema.String,
+						approval: Schema.optionalKey(Schema.Json)
+					}),
+					{ onExcessProperty: 'ignore' }
+				)(operation);
+				const operationObject = Schema.decodeUnknownOption(JsonObject)(operation);
 				if (
-					Schema.is(JsonObject)(operation) &&
-					operation.approval === undefined &&
-					typeof operation.collection === 'string'
+					gated._tag === 'Some' &&
+					gated.value.approval === undefined &&
+					operationObject._tag === 'Some'
 				) {
 					// The policies this subject's team declares, resolved the one way any policy is
 					// selected — by name, against the team map the release carries.
-					const held = AccessControl.policiesHeld(workspace.definition, subject);
+					const held = AccessControl.policiesHeld(
+						workspace.definition,
+						subject,
+						reportedStalePolicies
+					);
 					const configuration = workspace.definition.policies
 						.filter((policy) => held.has(policy.name.toLocaleLowerCase()))
 						.flatMap((policy) => policy.grants ?? [])
 						.find(
-							(grant) => grant.collection === operation.collection && grant.approval !== undefined
+							(grant) => grant.collection === gated.value.collection && grant.approval !== undefined
 						)?.approval;
-					if (Schema.is(Schema.Json)(configuration))
-						durableOperation = Object.fromEntries([
-							...Object.entries(operation),
-							['approval', configuration]
-						]);
+					if (isJsonObject(configuration))
+						durableOperation = { ...operationObject.value, approval: configuration };
 				}
 				const state: ApprovalState = {
 					_tag: 'Pending',
@@ -362,7 +379,7 @@ export const layer = Layer.effect(
 					yield* projectRequest(effectId, state);
 					yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: 'insert into requestor (norbital_id, approval_request_id, user_id) values ($1, $2, $3) on conflict (norbital_id) do nothing',
+						sql: 'insert into requestor (id, approval_request_id, user_id) values ($1, $2, $3) on conflict (id) do nothing',
 						parameters: [
 							deriveRecordId(`${requestId}:${subject.userId}`),
 							requestId,
@@ -503,5 +520,3 @@ export const layer = Layer.effect(
 		});
 	})
 );
-
-export * as Approvals from './approvals.js';

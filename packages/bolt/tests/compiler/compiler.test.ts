@@ -1,16 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import {
-	app,
-	collection,
-	dateRange,
-	defineModel,
-	field,
-	text,
-	workspace
-} from '../../src/authoring/index.js';
+import { dateRange, defineModel, text } from '../../src/authoring/index.js';
+import { app, collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { describeModel } from '../../src/authoring/model-introspection.js';
 import { discoverWorkspace } from '../../src/compiler/compiler.js';
-import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
+import { buildSchemaPlan, fingerprintSchemaSteps } from '../../src/compiler/schema-plan.js';
 
 const fixture = workspace({
 	name: 'fixture',
@@ -21,9 +14,9 @@ const fixture = workspace({
 	automations: [],
 	envoys: [],
 	integrations: [],
-		prompt: 'You are the test workspace agent.',
-		tools: [],
-		skills: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
 	requiredFacilities: ['database']
 });
 
@@ -50,7 +43,7 @@ const effectiveDated = workspace({
 					name: 'jurisdictions_code_effective_range_no_overlap',
 					elements: [
 						{ expr: 'code', with: '=' },
-						{ expr: 'norbital_daterange(effective_range)', with: '&&' }
+						{ expr: 'bolt_daterange(effective_range)', with: '&&' }
 					]
 				}
 			]
@@ -85,11 +78,17 @@ describe('Bolt compiler owners', () => {
 		expect(first).toEqual(second);
 		// `people` is authored, so the drizzle lineage renders its table and the plan renders nothing.
 		expect(first.steps.map(({ id }) => id)).not.toContain('collection:people');
-		expect(first.steps.map(({ id }) => id)).toContain('bolt:sync-outbox');
+		expect(first.steps.map(({ id }) => id)).toContain('collection:bolt_sync_outbox');
 		expect(first.steps.find(({ id }) => id === 'collection:approval_request')?.sql).toContain(
 			'"approval_request"'
 		);
 		expect(first.fingerprint).toMatch(/^fnv1a32:/);
+	});
+
+	it('fingerprints the exact provisioning lineage as well as its identifiers', () => {
+		const original = [{ id: 'lineage:baseline:0', sql: 'create table example (id uuid)' }];
+		const changed = [{ id: 'lineage:baseline:0', sql: 'create table example (id text)' }];
+		expect(fingerprintSchemaSteps(original)).not.toBe(fingerprintSchemaSteps(changed));
 	});
 
 	it('installs its extensions before anything that needs them', () => {
@@ -115,11 +114,11 @@ describe('Bolt compiler owners', () => {
 		const sql = buildSchemaPlan(fixture).steps.find(
 			({ id }) => id === 'collection:approval_request'
 		)?.sql;
-		// Bolt used to invent `id text primary key` with `norbital_id` generated from it, so its
+		// Bolt used to invent `id text primary key` with `id` generated from it, so its
 		// runtime inserted into a column deployed tables do not have and could not write to a real
 		// workspace at all. Local development provisions from this plan, so nothing ever failed.
-		expect(sql).toContain('norbital_id uuid primary key default gen_random_uuid()');
-		expect(sql).toContain('norbital_sys_period tstzrange not null');
+		expect(sql).toContain('"id" uuid primary key default gen_random_uuid()');
+		expect(sql).toMatch(/"sys_period" tstzrange default .* not null/);
 		expect(sql).not.toContain('id text primary key');
 	});
 
@@ -135,7 +134,9 @@ describe('Bolt compiler owners', () => {
 		// `tests/authoring/searchable-fields.test.ts` pins that it indexes exactly the opted-in columns.
 		expect(steps.map(({ id }) => id)).not.toContain('collection:jurisdictions:search:name');
 		expect(steps.map(({ id }) => id)).not.toContain('collection:jurisdictions:search:code');
-		expect(steps.filter(({ sql }) => sql.includes('gin_trgm_ops'))).toHaveLength(0);
+		expect(
+			steps.filter(({ sql }) => sql.includes('gin_trgm_ops') && sql.includes('on "jurisdictions"'))
+		).toHaveLength(0);
 	});
 
 	/**
@@ -150,7 +151,7 @@ describe('Bolt compiler owners', () => {
 		)?.sql;
 
 		expect(sql).toContain(
-			'alter table "jurisdictions" add constraint "jurisdictions_code_effective_range_no_overlap" exclude using gist (code with =, norbital_daterange(effective_range) with &&)'
+			'alter table "jurisdictions" add constraint "jurisdictions_code_effective_range_no_overlap" exclude using gist (code with =, bolt_daterange(effective_range) with &&)'
 		);
 		// The plan runs in full on every provision, and Postgres has no `add constraint if not exists`:
 		// unguarded, each boot would rebuild a GiST index over the whole table under an exclusive lock.
@@ -171,7 +172,7 @@ describe('Bolt compiler owners', () => {
 		);
 
 		expect(exclusion).toBeGreaterThan(ids.indexOf('bolt:extension-btree-gist'));
-		// `norbital_daterange` is one of the exclusion's members, so its projection has to exist too.
+		// `bolt_daterange` is one of the exclusion's members, so its projection has to exist too.
 		expect(exclusion).toBeGreaterThan(ids.indexOf('bolt:function-daterange'));
 		// The table it alters comes from the lineage, which runs after the whole `bolt:` foundation and
 		// before the plan's `collection:` supplements — the order `provisioningStatements` applies.

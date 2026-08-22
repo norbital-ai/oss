@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
-	import type { ShimmerProps } from './types';
+	import type { ShimmerProps } from '#lib/ai-elements/shimmer';
 
 	let {
 		children,

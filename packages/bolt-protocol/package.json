@@ -36,7 +36,7 @@
 		"package.json"
 	],
 	"scripts": {
-		"build": "tsc -p tsconfig.json",
+		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
 		"lint": "tsc -p tsconfig.json --noEmit",
 		"test": "vitest run",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt-protocol"

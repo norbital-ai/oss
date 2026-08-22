@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
+	import { Effect } from 'effect';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { SLIDING_INDICATOR_EXPAND_TRANSITION_CLASS } from '#lib/sliding-indicator';
-	import { getDefaultFileTreeEntryIcon } from './file-tree-icons';
+	import { getDefaultFileTreeEntryIcon } from '#lib/file-tree/file-tree-icons';
 	import FileTreeNode from './file-tree-node.svelte';
 	import FileTreeNodeRow from './file-tree-node-row.svelte';
-	import type { FileTreeEntry, FileTreeProps } from './file-tree.types';
+	import type { FileTreeEntry, FileTreeProps } from '#lib/file-tree/file-tree.types';
 
 	type Props = Omit<FileTreeProps, 'entries' | 'class'> & {
 		entry: FileTreeEntry;
@@ -50,38 +51,46 @@
 		cn('py-1.5 pr-2 text-xs italic', isDark ? 'text-[#858585]' : 'text-muted-foreground')
 	);
 
-	async function loadChildren(): Promise<void> {
-		if (!onToggle || loading) return;
-		loading = true;
-		loadError = '';
-		try {
-			children = await onToggle(entry.path);
-		} catch (error) {
-			loadError = error instanceof Error ? error.message : t('misc.failedToLoadFolder');
-			children = [];
-		} finally {
+	function loadChildren(): Effect.Effect<void> {
+		if (!onToggle || loading) return Effect.void;
+		return Effect.gen(function* () {
+			loading = true;
+			loadError = '';
+			const loaded = yield* onToggle(entry.path);
+			children = loaded;
 			loading = false;
-		}
+		}).pipe(
+			Effect.catch((error) => {
+				loadError = error instanceof Error ? error.message : t('misc.failedToLoadFolder');
+				children = [];
+				loading = false;
+				return Effect.void;
+			})
+		);
 	}
 
-	async function toggleDirectory(): Promise<void> {
-		if (loading) return;
-		if (open) {
-			open = false;
-			return;
-		}
-		if (children.length === 0) {
-			await loadChildren();
-		}
-		open = true;
+	function toggleDirectory(): Effect.Effect<void> {
+		return Effect.gen(function* () {
+			if (loading) return;
+			if (open) {
+				open = false;
+				return;
+			}
+			if (children.length === 0) {
+				yield* loadChildren();
+			}
+			open = true;
+		});
 	}
 
-	async function handleRowClick(): Promise<void> {
-		if (isDirectory) {
-			await toggleDirectory();
-			return;
-		}
-		onSelect?.(entry.path, entry);
+	function handleRowClick(): Effect.Effect<void> {
+		return Effect.gen(function* () {
+			if (isDirectory) {
+				yield* toggleDirectory();
+				return;
+			}
+			onSelect?.(entry.path, entry);
+		});
 	}
 
 	function handleDeleteClick(event: MouseEvent): void {
@@ -105,7 +114,7 @@
 	{showDelete}
 	{deleteDisabled}
 	{depth}
-	onRowClick={() => void handleRowClick()}
+	onRowClick={() => void Effect.runPromise(handleRowClick())}
 	onDeleteClick={handleDeleteClick}
 />
 

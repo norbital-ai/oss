@@ -44,7 +44,7 @@
 </script>
 
 <script lang="ts">
-	import { Tooltip } from '../tooltip';
+	import { Tooltip } from '#lib/tooltip';
 
 	let {
 		class: className,

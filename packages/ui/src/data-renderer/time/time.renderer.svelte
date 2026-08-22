@@ -5,7 +5,7 @@
 	import { Input } from '#lib/input';
 	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
-	import type { DataRendererProps } from '../data-renderer.types.js';
+	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -28,25 +28,21 @@
 			: []
 	);
 
-	function emitTimes(next: string[]): void {
-		onValueChange?.(next);
-	}
-
 	function updateTime(index: number, next: string): void {
 		const updated = [...times];
 		updated[index] = next;
-		emitTimes(updated);
+		onValueChange?.(updated);
 	}
 
 	function removeTime(index: number): void {
-		emitTimes(times.filter((_, entryIndex) => entryIndex !== index));
+		onValueChange?.(times.filter((_, entryIndex) => entryIndex !== index));
 	}
 
 	function addTime(): void {
 		const now = new Date();
 		const hours = String(now.getHours()).padStart(2, '0');
 		const minutes = String(now.getMinutes()).padStart(2, '0');
-		emitTimes([...times, `${hours}:${minutes}`]);
+		onValueChange?.([...times, `${hours}:${minutes}`]);
 	}
 </script>
 

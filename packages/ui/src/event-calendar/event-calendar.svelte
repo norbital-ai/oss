@@ -1,10 +1,16 @@
 <script lang="ts">
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn } from '#lib/utils';
-	import type { CalendarEvent, CalendarView, CreateSlot, EventRenderContext } from './types.js';
+	import type {
+		CalendarEvent,
+		CalendarView,
+		CreateSlot,
+		EventRenderContext
+	} from '#lib/event-calendar/types';
 	import type { Snippet } from 'svelte';
 	import { watch } from 'runed';
 	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
+	import { provideDragState } from './drag-state.svelte.js';
 
 	const { t } = useI18n<UiKeys>();
 	import CalendarHeader from './parts/calendar-header.svelte';
@@ -17,7 +23,7 @@
 
 	let {
 		events = [],
-		view = 'week' as CalendarView,
+		view = 'week',
 		date: initialDate,
 		views = ['day', 'week', 'month'] as CalendarView[],
 		startHour = 0,
@@ -67,6 +73,8 @@
 
 	let currentDate = $state<Date>(new Date());
 
+	provideDragState();
+
 	watch(
 		() => initialDate,
 		(date) => {
@@ -76,10 +84,6 @@
 
 	let selectedEvent = $state<CalendarEvent | null>(null);
 
-	function handleViewChange(v: CalendarView) {
-		onviewchange?.(v);
-	}
-
 	function handleDateChange(d: Date) {
 		currentDate = d;
 		ondatechange?.(d);
@@ -88,18 +92,6 @@
 	function handleEventClick(e: CalendarEvent) {
 		selectedEvent = e;
 		oneventclick?.(e);
-	}
-
-	function handleCellClick(day: Date) {
-		handleDateChange(day);
-	}
-
-	function handleCreate(slot: CreateSlot) {
-		oneventcreate?.(slot);
-	}
-
-	function handleMove(e: CalendarEvent, newStart: Date, newEnd: Date) {
-		oneventmove?.(e, newStart, newEnd);
 	}
 
 	function handleSave() {
@@ -136,7 +128,6 @@
 			: null
 	);
 
-	const activeColWidth = $derived(colWidth);
 	const showTimeAxis = $derived(view !== 'month');
 	const showColumnHeaders = $derived(view === 'week' || view === 'day');
 	const columnCount = $derived(view === 'day' ? 1 : 7);
@@ -147,7 +138,7 @@
 		{view}
 		date={currentDate}
 		{views}
-		onviewchange={handleViewChange}
+		{onviewchange}
 		ondatechange={handleDateChange}
 		{readonly}
 	/>
@@ -166,7 +157,7 @@
 
 		<Stack gap="none" grow>
 			{#if showColumnHeaders}
-				<ColumnHeaders {view} date={currentDate} {columnCount} colWidth={activeColWidth} />
+				<ColumnHeaders {view} date={currentDate} {columnCount} {colWidth} />
 			{/if}
 
 			<Inline gap="none" align="stretch" grow>
@@ -183,10 +174,10 @@
 							{endHour}
 							{hourHeight}
 							{snapMinutes}
-							colWidth={activeColWidth}
+							{colWidth}
 							onboxclick={handleEventClick}
-							oncreate={handleCreate}
-							onmove={handleMove}
+							oncreate={oneventcreate}
+							onmove={oneventmove}
 							{eventContent}
 							{readonly}
 						/>
@@ -198,10 +189,10 @@
 							{endHour}
 							{hourHeight}
 							{snapMinutes}
-							colWidth={activeColWidth}
+							{colWidth}
 							onboxclick={handleEventClick}
-							oncreate={handleCreate}
-							onmove={handleMove}
+							oncreate={oneventcreate}
+							onmove={oneventmove}
 							{eventContent}
 							{readonly}
 						/>
@@ -210,7 +201,7 @@
 							date={currentDate}
 							{events}
 							onpillclick={handleEventClick}
-							oncellclick={handleCellClick}
+							oncellclick={(day) => handleDateChange(day)}
 							{eventContent}
 							{readonly}
 						/>

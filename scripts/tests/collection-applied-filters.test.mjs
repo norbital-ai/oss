@@ -6,7 +6,7 @@ const companies = {
 	name: 'companies',
 	recordLabel: 'name',
 	fields: [
-		{ name: 'norbital_id', kind: 'uuid', nullable: false },
+		{ name: 'id', kind: 'uuid', nullable: false },
 		{ name: 'name', kind: 'text', nullable: false }
 	]
 };
@@ -24,14 +24,14 @@ const entries = {
 		{ name: 'amount', kind: 'number', nullable: false }
 	],
 	relationships: [
-		{ name: 'company', target: 'companies', fields: ['company_id'], references: ['norbital_id'] }
+		{ name: 'company', target: 'companies', fields: ['company_id'], references: ['id'] }
 	]
 };
 
 describe('schema-aware applied collection filters', () => {
 	it('resolves a nested relationship key to the target collection renderer', () => {
 		const [condition] = collectionAppliedFilterConditions(
-			{ company: { norbital_id: { eq: 'company-1' } } },
+			{ company: { id: { eq: 'company-1' } } },
 			entries,
 			{ entries, companies }
 		);

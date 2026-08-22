@@ -1,12 +1,12 @@
-import { Result, type Schema } from 'effect';
-import type { FieldDefinition, RelationDefinition } from '../../authoring/workspace-schema.js';
+import { Effect, Result, Schema } from 'effect';
 import {
 	compileOrderTerms,
 	compileWhere,
 	renderOrderBy,
 	type WhereContext
-} from '../../runtime/collections/where.js';
-import type { PGliteLike } from './pglite-sql.js';
+} from '#lib/runtime/collections/where.js';
+import type { PGliteLike } from '#lib/client/replica/pglite-sql.js';
+import { decodeReferenceRow } from '#lib/runtime/collections/references.js';
 
 /**
  * Answering a read from the replica instead of the server.
@@ -33,25 +33,81 @@ import type { PGliteLike } from './pglite-sql.js';
  * history all involve behaviour that lives in the Collections service rather than in the compiler, so
  * they are not attempted — a local answer that is merely close is worse than a remote answer that is
  * correct, and the replica exists to make reads fast, never to change them.
+ *
+ * ## Why this module holds raw SQL
+ *
+ * SQL1 exception: the two statements here are the replica's own read infrastructure, and the clauses
+ * they carry are produced by the *server's* `compileWhere`/`compileOrderTerms` — imported, never
+ * reimplemented — with the collection name quoted as an identifier. There is no query builder over
+ * PGlite and nothing to route through one; the only literals are `count(*)` and `to_jsonb`, which is
+ * how a page row stays the same object the server would have sent.
  */
 
-export type ReplicaShape = Readonly<{
-	readonly collections: ReadonlyArray<{
-		readonly name: string;
-		readonly fields: Readonly<Record<string, FieldDefinition>>;
-	}>;
-	readonly relations: ReadonlyArray<RelationDefinition>;
-}>;
+const ReferenceTarget = Schema.Struct({
+	tag: Schema.String,
+	collection: Schema.String,
+	storageColumn: Schema.String
+});
+const ReferenceDefinition = Schema.Struct({
+	targets: Schema.Array(ReferenceTarget),
+	onDelete: Schema.Literals(['restrict', 'cascade', 'set null'])
+});
+const ReplicaField = Schema.Struct({
+	type: Schema.Literals(['string', 'uuid', 'number', 'boolean', 'datetime', 'json', 'reference']),
+	required: Schema.Boolean,
+	indexed: Schema.Boolean,
+	primaryKey: Schema.optionalKey(Schema.Boolean),
+	unique: Schema.optionalKey(Schema.Boolean),
+	generated: Schema.optionalKey(Schema.String),
+	sqlType: Schema.optionalKey(Schema.String),
+	sqlDefault: Schema.optionalKey(Schema.String),
+	values: Schema.optionalKey(Schema.Array(Schema.String)),
+	customType: Schema.optionalKey(Schema.String),
+	search: Schema.optionalKey(Schema.Boolean),
+	mimeTypes: Schema.optionalKey(Schema.Array(Schema.String)),
+	file: Schema.optionalKey(Schema.Boolean),
+	fileMultiple: Schema.optionalKey(Schema.Boolean),
+	reference: Schema.optionalKey(ReferenceDefinition)
+});
+const RelationEndpoint = Schema.Struct({ collection: Schema.String, column: Schema.String });
+const ReplicaRelation = Schema.Struct({
+	name: Schema.String,
+	source: Schema.String,
+	target: Schema.String,
+	cardinality: Schema.Literals(['one', 'many']),
+	from: Schema.optionalKey(RelationEndpoint),
+	to: Schema.optionalKey(RelationEndpoint),
+	cascade: Schema.optionalKey(Schema.Boolean)
+});
+
+export const ReplicaShape = Schema.Struct({
+	collections: Schema.Array(
+		Schema.Struct({
+			name: Schema.String,
+			fields: Schema.Record(Schema.String, ReplicaField)
+		})
+	),
+	relations: Schema.Array(ReplicaRelation)
+});
+export interface ReplicaShape extends Schema.Schema.Type<typeof ReplicaShape> {}
 
 export type LocalReader = Readonly<{
 	/** The rows, or `undefined` when this query must go to the server. */
-	readonly answer: (command: string, input: Schema.Json) => Promise<Schema.Json | undefined>;
+	readonly answer: (
+		command: string,
+		input: Schema.Json
+	) => Effect.Effect<Schema.Json | undefined, unknown>;
 }>;
 
-const asRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
-	value !== null && typeof value === 'object' && !Array.isArray(value)
-		? (value as Readonly<Record<string, unknown>>)
-		: undefined;
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
+const decodeJsonObject = Schema.decodeUnknownResult(JsonObject);
+const LocalReadInput = Schema.Struct({
+	collection: Schema.String,
+	where: Schema.optionalKey(Schema.Json),
+	orderBy: Schema.optionalKey(Schema.Json),
+	limit: Schema.optionalKey(Schema.Number)
+});
+const decodeLocalReadInput = Schema.decodeUnknownResult(LocalReadInput);
 
 /**
  * Keys that change what a read means in ways only the server implements.
@@ -61,8 +117,6 @@ const asRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined
  * answer a different question.
  */
 const SERVED_KEYS = new Set(['collection', 'where', 'orderBy', 'limit']);
-
-const quote = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 export const createLocalReader = (
 	database: PGliteLike,
@@ -86,20 +140,24 @@ export const createLocalReader = (
 	};
 
 	return {
-		answer: async (command, input) => {
+		answer: Effect.fn('ReplicaReader.answer')(function* (command, input) {
 			if (command !== 'collections.findMany' && command !== 'collections.count') return undefined;
-			const record = asRecord(input);
-			if (record === undefined) return undefined;
-			const collection = record['collection'];
-			if (typeof collection !== 'string' || !readable.has(collection)) return undefined;
+			const record = decodeJsonObject(input);
+			if (Result.isFailure(record)) return undefined;
 			// A key this build does not know about may narrow, widen or reshape the result. Declining is
 			// the only response that cannot silently answer a different question.
-			if (Object.keys(record).some((key) => !SERVED_KEYS.has(key))) return undefined;
+			if (Object.keys(record.success).some((key) => !SERVED_KEYS.has(key))) return undefined;
+			const decoded = decodeLocalReadInput(record.success);
+			if (Result.isFailure(decoded)) return undefined;
+			const { collection, limit, orderBy, where } = decoded.success;
+			if (!readable.has(collection)) return undefined;
 			const context = contextFor(collection);
 			if (context === undefined) return undefined;
 
-			const where = record['where'];
-			let filter = { sql: 'true', parameters: [] as ReadonlyArray<Schema.Json> };
+			let filter: {
+				sql: string;
+				parameters: ReadonlyArray<Schema.Json>;
+			} = { sql: 'true', parameters: [] };
 			if (where !== undefined) {
 				const compiled = compileWhere(where, context);
 				// The compiler refuses an operator it cannot express rather than widening the predicate.
@@ -108,35 +166,32 @@ export const createLocalReader = (
 				filter = compiled.success;
 			}
 
-			const table = quote(collection);
+			const table = `"${collection.replaceAll('"', '""')}"`;
 			if (command === 'collections.count') {
-				const counted = await database.query<{ readonly count: number }>(
+				const counted = yield* database.query<{ readonly count: number }>(
 					`select count(*)::int as count from ${table} where ${filter.sql}`,
-					[...filter.parameters]
+					filter.parameters
 				);
-				return (counted.rows[0]?.count ?? 0) as unknown as Schema.Json;
+				return counted.rows[0]?.count ?? 0;
 			}
 
-			const orderBy = record['orderBy'];
 			const terms = orderBy === undefined ? [] : compileOrderTerms(orderBy, context);
 			// An ordering the compiler dropped would silently reorder the page, so an `orderBy` that
 			// yields no terms is declined rather than served unordered.
 			if (orderBy !== undefined && terms.length === 0) return undefined;
 			const ordering = terms.length === 0 ? '' : ` ${renderOrderBy(terms)}`;
 
-			const limit = record['limit'];
-			if (limit !== undefined && typeof limit !== 'number') return undefined;
 			const parameters = [...filter.parameters];
 			let bounds = '';
-			if (typeof limit === 'number') {
+			if (limit !== undefined) {
 				// One more than asked for, which is how the server decides whether a successor exists.
-				parameters.push((limit + 1) as unknown as Schema.Json);
+				parameters.push(limit + 1);
 				bounds = ` limit $${parameters.length}`;
 			}
 
 			// No alias: `compileWhere` qualifies columns with the collection's real table name, so
 			// renaming the relation here puts its predicate out of scope.
-			const result = await database.query<Readonly<Record<string, unknown>>>(
+			const result = yield* database.query<{ readonly record: Schema.Json }>(
 				`select to_jsonb(${table}) as record from ${table} where ${filter.sql}${ordering}${bounds}`,
 				parameters
 			);
@@ -149,11 +204,16 @@ export const createLocalReader = (
 			 * only cursor a caller ever receives is one the server minted, and a locally served answer is
 			 * always a complete result whose honest `nextCursor` is `null`.
 			 */
-			if (typeof limit === 'number' && result.rows.length > limit) return undefined;
+			if (limit !== undefined && result.rows.length > limit) return undefined;
 			return {
-				rows: result.rows.map((row) => row['record']),
+				rows: result.rows.map((row) => {
+					const stored = decodeJsonObject(row.record);
+					return Result.isSuccess(stored)
+						? decodeReferenceRow(stored.success, context.fields)
+						: row.record;
+				}),
 				nextCursor: null
-			} as unknown as Schema.Json;
-		}
+			};
+		})
 	};
 };

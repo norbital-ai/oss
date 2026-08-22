@@ -93,14 +93,3 @@ export function translate(
 	const template = catalogs[locale]?.[key] ?? catalogs[DEFAULT_LOCALE]?.[key] ?? key;
 	return interpolate(template, vars);
 }
-
-/**
- * True when a key exists in any locale of the catalog set.
- *
- * Lets callers distinguish "translated to the raw key" from "not in the
- * catalog at all" — e.g. label overrides that fall back to authored text when
- * a tenant did not supply one.
- */
-export function hasKey(catalogs: LocaleCatalogs, key: string): boolean {
-	return Object.values(catalogs).some((catalog) => key in catalog);
-}

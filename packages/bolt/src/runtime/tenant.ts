@@ -23,5 +23,3 @@ export const Service = Context.Service<Interface>('@norbital-ai/bolt/TenantScope
 
 export const layer = (tenantId: string): Layer.Layer<Interface> =>
 	Layer.succeed(Service, { tenantId });
-
-export * as TenantScope from './tenant.js';

@@ -11,7 +11,7 @@
 
 	let { children }: ConfirmationAcceptedProps = $props();
 
-	let context = getConfirmationContext();
+	const context = getConfirmationContext();
 
 	// Only show when approved and in response states
 	let shouldShow = $derived(

@@ -51,6 +51,7 @@ const MODEL_METADATA: Required<ModelMetadata> = {
 	icon: '',
 	history: true,
 	approvalLock: true,
+	sync: true,
 	indexes: [],
 	exclusions: []
 };
@@ -81,6 +82,7 @@ const WITNESSES: ReadonlyArray<Witness> = [
 			// hardcodes `history: true`, so this lift is what makes `history: false` mean anything —
 			// without it the option was accepted and the revision trail written anyway.
 			history: 'renderArtifact',
+			sync: 'compileModel',
 			indexes: 'authoredIndex',
 			exclusions: 'renderArtifact',
 			recordLabel: 'extractCollectionCatalog',

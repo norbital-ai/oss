@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import type { CalendarEvent } from '../types.js';
+	import type { CalendarEvent } from '#lib/event-calendar/types';
 
 	let {
 		event,

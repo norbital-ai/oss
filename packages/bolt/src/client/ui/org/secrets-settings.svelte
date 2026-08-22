@@ -1,8 +1,10 @@
 <script lang="ts">
+	import { Effect } from 'effect';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Bound, Cover, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
-	import { workspaceSession } from '../../session.js';
+	import type { EnvironmentVariable } from '#lib/client/ui/studio/studio-state.js';
+	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 
 	/**
 	 * The Environment secrets vault, as a form generated from the workspace's `+env.ts`.
@@ -25,56 +27,42 @@
 	 * host owned the shell. The workspace client owns it now, and one declared session is what every
 	 * surface reads — a second channel handed down beside it would be two ways to say the same thing.
 	 */
-	const { transport } = workspaceSession();
+	let { client }: { client: WorkspaceClient } = $props();
 
-	type SecretEntry = {
-		readonly name: string;
-		readonly label: string;
-		readonly description?: string;
-		readonly secret: boolean;
-		readonly configured: boolean;
-		readonly default?: string;
-		readonly updatedAt?: string;
-	};
-
-	let entries = $state<ReadonlyArray<SecretEntry>>([]);
 	let drafts = $state<Record<string, string>>({});
-	let loading = $state(true);
-	let error = $state<string | null>(null);
+	const statusQuery = $derived(client.system.secrets.status({}));
+	const entries = $derived<ReadonlyArray<EnvironmentVariable>>(statusQuery.current ?? []);
+	const loading = $derived(statusQuery.loading);
+	let saveError = $state<string | null>(null);
+	const error = $derived(
+		saveError ??
+			(statusQuery.error === undefined
+				? null
+				: statusQuery.error instanceof Error
+					? statusQuery.error.message
+					: 'Unable to read the vault.')
+	);
 	let saving = $state<string | null>(null);
 	let saved = $state<string | null>(null);
 
-	const load = async (): Promise<void> => {
-		loading = true;
-		error = null;
-		try {
-			entries = (await transport.command('secrets.status', {})) as ReadonlyArray<SecretEntry>;
-		} catch (cause) {
-			error = cause instanceof Error ? cause.message : 'Unable to read the vault.';
-		} finally {
-			loading = false;
-		}
-	};
-
-	const save = async (name: string): Promise<void> => {
-		saving = name;
-		saved = null;
-		error = null;
-		try {
-			await transport.command('secrets.write', { name, value: drafts[name] ?? '' });
+	const save = (name: string): Effect.Effect<void> =>
+		Effect.gen(function* () {
+			saving = name;
+			saved = null;
+			saveError = null;
+			yield* client.system.secrets.write({ name, value: drafts[name] ?? '' });
 			// The draft is dropped rather than kept: holding a secret in a component's state after it is
 			// stored keeps a copy alive in the page for no reason.
 			drafts = Object.fromEntries(Object.entries(drafts).filter(([key]) => key !== name));
 			saved = name;
-			await load();
-		} catch (cause) {
-			error = cause instanceof Error ? cause.message : 'Unable to store the value.';
-		} finally {
-			saving = null;
-		}
-	};
-
-	void load();
+			void statusQuery.refresh();
+		}).pipe(
+			Effect.catch((cause) => {
+				saveError = cause instanceof Error ? cause.message : 'Unable to store the value.';
+				return Effect.void;
+			}),
+			Effect.ensuring(Effect.sync(() => (saving = null)))
+		);
 </script>
 
 <!--
@@ -150,7 +138,7 @@
 								type="button"
 								size="sm"
 								disabled={saving === entry.name || (drafts[entry.name] ?? '') === ''}
-								onclick={() => save(entry.name)}
+								onclick={() => void Effect.runPromise(save(entry.name))}
 							>
 								{saving === entry.name ? 'Saving…' : 'Save'}
 							</Button>
@@ -162,7 +150,7 @@
 									disabled={saving === entry.name}
 									onclick={() => {
 										drafts = { ...drafts, [entry.name]: '' };
-										void save(entry.name);
+										void Effect.runPromise(save(entry.name));
 									}}
 								>
 									Clear

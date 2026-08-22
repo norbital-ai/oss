@@ -1,11 +1,11 @@
-import { Context, Effect, Layer, Schema } from 'effect';
+import { Clock, Context, Effect, Layer, Schema } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
-import { Database } from '../facilities/database.js';
-import { automationSubject } from '../identity/static-identity.js';
-import { TenantScope } from '../tenant.js';
-import { TaskQueue } from '../tasks/tasks.js';
-import { Workspace } from '../workspace.js';
-import { InvocationBudget } from '../budget.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import { automationSubject } from '#lib/runtime/identity/static-identity.js';
+import * as TenantScope from '#lib/runtime/tenant.js';
+import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
+import * as Workspace from '#lib/runtime/workspace.js';
+import * as InvocationBudget from '#lib/runtime/budget.js';
 
 /**
  * Starting an automation, and asking what became of one.
@@ -33,7 +33,7 @@ export type Interface = Readonly<{
 		name: string,
 		input: Schema.Json,
 		/** How long to wait before it becomes due. Absent means as soon as a tick can take it. */
-		options?: Readonly<{ readonly afterMillis?: number }>
+		options?: Readonly<{ readonly afterMillis?: number | undefined }>
 	) => Effect.Effect<
 		string,
 		Database.FacilityError | Workspace.WorkspaceLookupError | InvocationBudget.NestingLimitExceeded
@@ -67,7 +67,7 @@ export const layer = Layer.effect(
 			effectId: EffectIdType,
 			name: string,
 			input: Schema.Json,
-			options?: Readonly<{ readonly afterMillis?: number }>
+			options?: Readonly<{ readonly afterMillis?: number | undefined }>
 		) {
 			const declaration = yield* workspace.automation(name);
 			const subject = automationSubject(declaration, tenant.tenantId);
@@ -96,6 +96,10 @@ export const layer = Layer.effect(
 			// identity for a row that was never inserted.
 			const taskId = `${effectId}:start`;
 			const afterMillis = options?.afterMillis;
+			const runAtEpochMs =
+				afterMillis === undefined || afterMillis <= 0
+					? undefined
+					: (yield* Clock.currentTimeMillis) + afterMillis;
 			yield* queue.enqueue(EffectId.make(taskId), [
 				{
 					command: `automations.${name}`,
@@ -103,9 +107,7 @@ export const layer = Layer.effect(
 					effectId: taskId,
 					// Absent rather than `now`, so the row takes the column default and a delay of zero and
 					// no delay at all are the same row rather than two spellings of one.
-					...(afterMillis === undefined || afterMillis <= 0
-						? {}
-						: { runAtEpochMs: Date.now() + afterMillis })
+					...(runAtEpochMs === undefined ? {} : { runAtEpochMs })
 				}
 			]);
 			return taskId;
@@ -130,4 +132,3 @@ export const layer = Layer.effect(
 		});
 	})
 );
-export * as Automations from './automations.js';

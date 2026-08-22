@@ -4,15 +4,14 @@
 		CollectionDefinition,
 		CollectionField,
 		CollectionOperations,
-		CollectionPageQuery,
 		CollectionQuery,
 		CollectionRecord,
-		CollectionType,
-		RemoteQuery
+		CollectionType
 	} from '@norbital-ai/std/collection';
 	import { resolveRecordLabel } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
+	import { Array as Array_, Effect, Result } from 'effect';
 	import type { Snippet } from 'svelte';
 	import { watch } from 'runed';
 	import { toast } from 'svelte-sonner';
@@ -22,11 +21,11 @@
 	import { cn } from '#lib/utils';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Grid, Inline, Stack } from '#lib/layout';
-	import { DataRenderer, formatDataValue, type Translate } from '../data-renderer/index.js';
-	import { CollectionForm } from '../collection-form/index.js';
+	import { DataRenderer, formatDataValue, type Translate } from '#lib/data-renderer';
+	import { CollectionForm } from '#lib/collection-form';
 	import CollectionRecordDetailTabs from './collection-record-detail-tabs.svelte';
 	import CollectionRecordDetailEmpty from './collection-record-detail-empty.svelte';
-	import { isSystemField } from './collection-card-derivation.js';
+	import { isSystemField } from '#lib/collection-table/collection-card-derivation';
 	import {
 		getOptionalCollectionClientContext,
 		getCollectionSurfaceRuntime,
@@ -74,12 +73,7 @@
 	const operations = $derived(
 		client?.db[collectionName] as CollectionOperations<ErasedCollection> | undefined // stupidity: boundary-cast — the generated client indexes collections by the same key the stack names.
 	);
-	const recordIdField = 'norbital_id';
-
-	let queries = $state<{
-		record: CollectionPageQuery<Row> | null;
-		approval: RemoteQuery<readonly CollectionApprovalRequest[]> | null;
-	}>({ record: null, approval: null });
+	const recordIdField = 'id';
 
 	const recordQueryInput = $derived(
 		operations
@@ -92,30 +86,31 @@
 				}
 			: null
 	);
-	watch(
-		() => recordQueryInput,
-		(input) => {
-			queries.record = input ? input.operations.findMany(input.query) : null;
-		},
-		{ lazy: false }
+	const recordQuery = $derived(
+		recordQueryInput ? recordQueryInput.operations.findMany(recordQueryInput.query) : null
 	);
 	const record = $derived.by(() => {
-		const found = queries.record?.current?.[0];
+		const found = recordQuery?.current?.[0];
 		// Remote queries retain the previous result while a new key in the same family loads. Never
 		// mount a stateful representation with that carry-over row: its form captures the record id at
 		// construction, so showing record B with record A's form would send edits to the wrong row.
 		if (!found || String(Reflect.get(found, recordIdField)) !== recordId) return undefined;
 		return found;
 	});
-	const recordLoading = $derived(Boolean(queries.record?.loading));
-	const recordError = $derived(queries.record?.error?.message);
+	const recordLoading = $derived(Boolean(recordQuery?.loading));
+	const recordError = $derived(recordQuery?.error?.message);
 
-	const rawRecordFields = $derived(
-		(definition?.fields ?? []).filter((field) => !isSystemField(field.name))
+	/**
+	 * Split the definition's fields once rather than filtering it twice — both the raw and the
+	 * system group are the same slice of the same list.
+	 */
+	const rawFieldGroups = $derived(
+		Array_.partition(definition?.fields ?? [], (field) =>
+			isSystemField(field.name) ? Result.fail(field) : Result.succeed(field)
+		)
 	);
-	const rawSystemFields = $derived(
-		(definition?.fields ?? []).filter((field) => isSystemField(field.name))
-	);
+	const rawRecordFields = $derived(rawFieldGroups[1]);
+	const rawSystemFields = $derived(rawFieldGroups[0]);
 
 	let approvalActionState = $state<ApprovalActionState>({ status: 'idle' });
 	let changeRequestOpen = $state(false);
@@ -128,7 +123,7 @@
 	);
 	const activeApprovalId = $derived.by(() => {
 		if (!record) return undefined;
-		const value = Reflect.get(record, 'norbital_approval_id');
+		const value = Reflect.get(record, 'approval_id');
 		return typeof value === 'string' ? value : undefined;
 	});
 	const approvalQueryInput = $derived(
@@ -136,16 +131,12 @@
 			? { approvalId: activeApprovalId, approvals: client.approvals }
 			: null
 	);
-	watch(
-		() => approvalQueryInput,
-		(input) => {
-			queries.approval = input ? input.approvals.findMany(input.approvalId) : null;
-		},
-		{ lazy: false }
+	const approvalQuery = $derived(
+		approvalQueryInput ? approvalQueryInput.approvals.findMany(approvalQueryInput.approvalId) : null
 	);
-	const approvalRequest = $derived(queries.approval?.current?.[0]);
+	const approvalRequest = $derived(approvalQuery?.current?.[0]);
 	const approvalStatusMessage = $derived(
-		queries.approval?.loading
+		approvalQuery?.loading
 			? t('table.approvalLoading')
 			: approvalRequest?.status === 'ONGOING'
 				? t('table.approvalAwaiting')
@@ -183,11 +174,14 @@
 
 	function formatRawStructuredValue(value: unknown): string {
 		if (value == null) return '—';
-		try {
-			return JSON.stringify(value, null, 2) ?? String(value);
-		} catch {
-			return String(value);
-		}
+		return Effect.runSync(
+			Effect.try(() => JSON.stringify(value, null, 2) ?? String(value)).pipe(
+				Effect.match({
+					onFailure: () => String(value),
+					onSuccess: (text) => text
+				})
+			)
+		);
 	}
 
 	/**
@@ -198,8 +192,14 @@
 	 * cached answers and re-runs *every* live query reading it — the row list included, and the board
 	 * and any other surface showing the same record besides.
 	 */
-	async function refresh(): Promise<void> {
-		await Promise.all([queries.record?.refresh(), queries.approval?.refresh()]);
+	function refresh(): Effect.Effect<void, unknown> {
+		return Effect.all(
+			[
+				recordQuery ? Effect.tryPromise(() => recordQuery.refresh()) : Effect.void,
+				approvalQuery ? Effect.tryPromise(() => approvalQuery.refresh()) : Effect.void
+			],
+			{ discard: true }
+		);
 	}
 
 	function approvalActionSuccessMessage(
@@ -217,40 +217,54 @@
 		}
 	}
 
-	async function processApproval(
+	function processApproval(
 		action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE',
 		comments?: string
-	): Promise<boolean> {
+	): Effect.Effect<boolean> {
 		const approvals = client?.approvals;
-		if (!activeApprovalId || !approvals) return false;
+		if (!activeApprovalId || !approvals) return Effect.succeed(false);
+		const approvalId = activeApprovalId;
 		approvalActionState =
 			action === 'REQUEST_FOR_CHANGE'
 				? { status: 'requesting_changes', reason: comments ?? '', pending: true }
 				: { status: 'pending' };
-		try {
-			await approvals.process({ approvalRequestId: activeApprovalId, action, comments });
-			if (action === 'REQUEST_FOR_CHANGE') changeRequestOpen = false;
-			approvalActionState = { status: 'idle' };
-			toast.success(approvalActionSuccessMessage(action));
-			// The decision is already committed. Keep slow or failed reads from turning a successful
-			// mutation into a stuck dialog and a false "action failed" message; live sync normally wins
-			// this race, while these refreshes are only an immediate consistency assist.
-			void refresh().catch((error: unknown) => {
-				toast.error(
-					error instanceof Error
-						? `${t('table.actionRefreshFailed')}: ${error.message}`
-						: t('table.actionRefreshFailed')
+		return Effect.tryPromise(() =>
+			approvals.process({ approvalRequestId: approvalId, action, comments })
+		).pipe(
+			Effect.map(() => {
+				if (action === 'REQUEST_FOR_CHANGE') changeRequestOpen = false;
+				approvalActionState = { status: 'idle' };
+				toast.success(approvalActionSuccessMessage(action));
+				// The decision is already committed. Keep slow or failed reads from turning a
+				// successful mutation into a stuck dialog and a false "action failed" message;
+				// live sync normally wins this race, while these refreshes are only an
+				// immediate consistency assist.
+				Effect.runFork(
+					refresh().pipe(
+						Effect.catch((error) =>
+							Effect.sync(() => {
+								toast.error(
+									error instanceof Error
+										? `${t('table.actionRefreshFailed')}: ${error.message}`
+										: t('table.actionRefreshFailed')
+								);
+							})
+						)
+					)
 				);
-			});
-			return true;
-		} catch (error) {
-			toast.error(error instanceof Error ? error.message : t('table.approvalActionFailed'));
-			approvalActionState =
-				action === 'REQUEST_FOR_CHANGE'
-					? { status: 'requesting_changes', reason: comments ?? '', pending: false }
-					: { status: 'idle' };
-			return false;
-		}
+				return true;
+			}),
+			Effect.catch((error) =>
+				Effect.sync(() => {
+					toast.error(error instanceof Error ? error.message : t('table.approvalActionFailed'));
+					approvalActionState =
+						action === 'REQUEST_FOR_CHANGE'
+							? { status: 'requesting_changes', reason: comments ?? '', pending: false }
+							: { status: 'idle' };
+					return false;
+				})
+			)
+		);
 	}
 
 	function openChangeRequest(): void {
@@ -269,25 +283,32 @@
 		approvalActionState = { ...approvalActionState, reason };
 	}
 
-	async function requestChanges(): Promise<void> {
+	function requestChanges(): void {
 		const reason = changeRequestReason.trim();
 		if (!reason) return;
-		await processApproval('REQUEST_FOR_CHANGE', reason);
+		void Effect.runPromise(processApproval('REQUEST_FOR_CHANGE', reason));
 	}
 
-	async function withdrawApproval(): Promise<void> {
+	function withdrawApproval(): void {
 		const approvals = client?.approvals;
 		if (!activeApprovalId || !approvals) return;
 		approvalActionState = { status: 'pending' };
-		try {
-			await approvals.withdraw(activeApprovalId);
-			await refresh();
-			toast.success(t('table.approvalWithdrawn'));
-		} catch (error) {
-			toast.error(error instanceof Error ? error.message : t('table.approvalWithdrawFailed'));
-		} finally {
-			approvalActionState = { status: 'idle' };
-		}
+		void Effect.runPromise(
+			Effect.tryPromise(() => approvals.withdraw(activeApprovalId)).pipe(
+				Effect.tap(() => refresh()),
+				Effect.tap(() => Effect.sync(() => toast.success(t('table.approvalWithdrawn')))),
+				Effect.catch((error) =>
+					Effect.sync(() => {
+						toast.error(error instanceof Error ? error.message : t('table.approvalWithdrawFailed'));
+					})
+				),
+				Effect.onExit(() =>
+					Effect.sync(() => {
+						approvalActionState = { status: 'idle' };
+					})
+				)
+			)
+		);
 	}
 </script>
 
@@ -313,7 +334,7 @@
 
 {#snippet approvalDetails()}
 	<Stack gap="md">
-		{#if queries.approval?.loading}
+		{#if approvalQuery?.loading}
 			<Inline
 				gap="sm"
 				class="rounded-lg border bg-card p-4 text-sm text-muted-foreground"
@@ -371,9 +392,9 @@
 						<p class="text-sm leading-5 text-muted-foreground">{approvalStatusMessage}</p>
 						<p
 							class="truncate font-mono text-micro text-muted-foreground"
-							title={approvalRequest.norbital_id}
+							title={approvalRequest.id}
 						>
-							{t('table.approvalRequestId')}: {approvalRequest.norbital_id}
+							{t('table.approvalRequestId')}: {approvalRequest.id}
 						</p>
 					</Stack>
 				</Inline>
@@ -381,7 +402,7 @@
 					<Cluster gap="sm" class="border-t pt-4">
 						<Button
 							disabled={approvalActionPending}
-							onclick={() => void processApproval('APPROVED')}
+							onclick={() => void Effect.runPromise(processApproval('APPROVED'))}
 						>
 							<Icon icon="lucide:check" class="mr-1.5 size-3.5" aria-hidden="true" />
 							{t('table.approve')}
@@ -393,7 +414,9 @@
 							variant="outline"
 							class="text-destructive hover:text-destructive"
 							disabled={approvalActionPending}
-							onclick={() => void processApproval('REJECTED')}>{t('table.reject')}</Button
+							onclick={() => void Effect.runPromise(processApproval('REJECTED'))}
+						>
+							{t('table.reject')}</Button
 						>
 						<Button variant="ghost" disabled={approvalActionPending} onclick={withdrawApproval}
 							>{t('table.withdrawRequest')}</Button

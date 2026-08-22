@@ -13,23 +13,41 @@ import type {
 	WebhookRequestSpec,
 	WebhookSignatureSpec
 } from './contracts-schema.js';
-import type { ModelExclusion } from './models-schema.js';
+import type { ModelExclusion, ModelIndex } from './models-schema.js';
 
 /**
  * `uuid` is its own member rather than a flavour of `string`.
  *
- * Every record is keyed by `norbital_id uuid`, so a column that points at one has to be `uuid` too:
+ * Every record is keyed by `id uuid`, so a column that points at one has to be `uuid` too:
  * a foreign key planned as `text` cannot be compared with the key it references, and the relation
- * `EXISTS` join the where compiler emits — `"leave_requests"."employment_id" = "employments"."norbital_id"` —
+ * `EXISTS` join the where compiler emits — `"leave_requests"."employment_id" = "employments"."id"` —
  * fails outright with `operator does not exist: text = uuid`. The migration generator reads the
  * authored Drizzle builder and has always rendered `uuid`; only the schema plan flattened it, so a
  * Bolt-provisioned database and a lineage-provisioned one disagreed on every foreign key.
  */
 export type ScalarType = 'string' | 'uuid' | 'number' | 'boolean' | 'datetime' | 'json';
-export interface FieldDefinition<TType extends ScalarType = ScalarType> {
+export type FieldType = ScalarType | 'reference';
+
+interface ReferenceTargetDefinition {
+	/** Stable discriminator exposed to application code. */
+	readonly tag: string;
+	/** Collection whose platform `id` column this arm references. */
+	readonly collection: string;
+	/** Generated nullable UUID column backing this arm. */
+	readonly storageColumn: string;
+}
+
+interface ReferenceFieldDefinition {
+	readonly targets: ReadonlyArray<ReferenceTargetDefinition>;
+	readonly onDelete: 'restrict' | 'cascade' | 'set null';
+}
+
+export interface FieldDefinition<TType extends FieldType = FieldType> {
 	readonly type: TType;
 	readonly required: boolean;
 	readonly indexed: boolean;
+	/** Whether the database owns this field as the table's primary key. */
+	readonly primaryKey?: boolean;
 	/** Whether that index is a unique one. Only meaningful alongside `indexed`. */
 	readonly unique?: boolean;
 	/** Inline SQL for a `generatedAlwaysAs` column; the database computes it and nothing writes it. */
@@ -90,6 +108,8 @@ export interface FieldDefinition<TType extends ScalarType = ScalarType> {
 	readonly file?: boolean;
 	/** Whether it was authored with `file({ multiple: true })`. */
 	readonly fileMultiple?: boolean;
+	/** Polymorphic-reference metadata. The logical value remains one `{ kind, id }` handle. */
+	readonly reference?: ReferenceFieldDefinition;
 }
 /** Owns make field behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 const makeField =
@@ -145,7 +165,7 @@ const makeField =
 /**
  * `uuid` is here because a column that references another collection has to be one.
  *
- * Every collection is keyed by `norbital_id uuid`, so a foreign key into one is `uuid` too — and a
+ * Every collection is keyed by `id uuid`, so a foreign key into one is `uuid` too — and a
  * `text` column planned in its place is the `operator does not exist: text = uuid` the where compiler
  * hits when it renders the join it planned. Authored models get this type from their builder; a
  * runtime-owned collection is `field.*` calls and had no way to say it.
@@ -163,6 +183,8 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
 	readonly fields: Fields;
 	readonly history: boolean;
 	readonly approvalLock?: boolean;
+	/** Whether readable rows belong in the browser replica. Defaults to true. */
+	readonly sync?: boolean;
 	/**
 	 * What the collection is, and the icon a host surface lists it under.
 	 *
@@ -180,12 +202,14 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
 	 * cannot travel as part of the compiled table.
 	 */
 	readonly exclusions?: ReadonlyArray<ModelExclusion>;
+	/** Database indexes declared by the model, including compound and partial indexes. */
+	readonly indexes?: ReadonlyArray<ModelIndex>;
 	/** Workspace-relative path of the authored model, so a host surface can link to its source. */
 	readonly sourcePath?: string;
 }
 
 /** Names one side of an authored relationship foreign key. */
-export interface RelationEndpoint {
+interface RelationEndpoint {
 	readonly collection: string;
 	readonly column: string;
 }
@@ -217,9 +241,11 @@ export const collection = <
 	readonly fields: Fields;
 	readonly history?: boolean;
 	readonly approvalLock?: boolean;
+	readonly sync?: boolean;
 	readonly description?: string;
 	readonly icon?: string;
 	readonly exclusions?: ReadonlyArray<ModelExclusion>;
+	readonly indexes?: ReadonlyArray<ModelIndex>;
 }): CollectionDefinition<Fields> => {
 	const name = options.name.trim();
 	if (name === '') {
@@ -249,7 +275,7 @@ export const collection = <
  * There is no `agent` field. It used to carry a back-pointer whose value was always the one agent
  * the compiler synthesized; an envoy *is* the agent now, so there is nothing left to point at.
  */
-export interface EnvoyDeclaration extends EnvoyDefinition {
+interface EnvoyDeclaration extends EnvoyDefinition {
 	readonly name: string;
 }
 /**
@@ -657,11 +683,120 @@ export const defineSend = <Row>(binding: {
 	return binding;
 };
 
+/** The MCP server and remote tool behind one entry in the agent's ordinary tool registry. */
+export const McpToolRoute = Schema.Struct({
+	server: Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9_-]*$/), Schema.isMaxLength(64)),
+	url: Schema.String.check(Schema.isPattern(/^https?:\/\//)),
+	tool: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_.-]+$/), Schema.isMaxLength(128))
+});
+export interface McpToolRoute extends Schema.Schema.Type<typeof McpToolRoute> {}
+
+/** A tool as the MCP 2026-07-28 `tools/list` contract describes it. */
+const McpToolDefinition = Schema.Union([
+	Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_.-]+$/), Schema.isMaxLength(128)),
+	Schema.Struct({
+		name: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_.-]+$/), Schema.isMaxLength(128)),
+		description: Schema.optionalKey(Schema.NonEmptyString),
+		inputSchema: Schema.optionalKey(
+			Schema.JsonObject.check(
+				Schema.makeFilter(
+					(schema) =>
+						schema['type'] === 'object' || 'an MCP tool input schema must have type "object"'
+				)
+			)
+		)
+	})
+]);
+
+const mcpToolName = (tool: Schema.Schema.Type<typeof McpToolDefinition>): string =>
+	typeof tool === 'string' ? tool : tool.name;
+
+/** One compiler-discovered MCP v2 server. Its filename owns its name. */
+export const McpServerDefinition = Schema.Struct({
+	url: McpToolRoute.fields.url,
+	description: Schema.optionalKey(Schema.NonEmptyString),
+	tools: Schema.Array(McpToolDefinition).check(
+		Schema.isNonEmpty(),
+		Schema.makeFilter((tools) => {
+			const names = tools.map(mcpToolName);
+			return new Set(names).size === names.length || 'an MCP server cannot declare a tool twice';
+		})
+	)
+});
+export interface McpServerDefinition extends Schema.Schema.Type<typeof McpServerDefinition> {}
+
+/** One compiled workspace Skill. The artifact carries the authored body rather than a file-store guess. */
+export const SkillDeclaration = Schema.Struct({
+	name: Schema.String.check(Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), Schema.isMaxLength(64)),
+	body: Schema.NonEmptyString
+});
+export interface SkillDeclaration extends Schema.Schema.Type<typeof SkillDeclaration> {}
+
 export interface ToolDeclaration {
 	readonly name: string;
 	readonly description: string;
 	readonly command: string;
+	/** MCP supplies the JSON Schema its tool accepts; local authored tools validate in their handler. */
+	readonly inputSchema?: Schema.JsonObject;
+	/** Present only for a remote MCP tool. Execution still enters through this same declaration. */
+	readonly mcp?: McpToolRoute;
 }
+
+/**
+ * Compiles an authored server into the agent's one tool registry.
+ *
+ * A server is not a second execution or authorization registry. Each allowlisted remote tool becomes
+ * the same `ToolDeclaration` a platform or workspace tool uses, with an MCP route attached. Policy
+ * grants still name the server, while invocation resolves the exact offered declaration by tool name.
+ */
+export const describeMcpServer = (
+	name: string,
+	definition: unknown
+): ReadonlyArray<ToolDeclaration> => {
+	const server = Schema.decodeUnknownSync(McpServerDefinition)(definition);
+	const serverName = Schema.decodeUnknownSync(McpToolRoute.fields.server)(name);
+	const defaultDescription = (tool: string) =>
+		server.description === undefined
+			? `${serverName} MCP tool ${tool}`
+			: `${server.description} — ${tool}`;
+	return server.tools.map((declared) => {
+		const tool =
+			typeof declared === 'string'
+				? { name: declared, description: defaultDescription(declared) }
+				: {
+						name: declared.name,
+						description: declared.description ?? defaultDescription(declared.name),
+						inputSchema: declared.inputSchema
+					};
+		return {
+			name: `${serverName}:${tool.name}`,
+			description: tool.description,
+			command: 'mcp:tools/call',
+			inputSchema: tool.inputSchema ?? { type: 'object', additionalProperties: true },
+			mcp: { server: serverName, url: server.url, tool: tool.name }
+		};
+	});
+};
+
+/** Merges authored and MCP tools once, refusing names that would make dispatch ambiguous. */
+export const agentTools = (
+	authored: ReadonlyArray<ToolDeclaration>,
+	servers: Readonly<Record<string, unknown>>
+): ReadonlyArray<ToolDeclaration> => {
+	const combined = [
+		...authored,
+		...Object.entries(servers).flatMap(([name, definition]) => describeMcpServer(name, definition))
+	];
+	const names = combined.map(({ name }) => name);
+	if (new Set(names).size !== names.length) {
+		throw new TypeError('Workspace agent capabilities contain duplicate tool names.');
+	}
+	return Object.freeze(combined);
+};
+
+/** Builds a schema-checked skill descriptor at the compiler's file boundary. */
+export const describeSkill = (name: string, body: string): SkillDeclaration =>
+	Schema.decodeUnknownSync(SkillDeclaration)({ name, body });
 /** Owns tool behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const tool = (declaration: ToolDeclaration): ToolDeclaration => {
 	if (!/^[a-z][a-z0-9_.-]*$/.test(declaration.name)) {
@@ -770,27 +905,6 @@ export const policy = (declaration: PolicyDeclaration): PolicyDeclaration => {
 	return Object.freeze({ ...declaration, name: declaration.name.trim() });
 };
 
-export interface EnvironmentDeclaration {
-	readonly name: string;
-	readonly production: boolean;
-}
-/** Owns environment behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-export const environment = (
-	name: string,
-	options: { readonly production?: boolean } = {}
-): EnvironmentDeclaration => {
-	const normalized = name.trim();
-	if (!/^[a-z][a-z0-9-]*$/.test(normalized)) {
-		throw new TypeError(`Environment name "${name}" must be lowercase kebab-case.`);
-	}
-	if (options.production !== undefined && typeof options.production !== 'boolean') {
-		throw new TypeError(`Environment ${normalized} production flag must be boolean.`);
-	}
-	return Object.freeze({
-		name: normalized,
-		production: options.production ?? false
-	});
-};
 export interface AppDeclaration {
 	readonly name: string;
 	readonly label: string;
@@ -824,7 +938,7 @@ export interface WorkspaceMigrationEntry {
  * declared policy names, so renaming or deleting a policy fails the build here rather than quietly
  * emptying somebody's authority.
  */
-export type TeamsDeclaration = Readonly<Record<string, ReadonlyArray<string>>>;
+type TeamsDeclaration = Readonly<Record<string, ReadonlyArray<string>>>;
 
 export interface WorkspaceDefinition {
 	readonly name: string;
@@ -891,8 +1005,8 @@ export interface WorkspaceDefinition {
 	 * widens no existing holder.
 	 */
 	readonly tools: ReadonlyArray<ToolDeclaration>;
-	/** Every skill directory under `src/capabilities/skills/`. Granted the same way tools are. */
-	readonly skills: ReadonlyArray<string>;
+	/** Every compiled Skill under `src/capabilities/skills/`. Granted the same way tools are. */
+	readonly skills: ReadonlyArray<SkillDeclaration>;
 	readonly automations: ReadonlyArray<AutomationDeclaration>;
 	readonly envoys: ReadonlyArray<EnvoyDeclaration>;
 	readonly integrations: ReadonlyArray<IntegrationDeclaration>;
@@ -909,7 +1023,7 @@ export interface WorkspaceDefinition {
 }
 
 /** Accepts an authored workspace before `relations` is normalized to an array. */
-export type WorkspaceDraft = Omit<WorkspaceDefinition, 'relations'> & {
+type WorkspaceDraft = Omit<WorkspaceDefinition, 'relations'> & {
 	readonly relations?: ReadonlyArray<RelationDefinition>;
 };
 
@@ -922,6 +1036,8 @@ export const workspace = (definition: WorkspaceDraft): WorkspaceDefinition => {
 		definition.collections,
 		definition.apps,
 		definition.policies,
+		definition.tools,
+		definition.skills,
 		definition.automations,
 		definition.envoys,
 		definition.integrations

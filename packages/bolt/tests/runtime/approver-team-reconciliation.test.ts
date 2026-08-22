@@ -17,7 +17,7 @@ import {
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
-import { Database } from '../../src/runtime/facilities/database.js';
+import * as Database from '../../src/runtime/facilities/database.js';
 import {
 	declaredApproverTeams,
 	reconcileApproverTeams
@@ -150,7 +150,7 @@ const provisionedDatabase = async (seed: ReadonlyArray<string> = []) => {
 	};
 	for (const step of await provisioningStatements(definition)) await run(step.id, step.sql);
 	for (const name of seed) {
-		await run(`team:${name}`, 'insert into bolt_team ("norbital_id", "name") values ($1, $2)', [
+		await run(`team:${name}`, 'insert into bolt_team ("id", "name") values ($1, $2)', [
 			globalThis.crypto.randomUUID(),
 			name
 		]);

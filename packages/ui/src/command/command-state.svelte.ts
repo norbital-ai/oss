@@ -1,6 +1,6 @@
 import { watch } from 'runed';
 import { createContext } from 'svelte';
-import type { CommandItemData, CommandStateProps, FilterFunction } from './types.js';
+import type { CommandItemData, CommandStateProps, FilterFunction } from '#lib/command/types';
 
 // ============================================================================
 // Command Context

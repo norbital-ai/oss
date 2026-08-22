@@ -1,6 +1,7 @@
+import { Schema } from 'effect';
 import type { CollectionField, CollectionRelationship } from '@norbital-ai/std/collection';
 import { humanize } from '@norbital-ai/std/string';
-import type { FilterCollectionDefinition } from './collection-table-filter-fields.js';
+import type { FilterCollectionDefinition } from '#lib/collection-table/collection-table-filter-fields';
 
 export interface CollectionAppliedFilterCondition {
 	readonly key: string;
@@ -13,14 +14,15 @@ export interface CollectionAppliedFilterCondition {
 	readonly lookupTarget?: string;
 }
 
-export type AppliedFilterCollectionDefinition = FilterCollectionDefinition;
+const whereNodeSchema = Schema.Record(Schema.String, Schema.Unknown);
+const decodeWhereNode = Schema.decodeUnknownResult(whereNodeSchema);
 
 function linkedLabel(field: CollectionField): string {
 	return (field.label ?? humanize(field.name)).replace(/\s+id$/i, '').trim();
 }
 
 function relationshipLabel(
-	definition: AppliedFilterCollectionDefinition,
+	definition: FilterCollectionDefinition,
 	relation: CollectionRelationship
 ): string {
 	const linkedField = definition.fields.find((field) => field.relation?.name === relation.name);
@@ -36,14 +38,14 @@ function relationshipLabel(
  */
 export function collectionAppliedFilterConditions(
 	where: unknown,
-	definition: AppliedFilterCollectionDefinition,
-	collections: Readonly<Record<string, AppliedFilterCollectionDefinition>>
+	definition: FilterCollectionDefinition,
+	collections: Readonly<Record<string, FilterCollectionDefinition>>
 ): readonly CollectionAppliedFilterCondition[] {
 	let nextKey = 0;
 
 	function walk(
 		value: unknown,
-		current: AppliedFilterCollectionDefinition,
+		current: FilterCollectionDefinition,
 		path: readonly string[],
 		negated: boolean,
 		alternative: boolean
@@ -51,14 +53,22 @@ export function collectionAppliedFilterConditions(
 		if (Array.isArray(value)) {
 			return value.flatMap((entry) => walk(entry, current, path, negated, alternative));
 		}
-		if (typeof value !== 'object' || value == null) return [];
+		// One decode at the boundary: every node of the authored `where` tree is a plain record. The
+		// relationship and field lookups below index the same definition once instead of re-searching
+		// it for every condition it holds.
+		const node = decodeWhereNode(value);
+		if (node._tag === 'Failure') return [];
+		const relationshipByName = new Map(
+			(current.relationships ?? []).map((relation) => [relation.name, relation])
+		);
+		const fieldByName = new Map(current.fields.map((field) => [field.name, field] as const));
 
-		return Object.entries(value as Record<string, unknown>).flatMap(([name, condition]) => {
+		return Object.entries(node.success).flatMap(([name, condition]) => {
 			if (name === 'AND') return walk(condition, current, path, negated, alternative);
 			if (name === 'OR') return walk(condition, current, path, negated, true);
 			if (name === 'NOT') return walk(condition, current, path, !negated, alternative);
 
-			const relation = current.relationships?.find((candidate) => candidate.name === name);
+			const relation = relationshipByName.get(name);
 			if (relation) {
 				const target = collections[relation.target];
 				if (target) {
@@ -72,7 +82,7 @@ export function collectionAppliedFilterConditions(
 				}
 			}
 
-			const field = current.fields.find((candidate) => candidate.name === name) ?? {
+			const field = fieldByName.get(name) ?? {
 				name,
 				kind: 'unknown',
 				nullable: true
@@ -80,15 +90,18 @@ export function collectionAppliedFilterConditions(
 			// A nested target's primary key describes the relationship itself ("Company"), not an
 			// implementation detail such as "Company · Norbital" or a UUID column name.
 			const label =
-				name === 'norbital_id' && path.length > 0
+				name === 'id' && path.length > 0
 					? path.join(' · ')
 					: [...path, linkedLabel(field)].join(' · ');
-			const lookupTarget =
-				field.relation?.target ?? (name === 'norbital_id' ? current.name : undefined);
-			const operators =
-				typeof condition === 'object' && condition != null && !Array.isArray(condition)
-					? Object.entries(condition as Record<string, unknown>)
-					: [['eq', condition] as const];
+			const lookupTarget = field.relation?.target ?? (name === 'id' ? current.name : undefined);
+			let operators: Array<[string, unknown]> = [];
+			if (typeof condition === 'object' && condition != null && !Array.isArray(condition)) {
+				for (const [operator, operand] of Object.entries(condition)) {
+					operators.push([operator, operand]);
+				}
+			} else {
+				operators = [['eq', condition]];
+			}
 
 			return operators.map(([operator, operand]) => ({
 				key: `applied-filter-${nextKey++}`,

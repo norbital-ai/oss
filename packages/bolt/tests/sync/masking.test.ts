@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { Collections } from '../../src/runtime/collections/collections.js';
-import { Sync } from '../../src/runtime/sync/sync.js';
-import type { Identity } from '../../src/runtime/identity/identity.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
+import * as Sync from '../../src/runtime/sync/sync.js';
+import type * as Identity from '../../src/runtime/identity/identity.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -51,7 +51,7 @@ const restrictedWorkspace = () =>
 				effect: 'allow',
 				actions: ['read'],
 				capabilities: { apps: ['*'] },
-				grants: [{ collection: 'people', action: 'read', fields: ['norbital_id', 'name'] }]
+				grants: [{ collection: 'people', action: 'read', fields: ['id', 'name'] }]
 			})
 		],
 		// `admin` holds the unrestricted policy ALONE, deliberately. Field grants are collected from
@@ -74,7 +74,8 @@ const restrictedWorkspace = () =>
 const viewerSubject: Identity.Subject = {
 	userId: 'viewer-1',
 	tenantId: 'test-tenant',
-	teamPath: ['viewer'], policies: []
+	teamPath: ['viewer'],
+	policies: []
 };
 
 let harness: BoltTestRuntime | undefined;

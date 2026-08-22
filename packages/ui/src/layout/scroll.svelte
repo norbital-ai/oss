@@ -1,9 +1,9 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap } from './layout.shared.js';
+	import type { LayoutAttributes, LayoutElement, LayoutGap } from '#lib/layout/layout.shared';
 
 	export type ScrollAxis = 'x' | 'y' | 'both';
-	export type ScrollLayout = 'block' | 'inline' | 'stack';
+	type ScrollLayout = 'block' | 'inline' | 'stack';
 	export interface ScrollProps extends LayoutAttributes {
 		as?: LayoutElement;
 		axis?: ScrollAxis;
@@ -32,7 +32,7 @@
 
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import { GAP_CLASSES, INSET_CLASS } from './layout.shared.js';
+	import { GAP_CLASSES, INSET_CLASS } from '#lib/layout/layout.shared';
 	import { scrollAffordance } from './scroll-affordance.svelte.js';
 
 	let {

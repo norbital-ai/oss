@@ -103,6 +103,6 @@ Narrow `CollectionTable` layouts are record summaries, not database inspectors. 
 human-readable title and description through `recordLabel` plus `Column` card roles (`card="title"`,
 `card="subtitle"`) wherever the schema cannot derive them reliably.
 
-Never expose `norbital_id`, UUID fields, or `*_id` relationship keys as a list title or description.
+Never expose `id`, UUID fields, or `*_id` relationship keys as a list title or description.
 Use the named record or relationship label; IDs remain internal keys for links, mutations, and
 diagnostics.

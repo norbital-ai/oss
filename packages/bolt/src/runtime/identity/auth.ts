@@ -1,6 +1,8 @@
 import { betterAuth } from 'better-auth';
 import { emailOTP } from 'better-auth/plugins';
-import { makeAuthStore, type ExecuteQuery } from './auth-store.js';
+import { Effect } from 'effect';
+import { AUTH_MODELS } from '#lib/authoring/system-models.js';
+import { makeAuthStore, type ExecuteQuery } from '#lib/runtime/identity/auth-store.js';
 
 /**
  * Identity for bolt, owned by bolt.
@@ -14,11 +16,9 @@ import { makeAuthStore, type ExecuteQuery } from './auth-store.js';
  * `verification`, which are names a tenant's own workspace is entitled to use — a workspace with a
  * `user` collection would otherwise share a table with the auth system and corrupt both.
  */
-export const AUTH_MODELS = {
-	user: 'bolt_auth_user',
-	session: 'bolt_auth_session',
-	account: 'bolt_auth_account',
-	verification: 'bolt_auth_verification'
+const PLATFORM_TIMESTAMP_FIELDS = {
+	createdAt: 'created_at',
+	updatedAt: 'updated_at'
 } as const;
 
 /**
@@ -36,7 +36,7 @@ export const DEVELOPMENT_SIGN_IN_CODE = '123456';
  * here would compile until the day a plugin sends a purpose this bolt never listed, and then fail at
  * the point of delivery instead of at the point of change.
  */
-export type CodePurpose = Parameters<
+type CodePurpose = Parameters<
 	NonNullable<Parameters<typeof emailOTP>[0]['sendVerificationOTP']>
 >[0]['type'];
 
@@ -44,9 +44,9 @@ export type DeliverCode = (message: {
 	readonly email: string;
 	readonly code: string;
 	readonly purpose: CodePurpose;
-}) => Promise<void>;
+}) => Effect.Effect<void>;
 
-export type AuthOptions = Readonly<{
+type AuthOptions = Readonly<{
 	readonly execute: ExecuteQuery;
 	readonly deliver: DeliverCode;
 	/** Signs sessions. Supplied by the host; never read from the environment by the bundle. */
@@ -62,7 +62,7 @@ export type AuthOptions = Readonly<{
  * There is no `AUTH_SCHEMA` here any more. It was a hand-written `create table` per model, rendered
  * beside a second declaration of the same columns — so the schema had two authors and a test between
  * them. The collections are the one declaration now: the schema plan creates them, `verify` checks
- * them, and `auth-tables.ts` maps Better Auth's field names onto the columns they produce.
+ * them, and the common model compiler derives Better Auth's Drizzle tables from those models.
  */
 
 /**
@@ -71,8 +71,18 @@ export type AuthOptions = Readonly<{
  * Email-and-password is off. A workspace signs in with a code to an address it controls, and
  * leaving a password path enabled would be a second way in that nobody configured and nobody
  * audits.
+ *
+ * The two randomness sources are parameters rather than reads of ambient globals, so a host that
+ * pins its id or code sequence can pass its own; the defaults are the platform primitives a bare
+ * invocation would use anyway.
  */
-export const makeAuth = (options: AuthOptions) =>
+export const makeAuth = (
+	options: AuthOptions,
+	/** Uniform source the six-digit production code is cut from; the platform RNG unless a host injects one. */
+	random: () => number = Math.random,
+	/** Minted when Better Auth creates one of its rows; the platform RNG unless a host injects one. */
+	randomId: () => string = () => globalThis.crypto.randomUUID()
+) =>
 	betterAuth({
 		database: makeAuthStore(options.execute),
 		secret: options.secret,
@@ -87,11 +97,11 @@ export const makeAuth = (options: AuthOptions) =>
 		 * library still decides when a row exists and what it is called; only the shape is the
 		 * platform's.
 		 */
-		advanced: { database: { generateId: () => globalThis.crypto.randomUUID() } },
-		user: { modelName: AUTH_MODELS.user },
-		session: { modelName: AUTH_MODELS.session },
-		account: { modelName: AUTH_MODELS.account },
-		verification: { modelName: AUTH_MODELS.verification },
+		advanced: { database: { generateId: randomId } },
+		user: { modelName: AUTH_MODELS.user, fields: PLATFORM_TIMESTAMP_FIELDS },
+		session: { modelName: AUTH_MODELS.session, fields: PLATFORM_TIMESTAMP_FIELDS },
+		account: { modelName: AUTH_MODELS.account, fields: PLATFORM_TIMESTAMP_FIELDS },
+		verification: { modelName: AUTH_MODELS.verification, fields: PLATFORM_TIMESTAMP_FIELDS },
 		plugins: [
 			emailOTP({
 				otpLength: 6,
@@ -101,14 +111,15 @@ export const makeAuth = (options: AuthOptions) =>
 				allowedAttempts: 3,
 				generateOTP: () =>
 					options.production
-						? String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')
+						? String(Math.floor(random() * 1_000_000)).padStart(6, '0')
 						: DEVELOPMENT_SIGN_IN_CODE,
-				sendVerificationOTP: async ({ email, otp, type }) => {
+				sendVerificationOTP: ({ email, otp, type }) => {
 					// Development is deliberately silent: the code is already known, and a local stack has
 					// no mailer to reach. Sending nothing is what makes that the same flow rather than a
 					// special case with a different shape.
-					if (!options.production) return;
-					await options.deliver({ email, code: otp, purpose: type });
+					return Effect.runPromise(
+						options.production ? options.deliver({ email, code: otp, purpose: type }) : Effect.void
+					);
 				}
 			})
 		]

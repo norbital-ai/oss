@@ -1,6 +1,6 @@
 <script module lang="ts">
 	import { createContext } from 'svelte';
-	import type { CollectionToolbarFilterDeclaration } from './collection-toolbar.types.js';
+	import type { CollectionToolbarFilterDeclaration } from '#lib/collection-toolbar/collection-toolbar.types';
 
 	interface CollectionToolbarFilterContext {
 		setFilter: (token: object, filter: CollectionToolbarFilterDeclaration) => void;
@@ -13,7 +13,7 @@
 
 <script lang="ts" generics="TValue extends string">
 	import { onMount } from 'svelte';
-	import type { CollectionToolbarFilterProps } from './collection-toolbar.types.js';
+	import type { CollectionToolbarFilterProps } from '#lib/collection-toolbar/collection-toolbar.types';
 
 	let props: CollectionToolbarFilterProps<TValue> = $props();
 	const context = getCollectionToolbarFilterContext();

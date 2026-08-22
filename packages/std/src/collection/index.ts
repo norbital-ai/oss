@@ -19,12 +19,13 @@
  */
 
 export { labelTermText, resolveRecordLabel } from './record-label.js';
+export { isSystemCollectionField, SYSTEM_COLLECTION_FIELD_NAMES } from './system-fields.js';
 
 export interface CollectionRecord {
 	readonly [field: string]: unknown;
 }
 
-export interface RemoteQuery<T> {
+export interface RemoteQuery<T> extends PromiseLike<T> {
 	readonly current: T | undefined;
 	readonly loading: boolean;
 	readonly error: Error | undefined;
@@ -75,7 +76,7 @@ export interface CollectionField<TName extends string = string> {
 	readonly label?: string;
 	readonly array?: boolean;
 	readonly readOnly?: boolean;
-	readonly values?: readonly string[];
+	readonly values?: readonly string[] | undefined;
 	readonly options?: Readonly<Record<string, unknown>>;
 	readonly currencies?: readonly string[];
 	readonly mimeTypes?: readonly string[];
@@ -208,7 +209,7 @@ export interface CollectionRelationOptions<TRow extends object = CollectionRecor
  */
 export interface CollectionFilter {
 	/** One or two segments: `status`, or `agreement_employment.employee_number` split in two. */
-	readonly path: string[];
+	readonly path: readonly string[];
 	readonly operator:
 		| 'eq'
 		| 'ne'
@@ -267,7 +268,7 @@ export interface CollectionOperations<TCollection extends CollectionType<object,
 }
 
 export interface CollectionApprovalRequest {
-	readonly norbital_id: string;
+	readonly id: string;
 	readonly status: string;
 }
 
@@ -305,7 +306,11 @@ export interface CollectionHistoryOperations {
 	): RemoteQuery<readonly CollectionRecordHistoryEntry[]>;
 }
 
+/** Type-only witness that preserves the exact generated registry across structural client views. */
+declare const collectionRegistryType: unique symbol;
+
 export interface CollectionClient<TCollections extends CollectionRegistry> {
+	readonly [collectionRegistryType]?: TCollections;
 	readonly db: {
 		readonly [TName in keyof TCollections]: CollectionOperations<TCollections[TName]>;
 	};
@@ -317,7 +322,28 @@ export interface CollectionClient<TCollections extends CollectionRegistry> {
 	readonly approvals?: CollectionApprovalOperations;
 }
 
+export interface CollectionMutations<TCollection extends CollectionType<object, object, object>> {
+	readonly create: (
+		input: CollectionCreateInput<TCollection>
+	) => Promise<CollectionRow<TCollection>>;
+	readonly update: (
+		recordId: string,
+		input: CollectionUpdateInput<TCollection>
+	) => Promise<CollectionRow<TCollection>>;
+	readonly delete: (recordId: string) => Promise<void>;
+}
+
+/** The generated workspace client always exposes writes; authorization decides whether they succeed. */
+export type MutableCollectionClient<TCollections extends CollectionRegistry> =
+	CollectionClient<TCollections> & {
+		readonly db: {
+			readonly [TName in keyof TCollections]: CollectionOperations<TCollections[TName]> &
+				CollectionMutations<TCollections[TName]>;
+		};
+	};
+
 /** Tenant-authored collection surfaces receive only the typed database vocabulary. */
 export interface CollectionDbClient<TCollections extends CollectionRegistry> {
+	readonly [collectionRegistryType]?: TCollections;
 	readonly db: CollectionClient<TCollections>['db'];
 }

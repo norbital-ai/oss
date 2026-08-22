@@ -2,12 +2,13 @@
 	import type { CollectionField } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
+	import { Effect, Schema } from 'effect';
 	import { tick } from 'svelte';
 	import * as Accordion from '#lib/accordion';
 	import * as AlertDialog from '#lib/alert-dialog';
 	import { Button, buttonVariants } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
-	import { DataRenderer } from '../data-renderer/index.js';
+	import { DataRenderer } from '#lib/data-renderer';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
@@ -16,12 +17,15 @@
 		CollectionTableIntegrationStatus,
 		CollectionTablePipeline,
 		CollectionTablePipelineContext
-	} from './collection-table.types.js';
+	} from '#lib/collection-table/collection-table.types';
 	import CollectionTableIntegrationsPanel from './collection-table-integrations-panel.svelte';
 	import CollectionTablePipelinePanel from './collection-table-pipeline-panel.svelte';
+	import { isSystemField } from './collection-card-derivation';
 
-	type OperationKind = 'export' | 'import';
-	type BulkOperation = 'update' | 'delete';
+	const OperationKindSchema = Schema.Literals(['export', 'import']);
+	const BulkOperationSchema = Schema.Literals(['update', 'delete']);
+	type OperationKind = typeof OperationKindSchema.Type;
+	type BulkOperation = typeof BulkOperationSchema.Type;
 	const PRIMITIVE_FIELD_KINDS = new Set([
 		'boolean',
 		'clock_time',
@@ -61,8 +65,12 @@
 		integrations: readonly CollectionTableIntegrationStatus[];
 		selectedRows: readonly TRow[];
 		fields: readonly CollectionField[];
-		updateSelected?: (fieldName: string, value: unknown, rows: readonly TRow[]) => Promise<void>;
-		deleteSelected?: (rows: readonly TRow[]) => Promise<void>;
+		updateSelected?: (
+			fieldName: string,
+			value: unknown,
+			rows: readonly TRow[]
+		) => Effect.Effect<void, unknown>;
+		deleteSelected?: (rows: readonly TRow[]) => Effect.Effect<void, unknown>;
 		updateUnavailable?: string | null;
 		deleteUnavailable?: string | null;
 		clearSelection?: () => void;
@@ -72,7 +80,7 @@
 			toggleAll(): void;
 		};
 		disabled: boolean;
-		refresh(): Promise<void>;
+		refresh(): Effect.Effect<void, unknown>;
 	} = $props();
 
 	const { t } = useI18n<UiKeys>();
@@ -88,7 +96,7 @@
 	const eligibleFields = $derived(
 		fields.filter(
 			(field) =>
-				!field.name.startsWith('norbital_') &&
+				!isSystemField(field.name) &&
 				!field.readOnly &&
 				(field.relation != null || (!field.array && PRIMITIVE_FIELD_KINDS.has(field.kind)))
 		)
@@ -119,10 +127,7 @@
 		)
 	);
 
-	async function runPipeline(
-		kind: OperationKind,
-		pipeline: CollectionTablePipeline<TRow>
-	): Promise<void> {
+	function runPipeline(kind: OperationKind, pipeline: CollectionTablePipeline<TRow>): void {
 		const operationKey = `${kind}:${pipeline.id}`;
 		if (
 			pendingOperation ||
@@ -137,18 +142,25 @@
 			selectedRows,
 			refresh
 		};
-		try {
-			await pipeline.run(context);
-			if (kind === 'import') await refresh();
-		} catch (error) {
-			toast.error(
-				error instanceof Error
-					? error.message
-					: t('table.pipelineFailed', { label: pipeline.label })
-			);
-		} finally {
-			pendingOperation = null;
-		}
+		Effect.runFork(
+			pipeline.run(context).pipe(
+				Effect.flatMap(() => (kind === 'import' ? refresh() : Effect.void)),
+				Effect.catch((error) =>
+					Effect.sync(() => {
+						toast.error(
+							error instanceof Error
+								? error.message
+								: t('table.pipelineFailed', { label: pipeline.label })
+						);
+					})
+				),
+				Effect.onExit(() =>
+					Effect.sync(() => {
+						pendingOperation = null;
+					})
+				)
+			)
+		);
 	}
 
 	function chooseField(fieldName: string | null): void {
@@ -157,14 +169,21 @@
 		bulkValueTouched = false;
 	}
 
-	async function reviewBulkOperation(kind: BulkOperation): Promise<void> {
+	function reviewBulkOperation(kind: BulkOperation): void {
 		actionsOpen = false;
-		await tick();
-		if (kind === 'update') confirmUpdateOpen = true;
-		else confirmDeleteOpen = true;
+		Effect.runFork(
+			Effect.tryPromise(() => tick()).pipe(
+				Effect.tap(() =>
+					Effect.sync(() => {
+						if (kind === 'update') confirmUpdateOpen = true;
+						else confirmDeleteOpen = true;
+					})
+				)
+			)
+		);
 	}
 
-	async function runBulkOperation(kind: BulkOperation): Promise<void> {
+	function runBulkOperation(kind: BulkOperation): void {
 		if (
 			pendingOperation ||
 			disabled ||
@@ -173,29 +192,42 @@
 		)
 			return;
 		pendingOperation = `bulk:${kind}`;
-		try {
-			if (kind === 'update') {
-				if (!updateSelected || !selectedField || !canSubmitUpdate) return;
-				await updateSelected(selectedField.name, bulkValue, selectedRows);
-				toast.success(t('table.bulkUpdated', { label: selectionLabel }));
-			} else {
-				if (!deleteSelected) return;
-				await deleteSelected(selectedRows);
-				toast.success(t('table.bulkDeleted', { label: selectionLabel }));
-			}
-			if (kind === 'update') confirmUpdateOpen = false;
-			else confirmDeleteOpen = false;
-			clearSelection?.();
-			await refresh();
-			if (kind === 'update') {
-				bulkValue = undefined;
-				bulkValueTouched = false;
-			}
-		} catch (error) {
-			toast.error(error instanceof Error ? error.message : t('table.bulkFailed', { kind }));
-		} finally {
-			pendingOperation = null;
-		}
+		Effect.runFork(
+			Effect.gen(function* () {
+				if (kind === 'update') {
+					if (!updateSelected || !selectedField || !canSubmitUpdate) return;
+					yield* updateSelected(selectedField.name, bulkValue, selectedRows);
+					yield* Effect.sync(() =>
+						toast.success(t('table.bulkUpdated', { label: selectionLabel }))
+					);
+				} else {
+					if (!deleteSelected) return;
+					yield* deleteSelected(selectedRows);
+					yield* Effect.sync(() =>
+						toast.success(t('table.bulkDeleted', { label: selectionLabel }))
+					);
+				}
+				if (kind === 'update') confirmUpdateOpen = false;
+				else confirmDeleteOpen = false;
+				clearSelection?.();
+				yield* refresh();
+				if (kind === 'update') {
+					bulkValue = undefined;
+					bulkValueTouched = false;
+				}
+			}).pipe(
+				Effect.catch((error) =>
+					Effect.sync(() => {
+						toast.error(error instanceof Error ? error.message : t('table.bulkFailed', { kind }));
+					})
+				),
+				Effect.onExit(() =>
+					Effect.sync(() => {
+						pendingOperation = null;
+					})
+				)
+			)
+		);
 	}
 </script>
 

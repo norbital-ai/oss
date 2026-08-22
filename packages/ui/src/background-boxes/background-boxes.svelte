@@ -19,15 +19,6 @@
 
 	let rowsArray = $derived(Array.from({ length: rows }));
 	let colsArray = $derived(Array.from({ length: cols }));
-
-	// Generate random animation parameters for each box
-	function getAnimationDelay(i: number, j: number) {
-		return ((i + j) * 50) % 2000; // stagger in ms
-	}
-
-	function getAnimationDuration(i: number, j: number) {
-		return 2000 + ((i * j) % 1000); // vary between 2-3s
-	}
 </script>
 
 <!-- stupidity:allow UI5 -- this leaf component owns a local clip or scroll boundary required by its interaction contract -->
@@ -36,8 +27,8 @@
 	<div class="absolute inset-0 z-0 flex flex-wrap">
 		{#each rowsArray as _, i}
 			{#each colsArray as _, j}
-				{@const animDelay = getAnimationDelay(i, j)}
-				{@const animDuration = getAnimationDuration(i, j)}
+				{@const animDelay = ((i + j) * 50) % 2000}
+				{@const animDuration = 2000 + ((i * j) % 1000)}
 				<div
 					class="box-cell mounted relative h-12 w-12 border-t border-r border-neutral-300/60 transition-all duration-200 last:border-b hover:bg-brand-500/30 md:h-16 md:w-16 dark:border-neutral-700/60 dark:hover:bg-brand-400/20"
 					class:border-l={j === 0}

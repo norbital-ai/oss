@@ -3,8 +3,12 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
-	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '../workspace-shell/workspace-shell.types.js';
-	import type { FileTreeEntry, FileTreeEntryBadge, FileTreePresencePeer } from './file-tree.types';
+	import { WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS } from '#lib/workspace-shell/workspace-shell.types';
+	import type {
+		FileTreeEntry,
+		FileTreeEntryBadge,
+		FileTreePresencePeer
+	} from '#lib/file-tree/file-tree.types';
 
 	type Props = {
 		entry: FileTreeEntry;

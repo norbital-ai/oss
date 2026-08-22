@@ -1,6 +1,8 @@
 <script lang="ts">
-	import MoneyInput, { type MoneyValue } from './money.input.svelte';
-	import type { DataRendererProps } from '../data-renderer.types.js';
+	import { MoneyValueSchema, type MoneyValue } from '@norbital-ai/std/finance';
+	import { Result, Schema } from 'effect';
+	import MoneyInput from './money.input.svelte';
+	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 
 	let {
 		field,
@@ -11,18 +13,13 @@
 		class: className
 	}: DataRendererProps = $props();
 
-	const moneyValue = $derived.by((): MoneyValue | MoneyValue[] | null => {
-		const parse = (item: unknown): MoneyValue | null => {
-			if (item == null || typeof item !== 'object') return null;
-			const amount = Reflect.get(item, 'value');
-			const currency = Reflect.get(item, 'currency');
-			return typeof amount === 'number' && typeof currency === 'string'
-				? { value: amount, currency }
-				: null;
-		};
-		if (!field.array) return parse(value);
-		return Array.isArray(value) ? value.flatMap((item) => parse(item) ?? []) : [];
-	});
+	const decodeMoney = Schema.decodeUnknownResult(MoneyValueSchema);
+	const decodeMoneyArray = Schema.decodeUnknownResult(Schema.Array(MoneyValueSchema));
+	const moneyValue = $derived.by((): MoneyValue | readonly MoneyValue[] | null =>
+		field.array
+			? Result.getOrElse(decodeMoneyArray(value), () => [])
+			: Result.getOrElse(decodeMoney(value), () => null)
+	);
 </script>
 
 <MoneyInput

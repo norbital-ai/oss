@@ -1,9 +1,10 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { Communication, IdentityHooks } from '../facilities/services.js';
-import { Database } from '../facilities/database.js';
-import { AUTH_MODELS, makeAuth } from './auth.js';
-import { identitiesOf, identityMatches } from '../envoys/transport-identity.js';
+import { Communication, IdentityHooks } from '#lib/runtime/facilities/services.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import { AUTH_MODELS } from '#lib/authoring/system-models.js';
+import { makeAuth } from '#lib/runtime/identity/auth.js';
+import { identitiesOf, identityMatches } from '#lib/runtime/envoys/transport-identity.js';
 
 export const Subject = Schema.Struct({
 	userId: Schema.NonEmptyString,
@@ -56,22 +57,70 @@ export const Subject = Schema.Struct({
 });
 export interface Subject extends Schema.Schema.Type<typeof Subject> {}
 
-/** Reads the loosely-typed values a SQL row hands back without scattering guards through the projection. */
-const IdentityRows = {
-	text: (row: unknown, field: string): string | undefined => {
-		const value = row === null || typeof row !== 'object' ? undefined : Reflect.get(row, field);
-		return typeof value === 'string' && value.length > 0 ? value : undefined;
-	},
-	strings: (row: unknown, field: string): ReadonlyArray<string> => {
-		const value = row === null || typeof row !== 'object' ? undefined : Reflect.get(row, field);
-		return Array.isArray(value)
-			? value.filter((entry): entry is string => typeof entry === 'string')
-			: [];
-	}
-};
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
+const NullableString = Schema.NullOr(Schema.String);
+const SubjectDatabaseRow = Schema.Struct({
+	userId: Schema.NonEmptyString,
+	tenantId: Schema.NonEmptyString,
+	email: Schema.optionalKey(NullableString),
+	status: Schema.optionalKey(NullableString),
+	teamPath: Schema.Array(Schema.NonEmptyString)
+});
+const SecretRow = Schema.Struct({ value: Schema.NonEmptyString });
+const TeamDatabaseRow = Schema.Struct({
+	id: Schema.NonEmptyString,
+	name: Schema.NonEmptyString,
+	parentId: NullableString,
+	description: NullableString
+});
+const TransportAccountRow = Schema.Struct({
+	userId: Schema.NonEmptyString,
+	email: NullableString,
+	channels: Schema.Json
+});
+const InvitationAcceptedRow = Schema.Struct({
+	tenant_id: Schema.NonEmptyString,
+	email: NullableString
+});
+const IdRow = Schema.Struct({ id: Schema.NonEmptyString });
+const MemberRow = Schema.Struct({
+	id: Schema.NonEmptyString,
+	email: NullableString,
+	team: NullableString,
+	status: Schema.String
+});
+const InvitationRow = Schema.Struct({
+	id: Schema.NonEmptyString,
+	email: Schema.String,
+	status: Schema.String,
+	invitedBy: NullableString
+});
+const AuditSubject = Schema.Struct({
+	collection: Schema.optionalKey(Schema.String),
+	requestId: Schema.optionalKey(Schema.String),
+	team: Schema.optionalKey(Schema.String)
+});
+const AuditRow = Schema.Struct({
+	id: Schema.NonEmptyString,
+	action: Schema.NonEmptyString,
+	actor: Schema.NonEmptyString,
+	payload: AuditSubject,
+	at: Schema.String
+});
+const AssignedMemberRow = Schema.Struct({ id: Schema.NonEmptyString, email: NullableString });
+const WorkspaceSettingsRow = Schema.Struct({ settings: Schema.Json });
+
+const malformedDatabaseRow = (operation: string) =>
+	new Database.FacilityError({
+		operation,
+		code: 'malformed_response',
+		message: `database returned a malformed row for ${operation}`,
+		retryable: false,
+		outcome: 'known'
+	});
 
 /**
- * Whether a string is shaped like the `norbital_id` an identity row is keyed by.
+ * Whether a string is shaped like the `id` an identity row is keyed by.
  *
  * Checked before the value reaches a statement, because `$1::uuid` on anything else is a *database*
  * error — a 500 with a Postgres sentence in it — where the honest answer to "delete the team called
@@ -82,7 +131,7 @@ const RECORD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 const isRecordId = (value: string): boolean => RECORD_ID_PATTERN.test(value);
 
 /** Every column a team is read back as, spelled once so the four writes cannot project it differently. */
-const TEAM_COLUMNS = `"norbital_id"::text as "id", "name", "parent_id"::text as "parentId", "description"`;
+const TEAM_COLUMNS = `"id"::text as "id", "name", "parent_id"::text as "parentId", "description"`;
 
 /**
  * The subtree under one team, bounded exactly as `TEAM_TREE_SQL` is and for the same reason.
@@ -93,9 +142,9 @@ const TEAM_COLUMNS = `"norbital_id"::text as "id", "name", "parent_id"::text as 
  * a graph that is already cyclic.
  */
 const TEAM_SUBTREE_SQL = `with recursive tree as (
-	select "norbital_id" as id, 1 as depth from bolt_team where "norbital_id" = $1::uuid
+	select "id" as id, 1 as depth from bolt_team where "id" = $1::uuid
 	union all
-	select c."norbital_id", p.depth + 1 from bolt_team c join tree p on c."parent_id" = p.id
+	select c."id", p.depth + 1 from bolt_team c join tree p on c."parent_id" = p.id
 	 where p.depth < 8
 )
 select 1 from tree where id = $2::uuid limit 1`;
@@ -125,23 +174,19 @@ export type SubjectStatus = typeof ADMIN_STATUS | typeof NORMAL_STATUS;
  * A row missing `userId` or `tenantId` still fails to decode — those stay `NonEmptyString`, so a
  * genuinely malformed row is still refused rather than admitted as an anonymous subject.
  */
-const subjectFromRow = (row: unknown): Record<string, unknown> => {
-	const email = IdentityRows.text(row, 'email');
-	const impersonatedBy = IdentityRows.text(row, 'impersonatedBy');
-	const teamPath = IdentityRows.strings(row, 'teamPath');
+const subjectFromRow = (row: Schema.Schema.Type<typeof SubjectDatabaseRow>): Subject => {
 	return {
-		userId: IdentityRows.text(row, 'userId'),
-		tenantId: IdentityRows.text(row, 'tenantId'),
-		teamPath,
+		userId: row.userId,
+		tenantId: row.tenantId,
+		teamPath: row.teamPath,
 		// Empty, always. A person holds policies through their team and never directly; the array is
 		// what a *static* identity carries, and no row projects one.
 		policies: [],
 		// Exactly one spelling counts. A column that is null, absent, misspelled or holding anything
 		// else at all is an ordinary user, so a projection that forgets to select `status` cannot
 		// promote everybody it returns.
-		admin: IdentityRows.text(row, 'status') === ADMIN_STATUS,
-		...(email === undefined ? {} : { email }),
-		...(impersonatedBy === undefined ? {} : { impersonatedBy })
+		admin: row.status === ADMIN_STATUS,
+		...(row.email === undefined || row.email === null ? {} : { email: row.email })
 	};
 };
 
@@ -162,7 +207,7 @@ const subjectFromRow = (row: unknown): Record<string, unknown> => {
  * property of the hierarchy.
  *
  * Note what this does *not* do, because it is the thing most likely to be misread: inheriting a
- * policy is not inheriting its rows. A grant scoped `${requestor.norbital_id}` re-evaluates against
+ * policy is not inheriting its rows. A grant scoped `${requestor.id}` re-evaluates against
  * whoever is asking, so a manager holding a report's self-scoped policy sees their *own* records.
  * Reaching a report's rows is a predicate written against the team subtree — see
  * `requestor.team_scope_users` in `access-control.ts` — not a consequence of descending here.
@@ -173,10 +218,10 @@ const subjectFromRow = (row: unknown): Record<string, unknown> => {
  * the same reasoning as `HOOK_NESTING_LIMIT`.
  */
 const TEAM_TREE_SQL = `, tree as (
-	select t."norbital_id" as id, t."name" as name, 1 as depth
-	  from bolt_team t join subject on t."norbital_id" = subject."team_id"
+	select t."id" as id, t."name" as name, 1 as depth
+	  from bolt_team t join subject on t."id" = subject."team_id"
 	union all
-	select c."norbital_id", c."name", p.depth + 1
+	select c."id", c."name", p.depth + 1
 	  from bolt_team c join tree p on c."parent_id" = p.id
 	 where p.depth < 8
 )`;
@@ -200,13 +245,12 @@ const EXTERNAL_SUBJECT_SQL = `with recursive subject as (
 )${TEAM_TREE_SQL} ${SUBJECT_TAIL_SQL}`;
 
 const AUTHENTICATE_SQL = `with recursive subject as (
-	select u."norbital_id" as "userId", u."tenantId" as "tenantId",
+	select u."id" as "userId", u."tenantId" as "tenantId",
 	       u."email" as "email", u."status" as "status", u."team_id" as "team_id"
 	  from ${AUTH_MODELS.session} s
-	  join ${AUTH_MODELS.user} u on u."norbital_id" = s."userId"
+	  join ${AUTH_MODELS.user} u on u."id" = s."userId"
 	 where s."token" = $1 and s."expiresAt" > now()
 )${TEAM_TREE_SQL} ${SUBJECT_TAIL_SQL}`;
-
 
 /** Carries authentication error through the typed identity failure channel without losing diagnostic context. */
 export class AuthenticationError extends Schema.TaggedError<AuthenticationError>()(
@@ -236,8 +280,8 @@ export type TeamRecord = Readonly<{
 /** The fields a new team is created with. Everything but the name is optional and defaults to none. */
 export type TeamDraft = Readonly<{
 	readonly name: string;
-	readonly parentId?: string | null;
-	readonly description?: string | null;
+	readonly parentId?: string | null | undefined;
+	readonly description?: string | null | undefined;
 }>;
 
 /**
@@ -248,9 +292,9 @@ export type TeamDraft = Readonly<{
  * that says both.
  */
 export type TeamChanges = Readonly<{
-	readonly name?: string;
-	readonly parentId?: string | null;
-	readonly description?: string | null;
+	readonly name?: string | undefined;
+	readonly parentId?: string | null | undefined;
+	readonly description?: string | null | undefined;
 }>;
 
 /**
@@ -456,7 +500,12 @@ export const Service = Context.Service<Interface>('@norbital-ai/bolt/Identity');
  * Stated as "can this host deliver" rather than "is this development", because that is the fact
  * being acted on, and it stays true for any host rather than for one deployment's idea of a mode.
  */
-export const layerWith = (canDeliver: boolean) =>
+export const layerWith = (
+	canDeliver: boolean,
+	randomId: () => string = () => globalThis.crypto.randomUUID(),
+	/** Uniform source for the six-digit sign-in codes; the platform RNG unless a host injects one. */
+	random: () => number = Math.random
+) =>
 	Layer.effect(
 		Service,
 		Effect.gen(function* () {
@@ -471,9 +520,10 @@ export const layerWith = (canDeliver: boolean) =>
 				const result = yield* database.execute(effectId, { _tag: 'Query', sql, parameters });
 				const first = result.rows[0];
 				if (first === undefined) return yield* new AuthenticationError({ reason: 'invalid' });
-				return yield* Schema.decodeUnknownEffect(Subject)(subjectFromRow(first)).pipe(
+				const row = yield* Schema.decodeUnknownEffect(SubjectDatabaseRow)(first).pipe(
 					Effect.mapError(() => new AuthenticationError({ reason: 'malformed' }))
 				);
+				return subjectFromRow(row);
 			});
 			/**
 			 * Runs Better Auth for one invocation.
@@ -490,7 +540,7 @@ export const layerWith = (canDeliver: boolean) =>
 					// host is under no obligation to have installed, and did not. `gen_random_uuid` is core
 					// Postgres, and two of them are 64 hex characters carrying ~244 bits of entropy.
 					// `where not exists` rather than `on conflict (key)`: this is an ordinary collection now, so
-					// it is keyed by `norbital_id` and `key` carries an index but no unique constraint for a
+					// it is keyed by `id` and `key` carries an index but no unique constraint for a
 					// conflict target to match. Concurrent callers race to insert and the loser's row is
 					// harmless — the select below takes whichever secret is there, and both are valid.
 					sql: `insert into bolt_auth_config ("key", "value") select 'session-secret', replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '') where not exists (select 1 from bolt_auth_config where "key" = 'session-secret')`,
@@ -501,29 +551,29 @@ export const layerWith = (canDeliver: boolean) =>
 					sql: `select "value" from bolt_auth_config where "key" = 'session-secret' limit 1`,
 					parameters: []
 				});
-				const secret = IdentityRows.text(stored.rows[0], 'value');
-				if (secret === undefined) return yield* new AuthenticationError({ reason: 'malformed' });
-				return makeAuth({
-					secret,
-					baseURL: 'https://bolt.invalid',
-					production: canDeliver,
-					execute: (sql, parameters) =>
-						Effect.runPromise(
-							database
-								.execute(effectId, {
+				const secret = yield* Schema.decodeUnknownEffect(SecretRow)(stored.rows[0]).pipe(
+					Effect.mapError(() => new AuthenticationError({ reason: 'malformed' })),
+					Effect.map((row) => row.value)
+				);
+				return makeAuth(
+					{
+						secret,
+						baseURL: 'https://bolt.invalid',
+						production: canDeliver,
+						execute: (sql, parameters) =>
+							Effect.gen(function* () {
+								const decodedParameters = yield* Schema.decodeUnknownEffect(
+									Schema.Array(Schema.Json)
+								)(parameters);
+								const result = yield* database.execute(effectId, {
 									_tag: 'Query',
 									sql,
-									parameters: parameters as ReadonlyArray<Schema.Json>
-								})
-								.pipe(
-									Effect.map((result) => ({
-										rows: result.rows as ReadonlyArray<Record<string, unknown>>,
-										affectedRows: result.affectedRows
-									}))
-								)
-						),
-					deliver: (message) =>
-						Effect.runPromise(
+									parameters: decodedParameters
+								});
+								const rows = yield* Schema.decodeUnknownEffect(Schema.Array(JsonObject))(result.rows);
+								return { rows, affectedRows: result.affectedRows };
+							}),
+						deliver: (message) =>
 							communication
 								.execute(effectId, {
 									_tag: 'Send',
@@ -538,21 +588,27 @@ export const layerWith = (canDeliver: boolean) =>
 									Effect.asVoid,
 									Effect.catch(() => Effect.void)
 								)
-						)
-				});
+					},
+					random,
+					randomId
+				);
 			});
 
 			/** The projection every team write answers with, read off the row the statement returned. */
-			const teamFromRow = (row: unknown): TeamRecord => {
-				const parentId = IdentityRows.text(row, 'parentId');
-				const description = IdentityRows.text(row, 'description');
+			const teamFromRow = (row: Schema.Schema.Type<typeof TeamDatabaseRow>): TeamRecord => {
+				const { description, id, name, parentId } = row;
 				return {
-					id: IdentityRows.text(row, 'id') ?? 'unknown',
-					name: IdentityRows.text(row, 'name') ?? 'unknown',
-					...(parentId === undefined ? {} : { parentId }),
-					...(description === undefined ? {} : { description })
+					id,
+					name,
+					...(parentId === null ? {} : { parentId }),
+					...(description === null ? {} : { description })
 				};
 			};
+			const decodeTeamRow = (operation: string, row: Schema.Json) =>
+				Schema.decodeUnknownEffect(TeamDatabaseRow)(row).pipe(
+					Effect.map(teamFromRow),
+					Effect.mapError(() => malformedDatabaseRow(operation))
+				);
 			const readTeam = Effect.fn('Identity.readTeam')(function* (
 				effectId: EffectId,
 				teamId: string
@@ -560,11 +616,11 @@ export const layerWith = (canDeliver: boolean) =>
 				if (!isRecordId(teamId)) return undefined;
 				const found = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: `select ${TEAM_COLUMNS} from bolt_team where "norbital_id" = $1::uuid`,
+					sql: `select ${TEAM_COLUMNS} from bolt_team where "id" = $1::uuid`,
 					parameters: [teamId]
 				});
 				const row = found.rows[0];
-				return row === undefined ? undefined : teamFromRow(row);
+				return row === undefined ? undefined : yield* decodeTeamRow('identity.team.read', row);
 			});
 			/**
 			 * The trace a team write leaves, in the ledger `workspaceAccess` already reads back.
@@ -624,21 +680,21 @@ export const layerWith = (canDeliver: boolean) =>
 					function* (effectId, transport, senderAddress) {
 						const result = yield* database.execute(effectId, {
 							_tag: 'Query',
-							sql: `select u."norbital_id" as "userId", u."email" as "email", u."channels" as "channels"
+							sql: `select u."id" as "userId", u."email" as "email", u."channels" as "channels"
 						        from ${AUTH_MODELS.user} u
 						       where u."channels" @> $1::jsonb`,
 							parameters: [JSON.stringify([{ type: transport, verified: true }])]
 						});
 						for (const row of result.rows) {
-							const held = identitiesOf(
-								row === null || typeof row !== 'object' ? undefined : Reflect.get(row, 'channels')
+							const decoded = yield* Schema.decodeUnknownEffect(TransportAccountRow)(row).pipe(
+								Effect.mapError(() => malformedDatabaseRow('identity.accountByTransportIdentity'))
 							);
+							const held = identitiesOf(decoded.channels);
 							if (!held.some((identity) => identityMatches(identity, transport, senderAddress)))
 								continue;
-							const userId = IdentityRows.text(row, 'userId');
-							if (userId === undefined) continue;
-							const email = IdentityRows.text(row, 'email');
-							return email === undefined ? { userId } : { userId, email };
+							return decoded.email === null
+								? { userId: decoded.userId }
+								: { userId: decoded.userId, email: decoded.email };
 						}
 						return undefined;
 					}
@@ -673,22 +729,22 @@ export const layerWith = (canDeliver: boolean) =>
 						});
 						const row = result.rows[0];
 						if (row === undefined) return yield* new AuthenticationError({ reason: 'invalid' });
-						const organizationId = IdentityRows.text(row, 'tenant_id');
-						if (organizationId === undefined)
-							return yield* new AuthenticationError({ reason: 'malformed' });
-						const email = IdentityRows.text(row, 'email');
+						const invitation = yield* Schema.decodeUnknownEffect(InvitationAcceptedRow)(row).pipe(
+							Effect.mapError(() => new AuthenticationError({ reason: 'malformed' }))
+						);
+						const { email, tenant_id: organizationId } = invitation;
 						yield* identityHooks.emit(effectId, {
 							_tag: 'MembershipChanged',
 							userId,
 							organizationId,
-							...(email === undefined ? {} : { email }),
+							...(email === null ? {} : { email }),
 							action: 'joined'
 						});
 						yield* identityHooks.emit(effectId, {
 							_tag: 'UserChanged',
 							userId,
 							organizationId,
-							...(email === undefined ? {} : { email })
+							...(email === null ? {} : { email })
 						});
 					}
 				),
@@ -738,19 +794,22 @@ export const layerWith = (canDeliver: boolean) =>
 				admit: Effect.fn('Identity.admit')(function* (effectId, tenantId, email, teamId, status) {
 					const admitted = yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: `insert into ${AUTH_MODELS.user} ("norbital_id", "name", "email", "emailVerified", "status", "tenantId", "team_id")
+						sql: `insert into ${AUTH_MODELS.user} ("id", "name", "email", "emailVerified", "status", "tenantId", "team_id")
 					      values (gen_random_uuid(), $1, $1, true, $4, $2, $3)
 					      on conflict ("email") do update set
 					        "tenantId" = excluded."tenantId",
 					        "team_id" = excluded."team_id",
 					        "status" = excluded."status",
-					        "norbital_updated_at" = now()
-					      returning "norbital_id" as "id"`,
+					        "updated_at" = now()
+					      returning "id" as "id"`,
 						parameters: [email, tenantId, teamId, status]
 					});
-					const admittedId = IdentityRows.text(admitted.rows[0], 'id') ?? '';
+					const admittedId = yield* Schema.decodeUnknownEffect(IdRow)(admitted.rows[0]).pipe(
+						Effect.map((row) => row.id),
+						Effect.mapError(() => malformedDatabaseRow('identity.admit'))
+					);
 					// The address rides along because it is the only stable name this person has across
-					// organizations: identity is per-tenant, so the same human is a different `norbital_id`
+					// organizations: identity is per-tenant, so the same human is a different `id`
 					// in every workspace they belong to, and a host filing memberships by user id records
 					// six strangers rather than one person in six places.
 					yield* identityHooks.emit(effectId, {
@@ -775,12 +834,13 @@ export const layerWith = (canDeliver: boolean) =>
 					// actually signed in, so a second user sharing the address cannot be the one admitted.
 					const admitted = yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: `update ${AUTH_MODELS.user} set "tenantId" = $2, "norbital_updated_at" = now() where "norbital_id" = (select "userId" from ${AUTH_MODELS.session} where "token" = $1) returning "norbital_id" as "id"`,
+						sql: `update ${AUTH_MODELS.user} set "tenantId" = $2, "updated_at" = now() where "id" = (select "userId" from ${AUTH_MODELS.session} where "token" = $1) returning "id" as "id"`,
 						parameters: [signedIn.token, tenantId]
 					});
-					const admittedId = IdentityRows.text(admitted.rows[0], 'id');
-					if (admittedId === undefined)
-						return yield* new AuthenticationError({ reason: 'invalid' });
+					const admittedId = yield* Schema.decodeUnknownEffect(IdRow)(admitted.rows[0]).pipe(
+						Effect.map((row) => row.id),
+						Effect.mapError(() => new AuthenticationError({ reason: 'invalid' }))
+					);
 					// Same reason as `admit`: without the address the host cannot tell that the person signing
 					// into this organization is the one it already knows from another.
 					yield* identityHooks.emit(effectId, {
@@ -800,18 +860,18 @@ export const layerWith = (canDeliver: boolean) =>
 				 * A session for an unknown subject is now refused rather than granted.
 				 */
 				startSession: Effect.fn('Identity.startSession')(function* (effectId, userId, tenantId) {
-					const credential = `bolt:${tenantId}:${globalThis.crypto.randomUUID()}`;
+					const credential = `bolt:${tenantId}:${randomId()}`;
 					const admitted = yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: `update ${AUTH_MODELS.user} set "tenantId" = $2, "norbital_updated_at" = now() where "norbital_id" = $1 returning "norbital_id" as "id"`,
+						sql: `update ${AUTH_MODELS.user} set "tenantId" = $2, "updated_at" = now() where "id" = $1 returning "id" as "id"`,
 						parameters: [userId, tenantId]
 					});
 					if (admitted.rows[0] === undefined)
 						return yield* new AuthenticationError({ reason: 'invalid' });
 					yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: `insert into ${AUTH_MODELS.session} ("norbital_id", "token", "userId", "expiresAt") values ($1, $2, $3, now() + interval '8 hours')`,
-						parameters: [globalThis.crypto.randomUUID(), credential, userId]
+						sql: `insert into ${AUTH_MODELS.session} ("id", "token", "userId", "expiresAt") values ($1, $2, $3, now() + interval '8 hours')`,
+						parameters: [randomId(), credential, userId]
 					});
 					yield* identityHooks.emit(effectId, {
 						_tag: 'UserChanged',
@@ -854,17 +914,17 @@ export const layerWith = (canDeliver: boolean) =>
 						  -- external row demote the person's own status row.
 						  case when bool_or(subjects.status = '${ADMIN_STATUS}') then '${ADMIN_STATUS}' else '${NORMAL_STATUS}' end as "status"
 						  from (
-							-- Cast to text so the union matches: identity is keyed by \`norbital_id uuid\`, while an
+							-- Cast to text so the union matches: identity is keyed by \`id uuid\`, while an
 							-- external subject's id is whatever its provider calls it, and both are only ever
 							-- read back out of this projection as a string.
-							select "norbital_id"::text as user_id, "email", "team_id", "status" from ${AUTH_MODELS.user} where "tenantId" = $1
+							select "id"::text as user_id, "email", "team_id", "status" from ${AUTH_MODELS.user} where "tenantId" = $1
 							union all
 							-- An external subject is authenticated somewhere else and \`bolt_external_subjects\`
 							-- carries no status column, so it can only ever be an ordinary member — the same
 							-- answer \`resolveSubject\` gives it.
 							select user_id, email, team_id, '${NORMAL_STATUS}' from bolt_external_subjects where tenant_id = $1
 						  ) subjects
-						  left join bolt_team t on t."norbital_id" = subjects."team_id"
+						  left join bolt_team t on t."id" = subjects."team_id"
 						  group by subjects.user_id
 						  order by subjects.user_id`,
 						parameters: [tenantId]
@@ -879,67 +939,67 @@ export const layerWith = (canDeliver: boolean) =>
 						sql: 'select sequence::text as "id", kind as "action", subject_id as "actor", payload, created_at as "at" from bolt_audit order by sequence desc limit 200',
 						parameters: []
 					});
-					const members = memberRows.rows.map((row) => {
-						const team = IdentityRows.text(row, 'team');
+					const decodedMembers = yield* Schema.decodeUnknownEffect(Schema.Array(MemberRow))(
+						memberRows.rows
+					).pipe(Effect.mapError(() => malformedDatabaseRow('identity.workspaceAccess.members')));
+					const decodedInvitations = yield* Schema.decodeUnknownEffect(Schema.Array(InvitationRow))(
+						invitationRows.rows
+					).pipe(
+						Effect.mapError(() => malformedDatabaseRow('identity.workspaceAccess.invitations'))
+					);
+					const decodedAudits = yield* Schema.decodeUnknownEffect(Schema.Array(AuditRow))(
+						auditRows.rows
+					).pipe(Effect.mapError(() => malformedDatabaseRow('identity.workspaceAccess.audit')));
+					const members = decodedMembers.map((row) => {
+						const { email, id, status, team } = row;
 						return {
-							id: IdentityRows.text(row, 'id') ?? 'unknown',
-							email: IdentityRows.text(row, 'email') ?? '',
-							name:
-								IdentityRows.text(row, 'email')?.split('@')[0] ??
-								IdentityRows.text(row, 'id') ??
-								'',
+							id,
+							email: email ?? '',
+							name: email?.split('@')[0] ?? id,
 							// The status column, and only it. `admin` was never a role a workspace declares and
 							// is now explicitly not one; what a person may do otherwise is their team's
 							// business, so this reports the team rather than guessing a tier from it.
-							role: IdentityRows.text(row, 'status') === ADMIN_STATUS ? 'admin' : 'basic',
+							role: status === ADMIN_STATUS ? 'admin' : 'basic',
 							status: 'active',
-							...(team === undefined ? {} : { team })
+							...(team === null ? {} : { team })
 						};
 					});
 					const teamRows = yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: 'select "norbital_id"::text as "id", "name", "parent_id"::text as "parentId", "description" from bolt_team order by "name"',
+						sql: 'select "id"::text as "id", "name", "parent_id"::text as "parentId", "description" from bolt_team order by "name"',
 						parameters: []
 					});
+					const teams = yield* Schema.decodeUnknownEffect(Schema.Array(TeamDatabaseRow))(
+						teamRows.rows
+					).pipe(
+						Effect.map((rows) => rows.map(teamFromRow)),
+						Effect.mapError(() => malformedDatabaseRow('identity.workspaceAccess.teams'))
+					);
 					return {
 						members,
-						invitations: invitationRows.rows.map((row) => {
-							const invitedBy = IdentityRows.text(row, 'invitedBy');
+						invitations: decodedInvitations.map((row) => {
+							const { email, id, invitedBy, status } = row;
 							return {
-								id: IdentityRows.text(row, 'id') ?? 'unknown',
-								email: IdentityRows.text(row, 'email') ?? '',
+								id,
+								email,
 								role: 'basic',
-								status: IdentityRows.text(row, 'status') ?? 'pending',
-								...(invitedBy === undefined ? {} : { invitedBy })
+								status,
+								...(invitedBy === null ? {} : { invitedBy })
 							};
 						}),
-						teams: teamRows.rows.map((row) => {
-							const parentId = IdentityRows.text(row, 'parentId');
-							const description = IdentityRows.text(row, 'description');
-							return {
-								id: IdentityRows.text(row, 'id') ?? 'unknown',
-								name: IdentityRows.text(row, 'name') ?? 'unknown',
-								...(parentId === undefined ? {} : { parentId }),
-								...(description === undefined ? {} : { description })
-							};
-						}),
-						events: auditRows.rows.map((row) => {
-							const payload = Reflect.get(Object(row), 'payload');
+						teams,
+						events: decodedAudits.map((row) => {
 							// `team` is third because the entries that carry one — every `teams.*` write, and
 							// the impersonation row that names a previewed team — have no collection and no
 							// request behind them, and without it they render in the activity list as an
 							// action by somebody against nothing.
-							const subject = Schema.is(Schema.Record(Schema.String, Schema.Json))(payload)
-								? (IdentityRows.text(payload, 'collection') ??
-									IdentityRows.text(payload, 'requestId') ??
-									IdentityRows.text(payload, 'team'))
-								: undefined;
+							const subject = row.payload.collection ?? row.payload.requestId ?? row.payload.team;
 							return {
-								id: IdentityRows.text(row, 'id') ?? 'unknown',
-								action: IdentityRows.text(row, 'action') ?? 'unknown',
-								actor: IdentityRows.text(row, 'actor') ?? 'unknown',
+								id: row.id,
+								action: row.action,
+								actor: row.actor,
 								...(subject === undefined ? {} : { subject }),
-								at: IdentityRows.text(row, 'at') ?? ''
+								at: row.at
 							};
 						})
 					};
@@ -973,7 +1033,7 @@ export const layerWith = (canDeliver: boolean) =>
 							// preview with `lower("name") = lower($1)` and `policiesHeldByTeam` folds both sides —
 							// but the unique index on the column is case-*sensitive*, so `on conflict` would admit
 							// `hr manager` beside `HR Manager` and make which one an approval matched an accident.
-							sql: `insert into bolt_team ("norbital_id", "name", "parent_id", "description")
+							sql: `insert into bolt_team ("id", "name", "parent_id", "description")
 						      select gen_random_uuid(), $1::text, $2::uuid, $3::text
 						       where not exists (select 1 from bolt_team where lower("name") = lower($1::text))
 						   returning ${TEAM_COLUMNS}`,
@@ -982,7 +1042,7 @@ export const layerWith = (canDeliver: boolean) =>
 						const row = created.rows[0];
 						if (row === undefined)
 							return { _tag: 'Refused', reason: `a team called ${name} already exists` } as const;
-						const team = teamFromRow(row);
+						const team = yield* decodeTeamRow('identity.team.create', row);
 						yield* recordTeamEvent(
 							EffectId.make(`${effectId}:team-create-audit`),
 							'team_created',
@@ -1053,18 +1113,18 @@ export const layerWith = (canDeliver: boolean) =>
 							// The folded uniqueness test rides in the statement rather than in a read before it, so
 							// two operators renaming two teams to the same thing at once cannot both be told yes.
 							sql: `update bolt_team set "name" = $2::text, "parent_id" = $3::uuid, "description" = $4::text,
-						             "norbital_updated_at" = now()
-						       where "norbital_id" = $1::uuid
+						             "updated_at" = now()
+						       where "id" = $1::uuid
 						         and not exists (select 1 from bolt_team other
 						                          where lower(other."name") = lower($2::text)
-						                            and other."norbital_id" <> $1::uuid)
+						                            and other."id" <> $1::uuid)
 						   returning ${TEAM_COLUMNS}`,
 							parameters: [current.id, name, parentId, description]
 						});
 						const row = updated.rows[0];
 						if (row === undefined)
 							return { _tag: 'Refused', reason: `a team called ${name} already exists` } as const;
-						const team = teamFromRow(row);
+						const team = yield* decodeTeamRow('identity.team.update', row);
 						yield* recordTeamEvent(
 							EffectId.make(`${effectId}:team-update-audit`),
 							'team_updated',
@@ -1114,14 +1174,14 @@ export const layerWith = (canDeliver: boolean) =>
 						}
 						const deleted = yield* database.execute(EffectId.make(`${effectId}:team-delete`), {
 							_tag: 'Query',
-							sql: `delete from bolt_team where "norbital_id" = $1::uuid returning ${TEAM_COLUMNS}`,
+							sql: `delete from bolt_team where "id" = $1::uuid returning ${TEAM_COLUMNS}`,
 							parameters: [current.id]
 						});
 						if (deleted.rows[0] === undefined)
 							return { _tag: 'Refused', reason: `there is no team ${teamId}` } as const;
 						yield* database.execute(EffectId.make(`${effectId}:team-reparent`), {
 							_tag: 'Query',
-							sql: `update bolt_team set "parent_id" = null, "norbital_updated_at" = now() where "parent_id" = $1::uuid`,
+							sql: `update bolt_team set "parent_id" = null, "updated_at" = now() where "parent_id" = $1::uuid`,
 							parameters: [current.id]
 						});
 						yield* recordTeamEvent(
@@ -1159,9 +1219,9 @@ export const layerWith = (canDeliver: boolean) =>
 							} as const;
 						const moved = yield* database.execute(EffectId.make(`${effectId}:team-assign`), {
 							_tag: 'Query',
-							sql: `update ${AUTH_MODELS.user} set "team_id" = $2::uuid, "norbital_updated_at" = now()
-						       where "norbital_id" = $1::uuid and "tenantId" = $3::text
-						   returning "norbital_id"::text as "id", "email"`,
+							sql: `update ${AUTH_MODELS.user} set "team_id" = $2::uuid, "updated_at" = now()
+						       where "id" = $1::uuid and "tenantId" = $3::text
+						   returning "id"::text as "id", "email"`,
 							parameters: [memberId, team?.id ?? null, tenantId]
 						});
 						const row = moved.rows[0];
@@ -1170,7 +1230,9 @@ export const layerWith = (canDeliver: boolean) =>
 								_tag: 'Refused',
 								reason: `there is nobody with id ${memberId} in this workspace`
 							} as const;
-						const email = IdentityRows.text(row, 'email');
+						const movedMember = yield* Schema.decodeUnknownEffect(AssignedMemberRow)(row).pipe(
+							Effect.mapError(() => malformedDatabaseRow('identity.assignTeam'))
+						);
 						yield* recordTeamEvent(
 							EffectId.make(`${effectId}:team-assign-audit`),
 							'member_team_changed',
@@ -1184,7 +1246,7 @@ export const layerWith = (canDeliver: boolean) =>
 							_tag: 'MembershipChanged',
 							userId: memberId,
 							organizationId: tenantId,
-							...(email === undefined ? {} : { email }),
+							...(movedMember.email === null ? {} : { email: movedMember.email }),
 							action: 'team_changed',
 							...(team === undefined ? {} : { team: team.name })
 						});
@@ -1202,9 +1264,11 @@ export const layerWith = (canDeliver: boolean) =>
 						parameters: [tenantId]
 					});
 					const row = result.rows[0];
-					const settings =
-						typeof row === 'object' && row !== null ? Reflect.get(row, 'settings') : undefined;
-					return yield* Schema.decodeUnknownEffect(Schema.Json)(settings ?? {}).pipe(Effect.orDie);
+					if (row === undefined) return {};
+					return yield* Schema.decodeUnknownEffect(WorkspaceSettingsRow)(row).pipe(
+						Effect.map((decoded) => decoded.settings),
+						Effect.mapError(() => malformedDatabaseRow('identity.workspaceSettings'))
+					);
 				})
 			});
 		})
@@ -1212,5 +1276,3 @@ export const layerWith = (canDeliver: boolean) =>
 
 /** The default binding: a host that has bound communication. */
 export const layer = layerWith(true);
-
-export * as Identity from './identity.js';

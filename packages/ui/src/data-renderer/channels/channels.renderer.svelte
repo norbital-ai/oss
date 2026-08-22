@@ -7,16 +7,9 @@
 	 * editor containing `[]`. That asks an administrator to know the wire shape in order to add a
 	 * phone number, and it lets them save a malformed channel that only fails later at delivery.
 	 */
-	export const CHANNEL_TYPES = [
-		'email',
-		'phone',
-		'wechat',
-		'telegram',
-		'whatsapp',
-		'slack'
-	] as const;
+	const CHANNEL_TYPES = ['email', 'phone', 'wechat', 'telegram', 'whatsapp', 'slack'] as const;
 
-	export type ChannelRow = {
+	type ChannelRow = {
 		type: (typeof CHANNEL_TYPES)[number];
 		address?: string;
 		verified?: boolean;
@@ -58,28 +51,27 @@
 			: []
 	);
 
-	function commit(next: ChannelRow[]): void {
-		onValueChange?.(next);
-	}
-
 	function update(index: number, patch: Partial<ChannelRow>): void {
-		commit(rows.map((row, position) => (position === index ? { ...row, ...patch } : row)));
+		onValueChange?.(rows.map((row, position) => (position === index ? { ...row, ...patch } : row)));
 	}
 
 	/** Exactly one channel is primary, so electing one demotes the rest rather than adding a second. */
 	function electPrimary(index: number): void {
-		commit(rows.map((row, position) => ({ ...row, primary: position === index })));
+		onValueChange?.(rows.map((row, position) => ({ ...row, primary: position === index })));
 	}
 
 	function addChannel(): void {
-		commit([...rows, { type: 'email', address: '', verified: false, primary: rows.length === 0 }]);
+		onValueChange?.([
+			...rows,
+			{ type: 'email', address: '', verified: false, primary: rows.length === 0 }
+		]);
 	}
 
 	function removeChannel(index: number): void {
 		const next = rows.filter((_, position) => position !== index);
 		// Removing the primary would leave the record with none; the first survivor inherits it.
 		if (rows[index]?.primary && next.length > 0) next[0] = { ...next[0], primary: true };
-		commit(next);
+		onValueChange?.(next);
 	}
 </script>
 

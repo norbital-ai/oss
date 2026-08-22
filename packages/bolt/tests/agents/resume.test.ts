@@ -17,7 +17,7 @@ import {
 	type TaskRequest,
 	type TaskResponse
 } from '@norbital-ai/bolt-protocol';
-import { app, collection, field, policy, workspace } from '../../src/authoring/index.js';
+import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { buildManifest } from '../../src/manifest/manifest.js';
 import { makeBundle } from '../../src/runtime/app.js';
 
@@ -140,7 +140,7 @@ const resumeStore = (initial = parkedTurn(), authorized = true) => {
 				});
 			if (request._tag !== 'Query') return answer();
 			statements.push({ sql: request.sql, parameters: request.parameters });
-			if (request.sql.includes('join bolt_conversations parent')) {
+			if (request.sql.includes('join chat_session parent')) {
 				return answer(
 					authorized
 						? [
@@ -154,20 +154,20 @@ const resumeStore = (initial = parkedTurn(), authorized = true) => {
 				);
 			}
 			if (request.sql.includes("content->>'status' in")) return answer([{ content: targetTurn }]);
-			if (request.sql.startsWith('update bolt_agent_messages set content = $3::jsonb')) {
+			if (request.sql.startsWith('update chat_message set content = $3::jsonb')) {
 				current = JSON.parse(String(request.parameters[2])) as JsonObject;
 				return answer();
 			}
 			if (request.sql.includes("content->>'status' = 'running'")) {
 				return answer(current.status === 'running' ? [{ content: current }] : []);
 			}
-			if (request.sql.startsWith('select role, content from bolt_agent_messages')) {
+			if (request.sql.startsWith('select role, content from chat_message')) {
 				return answer([
 					{ role: 'user', content: 'Please delegate the draft.' },
 					{ role: 'assistant', content: current }
 				]);
 			}
-			if (request.sql.startsWith('select parent_id from bolt_conversations')) {
+			if (request.sql.startsWith('select parent_id from chat_session')) {
 				return answer([{ parent_id: null }]);
 			}
 			return answer();
@@ -235,10 +235,10 @@ describe('agent continuation', () => {
 		});
 		// A continuation replays the existing user row; it does not append an empty replacement prompt.
 		expect(
-			store.statements.filter((entry) => entry.sql.startsWith('insert into bolt_agent_messages'))
+			store.statements.filter((entry) => entry.sql.startsWith('insert into chat_message'))
 		).toEqual([]);
 		const usage = store.statements.find((entry) =>
-			entry.sql.includes('update bolt_conversations set')
+			entry.sql.includes('update chat_session set')
 		);
 		// Only the resumed segment is added, and it is still one logical turn (`turnsCounted = 0`).
 		expect(usage?.parameters).toEqual([parentId, 0.2, 0, null, 20, 0, 0]);
@@ -295,7 +295,7 @@ describe('agent continuation', () => {
 					request._tag === 'Query' && request.sql.includes('bolt_auth_session')
 						? [subject]
 						: request._tag === 'Query' &&
-							  request.sql.startsWith('select parent_id from bolt_conversations')
+							  request.sql.startsWith('select parent_id from chat_session')
 							? [{ parent_id: parentId }]
 							: [];
 				if (request._tag === 'Query') {

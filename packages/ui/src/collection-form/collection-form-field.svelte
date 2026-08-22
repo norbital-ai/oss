@@ -25,12 +25,12 @@
 
 <script lang="ts" generics="TFieldName extends string">
 	import { humanize } from '@norbital-ai/std/string';
-	import { DataRenderer } from '../data-renderer/index.js';
+	import { DataRenderer } from '#lib/data-renderer';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
-	import type { CollectionFormFieldProps } from './collection-form.types.js';
+	import type { CollectionFormFieldProps } from '#lib/collection-form/collection-form.types';
 	import CollectionFormFieldHistory from './collection-form-field-history.svelte';
 
 	const { t } = useI18n<UiKeys>();

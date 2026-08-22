@@ -5,7 +5,7 @@ import type { SystemRow } from '../../src/authoring/contracts-schema.js';
 import { describeModel } from '../../src/authoring/model-introspection.js';
 import { extractCollectionCatalog } from '../../src/compiler/model-fields.js';
 import { planWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
-import { SYSTEM_COLUMN_NAMES } from '../../src/compiler/schema-plan.js';
+import { SYSTEM_COLUMN_NAMES } from '../../src/authoring/system-row-model.js';
 
 /**
  * Two more options that were accepted at the authoring boundary and then dropped: an `enums()`
@@ -128,16 +128,16 @@ describe('SystemRow', () => {
 	 * enumerable at runtime, so the assertion below then proves the witness names exactly the columns
 	 * the schema plan creates — which is what authored row types claim to describe.
 	 *
-	 * `norbital_sys_period` was the omission: five of six, so every template's row type denied that
+	 * `sys_period` was the omission: five of six, so every template's row type denied that
 	 * the temporal column exists while every table has it.
 	 */
 	const witness: SystemRow = {
-		norbital_id: '2f1b4a1e-0000-4000-8000-000000000000',
-		norbital_created_at: '2026-01-01T00:00:00.000Z',
-		norbital_updated_at: '2026-01-01T00:00:00.000Z',
-		norbital_sys_period: '["2026-01-01 00:00:00+00",)',
-		norbital_row_version: 1,
-		norbital_approval_id: null
+		id: '2f1b4a1e-0000-4000-8000-000000000000',
+		created_at: '2026-01-01T00:00:00.000Z',
+		updated_at: '2026-01-01T00:00:00.000Z',
+		sys_period: '["2026-01-01 00:00:00+00",)',
+		row_version: 1,
+		approval_id: null
 	};
 
 	it('describes every system column the schema plan creates, and no others', () => {

@@ -3,7 +3,7 @@
 	import { cn } from '#lib/utils';
 	import Icon from '@iconify/svelte';
 	import { RatingGroup } from 'bits-ui';
-	import type { StarRatingStarProps } from './types.js';
+	import type { StarRatingStarProps } from '#lib/star-rating/types';
 
 	let { index, state, class: className, disabled = false, ...rest }: StarRatingStarProps = $props();
 

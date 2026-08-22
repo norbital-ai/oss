@@ -1,4 +1,4 @@
-import { Cause, Effect, Layer, Result, type Schema } from 'effect';
+import { Cause, Clock, Effect, Layer, type Schema } from 'effect';
 import {
 	EffectId,
 	makeWireError,
@@ -11,58 +11,58 @@ import {
 	type Invocation,
 	type Registration
 } from '@norbital-ai/bolt-protocol';
-import type { WorkspaceDefinition } from '../authoring/workspace-schema.js';
-import { AccessControl } from './access/access-control.js';
-import { Agents } from './agents/agents.js';
-import { Approvals } from './approvals/approvals.js';
-import { Automations } from './automations/automations.js';
-import { TaskQueue } from './tasks/tasks.js';
-import type { Declaration } from './tasks/queue.js';
-import { Envoys } from './envoys/envoys.js';
-import { Collections } from './collections/collections.js';
+import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
+import * as AccessControl from '#lib/runtime/access/access-control.js';
+import * as Agents from '#lib/runtime/agents/agents.js';
+import * as Approvals from '#lib/runtime/approvals/approvals.js';
+import * as Automations from '#lib/runtime/automations/automations.js';
+import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
+import type { Declaration } from '#lib/runtime/tasks/queue.js';
+import * as Envoys from '#lib/runtime/envoys/envoys.js';
+import * as Collections from '#lib/runtime/collections/collections.js';
 import {
 	AuthoredRuntimeService,
 	emptyAuthoredRuntime,
 	type AuthoredRuntime
-} from './collections/authored.js';
-import { DispatchError, dispatchInvocation } from './dispatch.js';
+} from '#lib/runtime/collections/authored.js';
+import { DispatchError, dispatchInvocation } from '#lib/runtime/dispatch.js';
 import {
 	HostConfig,
 	hostConfigFromFacility,
 	hostConfigFromProcessEnv
-} from './access/system-principal.js';
-import { AI } from './facilities/services.js';
-import { Communication } from './facilities/services.js';
-import { Connector } from './facilities/services.js';
-import { Database, type CallContext } from './facilities/database.js';
-import { Files } from './facilities/services.js';
-import { HostTools } from './facilities/services.js';
-import { IdentityHooks } from './facilities/services.js';
-import { Tasks } from './facilities/services.js';
-import { Transport } from './facilities/services.js';
-import { Identity } from './identity/identity.js';
-import { reconcileApproverTeams } from './identity/approver-teams.js';
-import { automationSubject } from './identity/static-identity.js';
-import { approvalRefusal } from '../compiler/approval-checks.js';
-import { Integrations } from './integrations/integrations.js';
-import { Notifications } from './notifications/notifications.js';
+} from '#lib/runtime/access/system-principal.js';
+import { AI } from '#lib/runtime/facilities/services.js';
+import { Communication } from '#lib/runtime/facilities/services.js';
+import { Connector } from '#lib/runtime/facilities/services.js';
+import * as Database from '#lib/runtime/facilities/database.js';
+import type { CallContext } from '#lib/runtime/facilities/database.js';
+import { Files } from '#lib/runtime/facilities/services.js';
+import { HostTools } from '#lib/runtime/facilities/services.js';
+import { IdentityHooks } from '#lib/runtime/facilities/services.js';
+import { Tasks } from '#lib/runtime/facilities/services.js';
+import { Transport } from '#lib/runtime/facilities/services.js';
+import * as Identity from '#lib/runtime/identity/identity.js';
+import { reconcileApproverTeams } from '#lib/runtime/identity/approver-teams.js';
+import { automationSubject } from '#lib/runtime/identity/static-identity.js';
+import { approvalRefusal } from '#lib/compiler/approval-checks.js';
+import * as Integrations from '#lib/runtime/integrations/integrations.js';
+import * as Notifications from '#lib/runtime/notifications/notifications.js';
 import {
 	mergeRuntimeHandlers,
 	remoteRegistryLayer,
-	type RuntimeRemoteHandler,
-	type RuntimeToolHandler
-} from './remotes.js';
-import { WorkspaceSchema } from './schema/workspace-schema.js';
-import { Secrets } from './secrets/secrets.js';
-import { PersonalSecrets } from './secrets/personal-secrets.js';
+	type RuntimeRemoteHandler
+} from '#lib/runtime/remotes.js';
+import * as WorkspaceSchema from '#lib/runtime/schema/workspace-schema.js';
+import { Secrets } from '#lib/runtime/secrets/secrets.js';
+import { PersonalSecrets } from '#lib/runtime/secrets/personal-secrets.js';
 import { SecretCipher } from '@norbital-ai/std/secret';
-import { Sync } from './sync/sync.js';
-import { SyncWake } from './sync/wake.js';
-import { Workspace } from './workspace.js';
-import { InvocationBudget } from './budget.js';
-import { RateLimits } from './rate-limits.js';
-import { TenantScope } from './tenant.js';
-import { AuthoredRefusal, refusalOf } from '../authoring/refusal.js';
+import * as Sync from '#lib/runtime/sync/sync.js';
+import * as SyncWake from '#lib/runtime/sync/wake.js';
+import * as Workspace from '#lib/runtime/workspace.js';
+import * as InvocationBudget from '#lib/runtime/budget.js';
+import * as RateLimits from '#lib/runtime/rate-limits.js';
+import * as TenantScope from '#lib/runtime/tenant.js';
+import { AuthoredRefusal } from '#lib/authoring/refusal.js';
 
 /** Owns invocation layer behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
 const InvocationLayers = {
@@ -381,7 +381,7 @@ export const ActivationCommands = {
 									args: {},
 									scope: {},
 									bolt_run_as: automationSubject(automation, tenantId)
-								} as unknown as Schema.Json
+								} satisfies Schema.Json
 							}
 						]
 					: []
@@ -399,7 +399,7 @@ export const ActivationCommands = {
 										name: integration.name,
 										binding: binding.name,
 										cursor: null
-									} as Schema.Json
+									}
 								}
 							]
 				)
@@ -536,10 +536,11 @@ const BundleActivation = {
 							 * release activating for the first time has no history to catch up on and fires next at
 							 * its next ordinary occurrence.
 							 */
+							const nowEpochMs = yield* Clock.currentTimeMillis;
 							const declared = yield* (yield* TaskQueue.Service).declare(
 								EffectId.make(`${activation.id}:schedules`),
 								ActivationCommands.schedulesFor(workspace, activation.scope.tenantId),
-								Date.now()
+								nowEpochMs
 							);
 							for (const rejection of declared.rejections) {
 								// Loud, and at the one moment a person is watching: a deploy. An expression that
@@ -569,17 +570,19 @@ const BundleActivation = {
 		// release's durable callbacks talks to the host's task facility, and a host that never answers
 		// would otherwise leave a deploy hanging with no report of why.
 		return Effect.runPromise(
-			effect.pipe(
-				Effect.timeout(remainingMillis(activation.deadlineEpochMs)),
-				Effect.catch(() =>
-					Effect.succeed({
-						_tag: 'Failure' as const,
-						error: makeWireError(
-							'deadline_exceeded',
-							'Activation did not finish inside its deadline',
-							{ retryable: true }
-						)
-					})
+			Effect.flatMap(Clock.currentTimeMillis, (nowEpochMs) =>
+				effect.pipe(
+					Effect.timeout(remainingMillis(activation.deadlineEpochMs, nowEpochMs)),
+					Effect.catch(() =>
+						Effect.succeed({
+							_tag: 'Failure' as const,
+							error: makeWireError(
+								'deadline_exceeded',
+								'Activation did not finish inside its deadline',
+								{ retryable: true }
+							)
+						})
+					)
 				)
 			),
 			{ signal }
@@ -597,8 +600,8 @@ const activate = BundleActivation.activate;
  * non-positive duration instead would be read as "no limit" by some combinators, which is precisely
  * backwards.
  */
-const remainingMillis = (deadlineEpochMs: number): number =>
-	Math.max(1, deadlineEpochMs - Date.now());
+const remainingMillis = (deadlineEpochMs: number, nowEpochMs: number): number =>
+	Math.max(1, deadlineEpochMs - nowEpochMs);
 
 /** Owns run behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
 const BundleDispatch = {
@@ -616,7 +619,7 @@ const BundleDispatch = {
 			environment: String(invocation.scope.environment),
 			tenantId: String(invocation.scope.tenantId)
 		};
-		const effect = dispatchInvocation(invocation).pipe(
+		const provided = dispatchInvocation(invocation).pipe(
 			Effect.provide(
 				invocationLayer(
 					workspace,
@@ -628,22 +631,27 @@ const BundleDispatch = {
 					// person sent, a request, a webhook and a realtime frame all start their own chain.
 					invocation._tag === 'Task' ? InvocationBudget.depthOf(invocation.input) : 0
 				)
-			),
-			// The invocation deadline, enforced where every host gets it rather than only where one
-			// host remembered to. `deadlineEpochMs` has ridden on every invocation since the protocol
-			// was written and was read by nothing but the facility metadata: bolt-server wrapped its
-			// own `Effect.timeout` around dispatch, and Colony wrapped nothing at all, so on the
-			// hosting platform an invocation that never settled held its slot until the process died.
-			//
-			// This bounds *the tree*, which is a different job from the isolate's CPU-span budget and
-			// from a facility's own statement or request timeout. It can only interrupt work that
-			// yields — a tenant loop that never awaits is unreachable from inside the runtime, and
-			// bounding that is the host's, because only the host can terminate the thread.
-			//
-			// Every nested piece of work under this invocation shares this one deadline by
-			// construction: a hook chain, an import pipeline and an agent's tool calls are all the
-			// same fiber tree, so none of them can be given a fresh budget by running deeper.
-			Effect.timeout(remainingMillis(invocation.deadlineEpochMs)),
+			)
+		);
+		// The invocation deadline, enforced where every host gets it rather than only where one
+		// host remembered to. `deadlineEpochMs` has ridden on every invocation since the protocol
+		// was written and was read by nothing but the facility metadata: bolt-server wrapped its
+		// own `Effect.timeout` around dispatch, and Colony wrapped nothing at all, so on the
+		// hosting platform an invocation that never settled held its slot until the process died.
+		//
+		// This bounds *the tree*, which is a different job from the isolate's CPU-span budget and
+		// from a facility's own statement or request timeout. It can only interrupt work that
+		// yields — a tenant loop that never awaits is unreachable from inside the runtime, and
+		// bounding that is the host's, because only the host can terminate the thread.
+		//
+		// Every nested piece of work under this invocation shares this one deadline by
+		// construction: a hook chain, an import pipeline and an agent's tool calls are all the
+		// same fiber tree, so none of them can be given a fresh budget by running deeper.
+		// The remaining time is read through the Clock at execution rather than at construction, so
+		// the deadline is measured against the instant the invocation actually starts.
+		const effect = Effect.flatMap(Clock.currentTimeMillis, (nowEpochMs) =>
+			Effect.timeout(provided, remainingMillis(invocation.deadlineEpochMs, nowEpochMs))
+		).pipe(
 			Effect.match({
 				onFailure: (raised): BundleResult => {
 					/**
@@ -770,18 +778,15 @@ const BundleDispatch = {
 							)
 						};
 					if (error instanceof AuthoredRefusal) {
+						const details: Record<string, Schema.Json> = {};
+						if (error.collection !== undefined) details.collection = error.collection;
+						if (error.action !== undefined) details.action = error.action;
+						if (phase !== undefined) Object.assign(details, phase);
 						return {
 							_tag: 'Failure',
 							error: makeWireError('refused', error.message, {
 								httpStatus: 422,
-								details: {
-									...(error.collection === undefined ? {} : { collection: error.collection }),
-									...(error.action === undefined ? {} : { action: error.action }),
-									// Which phase of a batch this came out of, when it came out of one. A
-									// `settle` refusal is the one a caller must read differently: the rows are
-									// already written, and `committed` names them.
-									...(phase ?? {})
-								}
+								details
 							})
 						};
 					}
@@ -807,12 +812,11 @@ const BundleDispatch = {
 							: String(error).trim() || 'Dispatch failed';
 					return {
 						_tag: 'Failure',
-						error: makeWireError('dispatch_failed', message, {
-							httpStatus: 500,
-							// The last branch is where an unrecognised failure lands, which is exactly where
-							// knowing whether the write had already happened is worth the most.
-							...(phase === undefined ? {} : { details: phase })
-						})
+						error: makeWireError(
+							'dispatch_failed',
+							message,
+							phase === undefined ? { httpStatus: 500 } : { httpStatus: 500, details: phase }
+						)
 					};
 				},
 				onSuccess: (response): BundleResult => ({ _tag: 'Success', response })
@@ -823,42 +827,13 @@ const BundleDispatch = {
 };
 const run = BundleDispatch.run;
 
-/**
- * Runs an authored handler's result to the promise the compiled dispatcher awaits.
- *
- * The authoring surface accepts plain values, promises, and Effect programs; the generated
- * dispatcher routes every handler result through this so an authored `Effect.fn` runs to its
- * output (failures surface as the thrown errors the dispatch boundary already reports) while
- * promise- and value-returning handlers pass through untouched.
- */
-export const runAuthoredHandler = (result: unknown): Promise<unknown> =>
-	Effect.isEffect(result)
-		? Effect.runPromise(
-				(result as Effect.Effect<unknown, unknown, never>).pipe(
-					// A refusal is lifted out of the defect channel here so that the promise this returns
-					// rejects with the tagged refusal itself. The seam that awaits it —
-					// `runtime/collections/authored.ts` — recognises a refusal structurally, by its `_tag`,
-					// and a defect wrapped in whatever the runtime puts around one is not recognisable. This
-					// is the compiled artifact's own entry point for remotes and tools, so without it a
-					// remote that refuses would still report as a 500 while a hook that refuses reported 422.
-					Effect.catchDefect((defect) => {
-						const refusal = refusalOf(defect);
-						return refusal === undefined ? Effect.die(defect) : Effect.fail(refusal);
-					}),
-					Effect.result
-				)
-			).then((outcome) =>
-				Result.isSuccess(outcome) ? outcome.success : Promise.reject(outcome.failure)
-			)
-		: Promise.resolve(result);
-
 /** Owns make bundle behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
 const Bundles = {
 	make: (
 		workspace: WorkspaceDefinition,
 		manifest: BundleManifest,
 		remoteHandlers: Readonly<Record<string, RuntimeRemoteHandler>> = {},
-		toolHandlers: Readonly<Record<string, RuntimeToolHandler>> = {},
+		toolHandlers: Readonly<Record<string, RuntimeRemoteHandler>> = {},
 		authored: AuthoredRuntime = emptyAuthoredRuntime
 	): BoltBundle => ({
 		protocolVersion: PROTOCOL_VERSION,

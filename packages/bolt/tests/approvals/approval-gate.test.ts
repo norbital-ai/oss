@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { Approvals } from '../../src/runtime/approvals/approvals.js';
-import { Collections, PendingApproval } from '../../src/runtime/collections/collections.js';
+import * as Approvals from '../../src/runtime/approvals/approvals.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
+import { PendingApproval } from '../../src/runtime/collections/collections.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -13,7 +14,7 @@ import {
 /**
  * A valid record id for a readable fixture name.
  *
- * Records are keyed by `norbital_id uuid`. Names like `'person-1'` were only ever accepted by the
+ * Records are keyed by `id uuid`. Names like `'person-1'` were only ever accepted by the
  * `id text` primary key Bolt used to invent, so these fixtures built rows a real database would have
  * rejected — and passed anyway.
  */
@@ -47,7 +48,9 @@ const gatedWorkspace = workspace({
 		})
 	],
 	apps: [],
-	policies: [policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })],
+	policies: [
+		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+	],
 	teams: {
 		admin: ['admin']
 	},
@@ -90,11 +93,10 @@ describe('approval gate over SQL', () => {
 		// is written so a reviewer has something to open and the table has something to badge, and it
 		// carries the request that holds it, which is what every later mutation checks.
 		expect(await rowCount(harness, 'people')).toBe(1);
-		const held = await harness.database.query(
-			'select norbital_approval_id from people where norbital_id = $1',
-			[rid('person-1')]
-		);
-		expect(held[0]?.['norbital_approval_id']).toEqual(expect.any(String));
+		const held = await harness.database.query('select approval_id from people where id = $1', [
+			rid('person-1')
+		]);
+		expect(held[0]?.['approval_id']).toEqual(expect.any(String));
 	});
 
 	it('records the held request so a reviewer can find and read it', async () => {
@@ -190,7 +192,7 @@ describe('approval gate over SQL', () => {
 		);
 
 		// A held record has to reach the replica. The decision surface reads a row's
-		// `norbital_approval_id` to know it is pending and to offer approve/reject on it, and it reads
+		// `approval_id` to know it is pending and to offer approve/reject on it, and it reads
 		// through the replica like everything else — so a record withheld until approval is a record
 		// nobody can approve. Who may see it is still the access predicate's question, not this one's.
 		const outbox = await harness.database.query(

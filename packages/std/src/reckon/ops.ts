@@ -1,3 +1,4 @@
+import { Number as ENumber } from 'effect';
 import type { InlinedTable, RoundingMethod } from './definition.js';
 
 /** A single audit entry pushed by an op during evaluation. */
@@ -6,11 +7,8 @@ export type AuditEntry = { op: string; audit: unknown };
 /** Mutable audit sink — ops push entries here as a side effect. */
 export type AuditRef = { sink: AuditEntry[] };
 
-/** CEL function signature string. */
-export type OpSignature = string;
-
-/** Spec for registering an op on the CEL environment. */
-export type OpRegistration = { signature: OpSignature; handler: (...args: unknown[]) => unknown };
+/** Spec for registering an op on the CEL environment; `signature` is the CEL function signature string. */
+export type OpRegistration = { signature: string; handler: (...args: unknown[]) => unknown };
 
 function toNumber(value: unknown): number {
 	if (typeof value === 'number') return value;
@@ -88,7 +86,7 @@ export function createScalarOps(audit: AuditRef): OpRegistration[] {
 			const v = toNumber(value);
 			const lo = toNumber(min);
 			const hi = toNumber(max);
-			const clamped = Math.max(lo, Math.min(hi, v));
+			const clamped = ENumber.clamp({ minimum: lo, maximum: hi })(v);
 			audit.sink.push({
 				op: 'clamp',
 				audit: { min: lo, max: hi, before: v, after: clamped, clamped: v !== clamped }

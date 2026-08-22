@@ -29,21 +29,13 @@ import type { AuditEntry } from './ops.js';
  */
 export function runComputation<
 	TInput extends object = Record<string, unknown>,
-	TOutput = Record<string, unknown>
+	TOutput extends Record<string, unknown> = Record<string, unknown>
 >(def: ComputationDefinition, input: TInput, env?: ReckonEnvironment): ReckonResult<TOutput> {
 	const reckonEnv = env ?? createEnvironment(def);
 	return evaluate<TInput, TOutput>(reckonEnv, input);
 }
 
-/** Execute using a pre-created environment (avoids re-parsing for repeated runs). */
-export function runComputationWithEnv<
-	TInput extends object = Record<string, unknown>,
-	TOutput = Record<string, unknown>
->(env: ReckonEnvironment, input: TInput): ReckonResult<TOutput> {
-	return evaluate<TInput, TOutput>(env, input);
-}
-
-function evaluate<TInput extends object, TOutput>(
+function evaluate<TInput extends object, TOutput extends Record<string, unknown>>(
 	reckonEnv: ReckonEnvironment,
 	input: TInput
 ): ReckonResult<TOutput> {
@@ -87,8 +79,8 @@ function evaluate<TInput extends object, TOutput>(
 			expr: reckonEnv.exprs[name]!,
 			inputs,
 			output: result,
-			...(opAudit === undefined ? {} : { opAudit }),
-			...(iterations === undefined ? {} : { iterations })
+			opAudit,
+			iterations
 		});
 	}
 
