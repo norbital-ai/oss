@@ -1,18 +1,20 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { safeParse } from '@norbital-ai/std/json';
+import { Result, Schema } from 'effect';
+
+const jsonObject = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.JsonObject));
 
 /**
  * Shared read-and-guard for package manifests, so every release script parses them one way instead
  * of shipping four copies that could drift on the failure shape.
  */
 export function readManifest(filePath) {
-	const parsed = safeParse(readFileSync(filePath, 'utf8'));
-	if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+	const parsed = jsonObject(readFileSync(filePath, 'utf8'));
+	if (Result.isFailure(parsed)) {
 		throw new Error(`${filePath} is not a JSON object.`);
 	}
-	return parsed;
+	return parsed.success;
 }
 
 export const publicPackageDirectories = [

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ import {
 import {
 	platformPackageKey,
 	publicPackageDirectories,
+	readManifest,
 	readPublicPackageEntries
 } from '../lib/package-release.mjs';
 import { resolveWorkspacePackages } from '../resolve-published-packages.mjs';
@@ -36,6 +37,24 @@ const entries = [
 ];
 
 describe('published package identity', () => {
+	it('boots before any workspace package has been built', () => {
+		const source = readFileSync(
+			path.join(repositoryRoot, 'scripts/lib/package-release.mjs'),
+			'utf8'
+		);
+		assert.doesNotMatch(source, /from ['"]@norbital-ai\//);
+		const directory = mkdtempSync(path.join(tmpdir(), 'norbital-package-manifest-test-'));
+		try {
+			const manifest = path.join(directory, 'package.json');
+			writeFileSync(manifest, '{"name":"@norbital-ai/example"}\n');
+			assert.deepEqual(readManifest(manifest), { name: '@norbital-ai/example' });
+			writeFileSync(manifest, '[]\n');
+			assert.throws(() => readManifest(manifest), /is not a JSON object/);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it('keeps every public package on the workspace release version', () => {
 		const releaseVersion = JSON.parse(
 			readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8')
