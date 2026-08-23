@@ -31,6 +31,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The schedule-owner parity suite compares the runtime against the real public authoring
+      # tree. Release runs execute that same suite as CI, so they need the same explicit fixture.
+      - name: Checkout public template fixtures
+        uses: actions/checkout@v7
+        with:
+          repository: norbital-ai/templates
+          path: template-fixtures
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
 
@@ -54,6 +62,8 @@ jobs:
       # local-protocol removal, license, provenance metadata, and the coherent release version.
       - name: Check publishable packages
         run: pnpm check:packages:ci
+        env:
+          NORBITAL_TEMPLATE_SOURCE: ${{ github.workspace }}/template-fixtures
 
       # Skipped, not failed, when this version is already on the registry.
       #
