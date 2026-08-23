@@ -78,6 +78,11 @@ jobs:
       - name: Publish one coherent package set
         run: |
           set -euo pipefail
+          node scripts/resolve-published-packages.mjs \
+            --source workspace \
+            --archive-base-url "$PACKAGE_REGISTRY_URL" \
+            --output dist/package-release.json \
+            --archive-output dist/package-archives
           published=0
           skipped=0
           mapfile -t packages < <(node --input-type=module -e \
@@ -91,7 +96,11 @@ jobs:
               continue
             fi
             echo "publish $name@$version"
-            pnpm --dir "packages/$package" publish --access public --no-git-checks --force
+            npm publish "dist/package-archives/$package.tgz" \
+              --access public \
+              --ignore-scripts \
+              --provenance \
+              --registry="$PACKAGE_REGISTRY_URL"
             published=$((published + 1))
           done
           echo "published=$published skipped=$skipped"
