@@ -21,6 +21,7 @@ permissions:
 
 env:
   PACKAGE_REGISTRY_URL: ${{ vars.NORBITAL_PACKAGE_REGISTRY || 'https://npm.pkg.github.com' }}
+  EXPECTED_PACKAGE_KEY: d7cb6e215644bc65
 
 jobs:
   release:
@@ -45,10 +46,17 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 26
+          node-version: 26.0.0
           registry-url: ${{ env.PACKAGE_REGISTRY_URL }}
           scope: '@norbital-ai'
           package-manager-cache: false
+
+      # npm owns the final normalized tar stream. Pinning it makes the package key independent of
+      # whichever npm patch release a floating Node.js image happens to bundle.
+      - name: Pin archive packer
+        run: |
+          npm install --global npm@11.12.1
+          test "$(npm --version)" = "11.12.1"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
@@ -83,6 +91,8 @@ jobs:
             --archive-base-url "$PACKAGE_REGISTRY_URL" \
             --output dist/package-release.json \
             --archive-output dist/package-archives
+          resolved_key="$(node -p "require('./dist/package-release.json').packageKey")"
+          test "$resolved_key" = "$EXPECTED_PACKAGE_KEY"
           published=0
           skipped=0
           mapfile -t packages < <(node --input-type=module -e \
@@ -100,6 +110,7 @@ jobs:
               --access public \
               --ignore-scripts \
               --provenance \
+              --tag realm-v25 \
               --registry="$PACKAGE_REGISTRY_URL"
             published=$((published + 1))
           done
