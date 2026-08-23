@@ -50,7 +50,7 @@ teams exist and who is on them_ is data an operator edits without a deploy, but 
 and _which team approves step two of the payroll flow_ are both source. A person belongs to exactly
 one team; there are no roles. A person's effective policies are the union declared by their team
 and its descendants. Static envoys and automations name policy arrays directly and are never rows
-in `bolt_auth_user`.
+in `user`.
 
 ## Reference routing
 

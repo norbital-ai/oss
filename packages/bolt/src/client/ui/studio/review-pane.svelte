@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Cluster, Scroll, Stack } from '@norbital-ai/ui/layout';
@@ -28,9 +27,10 @@
 
 	const fileCount = $derived(Object.keys(source?.files ?? {}).length);
 
-	let mounted = $state(false);
 	let selectedCheck = $state<'schema.validate' | 'schema.verify' | undefined>();
-	const planQuery = $derived(mounted && tab === 'schema' ? system.schema.plan({}) : undefined);
+	const planQuery = $derived(
+		typeof window !== 'undefined' && tab === 'schema' ? system.schema.plan({}) : undefined
+	);
 	const plan = $derived(planQuery?.current);
 	const checkQuery = $derived(
 		selectedCheck === 'schema.validate'
@@ -43,8 +43,6 @@
 		if (selectedCheck === name) void checkQuery?.refresh();
 		else selectedCheck = name;
 	};
-
-	onMount(() => (mounted = true));
 </script>
 
 {#snippet unavailable(icon: string, heading: string, body: string, detail: string)}

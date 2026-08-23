@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { defineModel, text } from '../../src/authoring/index.js';
 import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
-import { describeModel } from '../../src/authoring/model-introspection.js';
 import { planWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
 import { buildSchemaPlan, collectionIndexName } from '../../src/compiler/schema-plan.js';
 
@@ -90,16 +89,23 @@ describe('declared collection indexes', () => {
 	 * up with the same index twice.
 	 */
 	it('creates the same index in the migration lineage, under the same name', async () => {
-		const models = { work_items: defineModel({ zeta: text().unique(), ignored: text() }) };
+		const models = {
+			work_items: defineModel(
+				{ zeta: text(), ignored: text() },
+				{
+					indexes: [{ name: collectionIndexName('work_items', 'zeta'), columns: ['zeta'] }]
+				}
+			)
+		};
 		const migration = await Effect.runPromise(
 			planWorkspaceMigration({ models, relations: [], previous: undefined })
 		);
 
-		expect(describeModel(models.work_items).zeta?.indexed).toBe(true);
 		expect(
 			migration?.statements.some((statement) =>
 				statement.includes(collectionIndexName('work_items', 'zeta'))
-			)
+			),
+			JSON.stringify(migration?.statements)
 		).toBe(true);
 		expect(
 			migration?.statements.some((statement) =>
@@ -110,7 +116,14 @@ describe('declared collection indexes', () => {
 
 	/** A second `bolt migrate` over an unchanged model must propose nothing, not the index again. */
 	it('converges: re-diffing an unchanged model proposes no further index', async () => {
-		const models = { work_items: defineModel({ zeta: text().unique(), ignored: text() }) };
+		const models = {
+			work_items: defineModel(
+				{ zeta: text(), ignored: text() },
+				{
+					indexes: [{ name: collectionIndexName('work_items', 'zeta'), columns: ['zeta'] }]
+				}
+			)
+		};
 		const first = await Effect.runPromise(
 			planWorkspaceMigration({ models, relations: [], previous: undefined })
 		);

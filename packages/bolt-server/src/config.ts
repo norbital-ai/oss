@@ -24,7 +24,7 @@ export const ServerConfiguration = Schema.Struct({
 
 export interface ServerConfiguration extends Schema.Schema.Type<typeof ServerConfiguration> {}
 
-/** Reports invalid or unavailable self-host process configuration; stupidity:allow Q4 -- Effect TaggedError declaration is the canonical rc.109 error boundary. */
+/** Reports invalid or unavailable self-host process configuration. */
 export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()(
 	'BoltServer.ConfigurationError',
 	{
@@ -49,7 +49,7 @@ export interface ConfiguredProviderFactory<Provider, Error = never> {
 	readonly make: (settings: ConfiguredProviderSettings) => Effect.Effect<Provider, Error>;
 }
 
-/** Reports a configured provider name for which the host has no registered factory; stupidity:allow Q4 -- Effect TaggedError declaration is the canonical rc.109 error boundary. */
+/** Reports a configured provider name for which the host has no registered factory. */
 export class ProviderConfigurationError extends Schema.TaggedError<ProviderConfigurationError>()(
 	'BoltServer.ProviderConfigurationError',
 	{
@@ -89,7 +89,26 @@ export const selectConfiguredProvider = <Provider, Error>(
 type WireFailureDescription = Readonly<{
 	readonly code: string;
 	readonly message: string | ((cause: unknown) => string);
-	readonly retryable?: boolean;
+	/** `undefined` from a classifier preserves the binding's ordinary cancellation-based default. */
+	readonly retryable?: boolean | ((cause: unknown) => boolean | undefined);
+}>;
+
+type WireBindingOptions<
+	RequestSchema extends Schema.ConstraintDecoder<unknown>,
+	ResponseSchema extends Schema.ConstraintDecoder<unknown>
+> = Readonly<{
+	readonly request: RequestSchema;
+	readonly response: ResponseSchema;
+	readonly cancelled: Readonly<{ readonly code: string; readonly message: string }>;
+	readonly failed: WireFailureDescription;
+	readonly invoke: (
+		metadata: FacilityCall,
+		input: RequestSchema['Type'],
+		signal: AbortSignal
+		// repository-health:allow EFF2 -- FacilityBinding is a protocol-owned Promise boundary implemented by physical host providers.
+	) => Promise<unknown>;
+	/** A completed database operation can become unknown while its result crosses cancellation. */
+	readonly checkCancellationAfterInvoke?: boolean;
 }>;
 
 /** Owns schema checking, cancellation, and failure envelopes for every configured facility. */
@@ -97,19 +116,7 @@ export const makeWireBinding = <
 	RequestSchema extends Schema.ConstraintDecoder<unknown>,
 	ResponseSchema extends Schema.ConstraintDecoder<unknown>
 >(
-	options: Readonly<{
-		readonly request: RequestSchema;
-		readonly response: ResponseSchema;
-		readonly cancelled: Readonly<{ readonly code: string; readonly message: string }>;
-		readonly failed: WireFailureDescription;
-		readonly invoke: (
-			metadata: FacilityCall,
-			input: RequestSchema['Type'],
-			signal: AbortSignal
-		) => Promise<unknown>;
-		/** A completed database operation can become unknown while its result crosses cancellation. */
-		readonly checkCancellationAfterInvoke?: boolean;
-	}>
+	options: WireBindingOptions<RequestSchema, ResponseSchema>
 ): FacilityBinding<RequestSchema['Type'], ResponseSchema['Type']> => ({
 	call: (unsafeMetadata, unsafeInput, signal) =>
 		Effect.runPromise(
@@ -138,7 +145,10 @@ export const makeWireBinding = <
 									? options.failed.message(cause)
 									: options.failed.message,
 								{
-									retryable: options.failed.retryable ?? !signal.aborted,
+									retryable:
+										(typeof options.failed.retryable === 'function'
+											? options.failed.retryable(cause)
+											: options.failed.retryable) ?? !signal.aborted,
 									outcome: signal.aborted ? 'unknown' : 'known'
 								}
 							)

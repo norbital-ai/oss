@@ -196,14 +196,26 @@ and the server confirms or rejects asynchronously.
 import { client } from '$bolt/client';
 
 const employees = client.db.employees.findMany({ where, orderBy, columns, with, search, limit, after });
-await client.db.claims.create(input);
+await client.db.claims.mutate(input);
+client.db.claims.pending; // numeric in-flight count
 const forecast = await client.invoke.holiday_feed(input);
 ```
 
-Reads return reactive queries; mutations are promises and update live queries automatically. Use
-opaque `after` cursors, never offset pagination. Use `findGrouped` and `aggregate` only for
-queryable reporting; do not load wide datasets and regroup them in memory. Server roles use the
-same method names through the Effect-native `api.db` surface.
+Queries own their reactive `current`, `loading`, and `error` state. `mutate(values)` returns
+`Promise<void>`; successful completion invalidates affected live queries rather than returning a row.
+The collection's numeric `pending` property is the count of writes still in flight. Do not duplicate
+query or mutation state in a component. Use opaque `after` cursors, never offset pagination. Use
+`findGrouped` and `aggregate` only for queryable reporting; do not load wide datasets and regroup them
+in memory. Server roles keep their Effect-native `api.db` collection operations; do not invent a
+top-level `client.mutate(...)` wrapper or transplant the browser surface into server roles.
+
+`mutate` accepts the precisely generated nested graph. An included relationship is its complete
+desired state: present rows are inserted or updated, stored rows absent from the submitted relationship
+are deleted, and explicitly included relationships synchronize recursively. An omitted relationship is
+untouched. The root and every included relationship reconcile atomically, so submit a relationship only
+when replacement semantics are intended. The browser contract does not define a top-level record-delete
+encoding. Authorization, approvals, hooks, history, sync invalidation, and events all run through this
+one canonical mutation pipeline.
 
 **How it works under the hood:** every `findMany`/`findFirst` executes against the local replica —
 no network for data this device has already seen. When a mutation lands (yours or
@@ -335,13 +347,13 @@ const me = $derived(platform().user);
 `platform()` publishes exactly three things and nothing else — `user`, `apps`, `envoys`. If you
 want something that is not in this table, it is not there; do not guess a field name.
 
-| Field              | Is                                       | Use it for                                                     |
-| ------------------ | ---------------------------------------- | -------------------------------------------------------------- |
-| `user.id` | `bolt_auth_user.id`, a **uuid** | The only value you may key a row by                            |
-| `user.email`       | The address, as the host reports it      | Display, and matching a column that genuinely holds an address |
-| `user.admin`       | `bolt_auth_user.status === 'admin'`      | Widening a surface for administrators                          |
-| `apps`             | The app names **this session may see**   | Deriving authority — see below                                 |
-| `envoys`           | Declared envoys, with `audience`         | Offering an envoy to the right audience                        |
+| Field        | Is                                     | Use it for                                                     |
+| ------------ | -------------------------------------- | -------------------------------------------------------------- |
+| `user.id`    | `user.id`, a **uuid**                  | The only value you may key a row by                            |
+| `user.email` | The address, as the host reports it    | Display, and matching a column that genuinely holds an address |
+| `user.admin` | `user.status === 'admin'`              | Widening a surface for administrators                          |
+| `apps`       | The app names **this session may see** | Deriving authority — see below                                 |
+| `envoys`     | Declared envoys, with `audience`       | Offering an envoy to the right audience                        |
 
 **`user.id` is the row key. There is no second spelling.** A field named `id` used to sit
 beside it carrying the same value, the shell filled both from the display name, and every authored
@@ -423,7 +435,7 @@ sentence; "runs before create" restates the key and is worse than nothing.
   is what the generated `PolicyName` union, teams, envoys, and automations bind to.
   `src/access/+teams.ts` maps each team name to the policy names it holds (`satisfies Teams`). There is no
   `roles` array on a policy and no second way to select one: a person belongs to exactly one team
-  (`bolt_auth_user.team_id`), team membership is a row an operator edits, and what a team may _do_
+  (`user.team_id`), team membership is a row an operator edits, and what a team may _do_
   is this compiled file. Team names are matched case-insensitively. Behaviour is in the
   `norbital-platform` skill's `approvals-and-policies.md`.
 - Integrations use portable runtime delivery facilities; missing facilities fail at boot.

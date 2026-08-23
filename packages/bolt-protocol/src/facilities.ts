@@ -428,6 +428,7 @@ export type FacilityBinding<Input, Output> = Readonly<{
 		metadata: FacilityCall,
 		input: Input,
 		signal: AbortSignal
+		// repository-health:allow EFF2 -- Host facilities are transport adapters supplied by arbitrary runtimes; Bolt converts every call into Effect at invokeBinding.
 	) => Promise<FacilityResult<Output>>;
 }>;
 

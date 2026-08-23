@@ -49,11 +49,11 @@ one has:
 
 ```ts
 // norbital/apps/colony/src/lib/facilities/database.ts:46
-const cached = (yield* Ref.get(completed)).get(effectKey);
+const cached = (yield * Ref.get(completed)).get(effectKey);
 if (cached !== undefined) return cached;
 ```
 
-That matters because it is what lets a test assert *behaviour* rather than *calls*. When the
+That matters because it is what lets a test assert _behaviour_ rather than _calls_. When the
 dependency behaves, the subject's real logic runs, and the assertion can be about the state that
 resulted. When the dependency is a spy, the only thing left to assert is that the spy was touched —
 which is how a suite ends up proving nothing but its own wiring.
@@ -63,11 +63,11 @@ and put it beside the contract as `layerTest` so the next caller gets it too.
 
 Every contract module offers three layers, and the third one matters as much as the first two:
 
-| Layer               | Meaning                                                    |
-| ------------------- | ---------------------------------------------------------- |
-| `layer` / `layer*`  | The real thing. Lives in `.live.ts`, provided only by `app.ts` |
-| `layerTest`         | A working in-memory implementation of the same contract     |
-| `layerUnavailable`  | A binding that **fails loudly** when anything calls it       |
+| Layer              | Meaning                                                        |
+| ------------------ | -------------------------------------------------------------- |
+| `layer` / `layer*` | The real thing. Lives in `.live.ts`, provided only by `app.ts` |
+| `layerTest`        | A working in-memory implementation of the same contract        |
+| `layerUnavailable` | A binding that **fails loudly** when anything calls it         |
 
 `layerUnavailable` is how you say "this service must not be reached on this path". Bind it instead
 of a fake for every facility the behaviour under test has no business touching:
@@ -129,7 +129,7 @@ the case:
 
 Note what that handler is for. `opens` is counted so the test can assert `expect(opens).toBe(1)`
 after calling `transport.call` twice with the same metadata — the behaviour being pinned is
-*idempotency*, and the counter is the only way to see it. That is a legitimate use of a counting
+_idempotency_, and the counter is the only way to see it. That is a legitimate use of a counting
 double: the count **is** the behaviour, not evidence of wiring.
 
 Where several cases share a graph, build it in a local helper and provide it per case, as
@@ -164,7 +164,7 @@ real thing, and a double that disagrees with reality is exactly the fixture prob
 proving a false premise. Keep it to what the subject calls.
 
 And note what that double is used for. It records into a `deleted` array, and the assertion is on
-the recorded *sequence and contents* — locks released before payslips, another run's claims
+the recorded _sequence and contents_ — locks released before payslips, another run's claims
 untouched (`:255`) — not on "delete was called". That is the difference between a double used to
 observe behaviour and a mock used to observe wiring.
 
@@ -183,7 +183,9 @@ const { runtime } = vi.hoisted(() => ({ runtime: { current: undefined as unknown
 //  including the `layerTest` this file builds its stand-in from — stays the real module."
 vi.mock('$lib/app.js', async (importOriginal) => ({
 	...(await importOriginal<typeof import('../../src/lib/app.js')>()),
-	get runtime() { return runtime.current; }
+	get runtime() {
+		return runtime.current;
+	}
 }));
 
 // "Imported after the mock is registered, so the handler closes over the test runtime."
@@ -218,7 +220,7 @@ undefined` — the event carried no `cookies` and no `fetch`, so the handler die
 the gate, and each case reported the refusal it expected. **A suite that passes because the subject
 crashed is passing on nothing**, and it will keep doing so after somebody deletes the gate.
 
-Guard against it the same way you guard any refusal test: include a case that must be *admitted*.
+Guard against it the same way you guard any refusal test: include a case that must be _admitted_.
 
 ```
 :307  it('accepts an administrator, and the profile it wrote is the profile stored', …)
@@ -241,7 +243,7 @@ oss/packages/bolt — the plugin invocation helper carried this note verbatim:
 	 pass."
 ```
 
-Use an explicit sentinel (`null`) for "absent", and default only the parameter's *present* values.
+Use an explicit sentinel (`null`) for "absent", and default only the parameter's _present_ values.
 
 ## Ambient environment is a dependency too
 

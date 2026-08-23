@@ -28,7 +28,6 @@
 	</Collapsible.Trigger>
 	<Collapsible.Content class="ml-3.75 border-l">
 		<Inline align="start" gap="none" class="relative">
-			<!-- stupidity:allow UI13 -- the connector line needs symmetric inline clearance from both tree branches -->
 			<div class="mx-2 h-full w-[1px] shrink-0 bg-border"></div>
 			<Stack gap="none" grow>
 				{@render children?.()}

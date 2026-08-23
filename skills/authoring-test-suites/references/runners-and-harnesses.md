@@ -32,13 +32,13 @@ the wait "would hang rather than fail, **which is the worst way for a test to be
 
 ### Using the TestClock deliberately
 
-When elapsed time *is* the behaviour — a scheduler firing, a lease expiring, an idle isolate being
+When elapsed time _is_ the behaviour — a scheduler firing, a lease expiring, an idle isolate being
 reclaimed, metered duration — `it.effect` plus `TestClock.adjust` is the right tool and is far
 better than sleeping. It is deterministic, it is instant, and it can advance five hours.
 
 ```ts
 // norbital/apps/colony/tests/hosting/source-workbench.test.ts:121
-yield* TestClock.adjust('1 hour');
+yield * TestClock.adjust('1 hour');
 ```
 
 Import it from `effect/testing` (the v4 path), not `effect/TestClock`. Pair it with an injected
@@ -52,14 +52,14 @@ check the current API before reaching for a familiar helper.
 
 ## Which runner runs your file
 
-| Package                       | Runner                              | Config                                     |
-| ----------------------------- | ----------------------------------- | ------------------------------------------ |
-| `oss/packages/bolt`           | vitest                              | `vitest.config.ts`                         |
-| `oss/packages/bolt-server`    | vitest, defaults                    | none                                       |
-| `oss/packages/bolt-protocol`  | vitest, defaults                    | none                                       |
-| `oss/packages/std`            | `node --test tests/*.test.ts`       | none                                       |
-| `norbital/apps/colony`        | vitest                              | `test` block inside `vite.config.js`       |
-| `templates/*`                 | `node --test --experimental-strip-types` over an explicit glob list | the `test` script in `package.json` |
+| Package                      | Runner                                                              | Config                               |
+| ---------------------------- | ------------------------------------------------------------------- | ------------------------------------ |
+| `oss/packages/bolt`          | vitest                                                              | `vitest.config.ts`                   |
+| `oss/packages/bolt-server`   | vitest, defaults                                                    | none                                 |
+| `oss/packages/bolt-protocol` | vitest, defaults                                                    | none                                 |
+| `oss/packages/std`           | `node --test tests/*.test.ts`                                       | none                                 |
+| `norbital/apps/colony`       | vitest                                                              | `test` block inside `vite.config.js` |
+| `templates/*`                | `node --test --experimental-strip-types` over an explicit glob list | the `test` script in `package.json`  |
 
 Note a live documentation drift: `norbital/.agents/context/AGENTS.md:115` documents
 `pnpm --filter colony test:unit`, `test:e2e` and `test:e2e:authoring`, and says `pnpm test` runs
@@ -100,10 +100,14 @@ nothing provisioned:
 
 ```ts
 // norbital/apps/colony/tests/hosting/neon-database.test.ts:60
-describe.skipIf(!configured)('Neon database provider', () => { /* … */ });
+describe.skipIf(!configured)('Neon database provider', () => {
+	/* … */
+});
 
 // norbital/apps/colony/tests/facilities/database-fork.test.ts:78
-describe.skipIf(configuredUrl === undefined)('Plain Postgres database provider', () => { /* … */ });
+describe.skipIf(configuredUrl === undefined)('Plain Postgres database provider', () => {
+	/* … */
+});
 ```
 
 Two obligations come with `skipIf`:
@@ -122,10 +126,12 @@ indexes, cascades, the migration lineage, `search`, pagination — because those
 against a double.
 
 ```ts
-harness = await makeBoltTestRuntime();                 // :362
+harness = await makeBoltTestRuntime(); // :362
 await harness.database.query(/* seed */);
 const result = await harness.runtime.runPromise(/* … */);
-afterEach(async () => { await harness?.dispose(); });   // :519
+afterEach(async () => {
+	await harness?.dispose();
+}); // :519
 ```
 
 Two things it does that a hand-rolled setup would not:

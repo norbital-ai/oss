@@ -67,11 +67,6 @@
 				session.operations.read({ billing: activeTab === 'billing' })
 			).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrganizationHostSnapshotSchema)));
 			profile = snapshot.organization;
-			// A record nobody has saved yet reads as a wall of blank fields. The workspace the tenant
-			// routes is named by its own manifest, so until the organization is given a name of its
-			// own the form opens on that name — the first save then persists it with the rest.
-			if (profile.name === '' && manifestQuery.current?.name)
-				profile = { ...profile, name: manifestQuery.current.name };
 			usage = snapshot.usage;
 			usageEstimate = snapshot.usageEstimate ?? EMPTY_PERIOD_ESTIMATE;
 			stripeDashboardUrl = snapshot.stripeDashboardUrl;
@@ -87,7 +82,13 @@
 </script>
 
 {#snippet generalContent()}
-	<GeneralPane bind:profile slug={tenantId} loading={hostLoading} loadFailure={hostFailure} />
+	<GeneralPane
+		bind:profile
+		slug={tenantId}
+		defaultName={manifestQuery.current?.name}
+		loading={hostLoading}
+		loadFailure={hostFailure}
+	/>
 {/snippet}
 
 {#snippet billingContent()}

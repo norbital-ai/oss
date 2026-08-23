@@ -60,7 +60,7 @@ const REVIEWERS = 'Reviewers';
 const REQUEST_ID = '019f6f10-0007-7000-8000-000000000001';
 const JOB_ID = '019f6f10-0008-7000-8000-000000000001';
 
-/** The approval the raiser's grant carries. `approvers` and `bolt_team.name` are the same string. */
+/** The approval the raiser's grant carries. `approvers` and `team.name` are the same string. */
 const jobApproval = {
 	id: '019f6f10-0007-7000-8000-000000000009',
 	name: 'Job review',

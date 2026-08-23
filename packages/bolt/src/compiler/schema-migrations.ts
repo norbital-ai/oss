@@ -14,7 +14,7 @@ import {
 	type PgTable,
 	type PgTableExtraConfigValue
 } from 'drizzle-orm/pg-core';
-import { generateDrizzleJson, generateMigration, up } from 'drizzle-kit/api-postgres';
+import type * as DrizzleKitPostgres from 'drizzle-kit/api-postgres';
 import { collectionSearchTrigramIndexName } from '@norbital-ai/std/collection';
 import {
 	compileModelTable,
@@ -49,7 +49,28 @@ import { STATEMENT_BREAKPOINT, discoverAuthoredSource } from './sync.js';
  */
 
 /** drizzle-kit's own snapshot shape, taken from the function that produces it rather than restated. */
-export type WorkspaceSnapshot = Awaited<ReturnType<typeof generateDrizzleJson>>;
+export type WorkspaceSnapshot = Awaited<ReturnType<typeof DrizzleKitPostgres.generateDrizzleJson>>;
+
+const DRIZZLE_KIT_POSTGRES = 'drizzle-kit/api-postgres';
+const loadDrizzleKitPostgres: Effect.Effect<typeof DrizzleKitPostgres> = Effect.promise(
+	() => import(/* @vite-ignore */ DRIZZLE_KIT_POSTGRES)
+);
+
+/**
+ * The stable envelope of a current drizzle-kit PostgreSQL snapshot.
+ *
+ * `up()` only accepts drizzle-kit's legacy `schemas`/`tables` document. Current snapshots already
+ * use the `ddl` representation consumed by `generateMigration`, so passing one through `up()` makes
+ * the upgrader read properties that deliberately no longer exist. Keep the envelope check here so
+ * snapshots written by this version round-trip unchanged while older lineages still use `up()`.
+ */
+const CurrentWorkspaceSnapshot = Schema.Struct({
+	dialect: Schema.Literal('postgres'),
+	id: Schema.String,
+	prevIds: Schema.Array(Schema.String),
+	version: Schema.String,
+	ddl: Schema.Array(Schema.Record(Schema.String, Schema.Json))
+});
 
 /**
  * A generated lineage entry: what the artifact carries, plus the snapshot only the generator uses.
@@ -337,7 +358,7 @@ const REFERENCE_ONLY_TABLES: Readonly<Record<string, PgTable>> = {
  *
  * The identity table is reachable as a foreign-key target but is never returned, and the difference
  * matters: this map is also what the migration is diffed against, so including it would write a
- * `CREATE TABLE bolt_auth_user` into every workspace's lineage — for a table the schema plan already
+ * `CREATE TABLE user` into every workspace's lineage — for a table the schema plan already
  * owns and creates before any lineage runs.
  */
 export const workspaceMigrationTables = (
@@ -388,8 +409,11 @@ type WorkspaceMigrationPlanInput = Readonly<{
  * cache: the legacy path kept one to avoid paying for a subprocess, and a cache that disagrees with
  * the schema is how a changed column reaches the client with no migration behind it.
  */
-export const planWorkspaceMigration = (input: WorkspaceMigrationPlanInput) =>
+export const planWorkspaceMigration = (
+	input: WorkspaceMigrationPlanInput
+): Effect.Effect<WorkspaceMigration | undefined> =>
 	Effect.gen(function* () {
+		const { generateDrizzleJson, generateMigration } = yield* loadDrizzleKitPostgres;
 		const tables = workspaceMigrationTables(input.models, input.relations);
 		// The previous snapshot is used whole. It used to be filtered to the tables the current models
 		// declare, so that a lineage written by Bolt — whose snapshot also carried its platform identity
@@ -412,13 +436,25 @@ export const planWorkspaceMigration = (input: WorkspaceMigrationPlanInput) =>
  * needs one model declaration and one table compiler, though: keeping a handwritten `CREATE TABLE`
  * beside a `defineModel` would recreate the split schema path this compiler exists to remove.
  */
-export const compileHostModelSchema = (name: string, model: ModelDeclaration) =>
+export const compileHostModelSchema = (
+	name: string,
+	model: ModelDeclaration
+): Effect.Effect<ReadonlyArray<string>> =>
 	planWorkspaceMigration({
 		models: { [name]: model },
 		relations: [],
 		previous: undefined,
 		name
-	}).pipe(Effect.map((migration) => migration?.statements ?? []));
+	}).pipe(
+		Effect.map((migration) =>
+			(migration?.statements ?? []).map((statement) =>
+				// A host acquires this schema on every process start. Workspace DDL is lineage-diffed,
+				// but a host model has no authored lineage; its bootstrap table must therefore make
+				// the ordinary already-present state a no-op instead of preventing every restart.
+				statement.replace(/^CREATE TABLE /, 'CREATE TABLE IF NOT EXISTS ')
+			)
+		)
+	);
 
 /**
  * Imports one authored `+model.ts` for its declaration.
@@ -456,7 +492,9 @@ const importModel = (modelFile: string) =>
 	);
 
 /** The newest lineage entry's snapshot, or `undefined` when the workspace has no lineage yet. */
-export const latestSnapshot = (migrationsRoot: string) =>
+export const latestSnapshot = (
+	migrationsRoot: string
+): Effect.Effect<WorkspaceSnapshot | undefined, Error> =>
 	Effect.gen(function* () {
 		const entries = yield* Effect.tryPromise(() =>
 			readdir(migrationsRoot, { withFileTypes: true })
@@ -475,6 +513,10 @@ export const latestSnapshot = (migrationsRoot: string) =>
 				const parsed = Schema.decodeUnknownSync(
 					Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))
 				)(source);
+				if (Schema.is(CurrentWorkspaceSnapshot)(parsed)) {
+					return parsed as WorkspaceSnapshot;
+				}
+				const { up } = yield* loadDrizzleKitPostgres;
 				return yield* Effect.try({
 					try: () => up(parsed).snapshot,
 					catch: (cause) =>
@@ -506,7 +548,6 @@ export const generateWorkspaceMigration = (workspaceRoot: string, name?: string)
 		const { root, models: modelFiles } = yield* discoverAuthoredSource(workspaceRoot);
 		const migrationsRoot = join(root, '.norbital', 'migrations');
 		const models: Record<string, ModelDeclaration> = {};
-		// stupidity:allow A6 -- imported one at a time so a module that fails names itself
 		for (const modelFile of modelFiles) {
 			models[basename(dirname(modelFile))] = yield* importModel(modelFile);
 		}

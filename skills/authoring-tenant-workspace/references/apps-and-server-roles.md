@@ -159,20 +159,27 @@ versus existing-record display/edit.
 import { client } from '$bolt/client';
 
 const sites = client.db.sites.findMany({ limit: 50, after });
-await client.db.sites.create({ name: 'North site' });
+await client.db.sites.mutate({ name: 'North site' });
+client.db.sites.pending; // numeric in-flight count
 const forecast = await client.invoke.compute_forecast({ site_id: '…' });
 ```
 
-Reads are reactive queries, mutations are promises, and mutations invalidate related queries. Use opaque
-cursors (`after`), query-level grouping/aggregation, and collection filters rather than broad in-memory work.
+Queries expose reactive `current`, `loading`, and `error` state. `mutate` returns `Promise<void>` and its
+collection exposes numeric `pending` as the count of writes still in flight. Successful completion
+invalidates affected live queries; it does not return a row. This is required for write-only and
+row-filtered policies, where the caller may be allowed to write a record it is not allowed to read. Do
+not mirror query or mutation state in a component. Use opaque cursors (`after`), query-level
+grouping/aggregation, and collection filters rather than broad in-memory work.
 
-`create` and `update` answer with the **stored row**, not with the values that were handed in: a
-record is not what the form posted once a column default, a generated column and a
-`perRecord.before` hook have run, and a caller that put its own argument into a store was holding a
-record that had never existed. The browser does not mint the primary key either — the server assigns
-it. `create` also accepts a **graph**: a key naming a declared `many` relation carries the records
-that belong to this one, and the server writes the parent and its children in one transaction,
-filling each child's foreign key from the id it assigns the parent.
+The generated mutation input accepts a precisely typed **graph**. A key naming a declared `many`
+relationship carries that relationship's complete desired state. Present rows are inserted or updated;
+previously stored rows absent from the submitted relationship are deleted. Explicitly included
+relationships reconcile recursively, omitted relationships remain untouched, and the entire root graph
+commits atomically. This makes a rendered matrix safe to submit as the desired state without handwritten
+insert/update/delete diffing. Do not send a relationship for additive or partial behavior, do not erase
+the generated graph type with a cast, and do not invent `client.mutate(...)` or a top-level delete
+encoding. Authorization, approvals, hooks, history, sync invalidation, and events all remain inside the
+canonical mutation pipeline.
 
 Server roles reach the same collections under the same names, but through Effects rather than
 promises — `yield* api.db.query.<collection>.findMany(...)`, `yield* api.db.<collection>.create(...)`.

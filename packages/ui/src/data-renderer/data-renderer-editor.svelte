@@ -159,7 +159,6 @@
 {:else if SIMPLE_INPUT_KINDS.has(field.kind)}
 	<TextRenderer {field} {value} {id} {disabled} {placeholder} {onValueChange} class={className} />
 {:else}
-	<!-- stupidity:allow UI7 -- this leaf component owns responsive or internal spacing as part of its public DOM contract -->
 	<div class={cn('min-w-0 space-y-1.5', className)}>
 		<CodeEditor
 			value={structuredDraft}

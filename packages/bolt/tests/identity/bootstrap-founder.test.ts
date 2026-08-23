@@ -162,23 +162,20 @@ const read = (value: unknown, key: string): unknown =>
 
 const founderRow = (runtime: BoltTestRuntime, email: string) =>
 	runtime.database
-		.query(
-			'select "id"::text as "id", "status", "tenantId" from bolt_auth_user where "email" = $1',
-			[email]
-		)
+		.query('select "id"::text as "id", "status", "tenantId" from "user" where "email" = $1', [
+			email
+		])
 		.then((rows) => rows[0]);
 
 const ledgerRows = (runtime: BoltTestRuntime) =>
 	runtime.database.query(
-		'select "identifier", "value" from bolt_auth_verification where "identifier" like $1 order by "identifier"',
+		'select "identifier", "value" from "verification" where "identifier" like $1 order by "identifier"',
 		['founder-claim:%']
 	);
 
 const sessionCount = (runtime: BoltTestRuntime, userId: string) =>
 	runtime.database
-		.query('select count(*)::int as "count" from bolt_auth_session where "userId" = $1::uuid', [
-			userId
-		])
+		.query('select count(*)::int as "count" from "session" where "userId" = $1::uuid', [userId])
 		.then((rows) => Number(read(rows[0], 'count') ?? 0));
 
 describe('who may bootstrap a founder', () => {
@@ -306,7 +303,7 @@ describe('spending a founder claim', () => {
 		);
 		const ledger = await ledgerRows(harness);
 		expect(String(read(ledger[0], 'identifier'))).toBe('founder-claim:claim-1');
-		// `bolt_auth_verification` is Better Auth's table and it keeps one-time codes keyed by address.
+		// `verification` is Better Auth's table and it keeps one-time codes keyed by address.
 		// The prefix is what keeps a claim out of that namespace.
 		expect(String(read(ledger[0], 'identifier'))).not.toBe('founder@example.com');
 		// And what is stored is the founder's id and address — never the credential that was minted.

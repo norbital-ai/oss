@@ -1,14 +1,12 @@
 import { Schema } from 'effect';
-import {
-	date as pgDate,
-	jsonb,
-	numeric as pgNumeric,
-	text as pgText,
-	timestamp as pgTimestamp,
-	uuid as pgUuid,
-	vector as pgVector,
-	type AnyPgColumnBuilder
-} from 'drizzle-orm/pg-core';
+import type { AnyPgColumnBuilder } from 'drizzle-orm/pg-core/columns/common';
+import { date as pgDate } from 'drizzle-orm/pg-core/columns/date';
+import { jsonb } from 'drizzle-orm/pg-core/columns/jsonb';
+import { numeric as pgNumeric } from 'drizzle-orm/pg-core/columns/numeric';
+import { text as pgText } from 'drizzle-orm/pg-core/columns/text';
+import { timestamp as pgTimestamp } from 'drizzle-orm/pg-core/columns/timestamp';
+import { uuid as pgUuid } from 'drizzle-orm/pg-core/columns/uuid';
+import { vector as pgVector } from 'drizzle-orm/pg-core/columns/vector_extension/vector';
 import type { WorkspaceAuthoringTypes } from './index.js';
 
 /**

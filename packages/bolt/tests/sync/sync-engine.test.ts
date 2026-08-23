@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import { Effect, Schema } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EffectId } from '@norbital-ai/bolt-protocol';
+import { EffectId, success, type TransportRequest } from '@norbital-ai/bolt-protocol';
 import { policy } from '../../src/authoring/workspace-schema.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import type * as Identity from '../../src/runtime/identity/identity.js';
 import * as Sync from '../../src/runtime/sync/sync.js';
+import { decodeWake, SYNC_TOPIC } from '../../src/runtime/sync/wake.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -37,6 +38,39 @@ const field = (row: Schema.Json, name: string): unknown =>
 	row !== null && typeof row === 'object' && !Array.isArray(row)
 		? Reflect.get(row, name)
 		: undefined;
+
+type Published = { readonly topic: string; readonly collections: ReadonlyArray<string> };
+
+/** A mounted client has its own cursor even when another tab has already drained the same write. */
+type MountedClient = Readonly<{
+	readonly subject: Identity.Subject;
+	readonly cursor: Sync.SyncCursor;
+}>;
+
+const drainMountedClient = (
+	runtime: BoltTestRuntime,
+	client: MountedClient,
+	name: string
+): Promise<
+	Readonly<{
+		client: MountedClient;
+		changes: ReadonlyArray<Sync.SyncChange>;
+	}>
+> =>
+	runtime.runtime.runPromise(
+		Effect.gen(function* () {
+			const changes = yield* (yield* Sync.Service).diff(
+				runtime.effectId(`mounted-${name}`),
+				client.subject,
+				client.cursor,
+				100
+			);
+			return {
+				client: { ...client, cursor: changes.at(-1)?.cursor ?? client.cursor },
+				changes
+			};
+		})
+	);
 
 describe('Sync engine over SQL', () => {
 	it('advances the head as collection writes land, and replays them in order from a cursor', async () => {
@@ -403,13 +437,13 @@ describe('Sync engine over SQL', () => {
 			// which also stops every file's metadata in the workspace landing in every browser.
 		).toEqual([
 			'approval_request',
-			'bolt_auth_user',
 			'bolt_notifications',
-			'bolt_team',
 			'chat_message',
 			'chat_session',
 			'people',
-			'requestor'
+			'requestor',
+			'team',
+			'user'
 		]);
 		/**
 		 * The authored collection is what an outsider does not replicate; runtime collections remain
@@ -440,12 +474,12 @@ describe('Sync engine over SQL', () => {
 			)
 		).toEqual([
 			'approval_request',
-			'bolt_auth_user',
 			'bolt_notifications',
-			'bolt_team',
 			'chat_message',
 			'chat_session',
-			'requestor'
+			'requestor',
+			'team',
+			'user'
 		]);
 		expect(
 			await runtime.runPromise(
@@ -556,6 +590,215 @@ describe('Sync engine over SQL', () => {
 		expect(await replicated(member('bystander', CONTRACTOR_TEAM), 'requestor')).toEqual([]);
 		expect(await replicated(party, 'requestor')).toHaveLength(1);
 	});
+
+	it('publishes a declarative create approval to two mounted inboxes and resumes it atomically', async () => {
+		const REQUESTER_TEAM = 'Requesters';
+		const APPROVER_TEAM = 'Approvers';
+		const published: Array<Published> = [];
+		harness = await makeBoltTestRuntime(
+			testWorkspace({
+				policies: [
+					policy({
+						name: 'requester',
+						effect: 'allow',
+						grants: [
+							{ collection: 'people', action: 'read' },
+							{
+								collection: 'people',
+								action: 'create',
+								approval: {
+									id: '019f6f10-0005-7000-8000-000000000101',
+									name: 'People create approval',
+									steps: [
+										{
+											id: '019f6f10-0005-7000-8000-000000000201',
+											name: 'Review',
+											approvers: [APPROVER_TEAM]
+										}
+									]
+								}
+							}
+						]
+					}),
+					policy({
+						name: 'reviewer',
+						effect: 'allow',
+						grants: [{ collection: 'people', action: 'read' }]
+					})
+				],
+				teams: { [REQUESTER_TEAM]: ['requester'], [APPROVER_TEAM]: ['reviewer'] }
+			}),
+			{
+				transport: {
+					call: async (_metadata: unknown, request: TransportRequest) => {
+						if (request._tag === 'Publish')
+							published.push({
+								topic: request.topic,
+								collections: decodeWake(request.bytes).collections
+							});
+						return success({ delivered: 2 });
+					}
+				} as never
+			}
+		);
+		await seedSession(harness, { token: 'requester', user: 'requester', team: REQUESTER_TEAM });
+		await seedSession(harness, { token: 'approver', user: 'approver', team: APPROVER_TEAM });
+		await harness.database.query('delete from bolt_sync_outbox');
+		published.length = 0;
+		const requester: Identity.Subject = {
+			userId: fixtureUserId('requester'),
+			tenantId: 'test-tenant',
+			teamPath: [REQUESTER_TEAM],
+			policies: []
+		};
+		const approver: Identity.Subject = {
+			userId: fixtureUserId('approver'),
+			tenantId: 'test-tenant',
+			teamPath: [APPROVER_TEAM],
+			policies: []
+		};
+		let requesterClient: MountedClient = { subject: requester, cursor: { xid: 0, sequence: 0 } };
+		let approverClient: MountedClient = { subject: approver, cursor: { xid: 0, sequence: 0 } };
+
+		const held = await harness.runtime.runPromise(
+			Effect.flip(
+				Effect.gen(function* () {
+					return yield* (yield* Collections.Service).mutate(
+						EffectId.make('mounted-approval-create'),
+						requester,
+						'people',
+						[{ name: 'Awaiting review', team: 'core' }],
+						false,
+						0,
+						{ declarative: true }
+					);
+				})
+			)
+		);
+		expect(held).toBeInstanceOf(Collections.PendingApproval);
+		if (!(held instanceof Collections.PendingApproval)) return;
+
+		// A pending graph is discoverable by request id, never through an uncommitted root row.
+		expect(await harness.database.query('select id from people')).toEqual([]);
+		expect(
+			await harness.database.query(
+				'select collection_name, record_id, action, status from approval_request where id = $1',
+				[held.requestId]
+			)
+		).toEqual([
+			expect.objectContaining({
+				collection_name: 'people',
+				action: 'create',
+				status: 'ONGOING'
+			})
+		]);
+		expect(
+			await harness.database.query(
+				'select approval_request_id, user_id from requestor where approval_request_id = $1',
+				[held.requestId]
+			)
+		).toEqual([{ approval_request_id: held.requestId, user_id: requester.userId }]);
+		expect(
+			await harness.database.query(
+				'select collection_name, operation from bolt_sync_outbox order by sequence'
+			)
+		).toEqual([
+			{ collection_name: 'approval_request', operation: 'create' },
+			{ collection_name: 'requestor', operation: 'create' }
+		]);
+		expect(published).toEqual([
+			{ topic: SYNC_TOPIC, collections: ['approval_request', 'requestor'] }
+		]);
+
+		const requesterRequest = await drainMountedClient(
+			harness,
+			requesterClient,
+			'requester-request'
+		);
+		requesterClient = requesterRequest.client;
+		const approverRequest = await drainMountedClient(harness, approverClient, 'approver-request');
+		approverClient = approverRequest.client;
+		for (const changes of [requesterRequest.changes, approverRequest.changes]) {
+			expect(changes.map(({ collection, operation }) => [collection, operation])).toEqual([
+				['approval_request', 'create'],
+				['requestor', 'create']
+			]);
+			expect(field(changes[0]?.record ?? null, 'id')).toBe(held.requestId);
+			expect(field(changes[0]?.record ?? null, 'status')).toBe('ONGOING');
+			expect(field(changes[1]?.record ?? null, 'approval_request_id')).toBe(held.requestId);
+		}
+
+		const pending = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Approvals.Service).status(
+					EffectId.make('mounted-approval-status'),
+					held.requestId
+				);
+			})
+		);
+		expect(pending?._tag).toBe('Pending');
+		if (pending === undefined) return;
+		const decided = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Approvals.Service).decide(
+					EffectId.make('mounted-approval-decide'),
+					approver,
+					pending,
+					'approve'
+				);
+			})
+		);
+		expect(decided._tag).toBe('Approved');
+		// A decision updates the inbox first. The approved graph is still absent until its queued resume.
+		expect(await harness.database.query('select id from people')).toEqual([]);
+		expect(
+			await harness.database.query(
+				'select collection_name, operation from bolt_sync_outbox order by sequence'
+			)
+		).toEqual([
+			{ collection_name: 'approval_request', operation: 'create' },
+			{ collection_name: 'requestor', operation: 'create' },
+			{ collection_name: 'approval_request', operation: 'update' }
+		]);
+		expect(published.at(-1)).toEqual({ topic: SYNC_TOPIC, collections: ['approval_request'] });
+
+		const requesterDecision = await drainMountedClient(
+			harness,
+			requesterClient,
+			'requester-decision'
+		);
+		requesterClient = requesterDecision.client;
+		const approverDecision = await drainMountedClient(harness, approverClient, 'approver-decision');
+		approverClient = approverDecision.client;
+		for (const changes of [requesterDecision.changes, approverDecision.changes]) {
+			expect(changes.map(({ collection, operation }) => [collection, operation])).toEqual([
+				['approval_request', 'update']
+			]);
+			expect(field(changes[0]?.record ?? null, 'status')).toBe('APPROVED');
+		}
+
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).resume(
+					EffectId.make('mounted-approval-resume'),
+					held.requestId
+				);
+			})
+		);
+		expect(await harness.database.query('select name, team from people')).toEqual([
+			{ name: 'Awaiting review', team: 'core' }
+		]);
+		expect(published.at(-1)).toEqual({ topic: SYNC_TOPIC, collections: ['people'] });
+
+		const requesterResume = await drainMountedClient(harness, requesterClient, 'requester-resume');
+		const approverResume = await drainMountedClient(harness, approverClient, 'approver-resume');
+		for (const changes of [requesterResume.changes, approverResume.changes]) {
+			expect(changes.map(({ collection, operation }) => [collection, operation])).toEqual([
+				['people', 'create']
+			]);
+			expect(field(changes[0]?.record ?? null, 'name')).toBe('Awaiting review');
+		}
+	}, 60_000);
 
 	it('carries the record body so a replica can apply a change without refetching', async () => {
 		harness = await makeBoltTestRuntime();

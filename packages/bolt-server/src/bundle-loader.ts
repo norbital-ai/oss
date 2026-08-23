@@ -28,7 +28,7 @@ interface Interface {
 	readonly dispose: () => Effect.Effect<void>;
 }
 
-/** Owns one cached, checksum-verified Bolt bundle for the application lifetime; stupidity:allow Q4 -- Effect Context.Service declaration is the canonical Effect v4 service tag. */
+/** Owns one cached, checksum-verified Bolt bundle for the application lifetime. */
 export class BundleLoader extends Context.Service<BundleLoader, Interface>()(
 	'@norbital-ai/bolt-server/BundleLoader'
 ) {}
@@ -37,6 +37,7 @@ export class BundleLoader extends Context.Service<BundleLoader, Interface>()(
 export interface LayerOptions {
 	readonly bundlePath: string;
 	readonly facilities: FacilityBindings;
+	// repository-health:allow EFF2 -- ECMAScript dynamic import is a Promise-only host module-loading boundary.
 	readonly importModule?: (url: string) => Promise<unknown>;
 }
 

@@ -88,14 +88,14 @@ const bundle = makeBundle(definition, manifest, {
 const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 	call: (_metadata, request) => {
 		// Authentication reads Better Auth's session joined to its user table. Matching on
-		// `bolt_auth_session` keeps this stub answering the query identity actually makes; matching
+		// `session` keeps this stub answering the query identity actually makes; matching
 		// the old `bolt_sessions` would have it answer nothing and every command would read as
 		// unauthenticated.
-		if (request._tag === 'Query' && request.sql.includes('bolt_auth_session')) {
+		if (request._tag === 'Query' && request.sql.includes('from "session" s')) {
 			return Promise.resolve({ _tag: 'Success', value: { rows: [subject], affectedRows: 0 } });
 		}
 		// `startSession` admits the subject before minting, and refuses when no row comes back.
-		if (request._tag === 'Query' && request.sql.includes('update bolt_auth_user')) {
+		if (request._tag === 'Query' && request.sql.includes('update "user"')) {
 			return Promise.resolve({
 				_tag: 'Success',
 				value: { rows: [{ id: subject.userId }], affectedRows: 1 }
@@ -105,6 +105,22 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			const externalId = request.parameters[1];
 			const resolved = externalId === 'employee-external' ? employee : subject;
 			return Promise.resolve({ _tag: 'Success', value: { rows: [resolved], affectedRows: 0 } });
+		}
+		if (
+			request._tag === 'Query' &&
+			request.sql.includes('select * from "employees"') &&
+			(request.sql.includes('"employees"."id" in ($1)') ||
+				request.parameters.some(
+					(parameter) => Array.isArray(parameter) && parameter.includes('employee-1')
+				))
+		) {
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [{ id: 'employee-1', name: 'Grace', row_version: 2 }],
+					affectedRows: 0
+				}
+			});
 		}
 		if (request._tag === 'Query' && request.sql.includes('max(xid)')) {
 			return Promise.resolve({
@@ -133,12 +149,53 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 				}
 			});
 		}
-		if (request._tag === 'Query' && request.sql.includes('select state from bolt_approvals')) {
+		if (
+			request._tag === 'Query' &&
+			request.sql.includes('select state from bolt_approvals where request_id')
+		) {
 			return Promise.resolve({
 				_tag: 'Success',
 				value: {
 					rows: [{ state: { _tag: 'Pending', requestId: 'approval-1', step: 0, operation: {} } }],
 					affectedRows: 0
+				}
+			});
+		}
+		if (request._tag === 'Query' && request.sql.includes('update bolt_approvals set state')) {
+			return Promise.resolve({
+				_tag: 'Success',
+				value: { rows: [{ state: request.parameters[1] ?? null }], affectedRows: 1 }
+			});
+		}
+		if (
+			request._tag === 'Query' &&
+			request.sql.includes('select to_jsonb(record) as snapshot from "employees"')
+		) {
+			const record = { id: 'employee-1', name: 'Grace', row_version: 2 };
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: request.sql.includes('to_jsonb(record)') ? [{ snapshot: record }] : [record],
+					affectedRows: 0
+				}
+			});
+		}
+		if (
+			request._tag === 'Transaction' &&
+			request.statements.some((statement) => statement.sql.includes('__bolt_graph_record'))
+		) {
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [
+						{
+							__bolt_graph_ordinal: 0,
+							__bolt_graph_collection: 'employees',
+							__bolt_graph_id: 'employee-1',
+							__bolt_graph_record: { id: 'employee-1', name: 'Grace', row_version: 2 }
+						}
+					],
+					affectedRows: 1
 				}
 			});
 		}
@@ -159,10 +216,10 @@ const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
 const facilities: FacilityBindings = { scope, database, ai, tasks };
 
 /**
- * The `bolt_auth_user` row the session query above hands back, so it has to be a row the real query
+ * The `user` row the session query above hands back, so it has to be a row the real query
  * could produce.
  *
- * Administration is `bolt_auth_user.status` and nothing else — `subjectFromRow` reads
+ * Administration is `user.status` and nothing else — `subjectFromRow` reads
  * `text(row, 'status') === ADMIN_STATUS` and consults no other column. This fixture used to carry
  * `admin: true` and `teamPath: ['admin', 'impersonator'], policies: []`, neither of which that projection looks at,
  * so every case below named for an administrator authenticated as an ordinary user with no matching
@@ -337,7 +394,7 @@ describe('runnable Bolt vertical slice', () => {
 			state: { _tag: 'Pending', requestId: 'approval-1', step: 0, operation: {} },
 			decision: 'approve'
 		});
-		expect(decided).toMatchObject({
+		expect(decided, JSON.stringify(decided)).toMatchObject({
 			_tag: 'Success',
 			response: { value: { _tag: 'Approved', decidedBy: 'admin-1' } }
 		});
@@ -348,9 +405,15 @@ describe('runnable Bolt vertical slice', () => {
 			_tag: 'Success',
 			response: { value: { xid: 3, sequence: 4 } }
 		});
-		expect(
-			await invoke('sync.diff', { subject, cursor: { xid: 3, sequence: 4 }, limit: 100 })
-		).toMatchObject({ _tag: 'Success', response: { value: [{ recordId: 'employee-1' }] } });
+		const diff = await invoke('sync.diff', {
+			subject,
+			cursor: { xid: 3, sequence: 4 },
+			limit: 100
+		});
+		expect(diff, JSON.stringify(diff)).toMatchObject({
+			_tag: 'Success',
+			response: { value: [{ recordId: 'employee-1' }] }
+		});
 	});
 
 	it('communicates with an agent and persists the turn before scheduling continuation', async () => {
@@ -441,18 +504,16 @@ describe('runnable Bolt vertical slice', () => {
 		});
 	});
 
-	it('dispatches update and delete commands emitted by the browser collection proxy', async () => {
-		expect(
-			await invoke('collections.update', {
-				subject,
-				collection: 'employees',
-				id: 'employee-1',
-				values: { name: 'Grace' }
-			})
-		).toMatchObject({ _tag: 'Success', response: { value: { updated: true } } });
-		expect(
-			await invoke('collections.delete', { subject, collection: 'employees', id: 'employee-1' })
-		).toMatchObject({ _tag: 'Success', response: { value: { deleted: true } } });
+	it('dispatches the declarative mutation command emitted by the browser collection proxy', async () => {
+		const mutation = await invoke('collections.mutate', {
+			subject,
+			collection: 'employees',
+			values: { id: 'employee-1', name: 'Grace' }
+		});
+		expect(mutation, JSON.stringify(mutation)).toMatchObject({
+			_tag: 'Success',
+			response: { value: { records: [{ id: 'employee-1', name: 'Grace', row_version: 2 }] } }
+		});
 	});
 
 	it('returns bounded realtime frames and explicit close outcomes', async () => {

@@ -25,7 +25,6 @@
 	const descriptionEffective = $derived(description ?? t('common.emptyGetStarted'));
 </script>
 
-<!-- stupidity:allow UI15 -- the empty-state minimum prevents a short result set from collapsing the surface -->
 <Stack
 	gap="md"
 	justify="center"

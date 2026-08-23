@@ -105,7 +105,7 @@ export interface CollectionToolbarActionProps {
 }
 
 /**
- * Import, export, integrations and bulk edits, as the shared operations menu takes them.
+ * Import, export and integrations, as the shared operations menu takes them.
  *
  * `fields` is deliberately absent: the toolbar has the client and the collection name, so it reads
  * the field list from the same definition the filter builder does.
@@ -115,29 +115,13 @@ export interface CollectionToolbarOperations<TRow extends object> {
 	readonly importPipelines?: readonly CollectionTablePipeline<TRow>[];
 	readonly integrations?: readonly CollectionTableIntegrationStatus[];
 	readonly selectedRows?: readonly TRow[];
-	readonly updateSelected?: (
-		fieldName: string,
-		value: unknown,
-		rows: readonly TRow[]
-	) => Effect.Effect<void, unknown>;
-	readonly deleteSelected?: (rows: readonly TRow[]) => Effect.Effect<void, unknown>;
-	/** Mutation-only refusal. Selection and pipelines remain available. */
-	readonly updateUnavailable?: string | null;
-	/** Mutation-only refusal. Selection and pipelines remain available. */
-	readonly deleteUnavailable?: string | null;
-	readonly clearSelection?: () => void;
 	readonly selectionControls?: {
 		readonly totalRows: number;
 		readonly allSelected: boolean;
 		toggleAll(): void;
 	};
-	/**
-	 * Refuses the menu on its own, without taking search and filters down with it. A surface that is
-	 * mid-refresh should not accept a bulk delete, but narrowing the set is exactly what an operator
-	 * does while waiting.
-	 */
+	/** Refuses the menu on its own without taking search and filters down with it. */
 	readonly disabled?: boolean;
-	refresh(): Effect.Effect<void, unknown>;
 }
 
 /** What the view applies on the operator's behalf, shown behind the toolbar's info button. */

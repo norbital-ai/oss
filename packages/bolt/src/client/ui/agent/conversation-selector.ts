@@ -36,6 +36,20 @@ type ConversationSession = Pick<
 	'conversation_id' | 'user_id' | 'title' | 'visibility' | 'envoy_key'
 >;
 
+type ConversationScope = Readonly<{
+	readonly scopeUserId: string | null;
+	readonly currentUserId: string | null;
+	readonly isAdmin: boolean;
+	readonly publicEnvoyKeys: ReadonlySet<string>;
+}>;
+
+type AccessibleEnvoysInput = Readonly<{
+	readonly sessions: readonly ConversationSession[];
+	readonly labels: SelectorLabels;
+	readonly declaredEnvoys: readonly PlatformEnvoy[];
+	readonly scope: ConversationScope;
+}>;
+
 /** Tab id for a session: personal stays on web, otherwise the envoy it arrived on. */
 export function sessionEnvoyId(
 	session: ConversationSession,
@@ -48,12 +62,7 @@ export function sessionEnvoyId(
 /** Whether this session belongs in the current admin/member conversation scope. */
 export function sessionVisibleInScope(
 	session: ConversationSession,
-	scope: {
-		readonly scopeUserId: string | null;
-		readonly currentUserId: string | null;
-		readonly isAdmin: boolean;
-		readonly publicEnvoyKeys: ReadonlySet<string>;
-	}
+	scope: ConversationScope
 ): boolean {
 	if (!CONVERSATION_VISIBILITIES.has(session.visibility)) return false;
 	const isPublicEnvoy = session.envoy_key != null && scope.publicEnvoyKeys.has(session.envoy_key);
@@ -80,12 +89,7 @@ export function publicEnvoyNames(envoys: readonly PlatformEnvoy[]): ReadonlySet<
 }
 
 /** Tabs the current scope may inspect: Web, allowed manifest entries, plus any scoped thread. */
-export function listAccessibleEnvoys(input: {
-	readonly sessions: readonly ConversationSession[];
-	readonly labels: SelectorLabels;
-	readonly declaredEnvoys: readonly PlatformEnvoy[];
-	readonly scope: Parameters<typeof sessionVisibleInScope>[1];
-}) {
+export function listAccessibleEnvoys(input: AccessibleEnvoysInput) {
 	const tabs = new Map<
 		string,
 		{ readonly id: string; readonly label: string; readonly icon: string }

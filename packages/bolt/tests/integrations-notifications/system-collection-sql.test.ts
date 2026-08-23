@@ -6,8 +6,8 @@ import { SYSTEM_COLLECTIONS } from '../../src/runtime/schema/system-collections.
  * Hand-written SQL against a system collection, checked against what that collection declares.
  *
  * This exists because a column was dropped and a writer was left behind. The now-deleted
- * `channel-principal.ts` did `insert into bolt_team ("id", "name", "inherits")` after
- * `inherits` was removed, so the statement failed with `column "inherits" of relation "bolt_team"
+ * `channel-principal.ts` did `insert into "team" ("id", "name", "inherits")` after
+ * `inherits` was removed, so the statement failed with `column "inherits" of relation "team"
  * does not exist` — and the `Effect.catch` around it turned that into a warning. Every channel in
  * every workspace refused inbound messages, and it reached a person as "the WhatsApp integration
  * does not work", one whole layer away from the cause.
@@ -70,7 +70,7 @@ describe('hand-written SQL against system collections', () => {
 		}
 		// The rule is only worth anything if it actually looked at something. Without this a rename
 		// of any source file above would empty the loop and leave the suite green and blind.
-		expect(checked).toContain('bolt_team.name');
+		expect(checked).toContain('team.name');
 		expect(checked.length).toBeGreaterThanOrEqual(4);
 	});
 });

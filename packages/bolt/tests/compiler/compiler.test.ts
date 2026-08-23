@@ -82,6 +82,9 @@ describe('Bolt compiler owners', () => {
 		expect(first.steps.find(({ id }) => id === 'collection:approval_request')?.sql).toContain(
 			'"approval_request"'
 		);
+		expect(first.steps.find(({ id }) => id === 'collection:bolt_sync_horizon')?.sql).toContain(
+			'"singleton" boolean default true not null unique'
+		);
 		expect(first.fingerprint).toMatch(/^fnv1a32:/);
 	});
 
@@ -106,6 +109,16 @@ describe('Bolt compiler owners', () => {
 		expect(ids.indexOf('bolt:extension-pg-trgm')).toBeLessThan(
 			ids.indexOf('collection:approval_request')
 		);
+	});
+
+	it('provisions a retryable assertion for optimistic snapshot guards', () => {
+		const assertion = buildSchemaPlan(fixture).steps.find(
+			({ id }) => id === 'bolt:function-assert'
+		);
+
+		expect(assertion?.sql).toContain('function bolt_assert(ok boolean, message text) returns void');
+		expect(assertion?.sql).toContain("errcode = '40001'");
+		expect(assertion?.sql).toContain('if ok is not true');
 	});
 
 	it('gives every collection the system columns the migration lineage defines', () => {

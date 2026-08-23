@@ -17,6 +17,7 @@ import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 import type {
 	CollectionDefinition,
 	FieldDefinition,
+	RelationDefinition,
 	WorkspaceDefinition
 } from '#lib/authoring/workspace-schema.js';
 import {
@@ -78,6 +79,17 @@ const JsonObject = Schema.Record(Schema.String, Schema.Json);
 /** The `JsonObject` predicate, built once: it is consulted for every row the facility hands back. */
 const isJsonObject = Schema.is(JsonObject);
 
+/** Stable structural identity for approval configurations authored with different key order. */
+const approvalFingerprint = (value: Schema.Json | undefined): string => {
+	if (value === undefined) return 'default';
+	if (value === null || typeof value !== 'object') return JSON.stringify(value);
+	if (Array.isArray(value)) return `[${value.map(approvalFingerprint).join(',')}]`;
+	return `{${Object.entries(value)
+		.toSorted(([left], [right]) => left.localeCompare(right))
+		.map(([key, entry]) => `${JSON.stringify(key)}:${approvalFingerprint(entry)}`)
+		.join(',')}}`;
+};
+
 /**
  * How many related rows one prefetch may load.
  *
@@ -87,12 +99,36 @@ const isJsonObject = Schema.is(JsonObject);
  */
 const PREFETCH_LIMIT = 5000;
 const CollectionAction = Schema.Literals(['create', 'update', 'delete']);
+const DeclarativeReviewRow = Schema.Struct({
+	collection: Schema.NonEmptyString,
+	id: Schema.NonEmptyString,
+	snapshot: Schema.String
+});
+const DeclarativeReviewRelationship = Schema.Struct({
+	name: Schema.NonEmptyString,
+	parentCollection: Schema.NonEmptyString,
+	parentColumn: Schema.NonEmptyString,
+	childCollection: Schema.NonEmptyString,
+	childColumn: Schema.NonEmptyString,
+	cascade: Schema.Boolean,
+	parentId: Schema.NonEmptyString,
+	snapshot: Schema.String
+});
+const DeclarativeReview = Schema.Struct({
+	version: Schema.Literal(1),
+	rows: Schema.Array(DeclarativeReviewRow),
+	relationships: Schema.Array(DeclarativeReviewRelationship),
+	policyFingerprint: Schema.String
+});
+type DeclarativeReview = typeof DeclarativeReview.Type;
 const CollectionOperation = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	id: Schema.NonEmptyString,
 	values: Schema.Record(Schema.String, Schema.Json),
 	action: CollectionAction,
-	subject: Subject
+	subject: Subject,
+	mode: Schema.optionalKey(Schema.Literal('declarative')),
+	review: Schema.optionalKey(DeclarativeReview)
 });
 
 /** Holds a collection mutation until every required approval step is complete. */
@@ -108,6 +144,17 @@ export class PendingApproval extends Schema.TaggedError<PendingApproval>()(
 	readonly category = 'pending-approval' as const;
 	readonly retryable = false;
 }
+
+/** Internal preparation signal: the whole root graph must be stored as one approval operation. */
+class GraphApprovalRequired extends Schema.TaggedError<GraphApprovalRequired>()(
+	'Bolt.Collections.GraphApprovalRequired',
+	{
+		collection: Schema.NonEmptyString,
+		action: CollectionAction,
+		approval: Schema.optionalKey(Schema.Json),
+		review: DeclarativeReview
+	}
+) {}
 
 /** Which of a batch's three phases a failure came out of. */
 const MutationPhase = Schema.Literals(['prepare', 'commit', 'settle']);
@@ -457,6 +504,98 @@ type MutationInput = Readonly<{
 }>;
 
 /**
+ * The writable orientation of a declared parent-to-children relationship.
+ *
+ * Authored relationship modules normally put the endpoints on the inverse `one` edge, not on the
+ * parent's `many` edge. Programmatic workspaces sometimes put them directly on `many`. Both spell
+ * the same ownership fact, so the runtime resolves both and every graph consumer shares the answer.
+ */
+export type WritableManyRelation = Readonly<{
+	readonly name: string;
+	readonly parentCollection: string;
+	readonly parentColumn: string;
+	readonly childCollection: string;
+	readonly childColumn: string;
+	readonly cascade: boolean;
+}>;
+
+export const resolveWritableManyRelation = (
+	definition: WorkspaceDefinition,
+	parentCollection: string,
+	name: string
+): WritableManyRelation | undefined => {
+	const many = definition.relations.find(
+		(relation) =>
+			relation.name === name &&
+			relation.source === parentCollection &&
+			relation.cardinality === 'many'
+	);
+	if (many === undefined) return undefined;
+
+	const oriented = (
+		from: RelationDefinition['from'],
+		to: RelationDefinition['to'],
+		childCollection: string,
+		cascade: boolean
+	): WritableManyRelation | undefined => {
+		if (from === undefined || to === undefined) return undefined;
+		const child =
+			from.collection === childCollection && to.collection === parentCollection
+				? from
+				: to.collection === childCollection && from.collection === parentCollection
+					? to
+					: undefined;
+		const parent = child === from ? to : child === to ? from : undefined;
+		return child === undefined || parent === undefined
+			? undefined
+			: {
+					name,
+					parentCollection,
+					parentColumn: parent.column,
+					childCollection,
+					childColumn: child.column,
+					cascade
+				};
+	};
+
+	const inverseRelations = definition.relations.filter(
+		(relation) =>
+			relation.source === many.target &&
+			relation.target === parentCollection &&
+			relation.cardinality === 'one'
+	);
+	const inverseCascade = inverseRelations.length === 1 && inverseRelations[0]?.cascade === true;
+	const direct = oriented(many.from, many.to, many.target, many.cascade === true || inverseCascade);
+	if (direct !== undefined) return direct;
+	// The two sides are independently named for the UI (`account_contacts` / `contact_account`), so
+	// identity is the reversed collections and endpoints, not equal relation names. More than one
+	// usable inverse is ambiguous and therefore not writable.
+	const inverses = inverseRelations.flatMap((relation) => {
+		const resolved = oriented(
+			relation.from,
+			relation.to,
+			many.target,
+			many.cascade === true || relation.cascade === true
+		);
+		return resolved === undefined ? [] : [resolved];
+	});
+	return inverses.length === 1 ? inverses[0] : undefined;
+};
+
+const hasDeclaredManyRelationship = (
+	definition: WorkspaceDefinition,
+	collection: string,
+	values: Readonly<Record<string, unknown>>
+): boolean => {
+	const relationshipNames = new Set(
+		definition.relations
+			.filter((relation) => relation.source === collection && relation.cardinality === 'many')
+			.map((relation) => relation.name)
+	);
+	return Object.keys(values).some((key) => relationshipNames.has(key));
+};
+
+/**
  * One nearest-neighbour read against a pgvector column.
  *
  * The operands stay `unknown` for the reason `QueryInput.where` does: they arrive from authored
@@ -526,6 +665,7 @@ type ResumeError =
 	| Database.FacilityError
 	| ApprovalConflict
 	| AuthoredRefusal
+	| MutationPhaseFailure
 	| InvocationBudget.NestingLimitExceeded;
 /** Query paths add the where-compiler failure so an unsupported filter surfaces instead of silently widening the result. */
 type QueryError =
@@ -542,6 +682,12 @@ export type Interface = Readonly<{
 		subject: Identity.Subject,
 		input: QueryInput
 	) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
+	/** Reads the approval inbox through the same authorization and field-masking path as collections. */
+	readonly approvalFindFirst: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		input: Omit<QueryInput, 'collection'>
+	) => Effect.Effect<Schema.Json | undefined, QueryError>;
 	readonly findFirst: (
 		effectId: EffectId,
 		subject: Identity.Subject,
@@ -581,7 +727,7 @@ export type Interface = Readonly<{
 		payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
 		elevated?: boolean,
 		depth?: number,
-		options?: { readonly batchSize?: number }
+		options?: { readonly batchSize?: number; readonly declarative?: boolean }
 	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, BatchMutationError>;
 	readonly update: (
 		effectId: EffectId,
@@ -1160,6 +1306,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 * after hook — the record already passed authorization, so its own follow-ups must not fail
 			 * on a row filter the writer itself could not see past.
 			 */
+			type HookWriteOps = Pick<AuthoredCollectionOps, 'create' | 'update' | 'delete' | 'mutate'>;
 			const buildOps = (
 				effectId: EffectId,
 				subject: Identity.Subject,
@@ -1173,34 +1320,35 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				 * it. The invocation deadline eventually would, by which time the chain has done however
 				 * many writes it could fit into thirty seconds and every one of them is a fact.
 				 */
-				depth = 0
-		): AuthoredCollectionOps => ({
-			findMany: (collection, input) =>
-				findMany(effectId, subject, { collection, ...input }).pipe(Effect.flatMap(objectRowsOf)),
-			findFirst: (collection, input) =>
-				findMany(effectId, subject, { collection, ...input, limit: 1 }).pipe(
-					Effect.map((rows) => rows[0] as Readonly<Record<string, unknown>> | undefined)
-				),
-			count: (collection, input) =>
-				findMany(effectId, subject, { collection, ...input }).pipe(
-					Effect.map((rows) => rows.length)
-				),
-			findNearest: (collection, input) =>
-				findNearest(effectId, subject, nearestInputOf(collection, input)).pipe(
-					Effect.flatMap(objectRowsOf)
-				),
-			runAutomation: (name, input, options) =>
-				Effect.gen(function* () {
-					const after = options?.after;
-					const afterMillis = after === undefined ? undefined : afterMillisOf(after);
-					if (afterMillis === undefined) {
-						return yield* new AuthoredRefusal({
-							message: `"${String(after)}" is not a delay ${name} can wait — pass milliseconds, '5 seconds', '1 hour', or another Effect duration.`
-						});
-					}
-					const taskId = yield* automations.start(effectId, name, input, { afterMillis });
-					return { taskId };
-				}),
+				depth = 0,
+				staged?: HookWriteOps
+			): AuthoredCollectionOps => ({
+				findMany: (collection, input) =>
+					findMany(effectId, subject, { collection, ...input }).pipe(Effect.flatMap(objectRowsOf)),
+				findFirst: (collection, input) =>
+					findMany(effectId, subject, { collection, ...input, limit: 1 }).pipe(
+						Effect.map((rows) => rows[0] as Readonly<Record<string, unknown>> | undefined)
+					),
+				count: (collection, input) =>
+					findMany(effectId, subject, { collection, ...input }).pipe(
+						Effect.map((rows) => rows.length)
+					),
+				findNearest: (collection, input) =>
+					findNearest(effectId, subject, nearestInputOf(collection, input)).pipe(
+						Effect.flatMap(objectRowsOf)
+					),
+				runAutomation: (name, input, options) =>
+					Effect.gen(function* () {
+						const after = options?.after;
+						const afterMillis = after === undefined ? undefined : afterMillisOf(after);
+						if (afterMillis === undefined) {
+							return yield* new AuthoredRefusal({
+								message: `"${String(after)}" is not a delay ${name} can wait — pass milliseconds, '5 seconds', '1 hour', or another Effect duration.`
+							});
+						}
+						const taskId = yield* automations.start(effectId, name, input, { afterMillis });
+						return { taskId };
+					}),
 				/**
 				 * Answers with the row the database holds, and refuses when it holds none.
 				 *
@@ -1215,23 +1363,31 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				 * write the consequences of a create that never happened. The access predicate refusing the
 				 * insert is the way this is reached, so the refusal says that rather than reporting a fault.
 				 */
-				create: (collection, id, values) =>
-					Effect.gen(function* () {
-						yield* create(effectId, subject, { collection, id, values }, depth);
-						const row = yield* readRowElevated(effectId, collection, id);
-						if (row === undefined) return yield* storedNothing('create', collection, id);
-						return row;
-					}),
-				update: (collection, id, values) =>
-					Effect.gen(function* () {
-						yield* update(effectId, subject, { collection, id, values }, depth);
-						const row = yield* readRowElevated(effectId, collection, id);
-						if (row === undefined) return yield* storedNothing('update', collection, id);
-						return row;
-					}),
-				delete: (collection, id) => deleteRecord(effectId, subject, collection, id, depth),
-				mutate: (collection, payloads, options) =>
-					mutate(effectId, subject, collection, payloads, elevated, depth, options),
+				create:
+					staged?.create ??
+					((collection, id, values) =>
+						Effect.gen(function* () {
+							yield* create(effectId, subject, { collection, id, values }, depth);
+							const row = yield* readRowElevated(effectId, collection, id);
+							if (row === undefined) return yield* storedNothing('create', collection, id);
+							return row;
+						})),
+				update:
+					staged?.update ??
+					((collection, id, values) =>
+						Effect.gen(function* () {
+							yield* update(effectId, subject, { collection, id, values }, depth);
+							const row = yield* readRowElevated(effectId, collection, id);
+							if (row === undefined) return yield* storedNothing('update', collection, id);
+							return row;
+						})),
+				delete:
+					staged?.delete ??
+					((collection, id) => deleteRecord(effectId, subject, collection, id, depth)),
+				mutate:
+					staged?.mutate ??
+					((collection, payloads, options) =>
+						mutate(effectId, subject, collection, payloads, elevated, depth, options)),
 				approvalFindMany: (input) =>
 					findMany(effectId, subject, { collection: 'approval_request', ...input }).pipe(
 						Effect.map((rows) => rows as ReadonlyArray<Readonly<Record<string, unknown>>>)
@@ -1260,9 +1416,14 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				effectId: EffectId,
 				subject: Identity.Subject,
 				elevated = false,
-				depth = 0
+				depth = 0,
+				staged?: HookWriteOps
 			): unknown =>
-				makeAuthoringApi(buildOps(effectId, subject, elevated, depth), { elevated }, randomId);
+				makeAuthoringApi(
+					buildOps(effectId, subject, elevated, depth, staged),
+					{ elevated },
+					randomId
+				);
 			/**
 			 * Enqueues the change-triggered automations a write just satisfied.
 			 *
@@ -1348,7 +1509,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						automation.trigger.event === event
 				);
 				if (triggers.length === 0) return;
-					const enqueues = triggers.flatMap((automation) =>
+				const enqueues = triggers.flatMap((automation) =>
 					records.map((record) => {
 						const taskId = `${record.taskScope}:event:${automation.name}`;
 						const scope: Schema.Json =
@@ -1410,11 +1571,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				collection: string,
 				inputs: ReadonlyArray<Readonly<Record<string, Schema.Json>>>,
 				module: AuthoredCollectionHookModule | undefined,
-				depth: number
+				depth: number,
+				staged?: HookWriteOps
 			) {
 				const prepare = module?.create?.prepare;
 				if (prepare === undefined) return undefined;
-				const api = buildApi(effectId, subject, false, depth + 1);
+				const api = buildApi(effectId, subject, false, depth + 1, staged);
 				return yield* runAuthoredHandler(() => prepare({ inputs, api }, api)).pipe(
 					Effect.mapError((cause) => refusalAt(cause, { collection, action: 'create.prepare' }))
 				);
@@ -1425,9 +1587,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				input: MutationInput,
 				module: AuthoredCollectionHookModule | undefined,
 				depth = 0,
-				prepared: unknown = undefined
+				prepared: unknown = undefined,
+				staged?: HookWriteOps
 			) {
-				const api = buildApi(effectId, subject, false, depth + 1);
+				const api = buildApi(effectId, subject, false, depth + 1, staged);
 				// Already decoded by the caller. `load` sees the batch's inputs and the handler sees one of
 				// them, and they must be the same shape — a collection declaring two fields where the table
 				// has twenty would otherwise hand its batch read the raw payload and its handler the
@@ -1854,6 +2017,70 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				yield* database.execute(effectId, { _tag: 'Transaction', statements });
 				yield* wake.announce(effectId, [...touched]);
 			});
+			/**
+			 * Plans one update including the bookkeeping and outbound work that make it a canonical
+			 * collection mutation. Keeping this separate from execution lets a declarative graph put the
+			 * same operation inside its one transaction instead of recreating a shorter SQL-only path.
+			 */
+			const updateStatements = (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				input: MutationInput,
+				definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
+				visibility: AccessControl.RowPredicate,
+				clearLock: boolean,
+				previous: Readonly<Record<string, unknown>> | undefined
+			): ReadonlyArray<{
+				readonly sql: string;
+				readonly parameters: ReadonlyArray<Schema.Json>;
+			}> => {
+				const writable = writableValues(input.values, definition);
+				const entries = Object.entries(writable).sort(([left], [right]) =>
+					left.localeCompare(right)
+				);
+				if (entries.length === 0 && !clearLock) return [];
+				const assignments = [
+					...entries.map(
+						([name, value], index) =>
+							`${quoteIdentifier(name)} = ${boundPlaceholder(definition, name, value, index + 1)}`
+					),
+					'updated_at = now()',
+					'row_version = row_version + 1',
+					...(clearLock ? ['approval_id = null'] : [])
+				];
+				const history = definition.history
+					? [
+							{
+								sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id, snapshot) values ($1, $2, $3, $4, $5)',
+								parameters: [input.collection, input.id, 'update', subject.userId, input.values]
+							}
+						]
+					: [];
+				return [
+					{
+						sql: `update ${quoteIdentifier(input.collection)} set ${assignments.join(', ')} where id = $${entries.length + 1} and (${offsetParameters(visibility.sql, entries.length + 1)})`,
+						parameters: [
+							...entries.map(([name, value]) => boundParameter(definition, name, value)),
+							input.id,
+							...visibility.parameters
+						]
+					},
+					...history,
+					{
+						sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation, record) values ($1, $2, $3, $4)',
+						parameters: [input.collection, input.id, 'update', input.values]
+					},
+					...outboxStatements(
+						effectId,
+						subject,
+						input.collection,
+						input.id,
+						'update',
+						input.values,
+						previous
+					)
+				];
+			};
 			const applyUpdate = Effect.fn('Collections.applyUpdate')(function* (
 				effectId: EffectId,
 				subject: Identity.Subject,
@@ -1876,58 +2103,54 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const visibility = elevated
 					? AccessControl.unrestricted
 					: access.predicate(subject, 'update', input.collection);
-				const writable = writableValues(input.values, definition);
-				const entries = Object.entries(writable).sort(([left], [right]) =>
-					left.localeCompare(right)
+				const statements = updateStatements(
+					effectId,
+					subject,
+					input,
+					definition,
+					visibility,
+					clearLock,
+					previous
 				);
-				if (entries.length === 0 && !clearLock) return;
-				const assignments = [
-					...entries.map(
-						([name, value], index) =>
-							`${quoteIdentifier(name)} = ${boundPlaceholder(definition, name, value, index + 1)}`
-					),
-					'updated_at = now()',
-					'row_version = row_version + 1',
-					...(clearLock ? ['approval_id = null'] : [])
-				];
+				if (statements.length === 0) return;
+				yield* announceFlush(effectId, input.collection, 'update');
+				yield* database.execute(effectId, { _tag: 'Transaction', statements });
+				yield* wake.announce(effectId, [input.collection]);
+			});
+			/** The delete twin of `updateStatements`, shared by single-row and graph execution. */
+			const deleteStatements = (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				collection: string,
+				id: string,
+				definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
+				visibility: AccessControl.RowPredicate,
+				previous: Readonly<Record<string, unknown>> | undefined
+			): ReadonlyArray<{
+				readonly sql: string;
+				readonly parameters: ReadonlyArray<Schema.Json>;
+			}> => {
 				const history = definition.history
 					? [
 							{
-								sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id, snapshot) values ($1, $2, $3, $4, $5)',
-								parameters: [input.collection, input.id, 'update', subject.userId, input.values]
+								sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id) values ($1, $2, $3, $4)',
+								parameters: [collection, id, 'delete', subject.userId]
 							}
 						]
 					: [];
-				yield* announceFlush(effectId, input.collection, 'update');
-				yield* database.execute(effectId, {
-					_tag: 'Transaction',
-					statements: [
-						{
-							sql: `update ${quoteIdentifier(input.collection)} set ${assignments.join(', ')} where id = $${entries.length + 1} and (${offsetParameters(visibility.sql, entries.length + 1)})`,
-							parameters: [
-								...entries.map(([name, value]) => boundParameter(definition, name, value)),
-								input.id,
-								...visibility.parameters
-							]
-						},
-						...history,
-						{
-							sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation, record) values ($1, $2, $3, $4)',
-							parameters: [input.collection, input.id, 'update', input.values]
-						},
-						...outboxStatements(
-							effectId,
-							subject,
-							input.collection,
-							input.id,
-							'update',
-							input.values,
-							previous
-						)
-					]
-				});
-				yield* wake.announce(effectId, [input.collection]);
-			});
+				return [
+					{
+						sql: `delete from ${quoteIdentifier(collection)} where id = $1 and (${offsetParameters(visibility.sql, 1)})`,
+						parameters: [id, ...visibility.parameters]
+					},
+					...history,
+					{
+						sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation) values ($1, $2, $3)',
+						parameters: [collection, id, 'delete']
+					},
+					...outboxStatements(effectId, subject, collection, id, 'delete', {}, previous)
+				];
+			};
 			const applyDelete = Effect.fn('Collections.applyDelete')(function* (
 				effectId: EffectId,
 				subject: Identity.Subject,
@@ -1941,30 +2164,17 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const visibility = elevated
 					? AccessControl.unrestricted
 					: access.predicate(subject, 'delete', collection);
-				const history = definition.history
-					? [
-							{
-								sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id) values ($1, $2, $3, $4)',
-								parameters: [collection, id, 'delete', subject.userId]
-							}
-						]
-					: [];
+				const statements = deleteStatements(
+					effectId,
+					subject,
+					collection,
+					id,
+					definition,
+					visibility,
+					previous
+				);
 				yield* announceFlush(effectId, collection, 'delete');
-				yield* database.execute(effectId, {
-					_tag: 'Transaction',
-					statements: [
-						{
-							sql: `delete from ${quoteIdentifier(collection)} where id = $1 and (${offsetParameters(visibility.sql, 1)})`,
-							parameters: [id, ...visibility.parameters]
-						},
-						...history,
-						{
-							sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation) values ($1, $2, $3)',
-							parameters: [collection, id, 'delete']
-						},
-						...outboxStatements(effectId, subject, collection, id, 'delete', {}, previous)
-					]
-				});
+				yield* database.execute(effectId, { _tag: 'Transaction', statements });
 				yield* wake.announce(effectId, [collection]);
 			});
 			const readLock = Effect.fn('Collections.readLock')(function* (
@@ -1982,18 +2192,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					typeof row === 'object' && row !== null ? Reflect.get(row, 'approval_id') : undefined;
 				return typeof value === 'string' && value.length > 0 ? value : undefined;
 			});
-			const setLock = Effect.fn('Collections.setLock')(function* (
-				effectId: EffectId,
-				collection: string,
-				id: string,
-				requestId: string
-			) {
-				yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `update ${quoteIdentifier(collection)} set approval_id = $2 where id = $1 and approval_id is null returning id`,
-					parameters: [id, requestId]
-				});
-			});
 			/**
 			 * Releases a record held by an approval, without touching anything else on it.
 			 *
@@ -2004,19 +2202,40 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			const releaseLock = Effect.fn('Collections.releaseLock')(function* (
 				effectId: EffectId,
 				collection: string,
-				id: string
+				id: string,
+				requestId?: string
 			) {
-				yield* database.execute(effectId, {
+				const result = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: `update ${quoteIdentifier(collection)} set approval_id = null where id = $1 returning id`,
-					parameters: [id]
+					sql:
+						requestId === undefined
+							? `with released as (
+								update ${quoteIdentifier(collection)} as target set approval_id = null where id = $1::uuid
+								returning target.id::text as id, to_jsonb(target) as record
+							)
+							insert into bolt_sync_outbox (collection_name, record_id, operation, record)
+							select $2, id, 'update', record from released returning record_id`
+							: `with released as (
+								update ${quoteIdentifier(collection)} as target set approval_id = null where approval_id = $1::uuid and id = $2::uuid
+								returning target.id::text as id, to_jsonb(target) as record
+							)
+							insert into bolt_sync_outbox (collection_name, record_id, operation, record)
+							select $3, id, 'update', record from released returning record_id`,
+					parameters: requestId === undefined ? [id, collection] : [requestId, id, collection]
 				});
+				if (result.affectedRows > 0)
+					yield* wake
+						.announce(EffectId.make(`${effectId}:approval-release-wake`), [collection])
+						.pipe(Effect.timeout(250), Effect.ignore);
 			});
 			const holdForApproval = Effect.fn('Collections.holdForApproval')(function* (
 				effectId: EffectId,
 				subject: Identity.Subject,
 				input: MutationInput,
-				action: typeof CollectionAction.Type
+				action: typeof CollectionAction.Type,
+				approval?: Schema.Json,
+				mode?: 'declarative',
+				review?: DeclarativeReview
 			) {
 				const pending = yield* approvals.pendingForRecord(effectId, input.collection, input.id);
 				if (pending !== undefined) {
@@ -2039,23 +2258,60 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				// `approval_request` is a collection like any other, keyed by `id uuid` — the
 				// composite string only ever fit while Bolt's invented `id text` accepted anything.
 				const requestId = deriveRecordId(`${input.collection}:${input.id}:${effectId}`);
-				const state = yield* approvals.request(effectId, subject, requestId, {
-					collection: input.collection,
-					id: input.id,
-					values: input.values,
-					action,
-					subject
-				});
+				let durableReview = review;
+				if (mode === 'declarative' && action !== 'create' && review !== undefined) {
+					const rows: Array<(typeof review.rows)[number]> = [];
+					for (const row of review.rows) {
+						if (row.collection !== input.collection || row.id !== input.id) {
+							rows.push(row);
+							continue;
+						}
+						const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(JsonObject))(
+							row.snapshot
+						).pipe(
+							Effect.mapError(
+								() =>
+									new ApprovalConflict({
+										requestId,
+										reason: 'prepared approval review contains an invalid row snapshot'
+									})
+							)
+						);
+						rows.push({
+							...row,
+							snapshot: JSON.stringify({ ...decoded, approval_id: requestId })
+						});
+					}
+					durableReview = { ...review, rows };
+				}
+				const state = yield* approvals.request(
+					effectId,
+					subject,
+					requestId,
+					{
+						collection: input.collection,
+						id: input.id,
+						values: input.values,
+						action,
+						subject,
+						...(approval === undefined ? {} : { approval }),
+						...(mode === undefined ? {} : { mode }),
+						...(durableReview === undefined ? {} : { review: durableReview })
+					},
+					mode === 'declarative' && action === 'create'
+						? undefined
+						: { collection: input.collection, id: input.id }
+				);
 				if (state._tag !== 'Pending') {
 					return yield* new ApprovalConflict({
 						requestId: state.requestId,
 						reason: 'record is locked by a pending approval'
 					});
 				}
-				// Every action locks, `create` included. The row a gated create produces exists before this
-				// runs — see `create` below — so there is something to stamp, and stamping it is what makes
-				// the record visible-but-held rather than absent.
-				yield* setLock(effectId, input.collection, input.id, state.requestId);
+				// The request, durable inbox projection, requestor link, sync outbox and (where a row
+				// already exists) approval lock are one database statement in `Approvals.request`. A
+				// declarative create is the sole lockless case because its domain row intentionally does not
+				// exist before approval.
 				return yield* new PendingApproval({
 					requestId: state.requestId,
 					collection: input.collection,
@@ -2247,7 +2503,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							})
 						);
 					const definition = yield* workspace.collection(collection);
-					const relations = workspace.definition.relations ?? [];
 					const own: Record<string, Schema.Json> = {};
 					const nested: Array<{
 						readonly collection: string;
@@ -2262,13 +2517,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						// Read against the relation's *declared* name, and only where this collection is the
 						// source and the edge is a `many` with an endpoint. A `one` relation points at a record
 						// that has to exist already, so expanding it inline would mean inventing its target.
-						const relation = relations.find(
-							(candidate) =>
-								candidate.name === key &&
-								candidate.source === collection &&
-								candidate.cardinality === 'many' &&
-								candidate.from?.column !== undefined
-						);
+						const relation = resolveWritableManyRelation(workspace.definition, collection, key);
 						if (relation === undefined)
 							return yield* Effect.fail(
 								new AuthoredRefusal({
@@ -2286,8 +2535,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								})
 							);
 						nested.push({
-							collection: relation.target,
-							column: relation.from?.column ?? '',
+							collection: relation.childCollection,
+							column: relation.childColumn,
 							rows: value as ReadonlyArray<Readonly<Record<string, unknown>>>
 						});
 					}
@@ -2314,6 +2563,1108 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							);
 					return rows;
 				});
+
+			type IncludedRelationship = Readonly<{
+				readonly edge: WritableManyRelation;
+				readonly rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
+			}>;
+			type RelationshipSnapshot = Readonly<{
+				readonly edge: WritableManyRelation;
+				readonly parentId: string;
+				readonly json: string;
+			}>;
+			type PreparedGraphOperation = Readonly<{
+				readonly action: 'create' | 'update' | 'delete';
+				readonly collection: string;
+				readonly id: string;
+				readonly values: Readonly<Record<string, Schema.Json>>;
+				readonly definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>;
+				readonly visibility: AccessControl.RowPredicate;
+				readonly previous?: Readonly<Record<string, unknown>>;
+				readonly module?: AuthoredCollectionHookModule;
+				readonly depth: number;
+				readonly taskScope: EffectId;
+				readonly clearLock?: boolean;
+				readonly snapshot?: string;
+			}>;
+			type AppliedDeclarativeGraph = Readonly<{
+				readonly operations: ReadonlyArray<PreparedGraphOperation>;
+				/** Exact created/updated rows returned by the graph transaction before its locks release. */
+				readonly records: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
+			}>;
+
+			const graphRefusal = (
+				collection: string,
+				action: 'create' | 'update' | 'delete',
+				message: string
+			) => Effect.fail(new AuthoredRefusal({ collection, action, message }));
+
+			/**
+			 * Separates columns from explicitly included relationships before a hook input schema sees the
+			 * record. `Schema.Struct` drops undeclared keys, and relation keys are intentionally not table
+			 * columns, so decoding the graph as one object would silently turn "synchronize this relation"
+			 * into "leave it untouched".
+			 */
+			const splitGraphPayload = Effect.fn('Collections.splitGraphPayload')(function* (
+				collection: string,
+				payload: Readonly<Record<string, unknown>>,
+				action: 'create' | 'update'
+			) {
+				const definition = yield* workspace.collection(collection);
+				const own: Record<string, Schema.Json> = {};
+				const included: Array<IncludedRelationship> = [];
+				for (const [key, value] of Object.entries(payload)) {
+					if (key === 'id') continue;
+					if (SYSTEM_COLUMN_NAMES.includes(key))
+						return yield* graphRefusal(
+							collection,
+							action,
+							`${collection}.${key} is managed by Bolt and cannot be written.`
+						);
+					if (key in definition.fields) {
+						own[key] = value as Schema.Json;
+						continue;
+					}
+					const edge = resolveWritableManyRelation(workspace.definition, collection, key);
+					if (edge === undefined)
+						return yield* graphRefusal(
+							collection,
+							action,
+							`${collection} has no writable many relationship named "${key}".`
+						);
+					if (edge.parentColumn !== 'id')
+						return yield* graphRefusal(
+							collection,
+							action,
+							`The ${collection}.${key} relationship joins through ${edge.parentColumn}; declarative nested mutation currently requires the parent's id.`
+						);
+					if (!Array.isArray(value))
+						return yield* graphRefusal(
+							collection,
+							action,
+							`"${key}" is a many relationship on ${collection}, so its desired state must be an array of records.`
+						);
+					const rows: Array<Readonly<Record<string, unknown>>> = [];
+					for (const entry of value) {
+						if (typeof entry !== 'object' || entry === null || Array.isArray(entry))
+							return yield* graphRefusal(
+								collection,
+								action,
+								`Every entry of ${collection}.${key} must be a record.`
+							);
+						rows.push(entry as Readonly<Record<string, unknown>>);
+					}
+					included.push({ edge, rows });
+				}
+				return { own, included };
+			});
+
+			const relatedRows = Effect.fn('Collections.relatedRows')(function* (
+				effectId: EffectId,
+				edge: WritableManyRelation,
+				parentId: string
+			) {
+				const definition = yield* workspace.collection(edge.childCollection);
+				const result = yield* database.execute(effectId, {
+					_tag: 'Query',
+					sql: `select child.*, to_jsonb(child) as "__bolt_snapshot" from ${quoteIdentifier(edge.childCollection)} as child where ${quoteIdentifier(edge.childColumn)} = $1 order by id`,
+					parameters: [parentId]
+				});
+				const raw = result.rows.filter(isJsonObject);
+				const snapshots = raw.flatMap((row) =>
+					isJsonObject(row['__bolt_snapshot']) ? [row['__bolt_snapshot']] : []
+				);
+				return {
+					rows: raw.map(
+						(row) =>
+							decodeReferenceRow(
+								Object.fromEntries(
+									Object.entries(row).filter(([key]) => key !== '__bolt_snapshot')
+								),
+								definition.fields
+							) as Readonly<Record<string, unknown>>
+					),
+					json: JSON.stringify(snapshots)
+				};
+			});
+
+			/**
+			 * Builds the complete mixed create/update/delete plan before the transaction. Every hook and
+			 * authorization check therefore fails in `prepare`, while every statement it admits commits in
+			 * one envelope. Relationship omission is read by key presence: no key means no query and no
+			 * operation; an explicit empty array plans deletion of every stored child.
+			 */
+			type DeclarativePreparationOptions = Readonly<{
+				readonly approved: boolean;
+				readonly runHooks: boolean;
+				readonly rootId: string;
+				readonly rootAction: 'create' | 'update';
+				readonly clearRootLock: boolean;
+				readonly approvalRequestId?: string;
+				readonly expectedPolicyFingerprint?: string;
+			}>;
+
+			const prepareDeclarativeGraph = Effect.fn('Collections.prepareDeclarativeGraph')(function* (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				rootCollection: string,
+				rootPayload: Readonly<Record<string, unknown>>,
+				hookDepth: number,
+				options: DeclarativePreparationOptions
+			) {
+				const operations: Array<PreparedGraphOperation> = [];
+				const relationshipSnapshots = new Map<string, RelationshipSnapshot>();
+				const approvalRequirements: Array<{
+					readonly collection: string;
+					readonly action: 'create' | 'update' | 'delete';
+					readonly approval?: Schema.Json;
+				}> = [];
+				const executionInvariants: Array<Schema.Json> = [];
+				const registerExecutionInvariant = (
+					collection: string,
+					action: 'create' | 'update' | 'delete',
+					definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
+					visibility: AccessControl.RowPredicate
+				): void => {
+					executionInvariants.push({
+						collection,
+						action,
+						approvalLock: definition.approvalLock === true,
+						allowed: visibility.allowed,
+						sql: visibility.sql,
+						parameters: [...visibility.parameters],
+						fields: visibility.fields === undefined ? null : [...visibility.fields].toSorted(),
+						approval: visibility.approval ?? null
+					});
+				};
+				let ordinal = 0;
+				const preparedDeletes = new Set<string>();
+				const scope = (): EffectId => EffectId.make(`${effectId}:graph:${ordinal++}`);
+				const registerRelationshipSnapshot = (
+					edge: WritableManyRelation,
+					parentId: string,
+					json: string
+				): void => {
+					const key = `${edge.childCollection}\u0000${edge.childColumn}\u0000${parentId}`;
+					if (!relationshipSnapshots.has(key))
+						relationshipSnapshots.set(key, { edge, parentId, json });
+				};
+				const recordSnapshot = Effect.fn('Collections.recordSnapshot')(function* (
+					collection: string,
+					id: string
+				) {
+					const result = yield* database.execute(
+						EffectId.make(`${effectId}:graph:snapshot:${collection}:${id}`),
+						{
+							_tag: 'Query',
+							sql: `select to_jsonb(record) as snapshot from ${quoteIdentifier(collection)} as record where id = $1`,
+							parameters: [id]
+						}
+					);
+					const row = result.rows[0];
+					const snapshot = isJsonObject(row) ? row['snapshot'] : undefined;
+					if (!isJsonObject(snapshot))
+						return yield* graphRefusal(
+							collection,
+							'update',
+							`${collection} ${id} no longer exists.`
+						);
+					return JSON.stringify(snapshot);
+				});
+				const ensureGraphRowUnlocked = Effect.fn('Collections.ensureGraphRowUnlocked')(function* (
+					collection: string,
+					id: string
+				) {
+					const pending = yield* approvals.pendingForRecord(
+						EffectId.make(`${effectId}:graph:lock:${collection}:${id}`),
+						collection,
+						id
+					);
+					if (pending !== undefined)
+						return yield* new ApprovalConflict({
+							requestId: pending.requestId,
+							reason: `${collection} ${id} is locked by another pending approval`
+						});
+					const locked = yield* readLock(
+						EffectId.make(`${effectId}:graph:approval-lock:${collection}:${id}`),
+						collection,
+						id
+					);
+					if (locked !== undefined && locked !== options.approvalRequestId)
+						return yield* new ApprovalConflict({
+							requestId: locked,
+							reason: `${collection} ${id} is held by an approval that has not resumed`
+						});
+				});
+
+				const prepareDelete: (
+					collection: string,
+					row: Readonly<Record<string, unknown>>,
+					depth: number
+				) => Effect.Effect<
+					void,
+					| Workspace.WorkspaceLookupError
+					| AccessControl.AccessDenied
+					| Database.FacilityError
+					| ApprovalConflict
+					| AuthoredRefusal
+					| InvocationBudget.NestingLimitExceeded
+				> = Effect.fn('Collections.prepareGraphDelete')(function* (collection, row, depth) {
+					const operationPosition = operations.length;
+					const id = row['id'];
+					if (typeof id !== 'string' || id.length === 0)
+						return yield* graphRefusal(
+							collection,
+							'delete',
+							`A stored ${collection} row selected for reconciliation has no identifier.`
+						);
+					if (depth > GRAPH_DEPTH_LIMIT)
+						return yield* graphRefusal(
+							collection,
+							'delete',
+							`A cascading relationship delete on ${collection} is more than ${GRAPH_DEPTH_LIMIT} levels deep.`
+						);
+					const identity = `${collection}\u0000${id}`;
+					if (preparedDeletes.has(identity)) return;
+					preparedDeletes.add(identity);
+					const definition = yield* workspace.collection(collection);
+					const snapshot = yield* recordSnapshot(collection, id);
+					yield* ensureGraphRowUnlocked(collection, id);
+					yield* access.authorize(subject, 'delete', collection);
+					const visibility = access.predicate(subject, 'delete', collection);
+					registerExecutionInvariant(collection, 'delete', definition, visibility);
+					if (requiresApproval(definition, visibility))
+						approvalRequirements.push({
+							collection,
+							action: 'delete',
+							...(visibility.approval === undefined ? {} : { approval: visibility.approval })
+						});
+					const module = authored.hooks[collection];
+					if (options.runHooks && module?.delete?.perRecord?.before !== undefined) {
+						const api = buildApi(effectId, subject, false, hookDepth + depth + 1, stageHookWrites);
+						yield* runHook(module.delete.perRecord.before, { existing: row, api }, api, {
+							collection,
+							action: 'delete.before'
+						});
+					}
+					// Deleting an owned row necessarily deletes the rows it owns. Plan every descendant through
+					// the same authorization, approval, hooks, history, sync and event pipeline before the
+					// database's foreign-key cascade can make them disappear invisibly.
+					for (const relation of workspace.definition.relations) {
+						if (relation.source !== collection || relation.cardinality !== 'many') continue;
+						const edge = resolveWritableManyRelation(
+							workspace.definition,
+							collection,
+							relation.name
+						);
+						if (edge === undefined || edge.parentColumn !== 'id' || !edge.cascade) continue;
+						const related = yield* relatedRows(scope(), edge, id);
+						registerRelationshipSnapshot(edge, id, related.json);
+						for (const child of related.rows)
+							yield* prepareDelete(edge.childCollection, child, depth + 1);
+					}
+					operations.splice(operationPosition, 0, {
+						action: 'delete',
+						collection,
+						id,
+						values: {},
+						definition,
+						visibility,
+						previous: row,
+						snapshot,
+						...(module === undefined ? {} : { module }),
+						depth,
+						taskScope: scope()
+					});
+				});
+
+				const prepareNode: (
+					collection: string,
+					payload: Readonly<Record<string, unknown>>,
+					depth: number,
+					ownership?: Readonly<{ readonly column: string; readonly parentId: string }>,
+					identity?: Readonly<{
+						readonly id: string;
+						readonly action: 'create' | 'update';
+						readonly clearLock: boolean;
+					}>
+				) => Effect.Effect<
+					string,
+					| Workspace.WorkspaceLookupError
+					| AccessControl.AccessDenied
+					| Database.FacilityError
+					| ApprovalConflict
+					| AuthoredRefusal
+					| GraphApprovalRequired
+					| InvocationBudget.NestingLimitExceeded
+				> = Effect.fn('Collections.prepareGraphNode')(
+					// repository-health:allow COMPLEX1 -- This recursive graph planner is the single policy/hook/relationship owner; guard clauses bound every branch and splitting it would duplicate the shared atomic plan state.
+					function* (collection, payload, depth, ownership, identity) {
+						const operationPosition = operations.length;
+						if (depth > GRAPH_DEPTH_LIMIT)
+							return yield* graphRefusal(
+								collection,
+								'create',
+								`A nested write on ${collection} is more than ${GRAPH_DEPTH_LIMIT} levels deep.`
+							);
+						const submittedId = payload['id'];
+						if (
+							submittedId !== undefined &&
+							(typeof submittedId !== 'string' || submittedId.length === 0)
+						)
+							return yield* graphRefusal(
+								collection,
+								'update',
+								`The id of a ${collection} mutation must be a non-empty string.`
+							);
+						const action =
+							identity?.action ?? (typeof submittedId === 'string' ? 'update' : 'create');
+						const id = identity?.id ?? (typeof submittedId === 'string' ? submittedId : randomId());
+						const definition = yield* workspace.collection(collection);
+						const module = authored.hooks[collection];
+						const submitted = yield* splitGraphPayload(collection, payload, action);
+						let own: Readonly<Record<string, Schema.Json>> = submitted.own;
+						let included = submitted.included;
+						let previous: Readonly<Record<string, unknown>> | undefined;
+						let snapshot: string | undefined;
+						yield* access.authorize(subject, action, collection);
+						const visibility = access.predicate(subject, action, collection);
+						registerExecutionInvariant(collection, action, definition, visibility);
+						if (action === 'update') yield* ensureGraphRowUnlocked(collection, id);
+						if (requiresApproval(definition, visibility))
+							approvalRequirements.push({
+								collection,
+								action,
+								...(visibility.approval === undefined ? {} : { approval: visibility.approval })
+							});
+
+						if (action === 'create') {
+							const decoded = yield* decodeCreateInput(collection, own, module);
+							own = decoded;
+							if (options.runHooks) {
+								const prepared = yield* runCreatePrepare(
+									effectId,
+									subject,
+									collection,
+									[decoded],
+									module,
+									hookDepth + depth,
+									stageHookWrites
+								);
+								const hooked = yield* runCreateHooks(
+									effectId,
+									subject,
+									{ collection, id, values: decoded },
+									module,
+									hookDepth + depth,
+									prepared,
+									stageHookWrites
+								);
+								const returned = yield* splitGraphPayload(collection, hooked, action);
+								own = returned.own;
+								const byName = new Map(included.map((entry) => [entry.edge.name, entry]));
+								for (const entry of returned.included) byName.set(entry.edge.name, entry);
+								included = [...byName.values()];
+							}
+						} else {
+							previous = yield* readRowElevated(effectId, collection, id);
+							snapshot = yield* recordSnapshot(collection, id);
+							if (module?.update?.input !== undefined) {
+								own = (yield* Schema.decodeUnknownEffect(module.update.input)(own).pipe(
+									Effect.mapError(
+										() =>
+											new AccessControl.AccessDenied({
+												action: 'update',
+												resource: collection,
+												reason: 'hook input validation failed'
+											})
+									)
+								)) as Readonly<Record<string, Schema.Json>>;
+							}
+							if (options.runHooks && module?.update?.perRecord?.before !== undefined) {
+								const api = buildApi(
+									effectId,
+									subject,
+									false,
+									hookDepth + depth + 1,
+									stageHookWrites
+								);
+								const before = yield* runHook(
+									module.update.perRecord.before,
+									{ input: own, existing: previous, api },
+									api,
+									{ collection, action: 'update.before' }
+								);
+								if (before != null && typeof before === 'object' && !Array.isArray(before)) {
+									const returned = yield* splitGraphPayload(
+										collection,
+										before as Readonly<Record<string, unknown>>,
+										action
+									);
+									own = returned.own;
+									const byName = new Map(included.map((entry) => [entry.edge.name, entry]));
+									for (const entry of returned.included) byName.set(entry.edge.name, entry);
+									included = [...byName.values()];
+								}
+							}
+							if (
+								visibility.fields !== undefined &&
+								Object.keys(own).some((field) => !visibility.fields?.includes(field))
+							)
+								return yield* new AccessControl.AccessDenied({
+									action: 'update',
+									resource: collection,
+									reason: 'update includes fields outside the matching policy grant'
+								});
+						}
+
+						// Relationship ownership comes from the graph position, never from a writable payload.
+						// Existing children are proved to belong to this parent above. Their owner key is stripped
+						// rather than assigned, so it can neither reparent the row nor turn `{ id }` into a false
+						// update with version/history/event side effects.
+						if (ownership !== undefined) {
+							const owned = { ...own };
+							delete owned[ownership.column];
+							own =
+								action === 'create' ? { ...owned, [ownership.column]: ownership.parentId } : owned;
+						}
+						const referenceProblem = referenceValueProblem(own, definition.fields);
+						if (referenceProblem !== undefined)
+							return yield* graphRefusal(collection, action, referenceProblem);
+						operations.splice(operationPosition, 0, {
+							action,
+							collection,
+							id,
+							values: own,
+							definition,
+							visibility,
+							...(previous === undefined ? {} : { previous }),
+							...(snapshot === undefined ? {} : { snapshot }),
+							...(module === undefined ? {} : { module }),
+							depth,
+							taskScope: scope(),
+							...(identity?.clearLock === true ? { clearLock: true } : {})
+						});
+
+						for (const relation of included) {
+							const related =
+								action === 'create' ? undefined : yield* relatedRows(scope(), relation.edge, id);
+							if (related !== undefined)
+								registerRelationshipSnapshot(relation.edge, id, related.json);
+							const existing = related?.rows ?? [];
+							const byId = new Map(
+								existing.flatMap((row) =>
+									typeof row['id'] === 'string' ? [[row['id'], row] as const] : []
+								)
+							);
+							const desiredIds = new Set<string>();
+							for (const child of relation.rows) {
+								const childId = child['id'];
+								if (childId !== undefined && (typeof childId !== 'string' || childId.length === 0))
+									return yield* graphRefusal(
+										relation.edge.childCollection,
+										'update',
+										`The id of a nested ${relation.edge.childCollection} mutation must be a non-empty string.`
+									);
+								if (typeof childId === 'string') {
+									if (desiredIds.has(childId))
+										return yield* graphRefusal(
+											relation.edge.childCollection,
+											'update',
+											`The desired ${relation.edge.name} relationship contains ${childId} more than once.`
+										);
+									if (!byId.has(childId))
+										return yield* graphRefusal(
+											relation.edge.childCollection,
+											'update',
+											`${childId} is not currently owned by ${collection} ${id}, so this relationship mutation cannot move or overwrite it.`
+										);
+									desiredIds.add(childId);
+								}
+								yield* prepareNode(relation.edge.childCollection, child, depth + 1, {
+									column: relation.edge.childColumn,
+									parentId: id
+								});
+							}
+							for (const [childId, row] of byId) {
+								if (!desiredIds.has(childId))
+									yield* prepareDelete(relation.edge.childCollection, row, depth + 1);
+							}
+						}
+						return id;
+					}
+				);
+
+				/**
+				 * Before-hook writes are planned into this graph instead of reaching the database while the
+				 * graph is still being validated. Their hooks and authorization still run canonically, but
+				 * every resulting statement joins the parent/relationship transaction and therefore rolls
+				 * back with it. The record returned to the hook is explicitly the staged desired row.
+				 */
+				let stagedWriteCalls = 0;
+				const stagedRecord = (
+					collection: string,
+					id: string,
+					action: 'create' | 'update'
+				): Effect.Effect<Readonly<Record<string, unknown>>, AuthoredRefusal> => {
+					const planned = operations.findLast(
+						(operation) => operation.collection === collection && operation.id === id
+					);
+					return planned === undefined
+						? storedNothing(action, collection, id)
+						: Effect.succeed({ ...(planned.previous ?? {}), id, ...planned.values });
+				};
+				const stageHookWrites: HookWriteOps = {
+					create: (collection, id, values) =>
+						Effect.gen(function* () {
+							yield* refuseRunawayHooks('staged create', collection, ++stagedWriteCalls);
+							const own = Object.fromEntries(
+								Object.entries(values).filter(([name]) => name !== 'id')
+							);
+							yield* prepareNode(collection, { ...own, id }, 0, undefined, {
+								id,
+								action: 'create',
+								clearLock: false
+							});
+							return yield* stagedRecord(collection, id, 'create');
+						}),
+					update: (collection, id, values) =>
+						Effect.gen(function* () {
+							yield* refuseRunawayHooks('staged update', collection, ++stagedWriteCalls);
+							yield* prepareNode(collection, { ...values, id }, 0, undefined, {
+								id,
+								action: 'update',
+								clearLock: false
+							});
+							return yield* stagedRecord(collection, id, 'update');
+						}),
+					delete: (collection, id) =>
+						Effect.gen(function* () {
+							yield* refuseRunawayHooks('staged delete', collection, ++stagedWriteCalls);
+							const existing = yield* readRowElevated(scope(), collection, id);
+							if (existing !== undefined) yield* prepareDelete(collection, existing, 0);
+						}),
+					mutate: (collection, payloads) =>
+						Effect.gen(function* () {
+							yield* refuseRunawayHooks('staged mutate', collection, ++stagedWriteCalls);
+							const records: Array<Readonly<Record<string, unknown>>> = [];
+							for (const payload of payloads) {
+								const submittedId = payload['id'];
+								const id = typeof submittedId === 'string' ? submittedId : randomId();
+								const action = typeof submittedId === 'string' ? 'update' : 'create';
+								yield* prepareNode(collection, { ...payload, id }, 0, undefined, {
+									id,
+									action,
+									clearLock: false
+								});
+								records.push(yield* stagedRecord(collection, id, action));
+							}
+							return records;
+						})
+				};
+
+				const rootId = yield* prepareNode(rootCollection, rootPayload, 0, undefined, {
+					id: options.rootId,
+					action: options.rootAction,
+					clearLock: options.clearRootLock
+				});
+				const policyFingerprint = approvalFingerprint(
+					executionInvariants.toSorted((left, right) =>
+						approvalFingerprint(left).localeCompare(approvalFingerprint(right))
+					)
+				);
+				const firstApproval = approvalRequirements[0];
+				if (firstApproval !== undefined) {
+					const fingerprint = approvalFingerprint(firstApproval.approval);
+					const mixed = approvalRequirements.find(
+						(requirement) => approvalFingerprint(requirement.approval) !== fingerprint
+					);
+					if (mixed !== undefined)
+						return yield* graphRefusal(
+							rootCollection,
+							options.rootAction,
+							`The mutation graph crosses different approval policies (${firstApproval.collection}.${firstApproval.action} and ${mixed.collection}.${mixed.action}); one atomic graph must have one approval policy.`
+						);
+					const review: DeclarativeReview = {
+						version: 1,
+						rows: operations
+							.flatMap((operation) =>
+								operation.snapshot === undefined
+									? []
+									: [
+											{
+												collection: operation.collection,
+												id: operation.id,
+												snapshot: operation.snapshot
+											}
+										]
+							)
+							.toSorted((left, right) =>
+								`${left.collection}\u0000${left.id}`.localeCompare(
+									`${right.collection}\u0000${right.id}`
+								)
+							),
+						relationships: [...relationshipSnapshots.values()]
+							.map((snapshot) => ({
+								name: snapshot.edge.name,
+								parentCollection: snapshot.edge.parentCollection,
+								parentColumn: snapshot.edge.parentColumn,
+								childCollection: snapshot.edge.childCollection,
+								childColumn: snapshot.edge.childColumn,
+								cascade: snapshot.edge.cascade,
+								parentId: snapshot.parentId,
+								snapshot: snapshot.json
+							}))
+							.toSorted((left, right) =>
+								`${left.childCollection}\u0000${left.childColumn}\u0000${left.parentId}`.localeCompare(
+									`${right.childCollection}\u0000${right.childColumn}\u0000${right.parentId}`
+								)
+							),
+						policyFingerprint
+					};
+					if (options.approved) {
+						if (options.expectedPolicyFingerprint !== policyFingerprint)
+							return yield* graphRefusal(
+								rootCollection,
+								options.rootAction,
+								'The approval policy changed after this mutation graph was reviewed.'
+							);
+					} else {
+						return yield* new GraphApprovalRequired({
+							collection: firstApproval.collection,
+							action: firstApproval.action,
+							...(firstApproval.approval === undefined ? {} : { approval: firstApproval.approval }),
+							review
+						});
+					}
+				} else if (options.approved && options.expectedPolicyFingerprint !== undefined) {
+					return yield* graphRefusal(
+						rootCollection,
+						options.rootAction,
+						'The approval requirement was removed after this mutation graph was reviewed.'
+					);
+				}
+				return { rootId, operations, relationshipSnapshots: [...relationshipSnapshots.values()] };
+			});
+
+			const applyDeclarativeGraph = Effect.fn('Collections.applyDeclarativeGraph')(function* (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				operations: ReadonlyArray<PreparedGraphOperation>,
+				relationshipSnapshots: ReadonlyArray<RelationshipSnapshot>,
+				elevated: boolean,
+				review?: DeclarativeReview
+			) {
+				const creates = operations.filter((operation) => operation.action === 'create');
+				const existingOperations = operations.filter(
+					(operation) => operation.action === 'update' || operation.action === 'delete'
+				);
+				const updates = operations.filter(
+					(operation) =>
+						operation.action === 'update' &&
+						(Object.keys(operation.values).length > 0 || operation.clearLock === true)
+				);
+				const deletes = operations
+					.filter((operation) => operation.action === 'delete')
+					.toSorted((left, right) => right.depth - left.depth);
+				const createLayers = insertionLayers(creates, workspace.definition);
+				const plannedCreates: Array<CreateStatementNode> = creates.map((operation, index) => ({
+					input: {
+						collection: operation.collection,
+						id: operation.id,
+						values: operation.values
+					},
+					definition: operation.definition,
+					visibility: elevated ? AccessControl.unrestricted : operation.visibility,
+					layer: createLayers[index] ?? 0
+				}));
+				for (const operation of [...deletes, ...updates, ...creates])
+					yield* announceFlush(effectId, operation.collection, operation.action);
+				/**
+				 * Locks and proves every existing row before any graph statement can write. A row predicate
+				 * that matches nothing therefore raises division-by-zero inside the transaction, rolling the
+				 * whole graph back before a child, history entry, sync record or integration delivery lands.
+				 * The subquery is bounded by the primary key, so its count is exactly one or zero.
+				 */
+				const guards = existingOperations.map((operation) => {
+					const visibility = elevated ? AccessControl.unrestricted : operation.visibility;
+					const messageIndex = visibility.parameters.length + 2;
+					return {
+						sql: `select bolt_assert((select count(*) = 1 from (select id from ${quoteIdentifier(operation.collection)} where id = $1 and (${offsetParameters(visibility.sql, 1)}) for update) as bolt_authorized_row), $${messageIndex})`,
+						parameters: [
+							operation.id,
+							...visibility.parameters,
+							`${operation.collection} ${operation.id} is absent or outside the mutation predicate`
+						]
+					};
+				});
+				const createGuards = creates.map((operation) => ({
+					sql: `select bolt_assert(exists(select 1 from ${quoteIdentifier(operation.collection)} where id = $1), $2)`,
+					parameters: [
+						operation.id,
+						`${operation.collection} ${operation.id} was rejected by the create predicate`
+					]
+				}));
+				const reviewedRows =
+					review?.rows ??
+					existingOperations.flatMap((operation) =>
+						operation.snapshot === undefined
+							? []
+							: [
+									{
+										collection: operation.collection,
+										id: operation.id,
+										snapshot: operation.snapshot
+									}
+								]
+					);
+				const reviewedRelationships =
+					review?.relationships ??
+					relationshipSnapshots.map((snapshot) => ({
+						name: snapshot.edge.name,
+						parentCollection: snapshot.edge.parentCollection,
+						parentColumn: snapshot.edge.parentColumn,
+						childCollection: snapshot.edge.childCollection,
+						childColumn: snapshot.edge.childColumn,
+						cascade: snapshot.edge.cascade,
+						parentId: snapshot.parentId,
+						snapshot: snapshot.json
+					}));
+				const tableLocks = [
+					...new Set([
+						...operations.map((operation) => operation.collection),
+						...reviewedRows.map((row) => row.collection),
+						...reviewedRelationships.map((snapshot) => snapshot.childCollection)
+					])
+				]
+					.toSorted()
+					.map((table) => ({
+						sql: `lock table ${quoteIdentifier(table)} in share row exclusive mode`,
+						parameters: []
+					}));
+				const recordAssertions = reviewedRows.map((row) => ({
+					sql: `select bolt_assert((select to_jsonb(record) from ${quoteIdentifier(row.collection)} as record where id = $1) = $2::jsonb, $3)`,
+					parameters: [
+						row.id,
+						row.snapshot,
+						`${row.collection} ${row.id} changed while its mutation graph was prepared`
+					]
+				}));
+				const relationshipAssertions = reviewedRelationships.map((snapshot) => ({
+					sql: `select bolt_assert((select coalesce(jsonb_agg(to_jsonb(child) order by child.id), '[]'::jsonb) from ${quoteIdentifier(snapshot.childCollection)} as child where ${quoteIdentifier(snapshot.childColumn)} = $1) = $2::jsonb, $3)`,
+					parameters: [
+						snapshot.parentId,
+						snapshot.snapshot,
+						`${snapshot.childCollection} membership changed while ${snapshot.parentCollection} ${snapshot.parentId} was prepared`
+					]
+				}));
+				const appliedOperations = [...deletes, ...updates, ...creates];
+				const capturedOperations = appliedOperations.filter(
+					(operation) => operation.action === 'create' || operation.action === 'update'
+				);
+				const captureParameters: Array<Schema.Json> = [];
+				const captureSql = capturedOperations
+					.map((operation, index) => {
+						const ordinalParameter = captureParameters.push(index);
+						const collectionParameter = captureParameters.push(operation.collection);
+						const idParameter = captureParameters.push(operation.id);
+						return `select $${ordinalParameter}::integer as "__bolt_graph_ordinal", $${collectionParameter}::text as "__bolt_graph_collection", $${idParameter}::text as "__bolt_graph_id", to_jsonb(stored) as "__bolt_graph_record" from ${quoteIdentifier(operation.collection)} as stored where stored.id = $${idParameter}::uuid`;
+					})
+					.join(' union all ');
+				const captureStatement = {
+					sql:
+						captureSql.length > 0
+							? `${captureSql} order by "__bolt_graph_ordinal"`
+							: 'select null::integer as "__bolt_graph_ordinal", null::text as "__bolt_graph_collection", null::text as "__bolt_graph_id", null::jsonb as "__bolt_graph_record" where false',
+					parameters: captureParameters
+				};
+				const statements = [
+					...tableLocks,
+					...guards,
+					...recordAssertions,
+					...relationshipAssertions,
+					...deletes.flatMap((operation) =>
+						deleteStatements(
+							operation.taskScope,
+							subject,
+							operation.collection,
+							operation.id,
+							operation.definition,
+							elevated ? AccessControl.unrestricted : operation.visibility,
+							operation.previous
+						)
+					),
+					...updates.flatMap((operation) =>
+						updateStatements(
+							operation.taskScope,
+							subject,
+							{
+								collection: operation.collection,
+								id: operation.id,
+								values: operation.values
+							},
+							operation.definition,
+							elevated ? AccessControl.unrestricted : operation.visibility,
+							operation.clearLock === true,
+							operation.previous
+						)
+					),
+					...createStatements(effectId, subject, plannedCreates),
+					...createGuards,
+					captureStatement
+				];
+				const result = yield* database.execute(effectId, { _tag: 'Transaction', statements });
+				const records = new Map<string, Readonly<Record<string, unknown>>>();
+				for (const row of result.rows) {
+					if (!isJsonObject(row)) continue;
+					const ordinal = row['__bolt_graph_ordinal'];
+					const record = row['__bolt_graph_record'];
+					if (typeof ordinal !== 'number' || !isJsonObject(record)) continue;
+					const operation = capturedOperations[ordinal];
+					if (operation === undefined) continue;
+					records.set(
+						`${operation.collection}\u0000${operation.id}`,
+						decodeReferenceRow(record, operation.definition.fields) as Readonly<
+							Record<string, unknown>
+						>
+					);
+				}
+				return { operations: appliedOperations, records } satisfies AppliedDeclarativeGraph;
+			});
+
+			const settleDeclarativeGraph = Effect.fn('Collections.settleDeclarativeGraph')(function* (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				applied: AppliedDeclarativeGraph,
+				hookDepth: number
+			) {
+				const { operations, records } = applied;
+				const touched = [...new Set(operations.map((operation) => operation.collection))];
+				if (touched.length > 0)
+					yield* wake.announce(effectId, touched).pipe(Effect.timeout(250), Effect.ignore);
+				for (const operation of operations) {
+					const api = buildApi(operation.taskScope, subject, true, hookDepth + operation.depth + 1);
+					if (operation.action === 'create') {
+						const record = records.get(`${operation.collection}\u0000${operation.id}`);
+						if (record !== undefined && operation.module?.create?.perRecord?.after !== undefined)
+							yield* runHook(operation.module.create.perRecord.after, { record, api }, api, {
+								collection: operation.collection,
+								action: 'create.after'
+							});
+					} else if (operation.action === 'update') {
+						if (Object.keys(operation.values).length === 0 && operation.clearLock !== true)
+							continue;
+						const record = records.get(`${operation.collection}\u0000${operation.id}`);
+						if (record !== undefined && operation.module?.update?.perRecord?.after !== undefined)
+							yield* runHook(operation.module.update.perRecord.after, { record, api }, api, {
+								collection: operation.collection,
+								action: 'update.after'
+							});
+					} else if (operation.module?.delete?.perRecord?.after !== undefined) {
+						yield* runHook(
+							operation.module.delete.perRecord.after,
+							{ record: operation.previous, api },
+							api,
+							{ collection: operation.collection, action: 'delete.after' }
+						);
+					}
+				}
+				for (const [key, grouped] of Map.groupBy(
+					operations.filter(
+						(operation) =>
+							operation.action !== 'update' ||
+							Object.keys(operation.values).length > 0 ||
+							operation.clearLock === true
+					),
+					(operation) => `${operation.collection}\u0000${operation.action}`
+				)) {
+					const [collection, action] = key.split('\u0000') as [
+						string,
+						'create' | 'update' | 'delete'
+					];
+					yield* emitChangeEventsMany(
+						effectId,
+						subject,
+						collection,
+						grouped.flatMap((operation) => {
+							const record =
+								action === 'delete'
+									? operation.previous
+									: records.get(`${operation.collection}\u0000${operation.id}`);
+							return record === undefined ? [] : [{ taskScope: operation.taskScope, row: record }];
+						}),
+						action === 'create' ? 'created' : action === 'update' ? 'updated' : 'deleted'
+					);
+				}
+				return records;
+			});
+
+			type GraphApprovalContext = Readonly<{
+				readonly approved: boolean;
+				readonly rootId?: string;
+				readonly rootAction?: 'create' | 'update';
+				readonly clearRootLock?: boolean;
+				readonly approvalRequestId?: string;
+				readonly review?: DeclarativeReview;
+			}>;
+
+			const synchronizeGraph = Effect.fn('Collections.synchronizeGraph')(function* (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				collection: string,
+				payload: Readonly<Record<string, unknown>>,
+				elevated: boolean,
+				depth: number,
+				approval: GraphApprovalContext
+			) {
+				const submittedId = payload['id'];
+				if (
+					submittedId !== undefined &&
+					(typeof submittedId !== 'string' || submittedId.length === 0)
+				)
+					return yield* graphRefusal(
+						collection,
+						'update',
+						`The id of a ${collection} mutation must be a non-empty string.`
+					);
+				const rootAction =
+					approval.rootAction ?? (typeof submittedId === 'string' ? 'update' : 'create');
+				const rootId =
+					approval.rootId ?? (typeof submittedId === 'string' ? submittedId : randomId());
+				const rootValues = Object.fromEntries(
+					Object.entries(payload).filter(([key]) => key !== 'id')
+				);
+				const prepare = (
+					approved: boolean,
+					runHooks: boolean,
+					expectedPolicyFingerprint?: string
+				) =>
+					prepareDeclarativeGraph(effectId, subject, collection, payload, depth, {
+						approved,
+						runHooks,
+						rootId,
+						rootAction,
+						clearRootLock: approval.clearRootLock === true,
+						...(approval.approvalRequestId === undefined
+							? {}
+							: { approvalRequestId: approval.approvalRequestId }),
+						...(expectedPolicyFingerprint === undefined ? {} : { expectedPolicyFingerprint })
+					});
+				const phasePrepare = <A, E>(effect: Effect.Effect<A, E>) =>
+					effect.pipe(
+						Effect.catch((cause) =>
+							Effect.fail(
+								cause instanceof GraphApprovalRequired
+									? cause
+									: mutationPhaseFailure('prepare', collection, [], cause)
+							)
+						)
+					);
+				const hold = (cause: GraphApprovalRequired) =>
+					Effect.gen(function* () {
+						const values = yield* Schema.decodeUnknownEffect(JsonObject)(rootValues).pipe(
+							Effect.mapError(
+								() =>
+									new AuthoredRefusal({
+										collection,
+										action: rootAction,
+										message: 'The mutation graph cannot be stored as an approval operation.'
+									})
+							)
+						);
+						return yield* holdForApproval(
+							effectId,
+							subject,
+							{ collection, id: rootId, values },
+							rootAction,
+							cause.approval,
+							'declarative',
+							cause.review
+						);
+					});
+				let prepared;
+				if (approval.approved) {
+					if (approval.review === undefined)
+						return yield* new ApprovalConflict({
+							requestId: approval.approvalRequestId ?? rootId,
+							reason: 'stored declarative approval review is missing'
+						});
+					const currentReview = yield* phasePrepare(prepare(false, false)).pipe(
+						Effect.flatMap(() =>
+							Effect.fail(
+								new ApprovalConflict({
+									requestId: approval.approvalRequestId ?? rootId,
+									reason: 'the mutation graph no longer requires the approval that reviewed it'
+								})
+							)
+						),
+						Effect.catchTag('Bolt.Collections.GraphApprovalRequired', (cause) =>
+							Effect.succeed(cause.review)
+						)
+					);
+					if (!Schema.toEquivalence(DeclarativeReview)(currentReview, approval.review)) {
+						if (approval.approvalRequestId !== undefined)
+							yield* approvals.conflict(
+								EffectId.make(`${effectId}:stale-review-conflict`),
+								approval.approvalRequestId,
+								'the reviewed mutation graph changed while approval was pending'
+							);
+						return yield* new ApprovalConflict({
+							requestId: approval.approvalRequestId ?? rootId,
+							reason: 'the reviewed mutation graph changed while approval was pending'
+						});
+					}
+					prepared = yield* phasePrepare(
+						prepare(true, true, approval.review.policyFingerprint)
+					).pipe(
+						Effect.catchTag('Bolt.Collections.GraphApprovalRequired', () =>
+							graphRefusal(
+								collection,
+								rootAction,
+								'An approved mutation graph unexpectedly requested another approval.'
+							)
+						)
+					);
+				} else {
+					const probed = yield* phasePrepare(prepare(false, false)).pipe(
+						Effect.catchTag('Bolt.Collections.GraphApprovalRequired', hold)
+					);
+					// A hook-free probe proves whether the graph must be held. Only an ungated graph reaches
+					// authored preparation and before hooks, so a pending request never runs them twice.
+					prepared = yield* phasePrepare(prepare(false, true)).pipe(
+						Effect.catchTag('Bolt.Collections.GraphApprovalRequired', () =>
+							graphRefusal(
+								collection,
+								rootAction,
+								'A before hook introduced a newly approval-gated graph branch. Declare that branch in the submitted graph so it can be reviewed before hooks run.'
+							)
+						)
+					);
+					void probed;
+				}
+				const applied = yield* applyDeclarativeGraph(
+					effectId,
+					subject,
+					prepared.operations,
+					prepared.relationshipSnapshots,
+					elevated,
+					approval.review
+				).pipe(
+					Effect.catch((cause) =>
+						Effect.fail(mutationPhaseFailure('commit', collection, [], cause))
+					)
+				);
+				const committed = applied.operations.map((operation) => operation.id);
+				const records = yield* settleDeclarativeGraph(effectId, subject, applied, depth).pipe(
+					Effect.catch((cause) =>
+						Effect.fail(mutationPhaseFailure('settle', collection, committed, cause))
+					)
+				);
+				const root = records.get(`${collection}\u0000${prepared.rootId}`);
+				// The public command is completion-only; the identifier fallback only lets dispatch perform
+				// its subject-filtered compatibility read without a post-commit elevated reread here.
+				return [root ?? { id: prepared.rootId }];
+			});
 			const mutateBatch = Effect.fn('Collections.mutateBatch')(function* (
 				effectId: EffectId,
 				subject: Identity.Subject,
@@ -2469,26 +3820,46 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
 				elevated: boolean,
 				depth: number,
-				options?: { readonly batchSize?: number }
+				options?: { readonly batchSize?: number; readonly declarative?: boolean }
 			) {
-				yield* refuseRunawayHooks('create', collection, depth);
+				yield* refuseRunawayHooks('mutate', collection, depth);
 				const definition = yield* workspace.collection(collection);
-				// The same gate a single create passes, and it is not skipped by elevation: elevation
-				// relaxes the *row* predicate for a hook's own follow-ups, never the question of whether
-				// this subject may create in this collection at all.
-				yield* access.authorize(subject, 'create', collection);
 				/**
-				 * Updates are not inserts, and this is where they stop being treated as one.
-				 *
-				 * They go through `update` a row at a time rather than joining the batch transaction.
-				 * That is correct and it is not yet cheap; making an update batch co-transactional with an
-				 * insert batch needs `applyUpdate`'s statement building lifted out of its own transaction,
-				 * which is the next piece of this work rather than part of it.
+				 * A submitted relationship changes the operation from a flat batch into state
+				 * synchronization. The browser sends one root, while the authored bulk surface may still send
+				 * many scalar rows; preserving the old flat batch path keeps its constant facility-call budget.
+				 * Merely naming an endpointless `many` is enough to enter the graph path so it is refused there
+				 * rather than leaking through as an SQL column.
+				 */
+				const root = payloads[0];
+				if (options?.declarative === true) {
+					if (payloads.length !== 1 || root === undefined)
+						return yield* graphRefusal(
+							collection,
+							'create',
+							'A declarative mutation must contain exactly one root record.'
+						);
+					return yield* synchronizeGraph(effectId, subject, collection, root, elevated, depth, {
+						approved: false
+					});
+				}
+				const declaresRelationship =
+					payloads.length === 1 &&
+					root !== undefined &&
+					hasDeclaredManyRelationship(workspace.definition, collection, root);
+				if (root !== undefined && declaresRelationship)
+					return yield* synchronizeGraph(effectId, subject, collection, root, elevated, depth, {
+						approved: false
+					});
+				/**
+				 * Flat authored batches retain their established per-update path. The public declarative
+				 * graph has already branched above; no relationship synchronization reaches this loop.
 				 */
 				const updates = payloads.filter(
 					(payload) => typeof payload['id'] === 'string'
 				) as ReadonlyArray<Readonly<Record<string, Schema.Json>>>;
 				const inserts = payloads.filter((payload) => typeof payload['id'] !== 'string');
+				if (inserts.length > 0) yield* access.authorize(subject, 'create', collection);
 				const updated: Array<Readonly<Record<string, unknown>>> = [];
 				for (let index = 0; index < updates.length; index += 1) {
 					const payload = updates[index];
@@ -2709,15 +4080,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				if (module?.update?.perRecord?.after !== undefined) {
 					const afterApi = buildApi(effectId, subject, true, depth + 1);
 					const record = yield* readRowElevated(effectId, input.collection, input.id);
-					yield* runHook(
-						module.update.perRecord.after,
-						{ record, api: afterApi },
-						afterApi,
-						{
-							collection: input.collection,
-							action: 'update.after'
-						}
-					);
+					yield* runHook(module.update.perRecord.after, { record, api: afterApi }, afterApi, {
+						collection: input.collection,
+						action: 'update.after'
+					});
 				}
 				yield* emitChangeEvents(effectId, subject, input.collection, input.id, 'updated');
 			});
@@ -2765,15 +4131,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				yield* applyDelete(effectId, subject, collection, id, definition, false, existing);
 				if (module?.delete?.perRecord?.after !== undefined) {
 					const afterApi = buildApi(effectId, subject, true, depth + 1);
-					yield* runHook(
-						module.delete.perRecord.after,
-						{ record, api: afterApi },
-						afterApi,
-						{
-							collection,
-							action: 'delete.after'
-						}
-					);
+					yield* runHook(module.delete.perRecord.after, { record, api: afterApi }, afterApi, {
+						collection,
+						action: 'delete.after'
+					});
 				}
 				yield* emitChangeEvents(effectId, subject, collection, id, 'deleted');
 			});
@@ -2793,13 +4154,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						reason: 'stored approval operation is missing'
 					});
 				}
-				return yield* Schema.decodeUnknownEffect(CollectionOperation)({
-					collection: stored.collection,
-					id: stored.id,
-					values: stored.values,
-					action: stored.action,
-					subject: stored.subject
-				}).pipe(
+				return yield* Schema.decodeUnknownEffect(CollectionOperation)(stored).pipe(
 					Effect.mapError(
 						() =>
 							new ApprovalConflict({ requestId, reason: 'stored approval operation is malformed' })
@@ -2827,12 +4182,19 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						requestId,
 						reason: 'approval request was not found'
 					});
-				if (state._tag !== 'Rejected' && state._tag !== 'Withdrawn') {
+				if (
+					state._tag !== 'Rejected' &&
+					state._tag !== 'ChangesRequested' &&
+					state._tag !== 'Withdrawn'
+				) {
 					return yield* new ApprovalConflict({ requestId, reason: 'approval was not refused' });
 				}
 				const operation = yield* storedOperation(requestId, state.operation);
 				const definition = yield* workspace.collection(operation.collection);
 				if (operation.action === 'create') {
+					// A declarative graph is held before any part of it is written. Rejecting it is
+					// therefore already atomic cleanup: there is no provisional root (or child) to delete.
+					if (operation.mode === 'declarative') return;
 					yield* applyDelete(
 						effectId,
 						operation.subject,
@@ -2843,7 +4205,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					);
 					return;
 				}
-				yield* releaseLock(effectId, operation.collection, operation.id);
+				yield* releaseLock(effectId, operation.collection, operation.id, requestId);
 			});
 
 			const resume = Effect.fn('Collections.resume')(function* (
@@ -2859,6 +4221,41 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				yield* approvals.authorizeResume(state);
 				const operation = yield* storedOperation(requestId, state.operation);
 				const definition = yield* workspace.collection(operation.collection);
+				if (
+					(operation.action === 'create' || operation.action === 'update') &&
+					operation.mode === 'declarative'
+				) {
+					// The approval operation stores the original root graph as one durable value. Rebuild
+					// the canonical plan only after the final decision, then reconcile every explicitly
+					// included relationship inside the same transaction as the root. `approved` bypasses
+					// only approval interception; authorization, predicates, hooks and validation still run.
+					yield* synchronizeGraph(
+						effectId,
+						operation.subject,
+						operation.collection,
+						{ ...operation.values, id: operation.id },
+						false,
+						0,
+						{
+							approved: true,
+							rootId: operation.id,
+							rootAction: operation.action,
+							clearRootLock: operation.action === 'update',
+							approvalRequestId: requestId,
+							...(operation.review === undefined ? {} : { review: operation.review })
+						}
+					).pipe(
+						Effect.catchTag('Bolt.Collections.PendingApproval', (pending) =>
+							Effect.fail(
+								new ApprovalConflict({
+									requestId: pending.requestId,
+									reason: 'approved mutation graph unexpectedly requested a new approval'
+								})
+							)
+						)
+					);
+					return;
+				}
 				switch (operation.action) {
 					case 'create': {
 						// The row was written when the create was intercepted, so approving it releases the
@@ -2867,7 +4264,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						// "approved" means for a created record: the engine, the notification, the side effect
 						// the workspace attached to a real one, all of which must not fire for a record still
 						// waiting on a decision.
-						yield* releaseLock(effectId, operation.collection, operation.id);
+						yield* releaseLock(effectId, operation.collection, operation.id, requestId);
 						const createdModule = authored.hooks[operation.collection];
 						if (createdModule?.create?.perRecord?.after !== undefined) {
 							const api = buildApi(effectId, operation.subject, true);
@@ -2902,6 +4299,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			});
 			return Service.of({
 				findMany,
+				approvalFindFirst: (effectId, subject, input) =>
+					findMany(effectId, subject, {
+						collection: 'approval_request',
+						...input,
+						limit: 1
+					}).pipe(Effect.map((rows) => rows[0])),
 				findFirst: Effect.fn('Collections.findFirst')(function* (effectId, subject, input) {
 					return (yield* findMany(effectId, subject, { ...input, limit: 1 }))[0];
 				}),

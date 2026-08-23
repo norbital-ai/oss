@@ -230,6 +230,32 @@ export const enqueueStatements = (enqueues: ReadonlyArray<Enqueue>): ReadonlyArr
 		)
 	);
 
+/**
+ * Embeds one canonical queue insert in a data-modifying CTE owned by another transaction.
+ *
+ * The source CTE makes the enqueue conditional on the caller's successful state transition. Keeping
+ * the SQL here preserves one writer for `bolt_task`, while returning a fragment lets approval state,
+ * its projection, and the follow-up task commit atomically in one statement.
+ */
+export const enqueueFromCte = (
+	cteName: string,
+	sourceCte: string,
+	enqueue: Enqueue,
+	parameterOffset: number
+): Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
+	if (!/^[a-z][a-z0-9_]*$/u.test(cteName) || !/^[a-z][a-z0-9_]*$/u.test(sourceCte))
+		throw new TypeError('Task queue CTE names must be lowercase SQL identifiers.');
+	return {
+		sql: `, ${cteName} as (
+			insert into bolt_task (command, input, effect_id)
+			select $${parameterOffset}, $${parameterOffset + 1}::jsonb, $${parameterOffset + 2} from ${sourceCte}
+			on conflict (effect_id) do nothing
+			returning id
+		)`,
+		parameters: [enqueue.command, enqueue.input, enqueue.effectId]
+	};
+};
+
 /** Owns the two tables, and nothing else in the runtime touches them. */
 export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 	/**

@@ -1,7 +1,9 @@
 export {
-	CollectionCreateRequest,
+	CollectionMutateRequest,
+	CollectionPendingApproval,
 	CollectionWriteResult,
 	CollectionWriteValues,
+	pendingApprovalOf,
 	StoredRecord,
 	storedRecordsOf
 } from './collections.js';

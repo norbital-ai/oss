@@ -45,7 +45,6 @@
 
 	/** Writes the edited verifier prompt back when the field blurs. */
 	function saveVerifierPrompt(): void {
-		// repository-health:allow Q3 -- event handler
 		if (message.kind !== 'verifier') return;
 		if (prompt === message.prompt) return;
 		onVerifierPrompt?.(prompt);
@@ -61,7 +60,6 @@
 	 * alone cannot; the id is the last resort, and it is still better than an unattributed message.
 	 */
 	function counterpart(message: Extract<PanelMessage, { kind: 'agent-message' }>): string {
-		// repository-health:allow Q4 -- named helper
 		const named = message.agentName ?? message.sessionTitle;
 		if (named === null) return message.sessionId ?? t('bolt.agent.unknownAgent');
 		return message.sessionTitle === null || message.sessionTitle === message.agentName
@@ -71,7 +69,6 @@
 
 	/** A built-in tool's label is a catalog key; everything else is the humanized name. */
 	function toolLabel(message: Extract<PanelMessage, { kind: 'tool' }>): string {
-		// repository-health:allow Q4 -- named helper
 		return message.labelKey ? t(message.labelKey) : (message.label ?? message.name);
 	}
 </script>
@@ -82,7 +79,6 @@
 		     tabs are the addition: the summary alone tells a reader that history went somewhere without
 		     telling them where, and nothing was actually deleted to hide. -->
 		<details class="group/compaction w-full text-xs" role="note">
-			<!-- repository-health:allow UI6 -- details disclosure summary is a clickable control row. -->
 			<summary
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
@@ -167,7 +163,6 @@
 		     of the time, and the payload is tenant data that belongs behind a deliberate click rather
 		     than in the flow of the conversation. -->
 		<details class="group/tool w-full">
-			<!-- repository-health:allow UI6 -- details disclosure summary is a clickable control row. -->
 			<summary
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta whitespace-nowrap transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
@@ -333,7 +328,6 @@
 {:else if message.kind === 'reasoning'}
 	<li class="message" data-role="reasoning">
 		<details class="group/reasoning w-full">
-			<!-- repository-health:allow UI6 -- reasoning is supplementary detail behind a disclosure. -->
 			<summary
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
@@ -354,7 +348,6 @@
 {:else if message.kind === 'verifier'}
 	<li class="message my-1.5" data-role="verifier" data-testid="agent-verifier-scheduled">
 		<details class="group/verifier w-full" open>
-			<!-- repository-health:allow UI6 -- verifier disclosure is a clickable control row. -->
 			<summary
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
@@ -384,7 +377,6 @@
 {:else if message.kind === 'goal'}
 	<li class="message my-1.5" data-role="goal" data-achieved={message.achieved}>
 		<details class="group/goal w-full">
-			<!-- repository-health:allow UI6 -- goal verification is supplementary detail behind a disclosure. -->
 			<summary
 				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>

@@ -1,13 +1,7 @@
 import { Effect, Fiber, Schema } from 'effect';
 import type { QueryCache } from '#lib/client/replica/query-cache.js';
 import type { LiveQueryRegistry } from '#lib/client/replica/live-queries.js';
-
-interface RemoteQuery<Value> extends PromiseLike<Value> {
-	readonly current: Value | undefined;
-	readonly error: unknown;
-	readonly loading: boolean;
-	readonly refresh: () => Promise<void>;
-}
+import type { RemoteQuery } from '@norbital-ai/std/collection';
 
 const asError = (cause: unknown): Error =>
 	cause instanceof Error
@@ -30,7 +24,7 @@ type RemoteQueryCaching = Readonly<{
 /** Holds one in-flight command so `$derived` / CollectionTable see rows after the response lands. */
 class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Value> {
 	current = $state.raw<Value | undefined>(undefined);
-	error = $state.raw<unknown>(undefined);
+	error = $state.raw<Error | undefined>(undefined);
 	loading = $state(false);
 	readonly #pending: Fiber.Fiber<Value, unknown>;
 	readonly #fetch: () => Effect.Effect<Value, unknown>;
@@ -76,7 +70,7 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 	 * in a `finally`, because a cache read failing above the fetch is left to propagate with the flag
 	 * still true — the pre-Effect behaviour, which the pending fiber surfaces to its awaiter.
 	 */
-	refresh = (): Promise<void> => Effect.runPromise(this.#reload());
+	refresh: RemoteQuery<Value>['refresh'] = () => Effect.runPromise(this.#reload());
 
 	readonly #reload = (): Effect.Effect<void, unknown> => {
 		// Captured because `Effect.gen` bodies are plain generators, and `this` inside one is
@@ -120,10 +114,8 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 		});
 	};
 
-	then = <TResult1 = Value, TResult2 = never>(
-		onfulfilled?: ((value: Value) => TResult1 | PromiseLike<TResult1>) | null,
-		onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
-	) => Effect.runPromise(Fiber.join(this.#pending)).then(onfulfilled, onrejected);
+	then: RemoteQuery<Value>['then'] = (onfulfilled, onrejected) =>
+		Effect.runPromise(Fiber.join(this.#pending)).then(onfulfilled, onrejected);
 }
 
 /** Starts a command and exposes its result as Svelte-tracked query state. */

@@ -181,6 +181,7 @@ const decodeStoredText = Schema.decodeUnknownOption(StoredText);
 const decodeJsonObject = Schema.decodeUnknownOption(JsonObject);
 const decodeJsonObjects = Schema.decodeUnknownOption(JsonObjects);
 const decodeElicitationRequest = Schema.decodeUnknownOption(ElicitationRequest);
+const emptyJsonObject = (): typeof JsonObject.Type => ({});
 
 /**
  * Projects the typed, reactive `chat_message` query into the transcript's presentation records.
@@ -439,7 +440,6 @@ const MAX_SUBAGENT_DEPTH = 3;
  * parts rather than by reading one of them. The row used to hold a single part and a turn was spread
  * over several rows, which is why one turn rendered as several separate agent blocks.
  */
-// repository-health:allow Q3 -- ordered part projector
 function toPanelRow(
 	record: Readonly<Record<string, unknown>>,
 	context: ProjectionContext,
@@ -478,14 +478,13 @@ function toPanelRow(
 }
 
 /** Projects one stored tool call into the collapsed row the panel renders. */
-// repository-health:allow Q3 -- large projector
 function toToolCall(
 	call: unknown,
 	key: string,
 	context: ProjectionContext,
 	depth: number
 ): PanelToolCall {
-	const record: Record<string, unknown> = Option.getOrElse(decodeJsonObject(call), () => ({} as Record<string, unknown>));
+	const record = Option.getOrElse(decodeJsonObject(call), emptyJsonObject);
 	const name = typeof record.name === 'string' ? record.name : 'tool';
 	const metadata = TOOL_METADATA[name];
 	const mcpParsed = parsePublicMcpToolName(name);
@@ -500,7 +499,7 @@ function toToolCall(
 			: [];
 	// The loop turns a thrown tool into `{ error }` and feeds it back to the model rather than failing
 	// the turn, so a failed call is visible only here — the run around it still reports success.
-	const decodedOutput = Option.getOrElse(decodeJsonObject(output), () => ({} as Record<string, unknown>));
+	const decodedOutput = Option.getOrElse(decodeJsonObject(output), emptyJsonObject);
 	const error = typeof decodedOutput.error === 'string' ? decodedOutput.error : null;
 	const labelKey = mcpParsed ? null : (metadata?.labelKey ?? null);
 	const label = mcpParsed
@@ -564,7 +563,7 @@ function toInboundAgentMessage(
 	const id = record.id;
 	const text = textOf(record);
 	if (typeof id !== 'string' || text === null) return null;
-	const from = Option.getOrElse(decodeJsonObject(record.from), () => ({} as Record<string, unknown>));
+	const from = Option.getOrElse(decodeJsonObject(record.from), emptyJsonObject);
 	return {
 		kind: 'agent-message',
 		key: id,
@@ -592,11 +591,11 @@ function toOutboundAgentMessage(
 	context: ProjectionContext
 ): PanelAgentMessage | null {
 	if (call.name !== 'message_sandbox_agent') return null;
-	const input = Option.getOrElse(decodeJsonObject(part.input), () => ({} as Record<string, unknown>));
+	const input = Option.getOrElse(decodeJsonObject(part.input), emptyJsonObject);
 	if (typeof input.message !== 'string') return null;
 	const id = typeof part.id === 'string' ? part.id : null;
 	const answer = id === null ? undefined : context.results.get(id);
-	const output = Option.getOrElse(decodeJsonObject(answer), () => ({} as Record<string, unknown>));
+	const output = Option.getOrElse(decodeJsonObject(answer), emptyJsonObject);
 	return {
 		kind: 'agent-message',
 		key: call.key,
@@ -611,7 +610,6 @@ function toOutboundAgentMessage(
 }
 
 /** Narrows a tool's `input_required` payload to the fields the disclosure can render. */
-// repository-health:allow Q3 -- request projector
 function parseElicitationRequests(
 	requests: readonly unknown[]
 ): NonNullable<PanelToolCall['elicitation']> {
@@ -640,7 +638,6 @@ function formatPayload(value: unknown): string {
 }
 
 /** Truncates a payload or detail string at the panel's display cap. */
-// repository-health:allow Q4 -- named helper
 function clamp(text: string, limit: number = PAYLOAD_LIMIT): string {
 	return text.length <= limit ? text : `${text.slice(0, limit)}…`;
 }

@@ -108,10 +108,8 @@ const JsonObjectRows = Schema.Array(Schema.JsonObject);
  */
 export const objectRowsOf = (
 	rows: ReadonlyArray<Schema.Json>
-): Effect.Effect<
-	ReadonlyArray<Readonly<Record<string, Schema.Json>>>,
-	Schema.SchemaError
-> => Schema.decodeUnknownEffect(JsonObjectRows)(rows);
+): Effect.Effect<ReadonlyArray<Readonly<Record<string, Schema.Json>>>, Schema.SchemaError> =>
+	Schema.decodeUnknownEffect(JsonObjectRows)(rows);
 
 /** Identifies the authored-runtime carrier in Effect's context so wiring remains explicit and type checked. */
 export const AuthoredRuntimeService = Context.Service<AuthoredRuntime>(
@@ -131,6 +129,22 @@ const raise = <A>(cause: unknown): Effect.Effect<A, AuthoredRefusal> => {
 	return refusal === undefined ? Effect.die(cause) : Effect.fail(refusal);
 };
 
+/** Every result shape the authored surface admits, before the runtime settles it. */
+// repository-health:allow EFF2 -- Authored JavaScript may return a thenable; runAuthoredHandler converts it into Effect immediately at this single boundary.
+type AuthoredHandlerResult<A> = A | PromiseLike<A> | Effect.Effect<A>;
+
+/** Recognises promises without tying authored code to this realm's `Promise` constructor. */
+// repository-health:allow EFF2 -- The thenable predicate belongs to the same authored-JavaScript boundary and feeds only Effect.tryPromise below.
+const isPromiseLike = <A>(value: AuthoredHandlerResult<A>): value is PromiseLike<A> => {
+	if (
+		value === null ||
+		(typeof value !== 'object' && typeof value !== 'function') ||
+		!('then' in value)
+	)
+		return false;
+	return typeof value.then === 'function';
+};
+
 /**
  * Resolves one authored handler to an Effect, with a refusal it threw in the error channel.
  *
@@ -144,14 +158,15 @@ const raise = <A>(cause: unknown): Effect.Effect<A, AuthoredRefusal> => {
  * every recovery written here, and out through whichever generator happened to be running. Passing
  * `() => handler(context, api)` moves the call inside `Effect.suspend`, where it can be caught.
  *
- * Two arrival paths, because a refusal can be raised from either world the surface admits:
+ * Three arrival paths, because a refusal can be raised from any world the surface admits:
  *
  * - a plain handler throws **synchronously**, caught by the `try` below;
+ * - an async handler rejects its promise, caught by `Effect.tryPromise`;
  * - an `Effect.gen` handler throws inside the generator, which Effect converts to a **defect**
  *   before anyone else sees it, caught by `catchDefect`.
  */
 export const runAuthoredHandler = <A>(
-	handler: () => A | Effect.Effect<A>
+	handler: () => AuthoredHandlerResult<A>
 ): Effect.Effect<A, AuthoredRefusal> =>
 	Effect.suspend((): Effect.Effect<A, AuthoredRefusal> => {
 		const attempted = Result.try(handler);
@@ -159,6 +174,11 @@ export const runAuthoredHandler = <A>(
 		const produced = attempted.success;
 		if (Effect.isEffect(produced))
 			return produced.pipe(Effect.catchDefect((defect) => raise<A>(defect)));
+		if (isPromiseLike(produced))
+			return Effect.tryPromise({
+				try: () => produced,
+				catch: (cause) => cause
+			}).pipe(Effect.catch((cause) => raise<A>(cause)));
 		return Effect.succeed(produced);
 	});
 
@@ -259,11 +279,25 @@ type AuthoredInferenceImage = Readonly<{
  * authored `api.infer` must carry the same shape, and that shape is the contract between the
  * authoring surface and the AI facility.
  */
-export type InferenceRequest = Readonly<{
+type InferenceRequest = Readonly<{
 	readonly schema: Schema.Codec<unknown, unknown>;
 	readonly prompt: string;
 	readonly model?: string;
 	readonly images?: ReadonlyArray<AuthoredInferenceImage>;
+}>;
+
+/** The Effect-native capability object supplied to authored handlers after invocation binding. */
+export type RuntimeAuthoringApi = Readonly<{
+	readonly db: object;
+	readonly automations: Readonly<{
+		readonly run: (
+			name: string,
+			input?: Schema.Json,
+			options?: Readonly<{ readonly after?: string | number }>
+		) => Effect.Effect<{ readonly taskId: string }, unknown, never>;
+	}>;
+	readonly infer: (input: InferenceRequest) => Effect.Effect<unknown, unknown, never>;
+	readonly readFileAsset: (file: FileRef) => Effect.Effect<AuthoredFileAsset, unknown, never>;
 }>;
 
 /**
@@ -386,7 +420,7 @@ export const makeAuthoringApi = (
 	options: { readonly elevated?: boolean } = {},
 	/** Minted for a create whose payload carries no id; the platform RNG unless a host injects one. */
 	randomId: () => string = () => globalThis.crypto.randomUUID()
-): unknown => {
+): RuntimeAuthoringApi => {
 	const collectionApi = (collection: string): Readonly<Record<string, unknown>> => ({
 		findMany: (input: Readonly<Record<string, unknown>> = {}) =>
 			ops.findMany(collection, asQueryInput(input)),
@@ -397,8 +431,7 @@ export const makeAuthoringApi = (
 		findNearest: (input: Readonly<Record<string, unknown>>) =>
 			ops.findNearest(collection, asQueryInput(input)),
 		create: (input: Readonly<Record<string, unknown>>) => {
-			const identifier =
-				typeof input['id'] === 'string' ? input['id'] : randomId();
+			const identifier = typeof input['id'] === 'string' ? input['id'] : randomId();
 			return ops.create(collection, identifier, input as Readonly<Record<string, Schema.Json>>);
 		},
 		update: (id: string, input: Readonly<Record<string, unknown>>) =>

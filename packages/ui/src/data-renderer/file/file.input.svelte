@@ -265,7 +265,6 @@
 {#snippet triggerContent()}
 	{#if hasValidFiles}
 		<Inline gap="sm">
-			<!-- stupidity:allow UI6; stupidity:allow UI7; stupidity:allow UI13 -- overlapping file avatars are a deliberate visual pile, not a reusable sibling rhythm -->
 			<div class="flex items-center -space-x-1">
 				{#each displayFiles as file (file.id)}
 					<div class="h-5 w-5 overflow-hidden rounded-full border border-border">

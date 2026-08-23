@@ -17,7 +17,6 @@
 	const width = `${Math.floor(Math.random() * 40) + 50}%`;
 </script>
 
-<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 <div
 	bind:this={ref}
 	data-slot="sidebar-menu-skeleton"

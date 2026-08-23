@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { Effect } from 'effect';
 import {
 	createBrowserWorkspaceRuntime,
 	switchWorkspaceAccessScope
@@ -30,14 +31,14 @@ describe('browser access scope', () => {
 		expect(cache).toBeDefined();
 		if (cache === undefined || runtime.local === undefined) return;
 
-		await cache.hydrated;
+		await Effect.runPromise(cache.hydrated);
 		cache.write('visible-items', { role: 'operator' }, ['items']);
-		expect(await cache.read('visible-items')).toEqual({ role: 'operator' });
+		expect(await Effect.runPromise(cache.read('visible-items'))).toEqual({ role: 'operator' });
 		runtime.local.current = {} as NonNullable<typeof runtime.local.current>;
 
 		switchWorkspaceAccessScope(runtime, 'team:employee');
 
 		expect(runtime.local.current).toBeUndefined();
-		expect(await cache.read('visible-items')).toBeUndefined();
+		expect(await Effect.runPromise(cache.read('visible-items'))).toBeUndefined();
 	});
 });

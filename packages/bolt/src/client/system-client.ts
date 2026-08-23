@@ -44,11 +44,11 @@ const ImpersonationResponse = Schema.Struct({
 	activeTeamIds: Schema.Array(Schema.String),
 	teams: Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String }))
 });
-export const SchemaPlanResponse = Schema.Struct({
+const SchemaPlanResponse = Schema.Struct({
 	fingerprint: Schema.String,
 	steps: Schema.Array(Schema.Struct({ id: Schema.String, sql: Schema.String }))
 });
-export const AutomationHistoryRow = Schema.Struct({
+const AutomationHistoryRow = Schema.Struct({
 	effect_id: Schema.optionalKey(Schema.String),
 	status: Schema.optionalKey(Schema.String),
 	attempts: Schema.optionalKey(Schema.Number),

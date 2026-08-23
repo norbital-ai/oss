@@ -105,7 +105,11 @@ const subject = Subject.make({
 });
 
 type Row = Record<string, Schema.Json>;
-type ApprovalRow = { readonly requestId: string; readonly state: Schema.Json };
+type ApprovalRow = {
+	readonly requestId: string;
+	readonly state: Schema.Json;
+	readonly requestorId: string;
+};
 type AuditRow = {
 	readonly kind: string;
 	readonly subjectId: string;
@@ -128,7 +132,7 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 				sql: string,
 				parameters: ReadonlyArray<Schema.Json>
 			) {
-				if (sql.includes('bolt_task')) {
+				if (sql.includes('bolt_task') && !sql.includes('bolt_approvals')) {
 					// The follow-up work a decision schedules is a row now, not a facility call, so the
 					// tests observe it the way a host would: as `bolt_task` inserts, with the command
 					// first among the parameters.
@@ -140,14 +144,53 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 					const current = yield* Ref.get(approvals);
 					if (current.has(requestId))
 						return { rows: [], affectedRows: 0 } satisfies DatabaseResponse;
+					if (sql.includes('with locked as')) {
+						const table = quotedName(sql, 'update');
+						const id = String(parameters.at(-2));
+						const currentTables = yield* Ref.get(tables);
+						const rows = new Map(currentTables.get(table ?? '') ?? new Map());
+						const row = rows.get(id);
+						if (
+							row === undefined ||
+							(typeof row['approval_id'] === 'string' && row['approval_id'].length > 0)
+						)
+							return { rows: [], affectedRows: 0 } satisfies DatabaseResponse;
+						rows.set(id, { ...row, approval_id: requestId });
+						yield* Ref.set(tables, new Map(currentTables).set(table ?? '', rows));
+					}
 					const state = parameters[2] ?? null;
-					yield* Ref.set(approvals, new Map(current).set(requestId, { requestId, state }));
+					yield* Ref.set(
+						approvals,
+						new Map(current).set(requestId, {
+							requestId,
+							state,
+							requestorId: String(parameters[3])
+						})
+					);
+					if (sql.includes('bolt_audit')) {
+						const events = yield* Ref.get(audit);
+						yield* Ref.set(audit, [
+							...events,
+							{
+								kind: 'approval_requested',
+								subjectId: String(parameters[3]),
+								payload: state
+							}
+						]);
+					}
 					return { rows: [{ state }], affectedRows: 1 } satisfies DatabaseResponse;
+				}
+				if (sql.includes('select 1 from requestor where approval_request_id')) {
+					const current = yield* Ref.get(approvals);
+					const row = current.get(String(parameters[0]));
+					return {
+						rows: row?.requestorId === String(parameters[1]) ? [{ '?column?': 1 }] : [],
+						affectedRows: 0
+					} satisfies DatabaseResponse;
 				}
 				if (
 					sql.includes("state->>'_tag' = 'Pending'") &&
-					sql.includes('operation') &&
-					sql.includes('collection')
+					sql.includes("state->'operation'->>'collection'")
 				) {
 					const collectionName = String(parameters[0]);
 					const recordId = String(parameters[1]);
@@ -187,12 +230,26 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 					) {
 						return { rows: [], affectedRows: 0 } satisfies DatabaseResponse;
 					}
-					yield* Ref.set(approvals, new Map(current).set(requestId, { requestId, state: next }));
+					yield* Ref.set(
+						approvals,
+						new Map(current).set(requestId, {
+							requestId,
+							state: next,
+							requestorId: existing.requestorId
+						})
+					);
+					if (sql.includes('bolt_task')) taskInserts.push(JSON.stringify(parameters));
 					if (sql.includes('bolt_audit')) {
 						const events = yield* Ref.get(audit);
 						yield* Ref.set(audit, [
 							...events,
-							{ kind: String(parameters[2]), subjectId: String(parameters[3]), payload: next }
+							{
+								kind: sql.includes('approval_withdrawn')
+									? 'approval_withdrawn'
+									: 'approval_decided',
+								subjectId: String(parameters[2]),
+								payload: next
+							}
 						]);
 					}
 					return { rows: [{ state: next }], affectedRows: 1 } satisfies DatabaseResponse;
@@ -226,6 +283,35 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 							})),
 						affectedRows: 0
 					} satisfies DatabaseResponse;
+				}
+				if (sql.includes('with locked as') && sql.includes('approval_id = $2')) {
+					const table = quotedName(sql, 'update');
+					const id = String(parameters[0]);
+					const requestId = String(parameters[1]);
+					const current = yield* Ref.get(tables);
+					const existing = new Map(current.get(table ?? '') ?? new Map());
+					const row = existing.get(id);
+					if (
+						row === undefined ||
+						(typeof row['approval_id'] === 'string' && row['approval_id'].length > 0)
+					)
+						return { rows: [], affectedRows: 0 } satisfies DatabaseResponse;
+					existing.set(id, { ...row, approval_id: requestId });
+					yield* Ref.set(tables, new Map(current).set(table ?? '', existing));
+					return { rows: [{ record_id: id }], affectedRows: 1 } satisfies DatabaseResponse;
+				}
+				if (sql.includes('with released as') && sql.includes('approval_id = null')) {
+					const table = quotedName(sql, 'update');
+					const id = String(parameters[parameters.length === 2 ? 0 : 1]);
+					const requestId = parameters.length === 2 ? undefined : String(parameters[0]);
+					const current = yield* Ref.get(tables);
+					const existing = new Map(current.get(table ?? '') ?? new Map());
+					const row = existing.get(id);
+					if (row === undefined || (requestId !== undefined && row['approval_id'] !== requestId))
+						return { rows: [], affectedRows: 0 } satisfies DatabaseResponse;
+					existing.set(id, { ...row, approval_id: null });
+					yield* Ref.set(tables, new Map(current).set(table ?? '', existing));
+					return { rows: [{ record_id: id }], affectedRows: 1 } satisfies DatabaseResponse;
 				}
 				if (sql.startsWith('insert into bolt_') || sql.includes('insert into bolt_')) {
 					return { rows: [], affectedRows: 1 } satisfies DatabaseResponse;
@@ -363,8 +449,9 @@ const testLayer = (recorded: Array<string> = []) => {
 		)
 	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
+	const wake = SyncWake.layer.pipe(Layer.provide(Transport.layer(undefined, context)));
 	const approvalsLayer = Approvals.layer.pipe(
-		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue))
+		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, wake))
 	);
 	const authoredLayer = Layer.succeed(AuthoredRuntimeService, emptyAuthoredRuntime);
 	const collectionsLayer = Collections.layer.pipe(
@@ -381,7 +468,7 @@ const testLayer = (recorded: Array<string> = []) => {
 				authoredLayer,
 				// No transport is bound, so the announcement is ignored — which is exactly the behaviour
 				// under test here: a write path must not depend on anywhere to publish.
-				SyncWake.layer.pipe(Layer.provide(Transport.layer(undefined, context)))
+				wake
 			)
 		)
 	);
@@ -670,6 +757,45 @@ describe('approval lock and resume', () => {
 			]);
 		}).pipe(Effect.provide(testLayer()))
 	);
+
+	it.effect('preserves request-for-change as its own final state and schedules cleanup', () => {
+		const enqueued: Array<string> = [];
+		return Effect.gen(function* () {
+			const collectionsService = yield* Collections.Service;
+			const approvalsService = yield* Approvals.Service;
+			const pending = yield* Effect.flip(
+				collectionsService.create(EffectId.make('create-changes-requested'), subject, {
+					collection: 'orders',
+					id: rid('order-changes-requested'),
+					values: { title: 'Needs revision' }
+				})
+			);
+			expect(pending).toBeInstanceOf(PendingApproval);
+			if (!(pending instanceof PendingApproval)) return;
+			const requested = yield* approvalsService.status(
+				EffectId.make('status-changes-requested'),
+				pending.requestId
+			);
+			if (requested === undefined) return;
+			const changed = yield* approvalsService.decide(
+				EffectId.make('decide-changes-requested'),
+				subject,
+				requested,
+				'request_changes',
+				'Please add the missing evidence.'
+			);
+			expect(changed).toMatchObject({
+				_tag: 'ChangesRequested',
+				reason: 'Please add the missing evidence.'
+			});
+			expect(enqueued.some((request) => request.includes('collections.discard'))).toBe(true);
+			const stored = yield* approvalsService.status(
+				EffectId.make('status-changes-requested-final'),
+				pending.requestId
+			);
+			expect(stored?._tag).toBe('ChangesRequested');
+		}).pipe(Effect.provide(testLayer(enqueued)));
+	});
 
 	it.effect('releases the lock when a pending request is withdrawn', () =>
 		Effect.gen(function* () {

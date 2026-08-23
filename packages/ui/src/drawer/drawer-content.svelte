@@ -21,7 +21,6 @@
 		)}
 		{...restProps}
 	>
-		<!-- stupidity:allow UI7 -- fixed-size drawer grab handle decoration -->
 		<div class="mx-auto mt-4 h-2 w-[100px] rounded-full bg-muted"></div>
 		{@render children?.()}
 	</DrawerPrimitive.Content>

@@ -50,6 +50,7 @@ describe('refuse, as a typed refusal rather than a defect', () => {
 				return 'unreachable';
 			})
 		);
+		expect(Exit.isFailure(exit)).toBe(true);
 		expect(refusalFrom(exit)).toMatchObject({
 			message: 'Unpaid break must be shorter than the recorded worked time.'
 		});
@@ -75,15 +76,22 @@ describe('refuse, as a typed refusal rather than a defect', () => {
 	});
 
 	it('leaves a handler that genuinely broke as a defect', async () => {
-		const exit = await outcomeOf(
+		const synchronousExit = await outcomeOf(
 			runAuthoredHandler(() => {
 				throw new TypeError('cannot read properties of undefined');
 			})
 		);
+		const asynchronousExit = await outcomeOf(
+			runAuthoredHandler(async () => {
+				throw new TypeError('could not finish async work');
+			})
+		);
 		// The contract this change does *not* alter. A refusal is a rule; a `TypeError` is a fault, and
 		// reporting it as a business rule would be the same conflation in the opposite direction.
-		expect(refusalFrom(exit)).toBeUndefined();
-		expect(String(defectFrom(exit))).toContain('cannot read properties of undefined');
+		expect(refusalFrom(synchronousExit)).toBeUndefined();
+		expect(String(defectFrom(synchronousExit))).toContain('cannot read properties of undefined');
+		expect(refusalFrom(asynchronousExit)).toBeUndefined();
+		expect(String(defectFrom(asynchronousExit))).toContain('could not finish async work');
 	});
 
 	it('passes a value and a resolved promise through untouched', async () => {

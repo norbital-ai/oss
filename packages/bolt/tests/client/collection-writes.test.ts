@@ -1,22 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { Effect } from 'effect';
 import { EnvironmentName, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '../../src/client.js';
-import { createWorkspaceApiProxy } from '../../src/client/runtime.js';
+import {
+	type CollectionCatalog,
+	CollectionMutationPendingApproval,
+	createWorkspaceApiProxy
+} from '../../src/client/runtime.js';
+import { createLiveQueryRegistry } from '../../src/client/replica/live-queries.js';
+import { ANY_COLLECTION, createQueryCache } from '../../src/client/replica/query-cache.js';
 
 /**
- * What the browser sends, and what it is entitled to hand back.
+ * What the declarative browser mutation sends, returns, and exposes while in flight.
  *
- * Two faults lived in the same four lines. The client minted the primary key with
- * `crypto.randomUUID()` and posted it, which made the browser the authority on the identity of a row
- * that did not exist yet — and made a nested write inexpressible, because a child's foreign key
- * names a parent the client has not created. And it returned the caller's own argument with that id
- * stapled on, which is not the record: once a column default, a generated column and a
- * `create.before` hook have run, the row in the database has fields the submission never had and
- * different values in the ones it did.
- *
- * The transport is a stub here on purpose. What is under test is the half of the contract the
- * browser owns — what goes on the wire and what comes off it — and a real database would only make
- * the same two assertions slower and less specific. `wire-create.test.ts` is the other half.
+ * The transport is a stub because this suite owns the browser half only. The server suite owns the
+ * atomic reconciliation behind `collections.mutate`.
  */
 const scope = {
 	tenantId: TenantId.make('tenant'),
@@ -27,8 +25,8 @@ const scope = {
 type Sent = { readonly command: string; readonly input: unknown };
 
 type CollectionWriter = {
-	readonly create: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
-	readonly update: (id: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+	readonly mutate: (input: Record<string, unknown>) => Promise<void>;
+	readonly pending: number;
 };
 
 /** A client whose transport records what it was asked to post and answers with `answer`. */
@@ -45,7 +43,7 @@ const clientAnswering = (answer: unknown) => {
 	return { sent, orders };
 };
 
-/** One row as the database holds it: the columns that were posted, plus the ones only it can fill. */
+/** One row as the database holds it: the columns posted plus the ones only it can fill. */
 const storedOrder = {
 	id: '0f5f0f6e-2c2e-4f3f-9b3a-9b9c9d9e9f00',
 	reference: 'ORD-1-normalised',
@@ -54,87 +52,324 @@ const storedOrder = {
 	created_at: '2026-08-20T00:00:00.000Z'
 };
 
-describe('a create from the browser', () => {
-	it('posts the values alone, with no id of its own', async () => {
-		const { sent, orders } = clientAnswering({ created: true, records: [storedOrder] });
-
-		await orders.create({ reference: 'ORD-1' });
-
-		expect(sent).toHaveLength(1);
-		expect(sent[0]?.command).toBe('collections.create');
-		expect(sent[0]?.input).toEqual({ collection: 'orders', values: { reference: 'ORD-1' } });
-		// Stated separately from the equality above so a future field added to the body cannot make
-		// this pass by accident: the point is the absence of `id`, not the exact shape around it.
-		expect(Object.keys(sent[0]?.input as object)).not.toContain('id');
+const deferred = () => {
+	let resolve: (value: unknown) => void = () => undefined;
+	let reject: (cause: unknown) => void = () => undefined;
+	const promise = new Promise<unknown>((settle, fail) => {
+		resolve = settle;
+		reject = fail;
 	});
+	return { promise, resolve, reject };
+};
 
-	it('returns the stored row rather than the values that were submitted', async () => {
-		const { orders } = clientAnswering({ created: true, records: [storedOrder] });
-
-		const record = await orders.create({ reference: 'ORD-1' });
-
-		expect(record).toEqual(storedOrder);
-		// The three ways the stored row differs from the submission, named one at a time because each
-		// is a separate reason the old return value was wrong.
-		expect(record['reference']).toBe('ORD-1-normalised');
-		expect(record['status']).toBe('draft');
-		expect(record['row_version']).toBe(1);
-	});
-
-	it('carries a nested graph to the server untouched', async () => {
-		const { sent, orders } = clientAnswering({ created: true, records: [storedOrder] });
-
-		await orders.create({
+describe('a declarative collection mutation from the browser', () => {
+	it('posts the complete graph through the one mutation command', async () => {
+		const { sent, orders } = clientAnswering({ records: [storedOrder] });
+		const values = {
+			id: storedOrder.id,
 			reference: 'ORD-1',
-			order_line_order: [{ sku: 'a-1' }, { sku: 'a-2' }]
+			order_line_order: [
+				{ id: 'line-1', sku: 'a-1' },
+				{ sku: 'a-2', components: [] }
+			]
+		};
+
+		await orders.mutate(values);
+
+		expect(sent).toEqual([
+			{ command: 'collections.mutate', input: { collection: 'orders', values } }
+		]);
+	});
+
+	it('resolves without exposing a stored row', async () => {
+		const { orders } = clientAnswering({ records: [storedOrder] });
+
+		const result = await orders.mutate({ reference: 'ORD-1' });
+
+		expect(result).toBeUndefined();
+	});
+
+	it('does not require readback from a write-only collection', async () => {
+		const { orders } = clientAnswering({ records: [] });
+
+		await expect(orders.mutate({ reference: 'ORD-1' })).resolves.toBeUndefined();
+	});
+
+	it('invalidates readable queries after a write-only success', async () => {
+		const cache = createQueryCache('write-only-success-test');
+		await Effect.runPromise(cache.hydrated);
+		cache.write('orders', [storedOrder], ['orders']);
+		cache.write('customers', [], ['customers']);
+
+		const queries = createLiveQueryRegistry();
+		let refreshRoot = 0;
+		const rootQuery = {
+			collections: ['orders'],
+			refresh: () => {
+				refreshRoot += 1;
+				return Promise.resolve();
+			}
+		};
+		queries.register(rootQuery);
+
+		const bolt = createBoltClient(scope, {
+			command: () => Promise.resolve({ records: [] } as never)
+		});
+		const proxy = createWorkspaceApiProxy({ bolt, db: {}, cache, queries });
+		const orders = Reflect.get(proxy.db, 'orders') as CollectionWriter;
+
+		await orders.mutate({ reference: 'ORD-1' });
+		await vi.waitFor(() => expect(refreshRoot).toBe(1));
+
+		expect(await Effect.runPromise(cache.read('orders'))).toBeUndefined();
+		expect(await Effect.runPromise(cache.read('customers'))).toEqual([]);
+		expect(orders.pending).toBe(0);
+	});
+
+	it('clearing a relationship invalidates cascade-reachable descendants', async () => {
+		const cache = createQueryCache('cascade-clear-test');
+		await Effect.runPromise(cache.hydrated);
+		cache.write('order-lines', [], ['order_lines']);
+		cache.write('components', [], ['components']);
+		cache.write('line-notes', [], ['line_notes']);
+
+		const catalog: CollectionCatalog = {
+			orders: {
+				name: 'orders',
+				fields: [],
+				relationships: [
+					{
+						name: 'order_line_order',
+						target: 'order_lines',
+						cardinality: 'many',
+						cascade: true
+					}
+				]
+			},
+			order_lines: {
+				name: 'order_lines',
+				fields: [],
+				relationships: [
+					{
+						name: 'component_line',
+						target: 'components',
+						cardinality: 'many',
+						cascade: true
+					},
+					{
+						name: 'note_line',
+						target: 'line_notes',
+						cardinality: 'many'
+					}
+				]
+			},
+			components: { name: 'components', fields: [], relationships: [] },
+			line_notes: { name: 'line_notes', fields: [], relationships: [] }
+		};
+
+		const queries = createLiveQueryRegistry();
+		let refreshLines = 0;
+		let refreshComponents = 0;
+		let refreshNotes = 0;
+		const lineQuery = {
+			collections: ['order_lines'],
+			refresh: () => {
+				refreshLines += 1;
+				return Promise.resolve();
+			}
+		};
+		const componentQuery = {
+			collections: ['components'],
+			refresh: () => {
+				refreshComponents += 1;
+				return Promise.resolve();
+			}
+		};
+		const noteQuery = {
+			collections: ['line_notes'],
+			refresh: () => {
+				refreshNotes += 1;
+				return Promise.resolve();
+			}
+		};
+		queries.register(lineQuery);
+		queries.register(componentQuery);
+		queries.register(noteQuery);
+
+		const bolt = createBoltClient(scope, {
+			command: () => Promise.resolve({ records: [] } as never)
+		});
+		const proxy = createWorkspaceApiProxy({ bolt, db: {}, cache, queries }, catalog);
+		const orders = Reflect.get(proxy.db, 'orders') as CollectionWriter;
+
+		await orders.mutate({ id: storedOrder.id, order_line_order: [] });
+		await vi.waitFor(() => {
+			expect(refreshLines).toBe(1);
+			expect(refreshComponents).toBe(1);
 		});
 
-		// The client does not know which keys are relations — only the workspace's declared relations
-		// can say that, and they are the server's. So its job is to not lose them.
-		expect(sent[0]?.input).toEqual({
-			collection: 'orders',
-			values: { reference: 'ORD-1', order_line_order: [{ sku: 'a-1' }, { sku: 'a-2' }] }
-		});
+		expect(await Effect.runPromise(cache.read('order-lines'))).toBeUndefined();
+		expect(await Effect.runPromise(cache.read('components'))).toBeUndefined();
+		expect(await Effect.runPromise(cache.read('line-notes'))).toEqual([]);
+		expect(refreshNotes).toBe(0);
+		expect(orders.pending).toBe(0);
 	});
 
-	it('throws rather than inventing a record when the answer carries none', async () => {
-		const { orders } = clientAnswering({ created: true });
-
-		// There is no honest fallback here. "The write succeeded and I do not know what it stored" is
-		// not a record, and returning the submission in its place is the failure this replaced —
-		// silently, into a cache, where it looks exactly like a successful write.
-		await expect(orders.create({ reference: 'ORD-1' })).rejects.toThrow(/stored row/);
-	});
-
-	it('does not treat a non-record answer as an empty result', async () => {
-		const { orders } = clientAnswering({ created: true, records: ['not-a-row'] });
-
-		await expect(orders.create({ reference: 'ORD-1' })).rejects.toThrow(/stored row/);
-	});
-});
-
-describe('an update from the browser', () => {
-	it('answers with the stored row, because an update runs hooks too', async () => {
-		const updated = { ...storedOrder, reference: 'ORD-2-normalised', row_version: 2 };
-		const { sent, orders } = clientAnswering({ updated: true, records: [updated] });
-
-		const record = await orders.update(storedOrder.id, { reference: 'ORD-2' });
-
-		expect(sent[0]?.input).toEqual({
+	it('surfaces HTTP 202 as a precise pending-approval rejection', async () => {
+		const outcome = {
+			pending: true,
+			requestId: 'approval-1',
 			collection: 'orders',
 			id: storedOrder.id,
-			values: { reference: 'ORD-2' }
-		});
-		expect(record).toEqual(updated);
-		// The version the database bumped, which no submission has ever been able to report.
-		expect(record['row_version']).toBe(2);
+			action: 'update'
+		};
+		const { orders } = clientAnswering(outcome);
+
+		const failure = await orders
+			.mutate({ id: storedOrder.id, reference: 'ORD-2' })
+			.catch((cause: unknown) => cause);
+
+		expect(failure).toBeInstanceOf(CollectionMutationPendingApproval);
+		expect(failure).toMatchObject(outcome);
+		expect(orders.pending).toBe(0);
 	});
 
-	it('throws when the answer carries no row', async () => {
-		const { orders } = clientAnswering({ updated: true, records: [] });
+	it('invalidates root and approval readers before surfacing HTTP 202', async () => {
+		const outcome = {
+			pending: true,
+			requestId: 'approval-1',
+			collection: 'orders',
+			id: storedOrder.id,
+			action: 'update'
+		} as const;
+		const cache = createQueryCache('pending-approval-test');
+		await Effect.runPromise(cache.hydrated);
+		cache.write('orders', [storedOrder], ['orders']);
+		cache.write('approval-status', outcome, [ANY_COLLECTION]);
+		cache.write('customers', [], ['customers']);
 
-		await expect(orders.update(storedOrder.id, { reference: 'ORD-2' })).rejects.toThrow(
-			/stored row/
+		const queries = createLiveQueryRegistry();
+		let refreshRoot = 0;
+		let refreshApproval = 0;
+		let refreshUnrelated = 0;
+		const rootQuery = {
+			collections: ['orders'],
+			refresh: () => {
+				refreshRoot += 1;
+				return Promise.resolve();
+			}
+		};
+		const approvalQuery = {
+			collections: [ANY_COLLECTION],
+			refresh: () => {
+				refreshApproval += 1;
+				return Promise.resolve();
+			}
+		};
+		const unrelatedQuery = {
+			collections: ['customers'],
+			refresh: () => {
+				refreshUnrelated += 1;
+				return Promise.resolve();
+			}
+		};
+		queries.register(rootQuery);
+		queries.register(approvalQuery);
+		queries.register(unrelatedQuery);
+
+		const bolt = createBoltClient(scope, {
+			command: () => Promise.resolve(outcome as never)
+		});
+		const proxy = createWorkspaceApiProxy({ bolt, db: {}, cache, queries });
+		const orders = Reflect.get(proxy.db, 'orders') as CollectionWriter;
+
+		await expect(orders.mutate({ id: storedOrder.id, reference: 'ORD-2' })).rejects.toBeInstanceOf(
+			CollectionMutationPendingApproval
 		);
+		await vi.waitFor(() => {
+			expect(refreshRoot).toBe(1);
+			expect(refreshApproval).toBe(1);
+		});
+
+		expect(await Effect.runPromise(cache.read('orders'))).toBeUndefined();
+		expect(await Effect.runPromise(cache.read('approval-status'))).toBeUndefined();
+		expect(await Effect.runPromise(cache.read('customers'))).toEqual([]);
+		expect(refreshUnrelated).toBe(0);
+		expect(orders.pending).toBe(0);
+	});
+
+	it('does not expose browser create, update, or delete operations', () => {
+		const { orders } = clientAnswering({ records: [storedOrder] });
+
+		expect(orders).not.toHaveProperty('create');
+		expect(orders).not.toHaveProperty('update');
+		expect(orders).not.toHaveProperty('delete');
+	});
+
+	it('counts concurrent writes until each one settles', async () => {
+		const first = deferred();
+		const second = deferred();
+		const responses = [first, second];
+		const bolt = createBoltClient(scope, {
+			command: () => responses.shift()?.promise as Promise<never>
+		});
+		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
+		const orders = Reflect.get(proxy.db, 'orders') as CollectionWriter;
+
+		const one = orders.mutate({ reference: 'ORD-1' });
+		const two = orders.mutate({ reference: 'ORD-2' });
+		expect(orders.pending).toBe(2);
+
+		first.resolve({ records: [storedOrder] });
+		await one;
+		expect(orders.pending).toBe(1);
+
+		second.resolve({ records: [{ ...storedOrder, id: 'order-2' }] });
+		await two;
+		expect(orders.pending).toBe(0);
+	});
+
+	it('settles pending when the transport rejects', async () => {
+		const held = deferred();
+		const bolt = createBoltClient(scope, { command: () => held.promise as Promise<never> });
+		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
+		const orders = Reflect.get(proxy.db, 'orders') as CollectionWriter;
+
+		const write = orders.mutate({ reference: 'ORD-1' });
+		expect(orders.pending).toBe(1);
+		held.reject(new Error('offline'));
+		await expect(write).rejects.toThrow();
+		expect(orders.pending).toBe(0);
+	});
+
+	it('invalidates readers when a committed mutation rejects while settling', async () => {
+		const cache = createQueryCache('committed-settle-failure-test');
+		await Effect.runPromise(cache.hydrated);
+		cache.write('orders', [storedOrder], ['orders']);
+		cache.write('customers', [], ['customers']);
+
+		const queries = createLiveQueryRegistry();
+		let refreshRoot = 0;
+		const rootQuery = {
+			collections: ['orders'],
+			refresh: () => {
+				refreshRoot += 1;
+				return Promise.resolve();
+			}
+		};
+		queries.register(rootQuery);
+
+		const bolt = createBoltClient(scope, {
+			command: () => Promise.reject(new Error('after hook failed after commit'))
+		});
+		const proxy = createWorkspaceApiProxy({ bolt, db: {}, cache, queries });
+		const orders = Reflect.get(proxy.db, 'orders') as CollectionWriter;
+
+		await expect(orders.mutate({ id: storedOrder.id, reference: 'ORD-2' })).rejects.toBeDefined();
+		await vi.waitFor(() => expect(refreshRoot).toBe(1));
+
+		expect(await Effect.runPromise(cache.read('orders'))).toBeUndefined();
+		expect(await Effect.runPromise(cache.read('customers'))).toEqual([]);
+		expect(orders.pending).toBe(0);
 	});
 });

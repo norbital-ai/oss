@@ -8,7 +8,7 @@ import {
 	type Invocation
 } from '@norbital-ai/bolt-protocol';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
-import { WEB_AGENT_NAME, type RelationDefinition } from '#lib/authoring/workspace-schema.js';
+import { WEB_AGENT_NAME, type WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import * as SystemPrincipal from '#lib/runtime/access/system-principal.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
 import {
@@ -28,6 +28,7 @@ import {
 	SEED_PRINCIPAL_ID
 } from '#lib/runtime/identity/static-identity.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
+import { resolveWritableManyRelation } from '#lib/runtime/collections/collections.js';
 import { compileOrderTerms, makeWhereContext } from '#lib/runtime/collections/where.js';
 import * as Integrations from '#lib/runtime/integrations/integrations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
@@ -56,6 +57,7 @@ import {
 	type AuthoredRuntime
 } from '#lib/runtime/collections/authored.js';
 import * as Workspace from '#lib/runtime/workspace.js';
+import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 import { describeCause, DispatchError } from '#lib/runtime/workspace.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
@@ -96,7 +98,7 @@ const ApprovalRequestInput = Schema.Struct({
 const ApprovalDecideInput = Schema.Struct({
 	subject: Subject,
 	state: ApprovalState,
-	decision: Schema.Literals(['approve', 'reject']),
+	decision: Schema.Literals(['approve', 'reject', 'request_changes']),
 	reason: Schema.optionalKey(Schema.String)
 });
 const SyncDiffInput = Schema.Struct({ subject: Subject, cursor: SyncCursor, limit: Schema.Number });
@@ -147,7 +149,6 @@ const RateLimitAddressInput = Schema.Struct({
 	email: Schema.optionalKey(Schema.String)
 });
 const FounderLedgerRow = Schema.Struct({ value: Schema.NonEmptyString });
-const StoredId = Schema.Struct({ id: Schema.NonEmptyString });
 const decodeJsonObject = Schema.decodeUnknownResult(JsonObject);
 /**
  * What a host may still assert once it has proved who it is, which is only ever *less* authority.
@@ -160,54 +161,18 @@ const decodeJsonObject = Schema.decodeUnknownResult(JsonObject);
  * payload's copy to do except be believed. `impersonatedSubject` survives because it narrows rather
  * than widens — `AccessControl.impersonate` still has to authorize the authenticated actor for it.
  */
-/**
- * The create body, and the `id` that used to be on it.
- *
- * `CollectionCreateRequest` in `@norbital-ai/bolt-protocol` is this struct without `subject`, which
- * the boundary injects from the authenticated credential. It is declared there rather than only
- * here because the browser client posts against it and the two halves must not be able to disagree
- * about whether an id is part of a create.
- *
- * It is not, any more. The client minted one with `crypto.randomUUID()` and posted it, which made
- * the browser the authority on a primary key before the write had been authorized, before
- * `create.before` had run, and before the row existed — and it made a nested write inexpressible,
- * because the child of a record the client has not yet created has no parent id to carry. Ids are
- * assigned in `mutate`, at the point the row is built, and answered with.
- *
- * A create that arrives carrying an `id` has it *ignored* rather than honoured, because
- * `Schema.Struct` drops keys it does not declare. That is the one silent behaviour in this change,
- * and it is bounded: the runtime and the browser client that talks to it are the same compiled
- * artifact, so there is no version of the client still sending one. The paths that legitimately
- * choose their own key — an import replaying a deterministic id, an integration keying on an
- * external id — go through `collections.createMany` and `collections.import`, which still declare it.
- */
-const CollectionCreateInput = Schema.Struct({
+/** The protocol mutation body plus the subject minted from the authenticated credential. */
+const CollectionMutateInput = Schema.Struct({
 	subject: Subject,
 	collection: Schema.NonEmptyString,
 	values: CollectionWriteValues
-});
-/**
- * An update names the row it changes, so its `id` is required and this is no longer an alias of the
- * create input. It was one, which is the only reason the create input could lose a field an update
- * cannot do without.
- */
-const CollectionUpdateInput = Schema.Struct({
-	subject: Subject,
-	collection: Schema.NonEmptyString,
-	id: Schema.NonEmptyString,
-	values: Schema.Record(Schema.String, Schema.Json)
-});
-const CollectionDeleteInput = Schema.Struct({
-	subject: Subject,
-	collection: Schema.NonEmptyString,
-	id: Schema.NonEmptyString
 });
 const CollectionMutation = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	id: Schema.NonEmptyString,
 	values: Schema.Record(Schema.String, Schema.Json)
 });
-const CollectionCreateManyInput = Schema.Struct({
+const CollectionImportInput = Schema.Struct({
 	subject: Subject,
 	records: Schema.Array(CollectionMutation)
 });
@@ -301,7 +266,11 @@ const SkillInput = Schema.Struct({
 	subject: Subject,
 	name: Schema.optionalKey(Schema.NonEmptyString)
 });
-const ApprovalStatusInput = Schema.Struct({ requestId: Schema.NonEmptyString });
+const ApprovalStatusInput = Schema.Struct({
+	subject: Subject,
+	requestId: Schema.NonEmptyString
+});
+const ApprovalRequestIdInput = Schema.Struct({ requestId: Schema.NonEmptyString });
 const ApprovalWithdrawInput = Schema.Struct({ subject: Subject, state: ApprovalState });
 const SyncShapeInput = Schema.Struct({ subject: Subject });
 const SyncSnapshotInput = Schema.Struct({
@@ -580,7 +549,13 @@ const checkWrittenValues = Effect.fn('Bolt.checkWrittenValues')(function* (
 	//
 	// Relation keys pass through untouched: neither check looks at a key that is not a declared
 	// field, so the children of a graph are invisible here and are reached by the walk below instead.
+	const writtenSystemField = Object.keys(values).find(
+		(name) => name !== 'id' && SYSTEM_COLUMN_NAMES.includes(name)
+	);
 	const invalid =
+		(writtenSystemField === undefined
+			? undefined
+			: `${collection}.${writtenSystemField} is managed by Bolt and cannot be written.`) ??
 		describeGeneratedColumnWrite(definition.fields, values) ??
 		describeInvalidCustomValue(definition.fields, values, workspace.definition.customTypes);
 	if (invalid !== undefined)
@@ -588,7 +563,7 @@ const checkWrittenValues = Effect.fn('Bolt.checkWrittenValues')(function* (
 });
 
 /**
- * How far the boundary follows a create graph down.
+ * How far the boundary follows a mutation graph down.
  *
  * The same bound the runtime's `flattenGraph` applies, and stated here for the same reason: the
  * relation set has cycles in it, so a body that closes one would be walked until the isolate died.
@@ -598,11 +573,11 @@ const checkWrittenValues = Effect.fn('Bolt.checkWrittenValues')(function* (
  */
 const GRAPH_CHECK_DEPTH = 5;
 
-/** The child rows a create body names in `many`-relation keys, followed to their own collections. */
+/** Child rows named in writable `many` relationship keys, followed to their own collections. */
 const writtenGraphChildren = (
 	collection: string,
 	values: Readonly<Record<string, Schema.Json>>,
-	relations: ReadonlyArray<RelationDefinition>
+	definition: WorkspaceDefinition
 ): ReadonlyArray<{
 	readonly collection: string;
 	readonly values: Readonly<Record<string, Schema.Json>>;
@@ -614,17 +589,11 @@ const writtenGraphChildren = (
 	for (const [key, value] of Object.entries(values)) {
 		const childRows = Schema.decodeUnknownResult(Schema.Array(JsonObject))(value);
 		if (Result.isFailure(childRows)) continue;
-		const relation = relations.find(
-			(candidate) =>
-				candidate.name === key &&
-				candidate.source === collection &&
-				candidate.cardinality === 'many' &&
-				candidate.from?.column !== undefined
-		);
+		const relation = resolveWritableManyRelation(definition, collection, key);
 		if (relation === undefined) continue;
 		for (const child of childRows.success) {
 			children.push({
-				collection: relation.target,
+				collection: relation.childCollection,
 				values: child
 			});
 		}
@@ -633,7 +602,7 @@ const writtenGraphChildren = (
 };
 
 /**
- * The same check, down every branch of a create graph.
+ * The same check, down every branch of a mutation graph.
  *
  * A nested write posts a parent and its children in one body, and the children are rows in *other*
  * collections — so checking only the top level would let a generated column be written on a child
@@ -647,7 +616,6 @@ const checkWrittenGraph = Effect.fn('Bolt.checkWrittenGraph')(function* (
 	values: Readonly<Record<string, Schema.Json>>
 ) {
 	const workspace = yield* Workspace.Service;
-	const relations = workspace.definition.relations ?? [];
 	// A worklist rather than recursion: the depth bound is the point of the walk, and a queue makes
 	// it a value the loop carries rather than something to be reconstructed from a call stack.
 	const pending: Array<{
@@ -658,26 +626,18 @@ const checkWrittenGraph = Effect.fn('Bolt.checkWrittenGraph')(function* (
 	while (pending.length > 0) {
 		const node = pending.shift();
 		if (node === undefined) break;
-		/**
-		 * A key is a key wherever it is spelled, and a create assigns none of them.
-		 *
-		 * Dropping the `id` field off the create body would otherwise leave one way back in: put it
-		 * in `values` instead. On the parent that would route the payload through `mutate`'s update
-		 * branch, so `collections.create` would perform an update — authorized, but not the operation
-		 * anybody asked for. On a child it lands in the insert's column list beside the id the graph
-		 * assigned, and the statement fails on a duplicate column with nothing to say about why.
-		 */
-		if (Object.hasOwn(node.values, 'id'))
+		const id = node.values['id'];
+		if (id !== undefined && (typeof id !== 'string' || id.length === 0))
 			yield* Effect.fail(
 				new DispatchError({
 					code: 'invalid_input',
-					message: `A create on ${node.collection} carried an id. Ids are assigned by the server; to change an existing record use collections.update.`
+					message: `The id of a ${node.collection} mutation must be a non-empty string.`
 				})
 			);
 		yield* checkWrittenValues(node.collection, node.values);
 		if (node.depth >= GRAPH_CHECK_DEPTH) continue;
 		pending.push(
-			...writtenGraphChildren(node.collection, node.values, relations).map((child) => ({
+			...writtenGraphChildren(node.collection, node.values, workspace.definition).map((child) => ({
 				...child,
 				depth: node.depth + 1
 			}))
@@ -749,7 +709,7 @@ const IDENTITY_RESOURCE = 'identity';
 /**
  * The `teams.*` commands join it, and they are membership writes in exactly the same sense.
  *
- * Administration is a status on the person — `bolt_auth_user.status` — and `decide` short-circuits
+ * Administration is a status on the person — `user.status` — and `decide` short-circuits
  * on it before it consults a policy, so an administrator passes this gate and that is how these are
  * meant to be reached. They are gated on `manage`/`identity` rather than on `isAdministrator`
  * directly for the reason stated above: provisioning needs a way in that is not "be an
@@ -841,7 +801,7 @@ const authorizeSystemCommand = Effect.fn('Bolt.authorizeSystemCommand')(function
 /**
  * A team on the wire, with nulls where the row has none.
  *
- * Spelled out rather than spread, so a column added to `bolt_team` cannot reach a client by
+ * Spelled out rather than spread, so a column added to `team` cannot reach a client by
  * accident — and so the shape is stable whether the team has a parent or not, which is what lets the
  * settings surface read it with one decoder.
  */
@@ -1307,7 +1267,7 @@ export const dispatchInvocation: (
 			 *
 			 * Checked before the credential is demanded, for the same structural reason a sign-in is: there
 			 * is nobody to hold a credential. A freshly created database has no tables, so it has no
-			 * `bolt_auth_user` to be an administrator in and no `bolt_auth_session` to authenticate
+			 * `user` to be an administrator in and no `session` to authenticate
 			 * against — and `schema.migrate` is the command that would create both. The authority to break
 			 * that deadlock cannot come from the workspace's own membership.
 			 *
@@ -1320,7 +1280,7 @@ export const dispatchInvocation: (
 			 * enumerate.
 			 *
 			 * The previous arrangement is what this replaces, rather than joins: the host used to write a
-			 * `bolt_auth_user` row and a `bolt_auth_session` row straight into the tenant database over
+			 * `user` row and a `session` row straight into the tenant database over
 			 * `pg`, then hand bolt the token. That made provisioning authority a *row* — created before it
 			 * was needed, deleted afterwards if nothing crashed, and indistinguishable at the point of
 			 * decision from a person's. Nothing is written here and nothing needs revoking; the authority
@@ -1688,7 +1648,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		 * become, and what are they right now.
 		 *
 		 * A command rather than something stamped onto the document, for the same reason `apps.visible`
-		 * is one: the answer is this tenant's own `bolt_team` rows crossed with the credential's
+		 * is one: the answer is this tenant's own `team` rows crossed with the credential's
 		 * standing, and only the tenant runtime holds both.
 		 */
 		case 'access.impersonation': {
@@ -1827,7 +1787,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		 * is accepted, not overlooked — same person, same tenant, same status, and sessions expire.
 		 * Please do not "fix" it by storing the credential.
 		 *
-		 * `bolt_auth_verification` is reused rather than a table added, because it already holds
+		 * `verification` is reused rather than a table added, because it already holds
 		 * exactly this kind of thing and adding a collection would put a schema step in front of
 		 * every existing tenant. Note what that reuse implies: Better Auth deletes every row whose
 		 * `expires_at` has passed on each `findVerificationValue`, so this row is genuinely swept.
@@ -1844,7 +1804,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const ledgerIdentifier = `${FOUNDER_CLAIM_IDENTIFIER}${input.claimId}`;
 			const recorded = yield* database.execute(effectId, {
 				_tag: 'Query',
-				sql: 'select "value" from bolt_auth_verification where "identifier" = $1 limit 1',
+				sql: 'select "value" from "verification" where "identifier" = $1 limit 1',
 				parameters: [ledgerIdentifier]
 			});
 			const ledgerRow = Schema.decodeUnknownResult(FounderLedgerRow)(recorded.rows[0]);
@@ -1890,10 +1850,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			yield* database.execute(effectId, {
 				_tag: 'Query',
 				// `"expiresAt"` is quoted camelCase because that is the column the collection declares and
-				// the migration creates — `bolt_auth_*` follows Better Auth's own naming, not the
-				// snake_case the rest of the schema uses. An unquoted or snake_cased name here is a
+				// the migration creates — Better Auth's field naming is not the snake_case the rest of the
+				// schema uses. An unquoted or snake_cased name here is a
 				// statement that fails only in the tenant database, at signup, in production.
-				sql: 'insert into bolt_auth_verification ("identifier", "value", "expiresAt") values ($1, $2, $3)',
+				sql: 'insert into "verification" ("identifier", "value", "expiresAt") values ($1, $2, $3)',
 				parameters: [
 					ledgerIdentifier,
 					`${founderId} ${input.email}`,
@@ -2056,10 +2016,26 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		}
 		case 'approvals.status': {
 			const input = yield* decode(ApprovalStatusInput, commandInput);
+			const visible = yield* (yield* Collections.Service).approvalFindFirst(
+				effectId,
+				input.subject,
+				{
+					where: { id: { eq: input.requestId } }
+				}
+			);
+			if (visible === undefined) return json(null);
 			return json((yield* (yield* Approvals.Service).status(effectId, input.requestId)) ?? null);
 		}
 		case 'approvals.timeline': {
 			const input = yield* decode(ApprovalStatusInput, commandInput);
+			const visible = yield* (yield* Collections.Service).approvalFindFirst(
+				effectId,
+				input.subject,
+				{
+					where: { id: { eq: input.requestId } }
+				}
+			);
+			if (visible === undefined) return json([]);
 			return json(yield* (yield* Approvals.Service).timeline(effectId, input.requestId));
 		}
 		case 'sync.head': {
@@ -2320,92 +2296,49 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				)
 			);
 		}
-		/**
-		 * A create over the wire, which is a batch of one and takes the batch's path.
-		 *
-		 * `mutate` rather than `create` for three things at once, none of which the old call could
-		 * do. It assigns the id, so the browser stops minting one for a row that does not exist yet.
-		 * It runs the graph through `flattenGraph`, so a body carrying a parent and its children
-		 * commits as one transaction instead of being refused or silently flattened to the parent.
-		 * And it returns the rows from the read-back it already performs, so the answer is what the
-		 * database holds rather than what the caller submitted — which, once a default, a generated
-		 * column and a `create.before` hook have run, are not the same record.
-		 */
-		case 'collections.create': {
-			const input = yield* decode(CollectionCreateInput, commandInput);
+		/** The browser's one declarative write: a root and every relationship it explicitly owns. */
+		case 'collections.mutate': {
+			const input = yield* decode(CollectionMutateInput, commandInput);
 			yield* checkWrittenGraph(input.collection, input.values);
 			const collections = yield* Collections.Service;
-			const written = yield* collections.mutate(effectId, input.subject, input.collection, [
-				input.values
-			]);
+			const written = yield* collections.mutate(
+				effectId,
+				input.subject,
+				input.collection,
+				[input.values],
+				false,
+				0,
+				{ declarative: true }
+			);
 			const stored = written[0];
-			if (stored === undefined)
-				return yield* new DispatchError({
-					code: 'write_not_stored',
-					message: `A create on ${input.collection} completed without a stored record. Reporting success with no row is what made a client cache a record the database never held.`
-				});
-			const records = yield* maskStoredRecords(input.subject, input.collection, [stored]);
-			// Read off the unmasked row: the id identifies what this caller just created, so it is
-			// theirs to know even where a field policy would keep the column out of `records`.
-			const assigned = yield* decode(StoredId, stored);
-			return json({
-				created: true,
-				id: assigned.id,
-				records
-			});
-		}
-		case 'collections.createMany': {
-			const input = yield* decode(CollectionCreateManyInput, commandInput);
-			const records = input.records.map((record) => ({ ...record, subject: input.subject }));
-			for (const record of records) yield* checkWrittenValues(record.collection, record.values);
-			yield* (yield* Collections.Service).createMany(effectId, input.subject, records);
-			return json({
-				created: records.length,
-				ids: records.map(({ id }) => id)
-			});
-		}
-		/**
-		 * An update answers with the row too, for the same reason a create does.
-		 *
-		 * It costs one read that the old shape did not make, and it is not a read the caller was
-		 * avoiding: a client that was handed back its own submission had to invalidate and refetch to
-		 * find out what the row actually became, so this replaces a round trip rather than adding
-		 * one. The read goes through `findFirst`, so it is filtered and masked exactly as the same
-		 * caller's own query would be — no separate disclosure path.
-		 */
-		case 'collections.update': {
-			const input = yield* decode(CollectionUpdateInput, commandInput);
-			yield* checkWrittenValues(input.collection, input.values);
-			const collections = yield* Collections.Service;
-			yield* collections.update(effectId, input.subject, input);
-			const stored = yield* collections.findFirst(effectId, input.subject, {
-				collection: input.collection,
-				where: { id: { in: [input.id] } }
-			});
-			return json({
-				updated: true,
-				id: input.id,
-				records: stored === undefined ? [] : [stored]
-			});
-		}
-		case 'collections.delete': {
-			const input = yield* decode(CollectionDeleteInput, commandInput);
-			const collections = yield* Collections.Service;
-			yield* collections.delete(effectId, input.subject, input.collection, input.id);
-			return json({ deleted: true, id: input.id });
+			const id = stored?.['id'];
+			// Mutation success is independent of read entitlement. Querying through the ordinary subject
+			// path applies both row and field policy; a write-only subject receives an empty record list,
+			// and a post-commit read failure cannot turn an already committed mutation into a retry.
+			const records =
+				typeof id !== 'string'
+					? []
+					: yield* collections
+							.findMany(effectId, input.subject, {
+								collection: input.collection,
+								where: { id: { in: [id] } },
+								limit: 1
+							})
+							.pipe(Effect.catch(() => Effect.succeed([])));
+			return json({ records });
 		}
 		case 'collections.resume': {
-			const input = yield* decode(ApprovalStatusInput, commandInput);
+			const input = yield* decode(ApprovalRequestIdInput, commandInput);
 			yield* (yield* Collections.Service).resume(effectId, input.requestId);
 			return json({ resumed: true, requestId: input.requestId });
 		}
 		case 'collections.discard': {
-			const input = yield* decode(ApprovalStatusInput, commandInput);
+			const input = yield* decode(ApprovalRequestIdInput, commandInput);
 			yield* (yield* Collections.Service).discard(effectId, input.requestId);
 			return json({ discarded: true, requestId: input.requestId });
 		}
 		case 'collections.import': {
-			const input = yield* decode(CollectionCreateManyInput, commandInput);
+			const input = yield* decode(CollectionImportInput, commandInput);
 			const records = input.records.map((record) => ({ ...record, subject: input.subject }));
 			return json({
 				imported: yield* (yield* Collections.Service).import(effectId, input.subject, records)

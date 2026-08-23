@@ -87,7 +87,6 @@
 {/snippet}
 
 <TooltipPrimitive.Root context={chartCtx} variant="none">
-	<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 	<div
 		class={cn(
 			'grid min-w-[9rem] items-start gap-1.5 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-xs shadow-xl',
@@ -103,7 +102,6 @@
 				{@const key = `${nameKey || item.key || item.label || 'value'}`}
 				{@const itemConfig = getPayloadConfigFromPayload(chart.config, item, key)}
 				{@const indicatorColor = color || item.color}
-				<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 				<div
 					class={cn(
 						'flex w-full flex-wrap items-stretch gap-2 [&>svg]:size-2.5 [&>svg]:text-muted-foreground',

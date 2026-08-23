@@ -469,7 +469,6 @@
 			</div>
 
 			<!-- Scrollable columns -->
-			<!-- stupidity:allow UI5 -- virtualizer column pane clips its own viewport -->
 			<div class="absolute top-0 right-0 h-full overflow-hidden" style="left: {pinnedWidth}px;">
 				<div
 					class="relative h-full"
@@ -562,7 +561,6 @@
 				{/if}
 			</Inline>
 		{:else}
-			<!-- stupidity:allow UI10 -- a virtualized header cell clips its label inside an explicitly sized column -->
 			<Inline
 				gap="none"
 				grow
@@ -858,7 +856,6 @@
 													buttons never drift past the row's natural right edge when the
 													row already fits inside the viewport.
 												-->
-												<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 												<div
 													class={cn(
 														'pointer-events-none absolute inset-y-0 z-50 flex items-center gap-0.5',
@@ -943,7 +940,6 @@
 	</div>
 
 	<!-- scrollable cells -->
-	<!-- stupidity:allow UI5 -- virtualizer column pane clips its own viewport -->
 	<div
 		class="absolute top-0 h-full overflow-hidden"
 		style="left: {pinnedWidth}px; width: {scrollTotalWidth}px;"
@@ -1009,7 +1005,6 @@
 				{/if}
 			{/if}
 
-			<!-- stupidity:allow UI10 -- a virtualized grid cell clips content at its declared column boundary -->
 			<Inline
 				gap="none"
 				grow

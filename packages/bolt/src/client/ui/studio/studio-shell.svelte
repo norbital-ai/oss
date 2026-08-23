@@ -110,8 +110,9 @@
 	});
 	/** The file open in the Editor and its working copy; a commit writes exactly this pair. */
 	let editor = $state({ path: '', value: '' });
-	let mounted = $state(false);
-	const manifestQuery = $derived(mounted ? client.system.workspace.manifest({}) : undefined);
+	const manifestQuery = $derived(
+		typeof window === 'undefined' ? undefined : client.system.workspace.manifest({})
+	);
 	const workspace = $derived({
 		manifest: manifestQuery?.current,
 		error:
@@ -121,7 +122,9 @@
 					? manifestQuery.error.message
 					: String(manifestQuery.error)
 	});
-	const environmentQuery = $derived(mounted ? client.system.secrets.status({}) : undefined);
+	const environmentQuery = $derived(
+		typeof window === 'undefined' ? undefined : client.system.secrets.status({})
+	);
 	const vault = $derived({
 		entries: environmentQuery?.current ?? [],
 		error:
@@ -237,7 +240,6 @@
 	};
 
 	onMount(() => {
-		mounted = true;
 		void Effect.runPromise(actions.reload());
 		const interval = setInterval(() => {
 			void Effect.runPromise(actions.reload());

@@ -84,7 +84,6 @@
 		{:else}
 			<dl class="divide-y rounded-md border bg-muted/20">
 				{#each entries as [key, entry] (key)}
-					<!-- stupidity:allow UI6 -- structured dl entry row needs explicit responsive key/value tracks -->
 					<div class="grid min-w-0 gap-1 px-3 py-2.5 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-3">
 						<dt class="text-xs font-medium text-muted-foreground">{humanize(key)}</dt>
 						<dd class="min-w-0 break-words">{@render renderValue(entry)}</dd>

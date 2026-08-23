@@ -31,13 +31,13 @@ There are **no roles**. A policy has a filename-derived name and nothing else se
 
 Three facts, and they are the whole model:
 
-1. **A person belongs to exactly one team.** `bolt_auth_user.team_id` points at one `bolt_team` row.
+1. **A person belongs to exactly one team.** `user.team_id` points at one `team` row.
    Not a set. A combination of authority that used to come from holding two roles at once has to be
    a _named team_ now — more verbose, and more honest, because every combination anybody actually
    holds appears in a diff.
 2. **Which policies a team holds is declared in `src/access/+teams.ts`**, keyed by team name and valued by
    policy names, `satisfies Teams`. Team names are matched **case-insensitively** against
-   `bolt_team.name` — one rule, everywhere.
+   `team.name` — one rule, everywhere.
 3. **Membership is a row; authority is source.** An operator creates teams and moves people between
    them from a dashboard, without a deploy, because that changes constantly. What a team may _do_ is
    compiled into the release, because a row that granted a policy would be a privilege escalation
@@ -45,7 +45,7 @@ Three facts, and they are the whole model:
 
 The two halves are bound by name and they move independently at runtime:
 
-- A `bolt_team` row whose name `+teams.ts` does not mention holds no policies. Inert, not broken —
+- A `team` row whose name `+teams.ts` does not mention holds no policies. Inert, not broken —
   an operator may create a team before the code that gives it authority ships.
 - Source cannot name a missing policy because the generated `PolicyName` union makes that a build
   error. A stale database team row remains inert until source declares authority for its name.
@@ -82,12 +82,12 @@ grant behind.
 
 Details that matter:
 
-- **`approvers` entries and `bolt_team` names are the same string.** There is no id resolution and no
+- **`approvers` entries and `team` names are the same string.** There is no id resolution and no
   separate approver registry: an entry is matched against the deciding subject's own team name,
   folded. `approvers` is generated `TeamName`, so misspellings fail the build. Declare review-only
   teams in `src/access/+teams.ts` with an empty policy list.
 - **Activation creates the teams a step names.** On deploy, `reconcileApproverTeams` inserts an
-  _empty_ `bolt_team` row for every `approvers` entry that has no row yet, guarded by a folded
+  _empty_ `team` row for every `approvers` entry that has no row yet, guarded by a folded
   `not exists` so two spellings cannot mint two teams. It never refuses a release, and it logs each
   creation — so a name here that nobody expected is a typo in `approvers` showing itself at the one
   moment somebody is watching. An empty team is the correct thing to create: the name now resolves,
@@ -148,13 +148,13 @@ nobody else, including every rung above it.
 
 ## Where the state lives
 
-| Table / column                                 | Holds                                                                            |
-| ---------------------------------------------- | -------------------------------------------------------------------------------- |
-| `approval_request`                             | Status, the steps, which record it holds, the operation to apply, when it closed |
-| `requestor`                                    | Links a request to the user who raised it                                        |
+| Table / column                        | Holds                                                                            |
+| ------------------------------------- | -------------------------------------------------------------------------------- |
+| `approval_request`                    | Status, the steps, which record it holds, the operation to apply, when it closed |
+| `requestor`                           | Links a request to the user who raised it                                        |
 | `approval_id` on every collection row | The stamp identifying the open request holding it — **this is the lock**         |
-| `bolt_team`                                    | The teams themselves; `approvers` entries are matched against `name`             |
-| `bolt_auth_user.team_id`                       | Which single team a person belongs to                                            |
+| `team`                                | The teams themselves; `approvers` entries are matched against `name`             |
+| `user.team_id`                        | Which single team a person belongs to                                            |
 
 The flow itself is not a separate table: it rides on the policy grant's own `approval` field, in the
 compiled release, carrying **team names** — there is no `approval_config` with ids resolved into it,
@@ -167,13 +167,13 @@ on its policies, but they exist and this is where the answers are.
 ## Approver teams on a fresh tenant
 
 Activation reconciles them. `reconcileApproverTeams` walks every `approvers` entry in the release and
-inserts an **empty** `bolt_team` row for any name that has none, so on a brand-new tenant the teams
+inserts an **empty** `team` row for any name that has none, so on a brand-new tenant the teams
 exist as soon as the workspace activates. It never refuses a release and never invents membership —
 who is on a team is an operator's decision.
 
 So the failure mode is no longer an unknown approver name; generated types reject that. It is a
 declared team that exists and is **empty**. If an approval cannot be decided, look for a
-`bolt_team` row with no members. The activation log names every team it created.
+`team` row with no members. The activation log names every team it created.
 
 ## What does not exist
 

@@ -226,11 +226,9 @@ describe('Transport identities recognise a sender without granting them anything
 });
 
 describe('The schema plan builds the canonical greenfield schema', () => {
-	it('creates channels directly on bolt_auth_user', () => {
+	it('creates channels directly on user', () => {
 		const steps = buildSchemaPlan(envoyWorkspace()).steps;
-		expect(steps.find((step) => step.id === 'collection:bolt_auth_user')?.sql).toContain(
-			'"channels" jsonb'
-		);
+		expect(steps.find((step) => step.id === 'collection:user')?.sql).toContain('"channels" jsonb');
 	});
 
 	it('creates envoy tables without compatibility steps', () => {

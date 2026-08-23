@@ -409,7 +409,6 @@
 {/snippet}
 
 {#if isReadonlySimple}
-	<!-- stupidity:allow UI5 -- this leaf component owns a local clip or scroll boundary required by its interaction contract -->
 	<div
 		class={cn(
 			'flex w-full items-center justify-start rounded-md p-1 pl-2',

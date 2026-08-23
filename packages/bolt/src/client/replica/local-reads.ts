@@ -5,7 +5,11 @@ import {
 	renderOrderBy,
 	type WhereContext
 } from '#lib/runtime/collections/where.js';
-import type { PGliteLike } from '#lib/client/replica/pglite-sql.js';
+import {
+	executeReplicaStatement,
+	type PGliteLike,
+	replicaStatement
+} from '#lib/client/replica/pglite-sql.js';
 import { decodeReferenceRow } from '#lib/runtime/collections/references.js';
 
 /**
@@ -34,13 +38,10 @@ import { decodeReferenceRow } from '#lib/runtime/collections/references.js';
  * they are not attempted — a local answer that is merely close is worse than a remote answer that is
  * correct, and the replica exists to make reads fast, never to change them.
  *
- * ## Why this module holds raw SQL
- *
- * SQL1 exception: the two statements here are the replica's own read infrastructure, and the clauses
- * they carry are produced by the *server's* `compileWhere`/`compileOrderTerms` — imported, never
- * reimplemented — with the collection name quoted as an identifier. There is no query builder over
- * PGlite and nothing to route through one; the only literals are `count(*)` and `to_jsonb`, which is
- * how a page row stays the same object the server would have sent.
+ * Both statements use the replica's parameterized execution port. Their dynamic clauses are
+ * produced by the *server's* `compileWhere`/`compileOrderTerms` — imported, never reimplemented —
+ * and the collection name is quoted as an identifier. The only fixed projections are `count(*)`
+ * and `to_jsonb`, which is how a page row stays the same object the server would have sent.
  */
 
 const ReferenceTarget = Schema.Struct({
@@ -168,9 +169,12 @@ export const createLocalReader = (
 
 			const table = `"${collection.replaceAll('"', '""')}"`;
 			if (command === 'collections.count') {
-				const counted = yield* database.query<{ readonly count: number }>(
-					`select count(*)::int as count from ${table} where ${filter.sql}`,
-					filter.parameters
+				const counted = yield* executeReplicaStatement<{ readonly count: number }>(
+					database,
+					replicaStatement(
+						`select count(*)::int as count from ${table} where ${filter.sql}`,
+						filter.parameters
+					)
 				);
 				return counted.rows[0]?.count ?? 0;
 			}
@@ -191,9 +195,12 @@ export const createLocalReader = (
 
 			// No alias: `compileWhere` qualifies columns with the collection's real table name, so
 			// renaming the relation here puts its predicate out of scope.
-			const result = yield* database.query<{ readonly record: Schema.Json }>(
-				`select to_jsonb(${table}) as record from ${table} where ${filter.sql}${ordering}${bounds}`,
-				parameters
+			const result = yield* executeReplicaStatement<{ readonly record: Schema.Json }>(
+				database,
+				replicaStatement(
+					`select to_jsonb(${table}) as record from ${table} where ${filter.sql}${ordering}${bounds}`,
+					parameters
+				)
 			);
 			/**
 			 * A page with a successor is handed back to the server.

@@ -1,4 +1,5 @@
 import { mount, unmount } from 'svelte';
+import { Effect } from 'effect';
 import BoltWorkspace from './workspace.svelte';
 import { setWorkspaceSession } from '#lib/client/session.js';
 import type {
@@ -21,30 +22,30 @@ import type {
  * cache is namespaced by tenant and environment. A cache namespaced from a value that arrives after
  * it is built is a cache shared between organizations.
  */
-export const mountWorkspace = async (
-	target: HTMLElement,
-	options: MountWorkspaceOptions
-): Promise<WorkspaceHandle> => {
-	setWorkspaceSession(options.session);
-	const workspace = await options.loadWorkspace();
-	/**
-	 * The view the mounted tree actually watches.
-	 *
-	 * Created here, by *this* bundle's Svelte, and mutated by `update`. A `$state` object handed in
-	 * from the host would be a proxy over the host's reactive graph: reads from inside this bundle
-	 * would register nowhere, and the shell would render the first view forever.
-	 */
-	const view = $state<WorkspaceView>({ ...options.view });
-	const app = mount(BoltWorkspace, {
-		target,
-		props: { view, workspace, actions: options.actions }
-	});
-	return {
-		update: (next) => {
-			Object.assign(view, next);
-		},
-		destroy: () => {
-			void unmount(app);
-		}
-	};
-};
+export const mountWorkspace = (target: HTMLElement, options: MountWorkspaceOptions) =>
+	Effect.runPromise(
+		Effect.gen(function* () {
+			yield* Effect.sync(() => setWorkspaceSession(options.session));
+			const workspace = yield* Effect.tryPromise(options.loadWorkspace);
+			/**
+			 * The view the mounted tree actually watches.
+			 *
+			 * Created here, by *this* bundle's Svelte, and mutated by `update`. A `$state` object handed in
+			 * from the host would be a proxy over the host's reactive graph: reads from inside this bundle
+			 * would register nowhere, and the shell would render the first view forever.
+			 */
+			const view = $state<WorkspaceView>({ ...options.view });
+			const app = mount(BoltWorkspace, {
+				target,
+				props: { view, workspace, actions: options.actions }
+			});
+			return {
+				update: (next: WorkspaceView) => {
+					Object.assign(view, next);
+				},
+				destroy: () => {
+					void unmount(app);
+				}
+			} satisfies WorkspaceHandle;
+		})
+	);

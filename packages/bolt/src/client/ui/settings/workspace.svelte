@@ -220,7 +220,7 @@
 			view="workspace-settings:people"
 			title="Members"
 			description="Membership is derived from sessions and linked external subjects; it is not a table that can be edited here."
-			features={{ create: false, bulk: false }}
+			features={{ create: false }}
 			query={{ orderBy: { name: 'asc' } }}
 		>
 			{#snippet columns({ Column })}
@@ -250,7 +250,7 @@
 			view="workspace-settings:invitations"
 			title="Invitations"
 			description="Open invitations to join this workspace, and how each one ended. A pending invitation with a passed deadline reads as expired."
-			features={{ create: false, bulk: false }}
+			features={{ create: false }}
 			query={{ orderBy: { status: 'asc' } }}
 		>
 			{#snippet columns({ Column })}
@@ -272,7 +272,7 @@
 			view="workspace-settings:activity"
 			title="Activity"
 			description="The access events the runtime has recorded — invitations, joins and revocations."
-			features={{ create: false, bulk: false }}
+			features={{ create: false }}
 			query={{ orderBy: { at: 'desc' } }}
 		>
 			{#snippet columns({ Column })}

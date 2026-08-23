@@ -31,7 +31,7 @@ import {
 /**
  * A release names the teams its approvals route to, and activation makes them exist.
  *
- * `step.approvers` and `bolt_team.name` are the same string, bound by nothing but that. Before this,
+ * `step.approvers` and `team.name` are the same string, bound by nothing but that. Before this,
  * a release could declare `approvers: ['Payroll Approvers']` against a workspace with no such row
  * and nothing would say so: the deploy succeeded, the surface listed the teams that happened to
  * exist, and the fault surfaced later as an approval request that no subject in the workspace was
@@ -68,7 +68,7 @@ const definition = workspace({
 								// is: `approvers` is a generated union of that file's keys, so a name it does
 								// not declare is a compile error rather than an approval nobody can decide.
 								//
-								// **No `bolt_team` row is seeded for either of them anywhere in this file.**
+								// **No `team` row is seeded for either of them anywhere in this file.**
 								// Declaring a team is a statement in the release; the row is runtime, and the
 								// assertions below are what has to bring it into existence.
 								approvers: ['Payroll Approvers', 'Senior Management']
@@ -150,7 +150,7 @@ const provisionedDatabase = async (seed: ReadonlyArray<string> = []) => {
 	};
 	for (const step of await provisioningStatements(definition)) await run(step.id, step.sql);
 	for (const name of seed) {
-		await run(`team:${name}`, 'insert into bolt_team ("id", "name") values ($1, $2)', [
+		await run(`team:${name}`, 'insert into "team" ("id", "name") values ($1, $2)', [
 			globalThis.crypto.randomUUID(),
 			name
 		]);
@@ -159,7 +159,7 @@ const provisionedDatabase = async (seed: ReadonlyArray<string> = []) => {
 };
 
 const teamRows = (database: Awaited<ReturnType<typeof makeTestDatabase>>) =>
-	database.query('select "name", "parent_id"::text as "parentId" from bolt_team order by "name"');
+	database.query('select "name", "parent_id"::text as "parentId" from "team" order by "name"');
 
 const activate = (database: Awaited<ReturnType<typeof makeTestDatabase>>) =>
 	makeBundle(definition, manifest).activate(
@@ -205,7 +205,7 @@ describe('activation reconciles the teams a release names as approvers', () => {
 			// exactly what the workspace-access projection is built to keep visible.
 			expect(
 				await database.query(
-					'select 1 from bolt_auth_user where "team_id" is not null union all select 1 from bolt_external_subjects where team_id is not null'
+					'select 1 from "user" where "team_id" is not null union all select 1 from bolt_external_subjects where team_id is not null'
 				)
 			).toEqual([]);
 		} finally {

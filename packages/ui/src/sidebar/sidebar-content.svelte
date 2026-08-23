@@ -14,7 +14,6 @@
 	const { t } = useI18n<UiKeys>();
 </script>
 
-<!-- stupidity:allow UI10 -- collapsed icon mode intentionally disables this component's scroll overflow -->
 <Scroll
 	axis="y"
 	name={t('misc.sidebar')}

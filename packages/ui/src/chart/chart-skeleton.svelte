@@ -5,7 +5,6 @@
 	let { donut = false }: { donut?: boolean } = $props();
 </script>
 
-<!-- stupidity:allow UI15 -- the skeleton reserves the chart's contractual plotting height to prevent layout shift -->
 <Stack gap="none" class="h-[250px]" aria-hidden="true">
 	<Inline
 		align="end"

@@ -111,34 +111,35 @@ export interface FieldDefinition<TType extends FieldType = FieldType> {
 	/** Polymorphic-reference metadata. The logical value remains one `{ kind, id }` handle. */
 	readonly reference?: ReferenceFieldDefinition;
 }
+
+interface FieldOptions {
+	readonly required?: boolean;
+	readonly indexed?: boolean;
+	/**
+	 * Makes the column's index unique — one row per value.
+	 *
+	 * Needed wherever an upsert conflicts on the column rather than on the key: `on conflict`
+	 * requires a unique index to conflict against, and without one the statement does not
+	 * degrade, it fails. `user.email` is the case that forced this — the write that
+	 * admits a workspace's first administrator is an upsert on the address, made before that
+	 * person exists.
+	 */
+	readonly unique?: boolean;
+	/**
+	 * The column's DEFAULT, as the SQL literal the DDL carries — see `sqlDefault` above.
+	 *
+	 * A builder-authored model gets this from the builder. A runtime-owned collection is these
+	 * `field.*` calls and had no way to say it, so `required: true` rendered `not null` with no
+	 * default and every insert that correctly omits the column was refused. That is the same
+	 * failure `roster_entries.origin` had, one layer up.
+	 */
+	readonly sqlDefault?: string;
+}
+
 /** Owns make field behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 const makeField =
 	<TType extends ScalarType>(type: TType) =>
-	(
-		options: {
-			readonly required?: boolean;
-			readonly indexed?: boolean;
-			/**
-			 * Makes the column's index unique — one row per value.
-			 *
-			 * Needed wherever an upsert conflicts on the column rather than on the key: `on conflict`
-			 * requires a unique index to conflict against, and without one the statement does not
-			 * degrade, it fails. `bolt_auth_user.email` is the case that forced this — the write that
-			 * admits a workspace's first administrator is an upsert on the address, made before that
-			 * person exists.
-			 */
-			readonly unique?: boolean;
-			/**
-			 * The column's DEFAULT, as the SQL literal the DDL carries — see `sqlDefault` above.
-			 *
-			 * A builder-authored model gets this from the builder. A runtime-owned collection is these
-			 * `field.*` calls and had no way to say it, so `required: true` rendered `not null` with no
-			 * default and every insert that correctly omits the column was refused. That is the same
-			 * failure `roster_entries.origin` had, one layer up.
-			 */
-			readonly sqlDefault?: string;
-		} = {}
-	): FieldDefinition<TType> => {
+	(options: FieldOptions = {}): FieldDefinition<TType> => {
 		const required = options.required ?? false;
 		const indexed = options.indexed ?? false;
 		if (typeof required !== 'boolean') {
@@ -208,6 +209,18 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
 	readonly sourcePath?: string;
 }
 
+interface CollectionOptions<Fields extends Readonly<Record<string, FieldDefinition>>> {
+	readonly name: string;
+	readonly fields: Fields;
+	readonly history?: boolean;
+	readonly approvalLock?: boolean;
+	readonly sync?: boolean;
+	readonly description?: string;
+	readonly icon?: string;
+	readonly exclusions?: ReadonlyArray<ModelExclusion>;
+	readonly indexes?: ReadonlyArray<ModelIndex>;
+}
+
 /** Names one side of an authored relationship foreign key. */
 interface RelationEndpoint {
 	readonly collection: string;
@@ -234,19 +247,9 @@ export interface RelationDefinition {
 	readonly cascade?: boolean;
 }
 /** Owns collection behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-export const collection = <
-	const Fields extends Readonly<Record<string, FieldDefinition>>
->(options: {
-	readonly name: string;
-	readonly fields: Fields;
-	readonly history?: boolean;
-	readonly approvalLock?: boolean;
-	readonly sync?: boolean;
-	readonly description?: string;
-	readonly icon?: string;
-	readonly exclusions?: ReadonlyArray<ModelExclusion>;
-	readonly indexes?: ReadonlyArray<ModelIndex>;
-}): CollectionDefinition<Fields> => {
+export const collection = <const Fields extends Readonly<Record<string, FieldDefinition>>>(
+	options: CollectionOptions<Fields>
+): CollectionDefinition<Fields> => {
 	const name = options.name.trim();
 	if (name === '') {
 		throw new TypeError('Collection name cannot be empty.');
@@ -574,17 +577,44 @@ export const defineConnection = <const Connection extends HttpConnection>(
  * `resolve` alone — `map`'s second parameter is a `NoInfer` position — so a `map` that reads the
  * resolution wrongly is an error at `map` rather than a silently widened `resolve`.
  */
-export const definePull = <Record_, Encoded, Row, Resolved = undefined>(binding: {
-	readonly pull: PullRequestSpec;
+type InboundResolution<Resolved> =
+	| Effect.Effect<Resolved, unknown, never>
+	// repository-health:allow EFF2 -- Inbound integrations accept third-party async resolvers and the runtime immediately lifts this Promise branch into Effect.
+	| Promise<Resolved>
+	| Resolved;
+
+interface InboundBinding<Record_, Encoded, Row, Resolved> {
 	readonly input: Schema.Codec<Record_, Encoded>;
 	readonly records?: PullRecordsSpec;
 	readonly identity: { readonly column: string; readonly value: (record: Record_) => string };
 	readonly resolve?: (context: {
 		readonly records: ReadonlyArray<Record_>;
 		readonly api: BeforeApi;
-	}) => Effect.Effect<Resolved, unknown, never> | Promise<Resolved> | Resolved;
+	}) => InboundResolution<Resolved>;
 	readonly map?: (record: Record_, resolved: NoInfer<Resolved>) => Row;
-}): typeof binding => binding;
+}
+
+interface PullBinding<Record_, Encoded, Row, Resolved> extends InboundBinding<
+	Record_,
+	Encoded,
+	Row,
+	Resolved
+> {
+	readonly pull: PullRequestSpec;
+}
+
+interface WebhookBinding<Record_, Encoded, Row, Resolved> extends InboundBinding<
+	Record_,
+	Encoded,
+	Row,
+	Resolved
+> {
+	readonly webhook: WebhookRequestSpec;
+}
+
+export const definePull = <Record_, Encoded, Row, Resolved = undefined>(
+	binding: PullBinding<Record_, Encoded, Row, Resolved>
+): typeof binding => binding;
 
 /**
  * Declares one *pushed* inbound binding — a route the source delivers to, verified before it counts.
@@ -607,17 +637,9 @@ export const definePull = <Record_, Encoded, Row, Resolved = undefined>(binding:
  * per delivery with an `api`, and its result is `map`'s second argument, so a body carrying a site
  * *code* becomes a row carrying a `site_id`. One lookup per delivery, not one per event in it.
  */
-export const defineWebhook = <Record_, Encoded, Row, Resolved = undefined>(binding: {
-	readonly webhook: WebhookRequestSpec;
-	readonly input: Schema.Codec<Record_, Encoded>;
-	readonly records?: PullRecordsSpec;
-	readonly identity: { readonly column: string; readonly value: (record: Record_) => string };
-	readonly resolve?: (context: {
-		readonly records: ReadonlyArray<Record_>;
-		readonly api: BeforeApi;
-	}) => Effect.Effect<Resolved, unknown, never> | Promise<Resolved> | Resolved;
-	readonly map?: (record: Record_, resolved: NoInfer<Resolved>) => Row;
-}): typeof binding => {
+export const defineWebhook = <Record_, Encoded, Row, Resolved = undefined>(
+	binding: WebhookBinding<Record_, Encoded, Row, Resolved>
+): typeof binding => {
 	if (binding.webhook.path.trim() === '') {
 		throw new TypeError(
 			'A webhook binding requires a path: a route with no path is a route nothing can deliver to.'
@@ -930,7 +952,7 @@ export interface WorkspaceMigrationEntry {
 /**
  * A team's authority: the policies its members hold, keyed by the team's name.
  *
- * Names are matched case-insensitively against `bolt_team.name` — one rule, everywhere. Today
+ * Names are matched case-insensitively against `team.name` — one rule, everywhere. Today
  * `roles` matched policy names folded while `teams` matched approver names exactly, and the second
  * of those silently produced approvals nobody could decide.
  *
@@ -971,7 +993,7 @@ export interface WorkspaceDefinition {
 	/**
 	 * The `src/+teams.ts` declaration: which policies each named team holds.
 	 *
-	 * **Authority is declared; membership is a row.** A `bolt_team` row carries a name, a parent and
+	 * **Authority is declared; membership is a row.** A `team` row carries a name, a parent and
 	 * a description, and an operator edits it from a dashboard without a deploy — because who is on
 	 * which team changes constantly. What a team may *do* is this map, compiled into the release,
 	 * because a row that granted a policy would be a privilege escalation performed with an `update`

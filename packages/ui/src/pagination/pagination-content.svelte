@@ -11,7 +11,6 @@
 	}: WithElementRef<HTMLAttributes<HTMLUListElement>> = $props();
 </script>
 
-<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 <ul bind:this={ref} class={cn('flex flex-row items-center gap-1', className)} {...restProps}>
 	{@render children?.()}
 </ul>

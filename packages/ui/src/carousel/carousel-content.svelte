@@ -14,7 +14,6 @@
 	const emblaCtx = getEmblaContext('<Carousel.Content/>')();
 </script>
 
-<!-- stupidity:allow UI5 -- carousel viewport crop -->
 <div
 	data-slot="carousel-content"
 	class="overflow-hidden"
@@ -29,7 +28,6 @@
 	}}
 	onemblaInit={emblaCtx.onInit}
 >
-	<!-- stupidity:allow UI7 -- this leaf component owns responsive or internal spacing as part of its public DOM contract -->
 	<div
 		bind:this={ref}
 		class={cn(

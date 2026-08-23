@@ -5,7 +5,11 @@ import type {
 	IntegrationDeclaration,
 	IntegrationWebhookDeclaration
 } from '#lib/authoring/workspace-schema.js';
-import { absorbRecords, type AbsorbDependencies, type Rejection } from '#lib/runtime/integrations/absorb.js';
+import {
+	absorbRecords,
+	type AbsorbDependencies,
+	type Rejection
+} from '#lib/runtime/integrations/absorb.js';
 import { walk } from '#lib/runtime/integrations/pull.js';
 import { verifyDelivery } from '#lib/runtime/integrations/signature.js';
 
@@ -50,10 +54,10 @@ export type WebhookDependencies = AbsorbDependencies &
 		 * concurrently — providers parallelise retries — and a read-then-write would let both see nothing
 		 * and both absorb. The insert's own conflict clause is the arbiter.
 		 */
-		readonly remember: (effectId: EffectId, entry: InboxLedgerEntry) => Effect.Effect<
-			LedgerState,
-			{ readonly message: string }
-		>;
+		readonly remember: (
+			effectId: EffectId,
+			entry: InboxLedgerEntry
+		) => Effect.Effect<LedgerState, { readonly message: string }>;
 		/** Marks a ledger entry absorbed, so a later redelivery of it is recognised as a repeat. */
 		readonly settle: (
 			effectId: EffectId,

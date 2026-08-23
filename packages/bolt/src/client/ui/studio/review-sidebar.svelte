@@ -3,7 +3,10 @@
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { cn } from '@norbital-ai/ui/utils';
 	import { WORKSPACE_SIDEBAR_SECTION_TEXT_CLASS } from '@norbital-ai/ui/workspace-shell';
-	import { RELEASE_REQUEST_UNAVAILABLE, type SourceSnapshot } from '#lib/client/ui/studio/studio-state.js';
+	import {
+		RELEASE_REQUEST_UNAVAILABLE,
+		type SourceSnapshot
+	} from '#lib/client/ui/studio/studio-state.js';
 
 	/**
 	 * Review's navigator: the release requests to choose from, and the files one changed.

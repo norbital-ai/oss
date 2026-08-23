@@ -1,4 +1,5 @@
 import type { BoltTransport } from '#lib/client.js';
+import { Effect, MutableRef } from 'effect';
 
 /**
  * The host capabilities a workspace surface may use, named one by one.
@@ -28,9 +29,9 @@ export type WorkspaceFilesHost = Readonly<{
 		file: File,
 		onProgress?: (progress: { readonly loaded: number; readonly total: number }) => void,
 		signal?: AbortSignal
-	) => Promise<string>;
+	) => ReturnType<typeof Effect.runPromise<string, never>>;
 	/** Drops the bytes stored under a key. */
-	readonly remove: (key: string) => Promise<void>;
+	readonly remove: (key: string) => ReturnType<typeof Effect.runPromise<void, never>>;
 	/** Where a stored key is served from, so a surface can render one without knowing the host. */
 	readonly urlFor: (key: string) => string;
 }>;
@@ -48,8 +49,10 @@ export type WorkspaceOperationsHost = Readonly<{
 	 * The host snapshot. `billing` costs two Stripe round trips, so it is asked for rather than
 	 * assumed — a surface that does not show money should not wait on a payments API to render.
 	 */
-	readonly read: (options?: { readonly billing?: boolean }) => Promise<unknown>;
-	readonly run: (input: unknown) => Promise<unknown>;
+	readonly read: (options?: {
+		readonly billing?: boolean;
+	}) => ReturnType<typeof Effect.runPromise<unknown, never>>;
+	readonly run: (input: unknown) => ReturnType<typeof Effect.runPromise<unknown, never>>;
 }>;
 
 export type WorkspaceSession = Readonly<{
@@ -79,7 +82,28 @@ export type WorkspaceSession = Readonly<{
 	readonly operations: WorkspaceOperationsHost;
 }>;
 
-let session: WorkspaceSession | undefined;
+/** Owns the document-lifetime session through Effect's synchronous reference primitive. */
+const WorkspaceSessions = {
+	make: () => {
+		const current = MutableRef.make<WorkspaceSession | undefined>(undefined);
+		return {
+			set: (session: WorkspaceSession): void => {
+				MutableRef.set(current, session);
+			},
+			get: (): WorkspaceSession => {
+				const session = MutableRef.get(current);
+				if (session === undefined) {
+					throw new Error(
+						'No workspace session has been declared. The host must call mountWorkspace before any workspace surface reads.'
+					);
+				}
+				return session;
+			}
+		};
+	}
+};
+
+const workspaceSessions = WorkspaceSessions.make();
 
 /**
  * Declares the session every later read runs under.
@@ -90,7 +114,7 @@ let session: WorkspaceSession | undefined;
  * organizations or policy scopes.
  */
 export const setWorkspaceSession = (next: WorkspaceSession): void => {
-	session = next;
+	workspaceSessions.set(next);
 };
 
 /**
@@ -101,11 +125,4 @@ export const setWorkspaceSession = (next: WorkspaceSession): void => {
  * shell used to render as a named administrator. If the host has not said who this is, nothing may
  * proceed on a guess.
  */
-export const workspaceSession = (): WorkspaceSession => {
-	if (session === undefined) {
-		throw new Error(
-			'No workspace session has been declared. The host must call mountWorkspace before any workspace surface reads.'
-		);
-	}
-	return session;
-};
+export const workspaceSession = (): WorkspaceSession => workspaceSessions.get();

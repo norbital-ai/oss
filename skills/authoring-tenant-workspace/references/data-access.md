@@ -115,7 +115,7 @@ the call it came in on.
 
 ### `prepare` is for the batch's reads, never for its rules
 
-A hook is authored for one record, so a hook that *reads* per record is an N+1 by construction:
+A hook is authored for one record, so a hook that _reads_ per record is an N+1 by construction:
 `time_entries` asks two questions per row, so a four-thousand-row import asks eight thousand times.
 The rule and the reads are separable, and only the reads want to be batched.
 
@@ -161,13 +161,13 @@ create: {
 `prepare` is **not** a second place to put the rule. It returns data; nothing decides anything there.
 It is also not an alternative branch — it runs before `perRecord.before` every time, for a batch of
 four thousand and for a single `create` alike, so nothing has to work out which one applies. It is
-scoped to the *batch*, not the call: with `batchSize: 250` over 4,000 rows it runs sixteen times,
+scoped to the _batch_, not the call: with `batchSize: 250` over 4,000 rows it runs sixteen times,
 each seeing its own 250.
 
 Type it by naming what it returns. The generated alias takes the parameter:
 
 ```typescript
-export default { /* ... */ } satisfies Hooks<TimeEntryBatch>;
+export default {/* ... */} satisfies Hooks<TimeEntryBatch>;
 ```
 
 Cost is what this buys: facility calls per batch are **constant (~3)**, not three per row. That
@@ -182,14 +182,14 @@ compares 50 rows against 1 rather than against a fixed number.
 - **"These rows contain a duplicate" is a unique index in `+model.ts`**, not a hook. It is stricter
   than any hook can be, because it also catches a collision with a row already stored — which a check
   over only the rows in front of it cannot see.
-- **Ids are the server's.** The client no longer mints a uuid, and `create` answers with the **stored
-  row** rather than with the values that were submitted — a record is not what the form posted once a
-  column default, a generated column and a `perRecord.before` have run. A response with no record
-  throws rather than falling back to the submission.
+- **Browser writes are completion-only.** `mutate` returns `Promise<void>`, because write-only and
+  row-filtered policies cannot safely promise the caller a readable record. Successful completion
+  invalidates affected live queries; their `current`, `loading`, and `error` state is authoritative.
+  The collection's numeric `pending` count is the only mutation state.
 - **`batchHandler` is gone.** It was declared on the contract, re-typed in the runtime, and called
   from nowhere: batch validation written there shipped and silently never ran, in five collections,
   one of which had the same assertion written into both halves. It was removed rather than wired,
-  because a *rule* belongs in `perRecord` where it is written once. What people actually wanted from
+  because a _rule_ belongs in `perRecord` where it is written once. What people actually wanted from
   it was the batched read, and that is `prepare`.
 
 A bulk import and a single create run the same `perRecord.before`; the batch is a property of how the
@@ -232,10 +232,15 @@ Rules that hold:
 - **Depth is capped at 5.** `relations` is a graph with cycles in it, and a returned graph that
   closed a loop would otherwise be walked until the isolate died. It is refused during preparation,
   with nothing written.
-- The client's `create` accepts the same graph, for the same reason.
+- The browser's `mutate` accepts the same precisely generated graph. An included relationship is the
+  complete desired state: present rows are inserted or updated, stored rows absent from that submitted
+  relationship are deleted, and explicitly included relationships synchronize recursively. An omitted
+  relationship stays untouched. The root and all included relationships reconcile atomically. Do not
+  submit a relationship for additive or partial behavior, erase its generated type with a cast, invent
+  `client.mutate(...)`, or claim a top-level delete encoding.
 
 This is what replaced writing a parent and then its children in separate calls: a payroll run
-committed, and *then* its payslips in a second transaction and their lines in a third — a build that
+committed, and _then_ its payslips in a second transaction and their lines in a third — a build that
 died between them left a run row with no payslips under it, which was not a hypothesis.
 
 ### Where a check goes is a correctness question

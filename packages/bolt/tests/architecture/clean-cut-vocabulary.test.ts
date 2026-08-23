@@ -61,14 +61,14 @@ describe('clean-cut vocabulary', () => {
 
 		// Person address book.
 		expect(systemModels).toContain('channels: jsonb()');
-		expect(schemaPlan).not.toContain('alter table bolt_auth_user');
-		expect(transportIdentity).toContain('bolt_auth_user.channels');
+		expect(schemaPlan).not.toContain('alter table user');
+		expect(transportIdentity).toContain('user.channels');
 		// Deliberately deferred protocol wire field.
 		expect(protocol).toContain('VerifyInbound: { channel: Schema.NonEmptyString');
 		expect(protocol).toContain('Send: { channel: Schema.NonEmptyString');
 		// Browser/PostgreSQL channel vocabulary is unrelated to envoy identity.
 		expect(replica).toContain('BroadcastChannel');
-		expect(replica).toContain('listen?(channel:');
-		expect(clientRuntime).toContain("query('select pg_notify($1, $2)'");
+		expect(replica).toContain('listen(\n\t\tchannel: string,');
+		expect(clientRuntime).toContain("replicaStatement('select pg_notify($1, $2)'");
 	});
 });

@@ -26,7 +26,12 @@ import {
 	makeConnectorBinding,
 	makeConnectorBindingFromConfig
 } from '../src/facilities/providers.js';
-import { makeDatabaseFromConfig, makeLocalDatabase } from '../src/facilities/database.js';
+import {
+	databaseFailureRetryable,
+	databaseSqlState,
+	makeDatabaseFromConfig,
+	makeLocalDatabase
+} from '../src/facilities/database.js';
 import { makeFilesBindingFromConfig, makeLocalFilesBinding } from '../src/facilities/files.js';
 import { makeHostToolBinding, makeHostToolBindingFromConfig } from '../src/facilities/providers.js';
 import { makeScheduler, makeTaskBinding } from '../src/scheduler.js';
@@ -52,6 +57,46 @@ const isJsonObject = (
 	value: Schema.Json | undefined
 ): value is Readonly<Record<string, Schema.Json>> =>
 	value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value);
+
+it('classifies serialization SQLSTATE through driver wrappers without changing other failures', () => {
+	assert.strictEqual(databaseSqlState({ cause: { error: { code: '40001' } } }), '40001');
+	assert.strictEqual(databaseFailureRetryable({ cause: { code: '40001' } }), true);
+	assert.strictEqual(databaseFailureRetryable({ cause: { code: '23505' } }), undefined);
+	assert.strictEqual(databaseFailureRetryable(new Error('network unavailable')), undefined);
+});
+
+it.effect('returns a retryable facility failure for bolt_assert serialization conflicts', () =>
+	Effect.acquireUseRelease(
+		Effect.tryPromise(() => makeLocalDatabase({ dataDirectory: 'memory://' })),
+		(database) =>
+			Effect.gen(function* () {
+				yield* Effect.tryPromise(() =>
+					database.binding.call(
+						metadata,
+						DatabaseRequest.cases.Query.make({
+							sql: "create or replace function bolt_assert(ok boolean, message text) returns void language plpgsql as $$ begin if ok is not true then raise exception '%', message using errcode = '40001'; end if; end $$",
+							parameters: []
+						}),
+						signal
+					)
+				);
+				const result = yield* Effect.tryPromise(() =>
+					database.binding.call(
+						metadata,
+						DatabaseRequest.cases.Transaction.make({
+							statements: [{ sql: "select bolt_assert(false, 'graph changed')", parameters: [] }]
+						}),
+						signal
+					)
+				);
+				assert.strictEqual(result._tag, 'Failure');
+				if (result._tag === 'Failure') {
+					assert.strictEqual(result.error.retryable, true);
+				}
+			}),
+		(database) => Effect.tryPromise(() => database.close()).pipe(Effect.ignore)
+	)
+);
 
 it.effect(
 	'executes local PostgreSQL-compatible query and transaction calls',

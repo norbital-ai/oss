@@ -288,7 +288,7 @@ describe('invocation provenance', () => {
 
 		expect(
 			await harness.database.query(
-				'select count(*)::int as live from bolt_auth_session where "token" = $1',
+				'select count(*)::int as live from "session" where "token" = $1',
 				['admin-token']
 			)
 		).toEqual([{ live: 1 }]);

@@ -66,7 +66,6 @@
 </script>
 
 {#if field}
-	<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 	<div
 		class={cn('flex min-h-0 flex-col gap-2', className)}
 		data-collection-field={name}

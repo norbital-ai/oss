@@ -69,5 +69,9 @@ export {
 
 export { anonymousLimits } from './rate-limits-schema.js';
 
-export { sql } from 'drizzle-orm';
-export { boolean, bytea, integer, jsonb, uuid } from 'drizzle-orm/pg-core';
+export { sql } from 'drizzle-orm/sql/sql';
+export { boolean } from 'drizzle-orm/pg-core/columns/boolean';
+export { bytea } from 'drizzle-orm/pg-core/columns/bytea';
+export { integer } from 'drizzle-orm/pg-core/columns/integer';
+export { jsonb } from 'drizzle-orm/pg-core/columns/jsonb';
+export { uuid } from 'drizzle-orm/pg-core/columns/uuid';

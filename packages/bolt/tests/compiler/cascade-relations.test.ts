@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractRelationships } from '../../src/compiler/model-fields.js';
+import { extractCollectionCatalog, extractRelationships } from '../../src/compiler/model-fields.js';
 
 /**
  * `cascade(...)` used to be a wrapper the parser recognised and threw away.
@@ -12,6 +12,9 @@ import { extractRelationships } from '../../src/compiler/model-fields.js';
  */
 const source = `
 export default defineRelationships((r) => ({
+	payroll_runs: {
+		payslips: r.many.payslips()
+	},
 	payslips: {
 		run: cascade(r.one.payroll_runs({ from: r.payslips.payroll_run_id, to: r.payroll_runs.id })),
 		employment: r.one.employments({ from: r.payslips.employment_id, to: r.employments.id })
@@ -35,7 +38,26 @@ describe('cascade relations', () => {
 		expect(employment?.target).toBe('employments');
 	});
 
+	it('carries inverse ownership onto the parent many edge and generated catalog', () => {
+		const payslips = relations.find(
+			({ source: owner, name }) => owner === 'payroll_runs' && name === 'payslips'
+		);
+		expect(payslips).toMatchObject({
+			cascade: true,
+			from: { collection: 'payslips', column: 'payroll_run_id' },
+			to: { collection: 'payroll_runs', column: 'id' }
+		});
+
+		const catalog = extractCollectionCatalog('payroll_runs', '', relations);
+		expect(catalog.relationships).toContainEqual({
+			name: 'payslips',
+			target: 'payslips',
+			cardinality: 'many',
+			cascade: true
+		});
+	});
+
 	it('reads both relations of the block, wrapper or not', () => {
-		expect(relations.map(({ name }) => name).toSorted()).toEqual(['employment', 'run']);
+		expect(relations.map(({ name }) => name).toSorted()).toEqual(['employment', 'payslips', 'run']);
 	});
 });

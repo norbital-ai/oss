@@ -90,7 +90,6 @@
 		onValueChange={(next) => onValueChange?.(next == null ? null : next === 'true')}
 	/>
 {:else}
-	<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 	<div class={cn('flex h-8 items-center gap-2', className)}>
 		<Checkbox
 			{id}

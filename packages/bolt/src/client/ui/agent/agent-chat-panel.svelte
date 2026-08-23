@@ -72,7 +72,7 @@
 
 	const { t } = useI18n();
 	const agentClient = useAgentClient();
-	const runtime = agentClient.runtime;
+	const runtime = $derived(agentClient.runtime);
 	const decodeComposerSeed = Schema.decodeUnknownOption(
 		Schema.Struct({
 			message: Schema.optionalKey(Schema.String),
@@ -83,7 +83,7 @@
 	let { headerOrb = true }: { headerOrb?: boolean } = $props();
 
 	let draft = $state('');
-	const modelState = agentClient.models.state;
+	const modelState = $derived(agentClient.models.state);
 	let session = $state<{
 		runId: string | undefined;
 		chatId: string | undefined;
@@ -223,7 +223,6 @@
 
 	/** Reconciles mention chip ranges after the writer edits the composer draft. */
 	function onComposerInput(): void {
-		// repository-health:allow Q3 -- event handler
 		const element = mention.textarea;
 		if (!element) return;
 		mention.mentions = reconcileAfterEdit(mention.mentions, mention.lastDraft, element.value);
@@ -376,7 +375,7 @@
 	const resolvedScopeUserId = $derived(scopeUserId ?? currentUserId);
 	// The system read policy masks this collection to the two fields the picker needs.
 	const usersQuery = $derived(
-		runtime.client.db.bolt_auth_user.findMany({
+		runtime.client.db.user.findMany({
 			orderBy: { name: 'asc' },
 			limit: 500
 		})
@@ -741,7 +740,6 @@
 
 	/** Switches the panel to an existing replicated session. */
 	function selectConversation(value: string | null): void {
-		// repository-health:allow Q3 -- event handler
 		if (!value) return;
 		const row = sessions.find((candidate) => candidate.conversation_id === value);
 		if (!row) return;
@@ -757,7 +755,6 @@
 
 	/** Filters the conversation list to one member and drops a thread outside that scope. */
 	function selectScope(userId: string): void {
-		// repository-health:allow Q3 -- event handler
 		scopeUserId = userId;
 		if (session.chatId && sessions.some((row) => row.conversation_id === session.chatId)) {
 			const current = sessions.find((row) => row.conversation_id === session.chatId);
@@ -798,7 +795,6 @@
 
 	/** Clears the active thread so the next send creates a new conversation. */
 	function startConversation(): void {
-		// repository-health:allow Q3 -- event handler
 		scopeUserId = currentUserId;
 		selectedEnvoy = WEB_AGENT_ID;
 		session.chatId = undefined;
@@ -812,7 +808,6 @@
 
 	/** Routes keyboard input between the mention menu and the send action. */
 	function onKeydown(event: KeyboardEvent): void {
-		// repository-health:allow Q3 -- event handler
 		if (menuOpen) {
 			if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
 				event.preventDefault();
@@ -1118,7 +1113,6 @@
 
 					{#if previewIntent.verify}
 						<details class="group/verifier px-2.5 sm:px-3" data-testid="agent-verifier">
-							<!-- repository-health:allow UI6 -- verifier disclosure is a clickable control row. -->
 							<summary
 								class={`flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-md px-1.5 py-1 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}
 							>
@@ -1154,7 +1148,6 @@
 						</details>
 					{/if}
 
-					<!-- repository-health:allow UI6 -- Composer action bar keeps its wrapping left controls pinned beside the send cluster; Cluster would push send below the fold on narrow widths. -->
 					<div
 						class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-1 gap-y-1 px-2.5 pt-1 pb-[max(0.625rem,env(safe-area-inset-bottom))]"
 					>

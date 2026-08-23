@@ -7,7 +7,12 @@ import type {
 	IntegrationPullDeclaration
 } from '#lib/authoring/workspace-schema.js';
 import { absorbRecords, type AbsorbDependencies } from '#lib/runtime/integrations/absorb.js';
-import { IntegrationHttpRequest, isRetryableStatus, nextLink, retryDelayMs } from '#lib/runtime/integrations/http.js';
+import {
+	IntegrationHttpRequest,
+	isRetryableStatus,
+	nextLink,
+	retryDelayMs
+} from '#lib/runtime/integrations/http.js';
 
 /**
  * One binding's run, from request to rows.
@@ -177,7 +182,8 @@ const pageUrl = (
 		readonly absoluteUrl: string | undefined;
 		readonly token: string | undefined;
 	}
-): string => {	if (page.absoluteUrl !== undefined) return page.absoluteUrl;
+): string => {
+	if (page.absoluteUrl !== undefined) return page.absoluteUrl;
 	const url = new URL(
 		`${connection.baseUrl}${binding.path.startsWith('/') ? '' : '/'}${binding.path}`
 	);

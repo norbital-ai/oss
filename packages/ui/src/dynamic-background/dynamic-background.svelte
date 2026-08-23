@@ -72,7 +72,6 @@
 	});
 </script>
 
-<!-- stupidity:allow UI5 -- decorative background canvas clip -->
 <div class="relative w-full overflow-hidden">
 	<div class="pointer-events-none absolute inset-0 z-0 h-full w-full blur-[100px]">
 		{#each colors as color, i}

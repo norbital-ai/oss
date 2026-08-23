@@ -195,9 +195,14 @@ describe('approval gate over SQL', () => {
 		// `approval_id` to know it is pending and to offer approve/reject on it, and it reads
 		// through the replica like everything else — so a record withheld until approval is a record
 		// nobody can approve. Who may see it is still the access predicate's question, not this one's.
-		const outbox = await harness.database.query(
-			"select record_id from bolt_sync_outbox where collection_name = 'people'"
-		);
-		expect(outbox).toHaveLength(1);
+		const outbox = (await harness.database.query(
+			"select operation, record from bolt_sync_outbox where collection_name = 'people' order by xid, sequence"
+		)) as ReadonlyArray<{ readonly operation: string; readonly record: unknown }>;
+		// Legacy `create` publishes the inserted row and then the approval lock that makes it held. The
+		// replica applies both in cursor order, so the reviewer ends on the locked representation. The
+		// declarative browser mutation path is different by contract: it holds before a domain row exists.
+		expect(outbox).toHaveLength(2);
+		expect(outbox.map(({ operation }) => operation)).toEqual(['create', 'update']);
+		expect(outbox[1]?.record).toMatchObject({ approval_id: expect.any(String) });
 	});
 });

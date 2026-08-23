@@ -58,24 +58,20 @@ describe('policies held through a team', () => {
 	 * team's authority still resolves. A workspace must not fall over on a stale string.
 	 */
 	it('drops a policy the release no longer declares, keeps the rest, and warns once', () => {
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-		try {
-			const workspace = definition({ 'HR Manager': ['employee', 'payroll_admin_removed'] });
-			const reported = new Set<string>();
-			const held = policiesHeld(workspace, subject(['HR Manager']), reported);
-			expect([...held]).toEqual(['employee']);
-			expect(warn).toHaveBeenCalledTimes(1);
-			const [line] = warn.mock.calls[0] as [string];
-			expect(line).toContain('HR Manager');
-			expect(line).toContain('payroll_admin_removed');
+		const warn = vi.fn<(message: string) => void>();
+		const workspace = definition({ 'HR Manager': ['employee', 'payroll_admin_removed'] });
+		const reported = new Set<string>();
+		const held = policiesHeld(workspace, subject(['HR Manager']), reported, warn);
+		expect([...held]).toEqual(['employee']);
+		expect(warn).toHaveBeenCalledTimes(1);
+		const [line] = warn.mock.calls[0] as [string];
+		expect(line).toContain('HR Manager');
+		expect(line).toContain('payroll_admin_removed');
 
-			// Deduped across calls: this runs on the authorization path, so one stale name must be one
-			// line and not one line per request.
-			policiesHeld(workspace, subject(['HR Manager']), reported);
-			policiesHeld(workspace, subject(['HR Manager']), reported);
-			expect(warn).toHaveBeenCalledTimes(1);
-		} finally {
-			warn.mockRestore();
-		}
+		// Deduped across calls: this runs on the authorization path, so one stale name must be one
+		// line and not one line per request.
+		policiesHeld(workspace, subject(['HR Manager']), reported, warn);
+		policiesHeld(workspace, subject(['HR Manager']), reported, warn);
+		expect(warn).toHaveBeenCalledTimes(1);
 	});
 });

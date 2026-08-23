@@ -26,7 +26,6 @@
 	});
 </script>
 
-<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 <div
 	bind:this={ref}
 	data-chart={chartId}

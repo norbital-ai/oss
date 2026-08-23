@@ -1,7 +1,7 @@
 import { Option, Schema } from 'effect';
 
 /**
- * A messaging identity someone has proven is theirs, as stored on `bolt_auth_user.channels`.
+ * A messaging identity someone has proven is theirs, as stored on `user.channels`.
  *
  * One shape for every transport — `{ type, address, verified }` — rather than a variant per
  * transport carrying its own differently-named address field (`number`, `username`, `slack_user_id`).
@@ -78,7 +78,7 @@ export const identityMatches = (
 };
 
 /**
- * The identities on one `bolt_auth_user.channels` value, ignoring anything that is not one.
+ * The identities on one `user.channels` value, ignoring anything that is not one.
  *
  * The column is `jsonb` and nothing constrains what a hand-written row may put there, so a malformed
  * entry drops out rather than failing the read. A sender is then simply unrecognised — which on an

@@ -6,7 +6,11 @@ import {
 	SYSTEM_MODELS,
 	SYSTEM_MODEL_TABLES
 } from '../../src/authoring/system-models.js';
-import { IDENTITY_COLLECTIONS } from '../../src/runtime/schema/system-collections.js';
+import { collection } from '../../src/authoring/workspace-schema.js';
+import {
+	IDENTITY_COLLECTIONS,
+	withSystemCollections
+} from '../../src/runtime/schema/system-collections.js';
 import { identitySchemaSteps } from '../../src/compiler/schema-plan.js';
 
 /**
@@ -22,6 +26,18 @@ describe('identity as collections', () => {
 		const declared = new Set(IDENTITY_COLLECTIONS.map((collection) => collection.name));
 		for (const table of Object.values(AUTH_MODELS)) expect(declared).toContain(table);
 	});
+
+	it.each(['user', 'session', 'account', 'verification', 'auth_config', 'team'])(
+		'reserves the runtime-owned %s collection name',
+		(name) => {
+			expect(() =>
+				withSystemCollections({
+					collections: [collection({ name, fields: {} })],
+					policies: []
+				})
+			).toThrow(`Workspace collections cannot use runtime-owned names: ${name}`);
+		}
+	);
 
 	it('maps Better Auth onto the columns those collections actually produce', () => {
 		for (const model of Object.values(AUTH_MODELS)) {
@@ -69,7 +85,7 @@ describe('identity as collections', () => {
 				.toSorted();
 
 		expect(searchable(AUTH_MODELS.user)).toEqual(['email', 'name']);
-		expect(searchable('bolt_team')).toEqual(['name']);
+		expect(searchable('team')).toEqual(['name']);
 	});
 
 	it('renders the steps a host applies before anything can authenticate', () => {

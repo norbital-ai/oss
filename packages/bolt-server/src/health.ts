@@ -9,13 +9,13 @@ export const HealthSnapshot = Schema.Struct({
 
 export interface HealthSnapshot extends Schema.Schema.Type<typeof HealthSnapshot> {}
 
-/** Rejects new bundle work after the server begins draining; stupidity:allow Q4 -- Effect TaggedError declaration is the canonical rc.109 error boundary. */
+/** Rejects new bundle work after the server begins draining. */
 export class AdmissionStopped extends Schema.TaggedError<AdmissionStopped>()(
 	'BoltServer.AdmissionStopped',
 	{ operation: Schema.String }
 ) {}
 
-/** Reports that in-flight work outlived the configured shutdown bound; stupidity:allow Q4 -- Effect TaggedError declaration is the canonical rc.109 error boundary. */
+/** Reports that in-flight work outlived the configured shutdown bound. */
 export class DrainTimedOut extends Schema.TaggedError<DrainTimedOut>()('BoltServer.DrainTimedOut', {
 	operation: Schema.String,
 	inFlight: Schema.Int,
@@ -38,7 +38,7 @@ interface Interface {
 	readonly markFinalized: () => Effect.Effect<void>;
 }
 
-/** Owns readiness, admission, in-flight accounting, drain, and finalization state; stupidity:allow Q4 -- Effect Context.Service declaration is the canonical rc.109 service tag. */
+/** Owns readiness, admission, in-flight accounting, drain, and finalization state. */
 export class ServerHealth extends Context.Service<ServerHealth, Interface>()(
 	'@norbital-ai/bolt-server/ServerHealth'
 ) {}

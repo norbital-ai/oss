@@ -25,7 +25,6 @@
 	}: QueueSectionLabelProps = $props();
 </script>
 
-<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 <span bind:this={ref} class={cn('flex items-center gap-2', className)} {...restProps}>
 	<Icon
 		icon="lucide:chevron-down"

@@ -25,6 +25,7 @@ type StandardResult = Readonly<{ readonly issues?: ReadonlyArray<StandardIssue> 
 
 const validatorOf = (
 	definition: unknown
+	// repository-health:allow EFF2 -- Standard Schema validators may return a Promise by specification; this boundary detects that result and never composes it as native concurrency.
 ): ((value: unknown) => StandardResult | Promise<StandardResult>) | undefined => {
 	if (definition === null || typeof definition !== 'object') return undefined;
 	const schema = Reflect.get(definition, 'schema');

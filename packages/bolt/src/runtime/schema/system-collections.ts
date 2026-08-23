@@ -23,18 +23,18 @@ const collections = Object.freeze(
 
 /**
  * The collections authentication itself reads, and therefore the ones a host must create before it
- * can migrate anything else. `bolt_team` is among them because resolving a subject now joins it: a
+ * can migrate anything else. `team` is among them because resolving a subject now joins it: a
  * host that created the auth tables and not this one would authenticate nobody.
  */
 export const IDENTITY_COLLECTIONS: ReadonlyArray<
 	CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
 > = Object.freeze([
-	collections.bolt_auth_user,
-	collections.bolt_auth_session,
-	collections.bolt_auth_account,
-	collections.bolt_auth_verification,
-	collections.bolt_auth_config,
-	collections.bolt_team
+	collections.user,
+	collections.session,
+	collections.account,
+	collections.verification,
+	collections.auth_config,
+	collections.team
 ]);
 
 export const SYSTEM_COLLECTIONS: ReadonlyArray<
@@ -47,6 +47,10 @@ export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	collections.chat_message,
 	collections.bolt_notifications
 ]);
+
+const SYSTEM_COLLECTIONS_BY_NAME = new Map(
+	SYSTEM_COLLECTIONS.map((definition) => [definition.name, definition] as const)
+);
 
 /**
  * The approval requests this subject raised.
@@ -70,7 +74,7 @@ const RAISED_BY_SUBJECT =
  *
  * `AccessControl.subjectValue` resolves exactly three paths — `requestor.id`,
  * `requestor.tenantId`, `requestor.email` — so a team is something the predicate has to go and look
- * up. `bolt_auth_user.team_id` is one team, nullable, and a subject nobody has placed yields no row:
+ * up. `user.team_id` is one team, nullable, and a subject nobody has placed yields no row:
  * the scalar subquery is then `null`, `lower(...) = null` is `null`, and the approver leg below
  * matches nothing. Absence narrows, which is the only safe direction for it to go.
  *
@@ -80,8 +84,8 @@ const RAISED_BY_SUBJECT =
  * the hierarchy unconditionally, which is the opposite of "their higher ups".
  */
 const SUBJECT_TEAM_NAME =
-	'select lower(subject_team."name") from bolt_auth_user subject_user ' +
-	'join bolt_team subject_team on subject_team."id" = subject_user."team_id" ' +
+	'select lower(subject_team."name") from "user" subject_user ' +
+	'join "team" subject_team on subject_team."id" = subject_user."team_id" ' +
 	'where subject_user."id"::text = ${requestor.id}';
 
 /**
@@ -121,6 +125,22 @@ const APPROVED_BY_SUBJECT_TEAM =
 	')';
 
 /**
+ * Requests held by a collection-level `approvalLock` have no authored step configuration. At
+ * request time the approval service snapshots the teams whose declared policies grant the generic
+ * Approvals capability; this leg gives those same teams inbox discovery without widening the row to
+ * every authenticated member.
+ */
+const GENERICALLY_APPROVED_BY_SUBJECT_TEAM =
+	'select approval.request_id from bolt_approvals approval ' +
+	'cross join lateral jsonb_array_elements_text(' +
+	"case when jsonb_typeof(approval.state #> '{operation,genericApprovers}') = 'array' " +
+	"then approval.state #> '{operation,genericApprovers}' else '[]'::jsonb end" +
+	') as approver(team_name) ' +
+	'where lower(team_name) = (' +
+	SUBJECT_TEAM_NAME +
+	')';
+
+/**
  * An approval request is readable by its parties and by whoever may decide it.
  *
  * Written against unqualified column names on purpose: the same predicate is spliced into three
@@ -131,7 +151,13 @@ const APPROVED_BY_SUBJECT_TEAM =
  */
 const READABLE_APPROVAL_REQUEST = Object.freeze({
 	$sql:
-		'"id"::text in (' + RAISED_BY_SUBJECT + ') or "id"::text in (' + APPROVED_BY_SUBJECT_TEAM + ')'
+		'"id"::text in (' +
+		RAISED_BY_SUBJECT +
+		') or "id"::text in (' +
+		APPROVED_BY_SUBJECT_TEAM +
+		') or "id"::text in (' +
+		GENERICALLY_APPROVED_BY_SUBJECT_TEAM +
+		')'
 });
 
 /**
@@ -152,6 +178,8 @@ const READABLE_REQUESTOR = Object.freeze({
 		RAISED_BY_SUBJECT +
 		') or "approval_request_id" in (' +
 		APPROVED_BY_SUBJECT_TEAM +
+		') or "approval_request_id" in (' +
+		GENERICALLY_APPROVED_BY_SUBJECT_TEAM +
 		')'
 });
 
@@ -183,7 +211,7 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 	 * that could never contain this name, every grant below was inert, and the only thing making
 	 * these collections readable was the `isAdministrator` short-circuit in `decide` and
 	 * `rowPredicate`. An ordinary member — `field-operations`' non-admin controllers, reading
-	 * `bolt_auth_user` for the names behind `user_id` — was refused and rendered a column of dashes.
+	 * `user` for the names behind `user_id` — was refused and rendered a column of dashes.
 	 *
 	 * It is not a bypass. The flag decides only *whether this policy applies to this subject*; the
 	 * grants below still have to name the collection and the action, an authored `deny` still wins,
@@ -195,7 +223,7 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 	 * Identity is here only as a directory of names, and only because workspaces need one.
 	 *
 	 * The rest of this grant lets an authored query read the runtime's own bookkeeping — approval
-	 * state a report filters on. `bolt_auth_user` is not that: the row holds a person's address,
+	 * state a report filters on. `user` is not that: the row holds a person's address,
 	 * roles and teams, and granting the whole of it to any authenticated subject would put the entire
 	 * membership behind one signed-in session.
 	 *
@@ -247,12 +275,12 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 			where: READABLE_REQUESTOR
 		},
 		{
-			collection: collections.bolt_auth_user.name,
+			collection: collections.user.name,
 			action: 'read' as const,
 			fields: ['id', 'name']
 		},
 		{
-			collection: collections.bolt_team.name,
+			collection: collections.team.name,
 			action: 'read' as const,
 			fields: ['id', 'name']
 		},
@@ -312,6 +340,18 @@ export const withSystemCollections = <
 >(
 	definition: T
 ): T => {
+	const shadowed = definition.collections
+		.filter((collection) => {
+			const systemCollection = SYSTEM_COLLECTIONS_BY_NAME.get(collection.name);
+			return systemCollection !== undefined && systemCollection !== collection;
+		})
+		.map(({ name }) => name)
+		.toSorted();
+	if (shadowed.length > 0) {
+		throw new TypeError(
+			`Workspace collections cannot use runtime-owned names: ${shadowed.join(', ')}`
+		);
+	}
 	const authored = new Set(definition.collections.map(({ name }) => name));
 	const missing = SYSTEM_COLLECTIONS.filter(({ name }) => !authored.has(name));
 	const declared = new Set(definition.policies.map(({ name }) => name));

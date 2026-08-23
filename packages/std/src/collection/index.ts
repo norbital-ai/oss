@@ -29,6 +29,7 @@ export interface RemoteQuery<T> extends PromiseLike<T> {
 	readonly current: T | undefined;
 	readonly loading: boolean;
 	readonly error: Error | undefined;
+	// repository-health:allow EFF2 -- Generated browser query refresh is intentionally Promise-shaped at the public client boundary.
 	refresh(): Promise<void>;
 }
 
@@ -45,11 +46,14 @@ export interface CollectionPageQuery<TRow extends object> extends RemoteQuery<TR
 export interface CollectionType<
 	TRow extends object = CollectionRecord,
 	TCreate extends object = CollectionRecord,
-	TUpdate extends object = CollectionRecord
+	TUpdate extends object = CollectionRecord,
+	TMutation extends object = CollectionRecord
 > {
 	readonly row: TRow;
 	readonly create: TCreate;
 	readonly update: TUpdate;
+	/** Exact recursively generated graph accepted by the declarative browser mutation. */
+	readonly mutation?: TMutation;
 }
 
 export type CollectionRegistry = Readonly<Record<string, CollectionType<object, object, object>>>;
@@ -61,6 +65,8 @@ export type CollectionCreateInput<TCollection extends CollectionType<object, obj
 	TCollection['create'];
 export type CollectionUpdateInput<TCollection extends CollectionType<object, object, object>> =
 	TCollection['update'];
+export type CollectionMutationInput<TCollection extends CollectionType<object, object, object>> =
+	NonNullable<TCollection['mutation']>;
 export type CollectionFieldName<TCollection extends CollectionType<object, object, object>> =
 	Extract<keyof CollectionRow<TCollection>, string>;
 
@@ -248,23 +254,10 @@ export interface CollectionOperations<TCollection extends CollectionType<object,
 		query?: CollectionBaseQuery<CollectionRow<TCollection>>,
 		options?: CollectionFilterOptions
 	) => RemoteQuery<number>;
-	readonly create?: (
-		input: CollectionCreateInput<TCollection>
-	) => Promise<CollectionRow<TCollection>>;
-	readonly createMany?: (
-		inputs: readonly CollectionCreateInput<TCollection>[]
-	) => Promise<CollectionRow<TCollection>[]>;
-	readonly update?: (
-		recordId: string,
-		input: CollectionUpdateInput<TCollection>
-	) => Promise<CollectionRow<TCollection>>;
-	readonly updateMany?: (
-		updates: readonly {
-			readonly recordId: string;
-			readonly input: CollectionUpdateInput<TCollection>;
-		}[]
-	) => Promise<CollectionRow<TCollection>[]>;
-	readonly delete?: (recordId: string) => Promise<void>;
+	// repository-health:allow EFF2 -- Generated browser mutations intentionally expose completion as Promise<void> at the public client boundary.
+	readonly mutate: (values: CollectionMutationInput<TCollection>) => Promise<void>;
+	/** Number of in-flight writes for this collection. */
+	readonly pending: number;
 }
 
 export interface CollectionApprovalRequest {
@@ -280,7 +273,9 @@ export interface CollectionApprovalOperations {
 		readonly approvalRequestId: string;
 		readonly action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE';
 		readonly comments?: string;
+		// repository-health:allow EFF2 -- Generated browser approval actions intentionally expose completion as Promise<void> at the public client boundary.
 	}) => Promise<void>;
+	// repository-health:allow EFF2 -- Generated browser approval withdrawal intentionally exposes completion as Promise<void> at the public client boundary.
 	readonly withdraw: (approvalRequestId: string) => Promise<void>;
 }
 
@@ -321,26 +316,6 @@ export interface CollectionClient<TCollections extends CollectionRegistry> {
 	readonly history?: CollectionHistoryOperations;
 	readonly approvals?: CollectionApprovalOperations;
 }
-
-export interface CollectionMutations<TCollection extends CollectionType<object, object, object>> {
-	readonly create: (
-		input: CollectionCreateInput<TCollection>
-	) => Promise<CollectionRow<TCollection>>;
-	readonly update: (
-		recordId: string,
-		input: CollectionUpdateInput<TCollection>
-	) => Promise<CollectionRow<TCollection>>;
-	readonly delete: (recordId: string) => Promise<void>;
-}
-
-/** The generated workspace client always exposes writes; authorization decides whether they succeed. */
-export type MutableCollectionClient<TCollections extends CollectionRegistry> =
-	CollectionClient<TCollections> & {
-		readonly db: {
-			readonly [TName in keyof TCollections]: CollectionOperations<TCollections[TName]> &
-				CollectionMutations<TCollections[TName]>;
-		};
-	};
 
 /** Tenant-authored collection surfaces receive only the typed database vocabulary. */
 export interface CollectionDbClient<TCollections extends CollectionRegistry> {

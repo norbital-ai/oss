@@ -45,7 +45,7 @@ export const Subject = Schema.Struct({
 	system: Schema.optionalKey(Schema.Boolean),
 	email: Schema.optionalKey(Schema.NonEmptyString),
 	/**
-	 * Whether this subject administers the workspace, from `bolt_auth_user.status`.
+	 * Whether this subject administers the workspace, from `user.status`.
 	 *
 	 * Optional, and absent means `normal`. That polarity is the whole point: every construction of a
 	 * subject that predates this field — an external subject, a test fixture, a machine invocation —
@@ -142,15 +142,15 @@ const TEAM_COLUMNS = `"id"::text as "id", "name", "parent_id"::text as "parentId
  * a graph that is already cyclic.
  */
 const TEAM_SUBTREE_SQL = `with recursive tree as (
-	select "id" as id, 1 as depth from bolt_team where "id" = $1::uuid
+	select "id" as id, 1 as depth from "team" where "id" = $1::uuid
 	union all
-	select c."id", p.depth + 1 from bolt_team c join tree p on c."parent_id" = p.id
+	select c."id", p.depth + 1 from "team" c join tree p on c."parent_id" = p.id
 	 where p.depth < 8
 )
 select 1 from tree where id = $2::uuid limit 1`;
 
 /**
- * The two values `bolt_auth_user.status` may hold, named once so no call site spells them.
+ * The two values `user.status` may hold, named once so no call site spells them.
  *
  * `admit` writes one of them, `subjectFromRow` compares against one of them, and the collection
  * declares the default; three string literals in three files is how the third one drifts.
@@ -198,7 +198,7 @@ const subjectFromRow = (row: Schema.Schema.Type<typeof SubjectDatabaseRow>): Sub
  * round trip out of a guest isolate is the most expensive thing this runtime does: writing 89 rows
  * through one that made one per row cost 18 seconds.
  *
- * **Descent is unconditional, and a `bolt_team.inherits` flag used to gate it.** The flag defaulted
+ * **Descent is unconditional, and a `team.inherits` flag used to gate it.** The flag defaulted
  * to off, on the reasoning that `rowPredicate` unions grants so composition can only ever widen —
  * one unconditional grant anywhere beneath a team collapsed a narrowing declared above it, with no
  * diff to look at. That reasoning still describes what happens; what changed is that it is now the
@@ -219,10 +219,10 @@ const subjectFromRow = (row: Schema.Schema.Type<typeof SubjectDatabaseRow>): Sub
  */
 const TEAM_TREE_SQL = `, tree as (
 	select t."id" as id, t."name" as name, 1 as depth
-	  from bolt_team t join subject on t."id" = subject."team_id"
+	  from "team" t join subject on t."id" = subject."team_id"
 	union all
 	select c."id", c."name", p.depth + 1
-	  from bolt_team c join tree p on c."parent_id" = p.id
+	  from "team" c join tree p on c."parent_id" = p.id
 	 where p.depth < 8
 )`;
 
@@ -247,8 +247,8 @@ const EXTERNAL_SUBJECT_SQL = `with recursive subject as (
 const AUTHENTICATE_SQL = `with recursive subject as (
 	select u."id" as "userId", u."tenantId" as "tenantId",
 	       u."email" as "email", u."status" as "status", u."team_id" as "team_id"
-	  from ${AUTH_MODELS.session} s
-	  join ${AUTH_MODELS.user} u on u."id" = s."userId"
+	  from "${AUTH_MODELS.session}" s
+	  join "${AUTH_MODELS.user}" u on u."id" = s."userId"
 	 where s."token" = $1 and s."expiresAt" > now()
 )${TEAM_TREE_SQL} ${SUBJECT_TAIL_SQL}`;
 
@@ -396,7 +396,7 @@ export type Interface = Readonly<{
 		tenantId: string
 	) => Effect.Effect<WorkspaceAccess, Database.FacilityError>;
 	/**
-	 * The four writes an operator makes against `bolt_team`, and the whole of what they can change.
+	 * The four writes an operator makes against `team`, and the whole of what they can change.
 	 *
 	 * Between them they shape the tree and decide who is in it, and that is the entire surface: no
 	 * argument here names a policy, because what a team may *do* lives in the compiled release. Each
@@ -456,7 +456,7 @@ export type WorkspaceAccess = Readonly<{
 		}>
 	>;
 	/**
-	 * Every team in the workspace, read from `bolt_team` rather than derived from who is in one.
+	 * Every team in the workspace, read from `team` rather than derived from who is in one.
 	 *
 	 * Derived would mean an empty team does not exist — and an empty team is precisely what an
 	 * operator has to be able to see: it is what a freshly declared `approvers` name reconciles into,
@@ -543,12 +543,12 @@ export const layerWith = (
 					// it is keyed by `id` and `key` carries an index but no unique constraint for a
 					// conflict target to match. Concurrent callers race to insert and the loser's row is
 					// harmless — the select below takes whichever secret is there, and both are valid.
-					sql: `insert into bolt_auth_config ("key", "value") select 'session-secret', replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '') where not exists (select 1 from bolt_auth_config where "key" = 'session-secret')`,
+					sql: `insert into "auth_config" ("key", "value") select 'session-secret', replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '') where not exists (select 1 from "auth_config" where "key" = 'session-secret')`,
 					parameters: []
 				});
 				const stored = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: `select "value" from bolt_auth_config where "key" = 'session-secret' limit 1`,
+					sql: `select "value" from "auth_config" where "key" = 'session-secret' limit 1`,
 					parameters: []
 				});
 				const secret = yield* Schema.decodeUnknownEffect(SecretRow)(stored.rows[0]).pipe(
@@ -570,7 +570,9 @@ export const layerWith = (
 									sql,
 									parameters: decodedParameters
 								});
-								const rows = yield* Schema.decodeUnknownEffect(Schema.Array(JsonObject))(result.rows);
+								const rows = yield* Schema.decodeUnknownEffect(Schema.Array(JsonObject))(
+									result.rows
+								);
 								return { rows, affectedRows: result.affectedRows };
 							}),
 						deliver: (message) =>
@@ -616,7 +618,7 @@ export const layerWith = (
 				if (!isRecordId(teamId)) return undefined;
 				const found = yield* database.execute(effectId, {
 					_tag: 'Query',
-					sql: `select ${TEAM_COLUMNS} from bolt_team where "id" = $1::uuid`,
+					sql: `select ${TEAM_COLUMNS} from "team" where "id" = $1::uuid`,
 					parameters: [teamId]
 				});
 				const row = found.rows[0];
@@ -672,7 +674,7 @@ export const layerWith = (
 				 *
 				 * There is no `kind <> 'service'` filter, and there is nothing left for one to exclude. It
 				 * existed to keep channel principals — rows minted for a machine — out of the candidate
-				 * set. A static identity is minted in memory now and never written to `bolt_auth_user`, so
+				 * set. A static identity is minted in memory now and never written to `user`, so
 				 * every row this reaches is a person, and the predicate would have been a filter over an
 				 * empty set that read as a safety property.
 				 */
@@ -681,7 +683,7 @@ export const layerWith = (
 						const result = yield* database.execute(effectId, {
 							_tag: 'Query',
 							sql: `select u."id" as "userId", u."email" as "email", u."channels" as "channels"
-						        from ${AUTH_MODELS.user} u
+						        from "${AUTH_MODELS.user}" u
 						       where u."channels" @> $1::jsonb`,
 							parameters: [JSON.stringify([{ type: transport, verified: true }])]
 						});
@@ -794,7 +796,7 @@ export const layerWith = (
 				admit: Effect.fn('Identity.admit')(function* (effectId, tenantId, email, teamId, status) {
 					const admitted = yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: `insert into ${AUTH_MODELS.user} ("id", "name", "email", "emailVerified", "status", "tenantId", "team_id")
+						sql: `insert into "${AUTH_MODELS.user}" ("id", "name", "email", "emailVerified", "status", "tenantId", "team_id")
 					      values (gen_random_uuid(), $1, $1, true, $4, $2, $3)
 					      on conflict ("email") do update set
 					        "tenantId" = excluded."tenantId",
@@ -834,7 +836,7 @@ export const layerWith = (
 					// actually signed in, so a second user sharing the address cannot be the one admitted.
 					const admitted = yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: `update ${AUTH_MODELS.user} set "tenantId" = $2, "updated_at" = now() where "id" = (select "userId" from ${AUTH_MODELS.session} where "token" = $1) returning "id" as "id"`,
+						sql: `update "${AUTH_MODELS.user}" set "tenantId" = $2, "updated_at" = now() where "id" = (select "userId" from "${AUTH_MODELS.session}" where "token" = $1) returning "id" as "id"`,
 						parameters: [signedIn.token, tenantId]
 					});
 					const admittedId = yield* Schema.decodeUnknownEffect(IdRow)(admitted.rows[0]).pipe(
@@ -863,14 +865,14 @@ export const layerWith = (
 					const credential = `bolt:${tenantId}:${randomId()}`;
 					const admitted = yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: `update ${AUTH_MODELS.user} set "tenantId" = $2, "updated_at" = now() where "id" = $1 returning "id" as "id"`,
+						sql: `update "${AUTH_MODELS.user}" set "tenantId" = $2, "updated_at" = now() where "id" = $1 returning "id" as "id"`,
 						parameters: [userId, tenantId]
 					});
 					if (admitted.rows[0] === undefined)
 						return yield* new AuthenticationError({ reason: 'invalid' });
 					yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: `insert into ${AUTH_MODELS.session} ("id", "token", "userId", "expiresAt") values ($1, $2, $3, now() + interval '8 hours')`,
+						sql: `insert into "${AUTH_MODELS.session}" ("id", "token", "userId", "expiresAt") values ($1, $2, $3, now() + interval '8 hours')`,
 						parameters: [randomId(), credential, userId]
 					});
 					yield* identityHooks.emit(effectId, {
@@ -885,7 +887,7 @@ export const layerWith = (
 					// query forgets the flag is the failure the old two-writer design actually had.
 					yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: `delete from ${AUTH_MODELS.session} where "token" = $1`,
+						sql: `delete from "${AUTH_MODELS.session}" where "token" = $1`,
 						parameters: [credential]
 					});
 				}),
@@ -917,14 +919,14 @@ export const layerWith = (
 							-- Cast to text so the union matches: identity is keyed by \`id uuid\`, while an
 							-- external subject's id is whatever its provider calls it, and both are only ever
 							-- read back out of this projection as a string.
-							select "id"::text as user_id, "email", "team_id", "status" from ${AUTH_MODELS.user} where "tenantId" = $1
+							select "id"::text as user_id, "email", "team_id", "status" from "${AUTH_MODELS.user}" where "tenantId" = $1
 							union all
 							-- An external subject is authenticated somewhere else and \`bolt_external_subjects\`
 							-- carries no status column, so it can only ever be an ordinary member — the same
 							-- answer \`resolveSubject\` gives it.
 							select user_id, email, team_id, '${NORMAL_STATUS}' from bolt_external_subjects where tenant_id = $1
 						  ) subjects
-						  left join bolt_team t on t."id" = subjects."team_id"
+						  left join "team" t on t."id" = subjects."team_id"
 						  group by subjects.user_id
 						  order by subjects.user_id`,
 						parameters: [tenantId]
@@ -966,7 +968,7 @@ export const layerWith = (
 					});
 					const teamRows = yield* database.execute(effectId, {
 						_tag: 'Query',
-						sql: 'select "id"::text as "id", "name", "parent_id"::text as "parentId", "description" from bolt_team order by "name"',
+						sql: 'select "id"::text as "id", "name", "parent_id"::text as "parentId", "description" from "team" order by "name"',
 						parameters: []
 					});
 					const teams = yield* Schema.decodeUnknownEffect(Schema.Array(TeamDatabaseRow))(
@@ -1033,9 +1035,9 @@ export const layerWith = (
 							// preview with `lower("name") = lower($1)` and `policiesHeldByTeam` folds both sides —
 							// but the unique index on the column is case-*sensitive*, so `on conflict` would admit
 							// `hr manager` beside `HR Manager` and make which one an approval matched an accident.
-							sql: `insert into bolt_team ("id", "name", "parent_id", "description")
+							sql: `insert into "team" ("id", "name", "parent_id", "description")
 						      select gen_random_uuid(), $1::text, $2::uuid, $3::text
-						       where not exists (select 1 from bolt_team where lower("name") = lower($1::text))
+						       where not exists (select 1 from "team" where lower("name") = lower($1::text))
 						   returning ${TEAM_COLUMNS}`,
 							parameters: [name, parentId, draft.description ?? null]
 						});
@@ -1112,10 +1114,10 @@ export const layerWith = (
 							_tag: 'Query',
 							// The folded uniqueness test rides in the statement rather than in a read before it, so
 							// two operators renaming two teams to the same thing at once cannot both be told yes.
-							sql: `update bolt_team set "name" = $2::text, "parent_id" = $3::uuid, "description" = $4::text,
+							sql: `update "team" set "name" = $2::text, "parent_id" = $3::uuid, "description" = $4::text,
 						             "updated_at" = now()
 						       where "id" = $1::uuid
-						         and not exists (select 1 from bolt_team other
+						         and not exists (select 1 from "team" other
 						                          where lower(other."name") = lower($2::text)
 						                            and other."id" <> $1::uuid)
 						   returning ${TEAM_COLUMNS}`,
@@ -1160,7 +1162,7 @@ export const layerWith = (
 						// lets the delete through. One row or none cannot be misread that way.
 						const held = yield* database.execute(EffectId.make(`${effectId}:team-members`), {
 							_tag: 'Query',
-							sql: `select 1 from ${AUTH_MODELS.user} where "team_id" = $1::uuid and "tenantId" = $2::text
+							sql: `select 1 from "${AUTH_MODELS.user}" where "team_id" = $1::uuid and "tenantId" = $2::text
 						      union all
 						      select 1 from bolt_external_subjects where team_id = $1::uuid and tenant_id = $2::text
 						      limit 1`,
@@ -1174,14 +1176,14 @@ export const layerWith = (
 						}
 						const deleted = yield* database.execute(EffectId.make(`${effectId}:team-delete`), {
 							_tag: 'Query',
-							sql: `delete from bolt_team where "id" = $1::uuid returning ${TEAM_COLUMNS}`,
+							sql: `delete from "team" where "id" = $1::uuid returning ${TEAM_COLUMNS}`,
 							parameters: [current.id]
 						});
 						if (deleted.rows[0] === undefined)
 							return { _tag: 'Refused', reason: `there is no team ${teamId}` } as const;
 						yield* database.execute(EffectId.make(`${effectId}:team-reparent`), {
 							_tag: 'Query',
-							sql: `update bolt_team set "parent_id" = null, "updated_at" = now() where "parent_id" = $1::uuid`,
+							sql: `update "team" set "parent_id" = null, "updated_at" = now() where "parent_id" = $1::uuid`,
 							parameters: [current.id]
 						});
 						yield* recordTeamEvent(
@@ -1219,7 +1221,7 @@ export const layerWith = (
 							} as const;
 						const moved = yield* database.execute(EffectId.make(`${effectId}:team-assign`), {
 							_tag: 'Query',
-							sql: `update ${AUTH_MODELS.user} set "team_id" = $2::uuid, "updated_at" = now()
+							sql: `update "${AUTH_MODELS.user}" set "team_id" = $2::uuid, "updated_at" = now()
 						       where "id" = $1::uuid and "tenantId" = $3::text
 						   returning "id"::text as "id", "email"`,
 							parameters: [memberId, team?.id ?? null, tenantId]

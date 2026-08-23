@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Effect, Schema } from 'effect';
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy } from 'svelte';
 	import { Bound, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { workspaceSession } from '#lib/client/session.js';
@@ -65,8 +65,9 @@
 		connection: Schema.optionalKey(ConnectionSchema)
 	});
 
-	let mounted = $state(false);
-	const manifestQuery = $derived(mounted ? client.system.workspace.manifest({}) : undefined);
+	const manifestQuery = $derived(
+		typeof window === 'undefined' ? undefined : client.system.workspace.manifest({})
+	);
 	const envoys = $derived<ReadonlyArray<DeclaredEnvoy>>(manifestQuery?.current?.envoys ?? []);
 	const statusQueries = $derived(
 		envoys.map((envoy) => {
@@ -241,8 +242,6 @@
 			void Effect.runPromise(runPairing(envoy.name, envoy.transport, 'status'));
 		}
 	});
-
-	onMount(() => (mounted = true));
 </script>
 
 {#snippet pairingPanel(envoy: DeclaredEnvoy)}

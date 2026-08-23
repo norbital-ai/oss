@@ -58,6 +58,65 @@ describe('WorkspaceSchema owner', () => {
 		}
 	});
 
+	it('verifies polymorphic references against their physical storage columns', async () => {
+		const harness = await makeBoltTestRuntime(
+			testWorkspace({
+				collections: [
+					{
+						name: 'payslip_sources',
+						fields: {
+							source: {
+								type: 'reference',
+								required: true,
+								indexed: false,
+								reference: {
+									onDelete: 'restrict',
+									targets: [
+										{
+											tag: 'TIME_ENTRY',
+											collection: 'time_entries',
+											storageColumn: 'source__time_entry_id'
+										},
+										{
+											tag: 'LEAVE_REQUEST',
+											collection: 'leave_requests',
+											storageColumn: 'source__leave_request_id'
+										}
+									]
+								}
+							}
+						}
+					}
+				]
+			})
+		);
+		try {
+			expect(
+				await harness.runtime.runPromise(
+					Effect.flatMap(WorkspaceSchema.Service, (schema) =>
+						schema.verify(harness.effectId('verify'))
+					)
+				)
+			).toEqual([]);
+		} finally {
+			await harness.dispose();
+		}
+	});
+
+	it('raises retryable SQLSTATE 40001 when a snapshot assertion fails', async () => {
+		const harness = await makeBoltTestRuntime();
+		try {
+			await expect(
+				harness.database.query("select bolt_assert(true, 'unchanged')")
+			).resolves.toHaveLength(1);
+			await expect(
+				harness.database.query("select bolt_assert(false, 'mutation snapshot changed')")
+			).rejects.toMatchObject({ code: '40001', message: 'mutation snapshot changed' });
+		} finally {
+			await harness.dispose();
+		}
+	});
+
 	/**
 	 * The defect this command exists to catch, and could not: the plan is `create table if not exists`
 	 * throughout, so a table that already exists in an older shape is skipped in silence. Verifying the
@@ -313,6 +372,42 @@ describe('WorkspaceSchema owner', () => {
 			// Recorded, and not run: `people` still has its real columns rather than the entry's `x`.
 			expect(await ledgerTags(harness)).toEqual(['20260101000000_unreplayable']);
 			expect(await harness.database.query('select name from people')).toEqual([]);
+		} finally {
+			await harness.dispose();
+		}
+	});
+
+	/**
+	 * A first lineage may fail after the plan's foundation commits but before its CREATE TABLE
+	 * transaction does. That leaves a fingerprint and Bolt-owned tables, but no authored table and no
+	 * lineage tag. It is a retryable partial provision, not an old plan-provisioned database to baseline.
+	 */
+	it('retries the lineage when a prior attempt left only the plan foundation', async () => {
+		const harness = await makeBoltTestRuntime();
+		try {
+			await harness.database.query('drop table "people"');
+			await harness.database.query('drop table if exists __drizzle_migrations');
+			await harness.database.query(
+				'create table __drizzle_migrations (id serial primary key, tag text not null unique, created_at timestamptz not null default now())'
+			);
+			await harness.database.query(
+				"insert into bolt_schema_state (fingerprint) values ('partial')"
+			);
+
+			await harness.runtime.runPromise(
+				Effect.flatMap(WorkspaceSchema.Service, (schema) =>
+					schema.migrate(harness.effectId('migrate'))
+				)
+			);
+
+			expect(await harness.database.query('select id from people')).toEqual([]);
+			expect(
+				await harness.runtime.runPromise(
+					Effect.flatMap(WorkspaceSchema.Service, (schema) =>
+						schema.verify(harness.effectId('verify'))
+					)
+				)
+			).toEqual([]);
 		} finally {
 			await harness.dispose();
 		}

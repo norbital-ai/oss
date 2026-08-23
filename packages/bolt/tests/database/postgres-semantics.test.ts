@@ -61,13 +61,13 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 		expect(columns.rows).toContainEqual({ column_name: 'name', data_type: 'text' });
 		expect(columns.rows).toContainEqual({ column_name: 'active', data_type: 'boolean' });
 		const runtimeTables = await database.query<{ table_name: string }>(
-			`select table_name from information_schema.tables where table_schema = 'public' and table_name like 'bolt_%' order by table_name`
+			`select table_name from information_schema.tables where table_schema = 'public' and (table_name like 'bolt_%' or table_name in ('session', 'user')) order by table_name`
 		);
 		expect(runtimeTables.rows.map(({ table_name }) => table_name)).toEqual(
 			expect.arrayContaining([
 				'bolt_approvals',
-				'bolt_auth_session',
-				'bolt_auth_user',
+				'session',
+				'user',
 				'bolt_collection_history',
 				'bolt_sync_outbox'
 			])

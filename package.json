@@ -18,6 +18,7 @@
 		"format:check": "prettier --check .",
 		"test:scripts": "node --test scripts/tests/*.test.mjs",
 		"publication:check": "node scripts/validate-package-publication.mjs",
+		"packages:resolve": "node scripts/resolve-published-packages.mjs",
 		"skills:generate": "node scripts/generate-skills.mjs",
 		"skills:check": "node scripts/generate-skills.mjs --check",
 		"docs:api": "typedoc --options typedoc.json && node scripts/generate-api-docs.mjs",

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { safeParse } from '@norbital-ai/std/json';
+import { Effect } from 'effect';
 import { readPublicPackageEntries } from './package-release.mjs';
 
 export const signatureField = 'yalcSignature';
@@ -45,40 +46,53 @@ export const stalePackages = (consumerDirectory, names) =>
 
 /** Link consumers without leaving publish-time dependency coordinates in source control. */
 export const linkConsumers = ({ consumers, force = false, install, run, yalcBin }) => {
-	const snapshots = new Map();
-	for (const file of new Set(
-		consumers.flatMap(({ directory, stateFiles = [] }) => [
-			path.join(directory, 'package.json'),
-			path.join(directory, 'pnpm-lock.yaml'),
-			path.join(directory, 'yalc.lock'),
-			...stateFiles
-		])
-	)) {
-		snapshots.set(file, existsSync(file) ? readFileSync(file) : undefined);
-	}
-	try {
-		const states = consumers.map((consumer) => {
-			const packages = managedPackages(consumer.directory);
-			const prepared = ensurePureInstallation({
-				consumerDirectory: consumer.directory,
-				names: packages,
-				yalcBin,
-				run
-			});
-			const stale = stalePackages(consumer.directory, packages);
-			return { ...consumer, packages, prepared, stale };
-		});
-		const changed = states.filter(
-			({ prepared, stale }) => force || prepared.length > 0 || stale.length > 0
-		);
-		if (changed.length > 0) install(changed);
-		return states;
-	} finally {
-		for (const [file, contents] of snapshots) {
-			if (contents === undefined) rmSync(file, { force: true });
-			else writeFileSync(file, contents);
-		}
-	}
+	return Effect.runSync(
+		Effect.acquireUseRelease(
+			Effect.sync(() => {
+				const snapshots = new Map();
+				for (const file of new Set(
+					consumers.flatMap(({ directory, stateFiles = [] }) => [
+						path.join(directory, 'package.json'),
+						path.join(directory, 'pnpm-lock.yaml'),
+						path.join(directory, 'yalc.lock'),
+						...stateFiles
+					])
+				)) {
+					snapshots.set(file, existsSync(file) ? readFileSync(file) : undefined);
+				}
+				return snapshots;
+			}),
+			() =>
+				Effect.try({
+					try: () => {
+						const states = consumers.map((consumer) => {
+							const packages = managedPackages(consumer.directory);
+							const prepared = ensurePureInstallation({
+								consumerDirectory: consumer.directory,
+								names: packages,
+								yalcBin,
+								run
+							});
+							const stale = stalePackages(consumer.directory, packages);
+							return { ...consumer, packages, prepared, stale };
+						});
+						const changed = states.filter(
+							({ prepared, stale }) => force || prepared.length > 0 || stale.length > 0
+						);
+						if (changed.length > 0) install(changed);
+						return states;
+					},
+					catch: (cause) => cause
+				}),
+			(snapshots) =>
+				Effect.sync(() => {
+					for (const [file, contents] of snapshots) {
+						if (contents === undefined) rmSync(file, { force: true });
+						else writeFileSync(file, contents);
+					}
+				})
+		)
+	);
 };
 
 /** Convert registry pins to pure overlays; pnpm remains the sole owner of node_modules. */

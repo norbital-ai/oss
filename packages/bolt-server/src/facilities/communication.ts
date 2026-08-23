@@ -17,6 +17,7 @@ export interface Provider {
 		metadata: FacilityCall,
 		input: CommunicationRequest,
 		signal: AbortSignal
+		// repository-health:allow EFF2 -- Provider SPI mirrors the protocol-owned Promise facility boundary for external adapters.
 	) => Promise<unknown>;
 }
 
@@ -38,7 +39,7 @@ export const makeCommunicationBinding = (
 		invoke: provider.call.bind(provider)
 	});
 
-/** Selects and constructs the configured communication provider; stupidity:allow Q3 stupidity:allow Q4 -- public Config-selected provider factory entry point. */
+/** Selects and constructs the configured communication provider. */
 export const makeCommunicationBindingFromConfig = <Error>(
 	factories: Readonly<Record<string, ConfiguredProviderFactory<Provider, Error>>>
 ) =>

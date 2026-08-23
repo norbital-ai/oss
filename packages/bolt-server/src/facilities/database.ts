@@ -14,6 +14,7 @@ import { makeWireBinding } from '../config.js';
 /** The database SPI stays beside its wire adapter. */
 export interface LocalDatabase {
 	readonly binding: FacilityBinding<DatabaseRequest, DatabaseResponse>;
+	// repository-health:allow EFF2 -- Public host finalizers preserve the established Promise lifecycle contract.
 	readonly close: () => Promise<void>;
 }
 
@@ -32,6 +33,7 @@ export interface PostgresDatabaseOptions {
 /** The database provider lifecycle stays beside its constructors. */
 export interface DatabaseProvider {
 	readonly binding: FacilityBinding<DatabaseRequest, DatabaseResponse>;
+	// repository-health:allow EFF2 -- Public host finalizers preserve the established Promise lifecycle contract.
 	readonly close: () => Promise<void>;
 }
 
@@ -46,6 +48,22 @@ const jsonSafe = (value: unknown): unknown => {
 	}
 	return value;
 };
+
+/** Finds the SQLSTATE through the small wrapper shapes used by Effect and both Postgres drivers. */
+export const databaseSqlState = (cause: unknown, depth = 0): string | undefined => {
+	if (depth > 6 || cause === null || typeof cause !== 'object') return undefined;
+	const code = Reflect.get(cause, 'code');
+	if (typeof code === 'string' && /^\d{5}$/.test(code)) return code;
+	for (const key of ['cause', 'error', 'reason', 'originalError']) {
+		const nested = databaseSqlState(Reflect.get(cause, key), depth + 1);
+		if (nested !== undefined) return nested;
+	}
+	return undefined;
+};
+
+/** Serialization conflicts are safe to retry because their transaction committed nothing. */
+export const databaseFailureRetryable = (cause: unknown): boolean | undefined =>
+	databaseSqlState(cause) === '40001' ? true : undefined;
 
 /** Creates the durable PostgreSQL provider used by production self-host deployments. */
 export const makePostgresDatabase = ({
@@ -125,6 +143,7 @@ export const makePostgresDatabase = ({
 		cancelled: { code: 'database.cancelled', message: 'Database call was cancelled' },
 		failed: {
 			code: 'database.failed',
+			retryable: databaseFailureRetryable,
 			// A managed database fails for driver reasons only the driver knows. Keep that diagnostic so
 			// an unreachable host and a wrong password do not collapse into the same sentence.
 			message: (cause) =>
@@ -168,9 +187,7 @@ export const makeDatabaseFromConfig = Effect.fn('BoltServer.Database.makeDatabas
 );
 
 /** Creates the explicitly local PGlite adapter used by deterministic development and tests. */
-export const makeLocalDatabase = ({
-	dataDirectory
-}: LocalDatabaseOptions): Promise<LocalDatabase> =>
+export const makeLocalDatabase = ({ dataDirectory }: LocalDatabaseOptions) =>
 	Effect.runPromise(
 		Effect.gen(function* () {
 			// PGlite ships these but registers none by default, so `create extension` answered "not
@@ -194,6 +211,7 @@ export const makeLocalDatabase = ({
 				cancelled: { code: 'database.cancelled', message: 'Database call was cancelled' },
 				failed: {
 					code: 'database.failed',
+					retryable: databaseFailureRetryable,
 					message: (cause) =>
 						`Local database operation failed: ${cause instanceof Error ? cause.message : String(cause)}`
 				},
@@ -214,12 +232,12 @@ export const makeLocalDatabase = ({
 							// PGlite's transaction API is callback-shaped; the driver callback is the
 							// one physical boundary this binding cannot flatten.
 							const response = yield* Effect.tryPromise(() =>
-								database.transaction(async (transaction) => {
+								database.transaction((transaction) => {
 									const initial: {
 										readonly rows: ReadonlyArray<Record<string, unknown>>;
 										readonly affectedRows: number;
 									} = { rows: [], affectedRows: 0 };
-									const completed = await Effect.runPromise(
+									return Effect.runPromise(
 										Effect.forEach(input.statements, (statement) =>
 											Effect.gen(function* () {
 												if (signal.aborted) return yield* Effect.fail(signal.reason);
@@ -234,15 +252,16 @@ export const makeLocalDatabase = ({
 													affectedRows: result.affectedRows ?? 0
 												};
 											})
+										).pipe(
+											Effect.map((completed) => ({
+												rows: completed.at(-1)?.rows.map(jsonSafe) ?? initial.rows,
+												affectedRows: completed.reduce(
+													(total, entry) => total + entry.affectedRows,
+													initial.affectedRows
+												)
+											}))
 										)
 									);
-									return {
-										rows: completed.at(-1)?.rows.map(jsonSafe) ?? initial.rows,
-										affectedRows: completed.reduce(
-											(total, entry) => total + entry.affectedRows,
-											initial.affectedRows
-										)
-									};
 								})
 							);
 

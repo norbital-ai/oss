@@ -10,13 +10,12 @@
 		CollectionQuery,
 		CollectionRegistry,
 		CollectionType,
-		CollectionRecord,
-		CollectionUpdateInput
+		CollectionRecord
 	} from '@norbital-ai/std/collection';
 	import { resolveRecordLabel } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
-	import { Effect, Number as Number_ } from 'effect';
+	import { Number as Number_ } from 'effect';
 	import { onMount } from 'svelte';
 	import * as Popover from '#lib/popover';
 	import * as Sheet from '#lib/sheet';
@@ -34,12 +33,9 @@
 	import { CollectionForm } from '#lib/collection-form';
 	import {
 		collectionRecordMetadataDescription,
-		collectionRecordMutationReason,
-		type CollectionRecordMutation,
 		type ResolvedCollectionRecordMetadata
 	} from '#lib/collection-record-metadata';
 	import {
-		collectionRecordId,
 		createActionLabel,
 		deriveAutoCard,
 		formatAutoCardBadge,
@@ -188,12 +184,10 @@
 	const detailNavigation = getCollectionTableNavigationContext();
 	const searchEnabled = $derived(features.search !== false);
 	const filterEnabled = $derived(features.filter !== false);
-	const bulkEnabled = $derived(features.bulk !== false);
 	const effectiveSelectable = $derived(
 		selectable ||
 			exportPipelines.some((pipeline) => pipeline.requiresSelection) ||
-			importPipelines.some((pipeline) => pipeline.requiresSelection) ||
-			(bulkEnabled && (operations?.updateMany != null || operations?.delete != null))
+			importPipelines.some((pipeline) => pipeline.requiresSelection)
 	);
 	let registeredColumns: readonly ColumnConfig[] = $state([]);
 	let initialFitApplied = $state(false);
@@ -348,12 +342,9 @@
 		)
 	);
 
-	const createEnabled = $derived(features.create !== false && operations?.create != null);
+	const createEnabled = $derived(features.create !== false);
 	const operationsEnabled = $derived(
-		exportPipelines.length > 0 ||
-			importPipelines.length > 0 ||
-			integrations.length > 0 ||
-			(bulkEnabled && (operations?.updateMany != null || operations?.delete != null))
+		exportPipelines.length > 0 || importPipelines.length > 0 || integrations.length > 0
 	);
 	const createLabel = $derived(createActionLabel(String(collection), undefined, t as Translate));
 
@@ -542,30 +533,6 @@
 			.filter((row) => tableApi.rowSelection.current[row.__collectionTableRowId])
 			.map((row) => row.record)
 	);
-	function mutationReason(
-		rows: readonly Row[],
-		operation: CollectionRecordMutation
-	): string | null {
-		for (const record of rows) {
-			const reason = collectionRecordMutationReason(resolvedRecordMetadata(record), operation);
-			if (reason) return reason;
-		}
-		return null;
-	}
-	const updateUnavailable = $derived.by(() => {
-		const reason = mutationReason(selectedRecords, 'update');
-		return reason ? t('recordMetadata.selectedUpdateRestricted', { reason }) : null;
-	});
-	const deleteUnavailable = $derived.by(() => {
-		const reason = mutationReason(selectedRecords, 'delete');
-		return reason ? t('recordMetadata.selectedDeleteRestricted', { reason }) : null;
-	});
-	const updateSelectedAction = $derived(
-		bulkEnabled && operations?.updateMany ? updateSelectedRecords : undefined
-	);
-	const deleteSelectedAction = $derived(
-		bulkEnabled && operations?.delete ? deleteSelectedRecords : undefined
-	);
 	let createOpen = $state(false);
 
 	function openRecord(row: GridRow): void {
@@ -674,75 +641,6 @@
 		return fallback ?? t('table.recordDescription', { name: humanize(String(collection)) });
 	}
 
-	function refresh(): Effect.Effect<void, unknown> {
-		return Effect.all(
-			[
-				rowsQuery ? Effect.tryPromise(() => rowsQuery.refresh()) : Effect.void,
-				countQuery ? Effect.tryPromise(() => countQuery.refresh()) : Effect.void
-			],
-			{ discard: true }
-		);
-	}
-
-	function refreshData(): void {
-		if (disabled) return;
-		Effect.runFork(
-			refresh().pipe(
-				Effect.catch((error) =>
-					Effect.sync(() => {
-						toast.error(error instanceof Error ? error.message : t('table.refreshFailed'));
-					})
-				)
-			)
-		);
-	}
-
-	function updateSelectedRecords(
-		fieldName: string,
-		value: unknown,
-		rows: readonly Row[]
-	): Effect.Effect<void, unknown> {
-		return Effect.gen(function* () {
-			const unavailable = mutationReason(rows, 'update');
-			if (unavailable) {
-				return yield* Effect.fail(
-					new Error(t('recordMetadata.selectedUpdateRestricted', { reason: unavailable }))
-				);
-			}
-			const updateMany = operations?.updateMany;
-			if (!updateMany)
-				return yield* Effect.fail(new Error('This collection does not allow bulk updates.'));
-			yield* Effect.tryPromise(() =>
-				updateMany(
-					rows.map((record) => ({
-						recordId: collectionRecordId(record),
-						input: { [fieldName]: value } as CollectionUpdateInput<
-							CollectionType<Row, object, object>
-						> // stupidity: boundary-cast — schema-selected writable fields and DataRenderer constrain the dynamic patch.
-					}))
-				)
-			);
-		});
-	}
-
-	function deleteSelectedRecords(rows: readonly Row[]): Effect.Effect<void, unknown> {
-		return Effect.gen(function* () {
-			const unavailable = mutationReason(rows, 'delete');
-			if (unavailable) {
-				return yield* Effect.fail(
-					new Error(t('recordMetadata.selectedDeleteRestricted', { reason: unavailable }))
-				);
-			}
-			const deleteRecord = operations?.delete;
-			if (!deleteRecord)
-				return yield* Effect.fail(new Error('This collection does not allow deletion.'));
-			yield* Effect.all(
-				rows.map((record) => Effect.tryPromise(() => deleteRecord(collectionRecordId(record)))),
-				{ discard: true }
-			);
-		});
-	}
-
 	const listRows = $derived(
 		tableApi.rowInstances.map((row) => ({
 			id: row.id,
@@ -804,6 +702,7 @@
 			label={createLabel}
 			icon="lucide:plus"
 			variant="default"
+			pending={operations.pending > 0}
 			unavailable={disabled ? t('table.viewDisabled') : undefined}
 			onRun={() => {
 				createOpen = true;
@@ -814,9 +713,12 @@
 		label={t('table.refreshCollectionData')}
 		icon="lucide:refresh-cw"
 		iconOnly
-		pending={tableLoading}
+		pending={rowsQuery?.loading === true || countQuery?.loading === true}
 		unavailable={disabled ? t('table.viewDisabled') : undefined}
-		onRun={() => refreshData()}
+		onRun={() => {
+			void rowsQuery?.refresh();
+			void countQuery?.refresh();
+		}}
 	/>
 {/snippet}
 
@@ -846,12 +748,7 @@
 					importPipelines,
 					integrations,
 					selectedRows: selectedRecords,
-					updateSelected: updateSelectedAction,
-					deleteSelected: deleteSelectedAction,
-					updateUnavailable,
-					deleteUnavailable,
-					clearSelection: () => tableApi.setRowSelection({}),
-					refresh
+					disabled: operations.pending > 0
 				}
 			: undefined}
 		actions={toolbarActions}
@@ -879,7 +776,6 @@
 			</p>
 		</Stack>
 		{#if badge}
-			<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 			<span
 				class={cn(
 					'inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-full border px-2 py-0.5 text-xs font-medium',
@@ -894,8 +790,6 @@
 	{@render columns({ Column: CollectionTablePart })}
 </div>
 
-<!-- stupidity:allow UI10 -- collection surfaces need a natural minimum height (header + a few rows); no Bound size expresses it -->
-<!-- stupidity:allow UI15 -- the table keeps a usable empty/loading viewport before rows establish intrinsic height -->
 <Bound
 	size="full"
 	class="collection-table-responsive min-h-[24rem] w-full"
@@ -968,9 +862,7 @@
 				{@const Representation = collectionSurface.representation}
 				<Representation
 					record={null}
-					refresh
 					close={() => {
-						Effect.runFork(refresh());
 						createOpen = false;
 					}}
 				/>
@@ -978,8 +870,9 @@
 				<CollectionForm
 					{client}
 					{collection}
-					onAfterSubmit={() =>
-						refresh().pipe(Effect.tap(() => Effect.sync(() => (createOpen = false))))}
+					onAfterSubmit={() => {
+						createOpen = false;
+					}}
 				/>
 			{/if}
 		</div>

@@ -123,7 +123,6 @@
 					</button>
 
 					{#if open}
-						<!-- repository-health:allow UI7 -- Nested entry indent: ml-5 is hierarchy indentation alongside the guide border, not sibling spacing. -->
 						<div class="ml-5 border-l border-border/50 pl-2">
 							{#each section.entries as entry (entry.name)}
 								<button

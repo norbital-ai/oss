@@ -76,7 +76,6 @@
 			{@const isWknd = isWeekend(day)}
 			{@const overflow = Math.max(0, dayEvents.length - MAX_PILLS)}
 
-			<!-- stupidity:allow UI9 -- this local clip boundary contains, rather than duplicates, the descendant scroll owner -->
 			<button
 				class={cn(
 					'relative flex flex-col p-1 border border-border/60 rounded-sm text-left',

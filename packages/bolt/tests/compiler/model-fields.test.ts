@@ -25,6 +25,19 @@ export default defineModel({
 		});
 	});
 
+	it('preserves primary-key and unique constraints for the schema plan', () => {
+		const fields = extractModelFields(`
+export default defineModel({
+	id: uuid().primaryKey(),
+	singleton: boolean().notNull().default(true).unique(),
+	sequence: bigint({ mode: 'number' }).notNull().default(0)
+});
+`);
+		expect(fields['id']).toMatchObject({ indexed: true, primaryKey: true });
+		expect(fields['singleton']).toMatchObject({ indexed: true, unique: true });
+		expect(fields['sequence']).toMatchObject({ indexed: false });
+	});
+
 	it('reads one and many relationships including inverse foreign keys', () => {
 		const relations = extractRelationships(`
 export default ((r) => ({
@@ -49,7 +62,9 @@ export default ((r) => ({
 				name: 'employment_employee',
 				source: 'employees',
 				target: 'employments',
-				cardinality: 'many'
+				cardinality: 'many',
+				from: { collection: 'employments', column: 'employee_id' },
+				to: { collection: 'employees', column: 'id' }
 			},
 			{
 				name: 'employment_employee',
@@ -68,6 +83,43 @@ export default ((r) => ({
 				to: { collection: 'companies', column: 'id' }
 			}
 		]);
+	});
+
+	it('resolves a many edge from a uniquely reversed one even when their names differ', () => {
+		const relations = extractRelationships(`
+export default ((r) => ({
+	accounts: {
+		account_contacts: r.many.contacts()
+	},
+	contacts: {
+		contact_account: r.one.accounts({
+			from: r.contacts.account_id,
+			to: r.accounts.id
+		})
+	}
+})) satisfies Relationships;
+`);
+		expect(relations[0]).toMatchObject({
+			name: 'account_contacts',
+			from: { collection: 'contacts', column: 'account_id' },
+			to: { collection: 'accounts', column: 'id' }
+		});
+	});
+
+	it('leaves a many edge unresolved when two inverse foreign keys are possible', () => {
+		const relations = extractRelationships(`
+export default ((r) => ({
+	people: {
+		people_links: r.many.links()
+	},
+	links: {
+		link_from: r.one.people({ from: r.links.from_id, to: r.people.id }),
+		link_to: r.one.people({ from: r.links.to_id, to: r.people.id })
+	}
+})) satisfies Relationships;
+`);
+		expect(relations[0]).not.toHaveProperty('from');
+		expect(relations[0]).not.toHaveProperty('to');
 	});
 
 	it('builds CollectionTable catalog fields and relations', () => {

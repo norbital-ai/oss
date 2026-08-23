@@ -48,7 +48,7 @@ export const COLONY_SYSTEM_POLICY: PolicyDeclaration = Object.freeze<PolicyDecla
 	/**
 	 * Selected by a flag on the subject, never by a string the subject carries.
 	 *
-	 * This used to be `roles: ['colony-system']`, matched against `bolt_auth_user.roles` — so the one
+	 * This used to be `roles: ['colony-system']`, matched against `user.roles` — so the one
 	 * thing that made it forgeable was a row spelling it, and the guard was a second string match
 	 * that stripped the role from every projected subject. A trapdoor watched by a filter.
 	 *

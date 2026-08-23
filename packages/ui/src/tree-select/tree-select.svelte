@@ -448,7 +448,6 @@
 				{/if}
 			</div>
 			{#if multiple}
-				<!-- stupidity:allow UI7 -- this leaf component owns responsive or internal spacing as part of its public DOM contract -->
 				<div class={cn('ml-2 flex-none', { 'opacity-50': node.disabled })}>
 					<Checkbox
 						indeterminate={isParentNode(node) && node.isIndeterminate}

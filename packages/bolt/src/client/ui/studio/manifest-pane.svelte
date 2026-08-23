@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { Clock, Effect } from 'effect';
-	import { onMount } from 'svelte';
 	import { FEATURE_COLOR_STYLES } from '@norbital-ai/ui/feature-colors';
 	import type { SystemClientApi } from '#lib/client/system-client.js';
 
@@ -110,9 +109,8 @@
 		onopenSource?: ((path: string) => void) | undefined;
 	} = $props();
 
-	let mounted = $state(false);
 	const historyQueries = $derived(
-		mounted
+		typeof window !== 'undefined'
 			? (manifest?.automations ?? []).map((automation) => ({
 					name: automation.name,
 					query: system.automations.history({ name: automation.name, limit: 10 })
@@ -172,8 +170,6 @@
 			void historyQuery(name)?.refresh();
 		}
 	});
-
-	onMount(() => (mounted = true));
 
 	const kind = $derived(selected.split(':')[0] ?? 'collections');
 	const name = $derived(selected.slice(kind.length + 1));

@@ -75,7 +75,6 @@
 				</Collapsible.Trigger>
 
 				<Collapsible.Content class="w-full">
-					<!-- stupidity:allow UI5 -- popover content boundary -->
 					<div
 						class="w-full overflow-hidden rounded-xl border border-border bg-background/95 shadow-lg backdrop-blur-sm"
 					>
@@ -85,7 +84,6 @@
 							</p>
 							<span class="truncate text-meta">{activeLabel}</span>
 						</Inline>
-						<!-- stupidity:allow UI5 -- popover content boundary -->
 						<div class="max-h-[min(50dvh,20rem)] overflow-hidden">
 							<DocTocScrollArea bind:scrollElement class="max-h-[min(50dvh,20rem)] px-3 pt-2 pb-3">
 								<DocTocItems>

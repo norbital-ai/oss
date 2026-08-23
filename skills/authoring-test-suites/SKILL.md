@@ -48,7 +48,7 @@ you are writing a slow unit test.
 
 ## "Higher level" means the unit of behaviour, not the unit of code
 
-Raise the level by widening what the assertion is *about*, never by widening what the test *boots*.
+Raise the level by widening what the assertion is _about_, never by widening what the test _boots_.
 
 - Test a service through its public interface. Do not reach for a private helper — if a helper is
   worth pinning it is worth exporting, and if it is not worth exporting the behaviour it serves is
@@ -68,11 +68,11 @@ Services are declared as a contract module holding `type Interface`, a
 `Context.Service<Interface>('@colony/…')` tag, and **three** layers. `<name>.live.ts` holds only the
 real provider, and only `app.ts` may import it.
 
-| Layer              | What it is                                                    | When a test uses it                       |
-| ------------------ | ------------------------------------------------------------- | ----------------------------------------- |
-| `layer` / `layer*` | The real provider, in `.live.ts`                              | Never, in a unit test                     |
-| `layerTest`        | A working in-memory implementation of the same contract       | Every dependency the behaviour needs      |
-| `layerUnavailable` | A binding that fails loudly when anything calls it            | Every dependency it must **not** reach    |
+| Layer              | What it is                                              | When a test uses it                    |
+| ------------------ | ------------------------------------------------------- | -------------------------------------- |
+| `layer` / `layer*` | The real provider, in `.live.ts`                        | Never, in a unit test                  |
+| `layerTest`        | A working in-memory implementation of the same contract | Every dependency the behaviour needs   |
+| `layerUnavailable` | A binding that fails loudly when anything calls it      | Every dependency it must **not** reach |
 
 ```ts
 import { describe, expect, it } from '@effect/vitest';
@@ -88,7 +88,7 @@ it.effect('is idempotent across a repeated call', () =>
 `layerTest` is a real implementation, not a spy — that is what makes behavioural assertions possible
 at all. And bind `layerUnavailable` rather than a fake for anything out of scope: a fake answers and
 hides the new call, an unavailable binding fails and reports it. If you find yourself reaching for
-`vi.mock` to replace a *service*, the service is not injected properly and that is the bug.
+`vi.mock` to replace a _service_, the service is not injected properly and that is the bug.
 
 Details, the module-substitution escape hatch, and the narrow-double pattern for authored template
 code: [dependency-injection.md](references/dependency-injection.md).
@@ -97,12 +97,12 @@ code: [dependency-injection.md](references/dependency-injection.md).
 
 `expect(mock).toHaveBeenCalled()` proves the test wired the mock up. It does not prove the system
 did anything. Assert the state that changed, the row that exists, the value returned, the refusal
-that came back — and where a refusal is the point, assert *both* that it was refused and that
+that came back — and where a refusal is the point, assert _both_ that it was refused and that
 nothing happened anyway. A 403 that still writes the record passes a status-only assertion; the
 authority suite reads the control store back for exactly that reason
 (`norbital/apps/colony/tests/hosting/operations-authority.test.ts:193`).
 
-There are two exceptions and they are narrow. A callback passed *into* the subject is an output
+There are two exceptions and they are narrow. A callback passed _into_ the subject is an output
 port, so asserting it fired is asserting behaviour — but pair it with a state assertion, the way
 `oss/packages/bolt/tests/client/replica.test.ts:189` follows `expect(onError).toHaveBeenCalled()`
 with the cursor that must not have advanced. And an ordering or dispatch sequence can be the
@@ -115,10 +115,10 @@ Delete them on sight when you find them; do not add them.
 
 1. **Presence assertions.** A field exists. A component renders. A route is registered. An object is
    `toBeDefined()`. These pass on any implementation that has not been deleted, including one that
-   is completely wrong. Assert what the field *contains*, what the component *decides*, what the
-   route *refuses*.
+   is completely wrong. Assert what the field _contains_, what the component _decides_, what the
+   route _refuses_.
 2. **Tests pinned to one page's markup.** They fail on every redesign and pass through every real
-   regression. Component tests exercise complex components *generically* — the navigation stack, the
+   regression. Component tests exercise complex components _generically_ — the navigation stack, the
    field resolver, the state machine — not "the People page shows a table". The model is
    `oss/packages/bolt/tests/ui/collection-navigation.test.ts`: four `describe` blocks, every case
    about a decision the navigation machinery makes, not one rendered page.
@@ -137,7 +137,7 @@ Delete them on sight when you find them; do not add them.
 
 - **What edit makes this go red?** Name it concretely. If the answer is "deleting the function", the
   test asserts existence and should be deleted.
-- **Have you seen it fail?** Break the code, watch it go red for the *stated* reason, restore it. An
+- **Have you seen it fail?** Break the code, watch it go red for the _stated_ reason, restore it. An
   unmutated green is not evidence — a fixture-shape probe was once reported as having caught a bug
   independently when it had only ever run on already-fixed code, and mutation testing showed it never
   fired at all.
@@ -156,7 +156,7 @@ Delete them on sight when you find them; do not add them.
 
 ## What earns a comment
 
-Not the mechanics — the *judgement*. Specifically: why this level and not another; what is
+Not the mechanics — the _judgement_. Specifically: why this level and not another; what is
 deliberately not covered and who covers it instead; which single assertion fails if the fix is
 reverted; and any known weakness you are accepting. `policy_grants.test.ts` restates three runtime
 rules as one-line helpers, quotes each from its source, and states in its own header that drift is
@@ -176,12 +176,12 @@ that can be wrong, each with a stated reason, each demonstrably capable of going
 
 ## Reference routing
 
-| Task                                                                            | Reference                                                                   |
-| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Supplying dependencies: `Context.Service`, `layerTest`, doubles, harnesses       | [dependency-injection.md](references/dependency-injection.md)               |
-| `it.effect` vs `it.live`, TestClock, vitest configs, `node --test` in templates  | [runners-and-harnesses.md](references/runners-and-harnesses.md)             |
-| The catalogue of false confidence, each with a real defect it let through        | [false-confidence.md](references/false-confidence.md)                       |
-| Annotated tests from this repository, and three before/after rewrites            | [worked-examples.md](references/worked-examples.md)                         |
+| Task                                                                            | Reference                                                       |
+| ------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Supplying dependencies: `Context.Service`, `layerTest`, doubles, harnesses      | [dependency-injection.md](references/dependency-injection.md)   |
+| `it.effect` vs `it.live`, TestClock, vitest configs, `node --test` in templates | [runners-and-harnesses.md](references/runners-and-harnesses.md) |
+| The catalogue of false confidence, each with a real defect it let through       | [false-confidence.md](references/false-confidence.md)           |
+| Annotated tests from this repository, and three before/after rewrites           | [worked-examples.md](references/worked-examples.md)             |
 
 Read only the relevant reference. Line numbers in the references are paired with a quoted anchor
 phrase, because this tree moves; search the phrase if a line has drifted.

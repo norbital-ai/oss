@@ -24,7 +24,7 @@ const ApproverSteps = Schema.Struct({
 /**
  * Every team name the release's approval steps expect to exist, deduplicated case-insensitively.
  *
- * `step.approvers` and `bolt_team.name` are the same string — that is the whole binding, and it is
+ * `step.approvers` and `team.name` are the same string — that is the whole binding, and it is
  * the reason a typo in one is invisible until somebody tries to decide an approval and finds that
  * nobody is eligible. Folding is how the rest of the runtime compares team names (`TEAM_LOOKUP_SQL`
  * resolves with `lower("name") = lower($1)`, `policiesHeld` folds both sides), so two steps
@@ -55,7 +55,7 @@ type ApprovalStep = Readonly<{
 /**
  * Every approval step a release declares, flattened.
  *
- * One walk with two readers. `declaredApproverTeams` reconciles `bolt_team` rows from it at
+ * One walk with two readers. `declaredApproverTeams` reconciles `team` rows from it at
  * activation, and the compiler's `approval-checks` refuses a build from it — and those two were
  * always going to be asked to agree about what an approval step *is*. Written twice, a change to
  * the shape would have moved one and left the other reconciling rows for steps the build no longer
@@ -106,7 +106,7 @@ export const declaredApproverTeams = (definition: WorkspaceDefinition): Readonly
  *
  * An *empty* team is the correct thing to create. Membership is an operator's decision and there is
  * nobody this could sensibly put in one; what the empty row buys is that the name now resolves, the
- * team appears in `identity.workspaceAccess` — which lists teams from `bolt_team` rather than
+ * team appears in `identity.workspaceAccess` — which lists teams from `team` rather than
  * deriving them from who is in one, precisely so this row is visible — and putting somebody in it
  * is a `teams.assign` away. Without the row there is nothing to see, nothing to fill, and an
  * approval that no subject in the workspace can ever be eligible for.
@@ -134,9 +134,9 @@ export const reconcileApproverTeams = Effect.fn('Bolt.reconcileApproverTeams')(f
 				// and sits under nobody: descent is unconditional, so *where* a team is placed is the
 				// whole of what it composes, and placing one is an operator's decision in `teams.update`
 				// rather than something the reconciler makes on their behalf.
-				sql: `insert into bolt_team ("id", "name")
+				sql: `insert into "team" ("id", "name")
 				      select gen_random_uuid(), $1::text
-				       where not exists (select 1 from bolt_team where lower("name") = lower($1::text))
+				       where not exists (select 1 from "team" where lower("name") = lower($1::text))
 				   returning "name"`,
 				parameters: [name]
 			})
@@ -154,7 +154,7 @@ export const reconcileApproverTeams = Effect.fn('Bolt.reconcileApproverTeams')(f
 			// nowhere is worth a line, and so is the reverse reading — a name here that nobody expected
 			// is a typo in `approvers` showing itself before it strands an approval.
 			yield* Effect.logInfo(
-				`activation: created empty team "${name}", named by an approval step and absent from bolt_team`
+				`activation: created empty team "${name}", named by an approval step and absent from "team"`
 			);
 		}
 	}

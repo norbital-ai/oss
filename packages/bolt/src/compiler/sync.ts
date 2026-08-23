@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { existsSync, type Dirent } from 'node:fs';
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
@@ -28,11 +28,20 @@ import {
 
 const boltPackageRoot = fileURLToPath(new URL('../..', import.meta.url));
 
+/** Tests file presence without blocking the compiler's Effect-owned workflow. */
+const fileExists = (path: string): Effect.Effect<boolean> =>
+	Effect.tryPromise(() => access(path)).pipe(
+		Effect.as(true),
+		Effect.catch(() => Effect.succeed(false))
+	);
+
 /** Resolves a compiler alias to workspace `src` when present, otherwise the published `build` file. */
-const boltEntry = (sourcePath: string, publishedPath: string): string =>
-	existsSync(join(boltPackageRoot, sourcePath))
-		? join(boltPackageRoot, sourcePath)
-		: join(boltPackageRoot, publishedPath);
+const boltEntry = (sourcePath: string, publishedPath: string): Effect.Effect<string> => {
+	const source = join(boltPackageRoot, sourcePath);
+	return fileExists(source).pipe(
+		Effect.map((sourceExists) => (sourceExists ? source : join(boltPackageRoot, publishedPath)))
+	);
+};
 
 export type SyncResult = Readonly<{
 	readonly workspaceRoot: string;
@@ -64,6 +73,95 @@ type I18nCatalogs = Readonly<{
 	readonly en: Readonly<Record<string, string>>;
 	readonly zh: Readonly<Record<string, string>>;
 }>;
+
+type RenderAuthoringTypesInput = Readonly<{
+	readonly collections: ReadonlyArray<string>;
+	readonly apps: ReadonlyArray<string>;
+	readonly policies: ReadonlyArray<string>;
+	readonly functions: ReadonlyArray<string>;
+	readonly tools: ReadonlyArray<string>;
+	readonly envoys: ReadonlyArray<string>;
+	readonly mcpServers: ReadonlyArray<string>;
+	readonly skills: ReadonlyArray<string>;
+	readonly datatypes: ReadonlyArray<string>;
+	readonly automations: ReadonlyArray<string>;
+	/** The import specifier for `src/access/+teams.ts`, relative to `.norbital/generated/`. */
+	readonly teamsImport: string | undefined;
+}>;
+
+type RenderedAppGroup = Readonly<{
+	readonly name: string;
+	readonly label?: string;
+	readonly description?: string;
+	readonly icon?: string;
+	readonly defaultChild?: string;
+}>;
+
+type RenderedAppMetadata = Readonly<{
+	readonly label?: string;
+	readonly icon?: string;
+	readonly description?: string;
+	readonly banner?: string;
+	readonly thumbnail?: string;
+}>;
+
+type ResolvedMutationRelation = Readonly<{
+	readonly column: string | undefined;
+	readonly parentColumn: string | undefined;
+	readonly cascade: boolean;
+}>;
+
+const endpointColumn = (relation: RelationDefinition, collection: string): string | undefined => {
+	if (relation.from?.collection === collection) return relation.from.column;
+	if (relation.to?.collection === collection) return relation.to.column;
+	return undefined;
+};
+
+const uniqueInverseRelation = (
+	relation: RelationDefinition,
+	relations: ReadonlyArray<RelationDefinition>
+): RelationDefinition | undefined => {
+	let inverse: RelationDefinition | undefined;
+	for (const candidate of relations) {
+		if (candidate.source !== relation.target || candidate.target !== relation.source) continue;
+		if (candidate.cardinality !== 'one') continue;
+		if (endpointColumn(candidate, relation.target) === undefined) continue;
+		if (endpointColumn(candidate, relation.source) === undefined) continue;
+		if (inverse !== undefined) return undefined;
+		inverse = candidate;
+	}
+	return inverse;
+};
+
+const resolveMutationRelation = (
+	relation: RelationDefinition,
+	relations: ReadonlyArray<RelationDefinition>
+): ResolvedMutationRelation => {
+	if (relation.cardinality === 'one') {
+		return {
+			column: relation.from?.collection === relation.source ? relation.from.column : undefined,
+			parentColumn: endpointColumn(relation, relation.target),
+			cascade: relation.cascade === true
+		};
+	}
+
+	const directChildColumn = endpointColumn(relation, relation.target);
+	const directParentColumn = endpointColumn(relation, relation.source);
+	if (directChildColumn !== undefined && directParentColumn !== undefined) {
+		return {
+			column: directChildColumn,
+			parentColumn: directParentColumn,
+			cascade: relation.cascade === true
+		};
+	}
+
+	const inverse = uniqueInverseRelation(relation, relations);
+	return {
+		column: inverse === undefined ? undefined : endpointColumn(inverse, relation.target),
+		parentColumn: inverse === undefined ? undefined : endpointColumn(inverse, relation.source),
+		cascade: relation.cascade === true || inverse?.cascade === true
+	};
+};
 
 type EmbeddedAsset = Readonly<{
 	readonly path: string;
@@ -238,20 +336,7 @@ class WorkspaceCompiler {
 	 * type checker sees, which includes any a scan of the source text would miss. A workspace with no
 	 * teams file gets `never`, which is correct: with no team declared, there is no valid approver.
 	 */
-	static readonly renderAuthoringTypes = (input: {
-		readonly collections: ReadonlyArray<string>;
-		readonly apps: ReadonlyArray<string>;
-		readonly policies: ReadonlyArray<string>;
-		readonly functions: ReadonlyArray<string>;
-		readonly tools: ReadonlyArray<string>;
-		readonly envoys: ReadonlyArray<string>;
-		readonly mcpServers: ReadonlyArray<string>;
-		readonly skills: ReadonlyArray<string>;
-		readonly datatypes: ReadonlyArray<string>;
-		readonly automations: ReadonlyArray<string>;
-		/** The import specifier for `src/access/+teams.ts`, relative to `.norbital/generated/`. */
-		readonly teamsImport: string | undefined;
-	}): string => {
+	static readonly renderAuthoringTypes = (input: RenderAuthoringTypesInput): string => {
 		const union = WorkspaceCompiler.quotedUnion;
 		const teams =
 			input.teamsImport === undefined
@@ -317,7 +402,7 @@ class WorkspaceCompiler {
 
 	/** Owns render collection catalog declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderCollectionCatalogDeclaration = (): string =>
-		`export declare const collectionCatalog: Readonly<Record<string, {\n\treadonly name: string;\n\treadonly recordLabel?: string;\n\treadonly fields: ReadonlyArray<{ readonly name: string; readonly kind: string; readonly nullable: boolean; readonly readOnly?: boolean; readonly search?: boolean; readonly values?: ReadonlyArray<string> }>;\n\treadonly relationships: ReadonlyArray<{ readonly name: string; readonly target: string; readonly cardinality: 'one' | 'many' }>;\n}>>;\n`;
+		`export declare const collectionCatalog: Readonly<Record<string, {\n\treadonly name: string;\n\treadonly recordLabel?: string;\n\treadonly fields: ReadonlyArray<{ readonly name: string; readonly kind: string; readonly nullable: boolean; readonly readOnly?: boolean; readonly search?: boolean; readonly values?: ReadonlyArray<string> }>;\n\treadonly relationships: ReadonlyArray<{ readonly name: string; readonly target: string; readonly cardinality: 'one' | 'many'; readonly cascade?: true }>;\n}>>;\n`;
 
 	/**
 	 * The declared relations, as a type.
@@ -332,15 +417,24 @@ class WorkspaceCompiler {
 	 * writing it.
 	 *
 	 * `column` is the foreign key on the *child*, which is what a nested write fills in from the
-	 * parent's assigned id. A relation missing an endpoint carries `never` there rather than a
-	 * guess: an edge the author declared loosely is one a nested write must refuse, not invent a
-	 * column for.
+	 * parent's join column. `parentColumn` makes that other half explicit; the current synchronizer
+	 * supports only `id`, so another join is excluded by the generated mutation type rather than
+	 * promised and rejected at run time. A relation missing either endpoint carries `never` rather
+	 * than a guess.
 	 */
 	static readonly renderRelationTypes = (relations: ReadonlyArray<RelationDefinition>): string => {
 		const byCollection = new Map<string, Array<string>>();
 		for (const relation of relations) {
-			const column = relation.from?.column;
-			const entry = `\t\treadonly ${JSON.stringify(relation.name)}: { readonly target: ${JSON.stringify(relation.target)}; readonly cardinality: ${JSON.stringify(relation.cardinality)}; readonly column: ${column === undefined ? 'never' : JSON.stringify(column)} };`;
+			/**
+			 * A nested mutation expands a `many` edge from parent to children, but authored relationship
+			 * endpoints live on its inverse `one` edge: the child's foreign key is the `from` endpoint of
+			 * `child -> parent`. The two directions may have different declared names, so pairing is by
+			 * reversed collections and oriented endpoints; more than one candidate is ambiguous. A few
+			 * programmatic definitions put those endpoints directly on `many`, which is equally
+			 * unambiguous. Any other shape stays `never`; generated types must not guess.
+			 */
+			const { column, parentColumn, cascade } = resolveMutationRelation(relation, relations);
+			const entry = `\t\treadonly ${JSON.stringify(relation.name)}: { readonly target: ${JSON.stringify(relation.target)}; readonly cardinality: ${JSON.stringify(relation.cardinality)}; readonly column: ${column === undefined ? 'never' : JSON.stringify(column)}; readonly parentColumn: ${parentColumn === undefined ? 'never' : JSON.stringify(parentColumn)}; readonly cascade: ${cascade ? 'true' : 'false'} };`;
 			const existing = byCollection.get(relation.source);
 			if (existing === undefined) byCollection.set(relation.source, [entry]);
 			else existing.push(entry);
@@ -387,7 +481,7 @@ class WorkspaceCompiler {
 
 	/** Owns render collection types behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderCollectionTypes = (name: string): string =>
-		`import type { Effect } from 'effect';\nimport type { CollectionHooks, CollectionIntegrations, CollectionPipelines } from '@norbital-ai/bolt/authoring';\nimport type { WorkspaceRow, WorkspaceSchema } from '../../../generated/types.js';\nexport type { AfterHookApi, Api, HookApi, WorkspaceRow } from '../../../generated/types.js';\nexport type Row = WorkspaceRow<${JSON.stringify(name)}>;\nexport type RepresentationProps = { readonly record: Row | null; close(): void; refresh(): Effect.Effect<void, unknown> };\nexport type Hooks<Prepared = void> = CollectionHooks<WorkspaceSchema, ${JSON.stringify(name)}, Prepared>;\nexport type Pipelines = CollectionPipelines<WorkspaceSchema, ${JSON.stringify(name)}>;\nexport type Integrations = CollectionIntegrations<WorkspaceSchema, ${JSON.stringify(name)}>;\n`;
+		`import type { CollectionHooks, CollectionIntegrations, CollectionPipelines } from '@norbital-ai/bolt/authoring';\nimport type { WorkspaceRow, WorkspaceSchema } from '../../../generated/types.js';\nexport type { AfterHookApi, Api, HookApi, WorkspaceRow } from '../../../generated/types.js';\nexport type Row = WorkspaceRow<${JSON.stringify(name)}>;\nexport type RepresentationProps = { readonly record: Row | null; close(): void };\nexport type Hooks<Prepared = void> = CollectionHooks<WorkspaceSchema, ${JSON.stringify(name)}, Prepared>;\nexport type Pipelines = CollectionPipelines<WorkspaceSchema, ${JSON.stringify(name)}>;\nexport type Integrations = CollectionIntegrations<WorkspaceSchema, ${JSON.stringify(name)}>;\n`;
 
 	/** Owns render relationship types behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderRelationshipTypes = (): string =>
@@ -457,31 +551,14 @@ class WorkspaceCompiler {
 					`\treadonly ${JSON.stringify(basename(path).slice(1, -3))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
 			)
 			.join('\n');
-		return `import type { CollectionRegistryFor, InvokeClientApi, PlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { SystemClientApi } from '@norbital-ai/bolt/client-runtime';\nimport type { MutableCollectionClient } from '@norbital-ai/std/collection';\nimport type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';\nimport type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';\nimport type { Component } from 'svelte';\nimport type { WorkspaceSchema } from './types.js';\ntype CollectionHooks = {\n${hookEntries}\n};\ntype TenantCollections = CollectionRegistryFor<WorkspaceSchema, CollectionHooks>;\ntype Collections = TenantCollections & CollectionRegistryFor<PlatformSchema>;\ntype Invoke = {\n${invokeEntries}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceCreate<N extends keyof TenantCollections> = TenantCollections[N]['create'];\nexport type WorkspaceUpdate<N extends keyof TenantCollections> = TenantCollections[N]['update'];\nexport interface Client extends MutableCollectionClient<Collections> { readonly invoke: InvokeClientApi<Invoke>; readonly system: SystemClientApi; }\nexport declare const client: Client;\nexport declare const runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime;\nexport declare const changeAccessScope: (accessScope: string) => void;\nexport declare const startLocalReplica: (runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }) => Promise<{ readonly stop: () => void }>;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<Component>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<CustomTypeRendererMap[string]>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string }>>;\nexport declare const policyNames: ReadonlyArray<string>;\n`;
+		return `import type { CollectionRegistryFor, InvokeClientApi, PlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { CollectionMutationValues, SystemClientApi } from '@norbital-ai/bolt/client-runtime';\nimport type { CollectionClient } from '@norbital-ai/std/collection';\nimport type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';\nimport type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';\nimport type { Component } from 'svelte';\nimport type { WorkspaceSchema } from './types.js';\ntype CollectionHooks = {\n${hookEntries}\n};\ntype MutationRegistry<S extends { readonly tables: Readonly<Record<string, { readonly $inferSelect: object; readonly $inferInsert: object }>>; readonly relations: Readonly<Record<string, unknown>> }, Registry> = { readonly [N in keyof Registry]: Registry[N] & { readonly mutation: CollectionMutationValues<S, N & keyof S['tables'] & string> } };\ntype TenantCollections = MutationRegistry<WorkspaceSchema, CollectionRegistryFor<WorkspaceSchema, CollectionHooks>>;\ntype PlatformCollections = MutationRegistry<PlatformSchema, CollectionRegistryFor<PlatformSchema>>;\ntype Collections = TenantCollections & PlatformCollections;\ntype TenantDatabase = { readonly [N in keyof TenantCollections]: CollectionClient<TenantCollections>['db'][N] };\ntype PlatformDatabase = { readonly [N in Exclude<keyof PlatformCollections, keyof TenantCollections>]: CollectionClient<PlatformCollections>['db'][N] };\ntype Invoke = {\n${invokeEntries}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceMutation<N extends keyof TenantCollections> = TenantCollections[N]['mutation'];\nexport type Client = Omit<CollectionClient<Collections>, 'db'> & { readonly db: TenantDatabase & PlatformDatabase; readonly invoke: InvokeClientApi<Invoke>; readonly system: SystemClientApi };\nexport declare const client: Client;\nexport declare const runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime;\nexport declare const changeAccessScope: (accessScope: string) => void;\nexport declare const startLocalReplica: (runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }) => Promise<{ readonly stop: () => void }>;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<Component>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<CustomTypeRendererMap[string]>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string }>>;\nexport declare const policyNames: ReadonlyArray<string>;\n`;
 	};
 
 	/** Owns render client runtime behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderClientRuntime = (
 		apps: ReadonlyArray<string>,
-		groups: ReadonlyArray<{
-			readonly name: string;
-			readonly label?: string;
-			readonly description?: string;
-			readonly icon?: string;
-			readonly defaultChild?: string;
-		}>,
-		appMeta: Readonly<
-			Record<
-				string,
-				{
-					readonly label?: string;
-					readonly icon?: string;
-					readonly description?: string;
-					readonly banner?: string;
-					readonly thumbnail?: string;
-				}
-			>
-		>,
+		groups: ReadonlyArray<RenderedAppGroup>,
+		appMeta: Readonly<Record<string, RenderedAppMetadata>>,
 		policies: ReadonlyArray<string>,
 		root: string,
 		representations: ReadonlyArray<string>,
@@ -982,7 +1059,7 @@ class WorkspaceCompiler {
 			anonymousLimitFile === undefined ? '' : ', rateLimits: declaredAnonymousLimits';
 		// The team → policies map. It rides the definition rather than a facility because it is
 		// authority, and authority in this design is something a release states and a database row
-		// never asserts: a `bolt_team` row supplies only a name to look up here.
+		// never asserts: a `team` row supplies only a name to look up here.
 		const teamsImport =
 			teamsFile === undefined
 				? ''
@@ -1668,7 +1745,7 @@ const WorkspaceSynchronization = {
 			 * hears about it is an artifact whose client is missing. That is precisely the failure this
 			 * whole change exists to stop being silent, so it is checked where it can still be named.
 			 */
-			if (!existsSync(join(root, 'vite.config.ts'))) {
+			if (!(yield* fileExists(join(root, 'vite.config.ts')))) {
 				return yield* Effect.fail(
 					new Error(
 						`No vite.config.ts in ${root}. \`bolt sync\` builds the workspace client through it, so a materialized tree must carry it alongside package.json.`
@@ -1676,7 +1753,11 @@ const WorkspaceSynchronization = {
 				);
 			}
 			yield* Effect.tryPromise({
-				try: () => build({ root, mode: 'production', logLevel: 'warn' }),
+				// A host serves the artifact below its own tenant namespace, not at the origin root.
+				// Relative output keeps Vite's dynamic-import preloads, emitted CSS and font URLs beside
+				// `workspace.js`; the default `/` base asks the host for `/assets/*` and bypasses
+				// `/__bolt/static`, so static imports load while the first lazy client chunk 404s.
+				try: () => build({ root, base: './', mode: 'production', logLevel: 'warn' }),
 				catch: (cause) =>
 					cause instanceof Error
 						? cause
@@ -1757,6 +1838,26 @@ const WorkspaceSynchronization = {
 					teamsFile
 				})
 			);
+			const [
+				authoringInternalsEntry,
+				authoringEntry,
+				runtimeEntry,
+				clientRuntimeEntry,
+				clientEntry,
+				hostEntry,
+				rootEntry
+			] = yield* Effect.all(
+				[
+					boltEntry('src/authoring/internals.ts', 'build/authoring/internals.js'),
+					boltEntry('src/authoring/index.ts', 'build/authoring/index.js'),
+					boltEntry('src/runtime/app.ts', 'build/runtime/app.js'),
+					boltEntry('src/client/runtime.ts', 'build/client/runtime.js'),
+					boltEntry('src/client.ts', 'build/client.js'),
+					boltEntry('src/host.ts', 'build/host.js'),
+					boltEntry('src/index.ts', 'build/index.js')
+				] as const,
+				{ concurrency: 'unbounded' }
+			);
 			yield* Effect.promise(() =>
 				build({
 					root,
@@ -1780,31 +1881,31 @@ const WorkspaceSynchronization = {
 						alias: [
 							{
 								find: '@norbital-ai/bolt/authoring/internals',
-								replacement: boltEntry('src/authoring/internals.ts', 'build/authoring/internals.js')
+								replacement: authoringInternalsEntry
 							},
 							{
 								find: '@norbital-ai/bolt/authoring',
-								replacement: boltEntry('src/authoring/index.ts', 'build/authoring/index.js')
+								replacement: authoringEntry
 							},
 							{
 								find: '@norbital-ai/bolt/runtime',
-								replacement: boltEntry('src/runtime/app.ts', 'build/runtime/app.js')
+								replacement: runtimeEntry
 							},
 							{
 								find: '@norbital-ai/bolt/client-runtime',
-								replacement: boltEntry('src/client/runtime.ts', 'build/client/runtime.js')
+								replacement: clientRuntimeEntry
 							},
 							{
 								find: '@norbital-ai/bolt/client',
-								replacement: boltEntry('src/client.ts', 'build/client.js')
+								replacement: clientEntry
 							},
 							{
 								find: '@norbital-ai/bolt/host',
-								replacement: boltEntry('src/host.ts', 'build/host.js')
+								replacement: hostEntry
 							},
 							{
 								find: '@norbital-ai/bolt',
-								replacement: boltEntry('src/index.ts', 'build/index.js')
+								replacement: rootEntry
 							}
 						]
 					},
@@ -1839,3 +1940,6 @@ export const renderI18nMessages = WorkspaceCompiler.renderI18nMessages;
 export const renderArtifact = WorkspaceCompiler.renderArtifact;
 export const renderAuthoringTypes = WorkspaceCompiler.renderAuthoringTypes;
 export const renderWorkspaceAuthoring = WorkspaceCompiler.renderWorkspaceAuthoring;
+export const renderWorkspaceTypes = WorkspaceCompiler.renderTypes;
+export const renderClientDeclaration = WorkspaceCompiler.renderClientDeclaration;
+export const renderCollectionTypes = WorkspaceCompiler.renderCollectionTypes;

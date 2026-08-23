@@ -1,7 +1,7 @@
 import type { CollectionField } from '@norbital-ai/ui/data-renderer';
 import type { CollectionClient } from '@norbital-ai/std/collection';
 import type { CollectionRegistryFor, PlatformSchema } from '#lib/authoring/internals.js';
-import type { SystemClientApi } from '#lib/client/runtime.js';
+import type { CollectionMutationValues, SystemClientApi } from '#lib/client/runtime.js';
 
 /** A record of an unknown collection: this surface renders whichever workspace it was compiled into. */
 type ErasedRecord = Readonly<Record<string, unknown>>;
@@ -17,12 +17,23 @@ type ErasedRecord = Readonly<Record<string, unknown>>;
 type ErasedCollections = Readonly<
 	Record<
 		string,
-		{ readonly row: ErasedRecord; readonly create: ErasedRecord; readonly update: ErasedRecord }
+		{
+			readonly row: ErasedRecord;
+			readonly create: ErasedRecord;
+			readonly update: ErasedRecord;
+			readonly mutation: ErasedRecord;
+		}
 	>
 >;
 
 /** Runtime-owned collections retain their generated row types even on the workspace shell seam. */
-type WorkspaceCollections = ErasedCollections & CollectionRegistryFor<PlatformSchema>;
+type PlatformRegistry = CollectionRegistryFor<PlatformSchema>;
+type PlatformCollections = {
+	readonly [N in keyof PlatformRegistry]: PlatformRegistry[N] & {
+		readonly mutation: CollectionMutationValues<PlatformSchema, N & string>;
+	};
+};
+type WorkspaceCollections = ErasedCollections & PlatformCollections;
 
 /**
  * The compiled workspace's own collection client.
@@ -37,7 +48,18 @@ type WorkspaceCollections = ErasedCollections & CollectionRegistryFor<PlatformSc
  * ships inside the tenant's own bundle, so the client it reads is that workspace's and no lookup can
  * pick the wrong one.
  */
-export type WorkspaceClient = CollectionClient<WorkspaceCollections> & {
+type WorkspaceReads = CollectionClient<WorkspaceCollections>;
+
+export type WorkspaceClient = Omit<WorkspaceReads, 'db'> & {
+	readonly db: WorkspaceReads['db'] & {
+		readonly bolt_notifications: Omit<
+			WorkspaceReads['db']['bolt_notifications'],
+			'mutate' | 'pending'
+		> & {
+			readonly mutate: WorkspaceReads['db']['bolt_notifications']['mutate'];
+			readonly pending: number;
+		};
+	};
 	readonly system: SystemClientApi;
 	readonly collections: Readonly<
 		Record<

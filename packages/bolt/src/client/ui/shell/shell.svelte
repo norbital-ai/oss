@@ -29,12 +29,16 @@
 		type AppHeaderActionsSlot
 	} from './app-header-actions.svelte.js';
 	import { setPlatformStateContext, type PlatformState } from '#lib/client/ui/state/platform.js';
-	import { CollectionTableNavigationSurface } from '@norbital-ai/ui/collection-table';
+	import {
+		CollectionTable,
+		CollectionTableNavigationSurface
+	} from '@norbital-ai/ui/collection-table';
 	import BillingBanner from './billing-banner.svelte';
 	import OmniFinder from './omni-finder.svelte';
 	import Notifications from './notifications.svelte';
 	import {
 		AGENT_PATH,
+		APPROVALS_PATH,
 		buildApplicationNavigation,
 		buildSystemNavigation,
 		resolveAppHeaderDescription,
@@ -192,7 +196,7 @@
 			 *
 			 * `impersonation` is the answer to `access.impersonation`, whose `isAdmin` is
 			 * `AccessControl.mayImpersonate` — which is now exactly the `admin` status on the caller's
-			 * own `bolt_auth_user` row. So this is the same proven fact the sidebar's team picker is
+			 * own `user` row. So this is the same proven fact the sidebar's team picker is
 			 * offered on, read once and shared, rather than a second boolean a host would have to
 			 * remember to pass and could get wrong.
 			 *
@@ -309,7 +313,7 @@
 	);
 
 	const agentClient = useAgentClient();
-	const agentSurface = agentClient.surface;
+	const agentSurface = $derived(agentClient.surface);
 	const fabAgentState = $derived(
 		agentOrbState({
 			pending: agentSurface.pending,
@@ -322,7 +326,7 @@
 	let finderOpen = $state(false);
 	let agentSheetOpen = $state(false);
 	let shortcutModifier = $state(detectShortcutModifier());
-	const runtime = agentClient.runtime;
+	const runtime = $derived(agentClient.runtime);
 	const notificationsQuery = $derived(
 		runtime.client.db.bolt_notifications.findMany({
 			where: { recipient: { eq: runtime.subject.userId } },
@@ -369,8 +373,7 @@
 	);
 
 	const markNotificationRead = (id: string): void => {
-		const update = runtime.client.db.bolt_notifications.update;
-		if (update) void update(id, { read: true });
+		void runtime.client.db.bolt_notifications.mutate({ id, read: true });
 	};
 
 	const syncMentionCatalog = (): void => {
@@ -606,6 +609,28 @@
 					</Stack>
 				</Center>
 			</Scroll>
+		{:else if currentPath === APPROVALS_PATH || currentPath.startsWith(`${APPROVALS_PATH}/`)}
+			<CollectionTableNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
+				<CollectionTable
+					client={runtime.client}
+					collection="approval_request"
+					view="bolt:approval-inbox"
+					title="Approvals"
+					description="Pending changes awaiting your review, including creates that do not have a provisional record."
+					features={{ create: false }}
+					query={{ where: { status: { eq: 'ONGOING' } }, orderBy: { created_at: 'desc' } }}
+					class="min-h-0"
+				>
+					{#snippet columns({ Column })}
+						<Column name="collection_name" label="Collection" card="title" />
+						<Column name="action" label="Action" card="badge" />
+						<Column name="record_id" label="Record" card="subtitle" />
+						<Column name="status" label="Status" />
+						<Column name="proposed_values" label="Proposed change" />
+						<Column name="created_at" label="Requested" />
+					{/snippet}
+				</CollectionTable>
+			</CollectionTableNavigationSurface>
 		{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`) || activeHostPlugin}
 			{#key activeHostPlugin?.key ?? WORKSPACE_SETTINGS_PATH}
 				<Bound size="full" clip data-testid="host-plugin-surface" class="bg-background">

@@ -13,7 +13,6 @@
 
 	/** Icon for a prefix command in the mention menu. */
 	function commandIcon(command: MentionCommand): string {
-		// repository-health:allow Q3 -- named helper
 		switch (command) {
 			case 'record':
 				return 'lucide:search';
@@ -29,7 +28,7 @@
 	}
 
 	/** i18n key for a prefix command's menu label. */
-	function commandLabelKey( // repository-health:allow Q3 -- named helper
+	function commandLabelKey(
 		command: MentionCommand
 	): 'bolt.agent.prefixSearch' | 'bolt.agent.prefixPlan' | 'bolt.agent.prefixApps' {
 		switch (command) {
@@ -48,7 +47,6 @@
 
 	/** Maps a mention menu item onto a finder row. */
 	function toRow(item: MentionMenuItem): FinderRow {
-		// repository-health:allow Q3 -- named helper
 		switch (item.kind) {
 			case 'record':
 				return {
@@ -154,7 +152,6 @@
 
 	/** Forwards a palette pick to the parent highlight/select callbacks. */
 	function handlePick(entity: FinderEntity): void {
-		// repository-health:allow Q3 -- template handler
 		const index = rows.findIndex((row) => row.entity === entity || sameEntity(row.entity, entity));
 		if (index >= 0) {
 			onhighlight(index);
@@ -164,7 +161,6 @@
 
 	/** True when two finder entities name the same workspace object. */
 	function sameEntity(left: FinderEntity | undefined, right: FinderEntity): boolean {
-		// repository-health:allow Q3 -- named helper
 		if (!left || left.kind !== right.kind) return false;
 		switch (left.kind) {
 			case 'record':

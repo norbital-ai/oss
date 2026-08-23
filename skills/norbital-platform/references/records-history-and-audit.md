@@ -5,8 +5,8 @@
 Every collection row carries columns Bolt owns. They are read-only to workspace code, and they appear
 in the manifest marked as such.
 
-| Column                 | Meaning                                            |
-| ---------------------- | -------------------------------------------------- |
+| Column        | Meaning                                            |
+| ------------- | -------------------------------------------------- |
 | `id`          | The row's UUID primary key                         |
 | `created_at`  | When the row was created                           |
 | `updated_at`  | When it last changed                               |

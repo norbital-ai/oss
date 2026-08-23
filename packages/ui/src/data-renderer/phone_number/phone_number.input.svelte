@@ -104,7 +104,6 @@
 	</Inline>
 {/snippet}
 
-<!-- stupidity:allow UI7 -- this leaf component owns responsive or internal spacing as part of its public DOM contract -->
 <div class={cn('min-w-0 space-y-1.5', className)}>
 	<div class="flex min-w-0">
 		<Combobox

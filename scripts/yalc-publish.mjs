@@ -173,7 +173,8 @@ if (!existsSync(path.join(repositoryRoot, 'node_modules/.bin/yalc'))) {
  * of these are svelte-package runs and they contend badly.
  */
 const buildable = packages.filter(
-	({ directory }) => readManifest(path.join(repositoryRoot, directory, 'package.json')).scripts?.build
+	({ directory }) =>
+		readManifest(path.join(repositoryRoot, directory, 'package.json')).scripts?.build
 );
 if (buildable.length > 0) {
 	run('pnpm', [

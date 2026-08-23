@@ -628,11 +628,7 @@ export const compileOrderTerms = (
 	context: WhereContext
 ): ReadonlyArray<OrderTerm> => {
 	const terms: Array<OrderTerm> = [];
-	if (
-		orderBy != null &&
-		typeof orderBy === 'object' &&
-		!Array.isArray(orderBy)
-	) {
+	if (orderBy != null && typeof orderBy === 'object' && !Array.isArray(orderBy)) {
 		for (const [field, direction] of Object.entries(orderBy)) {
 			if (!WhereSql.isColumn(context, field)) continue;
 			// A logical reference is backed by one nullable UUID column per target kind.

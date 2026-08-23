@@ -14,7 +14,7 @@ import { ServerHealth, layer as serverHealthLayer } from './health.js';
 import { makeScheduler, makeTaskBinding } from './scheduler.js';
 import { startServer, type RunningServer, UuidGeneration, uuidGenerationLayer } from './server.js';
 
-/** Reports a lifecycle phase that prevented the self-host application from becoming usable; stupidity:allow Q4 -- Effect TaggedError declaration is the canonical rc.109 error boundary. */
+/** Reports a lifecycle phase that prevented the self-host application from becoming usable. */
 export class ApplicationStartError extends Schema.TaggedError<ApplicationStartError>()(
 	'BoltServer.ApplicationStartError',
 	{
@@ -28,26 +28,29 @@ export class ApplicationStartError extends Schema.TaggedError<ApplicationStartEr
 export interface ApplicationOptions {
 	readonly configuration: ServerConfiguration;
 	readonly facilities: FacilityBindings;
+	// repository-health:allow EFF2 -- Embedders own facilities outside this runtime and expose their established Promise finalizer here.
 	readonly finalizeFacilities?: () => Promise<void>;
 }
 
 export interface RunningApplication extends RunningServer {
-	readonly stop: () => Promise<void>;
+	readonly stop: RunningServer['close'];
 }
 
 /** Installs one-shot Node process shutdown hooks and returns a hook disposer. */
 export const installProcessShutdown = (application: RunningApplication): (() => void) => {
-	/** Removes both one-shot process hooks without stopping an already running application; stupidity:allow Q4 -- paired Node signal disposer must retain callback identity. */
+	/** Removes both one-shot process hooks without stopping an already running application. */
 	const dispose = () => {
 		process.off('SIGINT', shutdown);
 		process.off('SIGTERM', shutdown);
 	};
-	/** Converts either supported process signal into the same idempotent application stop; stupidity:allow Q4 -- paired Node signal callback must retain callback identity. */
+	/** Converts either supported process signal into the same idempotent application stop. */
 	const shutdown = () => {
 		dispose();
-		void application.stop().catch(() => {
-			process.exitCode = 1;
-		});
+		Effect.runFork(
+			Effect.tryPromise(() => application.stop()).pipe(
+				Effect.catch(() => Effect.sync(() => (process.exitCode = 1)))
+			)
+		);
 	};
 	process.once('SIGINT', shutdown);
 	process.once('SIGTERM', shutdown);
@@ -55,10 +58,14 @@ export const installProcessShutdown = (application: RunningApplication): (() => 
 };
 
 /** Validates configuration, activates one immutable bundle, and owns all server finalizers. */
-export const startApplication = (options: ApplicationOptions): Promise<RunningApplication> =>
+export const startApplication = (options: ApplicationOptions) =>
 	Effect.runPromise(
 		Effect.gen(function* () {
-			const { configuration, facilities, finalizeFacilities = () => Promise.resolve() } = options;
+			const { configuration, facilities } = options;
+			const finalizeFacilities =
+				options.finalizeFacilities === undefined
+					? Effect.void
+					: Effect.tryPromise(options.finalizeFacilities);
 			if (
 				facilities.scope.tenantId !== configuration.scope.tenantId ||
 				facilities.scope.environment !== configuration.scope.environment ||
@@ -67,7 +74,7 @@ export const startApplication = (options: ApplicationOptions): Promise<RunningAp
 				// The bindings the embedder may have opened are finalized before the mismatch is
 				// reported; a failure in finalization must not hide the validation error that
 				// caused the halt.
-				yield* Effect.tryPromise(() => finalizeFacilities()).pipe(Effect.catch(() => Effect.void));
+				yield* finalizeFacilities.pipe(Effect.catch(() => Effect.void));
 				return yield* new ApplicationStartError({
 					operation: 'BoltServer.Application.validateScope',
 					message: 'Facility bindings do not match the configured invocation scope'
@@ -229,7 +236,7 @@ export const startApplication = (options: ApplicationOptions): Promise<RunningAp
 				const cause = started.failure;
 				// Same order as the imperative path: the host's finalizer runs before the runtime is
 				// disposed, and the original failure is rethrown afterwards.
-				yield* Effect.tryPromise(() => finalizeFacilities()).pipe(Effect.catch(() => Effect.void));
+				yield* finalizeFacilities.pipe(Effect.catch(() => Effect.void));
 				yield* runtime.disposeEffect;
 				if (cause instanceof ApplicationStartError) return yield* cause;
 				return yield* new ApplicationStartError({
@@ -272,16 +279,14 @@ export const startApplication = (options: ApplicationOptions): Promise<RunningAp
 			}).pipe(
 				Effect.ensuring(
 					Effect.gen(function* () {
-						yield* Effect.tryPromise(() => finalizeFacilities()).pipe(
-							Effect.catch(() => Effect.void)
-						);
+						yield* finalizeFacilities.pipe(Effect.catch(() => Effect.void));
 						yield* runtime.disposeEffect;
 					})
 				)
 			);
 			let stopped = false;
 			/** Stops the application once, converging concurrent callers on the same run. */
-			const stop = (): Promise<void> =>
+			const stop = () =>
 				Effect.runPromise(
 					Effect.gen(function* () {
 						if (stopped) return;

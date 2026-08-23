@@ -42,7 +42,6 @@
 
 	/** Strips the OpenRouter-style variant suffix so catalog entries group by model family. */
 	function baseModelId(modelId: string): string {
-		// repository-health:allow Q4 -- named helper
 		return modelId.split(':', 1)[0] ?? modelId;
 	}
 
@@ -170,7 +169,6 @@
 		{@render fields()}
 	</Inline>
 {:else}
-	<!-- repository-health:allow UI6 -- Model/Variant field pair is a viewport sm:grid-cols-[1fr_9rem] row that Grid minimum cannot express. -->
 	<div class={cn('grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_9rem]', className)}>
 		{@render fields()}
 	</div>

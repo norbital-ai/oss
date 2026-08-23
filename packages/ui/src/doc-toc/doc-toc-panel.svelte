@@ -22,7 +22,6 @@
 </script>
 
 {#if toc.items.length > 0}
-	<!-- stupidity:allow UI10; stupidity:allow UI15 -- this responsive document rail owns viewport-relative visibility, clipping, and width -->
 	<!--
 		The rail is the primary form of the table of contents and stays on screen wherever it
 		fits: from `lg` up, paired with `DocTocPopover`'s `lg:hidden` so exactly one of the

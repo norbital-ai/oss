@@ -122,6 +122,8 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	'approvals.request',
 	'approvals.decide',
 	'approvals.withdraw',
+	'approvals.status',
+	'approvals.timeline',
 	'sync.diff',
 	'sync.shape',
 	'sync.mutate',
@@ -134,10 +136,7 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	'collections.findFirst',
 	'collections.count',
 	'collections.history',
-	'collections.create',
-	'collections.createMany',
-	'collections.update',
-	'collections.delete',
+	'collections.mutate',
 	'collections.import',
 	'collections.export'
 ];
@@ -233,7 +232,7 @@ describe('payload-supplied identity', () => {
 	// the claim is refused on that tag too and not only on the one the issue named.
 	it('refuses the same claim arriving on a plugin that is not the data browser', async () => {
 		harness = await makeBoltTestRuntime(vaultWorkspace);
-		for (const name of ['secrets.write', 'secrets.status', 'collections.create']) {
+		for (const name of ['secrets.write', 'secrets.status', 'collections.mutate']) {
 			const failure = await failureOf(
 				harness,
 				plugin(name, { subject: forgedSubject, name: 'GEOCODING_API_KEY', value: 'stolen' })

@@ -24,7 +24,6 @@
 	}
 </script>
 
-<!-- stupidity:allow UI5 -- attachment media crop -->
 <div class="h-full overflow-hidden rounded shadow">
 	<div class="flex items-center justify-between bg-muted px-3 py-2">
 		<span class="text-sm font-medium">{t('misc.pdfPreview')}</span>

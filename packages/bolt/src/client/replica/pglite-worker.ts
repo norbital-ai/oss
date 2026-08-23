@@ -23,7 +23,7 @@ import { vector } from '@electric-sql/pglite-pgvector';
 import { worker } from '@electric-sql/pglite/worker';
 
 void worker({
-	init: async (options) =>
+	init: (options) =>
 		// Registered explicitly: PGlite ships these and enables none of them, and the provisioning
 		// DDL's first statements are `create extension`. Without them the replica fails on step one.
 		PGlite.create(options.dataDir, {

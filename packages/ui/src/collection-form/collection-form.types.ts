@@ -1,12 +1,11 @@
 import type {
 	CollectionDbClient,
-	CollectionCreateInput,
 	CollectionField,
 	CollectionFieldName,
+	CollectionMutationInput,
 	CollectionRelationOptions,
 	CollectionRegistry,
-	CollectionRow,
-	CollectionUpdateInput
+	CollectionRow
 } from '@norbital-ai/std/collection';
 import { Effect, Schema } from 'effect';
 import type { StandardSchemaOf } from '#lib/form/standard_schema_form_errors';
@@ -70,11 +69,12 @@ export interface CollectionFormRendererProps extends CollectionFormRendererOptio
 	onValueChange: (value: unknown) => void;
 }
 
-type RendererProps<TRenderer> = TRenderer extends Component<infer TProps>
-	? TProps extends never
-		? CollectionFormRendererProps
-		: TProps
-	: CollectionFormRendererProps;
+type RendererProps<TRenderer> =
+	TRenderer extends Component<infer TProps>
+		? TProps extends never
+			? CollectionFormRendererProps
+			: TProps
+		: CollectionFormRendererProps;
 
 export interface CollectionFormFieldProps<
 	TFieldName extends string = string,
@@ -94,16 +94,13 @@ export interface CollectionFormFieldProps<
  */
 export interface CollectionFormFieldComponent<TFieldName extends string = string> {
 	new <TRenderer extends Component<never> = Component<CollectionFormRendererProps>>(
-		options: ComponentConstructorOptions<CollectionFormFieldProps<TFieldName, TRenderer>>
+		options: ComponentConstructorOptions<CollectionFormFieldProps<TFieldName, TRenderer>> // repository-health:allow LEGACY2 -- Svelte 5.56's generated isomorphic component shape still requires this constructor arm to preserve generic renderer inference through snippets; the call signature below supplies the Svelte 5 runtime API.
 	): SvelteComponent<CollectionFormFieldProps<TFieldName, TRenderer>>;
 	<TRenderer extends Component<never> = Component<CollectionFormRendererProps>>(
 		this: void,
 		internals: ComponentInternals,
 		props: CollectionFormFieldProps<TFieldName, TRenderer>
-	): {
-		$on?(type: string, callback: (e: unknown) => void): () => void;
-		$set?(props: Partial<CollectionFormFieldProps<TFieldName, TRenderer>>): void;
-	};
+	): ReturnType<Component<CollectionFormFieldProps<TFieldName, TRenderer>>>;
 	element?: typeof HTMLElement;
 	z_$$bindings?: string;
 }
@@ -144,13 +141,10 @@ export interface CollectionFormProps<
 	 */
 	defaultValues?:
 		| Partial<CollectionRow<TCollections[TName]>>
-		| Partial<CollectionCreateInput<TCollections[TName]>>
-		| Partial<CollectionUpdateInput<TCollections[TName]>>;
+		| Partial<CollectionMutationInput<TCollections[TName]>>;
 	submitLabel?: string;
 	validation?: CollectionFormValidation;
-	onSubmit?: (
-		values: CollectionFormValidationValues
-	) => Effect.Effect<CollectionRow<TCollections[TName]>, unknown>;
+	onSubmit?: (values: CollectionFormValidationValues) => Effect.Effect<void, unknown>;
 	deleteAction?: CollectionFormDeleteAction;
 	/** Application-authored behaviour and flags for this record. System metadata is injected. */
 	recordMetadata?: readonly CollectionRecordMetadata[];
@@ -158,9 +152,7 @@ export interface CollectionFormProps<
 	loading?: boolean;
 	skeletonRows?: number;
 	class?: string;
-	onAfterSubmit?: (
-		record: CollectionRow<TCollections[TName]>
-	) => void | Effect.Effect<void, unknown>;
+	onAfterSubmit?: () => void | Effect.Effect<void, unknown>;
 	/**
 	 * Ordered field-name pick for the auto-emitted form (RFC V.4b). Wins over auto field emission;
 	 * ignored when a `children` composition is provided.

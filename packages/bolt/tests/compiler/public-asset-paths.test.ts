@@ -17,6 +17,7 @@ describe('public Bolt tenant asset paths', () => {
 		expect(`${BOLT_TENANT_STATIC_PREFIX}/${WORKSPACE_ENTRY_FILE_NAME}`).toBe(
 			'/__bolt/static/workspace.js'
 		);
+		expect(compilerSource).toContain("build({ root, base: './', mode: 'production'");
 	});
 
 	it('embeds authored media at the Bolt tenant request surface with no legacy alias', () => {

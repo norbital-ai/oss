@@ -28,7 +28,7 @@ Everything worth copying is in that header:
 
 - **One subject, named as a behaviour** — "the settlement lock", not "persist.ts".
 - **The level of each check is chosen and justified.** Pure arithmetic is tested as arithmetic. The
-  hook is the *real authored handler, called directly* — not through a booted runtime. The database
+  hook is the _real authored handler, called directly_ — not through a booted runtime. The database
   interaction gets a narrow double.
 - **The boundary is stated.** Postgres performs the cascade, so this suite does not test the cascade;
   it tests the declaration, which is the part the workspace owns. Naming what you are not covering
@@ -64,15 +64,18 @@ oss/packages/bolt/src/runtime/identity/identity.ts:585
 await addSession(harness, 'u1', ['admin', 'basic'], ['Platform'], 'ada@example.test');
 // …
 expect(result.members.map(({ id, role }) => [id, role]).sort()).toEqual(
-	[[fixtureUserId('u1'), 'admin'], [fixtureUserId('u2'), 'basic']].sort()
+	[
+		[fixtureUserId('u1'), 'admin'],
+		[fixtureUserId('u2'), 'basic']
+	].sort()
 );
 ```
 
-The fixture hand-writes the string `admin` into a *roles* column. Nothing in production ever put it
-there — `admit` writes `bolt_auth_user.status`, and `subjectFromRow` compares against that column and
+The fixture hand-writes the string `admin` into a _roles_ column. Nothing in production ever put it
+there — `admit` writes `user.status`, and `subjectFromRow` compares against that column and
 nothing else (`identity.ts:76`). So this seeded a row no workspace could produce, and pinned a mapping
 the source did not perform. It was a test of the fixture. There is no `roles` column on
-`bolt_auth_user` at all now, so the same fixture would not even insert.
+`user` at all now, so the same fixture would not even insert.
 
 The same fault, in the same shape, was in the vertical-slice suite: its subject literal carried
 `roles: ['admin', 'impersonator']` and no `status`, so every case named for administrator behaviour
@@ -83,14 +86,17 @@ authenticated as an ordinary user.
 
 ```ts
 // `status` is a parameter, defaulted to 'normal', because administration is a status on the person.
-// `team` is one name or none, because `bolt_auth_user.team_id` is one team — a fixture that could
+// `team` is one name or none, because `user.team_id` is one team — a fixture that could
 // hand somebody two would be describing a shape the column cannot hold. There is no roles array.
 await addSession(harness, 'u1', 'Platform', 'ada@example.test', 'admin');
 await addSession(harness, 'u2', 'People', 'grace@example.test');
 
 const result = await access(harness);
 expect(result.members.map(({ id, role }) => [id, role]).sort()).toEqual(
-	[[fixtureUserId('u1'), 'admin'], [fixtureUserId('u2'), 'basic']].sort()
+	[
+		[fixtureUserId('u1'), 'admin'],
+		[fixtureUserId('u2'), 'basic']
+	].sort()
 );
 ```
 
@@ -104,7 +110,7 @@ What changed, and why each part matters:
   error as the roles array, one step earlier.
 - **Both outcomes are present.** `u1` administers, `u2` does not. A test with only the positive case
   passes against a projection that returns `'admin'` unconditionally.
-- **The row is written the way production writes it**, an `insert` into `bolt_auth_user`, so the
+- **The row is written the way production writes it**, an `insert` into `user`, so the
   projection's own `select` list decides what comes back. That is what catches the second half of
   this defect: the query also omitted `status`, and a column a query never asks for reads as absent,
   which is exactly `normal`. A double cannot see that — it supplies the row instead of the query
@@ -113,7 +119,7 @@ What changed, and why each part matters:
   and the test would fail for a reason nobody cares about.
 
 This is the trade the doctrine asks you to make consciously: a PGlite instance costs real time, and
-it is worth it *here* because the behaviour under test is what a query returns. It is not worth it
+it is worth it _here_ because the behaviour under test is what a query returns. It is not worth it
 for the `if` statement that turns a status into a label.
 
 ---
@@ -123,7 +129,7 @@ for the `if` statement that turns a status into a label.
 **Before** — the event is missing the fields the gate reads:
 
 ```ts
-const event = (roles) => ({ locals: route(roles) });   // no cookies, no fetch
+const event = (roles) => ({ locals: route(roles) }); // no cookies, no fetch
 
 it('refuses an ordinary member', async () => {
 	expect(await post(['employee'], { action: 'organization', profile: HOSTILE })).toBe(403);
@@ -147,8 +153,9 @@ const event = (credential, roles, request) => ({
 });
 
 it('refuses an ordinary tenant member the organization write, and stores nothing', async () => {
-	expect(await post('session-employee', ['employee'], { action: 'organization', profile: HOSTILE }))
-		.toBe(403);
+	expect(
+		await post('session-employee', ['employee'], { action: 'organization', profile: HOSTILE })
+	).toBe(403);
 	// :193 — "The assertion that fails if the gate is removed: without it the write lands, and this
 	//          reads back the hostile profile instead of the absent record."
 	expect(await organizationProfile()).toMatchObject({ _tag: 'None' });
@@ -156,9 +163,13 @@ it('refuses an ordinary tenant member the organization write, and stores nothing
 
 // :307 — the case without which every refusal above is satisfied by a handler that refuses everybody
 it('accepts an administrator, and the profile it wrote is the profile stored', async () => {
-	expect(await post('session-administrator', ['employee'], { action: 'organization', profile: HOSTILE }))
-		.toBe(202);
-	expect(await organizationProfile()).toMatchObject({ _tag: 'Some', value: JSON.stringify(HOSTILE) });
+	expect(
+		await post('session-administrator', ['employee'], { action: 'organization', profile: HOSTILE })
+	).toBe(202);
+	expect(await organizationProfile()).toMatchObject({
+		_tag: 'Some',
+		value: JSON.stringify(HOSTILE)
+	});
 });
 ```
 
@@ -170,7 +181,7 @@ Four transferable moves:
 3. **Include the admission case.** Without it the suite is satisfied by "refuse everything", which
    includes "crash".
 4. **Include the discriminating case.** `:217` `refuses a caller whose signed context claims admin
-   but whose session does not` is the one case every predecessor of this gate would have admitted —
+but whose session does not` is the one case every predecessor of this gate would have admitted —
    it is the test that names what changed, and it goes red the moment the roles array is believed
    again.
 
@@ -189,20 +200,20 @@ it('surfaces a transport failure', async () => {
 });
 ```
 
-Green against a client that reports the error *and* corrupts its cursor, applies a partial batch, or
+Green against a client that reports the error _and_ corrupts its cursor, applies a partial batch, or
 advances past the failed diff. The thing anyone actually cares about is untested.
 
 **After** (`oss/packages/bolt/tests/client/replica.test.ts:187`):
 
 ```ts
-expect(await client.drain()).toBe(0);       // nothing applied
-expect(onError).toHaveBeenCalled();          // the port fired
-expect(client.cursor()).toEqual(ORIGIN_CURSOR);  // and the cursor did not advance
+expect(await client.drain()).toBe(0); // nothing applied
+expect(onError).toHaveBeenCalled(); // the port fired
+expect(client.cursor()).toEqual(ORIGIN_CURSOR); // and the cursor did not advance
 ```
 
 The middle line is now the least important of the three, which is the correct ordering. Note also
 `:159`, `expect(onAdvance).toHaveBeenCalledWith({ xid: 1, sequence: 1 })` — when you do assert on a
-callback, assert the *value*, because the value is the contract and the call is not.
+callback, assert the _value_, because the value is the contract and the call is not.
 
 The counting double in `norbital/apps/colony/tests/facilities/transport.test.ts:191` is the other
 legitimate form: `opens` is incremented inside the injected handler so the test can assert
@@ -216,7 +227,7 @@ idempotency is not observable any other way.
 `oss/packages/bolt/tests/ui/collection-navigation.test.ts` is the model. It has four `describe`
 blocks and not one of them renders a page:
 
-| `:26` `route context`         | which app a URL belongs to, and what has no context at all |
+| `:26` `route context` | which app a URL belongs to, and what has no context at all |
 | `:55` `detail stack placement`| append, replace-in-place, truncate-to-parent, collapse, pop |
 | `:108` `detail surface service` | reopening a nested surface does not grow the URL; the stack parameter disappears when the last surface closes |
 | `:133` `record detail fields` | which fields a record detail resolves |
@@ -255,17 +266,17 @@ should be a unit test.
 
 Walk the file and ask, per test:
 
-| Signal                                                       | Verdict                                |
-| ------------------------------------------------------------ | -------------------------------------- |
-| Asserts a value exists, is defined, is truthy, has a length  | Delete, or replace with a value assertion |
-| Asserts a shape the compiler already enforces                | Delete                                  |
-| Names markup, a page, or a component's DOM                   | Delete; move the decision under test    |
-| Only assertion is `toHaveBeenCalled`                         | Rewrite to assert state, or delete      |
-| Duplicates a behaviour already covered in this file or another | Delete the weaker one                 |
-| Its subject has no production caller                         | Delete both                             |
-| You cannot name the edit that turns it red                   | Delete                                  |
-| Green because the subject threw                              | Fix the input, then check it still passes for the right reason |
-| Restates a rule, with no note that it does                   | Add the note, or drive the real rule    |
+| Signal                                                         | Verdict                                                        |
+| -------------------------------------------------------------- | -------------------------------------------------------------- |
+| Asserts a value exists, is defined, is truthy, has a length    | Delete, or replace with a value assertion                      |
+| Asserts a shape the compiler already enforces                  | Delete                                                         |
+| Names markup, a page, or a component's DOM                     | Delete; move the decision under test                           |
+| Only assertion is `toHaveBeenCalled`                           | Rewrite to assert state, or delete                             |
+| Duplicates a behaviour already covered in this file or another | Delete the weaker one                                          |
+| Its subject has no production caller                           | Delete both                                                    |
+| You cannot name the edit that turns it red                     | Delete                                                         |
+| Green because the subject threw                                | Fix the input, then check it still passes for the right reason |
+| Restates a rule, with no note that it does                     | Add the note, or drive the real rule                           |
 
 When the answer is "delete", say what stops being checked in the commit message. If nothing stops
 being checked, that is the strongest possible reason to delete it.

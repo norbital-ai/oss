@@ -86,9 +86,7 @@ if (command === 'help') {
 			);
 		}
 	});
-	await Effect.runPromise(
-		program.pipe(Effect.catch((error) => Effect.sync(() => fail('migrate', error))))
-	);
+	Effect.runFork(program.pipe(Effect.catch((error) => Effect.sync(() => fail('migrate', error)))));
 	/**
 	 * One command, because there was only ever one thing to run.
 	 *
@@ -114,7 +112,7 @@ if (command === 'help') {
 		yield* Effect.addFinalizer(() => Effect.sync(() => watcher.close()));
 		yield* Effect.never;
 	});
-	await Effect.runPromise(
+	Effect.runFork(
 		Effect.scoped(program).pipe(Effect.catch((error) => Effect.sync(() => fail(command, error))))
 	);
 } else {

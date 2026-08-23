@@ -72,7 +72,7 @@ describe('instance 2 — every write path that queues a delivery also queues its
 		// A write path is one that puts outbound delivery rows in its transaction. `createStatements`
 		// is the shared builder the create paths use, and it is the one that calls `outboxStatements`,
 		// so a path that calls either is a path that can emit a delivery.
-		const emits = named(blocks, /outboxStatements\(|createStatements\(/u).filter(
+		const emits = named(blocks, /outboxStatements\(|createStatements\(|deleteStatements\(/u).filter(
 			// `Collections.findNearest` is a read, not a write path, but its block still matches:
 			// `createStatements` is a plain const defined between `findNearest` and the next
 			// `Effect.fn`, so the builder's whole body — which calls `outboxStatements` — lands inside

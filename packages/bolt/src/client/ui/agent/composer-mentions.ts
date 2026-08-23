@@ -37,7 +37,6 @@ const WORD_CHAR = /[\p{L}\p{N}]/u;
  * sentence; `@Acme Corporation` — a label the writer kept typing — is prose again, and must stop
  * resolving to the record.
  */
-// repository-health:allow Q4 -- named helper
 function chipDelimited(draft: string, mention: ComposerMention): boolean {
 	const next = draft.slice(mention.end, mention.end + 1);
 	return next === '' || !WORD_CHAR.test(next);
@@ -84,13 +83,11 @@ export function findMentionTrigger(
 export type MentionTrigger = NonNullable<ReturnType<typeof findMentionTrigger>>;
 
 /** Shifts one chip's range after an edit that grew or shrank text before it. */
-// repository-health:allow Q4 -- named helper
 function shiftMention(mention: ComposerMention, delta: number): ComposerMention {
 	return { ...mention, start: mention.start + delta, end: mention.end + delta };
 }
 
 /** Orders chips left-to-right so later edits can walk them without crossing. */
-// repository-health:allow Q4 -- named helper
 function mentionsByStart(mentions: readonly ComposerMention[]): ComposerMention[] {
 	return [...mentions].sort((left, right) => left.start - right.start);
 }

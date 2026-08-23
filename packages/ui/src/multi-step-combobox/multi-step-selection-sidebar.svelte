@@ -49,7 +49,6 @@
 	const MISSING_SEP = ', ';
 </script>
 
-<!-- stupidity:allow UI5 -- popover panel boundary -->
 <aside class="w-[280px] shrink-0 overflow-hidden border-r bg-background">
 	<Stack gap="none" fill>
 		<Inline gap="none" justify="between" class="h-11 border-b px-3">
@@ -69,7 +68,6 @@
 				</Button>
 			{/if}
 		</Inline>
-		<!-- stupidity:allow UI9 -- listbox scroll body of the popover panel; Scroll cannot carry role="listbox" -->
 		<ul role="listbox" aria-label={ariaLabel} class="flex-1 overflow-auto px-2 py-2">
 			{#if selections.length === 0}
 				<li
@@ -85,7 +83,6 @@
 					{@const hasValues = stepKeys.some((key) => selection[key] != null)}
 					{@const sepClass = 'opacity-40'}
 					{@const fbClass = complete ? 'opacity-70' : 'opacity-60'}
-					<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 					<li
 						role="option"
 						aria-selected={idx === currentSelectionIndex}

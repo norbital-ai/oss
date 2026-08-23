@@ -20,26 +20,25 @@ export const CollectionWriteValues = Schema.Record(Schema.String, Schema.Json).a
 export type CollectionWriteValues = typeof CollectionWriteValues.Type;
 
 /**
- * The body of `collections.create`, and the two fields it deliberately does not have.
+ * The body of the browser's one declarative collection write.
  *
- * **No `id`.** It used to be required, and the browser minted it with `crypto.randomUUID()` before
- * posting. A key chosen by the caller is a key chosen before the write is authorized, before
- * `create.before` has run and before the database has applied a default — so the client held an
- * identifier for a row that might never exist, and a nested write could not be expressed at all,
- * because a child's foreign key names a parent whose id the client would have had to invent for it
- * too. The server assigns every id now, at the point the row is actually being built, and answers
- * with it.
+ * `values` is one root record and every explicitly included `many` relationship is the complete
+ * desired state of that relationship. Rows carrying an `id` are updated, rows without one are
+ * inserted, and stored related rows omitted from an included relationship are deleted. A
+ * relationship key that is absent is deliberately untouched. The collection runtime validates the
+ * actual relationship names because only the compiled workspace knows them; this neutral wire
+ * package can state only that the submitted value is a JSON graph.
  *
- * **No `subject`.** It is injected at the command boundary from the credential the request
- * authenticated with, for the same reason it is absent from every other tenant-data command: a body
- * that can name its own subject is a body that can write into someone else's tenant.
+ * There is no top-level `id`: the root's identity belongs to the root record itself, which gives the
+ * same shape to roots and nested records. There is also no `subject`; the command boundary injects
+ * it from the authenticated credential, so a request body cannot write as another tenant member.
  */
-export const CollectionCreateRequest = Schema.Struct({
+export const CollectionMutateRequest = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	values: CollectionWriteValues
-}).annotate({ identifier: 'BoltCollectionCreateRequest' });
-export interface CollectionCreateRequest extends Schema.Schema.Type<
-	typeof CollectionCreateRequest
+}).annotate({ identifier: 'BoltCollectionMutateRequest' });
+export interface CollectionMutateRequest extends Schema.Schema.Type<
+	typeof CollectionMutateRequest
 > {}
 
 /** One row exactly as the database holds it, defaults and generated columns included. */
@@ -58,15 +57,35 @@ export type StoredRecord = typeof StoredRecord.Type;
  * from the read-back the runtime already performs, so the cache holds what a subsequent read would
  * return.
  *
- * `records` is plural because a batch is the general case and a single create is a batch of one.
- * It carries the rows of the collection that was written, not the children a nested write also
- * created: reading those back would cost a query per child collection, and they are reachable
- * through the parent's declared relations on the next read.
+ * `records` remains an array at the transport boundary even though `collections.mutate` submits one
+ * root. A server may include the readable roots already produced by its canonical pipeline, but the
+ * browser mutation does not require one: a write-only policy can authorize the command while denying
+ * readback. Live queries own stored values and refresh after success. Related rows are likewise
+ * reached through declared relations on the next read.
  */
 export const CollectionWriteResult = Schema.Struct({
 	records: Schema.Array(StoredRecord)
 }).annotate({ identifier: 'BoltCollectionWriteResult' });
 export interface CollectionWriteResult extends Schema.Schema.Type<typeof CollectionWriteResult> {}
+
+/**
+ * A mutation accepted for approval rather than committed.
+ *
+ * HTTP 202 is successful at the transport layer, so this body is part of the collection wire
+ * vocabulary instead of a malformed stored-row response. The browser surfaces it as a typed
+ * rejection because returning it alongside a row would force every generic editor to decide
+ * whether an approval request should close that editor.
+ */
+export const CollectionPendingApproval = Schema.Struct({
+	pending: Schema.Literal(true),
+	requestId: Schema.NonEmptyString,
+	collection: Schema.NonEmptyString,
+	id: Schema.NonEmptyString,
+	action: Schema.Literals(['create', 'update', 'delete'])
+}).annotate({ identifier: 'BoltCollectionPendingApproval' });
+export interface CollectionPendingApproval extends Schema.Schema.Type<
+	typeof CollectionPendingApproval
+> {}
 
 /**
  * Reads the stored rows out of a write response, or `undefined` when it carries none.
@@ -80,3 +99,7 @@ export const storedRecordsOf = (value: unknown): ReadonlyArray<StoredRecord> | u
 	const decoded = Schema.decodeUnknownOption(CollectionWriteResult)(value);
 	return Option.getOrUndefined(Option.map(decoded, ({ records }) => records));
 };
+
+/** Reads a successful pending-approval response without conflating it with a stored-row result. */
+export const pendingApprovalOf = (value: unknown): CollectionPendingApproval | undefined =>
+	Option.getOrUndefined(Schema.decodeUnknownOption(CollectionPendingApproval)(value));

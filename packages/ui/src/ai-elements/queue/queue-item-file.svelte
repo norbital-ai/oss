@@ -19,7 +19,6 @@
 	}: QueueItemFileProps = $props();
 </script>
 
-<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 <span
 	bind:this={ref}
 	class={cn('bg-muted flex items-center gap-1 rounded border px-2 py-1 text-xs', className)}

@@ -1,6 +1,10 @@
 import { Effect, Schema } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
-import { SkillDeclaration, type ToolDeclaration, type WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
+import {
+	SkillDeclaration,
+	type ToolDeclaration,
+	type WorkspaceDefinition
+} from '#lib/authoring/workspace-schema.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
 import type { HostToolsInterface } from '#lib/runtime/facilities/services.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';

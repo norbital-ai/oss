@@ -10,19 +10,22 @@ import {
 	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
-import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
+import {
+	emptyAuthoredRuntime,
+	type AuthoredRuntime
+} from '../../src/runtime/collections/authored.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
 import { seedSession } from '../support/fixture-identity.js';
 
 /**
- * The create command as a browser actually reaches it: over `dispatchInvocation`, with a bearer
- * token, through the boundary that mints the subject.
+ * The declarative mutation as a browser actually reaches it: over `dispatchInvocation`, with a
+ * bearer token, through the boundary that mints the subject.
  *
  * Reached this way rather than by calling the collections service, because the three things under
- * test are properties of the *command*, not of the service beneath it. Who assigns the id, what
- * shape a body may have, and what the response is entitled to say are all decisions the boundary
- * makes, and the service has never had an opinion about any of them.
+ * test are properties of the *command*, not of the service beneath it. Where an identity is carried,
+ * what shape a graph may have, and what the response is entitled to say are all decisions the
+ * boundary makes.
  */
 const definition = workspace({
 	name: 'wire',
@@ -75,8 +78,11 @@ const definition = workspace({
 				{ collection: 'orders', action: 'create' },
 				{ collection: 'orders', action: 'read' },
 				{ collection: 'orders', action: 'update' },
+				{ collection: 'orders', action: 'delete' },
 				{ collection: 'order_lines', action: 'create' },
-				{ collection: 'order_lines', action: 'read' }
+				{ collection: 'order_lines', action: 'read' },
+				{ collection: 'order_lines', action: 'update' },
+				{ collection: 'order_lines', action: 'delete' }
 			]
 		})
 	]
@@ -129,8 +135,8 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-const open = async (): Promise<BoltTestRuntime> => {
-	const runtime = await makeBoltTestRuntime(definition, { authored });
+const open = async (runtimeAuthored: AuthoredRuntime = authored): Promise<BoltTestRuntime> => {
+	const runtime = await makeBoltTestRuntime(definition, { authored: runtimeAuthored });
 	await seedSession(runtime, { token: 'admin-token', user: 'user-admin', team: 'admin' });
 	return runtime;
 };
@@ -138,29 +144,37 @@ const open = async (): Promise<BoltTestRuntime> => {
 const post = async (runtime: BoltTestRuntime, name: string, input: unknown) =>
 	runtime.runtime.runPromise(dispatchInvocation(command(name, input)));
 
-describe('collections.create over the wire', () => {
-	it('assigns the id itself, and answers with it', async () => {
+describe('collections.mutate over the wire', () => {
+	it('assigns a new root an id and answers with exactly the stored root record', async () => {
 		harness = await open();
 
-		const response = await post(harness, 'collections.create', {
+		const response = await post(harness, 'collections.mutate', {
 			collection: 'orders',
 			values: { reference: 'ORD-1' }
 		});
 
 		const rows = await harness.database.query('select id from orders');
 		expect(rows).toHaveLength(1);
-		// The body carried no id at all, so this one can only have come from the server.
-		expect((response.value as { readonly id: unknown }).id).toBe(rows[0]?.['id']);
+		expect(response.value).toEqual({
+			records: [
+				expect.objectContaining({
+					id: rows[0]?.['id'],
+					reference: 'ORD-1',
+					status: 'accepted',
+					row_version: 1
+				})
+			]
+		});
 	});
 
-	it('assigns a distinct id per create', async () => {
+	it('assigns a distinct id per new root', async () => {
 		harness = await open();
 
-		await post(harness, 'collections.create', {
+		await post(harness, 'collections.mutate', {
 			collection: 'orders',
 			values: { reference: 'ORD-1' }
 		});
-		await post(harness, 'collections.create', {
+		await post(harness, 'collections.mutate', {
 			collection: 'orders',
 			values: { reference: 'ORD-2' }
 		});
@@ -172,13 +186,14 @@ describe('collections.create over the wire', () => {
 	it('answers with the row as stored, not with the values that were posted', async () => {
 		harness = await open();
 
-		const response = await post(harness, 'collections.create', {
+		const response = await post(harness, 'collections.mutate', {
 			collection: 'orders',
 			values: { reference: 'ORD-1' }
 		});
 
 		const records = storedRecordsOf(response.value);
 		expect(records).toHaveLength(1);
+		expect(response.value).toEqual({ records });
 		const record = records?.[0] ?? {};
 		// The hook's field, which the caller never sent — and which the old response, being the
 		// caller's own submission, could not have contained.
@@ -191,7 +206,7 @@ describe('collections.create over the wire', () => {
 	it('writes a graph posted in one body as one parent and its children', async () => {
 		harness = await open();
 
-		const response = await post(harness, 'collections.create', {
+		const response = await post(harness, 'collections.mutate', {
 			collection: 'orders',
 			values: {
 				reference: 'ORD-1',
@@ -210,28 +225,96 @@ describe('collections.create over the wire', () => {
 		expect(lines.map((row) => row['order_id'])).toEqual([orders[0]?.['id'], orders[0]?.['id']]);
 		// The children are not read back — that would cost a query per child collection — so the
 		// answer is the parent, and it does not pretend otherwise.
-		expect(storedRecordsOf(response.value)).toHaveLength(1);
+		const records = storedRecordsOf(response.value);
+		expect(records).toHaveLength(1);
+		expect(response.value).toEqual({ records });
 	});
 
-	it('refuses a id smuggled in through the values', async () => {
+	it('runs a relationship introduced by a root hook through the child mutation pipeline', async () => {
+		const childInputs: Array<unknown> = [];
+		harness = await open({
+			...emptyAuthoredRuntime,
+			hooks: {
+				orders: {
+					create: {
+						perRecord: {
+							before: {
+								description: 'Adds a child the submitted scalar payload did not contain.',
+								handler: (context: unknown) => ({
+									...(context as { readonly input: Record<string, unknown> }).input,
+									order_line_order: [{ sku: 'hook-child' }]
+								})
+							}
+						}
+					}
+				},
+				order_lines: {
+					create: {
+						perRecord: {
+							before: {
+								description: 'Proves the hook-added child ran its own create hook.',
+								handler: (context: unknown) => {
+									const input = (context as { readonly input: Record<string, unknown> }).input;
+									childInputs.push(input);
+									return { ...input, sku: `${String(input['sku'])}-prepared` };
+								}
+							}
+						}
+					}
+				}
+			}
+		});
+
+		await post(harness, 'collections.mutate', {
+			collection: 'orders',
+			values: { reference: 'HOOK-1' }
+		});
+
+		expect(childInputs).toHaveLength(1);
+		expect(await harness.database.query('select sku from order_lines')).toEqual([
+			{ sku: 'hook-child-prepared' }
+		]);
+	});
+
+	it('accepts identities at the root and nested levels', async () => {
 		harness = await open();
 
-		// Dropping `id` from the create body leaves exactly one way back in, so it is closed here:
-		// on the parent this would have routed the payload through the update branch and made
-		// `collections.create` perform an update.
-		const outcome = await harness.runtime.runPromise(
-			Effect.result(
-				dispatchInvocation(
-					command('collections.create', {
-						collection: 'orders',
-						values: { id: '0f5f0f6e-2c2e-4f3f-9b3a-9b9c9d9e9f00', reference: 'ORD-1' }
-					})
-				)
-			)
-		);
+		const created = await post(harness, 'collections.mutate', {
+			collection: 'orders',
+			values: {
+				reference: 'ORD-1',
+				order_line_order: [{ sku: 'a-1' }, { sku: 'a-2' }]
+			}
+		});
+		const root = storedRecordsOf(created.value)?.[0];
+		const children = await harness.database.query('select id, sku from order_lines order by sku');
+		const first = children[0];
+		const second = children[1];
+		expect(root).toBeDefined();
+		expect(first).toBeDefined();
+		expect(second).toBeDefined();
 
-		expect(outcome._tag).toBe('Failure');
-		expect(await harness.database.query('select id from orders')).toHaveLength(0);
+		const updated = await post(harness, 'collections.mutate', {
+			collection: 'orders',
+			values: {
+				id: root?.['id'],
+				reference: 'ORD-1-revised',
+				order_line_order: [
+					{ id: first?.['id'], sku: 'a-1-revised' },
+					{ id: second?.['id'], sku: 'a-2' }
+				]
+			}
+		});
+
+		const storedRoot = storedRecordsOf(updated.value)?.[0] ?? {};
+		expect(updated.value).toEqual({ records: [storedRoot] });
+		expect(storedRoot['id']).toBe(root?.['id']);
+		expect(storedRoot['reference']).toBe('ORD-1-revised');
+		expect(storedRoot['row_version']).toBe(2);
+		expect(await harness.database.query('select id, sku from order_lines order by sku')).toEqual([
+			{ id: first?.['id'], sku: 'a-1-revised' },
+			{ id: second?.['id'], sku: 'a-2' }
+		]);
 	});
 
 	it('checks a child of the graph the same way it checks the parent', async () => {
@@ -240,7 +323,7 @@ describe('collections.create over the wire', () => {
 		const outcome = await harness.runtime.runPromise(
 			Effect.result(
 				dispatchInvocation(
-					command('collections.create', {
+					command('collections.mutate', {
 						collection: 'orders',
 						values: {
 							reference: 'ORD-1',
@@ -266,7 +349,7 @@ describe('collections.create over the wire', () => {
 		const outcome = await harness.runtime.runPromise(
 			Effect.result(
 				dispatchInvocation(
-					command('collections.create', {
+					command('collections.mutate', {
 						collection: 'orders',
 						values: { reference: 'ORD-1', order_line_orders: [{ sku: 'a-1' }] }
 					})
@@ -278,27 +361,101 @@ describe('collections.create over the wire', () => {
 		expect(await harness.database.query('select id from orders')).toHaveLength(0);
 		expect(await harness.database.query('select id from order_lines')).toHaveLength(0);
 	});
-});
 
-describe('collections.update over the wire', () => {
-	it('answers with the row as stored, including the version the database bumped', async () => {
+	it('refuses a malformed root identity before writing', async () => {
 		harness = await open();
 
-		const created = await post(harness, 'collections.create', {
-			collection: 'orders',
-			values: { reference: 'ORD-1' }
-		});
-		const id = (created.value as { readonly id: string }).id;
+		const outcome = await harness.runtime.runPromise(
+			Effect.result(
+				dispatchInvocation(
+					command('collections.mutate', {
+						collection: 'orders',
+						values: { id: '', reference: 'ORD-1' }
+					})
+				)
+			)
+		);
 
-		const updated = await post(harness, 'collections.update', {
-			collection: 'orders',
-			id,
-			values: { reference: 'ORD-1-revised' }
-		});
-
-		const record = storedRecordsOf(updated.value)?.[0] ?? {};
-		expect(record['id']).toBe(id);
-		expect(record['reference']).toBe('ORD-1-revised');
-		expect(record['row_version']).toBe(2);
+		expect(outcome._tag).toBe('Failure');
+		expect(await harness.database.query('select id from orders')).toHaveLength(0);
 	});
+
+	it.each([
+		['row_version', 99],
+		['approval_id', '0f5f0f6e-2c2e-4f3f-9b3a-9b9c9d9e9f00'],
+		['created_at', '2026-01-01T00:00:00.000Z']
+	] as const)('refuses the system-managed root field %s', async (field, value) => {
+		harness = await open();
+		const outcome = await harness.runtime.runPromise(
+			Effect.result(
+				dispatchInvocation(
+					command('collections.mutate', {
+						collection: 'orders',
+						values: { reference: 'ORD-1', [field]: value }
+					})
+				)
+			)
+		);
+		expect(outcome._tag).toBe('Failure');
+		expect(await harness.database.query('select id from orders')).toEqual([]);
+	});
+
+	it('refuses a system-managed field on a nested row', async () => {
+		harness = await open();
+		const outcome = await harness.runtime.runPromise(
+			Effect.result(
+				dispatchInvocation(
+					command('collections.mutate', {
+						collection: 'orders',
+						values: {
+							reference: 'ORD-1',
+							order_line_order: [{ sku: 'a-1', updated_at: '2026-01-01T00:00:00.000Z' }]
+						}
+					})
+				)
+			)
+		);
+		expect(outcome._tag).toBe('Failure');
+		expect(await harness.database.query('select id from orders')).toEqual([]);
+		expect(await harness.database.query('select id from order_lines')).toEqual([]);
+	});
+});
+
+describe('the retired browser write commands', () => {
+	it.each([
+		['collections.create', { collection: 'orders', values: { reference: 'ORD-1' } }],
+		[
+			'collections.update',
+			{
+				collection: 'orders',
+				id: '0f5f0f6e-2c2e-4f3f-9b3a-9b9c9d9e9f00',
+				values: { reference: 'ORD-1' }
+			}
+		],
+		['collections.delete', { collection: 'orders', id: '0f5f0f6e-2c2e-4f3f-9b3a-9b9c9d9e9f00' }],
+		[
+			'collections.createMany',
+			{
+				records: [
+					{
+						collection: 'orders',
+						id: '0f5f0f6e-2c2e-4f3f-9b3a-9b9c9d9e9f00',
+						values: { reference: 'ORD-1' }
+					}
+				]
+			}
+		]
+	] as const)(
+		'refuses %s rather than preserving a second mutation surface',
+		async (name, input) => {
+			harness = await open();
+
+			const outcome = await harness.runtime.runPromise(
+				Effect.result(dispatchInvocation(command(name, input)))
+			);
+
+			expect(outcome._tag).toBe('Failure');
+			expect(await harness.database.query('select id from orders')).toHaveLength(0);
+		}
+	);
 });

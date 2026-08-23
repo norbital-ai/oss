@@ -119,8 +119,9 @@ const testLayer = (seen: Array<DatabaseRequest>) => {
 		)
 	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
+	const wake = SyncWake.layer.pipe(Layer.provide(Transport.layer(undefined, context)));
 	const approvals = Approvals.layer.pipe(
-		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue))
+		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, wake))
 	);
 	return Collections.layer.pipe(
 		Layer.provide(
@@ -134,7 +135,7 @@ const testLayer = (seen: Array<DatabaseRequest>) => {
 				taskQueue,
 				automations,
 				Layer.succeed(AuthoredRuntimeService, emptyAuthoredRuntime),
-				SyncWake.layer.pipe(Layer.provide(Transport.layer(undefined, context)))
+				wake
 			)
 		)
 	);

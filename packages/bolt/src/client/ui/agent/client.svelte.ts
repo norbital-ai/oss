@@ -42,7 +42,7 @@ export type AgentRuntimeConfig = Readonly<{
 	readonly client: Readonly<{
 		readonly db: Pick<
 			WorkspaceClient['db'],
-			'chat_session' | 'chat_message' | 'bolt_auth_user' | 'bolt_notifications'
+			'approval_request' | 'chat_session' | 'chat_message' | 'user' | 'bolt_notifications'
 		>;
 		readonly records: WorkspaceClient['records'];
 		readonly system: WorkspaceClient['system'];
@@ -58,7 +58,7 @@ type AgentSurface = {
 	failed: boolean;
 };
 
-export type AgentClient = Readonly<{
+type AgentClient = Readonly<{
 	runtime: AgentRuntimeConfig;
 	surface: AgentSurface;
 	models: AgentModelController;
@@ -116,10 +116,13 @@ function startInteractiveAgent(
 	});
 }
 
-function updateAgentVerifier(active: AgentRuntimeConfig, input: {
-	readonly runId: string;
-	readonly prompt: string;
-}): Effect.Effect<{ readonly accepted: true }, AgentClientFailure> {
+function updateAgentVerifier(
+	active: AgentRuntimeConfig,
+	input: {
+		readonly runId: string;
+		readonly prompt: string;
+	}
+): Effect.Effect<{ readonly accepted: true }, AgentClientFailure> {
 	return Effect.gen(function* () {
 		yield* agentRequest(
 			'updateVerifier',

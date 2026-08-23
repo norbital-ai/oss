@@ -132,8 +132,11 @@ const InvocationLayers = {
 		 * than reached for separately by each of those services.
 		 */
 		const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(database, tasks)));
+		// Approval projections are replicated system collections, so their state transitions publish
+		// through the same durable outbox + wake path as authored collection writes.
+		const syncWake = SyncWake.layer.pipe(Layer.provide(transport));
 		const approvals = Approvals.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue))
+			Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, syncWake))
 		);
 		/**
 		 * Automations, above Collections rather than below it.
@@ -152,7 +155,6 @@ const InvocationLayers = {
 		// The wake sits between Collections and the host's transport: Collections announces, the host fans
 		// out. It is its own layer rather than part of Sync because Sync depends on Collections, and the
 		// announcement has to be available to the thing doing the writing.
-		const syncWake = SyncWake.layer.pipe(Layer.provide(transport));
 		const collections = Collections.layer.pipe(
 			Layer.provide(
 				Layer.mergeAll(
@@ -428,7 +430,7 @@ const activationLayer = (activation: Activation, facilities: FacilityBindings) =
 	const tasks = Tasks.layer(facilities.tasks, context);
 	const database = Database.layer(facilities.database, context);
 	// The database is merged into the result rather than only provided to the queue: activation now
-	// writes to the tenant itself — the `bolt_team` rows an approval step names — and not only through
+	// writes to the tenant itself — the `team` rows an approval step names — and not only through
 	// `bolt_schedule`. Provided-but-not-merged left `Database.Service` unavailable to the activation
 	// body, which is a compile error rather than a silent one, but the shape is worth stating: what
 	// activation may touch is exactly these two facilities.
@@ -460,7 +462,7 @@ const BundleActivation = {
 		 *
 		 * This deliberately *does* fail activation where `reconcileApproverTeams` below deliberately
 		 * does not, and the difference is what is being compared. The reconciler compares a release
-		 * against `bolt_team` **rows**, which an operator edits from a dashboard at any moment — so a
+		 * against `team` **rows**, which an operator edits from a dashboard at any moment — so a
 		 * disagreement there is an ordinary state and taking a workspace down over it would be wrong.
 		 * These three rules compare two artifacts that both ship *inside* the release: `+teams.ts` and
 		 * the policy files. Nothing can move them apart after a build, so a disagreement is not drift,
@@ -494,7 +496,7 @@ const BundleActivation = {
 							 *
 							 * Here, and not earlier, because this is the first point in the sequence at which the
 							 * table is there to write to: `reconcileRelease` registers the route, forks the
-							 * database and runs `schema.migrate` — which is what creates `bolt_team`, an identity
+							 * database and runs `schema.migrate` — which is what creates `team`, an identity
 							 * collection `identitySchemaSteps` already puts ahead of migration — and only then
 							 * activates. Anything before that would be inserting into a table that does not exist
 							 * yet; anything after is a workspace already answering requests, and the approval it

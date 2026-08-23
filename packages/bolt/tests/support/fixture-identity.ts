@@ -71,7 +71,7 @@ export const seedTeam = async (
 	} = {}
 ): Promise<void> => {
 	await harness.database.query(
-		`insert into bolt_team ("id", "name", "parent_id")
+		`insert into "team" ("id", "name", "parent_id")
 		 values ($1::uuid, $2, $3::uuid) on conflict do nothing`,
 		[fixtureTeamId(name), name, options.parent === undefined ? null : fixtureTeamId(options.parent)]
 	);
@@ -81,7 +81,7 @@ export const seedTeam = async (
  * A person in a tenant, and a live session naming them — the fixture nearly every command test opens
  * with, because a `Command` carries a bearer token and the runtime resolves it against real rows.
  *
- * `team` is one name or none, because `bolt_auth_user.team_id` is one team. It replaces the `roles`
+ * `team` is one name or none, because `user.team_id` is one team. It replaces the `roles`
  * array these fixtures used to write: authority is a team's, and a team's policies are declared in
  * the release rather than stored on the person, so a fixture that wants a subject holding the
  * `manager` policy names the team that declares it. Omitting it is a real state and often the honest
@@ -107,7 +107,7 @@ export const seedSession = async (
 	if (options.team !== undefined) await seedTeam(harness, options.team);
 	await harness.database.query(
 		`with person as (
-			insert into bolt_auth_user ("id", "name", "email", "tenantId", "team_id", "status")
+			insert into "user" ("id", "name", "email", "tenantId", "team_id", "status")
 			values (md5($2::text)::uuid, $2, $4, $3, $5::uuid, $6)
 			on conflict ("id") do update set
 				"email" = excluded."email",
@@ -116,7 +116,7 @@ export const seedSession = async (
 				"status" = excluded."status"
 			returning "id" as id
 		 )
-		 insert into bolt_auth_session ("id", "token", "userId", "expiresAt")
+		 insert into "session" ("id", "token", "userId", "expiresAt")
 		 select gen_random_uuid(), $1, person.id, now() + interval '1 hour' from person`,
 		[
 			options.token,

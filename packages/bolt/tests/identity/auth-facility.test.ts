@@ -43,13 +43,16 @@ describe('bolt-owned identity over a host facility', () => {
 		// second one rather than the first.
 		for (const statement of identitySchemaSteps()) await database.exec(statement.sql);
 		const tables = await database.query<{ table_name: string }>(
-			`select table_name from information_schema.tables where table_name like 'bolt_auth_%' order by table_name`
+			`select table_name from information_schema.tables
+			  where table_name in ('account', 'auth_config', 'session', 'team', 'user', 'verification')
+			  order by table_name`
 		);
 		expect(tables.rows.map((row) => row.table_name)).toEqual([
 			AUTH_MODELS.account,
 			// Where bolt keeps its own signing secret, so no host has to supply one.
-			'bolt_auth_config',
+			'auth_config',
 			AUTH_MODELS.session,
+			'team',
 			AUTH_MODELS.user,
 			AUTH_MODELS.verification
 		]);
@@ -77,11 +80,11 @@ describe('bolt-owned identity over a host facility', () => {
 		// The session and the person are rows the host's database now holds, written entirely through
 		// `execute` — which is the property that makes this bundle host-agnostic.
 		const sessions = await database.query<{ userId: string }>(
-			`select "userId" from ${AUTH_MODELS.session}`
+			`select "userId" from "${AUTH_MODELS.session}"`
 		);
 		expect(sessions.rows.length).toBe(1);
 		const users = await database.query<{ email: string }>(
-			`select "email" from ${AUTH_MODELS.user}`
+			`select "email" from "${AUTH_MODELS.user}"`
 		);
 		expect(users.rows.map((row) => row.email)).toEqual([email]);
 	});
@@ -107,7 +110,7 @@ describe('bolt-owned identity over a host facility', () => {
 	/**
 	 * The token a sign-in returns is the token `authenticate` has to find.
 	 *
-	 * `AUTHENTICATE_SQL` looks a credential up as `bolt_auth_session.token`. Better Auth mints that
+	 * `AUTHENTICATE_SQL` looks a credential up as `session.token`. Better Auth mints that
 	 * row itself, so nothing in this repository guarantees the value it hands back is the value it
 	 * stored — and no test joined the two halves: every other identity fixture mints its session
 	 * through `startSession`, which inserts the row directly, so the whole suite could be green while
@@ -127,7 +130,7 @@ describe('bolt-owned identity over a host facility', () => {
 		const signedIn = await auth.api.signInEmailOTP({ body: { email, otp: code } });
 		expect(signedIn.token).toBeTruthy();
 		const found = await database.query<{ count: string }>(
-			`select count(*)::text as count from ${AUTH_MODELS.session} where "token" = $1 and "expiresAt" > now()`,
+			`select count(*)::text as count from "${AUTH_MODELS.session}" where "token" = $1 and "expiresAt" > now()`,
 			[signedIn.token]
 		);
 		expect(found.rows[0]?.count).toBe('1');
@@ -219,13 +222,13 @@ describe('the signing secret bolt generates for itself', () => {
 		const database = await PGlite.create('memory://');
 		try {
 			for (const statement of identitySchemaSteps()) await database.exec(statement.sql);
-			const insert = `insert into bolt_auth_config ("key", "value") select 'session-secret', replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '') where not exists (select 1 from bolt_auth_config where "key" = 'session-secret')`;
+			const insert = `insert into "auth_config" ("key", "value") select 'session-secret', replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '') where not exists (select 1 from "auth_config" where "key" = 'session-secret')`;
 			await database.query(insert);
 			// Re-running must not rotate the secret: a secret that changed on every boot would
 			// invalidate every session the previous boot issued.
 			await database.query(insert);
 			const rows = await database.query<{ value: string }>(
-				`select value from bolt_auth_config where key = 'session-secret'`
+				`select value from "auth_config" where key = 'session-secret'`
 			);
 			expect(rows.rows).toHaveLength(1);
 			expect(rows.rows[0]?.value).toMatch(/^[0-9a-f]{64}$/);

@@ -67,7 +67,7 @@ export class AccessDenied extends Schema.TaggedError<AccessDenied>()(
 /**
  * Whether this subject administers the workspace.
  *
- * Read off `bolt_auth_user.status` by `Identity.authenticate` and off nothing else — not a header,
+ * Read off `user.status` by `Identity.authenticate` and off nothing else — not a header,
  * not a cookie, not a role array a caller can assert. Every short-circuit below is guarded by this
  * one predicate so there is a single place to read to know what an administrator is.
  *
@@ -100,7 +100,9 @@ export const policiesHeld = (
 	definition: WorkspaceDefinition,
 	subject: Identity.Subject,
 	/** Layer-owned deduplication keeps one stale `(team, policy)` from burying authorization logs. */
-	reportedStalePolicies: Set<string> = new Set()
+	reportedStalePolicies: Set<string> = new Set(),
+	/** Injectable only so the pure policy resolver can be tested without replacing a global logger. */
+	reportWarning: (message: string) => void = (message) => Effect.runSync(Effect.logWarning(message))
 ): ReadonlySet<string> => {
 	const held = new Set<string>();
 	const path = subject.teamPath ?? [];
@@ -125,10 +127,8 @@ export const policiesHeld = (
 		const key = `declaration:${policyName}`;
 		if (reportedStalePolicies.has(key)) continue;
 		reportedStalePolicies.add(key);
-		Effect.runSync(
-			Effect.logWarning(
-				`[bolt.access] subject "${subject.userId}" names policy "${policyName}" directly, which this release does not declare — ignoring it.`
-			)
+		reportWarning(
+			`[bolt.access] subject "${subject.userId}" names policy "${policyName}" directly, which this release does not declare — ignoring it.`
 		);
 	}
 	for (const teamName of path) {
@@ -145,11 +145,9 @@ export const policiesHeld = (
 			const key = `${teamName}:${policyName}`;
 			if (reportedStalePolicies.has(key)) continue;
 			reportedStalePolicies.add(key);
-			Effect.runSync(
-				Effect.logWarning(
-					`[bolt.access] team "${teamName}" names policy "${policyName}", which this release does not declare — ignoring it. ` +
-						`Either the policy was renamed or removed, or the team map in +teams.ts is stale.`
-				)
+			reportWarning(
+				`[bolt.access] team "${teamName}" names policy "${policyName}", which this release does not declare — ignoring it. ` +
+					`Either the policy was renamed or removed, or the team map in +teams.ts is stale.`
 			);
 		}
 	}
@@ -275,15 +273,15 @@ const SCOPE_FRAGMENTS: Readonly<Record<string, string>> = {
 	'requestor.team_scope_users': `(
 		with recursive scope as (
 			select t."id" as id, 1 as depth
-			  from bolt_team t
-			  join bolt_auth_user me on me."team_id" = t."id"
+			  from "team" t
+			  join "user" me on me."team_id" = t."id"
 			 where me."id"::text = $SUBJECT
 			union all
 			select c."id", p.depth + 1
-			  from bolt_team c join scope p on c."parent_id" = p.id
+			  from "team" c join scope p on c."parent_id" = p.id
 			 where p.depth < 8
 		)
-		select u."id"::text from bolt_auth_user u where u."team_id" in (select id from scope)
+		select u."id"::text from "user" u where u."team_id" in (select id from scope)
 	)`
 };
 
@@ -336,11 +334,55 @@ const approvalReadTerm = (
 		"then step_value->'approvers' else '[]'::jsonb end" +
 		') as approver(team_name) ' +
 		'where lower(team_name) = (' +
-		'select lower(subject_team."name") from bolt_auth_user subject_user ' +
-		'join bolt_team subject_team on subject_team."id" = subject_user."team_id" ' +
+		'select lower(subject_team."name") from "user" subject_user ' +
+		'join "team" subject_team on subject_team."id" = subject_user."team_id" ' +
 		`where subject_user."id"::text = ${subjectParameter}` +
 		')))';
 	return { sql, parameters: [resource, id] };
+};
+
+type CompiledOwnerWhere = Readonly<{
+	readonly sql: string;
+	readonly parameters: ReadonlyArray<Schema.Json>;
+}>;
+
+const OWNER_COMPARISONS = {
+	eq: '=',
+	ne: '<>',
+	gt: '>',
+	gte: '>=',
+	lt: '<',
+	lte: '<=',
+	like: 'like',
+	ilike: 'ilike',
+	notLike: 'not like',
+	notIlike: 'not ilike',
+	arrayContains: '@>',
+	arrayContained: '<@',
+	arrayOverlaps: '&&',
+	contains: '@>'
+} as const;
+
+const ownerIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+
+/**
+ * Replaces exact identity tokens at every depth of a structured policy predicate.
+ *
+ * A token is an operand, never a string interpolation: `${requestor.id}` therefore becomes one
+ * bound UUID whether it appears directly, under `eq`, or in a logical branch. An unknown token is
+ * left as `undefined`, which the compiler below turns into `false`; a stale identity path must narrow
+ * access rather than widening it.
+ */
+const resolveOwnerOperand = (value: unknown, subject: Identity.Subject): unknown => {
+	if (typeof value === 'string') {
+		const token = /^\$\{([^}]+)\}$/.exec(value);
+		return token === null ? value : PolicyEvaluation.subjectValue(subject, token[1] ?? '');
+	}
+	if (Array.isArray(value)) return value.map((entry) => resolveOwnerOperand(entry, subject));
+	if (value === null || typeof value !== 'object') return value;
+	return Object.fromEntries(
+		Object.entries(value).map(([key, entry]) => [key, resolveOwnerOperand(entry, subject)])
+	);
 };
 
 /** Compiles trusted authored row scope into parameterized SQL while binding every identity value separately. */
@@ -348,12 +390,17 @@ const compileWhereOwner = {
 	compile: (
 		where: Readonly<Record<string, unknown>> | undefined,
 		subject: Identity.Subject
-	): Readonly<{ sql: string; parameters: ReadonlyArray<Schema.Json> }> => {
+	): CompiledOwnerWhere => {
 		if (where === undefined) return { sql: 'true', parameters: [] };
-		const raw = where.$sql;
-		if (typeof raw === 'string') {
-			const parameters: Array<Schema.Json> = [];
-			const sql = raw.replaceAll(/\$\{([^}]+)\}/g, (_token, path: string) => {
+		const parameters: Array<Schema.Json> = [];
+		const bind = (operand: unknown): string | undefined => {
+			const resolved = resolveOwnerOperand(operand, subject);
+			if (!isJson(resolved)) return undefined;
+			parameters.push(resolved);
+			return `$${parameters.length}`;
+		};
+		const rawSql = (raw: string): string =>
+			raw.replaceAll(/\$\{([^}]+)\}/g, (_token, path: string) => {
 				// A fragment first, because it is SQL rather than a value and must not be bound. It still
 				// carries the subject's id as a parameter — `$SUBJECT` is replaced with the placeholder
 				// number, never with the id itself.
@@ -369,20 +416,94 @@ const compileWhereOwner = {
 				parameters.push(value);
 				return `$${parameters.length}`;
 			});
-			return { sql, parameters };
-		}
-		const parameters: Array<Schema.Json> = [];
-		const clauses = Object.entries(where).flatMap(([field, value]) => {
-			if (field === 'AND' || field === 'OR' || field === 'NOT' || field === 'RAW') return [];
-			const resolved =
-				typeof value === 'string' && /^\$\{[^}]+\}$/.test(value)
-					? PolicyEvaluation.subjectValue(subject, value.slice(2, -1))
-					: value;
-			if (resolved === undefined) return ['false'];
-			parameters.push(isJson(resolved) ? resolved : String(resolved));
-			return [`"${field.replaceAll('"', '""')}" = $${parameters.length}`];
-		});
-		return { sql: clauses.length === 0 ? 'true' : clauses.join(' and '), parameters };
+		const join = (
+			clauses: ReadonlyArray<string>,
+			operator: 'and' | 'or',
+			empty: 'true' | 'false'
+		): string => {
+			if (clauses.length === 0) return empty;
+			if (clauses.length === 1) return clauses[0] ?? empty;
+			return `(${clauses.join(` ${operator} `)})`;
+		};
+		const compileOperator = (field: string, operator: string, operand: unknown): string => {
+			const column = ownerIdentifier(field);
+			if (Object.hasOwn(OWNER_COMPARISONS, operator)) {
+				const placeholder = bind(operand);
+				if (placeholder === undefined) return 'false';
+				return `${column} ${OWNER_COMPARISONS[operator as keyof typeof OWNER_COMPARISONS]} ${placeholder}`;
+			}
+			if (operator === 'in' || operator === 'notIn') {
+				if (!Array.isArray(operand)) return 'false';
+				if (operand.length === 0) return operator === 'in' ? 'false' : 'true';
+				const placeholders = operand.map(bind);
+				if (placeholders.some((placeholder) => placeholder === undefined)) return 'false';
+				return `${column} ${operator === 'in' ? 'in' : 'not in'} (${placeholders.join(', ')})`;
+			}
+			if (operator === 'isNull' || operator === 'isNotNull') {
+				if (typeof operand !== 'boolean') return 'false';
+				const wantsNull = operator === 'isNull' ? operand : !operand;
+				return `${column} is ${wantsNull ? '' : 'not '}null`;
+			}
+			if (operator === 'contains_date') {
+				const placeholder = bind(operand);
+				if (placeholder === undefined) return 'false';
+				return `((${column}->>'start')::timestamptz <= ${placeholder} and (${column}->>'end' is null or (${column}->>'end')::timestamptz >= ${placeholder}))`;
+			}
+			if (operator === 'overlaps') {
+				if (operand === null || typeof operand !== 'object' || Array.isArray(operand))
+					return 'false';
+				const start = bind(Reflect.get(operand, 'start'));
+				const end = bind(Reflect.get(operand, 'end'));
+				if (start === undefined || end === undefined) return 'false';
+				return `((${column}->>'start')::timestamptz <= ${end} and ${start}::timestamptz <= coalesce((${column}->>'end')::timestamptz, 'infinity'::timestamptz))`;
+			}
+			return 'false';
+		};
+		const compileField = (field: string, condition: unknown): string => {
+			if (condition === null || typeof condition !== 'object' || Array.isArray(condition))
+				return compileOperator(field, 'eq', condition);
+			const clauses = Object.entries(condition).map(([operator, operand]) =>
+				compileOperator(field, operator, operand)
+			);
+			return join(clauses, 'and', 'true');
+		};
+		const compileObject = (input: unknown): string => {
+			if (input === null || typeof input !== 'object' || Array.isArray(input)) return 'false';
+			const clauses: Array<string> = [];
+			for (const [field, condition] of Object.entries(input)) {
+				if (field === '$sql') {
+					clauses.push(typeof condition === 'string' ? rawSql(condition) : 'false');
+					continue;
+				}
+				if (field === 'AND' || field === 'OR') {
+					if (!Array.isArray(condition)) {
+						clauses.push('false');
+						continue;
+					}
+					clauses.push(
+						join(
+							condition.map(compileObject),
+							field === 'AND' ? 'and' : 'or',
+							field === 'AND' ? 'true' : 'false'
+						)
+					);
+					continue;
+				}
+				if (field === 'NOT') {
+					clauses.push(`not (${compileObject(condition)})`);
+					continue;
+				}
+				// Authored functions do not survive the manifest's JSON boundary. Refuse a malformed RAW
+				// entry rather than treating the missing function as an unconditional grant.
+				if (field === 'RAW') {
+					clauses.push('false');
+					continue;
+				}
+				clauses.push(compileField(field, condition));
+			}
+			return join(clauses, 'and', 'true');
+		};
+		return { sql: compileObject(where), parameters };
 	}
 };
 
@@ -492,16 +613,16 @@ export type ImpersonationTeam = Readonly<{ readonly id: string; readonly name: s
  * it simply never returns.
  */
 const TEAM_TREE_LOOKUP_SQL = `with recursive tree as (
-	select "id" as id, "name", 1 as depth from bolt_team where "id" = $1::uuid
+	select "id" as id, "name", 1 as depth from "team" where "id" = $1::uuid
 	union all
 	select c."id", c."name", p.depth + 1
-	  from bolt_team c join tree p on c."parent_id" = p.id
+	  from "team" c join tree p on c."parent_id" = p.id
 	 where p.depth < 8
 )
 select "name" from tree order by depth`;
 
 const TEAM_LOOKUP_SQL = `select "id"::text as id, "name"
-	from bolt_team
+	from "team"
 	where $1::text is null or lower("name") = lower($1::text)
 	order by "name"`;
 
@@ -564,7 +685,7 @@ export type Interface = Readonly<{
 	) => Effect.Effect<Identity.Subject, AccessDenied | Database.FacilityError>;
 	/** The teams an administrator may view this workspace as, for the sidebar's picker. */
 	/**
-	 * The teams this workspace has, for the picker — read from `bolt_team`, not derived from policies.
+	 * The teams this workspace has, for the picker — read from `team`, not derived from policies.
 	 *
 	 * An Effect because a team is a row now. It used to list the workspace's *policies* and call them
 	 * teams, which is why the picker offered "employee" and "hr_manager" as though they were bodies of
@@ -701,7 +822,7 @@ export const layer = Layer.effect(
 				});
 			}
 			/**
-			 * Resolved from `bolt_team`, which is also why the runtime's own policy is now unreachable
+			 * Resolved from `team`, which is also why the runtime's own policy is now unreachable
 			 * here by construction rather than by a filter. `colony system` is not a team and cannot be
 			 * one: it is selected by a minted flag, so no row and no name reaches it.
 			 */
@@ -718,7 +839,7 @@ export const layer = Layer.effect(
 				/**
 				 * The previewed team, and the path it resolves to.
 				 *
-				 * A preview now names a real `bolt_team`, so it narrows the same two things a real
+				 * A preview now names a real `team`, so it narrows the same two things a real
 				 * membership decides: which policies apply, and which approvals the subject may decide.
 				 * It used to substitute a *policy* name into `roles` and blank `teams` — so a preview
 				 * could see a screen it could never have approved on, which is not a preview of anybody.

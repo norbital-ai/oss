@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
-import { CollectionCreateRequest, storedRecordsOf } from '../src/index.js';
+import {
+	CollectionMutateRequest,
+	CollectionPendingApproval,
+	CollectionWriteResult,
+	pendingApprovalOf,
+	storedRecordsOf
+} from '../src/index.js';
 
 /**
  * The two halves of the collection write contract, held against the shape both ends are written to.
@@ -11,31 +17,54 @@ import { CollectionCreateRequest, storedRecordsOf } from '../src/index.js';
  * write that returned no record, which is indistinguishable from a legitimate result and is
  * therefore never investigated.
  */
-describe('the create request', () => {
-	it('accepts a body with no id, because the server assigns it', () => {
+describe('the declarative mutation request', () => {
+	it('accepts a new root with no id, because the server assigns it', () => {
 		expect(
-			Schema.is(CollectionCreateRequest)({
+			Schema.is(CollectionMutateRequest)({
 				collection: 'orders',
 				values: { reference: 'ORD-1' }
 			})
 		).toBe(true);
 	});
 
-	it('accepts a nested graph, because that is what a create body may carry', () => {
+	it('accepts identities at every graph level so present rows can be synchronized', () => {
 		expect(
-			Schema.is(CollectionCreateRequest)({
+			Schema.is(CollectionMutateRequest)({
 				collection: 'orders',
 				values: {
+					id: 'order-1',
 					reference: 'ORD-1',
-					order_line_order: [{ sku: 'a-1' }, { sku: 'a-2', components: [{ part: 'p-1' }] }]
+					order_line_order: [
+						{ id: 'line-1', sku: 'a-1' },
+						{ sku: 'a-2', components: [{ id: 'component-1', part: 'p-1' }] }
+					]
 				}
 			})
 		).toBe(true);
 	});
 
 	it('still requires the collection', () => {
-		expect(Schema.is(CollectionCreateRequest)({ values: { reference: 'ORD-1' } })).toBe(false);
-		expect(Schema.is(CollectionCreateRequest)({ collection: '', values: {} })).toBe(false);
+		expect(Schema.is(CollectionMutateRequest)({ values: { reference: 'ORD-1' } })).toBe(false);
+		expect(Schema.is(CollectionMutateRequest)({ collection: '', values: {} })).toBe(false);
+	});
+
+	it('uses the exact stored-record response envelope', () => {
+		expect(Schema.is(CollectionWriteResult)({ records: [{ id: 'order-1' }] })).toBe(true);
+		expect(Schema.is(CollectionWriteResult)({ record: { id: 'order-1' } })).toBe(false);
+		expect(Schema.is(CollectionWriteResult)({ records: { id: 'order-1' } })).toBe(false);
+	});
+
+	it('recognizes an HTTP 202 approval outcome as a distinct successful response', () => {
+		const pending = {
+			pending: true,
+			requestId: 'approval-1',
+			collection: 'orders',
+			id: 'order-1',
+			action: 'update'
+		} as const;
+		expect(Schema.is(CollectionPendingApproval)(pending)).toBe(true);
+		expect(pendingApprovalOf(pending)).toEqual(pending);
+		expect(pendingApprovalOf({ records: [{ id: 'order-1' }] })).toBeUndefined();
 	});
 });
 

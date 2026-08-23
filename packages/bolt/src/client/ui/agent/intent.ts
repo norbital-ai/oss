@@ -22,13 +22,15 @@ const TASK_SIGNAL =
 const CHITCHAT =
 	/^(hi|hello|hey|yo|thanks|thank you|thx|ok|okay|cool|cheers|bye|good (morning|afternoon|evening|night)|how are you|how'?s it going|what'?s up|how'?s the weather)\b/i;
 
-export function resolveAgentIntent(input: {
+type AgentIntentInput = Readonly<{
 	readonly intent?: string | null;
 	readonly planMode?: boolean | null;
 	readonly verifierPrompt?: string | null;
 	readonly message?: string | null;
 	readonly mentionCount?: number;
-}) {
+}>;
+
+export function resolveAgentIntent(input: AgentIntentInput) {
 	const intent: AgentIntent = input.intent === 'plan' || input.planMode === true ? 'plan' : 'do';
 	const trimmed = typeof input.verifierPrompt === 'string' ? input.verifierPrompt.trim() : '';
 	const verifierPrompt = trimmed || DEFAULT_VERIFIER_PROMPTS[intent];

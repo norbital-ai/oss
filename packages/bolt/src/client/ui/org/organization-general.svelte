@@ -24,14 +24,22 @@
 	let {
 		profile = $bindable(),
 		slug,
+		defaultName,
 		loading,
 		loadFailure
 	}: {
 		profile: OrganizationDraft;
 		slug: string;
+		defaultName?: string | undefined;
 		loading: boolean;
 		loadFailure: string | null;
 	} = $props();
+	/**
+	 * A host record nobody has saved yet has no name. The workspace manifest remains the owner of
+	 * its declared name, so the form projects that value until the operator edits or saves it rather
+	 * than copying a query result into the host draft.
+	 */
+	const organizationName = $derived(profile.name || defaultName || '');
 
 	/** One cell for both writes: a save and a logo change are never in flight together. */
 	let busy = $state<'profile' | 'logo' | null>(null);
@@ -138,7 +146,7 @@
 						void Effect.runPromise(
 							Effect.gen(function* () {
 								busy = 'profile';
-								yield* saveProfile({ ...profile, name: profile.name.trim() });
+								yield* saveProfile({ ...profile, name: organizationName.trim() });
 								busy = null;
 							})
 						);
@@ -146,7 +154,12 @@
 				>
 					<Stack gap="sm">
 						<label class="text-sm font-medium" for="orgName">Organization name</label>
-						<Input id="orgName" bind:value={profile.name} placeholder="Acme Inc." />
+						<Input
+							id="orgName"
+							value={organizationName}
+							placeholder="Acme Inc."
+							oninput={(event) => (profile = { ...profile, name: event.currentTarget.value })}
+						/>
 					</Stack>
 
 					<Stack gap="sm">
@@ -277,7 +290,7 @@
 					</Stack>
 
 					<Inline justify="end" class="border-t pt-4">
-						<Button type="submit" disabled={busy !== null || profile.name.trim() === ''}>
+						<Button type="submit" disabled={busy !== null || organizationName.trim() === ''}>
 							{#if busy === 'profile'}
 								<Icon icon="lucide:loader-2" class="mr-2 size-4 animate-spin" />
 							{/if}

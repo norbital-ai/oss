@@ -1,3 +1,6 @@
+import type { RemoteQuery } from '@norbital-ai/std/collection';
+import { Effect } from 'effect';
+
 /**
  * The mounted queries a sync advance has to re-ask.
  *
@@ -16,7 +19,7 @@
 type LiveQuery = Readonly<{
 	/** The collections whose changes falsify this query's current answer. */
 	readonly collections: ReadonlyArray<string>;
-	readonly refresh: () => Promise<void>;
+	readonly refresh: RemoteQuery<never>['refresh'];
 }>;
 
 export type LiveQueryRegistry = Readonly<{
@@ -72,4 +75,3 @@ export const createLiveQueryRegistry = (): LiveQueryRegistry => {
 		size: () => sweep().length
 	};
 };
-import { Effect } from 'effect';

@@ -45,14 +45,13 @@ const reportCandidateFilename = (output, start) => {
 		if (character !== '}' && character !== ']') continue;
 		depth -= 1;
 		if (depth !== 0) continue;
-		try {
-			const result = safeParse(output.slice(start, index + 1));
-			const filename = Array.isArray(result) ? result[0]?.filename : result.filename;
-			return filename ?? undefined;
-		} catch {
+		const result = safeParse(output.slice(start, index + 1));
+		if (result === null || typeof result !== 'object') {
 			// Lifecycle scripts may write JSON-like output before the pack report.
 			return undefined;
 		}
+		const filename = Array.isArray(result) ? result[0]?.filename : result.filename;
+		return filename ?? undefined;
 	}
 	return undefined;
 };
@@ -112,6 +111,32 @@ function validatePublishedManifest(manifest, directory, expected = {}) {
 	}
 }
 
+const importTargets = (value) => {
+	if (typeof value === 'string') return [value];
+	if (value === null || typeof value !== 'object' || Array.isArray(value)) return [];
+	return Object.values(value).flatMap(importTargets);
+};
+
+const escapeRegularExpression = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Every relative package-import branch must name content that is actually in the archive. */
+function validatePackageImports(manifest, archiveEntries) {
+	for (const [specifier, conditions] of Object.entries(manifest.imports ?? {})) {
+		for (const target of importTargets(conditions)) {
+			if (!target.startsWith('./')) continue;
+			const archivedTarget = `package/${target.slice(2)}`;
+			const present = archivedTarget.includes('*')
+				? archiveEntries.some((entry) =>
+						new RegExp(
+							`^${archivedTarget.split('*').map(escapeRegularExpression).join('.+')}$`
+						).test(entry)
+					)
+				: archiveEntries.includes(archivedTarget);
+			if (!present) fail(`${manifest.name} import ${specifier} targets missing ${target}.`);
+		}
+	}
+}
+
 export function inspectPackageArchive(
 	archivePath,
 	{ directory, expectedName, expectedVersion, repositoryLicense }
@@ -140,6 +165,7 @@ export function inspectPackageArchive(
 		name: expectedName,
 		version: expectedVersion
 	});
+	validatePackageImports(manifest, archiveEntries);
 	return {
 		manifest,
 		integrity: sha512Integrity(readFileSync(archivePath))

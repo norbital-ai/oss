@@ -13,7 +13,6 @@
 	} = $props();
 </script>
 
-<!-- stupidity:allow UI7 -- this leaf component owns responsive or internal spacing as part of its public DOM contract -->
 <legend
 	bind:this={ref}
 	data-slot="field-legend"

@@ -65,7 +65,7 @@ const command = (name: string, credential: string, input: unknown = null, team?:
 /**
  * The teams the picker offers and a preview resolves against.
  *
- * They are rows now, not policy names — `impersonationTeams` reads `bolt_team` and `subjectAsTeam`
+ * They are rows now, not policy names — `impersonationTeams` reads `team` and `subjectAsTeam`
  * looks a name up in it — so a workspace that declares `Employee` in `+teams.ts` and has no row for
  * it offers nothing and can preview nothing. Seeded flat and non-inheriting, because what these
  * tests are about is which policies one named team holds, not how a hierarchy composes them; the
@@ -81,7 +81,7 @@ const hrTeams = async (runtime: BoltTestRuntime) => {
  * Deliberately placeless rather than in `admin`. The fixture below declares a policy named `admin`
  * granting `*` and a team holding it, so placing them there would let every assertion here pass
  * through the policy ladder and say nothing about the status flag — which is the thing that actually
- * admits them now. With no team the only reason any of this works is `bolt_auth_user.status`.
+ * admits them now. With no team the only reason any of this works is `user.status`.
  */
 const administrator = async (runtime: BoltTestRuntime, token = 'admin-token') => {
 	await hrTeams(runtime);
@@ -114,13 +114,19 @@ const visibleApps = async (runtime: BoltTestRuntime, credential: string, team?: 
  * The `admin` policy is kept, and kept unused. It is an ordinary authored policy — no workspace has
  * to declare one and nothing in the runtime looks for the name — so it stands here for exactly what
  * a real workspace's is: a team the picker offers alongside the others, held by nobody these tests
- * sign in as. Administration itself is `bolt_auth_user.status` and reaches none of this.
+ * sign in as. Administration itself is `user.status` and reaches none of this.
  */
 const hrWorkspace = workspace({
 	name: 'test-workspace',
 	version: '1',
 	collections: [
-		collection({ name: 'notices', fields: { title: field.string({ required: true }) } }),
+		collection({
+			name: 'notices',
+			fields: {
+				title: field.string({ required: true }),
+				owner_id: field.uuid({ required: true })
+			}
+		}),
 		collection({ name: 'payslips', fields: { amount: field.string({ required: true }) } })
 	],
 	apps: [
@@ -134,7 +140,13 @@ const hrWorkspace = workspace({
 			name: 'Employee',
 			effect: 'allow',
 			capabilities: { apps: ['hr_employee'] },
-			grants: [{ collection: 'notices', action: 'read' }]
+			grants: [
+				{
+					collection: 'notices',
+					action: 'read',
+					where: { owner_id: { eq: '${requestor.id}' } }
+				}
+			]
 		}),
 		policy({
 			name: 'HR',
@@ -199,7 +211,7 @@ describe('team impersonation', () => {
 	 * the workspace's policies rather than the approver teams its grants name: a subject carrying
 	 * `teamPath: ['L1 Manager'], policies: []` matches no policy, so this read would fail too.
 	 */
-	it('still serves what the previewed team is granted', async () => {
+	it('serves a nested identity equality for what the previewed team is granted', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
 		await administrator(harness);
 
@@ -273,7 +285,7 @@ describe('team impersonation', () => {
 			harness,
 			command('apps.visible', 'admin-token', null, 'L1 Manager')
 		);
-		// "No team", not "no policy": a preview names a `bolt_team` row now, so an undeclared name is
+		// "No team", not "no policy": a preview names a `team` row now, so an undeclared name is
 		// refused by the lookup rather than by the policy ladder.
 		expect(refused).toMatchObject({ action: 'impersonate', reason: 'no team of that name' });
 	});
@@ -378,7 +390,7 @@ describe('team impersonation', () => {
 		expect(admitted.value).toMatchObject({ admitted: true, admin: true });
 		expect(
 			await harness.database.query(
-				`select "team_id" from bolt_auth_user where "email" = 'founder@example.test'`,
+				`select "team_id" from "user" where "email" = 'founder@example.test'`,
 				[]
 			),
 			'the founder was placed in a team rather than left for an operator to place'

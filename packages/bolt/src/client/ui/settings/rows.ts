@@ -21,7 +21,7 @@ const MemberRowSchema = Schema.Struct({
 	/**
 	 * The one team this person belongs to, absent for somebody nobody has placed.
 	 *
-	 * Singular, because `bolt_auth_user.team_id` is one team and the projection reports one name.
+	 * Singular, because `user.team_id` is one team and the projection reports one name.
 	 * This was a `teams` array, and nothing ever filled it: `workspaceAccess` answers `team`, so the
 	 * decoder read a key that is not on the wire, every member rendered with an em dash, and the
 	 * surface said the workspace had nobody on any team.

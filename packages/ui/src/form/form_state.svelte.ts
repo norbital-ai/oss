@@ -234,14 +234,10 @@ function resolve<T>(v: MaybeGetter<T>): T {
 }
 
 /** Run a possibly-synchronous callback and await its result through Effect. */
-export function maybeAsync<A>(
-	evaluate: () => A
-): Effect.Effect<Awaited<A>, Cause.UnknownError> {
+export function maybeAsync<A>(evaluate: () => A): Effect.Effect<Awaited<A>, Cause.UnknownError> {
 	return Effect.try(() => evaluate()).pipe(
 		Effect.flatMap((value) =>
-			Predicate.isPromise(value)
-				? Effect.tryPromise(() => value)
-				: Effect.succeed(value)
+			Predicate.isPromise(value) ? Effect.tryPromise(() => value) : Effect.succeed(value)
 		)
 	) as Effect.Effect<Awaited<A>, Cause.UnknownError>;
 }
@@ -874,93 +870,92 @@ export class FormState<Schema extends FormSchema, TReturn = unknown> {
 		this.clearErrors();
 
 		return Effect.gen({ self: this }, function* () {
-				const transformFn = this._transformConfig ? resolve(this._transformConfig) : undefined;
-				const payloadRaw = transformFn ? transformFn(this._workingCopy) : this._workingCopy;
+			const transformFn = this._transformConfig ? resolve(this._transformConfig) : undefined;
+			const payloadRaw = transformFn ? transformFn(this._workingCopy) : this._workingCopy;
 
-				// Call before submit hook
-				this.hooks.onBeforeSubmit?.(payloadRaw);
+			// Call before submit hook
+			this.hooks.onBeforeSubmit?.(payloadRaw);
 
-				const rawResult = yield* maybeAsync(() => this.schema['~standard'].validate(payloadRaw));
-				const validation = rawResult as StandardSchemaValidationResult;
-				const issues = 'issues' in validation ? validation.issues : undefined;
+			const rawResult = yield* maybeAsync(() => this.schema['~standard'].validate(payloadRaw));
+			const validation = rawResult as StandardSchemaValidationResult;
+			const issues = 'issues' in validation ? validation.issues : undefined;
 
-				if (Array.isArray(issues)) {
-					this.setValidationIssuesFromStandardSchema(issues);
-					this.submissionState = { status: 'idle' };
-					if (!silent) {
-						toast.error(
-							this._translate?.('form.fixErrors') ?? 'Please fix the highlighted errors.'
-						);
-						yield* Effect.logError('[FormState] Validation issues:', issues);
-					}
-					return null;
+			if (Array.isArray(issues)) {
+				this.setValidationIssuesFromStandardSchema(issues);
+				this.submissionState = { status: 'idle' };
+				if (!silent) {
+					toast.error(this._translate?.('form.fixErrors') ?? 'Please fix the highlighted errors.');
+					yield* Effect.logError('[FormState] Validation issues:', issues);
 				}
+				return null;
+			}
 
-				const validated = 'value' in validation
+			const validated =
+				'value' in validation
 					? (validation.value as InferSchema<Schema>)
 					: (validation as InferSchema<Schema>);
 
-				const remoteFn = this._remoteFnConfig();
+			const remoteFn = this._remoteFnConfig();
 
-				if (!remoteFn) {
-					this.draftStorage?.clear();
-					this.hooks.onAfterSubmit?.(validated, null);
-					const success = this.onSuccess?.(null);
-					if (success) yield* success;
-					this.submissionState = { status: 'idle' };
-					return null;
-				}
-
-				const remoteReturn = yield* remoteFn(validated);
-				this.submissionState = {
-					status: 'success',
-					result: remoteReturn
-				};
-
+			if (!remoteFn) {
 				this.draftStorage?.clear();
-
-				switch (resolve(this._submitSuccessBehaviorConfig)) {
-					case 'commit':
-						this.commitSubmittedData(validated);
-						break;
-					case 'reset':
-						this.reset();
-						break;
-					case 'none':
-					default:
-						break;
-				}
-
-				const successMessage = resolve(this._successMessageConfig);
-				if (successMessage !== null && !silent) {
-					toast.success(successMessage);
-				}
-
-				this.hooks.onAfterSubmit?.(validated, remoteReturn);
-				const success = this.onSuccess?.(remoteReturn);
+				this.hooks.onAfterSubmit?.(validated, null);
+				const success = this.onSuccess?.(null);
 				if (success) yield* success;
-				return remoteReturn;
-			}).pipe(
-				Effect.catch((error) => {
-					if (error instanceof SubmissionHandledExternallyError) {
+				this.submissionState = { status: 'idle' };
+				return null;
+			}
+
+			const remoteReturn = yield* remoteFn(validated);
+			this.submissionState = {
+				status: 'success',
+				result: remoteReturn
+			};
+
+			this.draftStorage?.clear();
+
+			switch (resolve(this._submitSuccessBehaviorConfig)) {
+				case 'commit':
+					this.commitSubmittedData(validated);
+					break;
+				case 'reset':
+					this.reset();
+					break;
+				case 'none':
+				default:
+					break;
+			}
+
+			const successMessage = resolve(this._successMessageConfig);
+			if (successMessage !== null && !silent) {
+				toast.success(successMessage);
+			}
+
+			this.hooks.onAfterSubmit?.(validated, remoteReturn);
+			const success = this.onSuccess?.(remoteReturn);
+			if (success) yield* success;
+			return remoteReturn;
+		}).pipe(
+			Effect.catch((error) => {
+				if (error instanceof SubmissionHandledExternallyError) {
+					this.submissionState = { status: 'idle' };
+					return Effect.succeed(null);
+				}
+				const message =
+					error instanceof Error && error.message.trim().length > 0
+						? error.message
+						: (this._translate?.('misc.toastError') ?? 'An error occurred');
+				this.submissionState = { status: 'error', message };
+				return Effect.fail(error);
+			}),
+			Effect.onExit(() =>
+				Effect.sync(() => {
+					if (this.submissionState.status === 'submitting') {
 						this.submissionState = { status: 'idle' };
-						return Effect.succeed(null);
 					}
-					const message =
-						error instanceof Error && error.message.trim().length > 0
-							? error.message
-							: (this._translate?.('misc.toastError') ?? 'An error occurred');
-					this.submissionState = { status: 'error', message };
-					return Effect.fail(error);
-				}),
-				Effect.onExit(() =>
-					Effect.sync(() => {
-						if (this.submissionState.status === 'submitting') {
-							this.submissionState = { status: 'idle' };
-						}
-					})
-				)
-			);
+				})
+			)
+		);
 	};
 
 	/**

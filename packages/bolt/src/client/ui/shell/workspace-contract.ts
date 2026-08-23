@@ -106,14 +106,14 @@ export type AppMeta = Readonly<{
 export type CompiledWorkspace = Readonly<{
 	readonly title: string;
 	readonly name: string;
-	readonly appLoaders: Readonly<Record<string, () => Promise<Component>>>;
+	readonly appLoaders: Readonly<Record<string, () => Promise<Component>>>; // repository-health:allow EFF2 -- Vite dynamic imports are native Promises and workspace.svelte adapts every loader into Effect.tryPromise immediately.
 	readonly appGroups: Readonly<Record<string, AppGroup>>;
 	readonly appMeta: Readonly<Record<string, AppMeta>>;
 	readonly representationLoaders: Readonly<
-		Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>>
+		Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>> // repository-health:allow EFF2 -- Vite dynamic imports are native Promises and workspace.svelte adapts every loader into Effect.tryPromise immediately.
 	>;
 	readonly customTypeRendererLoaders: Readonly<
-		Record<string, () => Promise<CustomTypeRendererMap[string]>>
+		Record<string, () => Promise<CustomTypeRendererMap[string]>> // repository-health:allow EFF2 -- Vite dynamic imports are native Promises and workspace.svelte adapts every loader into Effect.tryPromise immediately.
 	>;
 	readonly policyNames: ReadonlyArray<string>;
 	readonly tenantMessages: TenantMessageCatalogs;
@@ -122,7 +122,7 @@ export type CompiledWorkspace = Readonly<{
 	/** Withdraws browser data from the previous policy scope before reactive reads resume. */
 	readonly changeAccessScope: (accessScope: string) => void;
 	/** Boots the local PGlite replica against the same runtime `client` reads through. */
-	readonly startLocalReplica: (accessScope: string) => Promise<{ readonly stop: () => void }>;
+	readonly startLocalReplica: (accessScope: string) => Promise<{ readonly stop: () => void }>; // repository-health:allow EFF2 -- The generated browser runtime publishes a Promise and workspace.svelte immediately owns it with Effect.tryPromise and teardown.
 }>;
 
 /**
@@ -148,7 +148,7 @@ export type MountWorkspaceOptions = HostMountOptions &
 		 * was declared it would be a cache shared between organizations. Supplied by the workspace
 		 * entry, which is the one module that may name `$bolt/*`.
 		 */
-		readonly loadWorkspace: () => Promise<CompiledWorkspace>;
+		readonly loadWorkspace: () => Promise<CompiledWorkspace>; // repository-health:allow EFF2 -- The compiled entry is a browser dynamic import and mount.svelte.ts adapts it into Effect.tryPromise at the seam.
 	}>;
 
 /**
@@ -161,7 +161,7 @@ export type WorkspaceEntry = Readonly<{
 	readonly mountWorkspace: (
 		target: HTMLElement,
 		options: HostMountOptions
-	) => Promise<WorkspaceHandle>;
+	) => Promise<WorkspaceHandle>; // repository-health:allow EFF2 -- Hosts import the bundle over the browser module boundary and immediately adapt this mount Promise into their Effect lifecycle.
 }>;
 
 /** The host's grip on a mounted workspace: change what it is showing, or take it down. */

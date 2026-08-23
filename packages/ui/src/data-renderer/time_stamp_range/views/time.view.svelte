@@ -47,7 +47,6 @@
 		separatorClass="text-muted-foreground"
 	/>
 {:else}
-	<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 	<div class={cn('grid gap-4', hasEnd ? 'grid-cols-2' : 'grid-cols-1', className)}>
 		<TimeField
 			label={t('dataRenderer.startTime')}

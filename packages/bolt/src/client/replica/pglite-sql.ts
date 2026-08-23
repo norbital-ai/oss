@@ -26,14 +26,12 @@ export type LocalSql = Readonly<{
  * provisioned with — `sync.provisioning`, which is the schema plan's foundation plus the drizzle
  * lineage — so a column's type in the replica is the column's type on the server by construction.
  *
- * ## Why this module holds raw SQL
+ * ## Statement ownership
  *
- * SQL1 exception: this module is itself the replica's database infrastructure. There is no query
- * builder over PGlite to route statements through, and no per-statement contract to type against —
- * the commands are `information_schema` introspection, `pg_notify` plumbing, and table maintenance
- * (upsert/truncate) the server never sees. The statements are parameterised, identifiers quoted
- * here rather than interpolated raw, and the collection names come from the wire, not from author
- * input, which is what keeps them from being a path for injection.
+ * PGlite has no query builder, so this module owns one small parameterized statement port. Every
+ * replica query travels through `executeReplicaStatement`; values remain positional parameters and
+ * the few dynamic identifiers are quoted before a statement is constructed. That keeps SQL assembly
+ * in one infrastructure boundary while preserving the server compiler's clauses verbatim.
  */
 
 /**
@@ -76,6 +74,25 @@ export interface PGliteLike {
 	onLeaderChange(callback: () => void): () => void;
 }
 
+/** One parameterized statement accepted by the local replica database. */
+export type ReplicaStatement = Readonly<{
+	readonly text: string;
+	readonly parameters: ReadonlyArray<unknown>;
+}>;
+
+/** Constructs the only statement shape the replica execution port accepts. */
+export const replicaStatement = (
+	text: string,
+	parameters: ReadonlyArray<unknown> = []
+): ReplicaStatement => ({ text, parameters });
+
+/** Executes a parameterized statement through the PGlite adapter. */
+export const executeReplicaStatement = <Row>(
+	database: PGliteLike,
+	statement: ReplicaStatement
+): Effect.Effect<{ readonly rows: ReadonlyArray<Row> }, unknown> =>
+	database.query<Row>(statement.text, statement.parameters);
+
 export const ProvisioningStep = Schema.Struct({ id: Schema.String, sql: Schema.String });
 export interface ProvisioningStep extends Schema.Schema.Type<typeof ProvisioningStep> {}
 
@@ -102,20 +119,26 @@ type ReplicaState = Readonly<{
 }>;
 
 export const readReplicaState = Effect.fn('ReplicaSql.readState')(function* (database: PGliteLike) {
-	const catalogue = yield* database.query<{
+	const catalogue = yield* executeReplicaStatement<{
 		schema_state: string | null;
 		sync_horizon: string | null;
 	}>(
-		`select to_regclass('public.${SCHEMA_STATE_TABLE}')::text as schema_state, to_regclass('public.${SYNC_HORIZON_TABLE}')::text as sync_horizon`
+		database,
+		replicaStatement(
+			`select to_regclass('public.${SCHEMA_STATE_TABLE}')::text as schema_state, to_regclass('public.${SYNC_HORIZON_TABLE}')::text as sync_horizon`
+		)
 	);
 	if (catalogue.rows[0]?.schema_state == null || catalogue.rows[0]?.sync_horizon == null)
 		return undefined;
-	const result = yield* database.query<{
+	const result = yield* executeReplicaStatement<{
 		fingerprint: string;
 		xid: string | number;
 		sequence: string | number;
 	}>(
-		`select state.fingerprint, horizon.xid, horizon.sequence from ${SCHEMA_STATE_TABLE} state cross join ${SYNC_HORIZON_TABLE} horizon where horizon.singleton order by state.applied_at desc limit 1`
+		database,
+		replicaStatement(
+			`select state.fingerprint, horizon.xid, horizon.sequence from ${SCHEMA_STATE_TABLE} state cross join ${SYNC_HORIZON_TABLE} horizon where horizon.singleton order by state.applied_at desc limit 1`
+		)
 	);
 	const row = result.rows[0];
 	return row === undefined
@@ -131,12 +154,13 @@ export const writeReplicaCursor = (
 	database: PGliteLike,
 	cursor: { readonly xid: number; readonly sequence: number }
 ): Effect.Effect<void, unknown> =>
-	database
-		.query(`update ${SYNC_HORIZON_TABLE} set xid = $1, sequence = $2 where singleton`, [
+	executeReplicaStatement(
+		database,
+		replicaStatement(`update ${SYNC_HORIZON_TABLE} set xid = $1, sequence = $2 where singleton`, [
 			cursor.xid,
 			cursor.sequence
 		])
-		.pipe(Effect.asVoid);
+	).pipe(Effect.asVoid);
 
 /**
  * Applies the provisioning DDL, stopping at the first statement that fails.
@@ -192,13 +216,17 @@ export const markProvisioned = Effect.fn('ReplicaSql.markProvisioned')(function*
 	fingerprint: string,
 	cursor: { readonly xid: number; readonly sequence: number }
 ): Effect.fn.Return<void, unknown> {
-	yield* database.query(`delete from ${SCHEMA_STATE_TABLE}`);
-	yield* database.query(`insert into ${SCHEMA_STATE_TABLE} (fingerprint) values ($1)`, [
-		fingerprint
-	]);
-	yield* database.query(
-		`insert into ${SYNC_HORIZON_TABLE} (singleton, xid, sequence) values (true, $1, $2) on conflict (singleton) do update set xid = excluded.xid, sequence = excluded.sequence`,
-		[cursor.xid, cursor.sequence]
+	yield* executeReplicaStatement(database, replicaStatement(`delete from ${SCHEMA_STATE_TABLE}`));
+	yield* executeReplicaStatement(
+		database,
+		replicaStatement(`insert into ${SCHEMA_STATE_TABLE} (fingerprint) values ($1)`, [fingerprint])
+	);
+	yield* executeReplicaStatement(
+		database,
+		replicaStatement(
+			`insert into ${SYNC_HORIZON_TABLE} (singleton, xid, sequence) values (true, $1, $2) on conflict (singleton) do update set xid = excluded.xid, sequence = excluded.sequence`,
+			[cursor.xid, cursor.sequence]
+		)
 	);
 });
 
@@ -242,12 +270,13 @@ const upsert = (
 		assignments.length === 0
 			? 'on conflict (id) do nothing'
 			: `on conflict (id) do update set ${assignments.join(', ')}`;
-	return database
-		.query(
+	return executeReplicaStatement(
+		database,
+		replicaStatement(
 			`insert into ${quoteIdentifier(collection)} (${names.join(', ')}) values (${placeholders.join(', ')}) ${conflict}`,
 			entries.map(([, value]) => value)
 		)
-		.pipe(Effect.asVoid);
+	).pipe(Effect.asVoid);
 };
 
 /**
@@ -265,12 +294,13 @@ const columnsOf = (
 	database: PGliteLike,
 	collection: string
 ): Effect.Effect<ReadonlySet<string>, unknown> =>
-	database
-		.query<{ column_name: string }>(
+	executeReplicaStatement<{ column_name: string }>(
+		database,
+		replicaStatement(
 			"select column_name from information_schema.columns where table_schema = current_schema() and table_name = $1 and is_generated <> 'ALWAYS' and coalesce(identity_generation, '') <> 'ALWAYS'",
 			[collection]
 		)
-		.pipe(Effect.map((result) => new Set(result.rows.map((row) => row.column_name))));
+	).pipe(Effect.map((result) => new Set(result.rows.map((row) => row.column_name))));
 
 /**
  * Writes a whole page of snapshot rows in one statement.
@@ -310,12 +340,13 @@ export const bulkUpsert = (
 		assignments.length === 0
 			? 'on conflict (id) do nothing'
 			: `on conflict (id) do update set ${assignments.join(', ')}`;
-	return database
-		.query(
+	return executeReplicaStatement(
+		database,
+		replicaStatement(
 			`insert into ${quoteIdentifier(collection)} (${names.map(quoteIdentifier).join(', ')}) values ${tuples.join(', ')} ${conflict}`,
 			parameters
 		)
-		.pipe(Effect.as(rows.length));
+	).pipe(Effect.as(rows.length));
 };
 
 /** The writable columns of a local table, or an empty set when the replica has no such table. */
@@ -343,7 +374,9 @@ export const createPGliteSql = (
 		const columnsFor = yield* writableColumns(database);
 		return {
 			query: (sql, parameters) =>
-				database.query<Schema.Json>(sql, parameters).pipe(Effect.map((result) => result.rows)),
+				executeReplicaStatement<Schema.Json>(database, replicaStatement(sql, parameters)).pipe(
+					Effect.map((result) => result.rows)
+				),
 			applyChange: (change) =>
 				Effect.gen(function* () {
 					// `change` is already the typed sync change, so nothing here re-derives its shape.
@@ -354,9 +387,11 @@ export const createPGliteSql = (
 					// a changed fingerprint is what makes it visible.
 					if (columns.size === 0) return;
 					if (change.operation === 'delete') {
-						yield* database.query(
-							`delete from ${quoteIdentifier(change.collection)} where id = $1`,
-							[change.recordId]
+						yield* executeReplicaStatement(
+							database,
+							replicaStatement(`delete from ${quoteIdentifier(change.collection)} where id = $1`, [
+								change.recordId
+							])
 						);
 						return;
 					}
@@ -383,12 +418,18 @@ export const createPGliteSql = (
 					// Truncating every collection table rather than dropping the database: the schema came from
 					// the server's own provisioning and is still correct, and rebuilding it would cost a second
 					// round trip for DDL that has not changed.
-					const tables = yield* database.query<{ table_name: string }>(
-						"select table_name from information_schema.tables where table_schema = current_schema() and table_type = 'BASE TABLE' and table_name not like 'bolt_%' and table_name not like '\\_\\_%'"
+					const tables = yield* executeReplicaStatement<{ table_name: string }>(
+						database,
+						replicaStatement(
+							"select table_name from information_schema.tables where table_schema = current_schema() and table_type = 'BASE TABLE' and table_name not like 'bolt_%' and table_name not like '\\_\\_%'"
+						)
 					);
 					if (tables.rows.length === 0) return;
-					yield* database.query(
-						`truncate ${tables.rows.map((row) => quoteIdentifier(row.table_name)).join(', ')} cascade`
+					yield* executeReplicaStatement(
+						database,
+						replicaStatement(
+							`truncate ${tables.rows.map((row) => quoteIdentifier(row.table_name)).join(', ')} cascade`
+						)
 					);
 				})
 		};

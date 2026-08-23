@@ -45,7 +45,14 @@ export const layer = Layer.effect(
 		const declaredColumns = new Map<string, ReadonlySet<string>>(
 			withSystemCollections(workspace.definition).collections.map((collection) => [
 				collection.name,
-				new Set([...SYSTEM_COLUMN_NAMES, ...Object.keys(collection.fields)])
+				new Set([
+					...SYSTEM_COLUMN_NAMES,
+					...Object.entries(collection.fields).flatMap(([name, field]) =>
+						field.reference === undefined
+							? [name]
+							: field.reference.targets.map(({ storageColumn }) => storageColumn)
+					)
+				])
 			])
 		);
 		/**
@@ -237,7 +244,9 @@ export const layer = Layer.effect(
 						return missing === undefined ? [] : [missing];
 					})
 				);
-				const virgin = [...declaredColumns.keys()].every((name) => absent.has(name));
+				const allAuthoredTablesPresent = workspace.definition.collections.every(
+					({ name }) => !absent.has(name)
+				);
 				/**
 				 * Whether this database was built by the older plan, which rendered collection tables itself.
 				 *
@@ -330,7 +339,12 @@ export const layer = Layer.effect(
 				// would fail on `CREATE TABLE "companies"`, and skipping the record would leave its position
 				// unknown so the next authored entry would queue behind entries that can never run.
 				const recorded = yield* appliedTags(effectId);
-				const legacy = !virgin && recorded.size === 0 && planned > 0;
+				// A previous plan can only have provisioned the workspace when every authored table is
+				// present. "Not wholly virgin" is weaker: a failed first lineage can leave Bolt's own tables
+				// and a plan fingerprint behind while its transactional CREATE TABLE statements roll back.
+				// Baselining that partial database records schema DDL that never committed, after which every
+				// retry skips the only statements capable of creating the missing tables.
+				const legacy = allAuthoredTablesPresent && recorded.size === 0 && planned > 0;
 				yield* legacy ? baselineLineage(effectId) : applyLineage(effectId);
 				// Now that the collections exist, whichever half created them.
 				if (exclusionSteps.length > 0) {

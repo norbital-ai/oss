@@ -27,7 +27,7 @@ import {
  * with three subjects against one rule — a suite that checked a single level would pass just as well
  * against a predicate matching only the subject's own team, and would prove nothing about the walk.
  *
- * It also exists because `bolt_team` descent alone does not produce this. Descent hands a manager
+ * It also exists because `team` descent alone does not produce this. Descent hands a manager
  * every *policy* their reports hold, but a grant scoped `${requestor.id}` re-evaluates
  * against whoever is asking — so inheriting a self-scoped policy shows the manager their own records
  * and nobody else's. The hierarchy has to be in the predicate, which is what this token puts there.

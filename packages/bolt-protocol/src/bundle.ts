@@ -193,11 +193,13 @@ export type BoltBundle = Readonly<{
 		invocation: Invocation,
 		facilities: FacilityBindings,
 		signal: AbortSignal
+		// repository-health:allow EFF2 -- A dynamically imported bundle crosses an artifact/runtime boundary; both host entrypoints convert this promise into Effect immediately.
 	) => Promise<BundleResult>;
 	readonly activate: (
 		activation: Activation,
 		facilities: FacilityBindings,
 		signal: AbortSignal
+		// repository-health:allow EFF2 -- Activation uses the same dynamically imported artifact boundary and is converted into Effect by the host entrypoint.
 	) => Promise<ActivationResult>;
 }>;
 

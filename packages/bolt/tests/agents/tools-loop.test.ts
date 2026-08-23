@@ -101,10 +101,10 @@ const subjectRow = {
 const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 	call: (_metadata, request) => {
 		// Authentication reads Better Auth's session joined to its user table. Matching on
-		// `bolt_auth_session` keeps this stub answering the query identity actually makes; matching
+		// `session` keeps this stub answering the query identity actually makes; matching
 		// the old `bolt_sessions` would have it answer nothing and every command would read as
 		// unauthenticated.
-		if (request._tag === 'Query' && request.sql.includes('bolt_auth_session')) {
+		if (request._tag === 'Query' && request.sql.includes('session')) {
 			return Promise.resolve({ _tag: 'Success', value: { rows: [subjectRow], affectedRows: 0 } });
 		}
 		return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 1 } });

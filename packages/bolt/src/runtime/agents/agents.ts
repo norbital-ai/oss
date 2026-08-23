@@ -957,7 +957,6 @@ export const layer = Layer.effect(
 				yield* access.authorize(subject, 'agent', agentName);
 				yield* openConversation(effectId, agent, subject, conversationId);
 			}),
-			// stupidity:allow Q3 -- the tool loop and the records it writes are one unit of meaning
 			turn: Effect.fn('Agents.turn')(
 				function* (effectId, subject, agentName, conversationId, message, senderContext) {
 					const agent = yield* resolveAgent(agentName);

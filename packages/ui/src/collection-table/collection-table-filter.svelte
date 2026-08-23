@@ -291,7 +291,6 @@
 				{#each builderRows as filter (filter.id)}
 					{@const field = selectedField(filter)}
 					{@const operatorOptions = field ? collectionFilterOperatorOptions(field.field) : []}
-					<!-- stupidity:allow UI6 -- filter-builder row grid needs explicit responsive tracks and placements the auto-fit Grid cannot express -->
 					<div
 						class="grid min-w-0 grid-cols-[minmax(0,1fr)_2rem] items-center gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))_2rem]"
 					>

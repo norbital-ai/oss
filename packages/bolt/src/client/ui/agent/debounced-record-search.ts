@@ -3,13 +3,15 @@ import type { ParsedCommandQuery } from '#lib/client/ui/agent/mention-sources.js
 
 type DebouncedRecordSearchParsed = Pick<ParsedCommandQuery, 'text' | 'collection'>;
 
-/** Debounces record search so caret moves that keep the same query do not refetch. */
-export function createDebouncedRecordSearch<T>(options: {
+type DebouncedRecordSearchOptions<T> = Readonly<{
 	readonly delayMs?: number;
 	readonly search: (text: string, collection: string | null) => Effect.Effect<readonly T[]>;
 	readonly onLoading: (loading: boolean) => void;
 	readonly onResults: (hits: readonly T[]) => void;
-}): {
+}>;
+
+/** Debounces record search so caret moves that keep the same query do not refetch. */
+export function createDebouncedRecordSearch<T>(options: DebouncedRecordSearchOptions<T>): {
 	readonly schedule: (
 		identity: string,
 		parsed: DebouncedRecordSearchParsed | null,

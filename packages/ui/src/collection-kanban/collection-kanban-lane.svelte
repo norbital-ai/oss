@@ -31,7 +31,7 @@
 		movable: boolean;
 		selectable: boolean;
 		selectedRecordIds: ReadonlySet<string>;
-		pendingRecordIds: ReadonlySet<string>;
+		mutationPending: boolean;
 		updateRestrictedRecordIds: ReadonlySet<string>;
 		updateRestrictionReasonById: ReadonlyMap<string, string>;
 		renderCard: Snippet<[string]>;
@@ -53,7 +53,7 @@
 		movable,
 		selectable,
 		selectedRecordIds,
-		pendingRecordIds,
+		mutationPending,
 		updateRestrictedRecordIds,
 		updateRestrictionReasonById,
 		renderCard,
@@ -127,7 +127,7 @@
 	}
 
 	function handleCardKeydown(event: KeyboardEvent, recordId: string): void {
-		if (pendingRecordIds.has(recordId)) return;
+		if (mutationPending) return;
 		const updateRestrictionReason = updateRestrictionReasonById.get(recordId);
 		if (event.key === 'Escape' && keyboardPickedId === recordId) {
 			event.preventDefault();
@@ -236,15 +236,13 @@
 						<div
 							data-sortable-id={recordId}
 							data-sortable-disabled={!movable ||
-							pendingRecordIds.has(recordId) ||
+							mutationPending ||
 							updateRestrictedRecordIds.has(recordId)
 								? 'true'
 								: undefined}
 							class={cn(
 								'sortable-item min-w-0 overflow-hidden',
-								(!movable ||
-									pendingRecordIds.has(recordId) ||
-									updateRestrictedRecordIds.has(recordId)) &&
+								(!movable || mutationPending || updateRestrictedRecordIds.has(recordId)) &&
 									'sortable-disabled',
 								draggedItemId === recordId && 'sortable-dragging'
 							)}
@@ -260,7 +258,7 @@
 								aria-pressed={keyboardPickedId === recordId}
 								data-selected={selectedRecordIds.has(recordId) ? 'true' : undefined}
 								data-readonly={updateRestrictedRecordIds.has(recordId) ? 'true' : undefined}
-								aria-busy={pendingRecordIds.has(recordId)}
+								aria-busy={mutationPending}
 								onclick={() => onOpen(recordId)}
 								onkeydown={(event) => handleCardKeydown(event, recordId)}
 							>
@@ -281,7 +279,7 @@
 										onclick={(event) => event.stopPropagation()}
 										aria-label={t('kanban.selectCard')}
 										checked={selectedRecordIds.has(recordId)}
-										disabled={pendingRecordIds.has(recordId)}
+										disabled={mutationPending}
 										onCheckedChange={() => onToggleSelection(recordId)}
 									/>
 								{/if}

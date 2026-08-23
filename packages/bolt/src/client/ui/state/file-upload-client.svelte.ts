@@ -41,9 +41,7 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 		if (options.signal?.aborted === true) abort();
 		return effect.pipe(
 			Effect.onInterrupt(() => Effect.sync(() => this.cancel(id))),
-			Effect.ensuring(
-				Effect.sync(() => options.signal?.removeEventListener('abort', abort))
-			)
+			Effect.ensuring(Effect.sync(() => options.signal?.removeEventListener('abort', abort)))
 		);
 	}
 
@@ -69,40 +67,40 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 		const extension = file.name.includes('.') ? `.${file.name.split('.').at(-1)}` : '';
 		const storageKey = `${id}${extension}`;
 		const effect = Effect.tryPromise({
-				try: () =>
-					workspaceSession().files.store(
-						storageKey,
-						file,
-						({ loaded, total }) => {
-							entry.percent = total === 0 ? 100 : Math.round((loaded / total) * 100);
-						},
-						controller.signal
-					),
-				catch: (cause) => cause
-			}).pipe(
-				Effect.map((url) => {
-					const result: UploadResult = {
-						id: id,
-						storageKey,
-						url,
-						name: file.name,
-						type: file.type,
-						size: file.size
-					};
-					entry.stage = 'complete';
-					entry.percent = 100;
-					entry.result = result;
-					options.onProgress?.('complete');
-					return result;
-				}),
-				Effect.catch((cause) => {
-					entry.stage = controller.signal.aborted ? 'aborted' : 'error';
-					entry.error = String(cause);
-					options.onProgress?.(entry.stage);
-					return Effect.fail(cause);
-				}),
-				Effect.ensuring(Effect.sync(() => this.#controllers.delete(id)))
-			);
+			try: () =>
+				workspaceSession().files.store(
+					storageKey,
+					file,
+					({ loaded, total }) => {
+						entry.percent = total === 0 ? 100 : Math.round((loaded / total) * 100);
+					},
+					controller.signal
+				),
+			catch: (cause) => cause
+		}).pipe(
+			Effect.map((url) => {
+				const result: UploadResult = {
+					id: id,
+					storageKey,
+					url,
+					name: file.name,
+					type: file.type,
+					size: file.size
+				};
+				entry.stage = 'complete';
+				entry.percent = 100;
+				entry.result = result;
+				options.onProgress?.('complete');
+				return result;
+			}),
+			Effect.catch((cause) => {
+				entry.stage = controller.signal.aborted ? 'aborted' : 'error';
+				entry.error = String(cause);
+				options.onProgress?.(entry.stage);
+				return Effect.fail(cause);
+			}),
+			Effect.ensuring(Effect.sync(() => this.#controllers.delete(id)))
+		);
 		return { id, effect };
 	}
 

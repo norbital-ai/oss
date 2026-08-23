@@ -3,7 +3,7 @@ import type { InvocationScope } from '@norbital-ai/bolt-protocol';
 import { SyncChange, SyncCursor } from '#lib/runtime/sync/sync.js';
 
 export type BoltTransport = Readonly<{
-	readonly command: (command: string, input: Schema.Json, signal?: AbortSignal) => Promise<unknown>;
+	readonly command: (command: string, input: Schema.Json, signal?: AbortSignal) => Promise<unknown>; // repository-health:allow EFF2 -- Fetch-compatible transports expose the browser Promise protocol and createBoltClient immediately adapts it with Effect.tryPromise.
 }>;
 
 export type BoltClient = Readonly<{
@@ -13,7 +13,7 @@ export type BoltClient = Readonly<{
 		input: Schema.Json,
 		output: S,
 		signal?: AbortSignal
-	) => Promise<S['Type']>;
+	) => Promise<S['Type']>; // repository-health:allow EFF2 -- BoltClient is the public browser command seam; every internal workflow immediately adapts its decoded Promise into Effect.
 }>;
 
 /** Owns authenticated transport decoding and the collection, remote, and sync client views built on top of it. */

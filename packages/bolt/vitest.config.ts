@@ -6,7 +6,8 @@ export default defineConfig({
 	plugins: [svelte()],
 	resolve: {
 		alias: {
-			$lib: fileURLToPath(new URL('./src', import.meta.url))
+			$lib: fileURLToPath(new URL('./src', import.meta.url)),
+			'#lib': fileURLToPath(new URL('./src', import.meta.url))
 		},
 		conditions: ['svelte', 'browser']
 	},

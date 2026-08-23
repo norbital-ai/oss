@@ -58,7 +58,7 @@ describe('host-owned model schema', () => {
 			)
 		);
 		const ddl = statements.join('\n');
-		expect(ddl).toContain('CREATE TABLE "colony_control_store"');
+		expect(ddl).toContain('CREATE TABLE IF NOT EXISTS "colony_control_store"');
 		expect(ddl).toContain('"id" uuid PRIMARY KEY');
 		expect(ddl).toContain('"updated_at" timestamp with time zone');
 		expect(ddl).toContain('"key" text NOT NULL UNIQUE');

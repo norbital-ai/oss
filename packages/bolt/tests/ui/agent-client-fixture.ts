@@ -14,7 +14,7 @@ import { createWorkspaceApiProxy } from '../../src/client/runtime.js';
 
 type AgentCollections = Pick<
 	CollectionRegistryFor<PlatformSchema>,
-	'chat_session' | 'chat_message' | 'bolt_auth_user' | 'bolt_notifications'
+	'approval_request' | 'chat_session' | 'chat_message' | 'user' | 'bolt_notifications'
 >;
 
 export const settledQuery = <T>(current: T): RemoteQuery<T> => ({
@@ -36,7 +36,11 @@ const emptyOperations = <T extends CollectionType<object, object, object>>() =>
 		findMany: () => page<T['row']>([]),
 		findFirst: () => settledQuery<T['row'] | undefined>(undefined),
 		findGrouped: () => settledQuery<Readonly<Record<string, T['row'][]>>>({}),
-		count: () => settledQuery(0)
+		count: () => settledQuery(0),
+		mutate: async () => {
+			throw new Error('The empty agent client does not execute mutations');
+		},
+		pending: 0
 	}) satisfies CollectionOperations<T>;
 
 /** A real query surface over settled rows, for action tests that do not read it. */
@@ -54,9 +58,10 @@ export const emptyAgentClient = (transport: BoltTransport): AgentRuntimeConfig['
 	};
 	return {
 		db: {
+			approval_request: emptyOperations<AgentCollections['approval_request']>(),
 			chat_session: emptyOperations<AgentCollections['chat_session']>(),
 			chat_message: emptyOperations<AgentCollections['chat_message']>(),
-			bolt_auth_user: emptyOperations<AgentCollections['bolt_auth_user']>(),
+			user: emptyOperations<AgentCollections['user']>(),
 			bolt_notifications: emptyOperations<AgentCollections['bolt_notifications']>()
 		},
 		records: {

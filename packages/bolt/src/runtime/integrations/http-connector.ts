@@ -7,10 +7,7 @@ import {
 	type FacilityBinding
 } from '@norbital-ai/bolt-protocol';
 import { Effect, Schema } from 'effect';
-import {
-	INTEGRATION_HTTP_OPERATION,
-	IntegrationHttpRequest
-} from '#lib/runtime/integrations/http.js';
+import { INTEGRATION_HTTP_OPERATION, IntegrationHttpRequest } from './http.js';
 
 /**
  * A host-side connector binding that performs `http.request`, and nothing else.
@@ -37,48 +34,54 @@ export const makeHttpConnectorBinding = (
 	const perform = options.fetch ?? globalThis.fetch;
 	const maxResponseBytes = options.maxResponseBytes ?? 8 * 1024 * 1024;
 	return {
-		call: async (_metadata, unsafeInput, signal) => {
-			const decoded = Schema.decodeUnknownExit(ConnectorRequest)(unsafeInput);
-			if (decoded._tag !== 'Success') {
-				return failure(
-					makeWireError('connector.invalid_request', 'Connector request is malformed')
-				);
-			}
-			const input = decoded.value;
-			if (input.operation !== INTEGRATION_HTTP_OPERATION) {
-				return failure(
-					makeWireError(
-						'connector.unsupported_operation',
-						`This connector performs ${INTEGRATION_HTTP_OPERATION} only, not ${input.operation}`
-					)
-				);
-			}
-			const request = Schema.decodeUnknownExit(IntegrationHttpRequest)(input.input);
-			if (request._tag !== 'Success') {
-				return failure(
-					makeWireError('connector.invalid_request', 'HTTP request descriptor is malformed')
-				);
-			}
-			const { method, url, headers, body } = request.value;
-			const target = URL.parse(url);
-			if (
-				target === null ||
-				(target.protocol !== 'https:' &&
-					target.hostname !== 'localhost' &&
-					target.hostname !== '127.0.0.1')
-			) {
-				return failure(
-					makeWireError('connector.refused', 'Integration requests must be HTTPS outside localhost')
-				);
-			}
-			if (options.allowedHosts !== undefined && !options.allowedHosts.includes(target.host)) {
-				return failure(
-					makeWireError('connector.refused', `${target.host} is not an allowed integration host`)
-				);
-			}
-			const sends = body !== undefined && method !== 'GET';
-			return await Effect.runPromise(
+		call: (_metadata, unsafeInput, signal) =>
+			Effect.runPromise(
 				Effect.gen(function* () {
+					const decoded = Schema.decodeUnknownExit(ConnectorRequest)(unsafeInput);
+					if (decoded._tag !== 'Success') {
+						return failure(
+							makeWireError('connector.invalid_request', 'Connector request is malformed')
+						);
+					}
+					const input = decoded.value;
+					if (input.operation !== INTEGRATION_HTTP_OPERATION) {
+						return failure(
+							makeWireError(
+								'connector.unsupported_operation',
+								`This connector performs ${INTEGRATION_HTTP_OPERATION} only, not ${input.operation}`
+							)
+						);
+					}
+					const request = Schema.decodeUnknownExit(IntegrationHttpRequest)(input.input);
+					if (request._tag !== 'Success') {
+						return failure(
+							makeWireError('connector.invalid_request', 'HTTP request descriptor is malformed')
+						);
+					}
+					const { method, url, headers, body } = request.value;
+					const target = URL.parse(url);
+					if (
+						target === null ||
+						(target.protocol !== 'https:' &&
+							target.hostname !== 'localhost' &&
+							target.hostname !== '127.0.0.1')
+					) {
+						return failure(
+							makeWireError(
+								'connector.refused',
+								'Integration requests must be HTTPS outside localhost'
+							)
+						);
+					}
+					if (options.allowedHosts !== undefined && !options.allowedHosts.includes(target.host)) {
+						return failure(
+							makeWireError(
+								'connector.refused',
+								`${target.host} is not an allowed integration host`
+							)
+						);
+					}
+					const sends = body !== undefined && method !== 'GET';
 					const response = yield* Effect.tryPromise(() =>
 						perform(target.toString(), {
 							method,
@@ -128,8 +131,7 @@ export const makeHttpConnectorBinding = (
 						)
 					)
 				)
-			);
-		}
+			)
 	};
 };
 

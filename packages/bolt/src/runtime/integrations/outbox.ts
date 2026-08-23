@@ -186,8 +186,7 @@ const defaultBody = (
  * One collection write, as the outbox sees it: the row's id plus everything a trigger or body is
  * told about the event.
  */
-type OutboxEvent = IntegrationSendEventContext &
-	Readonly<{ readonly recordId: string }>;
+type OutboxEvent = IntegrationSendEventContext & Readonly<{ readonly recordId: string }>;
 
 /**
  * Turns one collection write into the outbox rows it earns.

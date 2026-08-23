@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import Icon from '@iconify/svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
@@ -46,9 +45,8 @@
 	} = $props();
 	const agentStyles = $derived(FEATURE_COLOR_STYLES.agents);
 
-	let mounted = $state(false);
 	const connectionQueries = $derived(
-		mounted
+		typeof window !== 'undefined'
 			? envoys.map((envoy) => ({
 					name: envoy.name,
 					query: system.envoys.status({ envoy: envoy.name })
@@ -60,10 +58,8 @@
 	const connectionsPending = $derived(connectionQueries.some(({ query }) => query.loading));
 
 	// The read is the browser's: server rendering must not issue a Bolt command, and a reader who
-	// opens Envoys has already asked the question the read answers.
-	onMount(() => {
-		mounted = true;
-	});
+	// opens Envoys has already asked the question the read answers. The capability check expresses
+	// that boundary directly without publishing mount lifecycle as application state.
 </script>
 
 {#snippet sectionHeading(label: string, count: number)}

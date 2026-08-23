@@ -77,8 +77,6 @@
 			((operations.exportPipelines?.length ?? 0) > 0 ||
 				(operations.importPipelines?.length ?? 0) > 0 ||
 				(operations.integrations?.length ?? 0) > 0 ||
-				operations.updateSelected != null ||
-				operations.deleteSelected != null ||
 				operations.selectionControls != null)
 	);
 
@@ -173,15 +171,8 @@
 					importPipelines={operations.importPipelines ?? []}
 					integrations={operations.integrations ?? []}
 					selectedRows={operations.selectedRows ?? []}
-					fields={definition.fields}
-					updateSelected={operations.updateSelected}
-					deleteSelected={operations.deleteSelected}
-					updateUnavailable={operations.updateUnavailable}
-					deleteUnavailable={operations.deleteUnavailable}
-					clearSelection={operations.clearSelection}
 					selectionControls={operations.selectionControls}
 					disabled={disabled || (operations.disabled ?? false)}
-					refresh={operations.refresh}
 				/>
 			{/if}
 		</Inline>

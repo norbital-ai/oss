@@ -69,9 +69,9 @@ exact<
 
 const priced = defineModel({ amount: custom('money') });
 type PricedRow = TablesForModels<{ readonly priced: typeof priced }>['priced']['$inferSelect'];
-exact<
-	Exact<PricedRow['amount'], { readonly value: number; readonly currency: string } | null>
->(true);
+exact<Exact<PricedRow['amount'], { readonly value: number; readonly currency: string } | null>>(
+	true
+);
 
 describe('custom type renderer value types', () => {
 	// The type assertions above are the subject; this keeps them inside a suite that runs, so a file

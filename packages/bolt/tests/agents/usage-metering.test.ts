@@ -64,24 +64,14 @@ const bundle = makeBundle(definition, manifest, {});
  * that already existed. Nobody paid for it, and nobody could tell from the answer.
  */
 const twiceInferringBundle = makeBundle(definition, manifest, {
-	classify: async (
-		_input: unknown,
-		api: Readonly<{
-			readonly infer: (input: {
-				readonly schema: Schema.Codec<unknown, unknown>;
-				readonly prompt: string;
-			}) => Promise<unknown>;
-		}>
-	) => {
-		// `infer` is declared as a promise on the remote api and answers an Effect, which
-		// `runAuthoredHandler` settles either way. Run it here so both calls are genuinely sequential —
-		// the point of the test is two distinct calls, not two started at once.
-		const run = (prompt: string) =>
-			Effect.runPromise(
-				api.infer({ schema: Schema.String, prompt }) as unknown as Effect.Effect<string>
-			);
-		return { first: await run('first'), second: await run('second') };
-	}
+	classify: (_input: unknown, api) =>
+		Effect.gen(function* () {
+			// Run the calls sequentially: the point of the test is two distinct invocations, not two
+			// started at once.
+			const first = yield* api.infer({ schema: Schema.String, prompt: 'first' });
+			const second = yield* api.infer({ schema: Schema.String, prompt: 'second' });
+			return { first, second };
+		})
 });
 const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'], policies: [] };
 
@@ -100,7 +90,7 @@ const makeDatabase = (
 	call: (_metadata, request) => {
 		if (request._tag === 'Query')
 			statements.push({ sql: request.sql, parameters: request.parameters });
-		if (request._tag === 'Query' && request.sql.includes('bolt_auth_session')) {
+		if (request._tag === 'Query' && request.sql.includes('session')) {
 			return Promise.resolve({ _tag: 'Success', value: { rows: [subject], affectedRows: 0 } });
 		}
 		return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 1 } });
@@ -249,9 +239,7 @@ describe('agent turn usage', () => {
 		expect(settled?.subagent_id).toBe('subagent:agent-usage:tool:0:0');
 		// Its rows carry the turn that produced them, or the reader's projection cannot tell a delegated
 		// agent's messages from ones the person typed into the session it is nested in.
-		const appended = statements.filter((entry) =>
-			entry.sql.startsWith('insert into chat_message')
-		);
+		const appended = statements.filter((entry) => entry.sql.startsWith('insert into chat_message'));
 		expect(appended.length).toBeGreaterThan(0);
 		expect(appended.every((entry) => typeof entry.parameters[3] === 'string')).toBe(true);
 	});

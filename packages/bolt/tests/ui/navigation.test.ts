@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	appAccessAllowed,
+	APPROVALS_PATH,
 	buildApplicationNavigation,
 	buildSystemNavigation,
 	WORKSPACE_SETTINGS_PATH
@@ -70,6 +71,10 @@ describe('workspace navigation', () => {
 		expect(studio?.badge).toBe('product:colony');
 		expect(system[0]?.children?.some((child) => child.key === 'workspace-studio')).toBe(false);
 		expect(system.some((item) => item.key === 'workspace-studio')).toBe(true);
+		expect(system.find((item) => item.key === 'approvals')).toMatchObject({
+			label: 'Approvals',
+			href: APPROVALS_PATH
+		});
 	});
 
 	it('lands a group on its default child', () => {

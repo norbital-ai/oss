@@ -9,7 +9,6 @@ import {
 	type ConfiguredProviderFactory
 } from '../config.js';
 
-// stupidity:allow AL10 -- local file-store options stay beside their constructor in the required 14-file architecture
 export interface LocalFilesOptions {
 	readonly rootDirectory: string;
 }
@@ -105,7 +104,7 @@ export const makeLocalFilesBindingFromConfig = Effect.fn(
 	return makeLocalFilesBinding({ rootDirectory });
 });
 
-/** Selects the local file store or a registered object-store provider through Effect Config; stupidity:allow Q3 -- public Config-selected provider factory entry point. */
+/** Selects the local file store or a registered object-store provider through Effect Config. */
 export const makeFilesBindingFromConfig = <Error>(
 	factories: Readonly<
 		Record<string, ConfiguredProviderFactory<FacilityBinding<FileRequest, FileResponse>, Error>>

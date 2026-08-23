@@ -25,16 +25,10 @@
  * CI — including the `prepack` build that produces a publishable tarball.
  */
 import { execFileSync } from 'node:child_process';
-import {
-	chmodSync,
-	existsSync,
-	readdirSync,
-	realpathSync,
-	renameSync,
-	rmSync
-} from 'node:fs';
+import { chmodSync, existsSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { Effect } from 'effect';
 import { assertDeclarationEmit } from './lib/declaration-emit.mjs';
 import { readManifest } from './lib/package-release.mjs';
 
@@ -99,9 +93,16 @@ rmSync(retired, { recursive: true, force: true });
 // `{}` is the staging directory: `-o {}` for a packager, or a tsconfig `outDir` override.
 const resolved = commandArguments.map((argument) => argument.replaceAll('{}', staging));
 
-try {
-	execFileSync(command, resolved, { cwd: packageRoot, stdio: 'inherit' });
-} catch (cause) {
+const buildResult = Effect.runSync(
+	Effect.result(
+		Effect.try({
+			try: () => execFileSync(command, resolved, { cwd: packageRoot, stdio: 'inherit' }),
+			catch: (cause) => cause
+		})
+	)
+);
+if (buildResult._tag === 'Failure') {
+	const cause = buildResult.failure;
 	rmSync(staging, { recursive: true, force: true });
 	process.exit(typeof cause?.status === 'number' ? cause.status : 1);
 }
@@ -115,13 +116,21 @@ if (!existsSync(staging)) {
 // cause we know of, but it only covers workspace edges; anything else that degrades an inferred
 // type still exits 0, and this is the last point where the output can be discarded instead of
 // swapped in, packed, and published.
-try {
-	assertDeclarationEmit({
-		declarationRoot: staging,
-		packageDirectory: path.basename(packageRoot),
-		label: `${manifest.name} build output`
-	});
-} catch (cause) {
+const declarationResult = Effect.runSync(
+	Effect.result(
+		Effect.try({
+			try: () =>
+				assertDeclarationEmit({
+					declarationRoot: staging,
+					packageDirectory: path.basename(packageRoot),
+					label: `${manifest.name} build output`
+				}),
+			catch: (cause) => cause
+		})
+	)
+);
+if (declarationResult._tag === 'Failure') {
+	const cause = declarationResult.failure;
 	console.error(`[build] ${cause.message}`);
 	rmSync(staging, { recursive: true, force: true });
 	process.exit(1);

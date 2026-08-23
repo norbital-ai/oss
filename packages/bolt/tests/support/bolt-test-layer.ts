@@ -57,7 +57,15 @@ const drizzleColumns = (
 	collection: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
 ): Readonly<Record<string, AnyPgColumnBuilder>> =>
 	Object.fromEntries(
-		Object.entries(collection.fields).map(([name, field]) => {
+		Object.entries(collection.fields).flatMap(([name, field]) => {
+			// A logical reference is an exclusive arc of nullable UUID columns in PostgreSQL. The
+			// runtime verifies those storage columns, not the client-facing `{ kind, id }` field.
+			if (field.reference !== undefined) {
+				return field.reference.targets.map(({ storageColumn }) => [
+					storageColumn,
+					uuidColumn(storageColumn)
+				]);
+			}
 			// `text` comes from Bolt's own authoring factory rather than Drizzle's, because that is what
 			// records the `search` marker on the builder. `describeModelColumns` reads it back off there,
 			// and it is what `searchIndexes` uses to decide a trigram index — so a bridge that reached for
@@ -74,7 +82,7 @@ const drizzleColumns = (
 								: field.type === 'json'
 									? jsonb(name)
 									: authoredText({ search: field.search === true });
-			return [name, field.required ? base.notNull() : base];
+			return [[name, field.required ? base.notNull() : base] as const];
 		})
 	);
 
@@ -294,7 +302,7 @@ export const makeTestDatabase = async (): Promise<{
 						};
 					}
 					let affectedRows = 0;
-					const rows: Array<Schema.Json> = [];
+					let rows: ReadonlyArray<Schema.Json> = [];
 					await database.transaction(async (transaction) => {
 						for (const statement of input.statements) {
 							statements.push(statement.sql);
@@ -302,17 +310,22 @@ export const makeTestDatabase = async (): Promise<{
 								...statement.parameters
 							]);
 							affectedRows += result.affectedRows ?? 0;
-							rows.push(...jsonSafe(result.rows));
+							// A transaction has one result surface: the rows returned by its final statement.
+							// This is how both production database bindings behave, and it matters when earlier
+							// assertions also happen to return rows before a final commit-capture SELECT.
+							rows = jsonSafe(result.rows);
 						}
 					});
 					return { _tag: 'Success', value: { rows, affectedRows } };
 				} catch (cause) {
+					const sqlState =
+						typeof cause === 'object' && cause !== null ? Reflect.get(cause, 'code') : undefined;
 					return {
 						_tag: 'Failure',
 						error: {
 							code: 'database.failed',
 							message: cause instanceof Error ? cause.message : String(cause),
-							retryable: false,
+							retryable: sqlState === '40001',
 							outcome: 'known' as const
 						}
 					};
@@ -537,11 +550,11 @@ export const makeBoltTestRuntime = async (
 	const automations = Automations.layer.pipe(
 		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, budget, tenantScope))
 	);
-	const data = Layer.provideMerge(Approvals.layer, Layer.mergeAll(foundation, taskQueue));
 	// Collections announces every committed write on the sync topic, so the wake has to be present for
 	// the write path to resolve at all. The harness binds no transport, which is the point: the
 	// announcement is `Effect.ignore`d, so a runtime with nowhere to publish still writes normally.
 	const wake = Layer.provideMerge(SyncWake.layer, facilities);
+	const data = Layer.provideMerge(Approvals.layer, Layer.mergeAll(foundation, taskQueue, wake));
 	const collections = Layer.provideMerge(
 		Collections.layer,
 		Layer.mergeAll(data, authoredLayer, wake, taskQueue, automations)
@@ -607,7 +620,7 @@ export const adminSubject: Identity.Subject = {
 	/**
 	 * What makes the name true, and it was missing.
 	 *
-	 * `isAdministrator` is `subject.admin === true`, read from `bolt_auth_user.status` — a status on
+	 * `isAdministrator` is `subject.admin === true`, read from `user.status` — a status on
 	 * the person. `teamPath: ['admin']` is the roles-era spelling of the same idea and has selected
 	 * nothing since teams replaced roles: no `+teams.ts` maps a team called `admin` to anything, so
 	 * this fixture was an ordinary member wearing an administrator's name. Every case asserting

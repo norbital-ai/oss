@@ -75,7 +75,6 @@
 <Stack gap="sm" class={className}>
 	{#each values as entry, index (`${entry}-${index}`)}
 		{@const parts = toLocalDateTimeParts(entry)}
-		<!-- stupidity:allow UI10 -- input-group chip boundary -->
 		<Inline
 			align="stretch"
 			gap="none"
@@ -120,7 +119,6 @@
 	{/each}
 
 	{#if values.length === 0 && !multiple}
-		<!-- stupidity:allow UI10 -- input-group chip boundary -->
 		<Inline
 			align="stretch"
 			gap="none"

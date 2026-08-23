@@ -69,10 +69,14 @@ const fieldWindows = (
 export const extractModelFields = (source: string): Readonly<Record<string, FieldDefinition>> => {
 	const fields: Record<string, FieldDefinition> = {};
 	for (const { name, builder, window } of fieldWindows(source)) {
+		const primaryKey = window.includes('.primaryKey()');
+		const unique = window.includes('.unique()');
 		fields[name] = {
 			type: builderTypes[builder] ?? 'string',
 			required: window.includes('.notNull()'),
-			indexed: window.includes('.primaryKey()')
+			indexed: primaryKey || unique,
+			...(primaryKey ? { primaryKey: true } : {}),
+			...(unique ? { unique: true } : {})
 		};
 	}
 	return fields;
@@ -140,6 +144,7 @@ export type CollectionCatalogEntry = Readonly<{
 		readonly name: string;
 		readonly target: string;
 		readonly cardinality: 'one' | 'many';
+		readonly cascade?: true;
 	}>;
 }>;
 
@@ -234,7 +239,8 @@ export const extractCollectionCatalog = (
 			.map((relation) => ({
 				name: relation.name,
 				target: relation.target,
-				cardinality: relation.cardinality
+				cardinality: relation.cardinality,
+				...(relation.cascade === true ? { cascade: true } : {})
 			}))
 	};
 };
@@ -282,5 +288,37 @@ export const extractRelationships = (source: string): ReadonlyArray<RelationDefi
 			});
 		}
 	}
-	return relations;
+	/**
+	 * A parent-side `many` declaration normally omits endpoints because the owning foreign key is
+	 * authored on the child's inverse `one`. Carry that one unambiguous fact onto the compiled edge
+	 * so every artifact consumer — mutation validation, graph reconciliation, prefetch, and generated
+	 * types — receives the same writable orientation. Direction names are deliberately irrelevant:
+	 * `account_contacts` and `contact_account` are two UI names for the same reversed collections.
+	 * Endpointless through-relations and multiple possible inverse foreign keys remain unresolved.
+	 */
+	return relations.map((relation) => {
+		if (relation.cardinality !== 'many') return relation;
+		const inverse = relations.filter((candidate) => {
+			if (
+				candidate.cardinality !== 'one' ||
+				candidate.source !== relation.target ||
+				candidate.target !== relation.source ||
+				candidate.from === undefined ||
+				candidate.to === undefined
+			)
+				return false;
+			const endpoints = new Set([candidate.from.collection, candidate.to.collection]);
+			return endpoints.has(relation.target) && endpoints.has(relation.source);
+		});
+		const resolved = inverse.length === 1 ? inverse[0] : undefined;
+		const inheritedCascade = relation.cascade === true || resolved?.cascade === true;
+		const needsEndpoints = relation.from === undefined && relation.to === undefined;
+		return {
+			...relation,
+			...(inheritedCascade ? { cascade: true } : {}),
+			...(needsEndpoints && resolved?.from !== undefined && resolved.to !== undefined
+				? { from: resolved.from, to: resolved.to }
+				: {})
+		};
+	});
 };

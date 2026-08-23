@@ -20,6 +20,7 @@ export type HostPlugin = Readonly<{
 }>;
 
 export const WORKSPACE_SETTINGS_PATH = '/people';
+export const APPROVALS_PATH = '/approvals';
 const HOST_PLUGIN_SURFACE_PREFIX = '/__host';
 export const AGENT_PATH = '/agent';
 
@@ -253,6 +254,25 @@ type ShellApp = AppDeclaration & {
 	readonly defaultChild?: string | undefined;
 };
 
+type ApplicationNavigationInput = Readonly<{
+	readonly apps: ReadonlyArray<ShellApp>;
+	/**
+	 * What `AccessControl.visibleApps` answered for this session, or `null`/absent when the host has
+	 * no such list. Absent is unrestricted, not empty: a host that never asked must keep the sidebar
+	 * it had, and a host that asked and got nothing back is saying something quite different.
+	 */
+	readonly accessibleAppNames?: ReadonlyArray<string> | null;
+	readonly currentPath: string;
+	readonly i18n?: NavigationLabelResolver;
+}>;
+
+type SystemNavigationInput = Readonly<{
+	readonly plugins?: ReadonlyArray<HostPlugin>;
+	readonly isAdmin: boolean;
+	readonly currentPath: string;
+	readonly i18n?: NavigationLabelResolver;
+}>;
+
 const toApplicationItem = (
 	app: ShellApp,
 	input: {
@@ -292,17 +312,9 @@ const toApplicationItem = (
 	};
 };
 
-export const buildApplicationNavigation = (input: {
-	apps: ReadonlyArray<ShellApp>;
-	/**
-	 * What `AccessControl.visibleApps` answered for this session, or `null`/absent when the host has
-	 * no such list. Absent is unrestricted, not empty: a host that never asked must keep the sidebar
-	 * it had, and a host that asked and got nothing back is saying something quite different.
-	 */
-	accessibleAppNames?: ReadonlyArray<string> | null;
-	currentPath: string;
-	i18n?: NavigationLabelResolver;
-}): WorkspaceNavigationItem[] => {
+export const buildApplicationNavigation = (
+	input: ApplicationNavigationInput
+): WorkspaceNavigationItem[] => {
 	const declared = filterAccessibleApps(input.apps, input.accessibleAppNames);
 	const names = new Set(declared.map((app) => app.name));
 	const childrenOf = new Map<string, ShellApp[]>();
@@ -323,12 +335,7 @@ export const buildApplicationNavigation = (input: {
 		);
 };
 
-export const buildSystemNavigation = (input: {
-	plugins?: ReadonlyArray<HostPlugin>;
-	isAdmin: boolean;
-	currentPath: string;
-	i18n?: NavigationLabelResolver;
-}): WorkspaceNavigationItem[] => {
+export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNavigationItem[] => {
 	const plugins = input.plugins ?? [];
 	const visible = plugins.filter(
 		(plugin) => plugin.placement !== 'footer' && (input.isAdmin || plugin.adminOnly !== true)
@@ -379,6 +386,13 @@ export const buildSystemNavigation = (input: {
 				];
 	return [
 		...settings,
+		{
+			key: 'approvals',
+			label: input.i18n?.t('bolt.shell.approvals') ?? 'Approvals',
+			icon: 'lucide:shield-check',
+			href: APPROVALS_PATH,
+			active: isUnder(input.currentPath, APPROVALS_PATH)
+		},
 		...visible.filter((plugin) => plugin.placement !== 'settings').map(pluginItem)
 	];
 };

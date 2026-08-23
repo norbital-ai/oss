@@ -109,15 +109,14 @@ const teamOf = (response: { readonly value?: unknown }): Record<string, unknown>
 
 const teamRows = (runtime: BoltTestRuntime) =>
 	runtime.database.query(
-		'select "id"::text as "id", "name", "parent_id"::text as "parentId" from bolt_team order by "name"'
+		'select "id"::text as "id", "name", "parent_id"::text as "parentId" from "team" order by "name"'
 	);
 
 const memberRow = (runtime: BoltTestRuntime, user: string) =>
 	runtime.database
-		.query(
-			'select "team_id"::text as "teamId", "status" from bolt_auth_user where "id" = $1::uuid',
-			[fixtureUserId(user)]
-		)
+		.query('select "team_id"::text as "teamId", "status" from "user" where "id" = $1::uuid', [
+			fixtureUserId(user)
+		])
 		.then((rows) => rows[0]);
 
 const access = (runtime: BoltTestRuntime) =>
@@ -134,7 +133,7 @@ const access = (runtime: BoltTestRuntime) =>
  * An administrator by status and an ordinary member of a declared team.
  *
  * The administrator belongs to no team at all, deliberately: with no team they hold no policy, so
- * the only thing that admits them to any command below is `bolt_auth_user.status`, which is what
+ * the only thing that admits them to any command below is `user.status`, which is what
  * this suite is about.
  */
 const seedPeople = async (runtime: BoltTestRuntime) => {

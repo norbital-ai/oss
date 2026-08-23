@@ -80,7 +80,6 @@
 	</Sidebar.Root>
 
 	<Sidebar.Inset as="main" class={cn(insetClass, 'h-dvh min-h-0 min-w-0 overflow-clip')}>
-		<!-- stupidity:allow UI15 -- mobile shell chrome includes the device safe-area inset by definition -->
 		<Inline
 			as="header"
 			gap="sm"

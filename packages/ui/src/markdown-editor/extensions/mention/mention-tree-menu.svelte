@@ -234,7 +234,6 @@
 	);
 </script>
 
-<!-- stupidity:allow UI5 -- popover content boundary -->
 <div
 	class="flex max-h-[min(28rem,70vh)] w-[min(34rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border bg-popover p-1 shadow-deep"
 	role="menu"

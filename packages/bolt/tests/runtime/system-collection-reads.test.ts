@@ -36,9 +36,9 @@ import { fixtureUserId, seedSession, seedTeam } from '../support/fixture-identit
  * nobody.
  *
  * The workspace below is shaped like `templates/field-operations`: a `field_ops_controller` policy
- * granting every action on the collections the app authors and nothing on `bolt_auth_user`, held by
+ * granting every action on the collections the app authors and nothing on `user`, held by
  * a team whose seeded members are ordinary people. That template's controller app runs
- * `client.db.bolt_auth_user.findMany({ columns: { id: true, name: true } })` to label the
+ * `client.db.user.findMany({ columns: { id: true, name: true } })` to label the
  * `user_id` column on its Contractors tab, which is exactly the directory read the masked grant
  * exists to serve.
  *
@@ -77,7 +77,7 @@ const CONTRACTOR_TEAM = 'Field Operations Contractors';
 /**
  * The approval the contractor's `create` grant carries, named after the team that may decide it.
  *
- * `approvers` and `bolt_team.name` are the same string — that is the whole binding, and it is what
+ * `approvers` and `team.name` are the same string — that is the whole binding, and it is what
  * the approver leg of the read predicate resolves through. Written here rather than in a fixture
  * helper because the *name* is what both halves of every assertion below turn on.
  */
@@ -260,8 +260,8 @@ const readAs = (runtime: BoltTestRuntime, credential: string, collectionName: st
 const RUNTIME_OWNED = [
 	'approval_request',
 	'requestor',
-	'bolt_auth_user',
-	'bolt_team',
+	'user',
+	'team',
 	'chat_session',
 	'chat_message',
 	'bolt_notifications'
@@ -292,7 +292,7 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 	});
 
 	/**
-	 * The control. An administrator is admitted by `bolt_auth_user.status` before a policy is read,
+	 * The control. An administrator is admitted by `user.status` before a policy is read,
 	 * so this passes whether or not the built-in grant reaches anybody — which is the point: it fixes
 	 * the harness, the schema and the dispatch path as working, leaving the case above to be about
 	 * policy matching alone.
@@ -318,9 +318,9 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 
 	/**
 	 * The mask is the other half of the directory grant, and it has to survive whatever admits the
-	 * read: `bolt_auth_user` holds an address, and the grant allows `id` and `name` only.
+	 * read: `user` holds an address, and the grant allows `id` and `name` only.
 	 */
-	it.each(['bolt_auth_user', 'bolt_team'])(
+	it.each(['user', 'team'])(
 		'masks the %s directory down to id and name for a member',
 		async (collectionName) => {
 			harness = await makeBoltTestRuntime(fieldOpsWorkspace);
@@ -343,7 +343,7 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 	 * the obvious way to widen it by accident.
 	 *
 	 * `COLONY_SYSTEM_POLICY` enumerates two `manage` grants and no read at all, so a system principal
-	 * can migrate a workspace and admit its founder and cannot open a record in it. `bolt_auth_user`
+	 * can migrate a workspace and admit its founder and cannot open a record in it. `user`
 	 * and `requestor` are exactly the collections it would gain if `authenticated` had been written
 	 * as an unconditional `true`, so they are what this pins.
 	 */
@@ -388,39 +388,35 @@ describe('notifications are live system collections scoped to their recipient', 
 
 		const markOwn = await harness.runtime.runPromise(
 			dispatchInvocation(
-				command('collections.update', 'controller-token', {
+				command('collections.mutate', 'controller-token', {
 					collection: 'bolt_notifications',
-					id: ownId,
-					values: { read: true }
+					values: { id: ownId, read: true }
 				})
 			).pipe(Effect.result)
 		);
 		expect(markOwn._tag).toBe('Success');
 
-		await harness.runtime.runPromise(
+		const markOther = await harness.runtime.runPromise(
 			dispatchInvocation(
-				command('collections.update', 'controller-token', {
+				command('collections.mutate', 'controller-token', {
 					collection: 'bolt_notifications',
-					id: otherId,
-					values: { read: true }
+					values: { id: otherId, read: true }
 				})
-			)
+			).pipe(Effect.result)
 		);
+		expect(markOther._tag).toBe('Failure');
 		const refusedField = await harness.runtime.runPromise(
 			dispatchInvocation(
-				command('collections.update', 'controller-token', {
+				command('collections.mutate', 'controller-token', {
 					collection: 'bolt_notifications',
-					id: ownId,
-					values: { payload: { text: 'Rewritten' } }
+					values: { id: ownId, payload: { text: 'Rewritten' } }
 				})
 			).pipe(Effect.result)
 		);
 		expect(refusedField._tag).toBe('Failure');
 
 		expect(
-			await harness.database.query(
-				'select id, payload, read from bolt_notifications order by id'
-			)
+			await harness.database.query('select id, payload, read from bolt_notifications order by id')
 		).toEqual([
 			{ id: ownId, payload: { text: 'Mine' }, read: true },
 			{ id: otherId, payload: { text: 'Theirs' }, read: false }

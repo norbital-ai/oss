@@ -239,6 +239,13 @@ export type ReleaseControls = Readonly<{
 	readonly reason?: string;
 }>;
 
+type ReleaseControlInput = Readonly<{
+	readonly environment: StudioEnvironment | undefined;
+	readonly busy: boolean;
+	readonly accepting: boolean;
+	readonly hasRelease: boolean;
+}>;
+
 /**
  * What an operator may do to this environment right now.
  *
@@ -247,12 +254,7 @@ export type ReleaseControls = Readonly<{
  * authoring but still allows a rollback, because rolling back is how a bad release is undone and
  * the environment that has one is exactly the one that is live.
  */
-export const releaseControls = (input: {
-	readonly environment: StudioEnvironment | undefined;
-	readonly busy: boolean;
-	readonly accepting: boolean;
-	readonly hasRelease: boolean;
-}): ReleaseControls => {
+export const releaseControls = (input: ReleaseControlInput): ReleaseControls => {
 	if (input.busy) {
 		return {
 			canCommit: false,
@@ -500,7 +502,6 @@ export const EnvoyStatusSchema = Schema.Struct({
 	received: Schema.Number,
 	replied: Schema.Number
 });
-export type EnvoyStatus = typeof EnvoyStatusSchema.Type;
 
 /**
  * Why no envoy row can show a green "connected" light *from the runtime*.

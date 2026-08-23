@@ -104,13 +104,16 @@ export const describeEnvironment = (
 		.map(([name, variable]) => {
 			const secret = variable.secret ?? true;
 			return decodeEnvironmentVariableView(
-				Record.filter({
-				name,
-				label: variable.label ?? name,
-				description: variable.description,
-				secret,
-				default: secret || variable.default === undefined ? undefined : variable.default
-				}, (value) => value !== undefined)
+				Record.filter(
+					{
+						name,
+						label: variable.label ?? name,
+						description: variable.description,
+						secret,
+						default: secret || variable.default === undefined ? undefined : variable.default
+					},
+					(value) => value !== undefined
+				)
 			);
 		})
 		.sort((left, right) => left.name.localeCompare(right.name));

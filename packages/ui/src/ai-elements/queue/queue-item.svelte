@@ -17,7 +17,6 @@
 	}: QueueItemProps = $props();
 </script>
 
-<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 <li
 	bind:this={ref}
 	class={cn(

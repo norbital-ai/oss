@@ -40,13 +40,6 @@ export function optionalCollectionRecordId(record: object | undefined | null): s
 	return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-/** Resolve a required runtime row key before issuing a selection-scoped mutation. */
-export function collectionRecordId(record: object): string {
-	const value = optionalCollectionRecordId(record);
-	if (value === undefined) throw new Error('Cannot mutate a record without a id.');
-	return value;
-}
-
 /** Textual kinds that read well as a card title / subtitle line. */
 const TEXT_LIKE_KINDS: ReadonlySet<string> = new Set(['text', 'phone', 'email', 'url', 'markdown']);
 

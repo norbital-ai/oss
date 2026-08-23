@@ -195,10 +195,10 @@
 		if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
 			event.preventDefault();
 			const currentIndex = resources.findIndex((resource) => resource.id === item.resourceId);
-			const nextIndex = EffectNumber.clamp(
-				currentIndex + (event.key === 'ArrowUp' ? -1 : 1),
-				{ minimum: 0, maximum: resources.length - 1 }
-			);
+			const nextIndex = EffectNumber.clamp(currentIndex + (event.key === 'ArrowUp' ? -1 : 1), {
+				minimum: 0,
+				maximum: resources.length - 1
+			});
 			const resourceId = resources[nextIndex]?.id;
 			if (resourceId) commitMove(item, resourceId, 0, null);
 		}
@@ -309,7 +309,6 @@
 		style={`grid-template-columns:${resourceWidth}px minmax(0,1fr)`}
 	>
 		<div class="z-20 flex items-center border-r px-3 text-xs font-semibold">{resourceLabel}</div>
-		<!-- stupidity:allow UI5 -- scheduler header timeline clips to the header row -->
 		<div bind:this={headerTimelineElement} class="overflow-hidden">
 			<div class="flex h-full" style={`width:${timelineWidth}px`}>
 				{#each days as day (day.key)}
@@ -419,7 +418,6 @@
 												{/if}
 											{/if}
 										</button>
-										<!-- stupidity:allow UI5 -- scheduler day-cell chip row clips to the cell -->
 										<div class="min-w-0 overflow-hidden">
 											<Inline gap="xs" class="mt-1">
 												{#each visibleItems as item (item.id)}

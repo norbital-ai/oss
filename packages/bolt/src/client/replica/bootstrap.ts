@@ -139,17 +139,20 @@ const loadCollectionSnapshot = Effect.fn('ReplicaBootstrap.loadCollectionSnapsho
 	let cursor: SyncCursor | undefined;
 	let rows = 0;
 	do {
-			const page = yield* readSnapshotPage(transport, collection, pageSize, after);
-			if (page === undefined) break;
-			// The whole page in one statement. Per-row writes made a first visit take minutes.
-			rows += yield* write(collection, page.rows);
-			// The oldest cursor across every collection governs the stream, so a pick up after the first
-			// page was read re-delivers a little rather than missing something a later page had ahead of it.
-			const pageCursor = page.cursor;
-			if (pageCursor !== undefined && (cursor === undefined || compareCursors(pageCursor, cursor) < 0)) {
-				cursor = pageCursor;
-			}
-			after = page.after;
+		const page = yield* readSnapshotPage(transport, collection, pageSize, after);
+		if (page === undefined) break;
+		// The whole page in one statement. Per-row writes made a first visit take minutes.
+		rows += yield* write(collection, page.rows);
+		// The oldest cursor across every collection governs the stream, so a pick up after the first
+		// page was read re-delivers a little rather than missing something a later page had ahead of it.
+		const pageCursor = page.cursor;
+		if (
+			pageCursor !== undefined &&
+			(cursor === undefined || compareCursors(pageCursor, cursor) < 0)
+		) {
+			cursor = pageCursor;
+		}
+		after = page.after;
 	} while (after !== undefined);
 	return cursor === undefined ? { rows } : { cursor, rows };
 });

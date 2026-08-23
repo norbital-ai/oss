@@ -6,12 +6,7 @@ import type {
 	CollectionRegistry,
 	CollectionRow
 } from '@norbital-ai/std/collection';
-import type {
-	ComponentConstructorOptions,
-	ComponentInternals,
-	Snippet,
-	SvelteComponent
-} from 'svelte';
+import type { Component, Snippet } from 'svelte';
 import type {
 	CollectionRecordMetadataResolver,
 	ResolvedCollectionRecordMetadata
@@ -116,21 +111,9 @@ export interface CollectionTableRowActionContext<TRow extends object> {
 }
 
 /** Svelte snippets construct component parameters; retain the row type through that constructor. */
-interface CollectionTableColumnComponent<TRow extends object> {
-	new (
-		options: ComponentConstructorOptions<CollectionTableColumnPrimitiveProps<TRow>>
-	): SvelteComponent<CollectionTableColumnPrimitiveProps<TRow>>;
-	(
-		this: void,
-		internals: ComponentInternals,
-		props: CollectionTableColumnPrimitiveProps<TRow>
-	): {
-		$on?(type: string, callback: (event: unknown) => void): () => void;
-		$set?(props: Partial<CollectionTableColumnPrimitiveProps<TRow>>): void;
-	};
-	element?: typeof HTMLElement;
-	z_$$bindings?: string;
-}
+type CollectionTableColumnComponent<TRow extends object> = Component<
+	CollectionTableColumnPrimitiveProps<TRow>
+>;
 
 export interface CollectionTableColumnsComposition<TRow extends object> {
 	Column: CollectionTableColumnComponent<TRow>;
@@ -139,14 +122,12 @@ export interface CollectionTableColumnsComposition<TRow extends object> {
 export interface CollectionTableFeatures {
 	readonly search?: boolean;
 	readonly filter?: boolean;
-	readonly bulk?: boolean;
 	readonly create?: boolean;
 }
 
 export interface CollectionTablePipelineContext<TRow extends object> {
 	readonly collectionName: string;
 	readonly selectedRows: readonly TRow[];
-	refresh(): Effect.Effect<void, unknown>;
 }
 
 export interface CollectionTablePipeline<TRow extends object> {

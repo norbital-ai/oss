@@ -7,8 +7,6 @@
 		CollectionGroupedResult,
 		CollectionRegistry,
 		CollectionRow,
-		CollectionType,
-		CollectionUpdateInput,
 		RemoteQuery
 	} from '@norbital-ai/std/collection';
 	import { resolveRecordLabel } from '@norbital-ai/std/collection';
@@ -33,7 +31,6 @@
 		getCollectionTableNavigationContext
 	} from '../collection-table/collection-table-navigation.svelte.js';
 	import {
-		collectionRecordId,
 		deriveAutoCard,
 		deriveColumnFieldNames,
 		deriveLanes,
@@ -52,7 +49,6 @@
 	import {
 		CollectionRecordMetadataView,
 		collectionRecordMutationReason,
-		type CollectionRecordMutation,
 		type ResolvedCollectionRecordMetadata
 	} from '#lib/collection-record-metadata';
 	import type {
@@ -63,18 +59,17 @@
 	interface OptimisticKanbanMove {
 		apply: () => void;
 		commit: () => Effect.Effect<void, Error>;
-		refresh: () => Effect.Effect<void, Error>;
 		rollback: () => void;
 	}
 
 	/**
 	 * Keeps the visual move immediate while preserving the query as the source of truth.
-	 * A failed mutation or refresh restores the record to its server-backed lane.
+	 * A failed mutation restores the record to its server-backed lane; mutation invalidation owns
+	 * refreshing the query after a successful commit.
 	 */
 	function runOptimisticKanbanMove(move: OptimisticKanbanMove): Effect.Effect<void, Error> {
 		return Effect.sync(move.apply).pipe(
 			Effect.flatMap(() => move.commit()),
-			Effect.flatMap(() => move.refresh()),
 			Effect.catch((cause) =>
 				Effect.sync(move.rollback).pipe(Effect.flatMap(() => Effect.fail(cause)))
 			)
@@ -128,9 +123,7 @@
 	const effectiveSelectable = $derived(
 		selectable ||
 			exportPipelines.some((pipeline) => pipeline.requiresSelection) ||
-			importPipelines.some((pipeline) => pipeline.requiresSelection) ||
-			operations.updateMany != null ||
-			operations.delete != null
+			importPipelines.some((pipeline) => pipeline.requiresSelection)
 	);
 	const resolvedDetailRouteKey = $derived(
 		createCollectionTableRouteKey({
@@ -189,7 +182,6 @@
 		{ lazy: false }
 	);
 	let laneOverrides = $state(new Map<string, string>());
-	let pendingRecordIds = $state(new Set<string>());
 	let moveError = $state('');
 	let activeDrag: { recordId: string; lane: string } | null = $state(null);
 	let selectedRecordIds = $state(new Set<string>());
@@ -251,31 +243,10 @@
 			.map((recordId) => recordById.get(recordId))
 			.filter((record): record is Row => record != null)
 	);
-	function mutationReason(
-		rows: readonly Row[],
-		operation: CollectionRecordMutation
-	): string | null {
-		for (const record of rows) {
-			const recordId = collectionRecordId(record);
-			const reason = collectionRecordMutationReason(metadataById.get(recordId) ?? [], operation);
-			if (reason) return reason;
-		}
-		return null;
-	}
-	const updateUnavailable = $derived.by(() => {
-		const reason = mutationReason(selectedRecords, 'update');
-		return reason ? t('recordMetadata.selectedUpdateRestricted', { reason }) : null;
-	});
-	const deleteUnavailable = $derived.by(() => {
-		const reason = mutationReason(selectedRecords, 'delete');
-		return reason ? t('recordMetadata.selectedDeleteRestricted', { reason }) : null;
-	});
 	const allVisibleSelected = $derived(
 		recordById.size > 0 &&
 			[...recordById.keys()].every((recordId) => selectedRecordIds.has(recordId))
 	);
-	const updateSelectedAction = $derived(operations.updateMany ? updateSelectedRecords : undefined);
-	const deleteSelectedAction = $derived(operations.delete ? deleteSelectedRecords : undefined);
 	const selectionControls = $derived(
 		effectiveSelectable
 			? {
@@ -285,7 +256,7 @@
 				}
 			: undefined
 	);
-	const actionsDisabled = $derived(query?.loading ?? false);
+	const actionsDisabled = $derived((query?.loading ?? false) || operations.pending > 0);
 	const laneLayoutCount = $derived(
 		Math.max(groups.length, lanes?.length ?? derivedLanes.length, 1)
 	);
@@ -323,63 +294,8 @@
 		selectedRecordIds = next;
 	}
 
-	function clearSelection(): void {
-		selectedRecordIds = new Set();
-	}
-
 	function toggleAllVisible(): void {
 		selectedRecordIds = allVisibleSelected ? new Set() : new Set(recordById.keys());
-	}
-
-	function updateSelectedRecords(
-		fieldName: string,
-		value: unknown,
-		rows: readonly Row[]
-	): Effect.Effect<void, unknown> {
-		return Effect.gen(function* () {
-				const unavailable = mutationReason(rows, 'update');
-				if (unavailable) {
-					return yield* Effect.fail(
-						new Error(t('recordMetadata.selectedUpdateRestricted', { reason: unavailable }))
-					);
-				}
-				const updateMany = operations.updateMany;
-				if (!updateMany)
-					return yield* Effect.fail(new Error('This collection does not allow bulk updates.'));
-				yield* Effect.tryPromise(() =>
-					updateMany(
-						rows.map((record) => ({
-							recordId: collectionRecordId(record),
-							input: { [fieldName]: value } as CollectionUpdateInput<
-								CollectionType<Row, object, object>
-							> // stupidity: boundary-cast — schema-selected writable fields and DataRenderer constrain the dynamic patch.
-						}))
-					)
-				);
-			});
-	}
-
-	function deleteSelectedRecords(rows: readonly Row[]): Effect.Effect<void, unknown> {
-		return Effect.gen(function* () {
-				const unavailable = mutationReason(rows, 'delete');
-				if (unavailable) {
-					return yield* Effect.fail(
-						new Error(t('recordMetadata.selectedDeleteRestricted', { reason: unavailable }))
-					);
-				}
-				const deleteRecord = operations.delete;
-				if (!deleteRecord)
-					return yield* Effect.fail(new Error('This collection does not allow deletion.'));
-				yield* Effect.all(
-					rows.map((record) => Effect.tryPromise(() => deleteRecord(collectionRecordId(record)))),
-					{ discard: true }
-				);
-			});
-	}
-
-	function refresh(): Effect.Effect<void, unknown> {
-		const currentQuery = query;
-		return currentQuery ? Effect.tryPromise(() => currentQuery.refresh()) : Effect.void;
 	}
 
 	function setRecordLane(recordId: string, lane: string | undefined): void {
@@ -387,13 +303,6 @@
 		if (lane == null) next.delete(recordId);
 		else next.set(recordId, lane);
 		laneOverrides = next;
-	}
-
-	function setRecordPending(recordId: string, pending: boolean): void {
-		const next = new Set(pendingRecordIds);
-		if (pending) next.add(recordId);
-		else next.delete(recordId);
-		pendingRecordIds = next;
 	}
 
 	function serverLaneFor(recordId: string): string | undefined {
@@ -429,9 +338,6 @@
 		}
 	);
 
-	// A move can commit whenever there is an authored handler or an updatable collection (RFC V.3c).
-	const canMove = $derived(onCardMove != null || operations.update != null);
-
 	function commitCardMove(
 		record: Row,
 		fromLane: string,
@@ -445,17 +351,10 @@
 		}
 		// Default optimistic move: write `toLane` into the groupBy field.
 		return Effect.gen(function* () {
-			const update = operations.update;
-			if (!update) return yield* Effect.fail(new Error('This collection cannot be updated.'));
 			const id = Reflect.get(record, recordIdField);
 			if (id == null)
 				return yield* Effect.fail(new Error(`Cannot move a record without ${recordIdField}.`));
-			yield* Effect.tryPromise(() =>
-				update(
-					String(id),
-					{ [groupBy]: toLane } as Parameters<NonNullable<typeof update>>[1] // stupidity: boundary-cast — the runtime groupBy key becomes a typed update payload.
-				)
-			);
+			yield* Effect.tryPromise(() => operations.mutate({ id: String(id), [groupBy]: toLane }));
 		});
 	}
 
@@ -468,36 +367,20 @@
 		fromLane: string;
 		toLane: string;
 	}): void {
-		if (
-			!canMove ||
-			fromLane === toLane ||
-			pendingRecordIds.has(recordId) ||
-			updateRestrictedRecordIds.has(recordId)
-		)
+		if (fromLane === toLane || operations.pending > 0 || updateRestrictedRecordIds.has(recordId))
 			return;
 		const record = recordById.get(recordId);
 		if (!record) return;
 		moveError = '';
-		setRecordPending(recordId, true);
 		void Effect.runPromise(
 			runOptimisticKanbanMove({
 				apply: () => setRecordLane(recordId, toLane),
 				commit: () => commitCardMove(record, fromLane, toLane),
-				refresh: () => {
-					const currentQuery = query;
-					if (!currentQuery) return Effect.fail(new Error('Kanban query is unavailable.'));
-					return Effect.tryPromise(() => currentQuery.refresh());
-				},
 				rollback: () => setRecordLane(recordId, undefined)
 			}).pipe(
 				Effect.catch((cause) =>
 					Effect.sync(() => {
 						moveError = cause instanceof Error ? cause.message : String(cause);
-					})
-				),
-				Effect.onExit(() =>
-					Effect.sync(() => {
-						setRecordPending(recordId, false);
 					})
 				)
 			)
@@ -540,7 +423,6 @@
 			{#if subtitle}<p class="min-w-0 truncate text-sm text-muted-foreground">{subtitle}</p>{/if}
 		</Stack>
 		{#if badge}
-			<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 			<span
 				class={cn(
 					'inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-full border px-2 py-0.5 text-xs font-medium',
@@ -576,14 +458,8 @@
 				importPipelines,
 				integrations,
 				selectedRows: selectedRecords,
-				updateSelected: updateSelectedAction,
-				deleteSelected: deleteSelectedAction,
-				updateUnavailable,
-				deleteUnavailable,
-				clearSelection,
 				selectionControls,
-				disabled: actionsDisabled,
-				refresh
+				disabled: actionsDisabled
 			}}
 		/>
 		{#if moveError}
@@ -592,7 +468,6 @@
 	</Stack>
 {/snippet}
 
-<!-- stupidity:allow UI15 -- the kanban needs a usable empty-lane drop surface before cards establish intrinsic height -->
 <Cover
 	as="div"
 	gap="sm"
@@ -624,10 +499,10 @@
 					{recordIds}
 					previousLane={groups[index - 1]?.[0]}
 					nextLane={groups[index + 1]?.[0]}
-					movable={canMove}
+					movable={true}
 					selectable={effectiveSelectable}
 					{selectedRecordIds}
-					{pendingRecordIds}
+					mutationPending={operations.pending > 0}
 					{updateRestrictedRecordIds}
 					{updateRestrictionReasonById}
 					renderCard={kanbanCard}

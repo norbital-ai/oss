@@ -79,11 +79,11 @@ export type IdentityFailure =
 export type SignInTransport = {
 	readonly sendCode: (
 		email: string
-	) => Promise<{ ok: true } | { ok: false; reason: IdentityFailure | string }>;
+	) => Promise<{ ok: true } | { ok: false; reason: IdentityFailure | string }>; // repository-health:allow EFF2 -- Host identity implementations cross the component prop boundary as Promises and sign-in.svelte immediately adapts them with Effect.tryPromise.
 	readonly verifyCode: (
 		email: string,
 		code: string
-	) => Promise<{ ok: true } | { ok: false; reason: IdentityFailure | string }>;
+	) => Promise<{ ok: true } | { ok: false; reason: IdentityFailure | string }>; // repository-health:allow EFF2 -- Host identity implementations cross the component prop boundary as Promises and sign-in.svelte immediately adapts them with Effect.tryPromise.
 };
 
 /** Tenant-owned strings for the email and OTP surfaces. */

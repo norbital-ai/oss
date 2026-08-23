@@ -16,10 +16,10 @@ const systemIndex = (column: string): ModelIndex => ({ columns: [column] });
 
 /** Better Auth's logical model names mapped to the platform collection each one uses. */
 export const AUTH_MODELS = Object.freeze({
-	user: 'bolt_auth_user',
-	session: 'bolt_auth_session',
-	account: 'bolt_auth_account',
-	verification: 'bolt_auth_verification'
+	user: 'user',
+	session: 'session',
+	account: 'account',
+	verification: 'verification'
 } as const);
 
 /**
@@ -44,6 +44,8 @@ const approvalRequestModel = defineModel(
 		status: text().notNull(),
 		steps: jsonb().notNull(),
 		locked_record_refs: jsonb().notNull(),
+		/** Exact scalar and explicitly included relationship graph the reviewer is deciding on. */
+		proposed_values: jsonb().notNull().default({}),
 		closed_at: timestamp(),
 		closed_by: text()
 	},
@@ -79,9 +81,9 @@ const requestorModel = defineModel(
  * omitted the model — or renamed a column in it — would boot a runtime whose only writer has nowhere
  * to write.
  *
- * The prefix on the table names is deliberate. `user`, `session` and `account` are names a tenant's
- * own workspace is entitled to use, and a workspace with a `user` collection would otherwise share a
- * table with the auth system and corrupt both.
+ * Their short names are deliberate: identity is part of every workspace's ordinary model rather
+ * than a second, prefixed namespace. Those names are therefore reserved by the runtime; an authored
+ * collection cannot replace one of these declarations with a different shape.
  */
 const authUserModel = defineModel(
 	{
@@ -142,7 +144,7 @@ const authUserModel = defineModel(
 		 * handle — as `[{ type, verified, ...address }]`.
 		 *
 		 * This is what makes an inbound channel message attributable. A transport hands the runtime an
-		 * address and nothing else, and `bolt_auth_user` held no address of any kind except `email`, so
+		 * address and nothing else, and `user` held no address of any kind except `email`, so
 		 * a channel declaring `audience: 'authenticated'` had literally nothing to authenticate a
 		 * sender against — the audience was decorative.
 		 *
@@ -624,12 +626,12 @@ const workspaceIdentitySettingsModel = defineModel(
 export const SYSTEM_COLLECTION_MODELS = Object.freeze({
 	approval_request: approvalRequestModel,
 	requestor: requestorModel,
-	bolt_auth_user: authUserModel,
-	bolt_auth_session: authSessionModel,
-	bolt_auth_account: authAccountModel,
-	bolt_auth_verification: authVerificationModel,
-	bolt_auth_config: authConfigModel,
-	bolt_team: teamModel,
+	user: authUserModel,
+	session: authSessionModel,
+	account: authAccountModel,
+	verification: authVerificationModel,
+	auth_config: authConfigModel,
+	team: teamModel,
 	chat_session: conversationModel,
 	chat_message: agentMessageModel,
 	bolt_notifications: notificationModel

@@ -128,7 +128,7 @@ const renderColumn = (name: string, field: FieldDefinition): string => {
 		return `${column} primary key${field.sqlDefault === undefined ? '' : ` default ${field.sqlDefault}`}`;
 	const defaulted =
 		field.sqlDefault === undefined ? column : `${column} default ${field.sqlDefault}`;
-	return `${defaulted}${field.required ? ' not null' : ''}`;
+	return `${defaulted}${field.required ? ' not null' : ''}${field.unique ? ' unique' : ''}`;
 };
 
 const SYSTEM_COLUMNS = Object.entries(systemRowFields)
@@ -297,6 +297,16 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 		// its very first migration on `type "vector" does not exist`.
 		{ id: 'bolt:extension-vector', sql: 'create extension if not exists vector' },
 		{
+			// Declarative reconciliation locks a graph optimistically, then verifies immediately before
+			// commit that no row changed beneath the snapshot it prepared. PostgreSQL has no scalar
+			// assertion expression, and deliberately crashing arithmetic reports a non-retryable data
+			// error. This function gives every generated database one exact guard: false (and NULL, which
+			// is not proof) raises serialization_failure so the existing retry boundary can safely rerun
+			// the whole atomic mutation.
+			id: 'bolt:function-assert',
+			sql: "create or replace function bolt_assert(ok boolean, message text) returns void language plpgsql volatile parallel unsafe as $bolt_assert$ begin if ok is not true then raise exception '%', message using errcode = '40001'; end if; end $bolt_assert$"
+		},
+		{
 			// A STORED generated column refuses a STABLE expression, and `text::date` is only STABLE
 			// because it reads DateStyle. Authored values are canonical ISO dates, whose parse does not,
 			// so this wrapper is honestly immutable. Empty or absent projects NULL, which is what a
@@ -393,10 +403,10 @@ export const identitySchemaSteps = (): ReadonlyArray<SchemaStep> =>
 	}).steps.filter(
 		(step) =>
 			!step.id.includes(':search:') &&
-			// Derived from the declaration rather than from a name prefix. `bolt_team` is an identity
-			// collection — resolving a subject joins it — and it does not begin with `bolt_auth_`, so a
-			// prefix test would have silently left every host that applies these steps unable to
-			// authenticate anybody.
+			// Derived from the declaration rather than from a naming convention. `team` and
+			// `auth_config` are just as necessary to authentication as Better Auth's four models, so a
+			// prefix or allowlist maintained beside the declarations could silently leave a new host
+			// unable to authenticate anybody.
 			IDENTITY_COLLECTION_NAMES.some(
 				(name) => step.id === `collection:${name}` || step.id.startsWith(`collection:${name}:`)
 			)

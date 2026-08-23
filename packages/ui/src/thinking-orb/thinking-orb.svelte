@@ -42,7 +42,6 @@
 
 	/** Read the live attribute Svelte keeps in sync — the attach closure must not snapshot `state`. */
 	function liveOrbState(root: Element): ThinkingOrbState {
-		// stupidity:allow Q4 -- named helper
 		const value = root.getAttribute('data-state');
 		return value !== null && Schema.is(ThinkingOrbStateSchema)(value) ? value : 'ready';
 	}
@@ -54,7 +53,6 @@
 
 	/** Returns the shortest signed angular distance between two radians. */
 	function angleDistance(a: number, b: number): number {
-		// stupidity:allow Q4 -- named helper
 		return Math.atan2(Math.sin(a - b), Math.cos(a - b));
 	}
 
@@ -78,7 +76,6 @@
 
 	/** Builds sphere seed coordinates scaled to the render size. */
 	function buildSphereLayout(renderSize: number): SphereSeed[] {
-		// stupidity:allow Q3 -- named helper
 		const sizeRatio = renderSize / 64;
 		const ringScale = clamp(Math.pow(sizeRatio, 0.35), 0.68, 1);
 		const columnScale = clamp(Math.pow(sizeRatio, 0.45), 0.56, 1);
@@ -105,7 +102,7 @@
 	}
 
 	/** Positions and styles a sphere particle for the given agent orb state. */
-	function spherePoint( // stupidity:allow Q3 -- named helper
+	function spherePoint(
 		mode: ThinkingOrbState,
 		index: number,
 		layout: SphereSeed[],
@@ -286,7 +283,6 @@
 
 		/** Resizes the canvas and rebuilds sphere layout when size or DPR changes. */
 		function syncCanvas(): number {
-			// stupidity:allow Q3 -- named helper
 			const dpr = Math.min(2, window.devicePixelRatio || 1);
 			if (lastCanvasSize !== size || lastDpr !== dpr) {
 				if (lastCanvasSize !== size || shapeFits === undefined) {
@@ -406,7 +402,6 @@
 
 		/** Starts the requestAnimationFrame loop when the orb is visible. */
 		function start(): void {
-			// stupidity:allow Q4 -- named helper
 			if (frame || !visible || document.hidden) return;
 			frame = requestAnimationFrame(tick);
 		}
@@ -429,7 +424,6 @@
 
 		/** Starts or stops animation based on document and intersection visibility. */
 		function updateVisibility(): void {
-			// stupidity:allow Q4 -- named helper
 			if (document.hidden || !visible) stop();
 			else start();
 		}

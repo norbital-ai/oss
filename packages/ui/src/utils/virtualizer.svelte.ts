@@ -73,8 +73,7 @@ export type ScrollAlignment = 'start' | 'center' | 'end' | 'auto';
 
 export function createVirtualizer(options: VirtualizerOptions): Virtualizer {
 	const overscan = options.overscan;
-	const getOverscan =
-		typeof overscan === 'function' ? overscan : () => overscan ?? 3;
+	const getOverscan = typeof overscan === 'function' ? overscan : () => overscan ?? 3;
 
 	// Reactive state
 	let scrollOffset = $state(options.initialOffset ?? 0);

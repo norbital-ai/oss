@@ -20,7 +20,7 @@ import { approvalSteps } from '../runtime/identity/approver-teams.js';
  * asked to approve a record is what entitles somebody to read it.
  *
  * **What used to be here and is now a type.** This module carried the note that `+teams.ts` need not
- * declare an approver, because `reconcileApproverTeams` creates a `bolt_team` row for every approver
+ * declare an approver, because `reconcileApproverTeams` creates a `team` row for every approver
  * name a release declares and `Approvals.decide` matches by name rather than by policy. That reading
  * lost: `approvers` is typed as `TeamName`, a union generated from `+teams.ts`'s own keys, so a
  * misspelling is a compile error rather than an approval nobody can decide. The shape it protected —
@@ -38,7 +38,7 @@ type ApprovalDiagnostic = Readonly<{
 	readonly message: string;
 }>;
 
-/** `approvers` entries and `bolt_team.name` are compared folded everywhere else, so they are here. */
+/** `approvers` entries and `team.name` are compared folded everywhere else, so they are here. */
 const fold = (value: string): string => value.trim().toLocaleLowerCase();
 
 /** One approval step, exactly as `approvalSteps` emits and this module's diagnostics want to name it. */
@@ -120,8 +120,7 @@ const wideningDiagnostics = (
 			// A grant with no `where` — or with an empty one — is unconditional, and that is what makes
 			// it dangerous beside a narrowed sibling: `rowPredicate` ORs the `where`s, so `true OR
 			// (assignee = me)` is `true` and the narrowing evaporates.
-			const unconditional =
-				grant.where === undefined || Object.keys(grant.where).length === 0;
+			const unconditional = grant.where === undefined || Object.keys(grant.where).length === 0;
 			(unconditional ? entry.unconditional : entry.narrowed).push(policy.name);
 			byResource.set(key, entry);
 		}

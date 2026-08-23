@@ -14,6 +14,7 @@ import {
 	Context,
 	Cause,
 	Effect,
+	Fiber,
 	Layer,
 	ManagedRuntime,
 	Number as EffectNumber,
@@ -24,13 +25,12 @@ import {
 } from 'effect';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { once } from 'node:events';
 import { WebSocket, WebSocketServer } from 'ws';
 import { BundleLoader } from './bundle-loader.js';
 import type { ServerConfiguration } from './config.js';
 import { ServerHealth } from './health.js';
 
-/** Identifies a bounded Node transport operation that could not complete safely; stupidity:allow Q4 -- Effect TaggedError declaration is the canonical rc.109 error boundary. */
+/** Identifies a bounded Node transport operation that could not complete safely. */
 export class ServerTransportError extends Schema.TaggedError<ServerTransportError>()(
 	'BoltServer.ServerTransportError',
 	{
@@ -40,7 +40,7 @@ export class ServerTransportError extends Schema.TaggedError<ServerTransportErro
 	}
 ) {}
 
-/** Gives malformed command bodies a schema-owned client error instead of a JSON defect; stupidity:allow Q4 -- Effect TaggedError declaration is the canonical rc.109 error boundary. */
+/** Gives malformed command bodies a schema-owned client error instead of a JSON defect. */
 export class CommandInputError extends Schema.TaggedError<CommandInputError>()(
 	'BoltServer.CommandInputError',
 	{
@@ -52,6 +52,7 @@ export class CommandInputError extends Schema.TaggedError<CommandInputError>()(
 /** The server lifecycle: the transport it owns and the one-shot gate that closes it. */
 export interface RunningServer {
 	readonly address: { readonly host: string; readonly port: number };
+	// repository-health:allow EFF2 -- Public host finalizers preserve the established Promise lifecycle contract.
 	readonly close: () => Promise<void>;
 }
 
@@ -71,9 +72,13 @@ export class UuidGeneration extends Context.Service<
 	{ readonly next: () => InvocationId }
 >()('@norbital-ai/bolt-server/UuidGeneration') {}
 
-export const uuidGenerationLayer = Layer.succeed(UuidGeneration, {
-	next: () => InvocationId.make(randomUUID())
-});
+/** Builds the UUID service from an injected source so tests can own a deterministic sequence. */
+const makeUuidGenerationLayer = (nextUuid: () => string) =>
+	Layer.succeed(UuidGeneration, {
+		next: () => InvocationId.make(nextUuid())
+	});
+
+export const uuidGenerationLayer = makeUuidGenerationLayer(randomUUID);
 
 /** The payload shape a host plugin may send, decoded once instead of field-guessed. */
 const PluginInput = Schema.Struct({
@@ -314,6 +319,62 @@ const dispatchRealtime = Effect.fn('BoltServer.Server.dispatchRealtime')(functio
 	return realtime;
 });
 
+/** Writes one SSE frame and waits for Node backpressure without entering Promise control flow. */
+const writeSseFrame = (
+	response: ServerResponse,
+	frame: RealtimeOutput['frames'][number]
+): Effect.Effect<void, ServerTransportError> =>
+	Effect.callback<void, unknown>((resume, signal) => {
+		let settled = false;
+		const cleanup = () => {
+			response.off('drain', onDrain);
+			response.off('close', onClose);
+			signal.removeEventListener('abort', onAbort);
+		};
+		const settle = (effect: Effect.Effect<void, unknown>) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resume(effect);
+		};
+		function onDrain(): void {
+			settle(Effect.void);
+		}
+		function onClose(): void {
+			settle(Effect.fail(new Error('SSE client disconnected')));
+		}
+		function onAbort(): void {
+			settle(Effect.fail(signal.reason));
+		}
+
+		if (signal.aborted || response.destroyed) {
+			onAbort();
+			return;
+		}
+		const payload = JSON.stringify({
+			cursor: frame.cursor,
+			kind: frame.kind,
+			bytes: Buffer.from(frame.bytes).toString('base64')
+		});
+		if (response.write(`event: ${frame.kind}\ndata: ${payload}\n\n`)) {
+			settle(Effect.void);
+			return;
+		}
+		response.once('drain', onDrain);
+		response.once('close', onClose);
+		signal.addEventListener('abort', onAbort, { once: true });
+		return Effect.sync(cleanup);
+	}).pipe(
+		Effect.mapError(
+			(cause) =>
+				new ServerTransportError({
+					operation: 'BoltServer.Server.writeSse',
+					message: 'Unable to write Bolt SSE frames',
+					cause
+				})
+		)
+	);
+
 const handleSse = Effect.fn('BoltServer.Server.handleSse')(function* (
 	request: IncomingMessage,
 	response: ServerResponse,
@@ -357,35 +418,9 @@ const handleSse = Effect.fn('BoltServer.Server.handleSse')(function* (
 	response.setHeader('content-type', 'text/event-stream; charset=utf-8');
 	response.setHeader('cache-control', 'no-store');
 	response.setHeader('x-bolt-connection-id', connectionId);
-	yield* Effect.forEach(
-		output?.frames ?? [],
-		(frame) =>
-			Effect.tryPromise({
-				try: async (signal) => {
-					if (signal.aborted || response.destroyed) throw signal.reason;
-					const payload = JSON.stringify({
-						cursor: frame.cursor,
-						kind: frame.kind,
-						bytes: Buffer.from(frame.bytes).toString('base64')
-					});
-					if (!response.write(`event: ${frame.kind}\ndata: ${payload}\n\n`)) {
-						await Promise.race([
-							once(response, 'drain', { signal }),
-							once(response, 'close', { signal }).then(() => {
-								throw new Error('SSE client disconnected');
-							})
-						]);
-					}
-				},
-				catch: (cause) =>
-					new ServerTransportError({
-						operation: 'BoltServer.Server.writeSse',
-						message: 'Unable to write Bolt SSE frames',
-						cause
-					})
-			}),
-		{ discard: true }
-	);
+	yield* Effect.forEach(output?.frames ?? [], (frame) => writeSseFrame(response, frame), {
+		discard: true
+	});
 	response.end();
 });
 
@@ -661,54 +696,49 @@ const processRealtimeEvent = Effect.fn('BoltServer.Server.processRealtimeEvent')
 	}
 });
 
-/** Starts the HTTP, static, SSE, and WebSocket shell around one loaded Bolt bundle. */
-export const startServer = async <E>(
+const startServerEffect = <E>(
 	configuration: ServerConfiguration,
 	facilities: FacilityBindings,
 	runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, E>
-): Promise<RunningServer> => {
-	const websocketServer = new WebSocketServer({ noServer: true });
-	const shutdown = new AbortController();
-	const cancelConnections = new Set<() => Promise<void>>();
-	const server = createServer((request, response) => {
-		const requestAbort = new AbortController();
-		request.once('aborted', () => requestAbort.abort(new Error('HTTP client disconnected')));
-		response.once('close', () => {
-			if (!response.writableEnded) {
-				requestAbort.abort(new Error('HTTP client disconnected'));
-			}
+): Effect.Effect<RunningServer, ServerTransportError> =>
+	Effect.gen(function* () {
+		const websocketServer = new WebSocketServer({ noServer: true });
+		const shutdown = new AbortController();
+		const cancelConnections = new Set<Effect.Effect<void, unknown, RuntimeServices>>();
+		const server = createServer((request, response) => {
+			const requestAbort = new AbortController();
+			request.once('aborted', () => requestAbort.abort(new Error('HTTP client disconnected')));
+			response.once('close', () => {
+				if (!response.writableEnded) {
+					requestAbort.abort(new Error('HTTP client disconnected'));
+				}
+			});
+
+			runtime.runFork(
+				handleHttp(request, response, configuration, facilities).pipe(
+					Effect.catchCause((cause) =>
+						Effect.gen(function* () {
+							// The response body stays opaque, but an unexplained 500 with no
+							// server-side record is undiagnosable.
+							yield* Effect.logError(`bolt-server: ${request.method} ${request.url} failed`, cause);
+							yield* Effect.sync(() =>
+								writeJson(response, 500, { code: 'bolt_server.internal_error' })
+							);
+						})
+					)
+				),
+				{ signal: AbortSignal.any([shutdown.signal, requestAbort.signal]) }
+			);
 		});
 
-		void runtime
-			.runPromise(handleHttp(request, response, configuration, facilities), {
-				signal: AbortSignal.any([shutdown.signal, requestAbort.signal])
-			})
-			.catch((cause: unknown) => {
-				// The response body stays opaque, but an unexplained 500 with no server-side record
-				// is undiagnosable — every operator report of one started here.
-				void Effect.runPromise(
-					Effect.logError(`bolt-server: ${request.method} ${request.url} failed`, cause)
-				);
-				writeJson(response, 500, { code: 'bolt_server.internal_error' });
-			});
-	});
-
-	websocketServer.on('connection', (socket, request) => {
-		/** Mints the session identity and the serialization gate before any event can be enqueued. */
-		const session = () =>
-			Effect.gen(function* () {
-				const uuid = yield* UuidGeneration;
-				const semaphore = yield* Semaphore.make(1);
-				return { connectionId: uuid.next(), semaphore };
-			});
-		void runtime
-			.runPromise(session(), { signal: shutdown.signal })
-			.then(({ connectionId, semaphore }) => {
-				let sequence = 0;
-
-				/** Runs one event under the session permit, reporting a dispatch failure by closing the socket. */
-				const enqueue = (event: RealtimeEvent): Promise<void> =>
-					runtime.runPromise(
+		websocketServer.on('connection', (socket, request) => {
+			runtime.runFork(
+				Effect.gen(function* () {
+					const uuid = yield* UuidGeneration;
+					const semaphore = yield* Semaphore.make(1);
+					const connectionId = uuid.next();
+					let sequence = 0;
+					const enqueue = (event: RealtimeEvent) =>
 						Semaphore.withPermit(semaphore)(
 							processRealtimeEvent(connectionId, event, configuration, facilities, socket)
 						).pipe(
@@ -719,109 +749,153 @@ export const startServer = async <E>(
 									}
 								})
 							)
-						),
-						{ signal: shutdown.signal }
-					);
-				/** Gives Bolt a durable cancellation event before the host closes the socket; stupidity:allow Q4 -- Set membership requires one stable per-connection callback identity. */
-				const cancel = (): Promise<void> =>
-					enqueue(
+						);
+					const cancel = enqueue(
 						Invocation.cases.Realtime.fields.event.cases.Cancel.make({
 							reason: 'Server shutting down'
 						})
 					);
-				cancelConnections.add(cancel);
+					cancelConnections.add(cancel);
 
-				const protocol = request.headers['sec-websocket-protocol']?.split(',')[0]?.trim();
-				void enqueue(
-					Invocation.cases.Realtime.fields.event.cases.Open.make(
-						protocol === undefined || protocol.length === 0 ? {} : { protocol }
-					)
-				);
-				socket.on('message', (data, isBinary) => {
-					void enqueue(
-						Invocation.cases.Realtime.fields.event.cases.Input.make({
-							frame: {
-								sequence: sequence++,
-								kind: isBinary ? 'binary' : 'text',
-								bytes: Array.isArray(data)
-									? new Uint8Array(Buffer.concat(data))
-									: new Uint8Array(data)
-							}
-						})
+					const protocol = request.headers['sec-websocket-protocol']?.split(',')[0]?.trim();
+					runtime.runFork(
+						enqueue(
+							Invocation.cases.Realtime.fields.event.cases.Open.make(
+								protocol === undefined || protocol.length === 0 ? {} : { protocol }
+							)
+						),
+						{ signal: shutdown.signal }
 					);
-				});
-				socket.once('close', (code, reason) => {
-					if (shutdown.signal.aborted) {
-						cancelConnections.delete(cancel);
-						return;
-					}
-					void Effect.runPromise(
-						Effect.tryPromise(() =>
+					socket.on('message', (data, isBinary) => {
+						runtime.runFork(
+							enqueue(
+								Invocation.cases.Realtime.fields.event.cases.Input.make({
+									frame: {
+										sequence: sequence++,
+										kind: isBinary ? 'binary' : 'text',
+										bytes: Array.isArray(data)
+											? new Uint8Array(Buffer.concat(data))
+											: new Uint8Array(data)
+									}
+								})
+							),
+							{ signal: shutdown.signal }
+						);
+					});
+					socket.once('close', (code, reason) => {
+						if (shutdown.signal.aborted) {
+							cancelConnections.delete(cancel);
+							return;
+						}
+						runtime.runFork(
 							enqueue(
 								Invocation.cases.Realtime.fields.event.cases.Close.make({
 									code,
 									reason: reason.toString('utf8')
 								})
-							)
-						).pipe(
-							Effect.ensuring(Effect.sync(() => cancelConnections.delete(cancel))),
-							Effect.catch(() => Effect.void)
+							).pipe(Effect.ensuring(Effect.sync(() => cancelConnections.delete(cancel)))),
+							{ signal: shutdown.signal }
+						);
+					});
+				}).pipe(
+					Effect.catch((cause) =>
+						Effect.gen(function* () {
+							yield* Effect.logError('bolt-server: websocket session setup failed', cause);
+							yield* Effect.sync(() => {
+								if (
+									socket.readyState !== WebSocket.CLOSED &&
+									socket.readyState !== WebSocket.CLOSING
+								) {
+									socket.close(1011, 'Bolt websocket session failed');
+								}
+							});
+						})
+					)
+				),
+				{ signal: shutdown.signal }
+			);
+		});
+
+		server.on('upgrade', (request, socket, head) => {
+			const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+			if (url.pathname !== '/__bolt/realtime') {
+				socket.destroy();
+				return;
+			}
+			websocketServer.handleUpgrade(request, socket, head, (websocket) => {
+				websocketServer.emit('connection', websocket, request);
+			});
+		});
+
+		yield* Effect.callback<void, ServerTransportError>((resume) => {
+			const onError = (cause: Error) =>
+				resume(
+					Effect.fail(
+						new ServerTransportError({
+							operation: 'BoltServer.Server.listen',
+							message: 'Bolt server listener failed to start',
+							cause
+						})
+					)
+				);
+			server.once('error', onError);
+			server.listen(configuration.port, configuration.host, () => {
+				server.off('error', onError);
+				resume(Effect.void);
+			});
+			return Effect.sync(() => server.off('error', onError));
+		});
+
+		const address = server.address();
+		if (address === null || typeof address === 'string') {
+			return yield* new ServerTransportError({
+				operation: 'BoltServer.Server.address',
+				message: 'Bolt server listener did not expose a TCP address'
+			});
+		}
+
+		const closeEffect = Effect.gen(function* () {
+			const listener = yield* Effect.forkChild(
+				Effect.callback<void, ServerTransportError>((resume) => {
+					server.close((cause) =>
+						resume(
+							cause === undefined
+								? Effect.void
+								: Effect.fail(
+										new ServerTransportError({
+											operation: 'BoltServer.Server.close',
+											message: 'Bolt server listener failed to close',
+											cause
+										})
+									)
 						)
 					);
-				});
-			})
-			.catch((cause: unknown) => {
-				void Effect.runPromise(
-					Effect.logError('bolt-server: websocket session setup failed', cause)
-				);
-				if (socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
-					socket.close(1011, 'Bolt websocket session failed');
-				}
-			});
-	});
-
-	server.on('upgrade', (request, socket, head) => {
-		const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-		if (url.pathname !== '/__bolt/realtime') {
-			socket.destroy();
-			return;
-		}
-		websocketServer.handleUpgrade(request, socket, head, (websocket) => {
-			websocketServer.emit('connection', websocket, request);
-		});
-	});
-
-	await new Promise<void>((resolve, reject) => {
-		server.once('error', reject);
-		server.listen(configuration.port, configuration.host, () => {
-			server.off('error', reject);
-			resolve();
-		});
-	});
-
-	const address = server.address();
-	if (address === null || typeof address === 'string') {
-		throw new Error('Bolt server listener did not expose a TCP address');
-	}
-
-	let closePromise: Promise<void> | undefined;
-	/** Stops listener admission, cancels sessions, and closes every transport exactly once. */
-	const close = (): Promise<void> => {
-		closePromise ??= (async () => {
-			const listenerClosed = new Promise<void>((resolve, reject) => {
-				server.close((error) => (error === undefined ? resolve() : reject(error)));
-			});
-			await Promise.allSettled([...cancelConnections].map((cancel) => cancel()));
+				})
+			);
+			yield* Effect.forEach(
+				cancelConnections,
+				(cancel) => Effect.tryPromise(() => runtime.runPromise(cancel)).pipe(Effect.result),
+				{ concurrency: 'unbounded', discard: true }
+			);
 			shutdown.abort(new Error('Bolt server is shutting down'));
-			for (const client of websocketServer.clients) client.close(1001, 'Server shutting down');
+			for (const client of websocketServer.clients) {
+				client.close(1001, 'Server shutting down');
+			}
 			websocketServer.close();
-			await listenerClosed;
-		})();
-		return closePromise;
-	};
+			yield* Fiber.join(listener);
+		});
+		const closeOnce = yield* Effect.cached(closeEffect);
+		const close = () => Effect.runPromise(closeOnce);
 
-	return {
-		address: { host: configuration.host, port: address.port },
-		close
-	};
-};
+		return {
+			address: { host: configuration.host, port: address.port },
+			close
+		};
+	});
+
+/** Starts the HTTP, static, SSE, and WebSocket shell around one loaded Bolt bundle. */
+export const startServer = <E>(
+	configuration: ServerConfiguration,
+	facilities: FacilityBindings,
+	runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, E>
+) => Effect.runPromise(startServerEffect(configuration, facilities, runtime));

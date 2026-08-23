@@ -31,6 +31,7 @@
 		getCollectionSurfaceRuntime,
 		resolveCollectionSurface
 	} from '#lib/collection-runtime';
+	import { approvalRequestIdForRecord } from './approval-anchor.js';
 
 	type Row = CollectionRecord;
 	type ErasedCollection = CollectionType<Row, object, object>;
@@ -121,11 +122,7 @@
 	const changeRequestReason = $derived(
 		approvalActionState.status === 'requesting_changes' ? approvalActionState.reason : ''
 	);
-	const activeApprovalId = $derived.by(() => {
-		if (!record) return undefined;
-		const value = Reflect.get(record, 'approval_id');
-		return typeof value === 'string' ? value : undefined;
-	});
+	const activeApprovalId = $derived(approvalRequestIdForRecord(collectionName, record));
 	const approvalQueryInput = $derived(
 		activeApprovalId && client?.approvals
 			? { approvalId: activeApprovalId, approvals: client.approvals }
@@ -184,24 +181,6 @@
 		);
 	}
 
-	/**
-	 * Re-read what this sheet shows.
-	 *
-	 * The table's copy of this also refreshed the row list behind the sheet. It no longer needs to:
-	 * every `db.*` write goes through the runtime's `invalidateWrite`, which drops the collection's
-	 * cached answers and re-runs *every* live query reading it — the row list included, and the board
-	 * and any other surface showing the same record besides.
-	 */
-	function refresh(): Effect.Effect<void, unknown> {
-		return Effect.all(
-			[
-				recordQuery ? Effect.tryPromise(() => recordQuery.refresh()) : Effect.void,
-				approvalQuery ? Effect.tryPromise(() => approvalQuery.refresh()) : Effect.void
-			],
-			{ discard: true }
-		);
-	}
-
 	function approvalActionSuccessMessage(
 		action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE'
 	): string {
@@ -235,23 +214,6 @@
 				if (action === 'REQUEST_FOR_CHANGE') changeRequestOpen = false;
 				approvalActionState = { status: 'idle' };
 				toast.success(approvalActionSuccessMessage(action));
-				// The decision is already committed. Keep slow or failed reads from turning a
-				// successful mutation into a stuck dialog and a false "action failed" message;
-				// live sync normally wins this race, while these refreshes are only an
-				// immediate consistency assist.
-				Effect.runFork(
-					refresh().pipe(
-						Effect.catch((error) =>
-							Effect.sync(() => {
-								toast.error(
-									error instanceof Error
-										? `${t('table.actionRefreshFailed')}: ${error.message}`
-										: t('table.actionRefreshFailed')
-								);
-							})
-						)
-					)
-				);
 				return true;
 			}),
 			Effect.catch((error) =>
@@ -295,7 +257,6 @@
 		approvalActionState = { status: 'pending' };
 		void Effect.runPromise(
 			Effect.tryPromise(() => approvals.withdraw(activeApprovalId)).pipe(
-				Effect.tap(() => refresh()),
 				Effect.tap(() => Effect.sync(() => toast.success(t('table.approvalWithdrawn')))),
 				Effect.catch((error) =>
 					Effect.sync(() => {
@@ -316,7 +277,7 @@
 	{#if record && collectionSurface?.representation}
 		{@const Representation = collectionSurface.representation}
 		{#key recordId}
-			<Representation {record} close={onClose} {refresh} />
+			<Representation {record} close={onClose} />
 		{/key}
 	{:else if record && client}
 		<!-- Default detail surface (RFC V.2/V.6): a schema-derived form bound to the record. -->

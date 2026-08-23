@@ -61,10 +61,7 @@ const decodeImportResult = Schema.decodeUnknownEffect(Schema.Struct({ imported: 
  * disagree with the other two about where a command goes and who is issuing it.
  */
 const CollectionTransfer = {
-	download: (
-		input: CollectionExportInput,
-		options: CollectionExportOptions = {}
-	): Promise<ExportManifest> =>
+	download: (input: CollectionExportInput, options: CollectionExportOptions = {}) =>
 		Effect.runPromise(
 			Effect.tryPromise(() =>
 				workspaceSession().transport.command('collections.export', input)
@@ -75,7 +72,7 @@ const CollectionTransfer = {
 				)
 			)
 		),
-	importRecords: (input: CollectionImportInput): Promise<number> =>
+	importRecords: (input: CollectionImportInput) =>
 		Effect.runPromise(
 			Effect.tryPromise(() =>
 				workspaceSession().transport.command('collections.import', input)
@@ -88,7 +85,7 @@ const CollectionTransfer = {
 export const downloadCollectionExport = CollectionTransfer.download;
 
 /**
- * One record as `collections.import` declares it — the same mutation shape `collections.create`
+ * One record as `collections.import` declares it — close to the shape `collections.mutate`
  * posts: where it goes, what identifies it, and what it carries.
  *
  * `values` is where an import differs from a create. On a collection with an import pipeline these
@@ -101,10 +98,10 @@ export const downloadCollectionExport = CollectionTransfer.download;
  * what actually gets written come back off the rows the pipeline returns. Mint it with
  * `crypto.randomUUID()`.
  *
- * `collections.create` no longer takes one, and this is the last surface that does. The difference
- * is what the id is *for*: a create is one row and the server assigns its key at the point it
- * builds it, while an import posts a document whose id is a handle on the posted file rather than
- * on any row, and the pipeline decides what rows the file becomes.
+ * `collections.mutate` keeps identity inside an existing row and assigns it for a new one, while
+ * this is the last browser surface with a separate top-level id. The difference is what the id is
+ * *for*: a mutation is one root record, while an import posts a document whose id is a handle on
+ * the posted file rather than on any row, and the pipeline decides what rows the file becomes.
  */
 const CollectionImportRecordSchema = Schema.Struct({
 	collection: Schema.String,

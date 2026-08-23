@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
+import { generateDrizzleJson } from 'drizzle-kit/api-postgres';
 import { readWorkspaceMigrations } from '../../src/compiler/sync.js';
-import { writeMigration } from '../../src/compiler/schema-migrations.js';
+import { latestSnapshot, writeMigration } from '../../src/compiler/schema-migrations.js';
 
 /**
  * The lineage as the artifact sees it.
@@ -73,6 +74,19 @@ describe('Bolt migration lineage', () => {
 				readWorkspaceMigrations(await mkdtemp(join(tmpdir(), 'bolt-lineage-')))
 			)
 		).toEqual([]);
+	});
+
+	it('reads a current drizzle snapshot back without sending it through the legacy upgrader', async () => {
+		const migrationsRoot = await mkdtemp(join(tmpdir(), 'bolt-lineage-'));
+		const snapshot = await generateDrizzleJson({});
+		await Effect.runPromise(
+			writeMigration(migrationsRoot, {
+				tag: '20260817000000_baseline',
+				statements: [],
+				snapshot
+			})
+		);
+		expect(await Effect.runPromise(latestSnapshot(migrationsRoot))).toEqual(snapshot);
 	});
 
 	/**

@@ -1,5 +1,4 @@
 import { Context, Effect, Layer, Schema } from 'effect';
-import type { FileRef } from '#lib/authoring/models-schema.js';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import * as Collections from '#lib/runtime/collections/collections.js';
 import { AI, Files } from '#lib/runtime/facilities/services.js';
@@ -10,24 +9,11 @@ import { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import {
 	makeAuthoringApi,
 	makeBoundAuthoringOps,
-	runAuthoredHandler
+	runAuthoredHandler,
+	type RuntimeAuthoringApi
 } from '#lib/runtime/collections/authored.js';
 
-type RuntimeRemoteApi = Readonly<{
-	readonly db: object;
-	readonly infer: (input: {
-		readonly schema: Schema.Codec<unknown, unknown>;
-		readonly prompt: string;
-		readonly model?: string;
-	}) => Promise<unknown>;
-	readonly readFileAsset: (file: FileRef) => Promise<{
-		readonly id: string;
-		readonly name: string;
-		readonly mimeType: string | null;
-		readonly size: number;
-		readonly bytes: Uint8Array;
-	}>;
-}>;
+type RuntimeRemoteApi = Pick<RuntimeAuthoringApi, 'db' | 'infer' | 'readFileAsset'>;
 
 export type RuntimeRemoteHandler = ReturnType<
 	() => (input: unknown, api: RuntimeRemoteApi) => unknown
@@ -87,7 +73,7 @@ const RemoteRegistries = {
 							files,
 							automations
 						);
-						const api = makeAuthoringApi(ops) as RuntimeRemoteApi;
+						const api: RuntimeRemoteApi = makeAuthoringApi(ops);
 						// `runAuthoredHandler` already answers an Effect and settles a value, a promise or an
 						// Effect alike, so it is yielded rather than wrapped in `tryPromise` — wrapping it
 						// would hand the fiber the Effect object instead of running it.

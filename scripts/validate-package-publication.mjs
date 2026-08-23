@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { Effect } from 'effect';
 import { assertDeclarationEmit } from './lib/declaration-emit.mjs';
 import { inspectPackageArchive, packedArchiveFilename } from './lib/package-archive.mjs';
 import { publicPackageDirectories, readManifest } from './lib/package-release.mjs';
@@ -42,33 +43,43 @@ function assertArchiveDeclarations(archivePath, directory) {
 	rmSync(unpacked, { recursive: true, force: true });
 }
 
-rmSync(outputDirectory, { recursive: true, force: true });
-mkdirSync(outputDirectory, { recursive: true });
-try {
-	for (const directory of publicPackageDirectories) {
-		const packageDirectory = path.join(repositoryRoot, 'packages', directory);
-		const manifest = readManifest(path.join(packageDirectory, 'package.json'));
-		if (manifest.scripts?.build) {
-			// `prepack` is the only hook every pack path goes through — `changeset publish` in the
-			// release workflow, a developer's `pnpm pack`, and this check. It must therefore build
-			// through turbo rather than call the package's own `build` directly: turbo's `^build` is
-			// what guarantees the workspace dependencies exist before the compiler reads them, and a
-			// compiler that reads a missing one emits `any` and exits 0.
-			if (manifest.scripts.prepack !== `pnpm exec turbo run build --filter=${manifest.name}`) {
-				fail(`${manifest.name} must build through turbo during prepack.`);
-			}
-			rmSync(path.join(packageDirectory, 'build'), { recursive: true, force: true });
-		}
-		const packOutput = execFileSync(
-			'pnpm',
-			['pack', '--json', '--pack-destination', outputDirectory],
-			{ cwd: packageDirectory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }
-		);
-		const filename = packedArchiveFilename(packOutput, `pnpm pack for packages/${directory}`);
-		inspectPackageArchive(filename, { directory, repositoryLicense });
-		if (manifest.scripts?.build) assertArchiveDeclarations(filename, directory);
-	}
-	console.log(`Validated ${publicPackageDirectories.length} standalone public package archives.`);
-} finally {
-	rmSync(outputDirectory, { recursive: true, force: true });
-}
+Effect.runSync(
+	Effect.acquireUseRelease(
+		Effect.sync(() => {
+			rmSync(outputDirectory, { recursive: true, force: true });
+			mkdirSync(outputDirectory, { recursive: true });
+		}),
+		() =>
+			Effect.sync(() => {
+				for (const directory of publicPackageDirectories) {
+					const packageDirectory = path.join(repositoryRoot, 'packages', directory);
+					const manifest = readManifest(path.join(packageDirectory, 'package.json'));
+					if (manifest.scripts?.build) {
+						// `prepack` is the only hook every pack path goes through — `changeset publish` in the
+						// release workflow, a developer's `pnpm pack`, and this check. It must therefore build
+						// through turbo rather than call the package's own `build` directly: turbo's `^build` is
+						// what guarantees the workspace dependencies exist before the compiler reads them, and a
+						// compiler that reads a missing one emits `any` and exits 0.
+						if (
+							manifest.scripts.prepack !== `pnpm exec turbo run build --filter=${manifest.name}`
+						) {
+							fail(`${manifest.name} must build through turbo during prepack.`);
+						}
+						rmSync(path.join(packageDirectory, 'build'), { recursive: true, force: true });
+					}
+					const packOutput = execFileSync(
+						'pnpm',
+						['pack', '--json', '--pack-destination', outputDirectory],
+						{ cwd: packageDirectory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }
+					);
+					const filename = packedArchiveFilename(packOutput, `pnpm pack for packages/${directory}`);
+					inspectPackageArchive(filename, { directory, repositoryLicense });
+					if (manifest.scripts?.build) assertArchiveDeclarations(filename, directory);
+				}
+				console.log(
+					`Validated ${publicPackageDirectories.length} standalone public package archives.`
+				);
+			}),
+		() => Effect.sync(() => rmSync(outputDirectory, { recursive: true, force: true }))
+	)
+);

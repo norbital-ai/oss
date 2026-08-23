@@ -53,7 +53,7 @@ const UploadResultSchema = Schema.Struct({
 	 * and returns the bare uuid as the id. Reconstructing one from the other by string surgery is
 	 * how a read lands on a key nothing was ever written under, so the key is carried.
 	 */
-	storageKey: Schema.String,
+	storageKey: Schema.String
 });
 export type UploadResult = typeof UploadResultSchema.Type;
 

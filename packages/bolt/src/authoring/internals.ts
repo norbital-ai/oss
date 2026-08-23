@@ -1,5 +1,7 @@
 import type { ModelDeclaration } from './models-schema.js';
 import type { SYSTEM_COLLECTION_MODELS } from './system-models.js';
+import type { RemoteQuery as ClientRemoteQuery } from '@norbital-ai/std/collection';
+export type { RemoteQuery } from '@norbital-ai/std/collection';
 export type { AutomationContext, AutomationTrigger } from './automations-schema.js';
 export {
 	describeHooks,
@@ -130,13 +132,13 @@ export type GroupDefinition = import('./models-schema.js').BoltGroupDefinition;
 /**
  * A person, as much of one as a workspace may read.
  *
- * Two fields, because the system read policy grants `bolt_auth_user` with exactly that field mask —
+ * Two fields, because the system read policy grants `user` with exactly that field mask —
  * `findMany` masks every row it returns, so the address, roles and teams are not merely unselected
  * here, they cannot be read at all. Typing the full row would promise authored code something the
  * runtime refuses.
  *
  * This replaces `user`, `team` and `team_members`, which were declared here long after the tables
- * themselves stopped existing: identity became runtime-owned and merged into `bolt_auth_user`, and
+ * themselves stopped existing: identity became runtime-owned and merged into `user`, and
  * teams became a jsonb array on that row rather than records of their own. Nothing removed the
  * types, so `db.user.findMany(...)` went on typechecking in three workspace screens and failing at
  * run time against a table that is not in `information_schema`.
@@ -162,7 +164,7 @@ export type InvokeClientApi<
 > = {
 	readonly [K in keyof Invoke]: (
 		input: Parameters<Invoke[K]['handler']>[0]
-	) => RemoteQuery<HandlerSuccess<ReturnType<Invoke[K]['handler']>>>;
+	) => ClientRemoteQuery<HandlerSuccess<ReturnType<Invoke[K]['handler']>>>;
 };
 type HandlerSuccess<Value> = Value extends import('effect').Effect.Effect<
 	infer Success,
@@ -171,12 +173,6 @@ type HandlerSuccess<Value> = Value extends import('effect').Effect.Effect<
 >
 	? Success
 	: Awaited<Value>;
-export interface RemoteQuery<Value> extends PromiseLike<Value> {
-	readonly current: Value | undefined;
-	readonly error: unknown;
-	readonly loading: boolean;
-	readonly refresh: () => Promise<void>;
-}
 export type InvokeClientRuntime<
 	S extends import('./contracts-schema.js').AnySchema = DefaultWorkspaceSchema
 > = Readonly<{ readonly api: BeforeApi<S> }>;

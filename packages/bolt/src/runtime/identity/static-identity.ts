@@ -4,7 +4,7 @@ import type * as Identity from '#lib/runtime/identity/identity.js';
  * The static identities this runtime mints, and the one rule they all obey.
  *
  * A static identity is declared in source, compiled into the release, and minted **in memory per
- * invocation**. It never has a `bolt_auth_user` row. The set of them changes only by deploying a
+ * invocation**. It never has a `user` row. The set of them changes only by deploying a
  * different release — declare a fifth envoy and there is a fifth identity, arriving by deploying
  * rather than by anything being inserted.
  *

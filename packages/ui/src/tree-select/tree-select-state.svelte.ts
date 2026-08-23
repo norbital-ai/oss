@@ -13,13 +13,13 @@ import type {
 // ============================================================================
 
 export function isParentNode<TMetadata>(
-	node: TreeNodes<TMetadata> // stupidity:allow R5b -- canonical instanceof guard for this exported class union
+	node: TreeNodes<TMetadata>
 ): node is TreeParentNode<TMetadata> {
 	return node instanceof TreeParentNode;
 }
 
 export function isRequiredChildNode<TMetadata>(
-	node: TreeNodes<TMetadata> // stupidity:allow R5b -- canonical instanceof guard for this exported class union
+	node: TreeNodes<TMetadata>
 ): node is RequiredTreeChildNode<TMetadata> {
 	return node instanceof RequiredTreeChildNode;
 }

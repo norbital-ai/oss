@@ -42,7 +42,7 @@ describe('typed browser client', () => {
 		const proxy = createWorkspaceApiProxy(runtime);
 		const employees = Reflect.get(proxy.db, 'employees') as
 			{ findMany: (input?: object) => PromiseLike<unknown> } | undefined;
-		const query = employees?.findMany({ limit: 20 });
+		const query = employees?.findMany({ limit: 20, after: undefined });
 		expect(proxy.collections['employees']?.name).toBe('employees');
 		expect(await query).toEqual([{ id: 'e1', name: 'Ada' }]);
 		expect(commands.map((entry) => entry.command)).toContain('collections.findMany');
@@ -52,5 +52,123 @@ describe('typed browser client', () => {
 				limit: 20
 			}
 		);
+		expect(
+			commands.find((entry) => entry.command === 'collections.findMany')?.input
+		).not.toHaveProperty('after');
+	});
+
+	it('groups a board query through the canonical collection read', async () => {
+		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
+		const bolt = createBoltClient(scope, {
+			command: (command, input) => {
+				commands.push({ command, input });
+				return Promise.resolve({
+					rows: [
+						{ id: 'e1', status: 'active' },
+						{ id: 'e2', status: 'active' },
+						{ id: 'e3', status: 'closed' }
+					],
+					nextCursor: null
+				});
+			}
+		});
+		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
+		const employees = Reflect.get(proxy.db, 'employees') as {
+			findGrouped: (input: object) => PromiseLike<unknown>;
+		};
+
+		await expect(
+			employees.findGrouped({
+				where: { archived: { eq: false } },
+				group: { by: 'status', lanes: ['active', 'pending', 'closed'] }
+			})
+		).resolves.toEqual({
+			active: [
+				{ id: 'e1', status: 'active' },
+				{ id: 'e2', status: 'active' }
+			],
+			pending: [],
+			closed: [{ id: 'e3', status: 'closed' }]
+		});
+		expect(commands).toEqual([
+			{
+				command: 'collections.findMany',
+				input: {
+					collection: 'employees',
+					where: { archived: { eq: false } },
+					limit: 500
+				}
+			}
+		]);
+	});
+
+	it('loads an approval request by id instead of mistaking timeline events for request rows', async () => {
+		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
+		const bolt = createBoltClient(scope, {
+			command: (command, input) => {
+				commands.push({ command, input });
+				return Promise.resolve({
+					rows: [{ id: 'request-1', status: 'ONGOING' }],
+					nextCursor: null
+				});
+			}
+		});
+		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
+
+		expect(await proxy.approvals.findMany('request-1')).toEqual([
+			{ id: 'request-1', status: 'ONGOING' }
+		]);
+		expect(commands).toEqual([
+			{
+				command: 'collections.findMany',
+				input: {
+					collection: 'approval_request',
+					where: { id: { eq: 'request-1' } },
+					limit: 1
+				}
+			}
+		]);
+	});
+
+	it('sends request-for-change as a distinct approval decision', async () => {
+		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
+		const bolt = createBoltClient(scope, {
+			command: (command, input) => {
+				commands.push({ command, input });
+				if (command === 'approvals.status') {
+					return Promise.resolve({
+						_tag: 'Pending',
+						requestId: 'request-1',
+						step: 0,
+						operation: { collection: 'orders' }
+					});
+				}
+				return Promise.resolve({});
+			}
+		});
+		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
+
+		await proxy.approvals.process({
+			approvalRequestId: 'request-1',
+			action: 'REQUEST_FOR_CHANGE',
+			comments: 'Attach the supporting document.'
+		});
+
+		expect(commands).toEqual([
+			{ command: 'approvals.status', input: { requestId: 'request-1' } },
+			{
+				command: 'approvals.decide',
+				input: {
+					state: {
+						_tag: 'Pending',
+						requestId: 'request-1',
+						step: 0,
+						operation: { collection: 'orders' }
+					},
+					decision: 'request_changes',
+					reason: 'Attach the supporting document.'
+				}
+			}
+		]);
 	});
 });

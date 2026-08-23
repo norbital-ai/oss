@@ -46,7 +46,7 @@ oss/packages/bolt/src/runtime/identity/identity.ts:76
 	//  else at all is an ordinary user"
 ```
 
-The vertical-slice suite's subject fixture stands in for the `bolt_auth_user` row that query returns.
+The vertical-slice suite's subject fixture stands in for the `user` row that query returns.
 When that fixture carried authority as `admin: true` or as `roles: ['admin']` instead of
 `status: 'admin'` (`oss/packages/bolt/tests/runtime/vertical-slice.test.ts`), seven tests believed
 they were exercising an administrator and were silently authenticating as an ordinary user.
@@ -85,13 +85,13 @@ an ordinary member, silently.**
 No amount of mocking catches this. A double returns the row the test author imagined, **including the
 column the real query forgot to ask for.** The only thing that catches it is a real database
 answering a real query — which is why the workspace-access suite runs against PGlite and seeds
-`bolt_auth_user` rows with SQL rather than handing the service a literal.
+`user` rows with SQL rather than handing the service a literal.
 
 Note that the real database is necessary and not sufficient. That suite used to seed authority into
 the wrong column — `workspace-access.test.ts` wrote the string `admin` into a `roles` array, which
 nothing in production ever did — so it pinned a mapping the source did not perform, with PGlite
 underneath it the whole time. Getting the database into the test buys you nothing if the row you
-write is one the system cannot produce. It is seeded as `status` now, and `bolt_auth_user` has no
+write is one the system cannot produce. It is seeded as `status` now, and `user` has no
 `roles` column left to write into: a person's authority is their `status`, and their policies come
 from the one team `team_id` names. See [worked-examples.md](worked-examples.md) §2.
 

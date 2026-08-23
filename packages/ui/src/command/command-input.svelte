@@ -47,7 +47,6 @@
 	}
 </script>
 
-<!-- stupidity:allow UI6 -- this leaf component root is the reusable layout boundary being defined -->
 <div
 	class={cn('flex items-center gap-2 border-b px-2', outerClass)}
 	data-command-input-wrapper="true"

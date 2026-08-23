@@ -84,7 +84,7 @@ const store = (transcript: ReadonlyArray<Row>) => {
 				});
 			if (request._tag !== 'Query') return answer([]);
 			const id = String(request.parameters[0] ?? '');
-			if (request.sql.includes('bolt_auth_session')) return answer([subject]);
+			if (request.sql.includes('from "session" s')) return answer([subject]);
 			if (request.sql.includes('from chat_session')) {
 				const title = titles[id];
 				if (title === undefined) return answer([]);

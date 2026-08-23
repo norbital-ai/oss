@@ -237,9 +237,7 @@ describe('agent continuation', () => {
 		expect(
 			store.statements.filter((entry) => entry.sql.startsWith('insert into chat_message'))
 		).toEqual([]);
-		const usage = store.statements.find((entry) =>
-			entry.sql.includes('update chat_session set')
-		);
+		const usage = store.statements.find((entry) => entry.sql.includes('update chat_session set'));
 		// Only the resumed segment is added, and it is still one logical turn (`turnsCounted = 0`).
 		expect(usage?.parameters).toEqual([parentId, 0.2, 0, null, 20, 0, 0]);
 
@@ -292,7 +290,7 @@ describe('agent continuation', () => {
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			call: (_metadata, request) => {
 				const rows =
-					request._tag === 'Query' && request.sql.includes('bolt_auth_session')
+					request._tag === 'Query' && request.sql.includes('from "session" s')
 						? [subject]
 						: request._tag === 'Query' &&
 							  request.sql.startsWith('select parent_id from chat_session')
@@ -343,7 +341,7 @@ describe('agent continuation', () => {
 					statements.push({ sql: request.sql, parameters: request.parameters });
 				}
 				const rows =
-					request._tag === 'Query' && request.sql.includes('bolt_auth_session') ? [subject] : [];
+					request._tag === 'Query' && request.sql.includes('from "session" s') ? [subject] : [];
 				return Promise.resolve({
 					_tag: 'Success',
 					value: { rows, affectedRows: rows.length }

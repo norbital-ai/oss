@@ -3,7 +3,7 @@ import { Cause, Effect, Exit, Fiber, Result } from 'effect';
 
 export type PlatformUser = Readonly<{
 	/**
-	 * The person, as the row they are: `bolt_auth_user.id`, the uuid every workspace column
+	 * The person, as the row they are: `user.id`, the uuid every workspace column
 	 * that points at a person holds.
 	 *
 	 * The only identity published here. There used to be a second field, `id`, carrying the same
@@ -16,7 +16,7 @@ export type PlatformUser = Readonly<{
 	readonly id: string;
 	readonly email?: string | undefined;
 	/**
-	 * Whether this person administers the workspace: `bolt_auth_user.status`, as the host reports it.
+	 * Whether this person administers the workspace: `user.status`, as the host reports it.
 	 *
 	 * Separate from `team` because it is not one. The surfaces that ask "is this an administrator"
 	 * used to look for the string `admin` in a roles array, which no workspace declares and nothing writes,
@@ -100,6 +100,7 @@ export const parseRoute = PlatformNavigation.parseRoute;
 export class LatestQuery<T> {
 	#fiber: Fiber.Fiber<T, unknown> | undefined;
 	/** Owns run behavior at the state boundary so validation and typed semantics stay consistent for every caller. */
+	// repository-health:allow EFF2 -- Public search providers use AbortSignal-aware Promises and this method immediately owns them in an interruptible Effect fiber.
 	readonly run = (query: (signal: AbortSignal) => Promise<T>): Promise<T | undefined> => {
 		// A newer run supersedes the one in flight: the old fiber is interrupted, so its result can
 		// never land after the new query's.

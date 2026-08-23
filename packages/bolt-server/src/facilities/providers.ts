@@ -21,6 +21,7 @@ export interface AiProvider {
 		metadata: FacilityCall,
 		input: AIRequest,
 		signal: AbortSignal
+		// repository-health:allow EFF2 -- Provider SPI mirrors the protocol-owned Promise facility boundary for external adapters.
 	) => Promise<unknown>;
 }
 
@@ -30,6 +31,7 @@ export interface ConnectorProvider {
 		metadata: FacilityCall,
 		input: ConnectorRequest,
 		signal: AbortSignal
+		// repository-health:allow EFF2 -- Provider SPI mirrors the protocol-owned Promise facility boundary for external adapters.
 	) => Promise<unknown>;
 }
 
@@ -39,6 +41,7 @@ export interface HostToolProvider {
 		metadata: FacilityCall,
 		input: HostToolRequest,
 		signal: AbortSignal
+		// repository-health:allow EFF2 -- Provider SPI mirrors the protocol-owned Promise facility boundary for external adapters.
 	) => Promise<unknown>;
 }
 
@@ -52,7 +55,7 @@ export const makeAiBinding = (provider: AiProvider): FacilityBinding<AIRequest, 
 		invoke: provider.call.bind(provider)
 	});
 
-/** Selects and constructs the configured AI provider before adapting it to the wire contract; stupidity:allow Q3 stupidity:allow Q4 -- public Config-selected provider factory entry point. */
+/** Selects and constructs the configured AI provider before adapting it to the wire contract. */
 export const makeAiBindingFromConfig = <Error>(
 	factories: Readonly<Record<string, ConfiguredProviderFactory<AiProvider, Error>>>
 ) => selectConfiguredProvider('AI', factories).pipe(Effect.map(makeAiBinding));
@@ -69,7 +72,7 @@ export const makeConnectorBinding = (
 		invoke: provider.call.bind(provider)
 	});
 
-/** Selects and constructs the configured connector provider; stupidity:allow Q3 stupidity:allow Q4 -- public Config-selected provider factory entry point. */
+/** Selects and constructs the configured connector provider. */
 export const makeConnectorBindingFromConfig = <Error>(
 	factories: Readonly<Record<string, ConfiguredProviderFactory<ConnectorProvider, Error>>>
 ) => selectConfiguredProvider('CONNECTOR', factories).pipe(Effect.map(makeConnectorBinding));
@@ -86,7 +89,7 @@ export const makeHostToolBinding = (
 		invoke: provider.call.bind(provider)
 	});
 
-/** Selects and constructs the configured host-tool provider; stupidity:allow Q3 stupidity:allow Q4 -- public Config-selected provider factory entry point. */
+/** Selects and constructs the configured host-tool provider. */
 export const makeHostToolBindingFromConfig = <Error>(
 	factories: Readonly<Record<string, ConfiguredProviderFactory<HostToolProvider, Error>>>
 ) => selectConfiguredProvider('HOST_TOOLS', factories).pipe(Effect.map(makeHostToolBinding));

@@ -29,7 +29,7 @@ const JsonObject = Schema.Record(Schema.String, Schema.Json);
  */
 export const DEFAULT_NESTING_LIMIT = 8;
 
-/** Reports work that would nest deeper than this host allows; stupidity:allow Q4 -- Effect TaggedError declaration is the canonical rc.109 error boundary. */
+/** Reports work that would nest deeper than this host allows. */
 export class NestingLimitExceeded extends Schema.TaggedError<NestingLimitExceeded>()(
 	'Bolt.Budget.NestingLimitExceeded',
 	{

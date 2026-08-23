@@ -15,7 +15,6 @@
 	} = $props();
 </script>
 
-<!-- stupidity:allow UI15 -- the calendar sidebar is a deliberately fixed navigation rail -->
 <Scroll
 	axis="y"
 	name={t('misc.calendarSidebar')}

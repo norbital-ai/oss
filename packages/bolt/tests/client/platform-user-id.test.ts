@@ -72,3 +72,18 @@ describe('the id the platform context publishes', () => {
 		expect(platform).not.toMatch(/readonly organization: string;/);
 	});
 });
+
+describe('workspace application loading', () => {
+	it('keeps the stale-import counter outside reactive state', () => {
+		const workspace = read('../../src/client/ui/shell/workspace.svelte');
+		expect(workspace).toMatch(/let appRequest = 0;/);
+		expect(workspace).toMatch(/const request = \+\+appRequest;/);
+		expect(workspace).not.toMatch(/appMount\.request/);
+	});
+
+	it('replaces an application route when a policy preview hides that app', () => {
+		const workspace = read('../../src/client/ui/shell/workspace.svelte');
+		expect(workspace).toMatch(/visible\.apps\.includes\(current\)/);
+		expect(workspace).toMatch(/actions\.navigate\('\/'\, \{ replace: true \}\)/);
+	});
+});

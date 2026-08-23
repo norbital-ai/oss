@@ -62,11 +62,11 @@ export const matchingRows = (
 };
 
 /**
- * Read operations only, shared by every tab.
+ * In-memory operations shared by every read-only tab.
  *
- * `create`, `update` and `delete` are optional on `CollectionOperations`, and leaving them off is
- * how an in-memory client says the data is not editable here — the table then omits the affordance
- * instead of offering one that rejects when it is used.
+ * The settings views declare no editing actions, so their mutation capability is unreachable. It
+ * still refuses explicitly if a future caller invokes it: these rows are projections of access
+ * state and cannot be written back through the collection command surface.
  */
 export const readOnly = (
 	rows: ReadonlyArray<CollectionRecord>
@@ -94,7 +94,9 @@ export const readOnly = (
 		}
 		return settled(lanes);
 	},
-	count: (query, options) => settled(matchingRows(rows, query, options?.filters).length)
+	count: (query, options) => settled(matchingRows(rows, query, options?.filters).length),
+	mutate: () => Effect.runPromise(Effect.fail(new Error('This in-memory collection is read-only'))),
+	pending: 0
 });
 
 /**

@@ -54,7 +54,6 @@
 				<h3 class="text-overline border-b border-border/60 px-4 py-2.5">
 					Declared names ({entries.length}) · {missing} not set
 				</h3>
-				<!-- repository-health:allow UI3 -- compact manifest key/status matrix is not record data -->
 				<table class="w-full text-left">
 					<thead class="border-b border-border/40">
 						<tr class="text-overline">

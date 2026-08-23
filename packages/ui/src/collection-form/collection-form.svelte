@@ -3,13 +3,11 @@
 	generics="TCollections extends CollectionRegistry, TName extends CollectionFormName<TCollections>"
 >
 	import type {
-		CollectionCreateInput,
 		CollectionField,
 		CollectionFieldName,
 		CollectionRecordHistoryEntry,
 		CollectionRegistry,
 		CollectionRow,
-		CollectionUpdateInput,
 		RemoteQuery
 	} from '@norbital-ai/std/collection';
 	import { Button } from '#lib/button';
@@ -242,11 +240,13 @@
 			.map((name) => fieldByName.get(name))
 			.filter((field): field is CollectionField => field != null)
 	);
+	const operations = $derived(client.db[collection]);
 	const registeredFields = new Set<string>();
 	let historyRequested = $state(false);
 	const historyQuery = $derived.by(() => {
-		if (!historyRequested || !recordId || !workspaceClient.history) return undefined;
-		return workspaceClient.history.findMany(String(collection), recordId);
+		const currentRecordId = optionalCollectionRecordId(defaultValues);
+		if (!historyRequested || !currentRecordId || !workspaceClient.history) return undefined;
+		return workspaceClient.history.findMany(String(collection), currentRecordId);
 	});
 	let deleting = $state(false);
 
@@ -271,7 +271,7 @@
 		}
 	} satisfies FormSchema;
 	// svelte-ignore state_referenced_locally -- a mounted form owns one record baseline; record changes remount its representation.
-	const form: FormState<typeof runtimeSchema, CollectionRow<TCollections[TName]>> = new FormState({
+	const form: FormState<typeof runtimeSchema, void> = new FormState({
 		schema: runtimeSchema,
 		defaultState: initialValues,
 		serverState: recordId ? initialValues : null,
@@ -281,36 +281,16 @@
 		translate: t as TranslateFn,
 		remoteFn:
 			() =>
-			(data): Effect.Effect<CollectionRow<TCollections[TName]>, unknown> => {
-				const operations = client.db[collection];
+			(data): Effect.Effect<void, unknown> => {
 				const values = Object.fromEntries(Object.entries(data));
 				if (onSubmit) return onSubmit(values);
-				if (recordId) {
-					if (!operations.update)
-						return Effect.fail(new Error('This collection cannot be updated.'));
-					const dirtyValues: Record<string, unknown> = Object.fromEntries(
-						definition.fields
-							.filter((field) => form.hasChangesForPath(field.name))
-							.map((field) => [field.name, values[field.name]])
-					);
-					return Effect.tryPromise(() =>
-						operations.update!(
-							recordId,
-							dirtyValues as CollectionUpdateInput<TCollections[TName]> // stupidity: boundary-cast — dirty rendered fields and validation constrain this dynamic update payload to the selected collection.
-						)
-					);
-				}
-				if (!operations.create) return Effect.fail(new Error('This collection cannot be created.'));
 				return Effect.tryPromise(() =>
-					operations.create!(
-						values as CollectionCreateInput<TCollections[TName]> // stupidity: boundary-cast — rendered fields and validation constrain this dynamic form payload to the selected collection.
-					)
+					operations.mutate(recordId ? { id: recordId, ...values } : values)
 				);
 			},
-		onSuccess: (record) => {
-			if (record && onAfterSubmit) return onAfterSubmit(record);
-		}
+		onSuccess: () => onAfterSubmit?.()
 	});
+	const submissionPending = $derived(onSubmit ? form.isSubmitting : operations.pending > 0);
 	const dirtyFieldCount = $derived(
 		definition.fields.filter((field) => form.hasChangesForPath(field.name)).length
 	);
@@ -334,7 +314,7 @@
 		},
 		dirty: (name) => form.hasChangesForPath(name),
 		errors: (name) => form.getFieldErrors(name),
-		disabled: () => form.disabled || form.isSubmitting,
+		disabled: () => form.disabled || submissionPending,
 		historyAvailable: () => Boolean(recordId && workspaceClient.history),
 		loadHistory,
 		history: () => historyQuery?.current ?? [],
@@ -396,17 +376,17 @@
 					type="submit"
 					disabled={loading ||
 						form.disabled ||
-						form.isSubmitting ||
+						submissionPending ||
 						Boolean(recordId && !form.isDirty)}
 				>
-					{form.isSubmitting
+					{submissionPending
 						? t('form.saving')
 						: (submitLabel ?? (recordId ? t('form.save') : t('common.create')))}
 				</Button>
 				<Button
 					type="button"
 					variant="outline"
-					disabled={loading || form.disabled || form.isSubmitting || !form.isDirty}
+					disabled={loading || form.disabled || submissionPending || !form.isDirty}
 					onclick={clear}>{t('common.clear')}</Button
 				>
 				{#if form.isDirty}
@@ -424,7 +404,7 @@
 					class="sm:ml-auto"
 					disabled={loading ||
 						disabled ||
-						form.isSubmitting ||
+						submissionPending ||
 						deleting ||
 						Boolean(deleteRestriction) ||
 						deleteAction.disabled}
@@ -441,7 +421,7 @@
 	as="form"
 	gap="md"
 	class={className}
-	aria-busy={loading || form.isSubmitting}
+	aria-busy={loading || submissionPending}
 	onsubmit={submit}
 	bottom={formFooter}
 >

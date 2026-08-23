@@ -1,4 +1,6 @@
 import { Effect, Result, Schema } from 'effect';
+import type { RemoteQuery } from '@norbital-ai/std/collection';
+export type { RemoteQuery } from '@norbital-ai/std/collection';
 import { ApprovalState } from '#lib/runtime/approvals/approvals.js';
 import { createSyncClient, decodeChanges, decodeCursor } from '#lib/client/replica/sync-client.js';
 import {
@@ -14,34 +16,164 @@ import {
 } from '#lib/client/replica/live-queries.js';
 import type { SyncChange } from '#lib/runtime/sync/sync.js';
 import {
+	type CollectionPendingApproval as ProtocolPendingApproval,
 	EnvironmentName,
 	InvocationScope,
+	pendingApprovalOf,
 	ReleaseId,
-	storedRecordsOf,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
 import { createBoltClient, type BoltClient, type BoltTransport } from '#lib/client.js';
 import { createRemoteQuery } from './remote-query.svelte.js';
+import { projectRemoteQuery } from '#lib/client/replica/query-projection.svelte.js';
+import { CollectionMutationState } from './collection-mutation.svelte.js';
 import { workspaceSession } from '#lib/client/session.js';
 import { openLocalDatabase, type BootstrapTransport } from '#lib/client/replica/bootstrap.js';
 import { createLocalReader, type LocalReader } from '#lib/client/replica/local-reads.js';
 import { subscribeToChanges, type Subscription } from '#lib/client/replica/subscribe.js';
-import type { PGliteLike, ProvisioningStep } from '#lib/client/replica/pglite-sql.js';
+import {
+	executeReplicaStatement,
+	type PGliteLike,
+	type ProvisioningStep,
+	replicaStatement
+} from '#lib/client/replica/pglite-sql.js';
 import { openPGlite } from '#lib/client/replica/pglite-loader.js';
 import type { LocalSql } from '#lib/client/replica/pglite-sql.js';
 import { createSystemClient } from '#lib/client/system-client.js';
 export type { SystemClientApi } from '#lib/client/system-client.js';
 
-export interface RemoteQuery<Value> extends PromiseLike<Value> {
-	readonly current: Value | undefined;
-	readonly error: unknown;
-	readonly loading: boolean;
-	readonly refresh: () => Promise<void>;
-}
-
 export interface CollectionPageQuery<Value> extends RemoteQuery<Value> {
 	readonly nextCursor: string | null | undefined;
 }
+
+/**
+ * A collection mutation the server accepted into its approval workflow instead of committing.
+ *
+ * Promise types cannot describe a rejection channel, so callers that care about this outcome catch
+ * this exported class while the ordinary mutation result remains `Promise<void>`. A mutation is a
+ * command, not a read: write-only policies may authorize it while denying the stored row, and live
+ * queries own the refreshed value when the caller can read it.
+ */
+export class CollectionMutationPendingApproval extends Error {
+	readonly pending = true as const;
+	readonly requestId: string;
+	readonly collection: string;
+	readonly id: string;
+	readonly action: ProtocolPendingApproval['action'];
+
+	constructor(outcome: ProtocolPendingApproval) {
+		super(
+			`${outcome.action} for ${outcome.collection} ${outcome.id} is pending approval ${outcome.requestId}`
+		);
+		this.name = 'CollectionMutationPendingApproval';
+		this.requestId = outcome.requestId;
+		this.collection = outcome.collection;
+		this.id = outcome.id;
+		this.action = outcome.action;
+	}
+}
+
+/** The schemas the generated client declaration may build mutation graphs from. */
+type MutationSchema = Readonly<{
+	readonly tables: Readonly<
+		Record<
+			string,
+			Readonly<{
+				readonly $inferSelect: object;
+				readonly $inferInsert: object;
+			}>
+		>
+	>;
+	readonly relations: Readonly<Record<string, unknown>>;
+}>;
+
+type MutationTableName<S extends MutationSchema> = keyof S['tables'] & string;
+type MutationRow<
+	S extends MutationSchema,
+	N extends MutationTableName<S>
+> = S['tables'][N]['$inferSelect'];
+type MutationInsert<
+	S extends MutationSchema,
+	N extends MutationTableName<S>
+> = S['tables'][N]['$inferInsert'];
+type SystemMutationKey =
+	'id' | 'created_at' | 'updated_at' | 'sys_period' | 'row_version' | 'approval_id';
+type AuthoredMutationInsert<S extends MutationSchema, N extends MutationTableName<S>> = Omit<
+	MutationInsert<S, N>,
+	SystemMutationKey
+>;
+type MutationIdentity<S extends MutationSchema, N extends MutationTableName<S>> =
+	MutationRow<S, N> extends { readonly id: infer Identity } ? Identity : string;
+
+type RelationsFor<
+	S extends MutationSchema,
+	N extends MutationTableName<S>
+> = N extends keyof S['relations'] ? S['relations'][N] : never;
+type ManyRelation<S extends MutationSchema, N extends MutationTableName<S>> = {
+	readonly [K in keyof RelationsFor<S, N>]: RelationsFor<S, N>[K] extends {
+		readonly cardinality: 'many';
+		readonly target: MutationTableName<S>;
+		readonly column: infer Column;
+		readonly parentColumn: infer ParentColumn;
+	}
+		? [Column] extends [never]
+			? never
+			: [ParentColumn] extends [never]
+				? never
+				: Column extends PropertyKey
+					? [ParentColumn] extends ['id']
+						? K
+						: never
+					: never
+		: never;
+}[keyof RelationsFor<S, N>];
+type RelationTarget<
+	S extends MutationSchema,
+	N extends MutationTableName<S>,
+	K extends ManyRelation<S, N>
+> = RelationsFor<S, N>[K] extends { readonly target: infer Target extends MutationTableName<S> }
+	? Target
+	: never;
+type RelationColumn<
+	S extends MutationSchema,
+	N extends MutationTableName<S>,
+	K extends ManyRelation<S, N>
+> = RelationsFor<S, N>[K] extends { readonly column: infer Column extends PropertyKey }
+	? Column
+	: never;
+
+type WithoutKey<Value, Key extends PropertyKey> = Value extends unknown
+	? Omit<Value, Extract<Key, keyof Value>>
+	: never;
+
+/**
+ * A declarative record is either a new insert or an identified partial update.
+ *
+ * Identity lives inside the record at every level. Its presence is the operation discriminator;
+ * callers cannot supply a separate id whose meaning changes between roots and children.
+ */
+type MutationRecord<S extends MutationSchema, N extends MutationTableName<S>> =
+	| AuthoredMutationInsert<S, N>
+	| (Readonly<{ id: MutationIdentity<S, N> }> & Partial<AuthoredMutationInsert<S, N>>);
+
+type MutationChildren<S extends MutationSchema, N extends MutationTableName<S>> = {
+	readonly [K in ManyRelation<S, N>]?: ReadonlyArray<
+		WithoutKey<CollectionMutationValues<S, RelationTarget<S, N, K>>, RelationColumn<S, N, K>>
+	>;
+};
+
+/**
+ * The precise graph accepted by `client.db.<collection>.mutate`.
+ *
+ * Only declared `many` relationships with an unambiguous child foreign key and the supported
+ * parent `id` join may be included. Each is optional so omission means untouched; when present, its
+ * array is the complete desired state and is checked recursively. The child's owning foreign key is
+ * absent because the server derives it from the parent.
+ */
+export type CollectionMutationValues<
+	S extends MutationSchema,
+	N extends MutationTableName<S>
+> = MutationRecord<S, N> & MutationChildren<S, N>;
 
 export type WorkspaceClientRuntime = Readonly<{
 	readonly db: Readonly<Record<string, unknown>>;
@@ -81,10 +213,18 @@ export type BrowserWorkspaceRuntimeOptions = Readonly<{
  * TypeScript discard the array member of `Schema.Json`. The checks are exhaustive; the assertion
  * only states what they already established.
  */
-const asJsonRecord = (input: Schema.Json): Readonly<Record<string, Schema.Json>> =>
-	input !== null && typeof input === 'object' && !Array.isArray(input)
-		? (input as Readonly<Record<string, Schema.Json>>)
-		: {};
+const asJsonRecord = (input: unknown): Readonly<Record<string, Schema.Json>> => {
+	if (input === null || typeof input !== 'object' || Array.isArray(input)) return {};
+	const record: Record<string, Schema.Json> = {};
+	for (const [key, value] of Object.entries(input)) {
+		// Optional query properties are routinely assembled as `key: undefined`. Undefined has no JSON
+		// representation and means exactly the same thing as omission here, so remove it before the
+		// command schema validates the input. Keeping it made every first page (`after: undefined`) fail
+		// locally with "Expected JSON value" without ever reaching the transport.
+		if (value !== undefined) record[key] = value as Schema.Json;
+	}
+	return record;
+};
 
 export type CollectionCatalogField = Readonly<{
 	readonly name: string;
@@ -100,6 +240,8 @@ export type CollectionCatalogRelation = Readonly<{
 	readonly name: string;
 	readonly target: string;
 	readonly cardinality: 'one' | 'many';
+	/** Whether deleting an owner recursively deletes records reached through this edge. */
+	readonly cascade?: true;
 }>;
 
 export type CollectionCatalogEntry = Readonly<{
@@ -264,9 +406,10 @@ const PageQueries = {
 		input: Schema.Json
 	): CollectionPageQuery<ReadonlyArray<Schema.Json>> => {
 		const query = RemoteQueries.make(runtime, command, input, Schema.Json, Schema.Json);
+		const projected = projectRemoteQuery(query, rowsFrom, (value) => rowsFrom(value) ?? []);
 		const page: CollectionPageQuery<ReadonlyArray<Schema.Json>> = {
 			get current() {
-				return rowsFrom(query.current);
+				return projected.current;
 			},
 			get nextCursor() {
 				return cursorFrom(query.current);
@@ -277,21 +420,8 @@ const PageQueries = {
 			get loading() {
 				return query.loading;
 			},
-			refresh: query.refresh,
-			// `PromiseLike.then` defaults `TResult1` to the resolved type, so returning the rows
-			// unchanged when no handler is given is exactly that default — TypeScript just cannot
-			// prove it for an arbitrary caller-supplied `TResult1`.
-			then: <TResult1 = ReadonlyArray<Schema.Json>, TResult2 = never>(
-				onfulfilled?:
-					((value: ReadonlyArray<Schema.Json>) => TResult1 | PromiseLike<TResult1>) | null,
-				onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
-			) =>
-				query.then((value) => {
-					const rows = rowsFrom(value) ?? [];
-					return onfulfilled === undefined || onfulfilled === null
-						? (rows as TResult1)
-						: onfulfilled(rows);
-				}, onrejected)
+			refresh: projected.refresh,
+			then: projected.then
 		};
 		return page;
 	}
@@ -300,9 +430,14 @@ const PageQueries = {
 const CountQueries = {
 	make: (runtime: WorkspaceClientRuntime, input: Schema.Json): RemoteQuery<number> => {
 		const query = RemoteQueries.make(runtime, 'collections.count', input, Schema.Json, Schema.Json);
+		const projected = projectRemoteQuery(query, countFrom, (value) => {
+			const count = countFrom(value);
+			if (count === undefined) throw new Error('Collection count completed without a value');
+			return count;
+		});
 		return {
 			get current() {
-				return countFrom(query.current);
+				return projected.current;
 			},
 			get error() {
 				return query.error;
@@ -310,19 +445,55 @@ const CountQueries = {
 			get loading() {
 				return query.loading;
 			},
-			refresh: query.refresh,
-			then: <TResult1 = number, TResult2 = never>(
-				onfulfilled?: ((value: number) => TResult1 | PromiseLike<TResult1>) | null,
-				onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
-			) =>
-				query.then((value) => {
-					const count = countFrom(value);
-					if (count === undefined) throw new Error('Collection count completed without a value');
-					return onfulfilled === undefined || onfulfilled === null
-						? (count as TResult1)
-						: onfulfilled(count);
-				}, onrejected)
+			refresh: projected.refresh,
+			then: projected.then
 		};
+	}
+};
+
+type GroupedJsonRows = Readonly<Record<string, Array<Schema.Json>>>;
+
+/** Groups one fetched collection page while retaining the source query's lifecycle state. */
+const groupRows = (
+	rows: ReadonlyArray<Schema.Json>,
+	by: string,
+	lanes: ReadonlyArray<Schema.Json>
+): GroupedJsonRows => {
+	const grouped: Record<string, Array<Schema.Json>> = Object.fromEntries(
+		lanes.map((lane) => [String(lane), []])
+	);
+	for (const row of rows) {
+		const record = asJsonRecord(row);
+		const lane = String(record[by] ?? '');
+		(grouped[lane] ??= []).push(row);
+	}
+	return grouped;
+};
+
+const GroupedQueries = {
+	make: (
+		runtime: WorkspaceClientRuntime,
+		collection: string,
+		input: Schema.Json,
+		options?: QueryOptions
+	): RemoteQuery<GroupedJsonRows> => {
+		const merged = mergeWhere(asJsonRecord(input), options);
+		const group = asJsonRecord(merged.group);
+		const by = typeof group.by === 'string' ? group.by : '';
+		const lanes = Array.isArray(group.lanes) ? group.lanes : [];
+		const pageInput: Record<string, Schema.Json> = { collection };
+		for (const [key, value] of Object.entries(merged)) {
+			if (key !== 'group') pageInput[key] = value;
+		}
+		// A board has no pagination control. Respect an authored ceiling and otherwise request the
+		// command boundary's maximum page so it does not silently stop at the ordinary table default.
+		if (typeof pageInput.limit !== 'number') pageInput.limit = 500;
+		const source = PageQueries.make(runtime, 'collections.findMany', pageInput);
+		return projectRemoteQuery(
+			source,
+			(rows) => groupRows(rows, by, lanes),
+			(rows) => groupRows(rows, by, lanes)
+		);
 	}
 };
 
@@ -331,7 +502,7 @@ type InvokeMethod = ReturnType<() => (input: Schema.Json) => RemoteQuery<Schema.
 /** Groups workspace API construction with the stateful remote-query factory it exposes. */
 const WorkspaceApis = {
 	create: (runtime: WorkspaceClientRuntime, catalog: CollectionCatalog = {}) => ({
-		db: ClientDatabase.database(runtime),
+		db: ClientDatabase.database(runtime, catalog),
 		system: createSystemClient(runtime, (command, input, inputSchema, outputSchema, signal) =>
 			RemoteQueries.make(runtime, command, input, inputSchema, outputSchema, signal)
 		),
@@ -376,16 +547,14 @@ const WorkspaceApis = {
 		},
 		approvals: {
 			findMany: (approvalId: string) =>
-				RemoteQueries.make(
-					runtime,
-					'approvals.timeline',
-					{ requestId: approvalId },
-					Schema.Json,
-					Schema.Json
-				),
+				PageQueries.make(runtime, 'collections.findMany', {
+					collection: 'approval_request',
+					where: { id: { eq: approvalId } },
+					limit: 1
+				}),
 			process: (input: {
 				readonly approvalRequestId: string;
-				readonly action: 'APPROVED' | 'REJECTED';
+				readonly action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE';
 				readonly comments?: string;
 			}) =>
 				Effect.runPromise(
@@ -393,7 +562,12 @@ const WorkspaceApis = {
 						const state = yield* commandEffect(runtime, 'approvals.status', {
 							requestId: input.approvalRequestId
 						});
-						const decision = input.action === 'APPROVED' ? 'approve' : 'reject';
+						const decision =
+							input.action === 'APPROVED'
+								? 'approve'
+								: input.action === 'REQUEST_FOR_CHANGE'
+									? 'request_changes'
+									: 'reject';
 						const decodedState = Schema.decodeUnknownResult(ApprovalState)(state);
 						if (Result.isFailure(decodedState)) return;
 						yield* commandEffect(runtime, 'approvals.decide', {
@@ -443,9 +617,48 @@ const browserTransport: BoltTransport = {
  * and not on a timer: waiting for the outbox to report a write this client just made would leave the
  * table the user is looking at showing the row as it was before their own edit.
  */
-const invalidateWrite = (runtime: WorkspaceClientRuntime, collection: string): void => {
-	runtime.cache?.invalidate([collection]);
-	runtime.queries?.refreshAffected([collection]);
+const invalidateWrite = (
+	runtime: WorkspaceClientRuntime,
+	collections: ReadonlyArray<string>
+): void => {
+	runtime.cache?.invalidate(collections);
+	runtime.queries?.refreshAffected(collections);
+};
+
+/** Names the root and every explicitly synchronized relationship for immediate query invalidation. */
+const mutationCollections = (
+	catalog: CollectionCatalog,
+	collection: string,
+	values: Readonly<Record<string, Schema.Json>>
+): ReadonlyArray<string> => {
+	const affected = new Set([collection]);
+	const cascadesVisited = new Set<string>();
+	const addCascadeDescendants = (name: string): void => {
+		if (cascadesVisited.has(name)) return;
+		cascadesVisited.add(name);
+		for (const relation of catalog[name]?.relationships ?? []) {
+			if (relation.cardinality !== 'many' || relation.cascade !== true) continue;
+			affected.add(relation.target);
+			addCascadeDescendants(relation.target);
+		}
+	};
+	const visit = (name: string, record: Readonly<Record<string, Schema.Json>>): void => {
+		const definition = catalog[name];
+		if (definition === undefined) return;
+		for (const relation of definition.relationships ?? []) {
+			if (relation.cardinality !== 'many') continue;
+			const children = record[relation.name];
+			if (!Array.isArray(children)) continue;
+			affected.add(relation.target);
+			// A submitted empty array and an omitted stored child carry no values to recurse through,
+			// but deleting that child may cascade through collections below it. Walk ownership metadata
+			// rather than the submitted rows; non-cascade descendants remain untouched.
+			addCascadeDescendants(relation.target);
+			for (const child of children) visit(relation.target, asJsonRecord(child));
+		}
+	};
+	visit(collection, values);
+	return [...affected];
 };
 
 /**
@@ -465,97 +678,81 @@ const invalidateApproval = (runtime: WorkspaceClientRuntime): void => {
 
 /** Owns collection proxy behavior at the client boundary so validation and typed semantics stay consistent for every caller. */
 const ClientDatabase = {
-	collection: (runtime: WorkspaceClientRuntime, collection: string) => ({
-		findMany: (input: Schema.Json = {}, options?: QueryOptions) =>
-			PageQueries.make(runtime, 'collections.findMany', {
-				collection,
-				...mergeWhere(asJsonRecord(input), options)
-			}),
-		findFirst: (input: Schema.Json = {}) =>
-			RemoteQueries.make(
-				runtime,
-				'collections.findFirst',
-				{ collection, ...asJsonRecord(input) },
-				Schema.Json,
-				Schema.Json
-			),
-		count: (input: Schema.Json = {}, options?: QueryOptions) =>
-			CountQueries.make(runtime, { collection, ...mergeWhere(asJsonRecord(input), options) }),
-		/**
-		 * Creates a record, and answers with the record — not with what was handed in.
-		 *
-		 * Two things used to happen here that could not both stay. The browser minted the primary key
-		 * with `crypto.randomUUID()`, which made the client the authority on the identity of a row
-		 * that did not exist yet and could still be refused; and the return value was the caller's own
-		 * argument with that id stapled to it. The second is the one that did damage: a submitted
-		 * value is not what the database holds once a column default, a generated column and a
-		 * `create.before` hook have run — a payroll run is posted with four fields and stored with ten
-		 * — so every caller that put this straight into a store, or rendered it, was holding a record
-		 * that had never existed anywhere.
-		 *
-		 * `values` now goes up alone and the stored row comes back. `values` may also carry a graph:
-		 * a key naming a declared `many` relation carries the records that belong to this one, and
-		 * the server writes the parent and its children in one transaction, filling each child's
-		 * foreign key from the id it assigns the parent.
-		 *
-		 * A response with no record throws rather than falling back to the submission. There is no
-		 * honest fallback: "the write succeeded and I do not know what it stored" is not a record,
-		 * and inventing one is exactly the failure this replaced.
-		 */
-		create: (input: Schema.Json) =>
-			Effect.runPromise(
-				Effect.gen(function* () {
-					const response = yield* commandEffect(runtime, 'collections.create', {
-						collection,
-						values: asJsonRecord(input)
-					});
-					yield* Effect.sync(() => invalidateWrite(runtime, collection));
-					const stored = storedRecordsOf(response)?.[0];
-					if (stored === undefined)
-						return yield* Effect.fail(
-							new Error(
-								`Creating a ${collection} record answered without the stored row, so there is nothing to return. The command reported: ${JSON.stringify(response)}`
-							)
-						);
-					return stored;
-				})
-			),
-		/** Answers with the stored row for the same reason `create` does — an update runs hooks too. */
-		update: (recordId: string, input: Schema.Json) =>
-			Effect.runPromise(
-				Effect.gen(function* () {
-					const response = yield* commandEffect(runtime, 'collections.update', {
-						collection,
-						id: recordId,
-						values: asJsonRecord(input)
-					});
-					yield* Effect.sync(() => invalidateWrite(runtime, collection));
-					const stored = storedRecordsOf(response)?.[0];
-					if (stored === undefined)
-						return yield* Effect.fail(
-							new Error(
-								`Updating ${collection} ${recordId} answered without the stored row, so there is nothing to return. The command reported: ${JSON.stringify(response)}`
-							)
-						);
-					return stored;
-				})
-			),
-		delete: (recordId: string) =>
-			Effect.runPromise(
-				commandEffect(runtime, 'collections.delete', { collection, id: recordId }).pipe(
-					Effect.tap(() => Effect.sync(() => invalidateWrite(runtime, collection))),
-					Effect.asVoid
-				)
-			)
-	}),
-	database: (runtime: WorkspaceClientRuntime): Readonly<Record<string, unknown>> =>
-		new Proxy<Record<string, unknown>>(
+	collection: (runtime: WorkspaceClientRuntime, catalog: CollectionCatalog, collection: string) => {
+		const mutation = new CollectionMutationState();
+		return {
+			findMany: (input: Schema.Json = {}, options?: QueryOptions) =>
+				PageQueries.make(runtime, 'collections.findMany', {
+					collection,
+					...mergeWhere(asJsonRecord(input), options)
+				}),
+			findFirst: (input: Schema.Json = {}) =>
+				RemoteQueries.make(
+					runtime,
+					'collections.findFirst',
+					{ collection, ...asJsonRecord(input) },
+					Schema.Json,
+					Schema.Json
+				),
+			findGrouped: (input: Schema.Json, options?: QueryOptions) =>
+				GroupedQueries.make(runtime, collection, input, options),
+			count: (input: Schema.Json = {}, options?: QueryOptions) =>
+				CountQueries.make(runtime, { collection, ...mergeWhere(asJsonRecord(input), options) }),
+			/**
+			 * Synchronizes one declarative graph.
+			 *
+			 * An included relationship is its complete desired state; omission leaves it untouched. The
+			 * server performs the recursive reconciliation atomically. The browser owns no
+			 * create/update/delete vocabulary and does no handwritten relational diffing. It also does not
+			 * require a stored-row readback: a write-only policy can authorize this command while denying
+			 * the corresponding read. Query invalidation makes a readable stored value the query's concern.
+			 */
+			mutate: (input: Schema.Json) => {
+				const values = asJsonRecord(input);
+				const affected = mutationCollections(catalog, collection, values);
+				return mutation.run(
+					Effect.gen(function* () {
+						const response = yield* commandEffect(runtime, 'collections.mutate', {
+							collection,
+							values
+						});
+						const pending = pendingApprovalOf(response);
+						if (pending !== undefined)
+							return yield* Effect.fail(new CollectionMutationPendingApproval(pending));
+					}).pipe(
+						// A command can commit and then fail while settling an after-hook. The wire failure
+						// cannot prove that no state changed, so every outcome conservatively invalidates the
+						// submitted graph. This also covers approval acquisition before its typed rejection.
+						// Non-collection queries depend on ANY_COLLECTION, so the same names refresh approval
+						// status and timeline readers without component-owned refresh state.
+						Effect.ensuring(Effect.sync(() => invalidateWrite(runtime, affected)))
+					)
+				);
+			},
+			get pending() {
+				return mutation.pending;
+			}
+		};
+	},
+	database: (
+		runtime: WorkspaceClientRuntime,
+		catalog: CollectionCatalog
+	): Readonly<Record<string, unknown>> => {
+		const collections = new Map<string, unknown>();
+		return new Proxy<Record<string, unknown>>(
 			{},
 			{
-				get: (_target, property) =>
-					typeof property === 'string' ? ClientDatabase.collection(runtime, property) : undefined
+				get: (_target, property) => {
+					if (typeof property !== 'string') return undefined;
+					const existing = collections.get(property);
+					if (existing !== undefined) return existing;
+					const created = ClientDatabase.collection(runtime, catalog, property);
+					collections.set(property, created);
+					return created;
+				}
 			}
-		)
+		);
+	}
 };
 
 /**
@@ -585,23 +782,41 @@ const REPLICA_CHANNEL = 'bolt_replica_changed';
  * already assumed it was.
  *
  * Keyed by scope rather than by runtime, because the storage a replica opens is keyed by scope: two
- * runtimes for one workspace would otherwise collide in exactly the place this is protecting.
+ * runtimes for one workspace would otherwise collide in exactly the place this is protecting. The
+ * maps live inside one document-lifetime owner rather than as ambient mutable collections.
  */
-const runningReplicas = new Map<string, Effect.Effect<LocalReplica, unknown>>();
-
 type RuntimeAccessState = {
 	current: string;
 	cache: QueryCache;
 	readonly cacheNamespace: (accessScope: string) => string;
 };
 
-const runtimeAccessStates = new WeakMap<WorkspaceClientRuntime, RuntimeAccessState>();
+const RuntimeStates = {
+	make: () => {
+		const replicas = new Map<string, Effect.Effect<LocalReplica, unknown>>();
+		const accessStates = new WeakMap<WorkspaceClientRuntime, RuntimeAccessState>();
+		return {
+			replica: (key: string) => replicas.get(key),
+			rememberReplica: (key: string, replica: Effect.Effect<LocalReplica, unknown>) => {
+				replicas.set(key, replica);
+			},
+			forgetReplica: (key: string) => {
+				replicas.delete(key);
+			},
+			access: (runtime: WorkspaceClientRuntime) => accessStates.get(runtime),
+			rememberAccess: (runtime: WorkspaceClientRuntime, state: RuntimeAccessState) => {
+				accessStates.set(runtime, state);
+			}
+		};
+	}
+};
+
+const runtimeStates = RuntimeStates.make();
 
 const normalizedAccessScope = (value: string): string => value.trim() || 'operator';
 
 const accessScopeFor = (runtime: WorkspaceClientRuntime): string =>
-	runtimeAccessStates.get(runtime)?.current ??
-	normalizedAccessScope(workspaceSession().accessScope);
+	runtimeStates.access(runtime)?.current ?? normalizedAccessScope(workspaceSession().accessScope);
 
 /**
  * Moves one mounted client between policy scopes without rebuilding its component tree.
@@ -616,7 +831,7 @@ export const switchWorkspaceAccessScope = (
 	runtime: WorkspaceClientRuntime,
 	accessScope: string
 ): void => {
-	const state = runtimeAccessStates.get(runtime);
+	const state = runtimeStates.access(runtime);
 	if (state === undefined) return;
 	const next = normalizedAccessScope(accessScope);
 	if (state.current === next) return;
@@ -634,11 +849,11 @@ export const startLocalReplica = (
 		readonly onChange?: (applied: number) => void;
 		readonly onError?: (cause: unknown) => void;
 	} = {}
-): Promise<LocalReplica> => {
+) => {
 	const accessScope = normalizedAccessScope(options.accessScope ?? accessScopeFor(runtime));
 	switchWorkspaceAccessScope(runtime, accessScope);
 	const key = `${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}::${accessScope}`;
-	let running = runningReplicas.get(key);
+	let running = runtimeStates.replica(key);
 	if (running === undefined) {
 		// Cache the Effect, not a Promise: callers share the startup fiber while internal control flow
 		// remains in Effect. `runPromise` below is only the exported browser API adapter.
@@ -648,15 +863,15 @@ export const startLocalReplica = (
 					Effect.map((replica) => ({
 						...replica,
 						stop: () => {
-							runningReplicas.delete(key);
+							runtimeStates.forgetReplica(key);
 							replica.stop();
 						}
 					})),
-					Effect.tapError(() => Effect.sync(() => runningReplicas.delete(key)))
+					Effect.tapError(() => Effect.sync(() => runtimeStates.forgetReplica(key)))
 				)
 			)
 		);
-		runningReplicas.set(key, running);
+		runtimeStates.rememberReplica(key, running);
 	}
 	return Effect.runPromise(running);
 };
@@ -716,18 +931,20 @@ const startReplica = (
 		 * cannot outrun the rows it describes, and a tab with no shared engine simply has no listener and
 		 * loses nothing.
 		 */
-		// `pg_notify` is the replica's own channel infrastructure — SQL1 exception: this is the
-		// transport the engine's `listen` is bound to, and there is no builder for it. The collections
-		// are JSON-stringified into the payload, never used as statements.
+		// The collections are JSON-stringified into a positional payload, never used as statements.
 		const announceToTabs = (collections: ReadonlyArray<string>): Effect.Effect<void> =>
 			collections.length === 0
 				? Effect.void
-				: local.engine
-						.query('select pg_notify($1, $2)', [REPLICA_CHANNEL, JSON.stringify(collections)])
-						.pipe(
-							Effect.catch(() => Effect.void),
-							Effect.asVoid
-						);
+				: executeReplicaStatement(
+						local.engine,
+						replicaStatement('select pg_notify($1, $2)', [
+							REPLICA_CHANNEL,
+							JSON.stringify(collections)
+						])
+					).pipe(
+						Effect.catch(() => Effect.void),
+						Effect.asVoid
+					);
 
 		const client = yield* createSyncClient({
 			transport: {
@@ -965,7 +1182,7 @@ export const createBrowserWorkspaceRuntime = (
 		cache,
 		queries: createLiveQueryRegistry()
 	};
-	runtimeAccessStates.set(runtime, accessState);
-	runtime.db = ClientDatabase.database(runtime);
+	runtimeStates.rememberAccess(runtime, accessState);
+	runtime.db = ClientDatabase.database(runtime, {});
 	return runtime;
 };

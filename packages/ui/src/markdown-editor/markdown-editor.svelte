@@ -595,7 +595,6 @@
 {/if}
 
 <!-- ─── Main editor wrapper ──────────────────────────────────────── -->
-<!-- stupidity:allow UI9 -- this local clip boundary contains, rather than duplicates, the descendant scroll owner -->
 <div
 	{...controlProps}
 	onclick={() => {

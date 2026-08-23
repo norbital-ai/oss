@@ -142,7 +142,7 @@ export type PolicyName = DeclaredName<'policyName'>;
  * A team, by the name `src/access/+teams.ts` gives it, and the only thing an approver may be.
  *
  * `approvers: ['HR Manger']` shipped, and produced an approval nobody could ever decide: a bare
- * string compared against `bolt_team.name` matches nothing when it is misspelled, and nothing says
+ * string compared against `team.name` matches nothing when it is misspelled, and nothing says
  * so. Case-folding closed the casing half and left the typo half open. This closes it: a step names
  * a key of `+teams.ts` or the build fails.
  *
@@ -167,7 +167,7 @@ type DeclaredSkillName = DeclaredName<'skillName'>;
 /**
  * The shape of `src/access/+teams.ts`: which policies each named team holds.
  *
- * Keys are team names, matched case-insensitively against `bolt_team.name`, and free strings on
+ * Keys are team names, matched case-insensitively against `team.name`, and free strings on
  * purpose — a team is a row an operator creates from a dashboard, so no compiled union can enumerate
  * them, and this file is where the enumeration comes from. Values are narrowed to *this* workspace's
  * declared policy names, so renaming or deleting a policy breaks the build here, in the map that

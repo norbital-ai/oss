@@ -35,8 +35,7 @@
 		onNavigate?: ((href: string) => void) | undefined;
 		onPrefetch?: ((href: string) => void) | undefined;
 		onOrganizationChange?:
-			| ((organizationId: string) => void | Effect.Effect<void, unknown>)
-			| undefined;
+			((organizationId: string) => void | Effect.Effect<void, unknown>) | undefined;
 		onSignOut?: (() => void | Effect.Effect<void, unknown>) | undefined;
 		/**
 		 * The account area's notification surface, rendered above the user menu.

@@ -123,7 +123,6 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<!-- stupidity:allow UI5; stupidity:allow UI9 -- this leaf component owns a local clip or scroll boundary required by its interaction contract; this local clip boundary contains, rather than duplicates, the descendant scroll owner -->
 <div
 	bind:this={ref}
 	class={cn(

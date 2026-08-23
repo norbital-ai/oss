@@ -21,7 +21,6 @@
 	let colsArray = $derived(Array.from({ length: cols }));
 </script>
 
-<!-- stupidity:allow UI5 -- this leaf component owns a local clip or scroll boundary required by its interaction contract -->
 <div bind:this={ref} class={cn('relative h-full w-full overflow-hidden', className)} {...restProps}>
 	<!-- Background boxes grid -->
 	<div class="absolute inset-0 z-0 flex flex-wrap">

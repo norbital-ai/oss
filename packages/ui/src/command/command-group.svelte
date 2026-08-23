@@ -28,7 +28,6 @@
 	setCommandGroupId(() => groupId);
 </script>
 
-<!-- stupidity:allow UI5 -- this leaf component owns a local clip or scroll boundary required by its interaction contract -->
 <div
 	bind:this={ref}
 	data-command-group="true"

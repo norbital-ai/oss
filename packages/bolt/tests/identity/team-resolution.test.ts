@@ -32,12 +32,12 @@ const placeAndAuthenticate = async (options: { readonly teamId: string | null })
 		[TEAM.supervisor, 'Supervisor', TEAM.manager]
 	] as const) {
 		await runtime.database.query(
-			`insert into bolt_team ("id", "name", "parent_id") values ($1, $2, $3)`,
+			`insert into "team" ("id", "name", "parent_id") values ($1, $2, $3)`,
 			[id, name, parent]
 		);
 	}
 	await runtime.database.query(
-		`insert into bolt_auth_user ("id", "name", "tenantId", "team_id") values (md5($1::text)::uuid, $1, 'test-tenant', $2)`,
+		`insert into "user" ("id", "name", "tenantId", "team_id") values (md5($1::text)::uuid, $1, 'test-tenant', $2)`,
 		['u1', options.teamId]
 	);
 	return runtime.runtime.runPromise(
@@ -66,7 +66,7 @@ describe('team resolution during authentication', () => {
 		expect(subject.teamPath[0]).toBe('Senior Management');
 		// Ordered by depth, so the subject's own team is first — the order a diagnostic reads best in.
 		//
-		// Descent is unconditional. A `bolt_team.inherits` flag used to gate it, defaulting to off, and
+		// Descent is unconditional. A `team.inherits` flag used to gate it, defaulting to off, and
 		// a team two levels up therefore held nothing from beneath it unless a row remembered to say
 		// so. Being above somebody is now the whole of the statement: authority composes downward
 		// because that is what a hierarchy is.
@@ -98,10 +98,7 @@ describe('team resolution during authentication', () => {
 			// Inserted with no parent first, then closed into a loop: the foreign key refuses a parent
 			// that does not exist yet, which is also why an operator can only ever create a cycle by
 			// editing an existing team rather than by creating one.
-			await runtime.database.query(`insert into bolt_team ("id", "name") values ($1, $2)`, [
-				id,
-				name
-			]);
+			await runtime.database.query(`insert into "team" ("id", "name") values ($1, $2)`, [id, name]);
 			void parent;
 		}
 		for (const [id, parent] of [
@@ -109,13 +106,13 @@ describe('team resolution during authentication', () => {
 			[TEAM.manager, TEAM.senior],
 			[TEAM.supervisor, TEAM.manager]
 		] as const) {
-			await runtime.database.query(`update bolt_team set "parent_id" = $2 where "id" = $1`, [
+			await runtime.database.query(`update "team" set "parent_id" = $2 where "id" = $1`, [
 				id,
 				parent
 			]);
 		}
 		await runtime.database.query(
-			`insert into bolt_auth_user ("id", "name", "tenantId", "team_id") values (md5($1::text)::uuid, $1, 'test-tenant', $2)`,
+			`insert into "user" ("id", "name", "tenantId", "team_id") values (md5($1::text)::uuid, $1, 'test-tenant', $2)`,
 			['u1', TEAM.senior]
 		);
 		const subject = await runtime.runtime.runPromise(

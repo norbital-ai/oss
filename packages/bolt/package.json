@@ -74,10 +74,7 @@
 		}
 	},
 	"imports": {
-		"#lib/*": {
-			"development": "./src/*",
-			"default": "./build/*"
-		}
+		"#lib/*": "./build/*"
 	},
 	"bin": {
 		"bolt": "./build/compiler/cli.js"

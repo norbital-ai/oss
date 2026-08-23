@@ -334,8 +334,6 @@
 	<div class="p-4 text-sm text-muted-foreground">{emptyMessage}</div>
 {/snippet}
 
-<!-- stupidity:allow UI10 -- the responsive matrix clips the inactive wide/narrow renderer at its surface boundary -->
-<!-- stupidity:allow UI5 -- surface overflow-hidden clips the inactive wide/narrow variant at an audited boundary -->
 <Stack
 	gap="none"
 	grow={bounded}
@@ -416,7 +414,6 @@
 		<div class="divide-y divide-border">
 			{#each displayRows as tableRow (tableRow.__matrixRowId)}
 				{@const source = resolveSource(tableRow)}
-				<!-- stupidity:allow UI5 -- per-row clip for the swipe-action overlay is an audited row boundary -->
 				<section class="matrix-renderer-narrow-row group relative overflow-hidden">
 					{#if source && showRowActionsColumn}
 						{@const rowDisabled = isRowDisabled?.(source.row, source.index) === true}

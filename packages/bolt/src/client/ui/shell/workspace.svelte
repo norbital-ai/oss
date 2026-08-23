@@ -81,7 +81,7 @@
 		void Effect.runPromise(
 			Effect.tryPromise(load).pipe(
 				Effect.tap((representation) =>
-					Effect.sync(() => (collectionSurfaces[collection] = { representation }))
+					Effect.sync(() => Object.assign(collectionSurfaces, { [collection]: { representation } }))
 				),
 				Effect.catch(() => Effect.void)
 			)
@@ -118,7 +118,9 @@
 	for (const [typeName, load] of Object.entries(workspace.customTypeRendererLoaders)) {
 		void Effect.runPromise(
 			Effect.tryPromise(load).pipe(
-				Effect.tap((renderer) => Effect.sync(() => (customTypeRenderers[typeName] = renderer))),
+				Effect.tap((renderer) =>
+					Effect.sync(() => Object.assign(customTypeRenderers, { [typeName]: renderer }))
+				),
 				Effect.catch(() => Effect.void)
 			)
 		);
@@ -305,15 +307,15 @@
 	/**
 	 * Which app component is mounted, and whether its module is still arriving.
 	 *
-	 * One cell because the three fields move together: the request counter is what tells a late module
-	 * that the navigation it belongs to was already superseded, and `component`/`loading` are what the
-	 * shell renders while that is decided.
+	 * `component` and `loading` are the render state. The request counter is deliberately plain local
+	 * state: reading and incrementing a reactive counter from the navigation effect would make that
+	 * effect subscribe to the value it writes and schedule itself forever.
 	 */
 	const appMount = $state({
 		component: null as Component | null,
-		loading: false,
-		request: 0
+		loading: false
 	});
+	let appRequest = 0;
 	const App = $derived(appMount.component);
 
 	/**
@@ -328,33 +330,31 @@
 	 * order, so a slow app could land on top of the fast one the operator actually asked for. Only
 	 * the newest request is allowed to assign.
 	 */
-	const loadAppName = (name: string | undefined): Promise<void> => {
-		const request = ++appMount.request;
+	const loadAppName = (name: string | undefined): Effect.Effect<void> => {
+		const request = ++appRequest;
 		appMount.component = null;
 		appMount.loading = false;
 		const loader = name === undefined ? undefined : workspace.appLoaders[name];
-		if (loader === undefined) return Effect.runPromise(Effect.void);
+		if (loader === undefined) return Effect.void;
 		appMount.loading = true;
-		return Effect.runPromise(
-			Effect.tryPromise(loader).pipe(
-				Effect.tap((loaded) =>
-					Effect.sync(() => {
-						if (request === appMount.request) appMount.component = loaded;
-					})
-				),
-				// A module that fails to evaluate is a missing app, never the previous one.
-				Effect.catch(() =>
-					Effect.sync(() => {
-						if (request === appMount.request) appMount.component = null;
-					})
-				),
-				Effect.ensuring(
-					Effect.sync(() => {
-						if (request === appMount.request) appMount.loading = false;
-					})
-				),
-				Effect.asVoid
-			)
+		return Effect.tryPromise(loader).pipe(
+			Effect.tap((loaded) =>
+				Effect.sync(() => {
+					if (request === appRequest) appMount.component = loaded;
+				})
+			),
+			// A module that fails to evaluate is a missing app, never the previous one.
+			Effect.catch(() =>
+				Effect.sync(() => {
+					if (request === appRequest) appMount.component = null;
+				})
+			),
+			Effect.ensuring(
+				Effect.sync(() => {
+					if (request === appRequest) appMount.loading = false;
+				})
+			),
+			Effect.asVoid
 		);
 	};
 
@@ -399,14 +399,29 @@
 		if (plugin !== null) {
 			// Same path as "no app here": it also has to invalidate a load still in flight, or that
 			// module lands on top of the plugin surface when it finally resolves.
-			void loadAppName(undefined);
+			Effect.runFork(loadAppName(undefined));
 			return;
 		}
 		if (href.startsWith('/app/') && name !== undefined && name !== href.slice('/app/'.length)) {
 			actions.navigate(`/app/${name}`, { replace: true });
 			return;
 		}
-		void loadAppName(name);
+		Effect.runFork(loadAppName(name));
+	});
+
+	/**
+	 * A policy preview can narrow the app set while an application is already mounted.
+	 *
+	 * Hiding its navigation entry is not enough: leaving the component mounted keeps issuing reads
+	 * that the preview quite correctly refuses and lets a stale privileged surface remain on screen.
+	 * Wait for the authority query to settle, then replace an inaccessible app route with the overview
+	 * whose cards are already filtered to the newly visible set.
+	 */
+	$effect(() => {
+		const visible = visibleAppsQuery.current;
+		const current = landingName;
+		if (visible === undefined || current === undefined || visible.apps.includes(current)) return;
+		actions.navigate('/', { replace: true });
 	});
 
 	const memberAccessQuery = $derived(

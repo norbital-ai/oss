@@ -16,6 +16,7 @@ export interface Provider {
 		metadata: FacilityCall,
 		input: TransportRequest,
 		signal: AbortSignal
+		// repository-health:allow EFF2 -- Provider SPI mirrors the protocol-owned Promise facility boundary for external adapters.
 	) => Promise<unknown>;
 }
 /** Validates transport envelopes without embedding any physical transport semantics. */
@@ -60,6 +61,7 @@ export const makeMemoryTransport = (
 	} = {}
 ): {
 	readonly binding: FacilityBinding<TransportRequest, TransportResponse>;
+	// repository-health:allow EFF2 -- Public host finalizers preserve the established Promise lifecycle contract.
 	readonly close: () => Promise<void>;
 	readonly activeConnections: () => number;
 } => {

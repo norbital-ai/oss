@@ -76,7 +76,7 @@ describe('approval bindings', () => {
 	});
 
 	it('matches team and policy names case-insensitively, as every other comparison does', () => {
-		// `bolt_team.name` resolves with `lower(name) = lower($1)` and `policiesHeldByTeam` folds both
+		// `team.name` resolves with `lower(name) = lower($1)` and `policiesHeldByTeam` folds both
 		// sides, so a build that refused on case would refuse a release the runtime routes correctly.
 		const definition = workspace(
 			[guarded(['field operations CONTROLLERS']), { name: 'Field_Ops_Controller' } as never],
@@ -88,7 +88,7 @@ describe('approval bindings', () => {
 	/**
 	 * An approver that `+teams.ts` does not declare, which used to be allowed and is not any more.
 	 *
-	 * The old rule read as obvious and was defensible: `reconcileApproverTeams` mints a `bolt_team`
+	 * The old rule read as obvious and was defensible: `reconcileApproverTeams` mints a `team`
 	 * row for every approver name a release declares, and `Approvals.decide` matches on team *name*
 	 * rather than on held policies — so a team holding nothing could still decide, and refusing it
 	 * would have made the reconciler's purpose unreachable.

@@ -3,7 +3,11 @@
 	import '@xyflow/svelte/dist/style.css';
 	import { Stack } from '@norbital-ai/ui/layout';
 	import TenantMatrixNode from './tenant-matrix-node.svelte';
-	import { buildMatrixFlow, buildTenantMatrix, type MatrixEntry } from '#lib/client/ui/studio/tenant-matrix.js';
+	import {
+		buildMatrixFlow,
+		buildTenantMatrix,
+		type MatrixEntry
+	} from '#lib/client/ui/studio/tenant-matrix.js';
 
 	/**
 	 * The tenant drawn as a Svelte Flow graph: one dashed lane carrying the environments the
