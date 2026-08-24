@@ -1321,7 +1321,7 @@ function scannerInputInventory(root) {
 		execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, stdio: 'ignore' });
 		git = true;
 	} catch {
-		/* rg is the deterministic fallback outside git */
+		/* A non-git tree is discovered below without changing the inventory contract. */
 	}
 	if (git) {
 		const patterns = [...SCANNER_SOURCE_EXTENSIONS].map((extension) => `*${extension}`);
@@ -1343,8 +1343,12 @@ function scannerInputInventory(root) {
 				encoding: 'utf8'
 			}).split('\0');
 		} catch (error) {
-			if (error?.status !== 1) throw error;
-			discovered = [];
+			if (error?.code === 'ENOENT') {
+				discovered = collectSourceFiles([root]).map((file) =>
+					relative(root, file).split(sep).join('/')
+				);
+			} else if (error?.status === 1) discovered = [];
+			else throw error;
 		}
 	}
 	const sources = [...new Set(discovered)]

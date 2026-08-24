@@ -231,6 +231,20 @@ function run(roots, receipts = [], extra = []) {
 	return spawnSync(process.execPath, args, { encoding: 'utf8' });
 }
 
+test('discovers a non-git tree without requiring ripgrep', (context) => {
+	const root = temporary('portable-discovery');
+	context.after(() => rmSync(root, { recursive: true, force: true }));
+	write(join(root, 'package.json'), JSON.stringify({ name: 'portable-discovery' }));
+	write(join(root, 'src/index.ts'), 'export const value = 1;\n');
+	const result = spawnSync(
+		process.execPath,
+		[analyzer, '--root', root, '--overlap-only', '--format', 'json'],
+		{ encoding: 'utf8', env: { ...process.env, PATH: '' } }
+	);
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(JSON.parse(result.stdout).totals.productionFiles, 1);
+});
+
 test('is deterministic and resolves baseUrl aliases, exports, cycles, configured tests, services, and principles', (context) => {
 	const { root, receipt } = fixture();
 	context.after(() => rmSync(root, { recursive: true, force: true }));
