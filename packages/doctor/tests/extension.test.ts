@@ -291,6 +291,24 @@ test('source discovery honors tests, path prefixes, and live .doctorignore edits
 	assert.deepEqual(sourceFiles(root), ['src/ignored.ts']);
 });
 
+test('source discovery needs neither git nor ripgrep outside a repository', (context) => {
+	const root = mkdtempSync(join(tmpdir(), 'probe-portable-source-'));
+	context.after(() => rmSync(root, { recursive: true, force: true }));
+	mkdirSync(join(root, 'src'), { recursive: true });
+	writeFileSync(join(root, 'src/index.ts'), 'export const value = 1;\n');
+	mkdirSync(join(root, 'node_modules/ignored'), { recursive: true });
+	writeFileSync(join(root, 'node_modules/ignored/index.ts'), 'export const ignored = 1;\n');
+
+	const previousPath = process.env.PATH;
+	try {
+		process.env.PATH = '';
+		assert.deepEqual(sourceFiles(root), ['src/index.ts']);
+	} finally {
+		if (previousPath === undefined) delete process.env.PATH;
+		else process.env.PATH = previousPath;
+	}
+});
+
 test('base none publishes durable authored evidence that consolidated assessment authenticates', async (context) => {
 	const root = repository('authored-evidence', {
 		'package.json': '{"name":"authored-evidence","type":"module"}',

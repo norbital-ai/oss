@@ -94,7 +94,7 @@ describe('clean-cut vocabulary', () => {
 	});
 
 	it('keeps one clear Workbench action and removes redundant Review chrome', () => {
-		const toolbar = readFileSync(join(studioRoot, 'authoring-toolbar.svelte'), 'utf8');
+		const toolbar = readFileSync(join(studioRoot, 'workbench-toolbar.svelte'), 'utf8');
 		const sidebar = readFileSync(join(studioRoot, 'review-sidebar.svelte'), 'utf8');
 		const review = readFileSync(join(studioRoot, 'review-pane.svelte'), 'utf8');
 		const operations = readFileSync(join(studioRoot, 'operations-pane.svelte'), 'utf8');
