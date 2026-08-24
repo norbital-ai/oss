@@ -45,6 +45,7 @@ const metadata = {
 };
 
 const signal = new AbortController().signal;
+const LOCAL_DATABASE_TEST_TIMEOUT_MILLIS = 30_000;
 const withConfiguration = (values: Record<string, string>) =>
 	ConfigProvider.layer(ConfigProvider.fromUnknown(values));
 
@@ -65,37 +66,42 @@ it('classifies serialization SQLSTATE through driver wrappers without changing o
 	assert.strictEqual(databaseFailureRetryable(new Error('network unavailable')), undefined);
 });
 
-it.effect('returns a retryable facility failure for bolt_assert serialization conflicts', () =>
-	Effect.acquireUseRelease(
-		Effect.tryPromise(() => makeLocalDatabase({ dataDirectory: 'memory://' })),
-		(database) =>
-			Effect.gen(function* () {
-				yield* Effect.tryPromise(() =>
-					database.binding.call(
-						metadata,
-						DatabaseRequest.cases.Query.make({
-							sql: "create or replace function bolt_assert(ok boolean, message text) returns void language plpgsql as $$ begin if ok is not true then raise exception '%', message using errcode = '40001'; end if; end $$",
-							parameters: []
-						}),
-						signal
-					)
-				);
-				const result = yield* Effect.tryPromise(() =>
-					database.binding.call(
-						metadata,
-						DatabaseRequest.cases.Transaction.make({
-							statements: [{ sql: "select bolt_assert(false, 'graph changed')", parameters: [] }]
-						}),
-						signal
-					)
-				);
-				assert.strictEqual(result._tag, 'Failure');
-				if (result._tag === 'Failure') {
-					assert.strictEqual(result.error.retryable, true);
-				}
-			}),
-		(database) => Effect.tryPromise(() => database.close()).pipe(Effect.ignore)
-	)
+it.effect(
+	'returns a retryable facility failure for bolt_assert serialization conflicts',
+	() =>
+		Effect.acquireUseRelease(
+			Effect.tryPromise(() => makeLocalDatabase({ dataDirectory: 'memory://' })),
+			(database) =>
+				Effect.gen(function* () {
+					yield* Effect.tryPromise(() =>
+						database.binding.call(
+							metadata,
+							DatabaseRequest.cases.Query.make({
+								sql: "create or replace function bolt_assert(ok boolean, message text) returns void language plpgsql as $$ begin if ok is not true then raise exception '%', message using errcode = '40001'; end if; end $$",
+								parameters: []
+							}),
+							signal
+						)
+					);
+					const result = yield* Effect.tryPromise(() =>
+						database.binding.call(
+							metadata,
+							DatabaseRequest.cases.Transaction.make({
+								statements: [
+									{ sql: "select bolt_assert(false, 'graph changed')", parameters: [] }
+								]
+							}),
+							signal
+						)
+					);
+					assert.strictEqual(result._tag, 'Failure');
+					if (result._tag === 'Failure') {
+						assert.strictEqual(result.error.retryable, true);
+					}
+				}),
+			(database) => Effect.tryPromise(() => database.close()).pipe(Effect.ignore)
+		),
+	LOCAL_DATABASE_TEST_TIMEOUT_MILLIS
 );
 
 it.effect(
@@ -134,34 +140,37 @@ it.effect(
 				}),
 			(database) => Effect.promise(database.close)
 		),
-	30_000
+	LOCAL_DATABASE_TEST_TIMEOUT_MILLIS
 );
 
-it.effect('returns JSON-safe timestamps from local PGlite queries', () =>
-	Effect.acquireUseRelease(
-		Effect.tryPromise(() => makeLocalDatabase({ dataDirectory: 'memory://' })),
-		(database) =>
-			Effect.gen(function* () {
-				const response = yield* Effect.tryPromise(() =>
-					database.binding.call(
-						metadata,
-						DatabaseRequest.cases.Query.make({ sql: 'select now() as ts', parameters: [] }),
-						signal
-					)
-				);
-				assert.strictEqual(response._tag, 'Success');
-				if (response._tag !== 'Success') return;
-				// A row crosses the facility boundary as `Json`, so it is narrowed before it is indexed
-				// rather than asserted into a shape the type does not actually promise.
-				const [row] = response.value.rows;
-				if (!isJsonObject(row))
-					throw new Error(`expected a row object, received ${JSON.stringify(row)}`);
-				const ts = row['ts'];
-				assert.strictEqual(typeof ts, 'string');
-				assert.match(String(ts), /^\d{4}-\d{2}-\d{2}T/);
-			}),
-		(database) => Effect.promise(database.close)
-	)
+it.effect(
+	'returns JSON-safe timestamps from local PGlite queries',
+	() =>
+		Effect.acquireUseRelease(
+			Effect.tryPromise(() => makeLocalDatabase({ dataDirectory: 'memory://' })),
+			(database) =>
+				Effect.gen(function* () {
+					const response = yield* Effect.tryPromise(() =>
+						database.binding.call(
+							metadata,
+							DatabaseRequest.cases.Query.make({ sql: 'select now() as ts', parameters: [] }),
+							signal
+						)
+					);
+					assert.strictEqual(response._tag, 'Success');
+					if (response._tag !== 'Success') return;
+					// A row crosses the facility boundary as `Json`, so it is narrowed before it is indexed
+					// rather than asserted into a shape the type does not actually promise.
+					const [row] = response.value.rows;
+					if (!isJsonObject(row))
+						throw new Error(`expected a row object, received ${JSON.stringify(row)}`);
+					const ts = row['ts'];
+					assert.strictEqual(typeof ts, 'string');
+					assert.match(String(ts), /^\d{4}-\d{2}-\d{2}T/);
+				}),
+			(database) => Effect.promise(database.close)
+		),
+	LOCAL_DATABASE_TEST_TIMEOUT_MILLIS
 );
 
 it.effect('executes memory transport Open, Send, Pull, and Close', () =>
