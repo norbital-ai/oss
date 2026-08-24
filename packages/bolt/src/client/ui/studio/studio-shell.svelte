@@ -8,7 +8,7 @@
 	import SourceEditor from './source-editor.svelte';
 	import ReviewPane from './review-pane.svelte';
 	import ReviewSidebar from './review-sidebar.svelte';
-	import AuthoringToolbar from './authoring-toolbar.svelte';
+	import WorkbenchToolbar from './workbench-toolbar.svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Bound, Cluster, Cover, Inline, INSET_X_CLASS, Stack } from '@norbital-ai/ui/layout';
 	import * as Sheet from '@norbital-ai/ui/sheet';
@@ -29,7 +29,7 @@
 		unavailableFacilities,
 		workspaceEnvoys,
 		workspaceTools,
-		type AuthoringView,
+		type WorkbenchView,
 		type StudioReviewTab,
 		type StudioRootTab
 	} from '#lib/client/ui/studio/studio-state.js';
@@ -150,7 +150,7 @@
 	 */
 	let view = $state<{
 		rootTab: StudioRootTab;
-		workbench: AuthoringView;
+		workbench: WorkbenchView;
 		review: StudioReviewTab;
 		selected: string;
 		expanded: ReadonlyArray<string>;
@@ -524,7 +524,7 @@
 			     this parent prevents Workbench and Review from drifting independently. -->
 			<Stack gap="none" shrink={false} class={INSET_X_CLASS}>
 				{#if isWorkbench}
-					<AuthoringToolbar
+					<WorkbenchToolbar
 						hostStatus={host.status}
 						view={view.workbench}
 						previewReady={sourceDraftCount === 0 &&

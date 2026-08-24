@@ -10,7 +10,7 @@
 	import {
 		sourceTreeChildren,
 		sourceTreeMatches,
-		type AuthoringView,
+		type WorkbenchView,
 		type ManifestSection,
 		type SourceTreeEntry
 	} from '#lib/client/ui/studio/studio-state.js';
@@ -43,7 +43,7 @@
 		sections?: ReadonlyArray<ManifestSection>;
 		files?: ReadonlyArray<string>;
 		fileSizes?: Readonly<Record<string, number>>;
-		view?: AuthoringView;
+		view?: WorkbenchView;
 		selected?: string;
 		expanded?: ReadonlyArray<string>;
 		readOnly?: boolean;

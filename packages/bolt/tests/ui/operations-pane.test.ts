@@ -10,7 +10,7 @@ const route = (environmentId: string, releaseId: string): MatrixEntry => ({
 	ownerEpoch: 'colony'
 });
 
-describe('Operations current release', () => {
+describe('Operations routed release', () => {
 	it('summarizes a configured routed environment without requiring it to be named live', () => {
 		expect(currentRoutedRelease([route('development', 'release-development')])).toMatchObject({
 			environmentId: 'development',

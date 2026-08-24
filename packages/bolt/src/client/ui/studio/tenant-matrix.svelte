@@ -34,7 +34,7 @@
 	);
 </script>
 
-<Stack gap="sm" data-testid="command-tenant-matrix">
+<Stack gap="sm" data-testid="operations-tenant-matrix">
 	{#if matrix.environments.length === 0}
 		<p class="text-meta">
 			This tenant has no routed environment yet. Nothing has been built and promoted, so the gateway

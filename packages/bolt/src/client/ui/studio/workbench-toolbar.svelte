@@ -3,7 +3,7 @@
 	import { Button } from '@norbital-ai/ui/button';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
-	import type { AuthoringView } from '#lib/client/ui/studio/studio-state.js';
+	import type { WorkbenchView } from '#lib/client/ui/studio/studio-state.js';
 
 	let {
 		hostStatus,
@@ -24,7 +24,7 @@
 		onrebase
 	}: {
 		hostStatus: string;
-		view?: AuthoringView;
+		view?: WorkbenchView;
 		previewReady?: boolean;
 		updateRequired?: boolean;
 		updateDisabled?: boolean;
@@ -34,7 +34,7 @@
 		reviewRequested?: boolean;
 		reviewDisabled?: boolean;
 		reviewReason: string;
-		onview?: ((next: AuthoringView) => void) | undefined;
+		onview?: ((next: WorkbenchView) => void) | undefined;
 		onpreview?: (() => void) | undefined;
 		onreview?: (() => void) | undefined;
 		onopenreview?: (() => void) | undefined;

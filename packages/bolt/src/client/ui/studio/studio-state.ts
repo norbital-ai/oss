@@ -2,8 +2,8 @@
  * The pure rules behind Studio's Workbench, Review, and administrator Operations surfaces.
  *
  * These decide what the environment selector offers, whether the tenant database is ready, which
- * release operations are legal right now, which entities the tree lists, and what the Command
- * panel can honestly claim to have measured. Keeping them out of the components is what lets the
+ * release operations are legal right now, which entities the tree lists, and what Operations can
+ * honestly claim to have measured. Keeping them out of the components is what lets the
  * chrome be asserted without mounting anything — Studio's workbench controls are exactly where
  * a wrong answer is expensive.
  */
@@ -96,7 +96,7 @@ type StudioEnvironment = Readonly<{
  * the same row of the page and a pane that draws its own tab strip drifts out of that row.
  */
 export type StudioRootTab = 'workbench' | 'review' | 'operations';
-export type AuthoringView = 'manifest' | 'editor';
+export type WorkbenchView = 'manifest' | 'editor';
 export type StudioReviewTab = 'requests' | 'history' | 'schema';
 
 /**
