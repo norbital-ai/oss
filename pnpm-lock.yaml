@@ -139,6 +139,9 @@ importers:
       happy-dom:
         specifier: ^20.11.6
         version: 20.11.6
+      jiti:
+        specifier: ^2.7.0
+        version: 2.7.0
       svelte:
         specifier: ^5.56.10
         version: 5.56.10

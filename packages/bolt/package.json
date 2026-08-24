@@ -120,6 +120,7 @@
 		"@types/node": "^26.2.0",
 		"@types/qrcode": "^1.5.6",
 		"happy-dom": "^20.11.6",
+		"jiti": "^2.7.0",
 		"svelte": "^5.56.10",
 		"svelte-check": "^4.7.6",
 		"typescript": "catalog:",
