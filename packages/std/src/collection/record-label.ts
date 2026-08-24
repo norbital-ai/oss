@@ -94,10 +94,10 @@ const JsonContainerDecoded = Schema.decodeOption(Schema.fromJsonString(JsonConta
  * Render one label term as text, or null when it has nothing to contribute.
  *
  * CEL cannot do this itself. Its `+` has no overload but string+string, and `string()` has no
- * overload for timestamps or null — so a label naming a `date()` column, a number, a boolean or an
- * empty field throws instead of concatenating, however the expression is written. Coercion
- * therefore belongs here, where the values are ordinary JavaScript and a missing one can simply be
- * left out.
+ * overload for timestamps or null — so a label naming a day-precision `instant()` column, a number,
+ * a boolean or an empty field throws instead of concatenating, however the expression is written.
+ * Coercion therefore belongs here, where the values are ordinary JavaScript and a missing one can
+ * simply be left out.
  */
 export function labelTermText(value: unknown): string | null {
 	if (value === null || value === undefined) return null;
