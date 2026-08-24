@@ -141,7 +141,7 @@ function containsValue(value: unknown, operand: unknown): boolean {
 	return isPlainRecord(value) && isPlainRecord(operand) ? valuesEqual(value, operand) : false;
 }
 
-function dateRange(value: unknown): { start: string; end: string } | null {
+function instantRangeValue(value: unknown): { start: string; end: string } | null {
 	if (!isPlainRecord(value)) return null;
 	const start = Reflect.get(value, 'start');
 	const end = Reflect.get(value, 'end');
@@ -223,13 +223,13 @@ function matchesOperator(value: unknown, operator: string, operand: unknown): bo
 				operand.some((candidate) => value.some((item) => valuesEqual(item, candidate)))
 			);
 		case 'contains_date': {
-			const range = dateRange(value);
+			const range = instantRangeValue(value);
 			const date = typeof operand === 'string' ? operand : null;
 			return range != null && date != null && range.start <= date && date <= range.end;
 		}
 		case 'overlaps': {
-			const left = dateRange(value);
-			const right = dateRange(operand);
+			const left = instantRangeValue(value);
+			const right = instantRangeValue(operand);
 			return left != null && right != null && left.start <= right.end && right.start <= left.end;
 		}
 		default:

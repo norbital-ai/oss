@@ -310,17 +310,8 @@ describe('workspace.manifest command', () => {
 		expect(fields.get('lifecycle')).not.toHaveProperty('search');
 	});
 
-	/**
-	 * The three `defineModel` options that reached no reader at all.
-	 *
-	 * `description` and `icon` are declared by 60 and 56 template models between them and were
-	 * dropped twice over — the compiler never lifted them off `model.metadata`, and this projection
-	 * would have dropped them again if it had. `approvalLock` is worse than unread: `Collections`
-	 * already intercepts a write on `definition.approvalLock`, so the behaviour worked while
-	 * declaring it on `defineModel` did nothing, and no host surface could tell a locked collection
-	 * from an open one.
-	 */
-	it('carries the collection metadata a studio names and gates a collection with', async () => {
+	/** Collection presentation metadata survives the artifact and manifest projection. */
+	it('carries the collection metadata a studio names', async () => {
 		harness = await makeBoltTestRuntime(
 			testWorkspace({
 				collections: [
@@ -328,8 +319,7 @@ describe('workspace.manifest command', () => {
 						name: 'people',
 						fields: { name: field.string() },
 						description: 'Everyone employed here',
-						icon: 'lucide:users',
-						approvalLock: true
+						icon: 'lucide:users'
 					},
 					{ name: 'orders', fields: { total: field.number() } }
 				]
@@ -343,20 +333,17 @@ describe('workspace.manifest command', () => {
 			name: string;
 			description?: string;
 			icon?: string;
-			approvalLock?: boolean;
 		}>;
 
 		const people = collections.find(({ name }) => name === 'people');
 		expect(people?.description).toBe('Everyone employed here');
 		expect(people?.icon).toBe('lucide:users');
-		expect(people?.approvalLock).toBe(true);
 
 		// A collection that declared none of them must not sprout empty keys: "no icon" and "an icon
 		// whose value is undefined" are different statements, and a studio reads them differently.
 		const orders = collections.find(({ name }) => name === 'orders');
 		expect(orders).not.toHaveProperty('description');
 		expect(orders).not.toHaveProperty('icon');
-		expect(orders).not.toHaveProperty('approvalLock');
 	});
 
 	it('shows only the collections the caller may read', async () => {

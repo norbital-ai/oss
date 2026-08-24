@@ -1,8 +1,23 @@
-import { and, asc, eq, inArray, lte, notInArray, or, sql } from 'drizzle-orm';
-import { PgDialect } from 'drizzle-orm/pg-core';
-import { drizzle } from 'drizzle-orm/pg-proxy';
+import { and, asc, eq, inArray, like, lte, min, notInArray, or } from 'drizzle-orm';
 import { Effect, Result, Schema } from 'effect';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
+import {
+	aliased,
+	always,
+	composer,
+	dbNow,
+	dbNowMinusDays,
+	dbNowPlusSeconds,
+	excluded,
+	excludedWhenDistinct,
+	increment,
+	least,
+	pendingNextRun,
+	resumedRunAt,
+	singleton,
+	toStatement,
+	type Statement
+} from '#lib/runtime/persistence.js';
 import * as Cron from '#lib/runtime/tasks/cron.js';
 
 const { bolt_schedule: boltSchedule, bolt_task: boltTask } = SYSTEM_MODEL_TABLES;
@@ -34,11 +49,7 @@ const { bolt_schedule: boltSchedule, bolt_task: boltTask } = SYSTEM_MODEL_TABLES
  *    `next_run_at` rather than against a local clock — see `roll`.
  */
 
-/** One statement, in the shape the database facility takes them. */
-export type Statement = Readonly<{
-	readonly sql: string;
-	readonly parameters: ReadonlyArray<Schema.Json>;
-}>;
+export type { Statement } from '#lib/runtime/persistence.js';
 
 /** A row as the executor answers it; operation-specific schemas decode it before any field is read. */
 type Row = Readonly<Record<string, unknown>>;
@@ -66,7 +77,13 @@ export type TaskRow = Readonly<{
 /** What a run came to, as `finish` is told it. */
 export type Outcome =
 	| Readonly<{ readonly _tag: 'Done'; readonly task: TaskRow; readonly result: Schema.Json }>
-	| Readonly<{ readonly _tag: 'Failed'; readonly task: TaskRow; readonly error: string }>;
+	| Readonly<{
+			readonly _tag: 'Failed';
+			readonly task: TaskRow;
+			readonly error: string;
+			/** False means another attempt cannot change the answer and must not consume the budget. */
+			readonly retryable: boolean;
+	  }>;
 
 /** One thing a release says should happen on a cron. */
 export type Declaration = Readonly<{
@@ -142,32 +159,6 @@ const RETENTION_DAYS = { done: 7, failed: 30 } as const;
 /** At most this many rows are pruned per tick, so retention never becomes the tick's whole budget. */
 const PRUNE_LIMIT = 200;
 
-/**
- * Composes SQL; never executes it.
- *
- * Drizzle's proxy driver wants a transport callback, and this one refuses. Every statement leaves
- * through `.toSQL()` and is committed by the caller's facility in a batch the caller chose, so a
- * query that reached the database through *this* object would be one that escaped the batching
- * rules above — better a thrown error at the first test than a statement that silently commits
- * alone.
- */
-const composer = drizzle(() =>
-	Effect.runPromise(
-		Effect.die(new Error('bolt tasks: statements are composed here and executed by the caller'))
-	)
-);
-
-/** Renders a bare `sql` fragment, for the two statements no builder expresses. */
-const dialect = new PgDialect();
-
-const jsonParameter = (value: unknown): Schema.Json =>
-	value instanceof Date ? value.toISOString() : Schema.decodeUnknownSync(Schema.Json)(value);
-
-const toStatement = (query: { readonly sql: string; readonly params: ReadonlyArray<unknown> }) => ({
-	sql: query.sql,
-	parameters: query.params.map(jsonParameter)
-});
-
 const DatabaseNumber = Schema.Union([Schema.Number, Schema.NumberFromString]);
 const DueScheduleRow = Schema.Struct({
 	key: Schema.String,
@@ -204,7 +195,19 @@ const epochMsOf = (value: string): number | undefined => {
  * honest label: `@06:00` says *the six o'clock run, late*, not *the run that happened at 08:31*.
  */
 export const slotEffectId = (key: string, slotEpochMs: number): string =>
-	`schedule:${key}@${new Date(slotEpochMs).toISOString()}`;
+	`schedule:${key}@${instantLabel(slotEpochMs)}`;
+
+/**
+ * An epoch instant in the one JSON-safe shape authored models expose.
+ *
+ * Both are pure conversions of an instant a caller already holds — the clock is read by the caller
+ * and passed in — so they live out here beside the composer rather than inside the workflows that
+ * build statements, where a bare `new Date` reads as a second, ambient source of time.
+ */
+const storedInstant = (epochMs: number): string => new Date(epochMs).toISOString();
+const instantLabel = storedInstant;
+/** Drizzle's `.toSQL()` does not run a JSONB column encoder, so writes cross as JSON text. */
+const storedJson = (value: Schema.Json): string => JSON.stringify(value);
 
 /**
  * The inserts that put work on the queue — a pure function, and deliberately not a method.
@@ -221,40 +224,110 @@ export const enqueueStatements = (enqueues: ReadonlyArray<Enqueue>): ReadonlyArr
 				.insert(boltTask)
 				.values({
 					command: enqueue.command,
-					input: enqueue.input,
+					input: storedJson(enqueue.input),
 					effect_id: enqueue.effectId,
-					...(enqueue.runAtEpochMs === undefined ? {} : { run_at: new Date(enqueue.runAtEpochMs) })
+					...(enqueue.runAtEpochMs === undefined
+						? {}
+						: { run_at: storedInstant(enqueue.runAtEpochMs) })
 				})
 				.onConflictDoNothing({ target: boltTask.effect_id })
 				.toSQL()
 		)
 	);
 
-/**
- * Embeds one canonical queue insert in a data-modifying CTE owned by another transaction.
- *
- * The source CTE makes the enqueue conditional on the caller's successful state transition. Keeping
- * the SQL here preserves one writer for `bolt_task`, while returning a fragment lets approval state,
- * its projection, and the follow-up task commit atomically in one statement.
- */
-export const enqueueFromCte = (
-	cteName: string,
-	sourceCte: string,
-	enqueue: Enqueue,
-	parameterOffset: number
-): Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
-	if (!/^[a-z][a-z0-9_]*$/u.test(cteName) || !/^[a-z][a-z0-9_]*$/u.test(sourceCte))
-		throw new TypeError('Task queue CTE names must be lowercase SQL identifiers.');
-	return {
-		sql: `, ${cteName} as (
-			insert into bolt_task (command, input, effect_id)
-			select $${parameterOffset}, $${parameterOffset + 1}::jsonb, $${parameterOffset + 2} from ${sourceCte}
-			on conflict (effect_id) do nothing
-			returning id
-		)`,
-		parameters: [enqueue.command, enqueue.input, enqueue.effectId]
-	};
-};
+/** Reads the lifecycle snapshot exposed to a running automation. */
+export const statusStatement = (taskId: string): Statement =>
+	toStatement(
+		composer
+			.select({
+				status: boltTask.status,
+				attempts: boltTask.attempts,
+				maxAttempts: aliased(boltTask.max_attempts, 'maxAttempts'),
+				error: boltTask.error,
+				result: boltTask.result,
+				progress: boltTask.progress,
+				progressSequence: aliased(boltTask.progress_sequence, 'progressSequence'),
+				progressUpdatedAt: aliased(boltTask.progress_updated_at, 'progressUpdatedAt'),
+				nextRunAt: aliased(pendingNextRun(boltTask.status, boltTask.run_at), 'nextRunAt'),
+				observedAt: aliased(dbNow(), 'observedAt')
+			})
+			.from(boltTask)
+			.where(eq(boltTask.effect_id, taskId))
+			.toSQL()
+	);
+
+/** Replaces an automation task's progress while advancing its durable sequence. */
+export const progressStatement = (taskId: string, value: Schema.Json): Statement =>
+	toStatement(
+		composer
+			.update(boltTask)
+			.set({
+				progress: storedJson(value),
+				progress_sequence: increment(boltTask.progress_sequence),
+				progress_updated_at: dbNow()
+			})
+			.where(
+				and(
+					eq(boltTask.effect_id, taskId),
+					eq(boltTask.status, 'pending'),
+					like(boltTask.command, 'automations.%')
+				)
+			)
+			.toSQL()
+	);
+
+/** Marks one exact pending command as permanently cancelled. */
+export const cancelStatement = (taskId: string, command: string): Statement =>
+	toStatement(
+		composer
+			.update(boltTask)
+			.set({ status: 'failed', error: 'cancelled', updated_at: dbNow() })
+			.where(
+				and(
+					eq(boltTask.effect_id, taskId),
+					eq(boltTask.command, command),
+					eq(boltTask.status, 'pending')
+				)
+			)
+			.toSQL()
+	);
+
+/** Fences queued and in-flight work on the same durable task row. */
+export const stopStatement = (taskId: string, command: string): Statement =>
+	toStatement(
+		composer
+			.update(boltTask)
+			.set({ status: 'paused', updated_at: dbNow() })
+			.where(
+				and(
+					eq(boltTask.effect_id, taskId),
+					eq(boltTask.command, command),
+					inArray(boltTask.status, ['pending', 'resuming'])
+				)
+			)
+			.toSQL()
+	);
+
+/** Returns one paused row to its existing lease or makes it immediately due. */
+export const resumeStatement = (taskId: string, command: string): Statement =>
+	toStatement(
+		composer
+			.update(boltTask)
+			.set({
+				status: 'resuming',
+				run_at: resumedRunAt(boltTask.attempts, boltTask.error, boltTask.run_at),
+				error: null,
+				updated_at: dbNow()
+			})
+			.where(
+				and(
+					eq(boltTask.effect_id, taskId),
+					eq(boltTask.command, command),
+					eq(boltTask.status, 'paused')
+				)
+			)
+			.toSQL()
+	);
 
 /** Owns the two tables, and nothing else in the runtime touches them. */
 export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
@@ -280,9 +353,9 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 		},
 		E
 	> =>
-		Effect.gen(function* () {
+		Effect.suspend(() => {
 			const rejections: Array<Rejection> = [];
-			const accepted: Array<Declaration & { readonly nextRunAt: Date }> = [];
+			const accepted: Array<Declaration & { readonly nextRunAt: string }> = [];
 			for (const declaration of declarations) {
 				const next = Cron.nextRunAfter(declaration.crontab, nowEpochMs);
 				if (next._tag === 'Rejected') {
@@ -293,7 +366,7 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 					});
 					continue;
 				}
-				accepted.push({ ...declaration, nextRunAt: new Date(next.epochMs) });
+				accepted.push({ ...declaration, nextRunAt: storedInstant(next.epochMs) });
 			}
 			const upserts = accepted.map((declaration) =>
 				toStatement(
@@ -303,16 +376,16 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 							key: declaration.key,
 							command: declaration.command,
 							crontab: declaration.crontab,
-							input: declaration.input,
+							input: storedJson(declaration.input),
 							next_run_at: declaration.nextRunAt
 						})
 						.onConflictDoUpdate({
 							target: boltSchedule.key,
 							set: {
-								command: sql`excluded.command`,
-								input: sql`excluded.input`,
-								crontab: sql`excluded.crontab`,
-								next_run_at: sql`case when ${boltSchedule.crontab} is distinct from excluded.crontab then excluded.next_run_at else ${boltSchedule.next_run_at} end`
+								command: excluded(boltSchedule.command),
+								input: excluded(boltSchedule.input),
+								crontab: excluded(boltSchedule.crontab),
+								next_run_at: excludedWhenDistinct(boltSchedule.crontab, boltSchedule.next_run_at)
 							}
 						})
 						.toSQL()
@@ -324,11 +397,13 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 			const retire = toStatement(
 				composer
 					.delete(boltSchedule)
-					.where(declaredKeys.length === 0 ? sql`true` : notInArray(boltSchedule.key, declaredKeys))
+					.where(declaredKeys.length === 0 ? always() : notInArray(boltSchedule.key, declaredKeys))
 					.toSQL()
 			);
-			const rows = yield* execute([...upserts, retire, whenStatement()]);
-			return { rejections, nextDueAtEpochMs: readWhen(rows) };
+			return Effect.map(execute([...upserts, retire, whenStatement()]), (rows) => ({
+				rejections,
+				nextDueAtEpochMs: readWhen(rows)
+			}));
 		});
 
 	/**
@@ -346,81 +421,84 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 	 * schedule rejoins its own rhythm. A missed occurrence is late, not multiplied.
 	 */
 	const roll = (nowEpochMs: number): Effect.Effect<Roll, E> =>
-		Effect.gen(function* () {
-			const due = yield* execute([
+		Effect.suspend(() =>
+			execute([
 				toStatement(
 					composer
 						.select()
 						.from(boltSchedule)
-						.where(lte(boltSchedule.next_run_at, sql`now()`))
+						.where(lte(boltSchedule.next_run_at, dbNow()))
 						.orderBy(asc(boltSchedule.next_run_at))
 						.toSQL()
 				)
-			]);
-			const statements: Array<Statement> = [];
-			const rejections: Array<Rejection> = [];
-			const retired: Array<string> = [];
-			let rolled = 0;
-			for (const row of due.flatMap((entry) => {
-				const decoded = decodeDueScheduleRow(entry);
-				return Result.isSuccess(decoded) ? [decoded.success] : [];
-			})) {
-				const { key, command, crontab, input } = row;
-				const slotEpochMs = epochMsOf(row.next_run_at);
-				if (key === '' || slotEpochMs === undefined) continue;
-				const next = Cron.nextRunAfter(crontab, Math.max(nowEpochMs, slotEpochMs));
-				// Two ways to reach one state, and the state is the expensive one. A schedule that cannot
-				// advance — because its expression will not parse, or because the instant it names is not
-				// later than the one already stored — goes on satisfying `next_run_at <= now()`, so `when`
-				// goes on answering "due now", so the host re-arms immediately and ticks forever against a
-				// row that does nothing. That is the exact cost this design exists to avoid, reached from
-				// the inside.
-				//
-				// Retiring costs nothing that is not recovered: activation re-declares every key this
-				// release names and rejects a bad one *there*, where a person is watching a deploy. The
-				// second condition guards against a future cron edge case rather than against anything
-				// reachable today — the point of it is that such a case degrades to a retired schedule
-				// rather than to a bill.
-				if (next._tag === 'Rejected' || next.epochMs <= slotEpochMs) {
-					rejections.push({
-						key,
-						crontab,
-						reason:
-							next._tag === 'Rejected'
-								? next.reason
-								: `names no instant after ${new Date(slotEpochMs).toISOString()}, which it already stands at`
-					});
-					retired.push(key);
-					continue;
+			])
+		).pipe(
+			Effect.map((due) => {
+				const statements: Array<Statement> = [];
+				const rejections: Array<Rejection> = [];
+				const retired: Array<string> = [];
+				let rolled = 0;
+				for (const row of due.flatMap((entry) => {
+					const decoded = decodeDueScheduleRow(entry);
+					return Result.isSuccess(decoded) ? [decoded.success] : [];
+				})) {
+					const { key, command, crontab, input } = row;
+					const slotEpochMs = epochMsOf(row.next_run_at);
+					if (key === '' || slotEpochMs === undefined) continue;
+					const next = Cron.nextRunAfter(crontab, Math.max(nowEpochMs, slotEpochMs));
+					// Two ways to reach one state, and the state is the expensive one. A schedule that cannot
+					// advance — because its expression will not parse, or because the instant it names is not
+					// later than the one already stored — goes on satisfying `next_run_at <= now()`, so `when`
+					// goes on answering "due now", so the host re-arms immediately and ticks forever against a
+					// row that does nothing. That is the exact cost this design exists to avoid, reached from
+					// the inside.
+					//
+					// Retiring costs nothing that is not recovered: activation re-declares every key this
+					// release names and rejects a bad one *there*, where a person is watching a deploy. The
+					// second condition guards against a future cron edge case rather than against anything
+					// reachable today — the point of it is that such a case degrades to a retired schedule
+					// rather than to a bill.
+					if (next._tag === 'Rejected' || next.epochMs <= slotEpochMs) {
+						rejections.push({
+							key,
+							crontab,
+							reason:
+								next._tag === 'Rejected'
+									? next.reason
+									: `names no instant after ${instantLabel(slotEpochMs)}, which it already stands at`
+						});
+						retired.push(key);
+						continue;
+					}
+					rolled += 1;
+					statements.push(
+						...enqueueStatements([
+							{
+								command,
+								input,
+								effectId: slotEffectId(key, slotEpochMs),
+								runAtEpochMs: slotEpochMs
+							}
+						]),
+						toStatement(
+							composer
+								.update(boltSchedule)
+								.set({ next_run_at: storedInstant(next.epochMs), last_fired_at: dbNow() })
+								.where(eq(boltSchedule.key, key))
+								.toSQL()
+						)
+					);
 				}
-				rolled += 1;
-				statements.push(
-					...enqueueStatements([
-						{
-							command,
-							input,
-							effectId: slotEffectId(key, slotEpochMs),
-							runAtEpochMs: slotEpochMs
-						}
-					]),
-					toStatement(
-						composer
-							.update(boltSchedule)
-							.set({ next_run_at: new Date(next.epochMs), last_fired_at: sql`now()` })
-							.where(eq(boltSchedule.key, key))
-							.toSQL()
-					)
-				);
-			}
-			if (retired.length > 0) {
-				statements.push(
-					toStatement(
-						composer.delete(boltSchedule).where(inArray(boltSchedule.key, retired)).toSQL()
-					)
-				);
-			}
-			return { statements, rejections, rolled };
-		});
+				if (retired.length > 0) {
+					statements.push(
+						toStatement(
+							composer.delete(boltSchedule).where(inArray(boltSchedule.key, retired)).toSQL()
+						)
+					);
+				}
+				return { statements, rejections, rolled };
+			})
+		);
 
 	/**
 	 * Hands out due tasks, hiding them while they run — one statement, and it has to be one.
@@ -461,7 +539,12 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 			const claimed = composer
 				.select({ id: boltTask.id })
 				.from(boltTask)
-				.where(and(eq(boltTask.status, 'pending'), lte(boltTask.run_at, sql`now()`)))
+				// `resuming` is a fence, not a second kind of work. A stopped in-flight attempt may
+				// still own its old lease; resume keeps the row behind that fence until the lease
+				// expires, at which point this claim turns it back into ordinary pending work.
+				.where(
+					and(inArray(boltTask.status, ['pending', 'resuming']), lte(boltTask.run_at, dbNow()))
+				)
 				.orderBy(asc(boltTask.run_at))
 				.limit(options.batchSize)
 				.for('update', { skipLocked: true });
@@ -471,9 +554,13 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 					composer
 						.update(boltTask)
 						.set({
-							attempts: sql`${boltTask.attempts} + 1`,
-							run_at: sql`now() + make_interval(secs => ${options.hideForMillis / 1000})`,
-							updated_at: sql`now()`
+							status: 'pending',
+							attempts: increment(boltTask.attempts),
+							// A non-null error means the row is between attempts. Clearing it at claim-time
+							// makes active work distinguishable from durable retry backoff to every reader.
+							error: null,
+							run_at: dbNowPlusSeconds(options.hideForMillis / 1000),
+							updated_at: dbNow()
 						})
 						.where(inArray(boltTask.id, claimed))
 						.returning({
@@ -521,36 +608,45 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 		outcomes: ReadonlyArray<Outcome>,
 		random: () => number = Math.random
 	): Effect.Effect<number | undefined, E> =>
-		Effect.gen(function* () {
+		Effect.suspend(() => {
 			const statements = outcomes.map((outcome) => {
 				if (outcome._tag === 'Done') {
 					return toStatement(
 						composer
 							.update(boltTask)
-							.set({ status: 'done', result: outcome.result, error: null, updated_at: sql`now()` })
-							.where(eq(boltTask.id, outcome.task.id))
+							.set({
+								status: 'done',
+								result: storedJson(outcome.result),
+								error: null,
+								updated_at: dbNow()
+							})
+							// A lifecycle fence wins the race with a worker that was already holding this row.
+							// A terminal task is evidence, not a mutable last-writer-wins status flag.
+							.where(and(eq(boltTask.id, outcome.task.id), eq(boltTask.status, 'pending')))
 							.toSQL()
 					);
 				}
-				const exhausted = outcome.task.attempts >= outcome.task.maxAttempts;
+				const exhausted =
+					outcome.retryable === false || outcome.task.attempts >= outcome.task.maxAttempts;
 				return toStatement(
 					composer
 						.update(boltTask)
 						.set({
 							error: outcome.error,
-							updated_at: sql`now()`,
+							updated_at: dbNow(),
 							...(exhausted
 								? { status: 'failed' as const }
 								: {
-										run_at: sql`now() + make_interval(secs => ${RetrySchedule.secondsAfter(outcome.task.attempts, random)})`
+										run_at: dbNowPlusSeconds(
+											RetrySchedule.secondsAfter(outcome.task.attempts, random)
+										)
 									})
 						})
-						.where(eq(boltTask.id, outcome.task.id))
+						.where(and(eq(boltTask.id, outcome.task.id), eq(boltTask.status, 'pending')))
 						.toSQL()
 				);
 			});
-			const rows = yield* execute([...statements, pruneStatement(), whenStatement()]);
-			return readWhen(rows);
+			return Effect.map(execute([...statements, pruneStatement(), whenStatement()]), readWhen);
 		});
 
 	const when = (): Effect.Effect<number | undefined, E> =>
@@ -562,11 +658,23 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 /** What every tick ends by asking, and the only thing the host is ever told. */
 const whenStatement = (): Statement =>
 	toStatement(
-		dialect.sqlToQuery(
-			// `least` ignores nulls, so an empty queue with a schedule, a schedule-free queue with work,
-			// and a workspace with neither all answer correctly without three cases.
-			sql`select least((select min(${boltTask.run_at}) from ${boltTask} where ${boltTask.status} = 'pending'), (select min(${boltSchedule.next_run_at}) from ${boltSchedule})) as next_due_at`
-		)
+		composer
+			.select({
+				// `least` ignores nulls, so an empty queue with a schedule, a schedule-free queue with work,
+				// and a workspace with neither all answer correctly without three cases.
+				next_due_at: aliased(
+					least(
+						composer
+							.select({ value: min(boltTask.run_at) })
+							.from(boltTask)
+							.where(inArray(boltTask.status, ['pending', 'resuming'])),
+						composer.select({ value: min(boltSchedule.next_run_at) }).from(boltSchedule)
+					),
+					'next_due_at'
+				)
+			})
+			.from(singleton())
+			.toSQL()
 	);
 
 /** The last row of a tick's final batch, which is the only row that batch returns. */
@@ -593,17 +701,11 @@ const pruneStatement = (): Statement =>
 							or(
 								and(
 									eq(boltTask.status, 'done'),
-									lte(
-										boltTask.updated_at,
-										sql`now() - make_interval(days => ${RETENTION_DAYS.done})`
-									)
+									lte(boltTask.updated_at, dbNowMinusDays(RETENTION_DAYS.done))
 								),
 								and(
 									eq(boltTask.status, 'failed'),
-									lte(
-										boltTask.updated_at,
-										sql`now() - make_interval(days => ${RETENTION_DAYS.failed})`
-									)
+									lte(boltTask.updated_at, dbNowMinusDays(RETENTION_DAYS.failed))
 								)
 							)
 						)

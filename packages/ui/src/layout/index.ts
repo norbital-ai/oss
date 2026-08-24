@@ -7,7 +7,7 @@ export { default as Cover, type CoverProps } from './cover.svelte';
 export { default as Frame, type FrameProps, type FrameRatio } from './frame.svelte';
 export { default as Grid, type GridMinimum, type GridProps } from './grid.svelte';
 export { default as Inline, type InlineProps } from './inline.svelte';
-export { default as Scroll, type ScrollAxis, type ScrollProps } from './scroll.svelte';
+export { default as Scroll, type ScrollProps } from './scroll.svelte';
 export { scrollAffordance } from './scroll-affordance.svelte.js';
 export {
 	default as Split,
@@ -17,10 +17,13 @@ export {
 } from './split.svelte';
 export { default as Stack, type StackProps } from './stack.svelte';
 export {
+	GAP_CLASSES,
 	INSET_CLASS,
 	INSET_MX_CLASS,
 	INSET_X_CLASS,
+	SCROLL_AXIS_CLASSES,
 	type LayoutElement,
 	type LayoutGap,
-	type LayoutPad
+	type LayoutPad,
+	type ScrollAxis
 } from './layout.shared.js';

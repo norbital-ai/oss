@@ -47,6 +47,15 @@ export interface ResourceSchedulerCollision {
 	readonly collidingItemIds: readonly string[];
 }
 
+/**
+ * The placement a collision check is asked about: the same shape as a collision, minus the two
+ * facts the check itself establishes.
+ */
+export type ResourceSchedulerPlacement = Omit<
+	ResourceSchedulerCollision,
+	'kind' | 'collidingItemIds'
+>;
+
 export interface ResourceSchedulerProps<
 	TResource extends ResourceSchedulerResource,
 	TItem extends ResourceSchedulerItem

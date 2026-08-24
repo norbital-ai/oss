@@ -5,6 +5,7 @@ export type {
 	ResourceSchedulerCollision,
 	ResourceSchedulerCreate,
 	ResourceSchedulerItem,
+	ResourceSchedulerPlacement,
 	ResourceSchedulerProps,
 	ResourceSchedulerResource
 } from './resource-scheduler.types.js';

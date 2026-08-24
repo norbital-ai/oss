@@ -1,7 +1,6 @@
 import { Schema } from 'effect';
 import {
 	AI_SGD_PER_PROVIDER_USD,
-	BILLING_ACCESS_TIERS,
 	COMPUTE_SGD_PER_SECOND,
 	DISC_SGD_PER_GB_MONTH,
 	FILES_SGD_PER_GB_MONTH,
@@ -114,12 +113,16 @@ export const BillingCataloguePriceSchema = Schema.Struct({
 });
 export type BillingCataloguePrice = Schema.Schema.Type<typeof BillingCataloguePriceSchema>;
 
+/**
+ * A plan is the base subscription: a flat fee plus the metered prices in the same product. The
+ * paywall checkout subscribes the plan plus every metered price as separate subscription items, so
+ * what a plan names is the trial, not seat licensing. There is no seat model: the base fee is
+ * stated once per workspace, whatever the headcount.
+ */
 export const BillingCataloguePlanSchema = Schema.Struct({
 	id: Schema.String,
 	trialDays: Schema.Number,
-	allowPromotionCodes: Schema.Boolean,
-	checkoutSeatPriceId: Schema.String,
-	seatPriceIds: Schema.Record(Schema.Literals(BILLING_ACCESS_TIERS), Schema.String)
+	allowPromotionCodes: Schema.Boolean
 });
 export type BillingCataloguePlan = Schema.Schema.Type<typeof BillingCataloguePlanSchema>;
 
@@ -177,36 +180,8 @@ export const LATEST_CATALOGUE_PRODUCTS = [
 		id: PLATFORM_PRODUCT_ID,
 		name: 'Norbital Platform',
 		description:
-			'One subscription containing Standard and Pro seats plus separately metered compute, disc, files, and AI usage.',
+			'A flat base fee per workspace, plus separately metered compute, disc, files, and AI usage.',
 		prices: [
-			{
-				id: 'platform-standard-seat-monthly',
-				name: 'Standard seat (Monthly)',
-				description: 'License fee charged monthly at SGD 10.00 per standard seat.',
-				model: 'per_seat',
-				interval: 'month',
-				checkout: true,
-				stripePriceIds: {
-					sandbox: 'price_1Ty7G6LvWjJB44nUdFZCNgSw',
-					production: 'price_1Ty7GBLlQVSVzCBM3qAEqbi7'
-				},
-				amount: '1000'
-			},
-			{
-				id: 'platform-builder-seat-monthly',
-				name: 'Pro seat (Monthly)',
-				description:
-					'License fee charged monthly at SGD 50.00 per Pro seat (agent and sandbox access).',
-				model: 'per_seat',
-				interval: 'month',
-				checkout: true,
-				stripePriceIds: {
-					// Sandbox + production: Pro · SGD 50 (2026-08-06). Old SGD 45 prices archived.
-					sandbox: 'price_1U1LEvLvWjJB44nUITBB7tR4',
-					production: 'price_1U1LZHLlQVSVzCBMq3ValfFX'
-				},
-				amount: '5000'
-			},
 			{
 				id: 'compute-second-monthly',
 				name: 'Compute usage',
@@ -256,12 +231,7 @@ export const LATEST_CATALOGUE_PRODUCTS = [
 			{
 				id: PLATFORM_PRODUCT_ID,
 				trialDays: DEFAULT_BILLING_TRIAL_DAYS,
-				allowPromotionCodes: true,
-				checkoutSeatPriceId: 'platform-builder-seat-monthly',
-				seatPriceIds: {
-					standard: 'platform-standard-seat-monthly',
-					builder: 'platform-builder-seat-monthly'
-				}
+				allowPromotionCodes: true
 			}
 		]
 	}

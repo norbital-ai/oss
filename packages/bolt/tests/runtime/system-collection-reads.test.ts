@@ -16,6 +16,7 @@ import { systemSubject } from '../../src/runtime/access/system-principal.js';
 import * as Identity from '../../src/runtime/identity/identity.js';
 import { ADMIN_STATUS } from '../../src/runtime/identity/identity.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	SYSTEM_READ_POLICY,
@@ -83,15 +84,13 @@ const CONTRACTOR_TEAM = 'Field Operations Contractors';
  */
 const jobApproval = {
 	id: '019f6f10-0001-7000-8000-000000000003',
-	name: 'Job change approval',
 	steps: [
 		{
 			id: '019f6f10-0001-7000-8000-000000000103',
-			name: 'Controller review',
-			approvers: [CONTROLLER_TEAM],
-			description: 'Controller verifies the change.'
+			approvers: [CONTROLLER_TEAM]
 		}
-	]
+	],
+	superceded_by: []
 };
 
 /** The template's own shape: authored grants on authored collections, and nothing else. */
@@ -218,7 +217,8 @@ const raiseApproval = (harness: BoltTestRuntime, requestId = REQUEST_ID) =>
 					collection: 'jobs',
 					id: '019f6f10-0003-7000-8000-000000000001',
 					action: 'create',
-					values: { title: 'Extra scaffolding' }
+					values: { title: 'Extra scaffolding' },
+					approval: jobApproval
 				}
 			);
 		})
@@ -292,12 +292,10 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 	});
 
 	/**
-	 * The control. An administrator is admitted by `user.status` before a policy is read,
-	 * so this passes whether or not the built-in grant reaches anybody — which is the point: it fixes
-	 * the harness, the schema and the dispatch path as working, leaving the case above to be about
-	 * policy matching alone.
+	 * The control. An administrator is selected by the same explicit built-in read policy as any
+	 * other authenticated user. Status does not bypass that policy or its row predicates.
 	 */
-	it('serves them to an administrator, who never consults a policy', async () => {
+	it('serves the explicitly granted system collections to an administrator', async () => {
 		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
 		await seedAdministrator(harness);
 
@@ -475,13 +473,37 @@ describe('approval requests are scoped to their parties and approvers', () => {
 		expect(await readIds(harness, 'controller-token', 'approval_request')).toEqual([REQUEST_ID]);
 	});
 
+	it('uses an impersonated subject team instead of the actor persisted on the user row', async () => {
+		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
+		await seedContractor(harness);
+		await seedBystander(harness);
+		await raiseApproval(harness);
+		const actorId = fixtureUserId('user-bystander');
+		const preview: Identity.Subject = {
+			userId: actorId,
+			tenantId: 'test-tenant',
+			teamPath: [CONTROLLER_TEAM],
+			policies: [],
+			impersonatedBy: actorId
+		};
+		const rows = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).findMany(
+					EffectId.make('approval-preview-team'),
+					preview,
+					{ collection: 'approval_request', limit: 10 }
+				);
+			})
+		);
+		expect(rows.map((row) => Reflect.get(row as object, 'id'))).toEqual([REQUEST_ID]);
+	});
+
 	/**
 	 * An approver reads exactly what they may decide, and a request routed past them is not it.
 	 *
-	 * The second request carries no approval configuration at all — `Approvals.request` embeds one
-	 * only when the requestor's team holds a grant naming the operation's collection, and `people` is
-	 * not a collection this workspace declares a grant on. So it has a party and no approvers, and
-	 * the controller must see the first and not the second.
+	 * The second request carries a different concrete route. Approval requests without a flow are
+	 * invalid now, so the negative control is another valid request whose active step names nobody
+	 * on the controller's team.
 	 */
 	it('does not show an approver a request their team is not named on', async () => {
 		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
@@ -494,7 +516,16 @@ describe('approval requests are scoped to their parties and approvers', () => {
 					EffectId.make('approval-unrouted'),
 					contractorSubject,
 					'019f6f10-0002-7000-8000-000000000002',
-					{ collection: 'people', id: '019f6f10-0003-7000-8000-000000000002', action: 'create' }
+					{
+						collection: 'people',
+						id: '019f6f10-0003-7000-8000-000000000002',
+						action: 'create',
+						approval: {
+							id: 'people:create',
+							steps: [{ id: 'people:create:stage:1', approvers: ['Other Reviewers'] }],
+							superceded_by: []
+						}
+					}
 				);
 			})
 		);
@@ -525,15 +556,8 @@ describe('approval requests are scoped to their parties and approvers', () => {
 		);
 	});
 
-	/**
-	 * Administrators, verified rather than granted.
-	 *
-	 * `decide` and `rowPredicate` both short-circuit on `isAdministrator` before a policy is read, so
-	 * an administrator matches no grant and is filtered by no predicate. Asserted through the same
-	 * read path as everybody else, because that short-circuit living in two places is exactly the
-	 * kind of thing a narrowing in a third place can miss.
-	 */
-	it('shows every request to an administrator', async () => {
+	/** Administrators can discover every request they may supersede, without tenant-data grants. */
+	it('shows requests and their requestors to an administrator', async () => {
 		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
 		await seedContractor(harness);
 		await seedAdministrator(harness);
@@ -551,8 +575,8 @@ describe('approval requests are scoped to their parties and approvers', () => {
 	 * `rowPredicate` **unions** the `where` of every matching grant, and a grant with no `where`
 	 * compiles to `true` — which short-circuits the union and serves the whole collection. So a
 	 * second grant added beside these two would not add a case, it would delete the rule. The
-	 * compiled predicate is checked as well as the declaration: a `where` written with `RAW` rather
-	 * than `$sql` survives the count below and lands as `true` after the manifest round-trip.
+	 * compiled predicate is checked as well as the declaration so a malformed persisted predicate
+	 * cannot survive the manifest round-trip as an unconditional grant.
 	 */
 	it('leaves no unconditional grant beside the narrowed ones', async () => {
 		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
@@ -572,7 +596,10 @@ describe('approval requests are scoped to their parties and approvers', () => {
 			);
 			expect(compiled.allowed).toBe(true);
 			expect(compiled.sql).not.toBe('true');
+			expect(compiled.sql).toContain('::jsonb');
 			expect(compiled.parameters).toContain(contractorSubject.userId);
+			expect(compiled.parameters).toContain(CONTRACTOR_TEAM);
+			expect(compiled.parameters).toContain(JSON.stringify([CONTRACTOR_TEAM.toLocaleLowerCase()]));
 		}
 	});
 });

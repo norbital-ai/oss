@@ -91,6 +91,18 @@ describe('generated declarative mutation types', () => {
 		expect(rendered).not.toContain('WorkspaceUpdate');
 	});
 
+	it('carries authored automation schemas into the generated per-name client surface', () => {
+		const rendered = renderClientDeclaration([], [], '/workspace', [
+			'/workspace/src/automations/+rebuild.ts'
+		]);
+
+		expect(rendered).toContain('type AutomationRegistry = {');
+		expect(rendered).toContain(
+			'readonly "rebuild": typeof import("../../src/automations/+rebuild.js").default'
+		);
+		expect(rendered).toContain('readonly automations: AutomationClientApi<AutomationRegistry>');
+	});
+
 	it('removes the representation refresh facade', () => {
 		const rendered = renderCollectionTypes('accounts');
 

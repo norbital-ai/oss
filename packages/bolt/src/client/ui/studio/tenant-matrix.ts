@@ -1,5 +1,5 @@
 /**
- * The Command panel's tenant-matrix model, and the deterministic layout that draws it.
+ * The Operations tenant-matrix model, and the deterministic layout that draws it.
  *
  * The tenant reads as one lane: the environments the gateway routes to it. The facilities every
  * environment shares are deliberately not drawn — every box hangs off the same set, so a lane of
@@ -113,12 +113,12 @@ const RELEASE_ID_VISIBLE = 16;
  * Places the environment boxes on a fixed grid, under the lane's own title.
  *
  * `detail` carries the one thing the host reports about a tenant rather than about one route — the
- * authored source revision — so every box can state it without the layout reaching for a snapshot
+ * personal workbench commit — so every box can state it without the layout reaching for a snapshot
  * of its own.
  */
 const layoutTenantMatrix = (
 	matrix: TenantMatrixGraph,
-	detail: { readonly revision: number }
+	detail: { readonly commit: string }
 ): MatrixLayout => {
 	// A node is as tall as its four rows need.
 	const environmentHeight = NODE_HEADER + 4 * ROW_HEIGHT + NODE_PAD;
@@ -138,7 +138,7 @@ const layoutTenantMatrix = (
 			status: environment.live ? 'live' : 'routed',
 			healthy: environment.health === 'ready',
 			rows: [
-				{ label: 'Revision', value: String(detail.revision) },
+				{ label: 'Commit', value: detail.commit === '' ? 'none' : detail.commit.slice(0, 12) },
 				{
 					label: 'Release',
 					value: releaseValue,
@@ -193,7 +193,7 @@ type MatrixFlowNode = Node<MatrixNodeData, MatrixNodeKind>;
  */
 export const buildMatrixFlow = (
 	matrix: TenantMatrixGraph,
-	detail: { readonly revision: number }
+	detail: { readonly commit: string }
 ): { nodes: MatrixFlowNode[]; edges: Edge[] } => {
 	const layout = layoutTenantMatrix(matrix, detail);
 	const lane: MatrixFlowNode = {

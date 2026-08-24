@@ -24,8 +24,7 @@ export const INTEGRATION_HTTP_OPERATION = 'http.request';
  * amends it with `PATCH` and withdraws it with `DELETE`, and collapsing all three into `POST` would
  * mean every update created a duplicate over there.
  */
-export const IntegrationHttpMethod = Schema.Literals(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-export type IntegrationHttpMethod = typeof IntegrationHttpMethod.Type;
+const IntegrationHttpMethod = Schema.Literals(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
 export const IntegrationHttpRequest = Schema.Struct({
 	method: IntegrationHttpMethod,

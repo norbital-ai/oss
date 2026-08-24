@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { humanize } from '@norbital-ai/std/string';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Scroll } from '#lib/layout';
+	import { Grid, Scroll } from '#lib/layout';
 	import { cn } from '#lib/utils';
 
 	let {
@@ -84,10 +84,16 @@
 		{:else}
 			<dl class="divide-y rounded-md border bg-muted/20">
 				{#each entries as [key, entry] (key)}
-					<div class="grid min-w-0 gap-1 px-3 py-2.5 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-3">
+					<!-- Stacked on a phone, label beside value from `sm` up; the template rides a custom
+					     property so the breakpoint stays a class. -->
+					<Grid
+						gap="xs"
+						tracks="var(--structured-row-columns)"
+						class="min-w-0 px-3 py-2.5 sm:gap-3 [--structured-row-columns:minmax(0,1fr)] sm:[--structured-row-columns:10rem_minmax(0,1fr)]"
+					>
 						<dt class="text-xs font-medium text-muted-foreground">{humanize(key)}</dt>
 						<dd class="min-w-0 break-words">{@render renderValue(entry)}</dd>
-					</div>
+					</Grid>
 				{/each}
 			</dl>
 		{/if}

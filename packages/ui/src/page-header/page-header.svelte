@@ -1,4 +1,4 @@
-<!-- fallow-ignore-file unrendered-component -- exported package header rendered by authored workspace applications -->
+<!-- exported package header rendered by authored workspace applications -->
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';

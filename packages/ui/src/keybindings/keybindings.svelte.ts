@@ -205,7 +205,7 @@ export const shortcut = (node: HTMLElement, options: Options[] | Options) => {
 		// Execute all matching shortcuts
 		for (const option of matchingShortcuts) {
 			// Handle preventDefault and stopPropagation
-			if (option.preventDefault === undefined || option.preventDefault) {
+			if (option.preventDefault ?? true) {
 				e.preventDefault();
 			}
 

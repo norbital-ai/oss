@@ -83,10 +83,11 @@ entity selector’s company list). Otherwise keep data on the primary query.
 
 ## Keep temporal filters canonical
 
-Use `YYYY-MM-DD` for `date()`, `HH:mm` for `clockTime()`, and UTC ISO ending in `Z` for
-`timestamp()`. Client timestamp controls convert the viewer's local input to UTC; server roles must
-already supply canonical operands. Local replica and server filters must receive the same value.
-See [dates-and-time.md](dates-and-time.md) for range and timezone rules.
+Instants (and `custom('instant_range')` bounds) travel as UTC ISO ending in `Z` — never an unzoned string.
+Client controls convert the viewer's local input to UTC; server roles must already supply canonical
+operands. Calendar-day and wall-clock values stay `YYYY-MM-DD` / `HH:mm` whatever the column is.
+Local replica and server filters must receive the same value. See
+[dates-and-time.md](dates-and-time.md) for range and timezone rules.
 
 ## Batch genuine bulk work
 
@@ -333,11 +334,11 @@ const openCount =
 	});
 ```
 
-Every server-role example above runs inside a hook, automation, remote, or pipeline handler — an `Effect.gen` where `api.db.*` calls are `yield*`'d. Server roles use Drizzle's query config directly, including typed `RAW` and `extras` callbacks. Browser
-code uses the same `db.query.<collection>.findMany|findFirst` topology and Drizzle object syntax, but it
-cannot send callbacks, SQL wrappers, placeholders, `RAW`, `extras`, or SQL comments across the remote
-transport. Put those predicates or projections in a typed remote and return only the scoped result; do
-not add a tagged JSON substitute to the generic query API.
+Every server-role example above runs inside a hook, automation, remote, or pipeline handler — an
+`Effect.gen` where `api.db.*` calls are `yield*`'d. Server and browser roles use the same structured
+`db.query.<collection>.findMany|findFirst` query objects. Custom SQL callbacks, SQL wrappers,
+placeholders, and SQL comments are not part of that API. If the structured operators cannot express
+a predicate, extend the typed query vocabulary rather than adding a raw escape hatch.
 
 Query from a selective parent when it narrows the child set:
 
@@ -377,5 +378,5 @@ const near =
 // each row includes `.distance`
 ```
 
-`withinDistance` is the filter-only where operator; it does not drive ANN ordering — prefer
-`findNearest` when you need the index path.
+There is no `withinDistance` operator and no ANN-ordered function in the client surface: `findNearest`
+is the one vector path, and it is server-only.

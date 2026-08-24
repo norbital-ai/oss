@@ -35,6 +35,10 @@ export type ColumnParentContext =
 
 export const COLUMN_PARENT_CONTEXT = Symbol('norbital-column-parent');
 
+/**
+ * The gap scale. Every stacking primitive spends it; it is exported for the same reason
+ * `INSET_MX_CLASS` is — a box that cannot be a primitive still owes the same rhythm.
+ */
 export const GAP_CLASSES: Record<LayoutGap, string> = {
 	none: 'gap-0',
 	xs: 'gap-1',
@@ -42,6 +46,28 @@ export const GAP_CLASSES: Record<LayoutGap, string> = {
 	md: 'gap-4',
 	lg: 'gap-6',
 	xl: 'gap-8'
+};
+
+export type ScrollAxis = 'x' | 'y' | 'both';
+
+/**
+ * The scrollport classes, per axis — the one definition of what "this region scrolls" means.
+ *
+ * Per-axis `overscroll-contain`: an x-only reel must not trap the parent's vertical scroll, and
+ * the axis that does not scroll is *clipped* rather than left visible, so a wide child cannot
+ * paint outside the region.
+ *
+ * `Scroll` is how a region declares itself a scrollport, and is what almost every caller wants.
+ * This token exists for the boxes `Scroll` cannot be: it fills its parent unconditionally, so a
+ * pane bounded by its own `max-height` (a popover, a collapsible) or by a fixed height (a chip
+ * reel) cannot be one — and neither can an element a third-party component or a ProseMirror
+ * editor owns. Those honour the same contract by naming it, the way `INSET_MX_CLASS` lets chrome
+ * that cannot pad itself still keep the app inset.
+ */
+export const SCROLL_AXIS_CLASSES: Record<ScrollAxis, string> = {
+	x: 'overflow-x-auto overflow-y-clip overscroll-x-contain',
+	y: 'overflow-x-clip overflow-y-auto overscroll-y-contain',
+	both: 'overflow-auto overscroll-contain'
 };
 
 export const PAD_CLASSES: Record<LayoutPad, string> = {

@@ -2,19 +2,17 @@ import { Effect, Result, Schema } from 'effect';
 import { SyncCursor, type SyncChange } from '#lib/runtime/sync/sync.js';
 import { compareCursors, ORIGIN_CURSOR } from '#lib/client/replica/sync-client.js';
 import {
-	createPGliteSql,
-	bulkUpsert,
+	createPGliteStore,
 	markProvisioned,
 	provision,
 	readReplicaState,
 	writeReplicaCursor,
-	writableColumns,
 	type PGliteLike,
 	ProvisioningStep,
 	type ProvisioningStep as ProvisioningStepType
 } from '#lib/client/replica/pglite-sql.js';
 import { ReplicaShape } from '#lib/client/replica/local-reads.js';
-import type { LocalSql } from '#lib/client/replica/pglite-sql.js';
+import type { LocalReplicaStore } from '#lib/client/replica/pglite-sql.js';
 
 /**
  * Building a local database that holds the workspace, from nothing.
@@ -196,7 +194,7 @@ const readShape = (transport: BootstrapTransport): Effect.Effect<ReadonlyArray<s
 		);
 
 type LocalDatabase = Readonly<{
-	readonly sql: LocalSql;
+	readonly store: LocalReplicaStore;
 	readonly cursor: SyncCursor;
 	readonly fingerprint: string;
 	/** Rows loaded by the initial snapshot; zero when the replica resumed an existing database. */
@@ -208,13 +206,18 @@ type LocalDatabase = Readonly<{
 	readonly close: () => Effect.Effect<void, unknown>;
 	/**
 	 * The engine itself, for the two things only it can answer: whether this tab leads, and
-	 * `LISTEN`. Everything else goes through `sql`.
+	 * `LISTEN`. Everything else goes through the structured store.
 	 */
 	readonly engine: PGliteLike;
 	/** Collection metadata, so a local read compiles the way the server would. */
 	readonly shape: ReplicaShape;
 	/** The collections this subject may read, as the server reported them. */
 	readonly readable: ReadonlySet<string>;
+	/** Replaces a divergent projection with a new authoritative snapshot without rebuilding its DDL. */
+	readonly resnapshot: () => Effect.Effect<
+		{ readonly cursor: SyncCursor; readonly rows: number },
+		unknown
+	>;
 }>;
 
 /**
@@ -244,21 +247,32 @@ export const openLocalDatabase = Effect.fn('ReplicaBootstrap.openLocalDatabase')
 	 * runs under, for the same reason. The server accepted these rows against these constraints; the
 	 * mirror's job is to hold them, not to audit them a second time in an order nobody guarantees.
 	 */
+	// repository-health:allow SQL1 -- session bootstrap for the sync engine's reconstructible mirror;
+	// this is neither application data access nor an exposed statement capability.
 	yield* database.exec('set session_replication_role = replica');
 	const provisioned = yield* provision(database, provisioning.steps, provisioning.fingerprint);
 	const fieldsByCollection = Object.fromEntries(
 		provisioning.shape.collections.map((collection) => [collection.name, collection.fields])
 	);
-	const sql = yield* createPGliteSql(database, fieldsByCollection);
+	const store = yield* createPGliteStore(database, fieldsByCollection);
+	const readable = yield* readShape(transport);
+	const snapshotCurrent = () =>
+		loadSnapshot(transport, (collection, rows) => store.applySnapshot(collection, rows), readable);
+	const resnapshot = () =>
+		Effect.gen(function* () {
+			yield* store.reset();
+			const snapshot = yield* snapshotCurrent();
+			yield* writeReplicaCursor(database, snapshot.cursor);
+			return snapshot;
+		});
 	if (!provisioned) {
 		// The local database already matches this schema and still holds its rows, so the expensive half
 		// is skipped entirely: no DDL, and no snapshot of a workspace it already has. It resumes from the
 		// cursor it recorded, which is the whole point of persisting the replica rather than rebuilding
 		// it on every visit.
 		const state = yield* readReplicaState(database);
-		const readable = yield* readShape(transport);
 		return {
-			sql,
+			store,
 			cursor: state?.cursor ?? ORIGIN_CURSOR,
 			fingerprint: provisioning.fingerprint,
 			rows: 0,
@@ -267,30 +281,16 @@ export const openLocalDatabase = Effect.fn('ReplicaBootstrap.openLocalDatabase')
 			close: database.close,
 			engine: database,
 			shape: provisioning.shape,
-			readable: new Set(readable)
+			readable: new Set(readable),
+			resnapshot
 		};
 	}
-	const columnsFor = yield* writableColumns(database);
-	const readable = yield* readShape(transport);
-	const snapshot = yield* loadSnapshot(
-		transport,
-		(collection, rows) =>
-			Effect.gen(function* () {
-				const fields = fieldsByCollection[collection];
-				if (fields === undefined)
-					return yield* Effect.fail(
-						new Error(`sync.shape named collection ${collection} without provisioning metadata`)
-					);
-				const columns = yield* columnsFor(collection);
-				return yield* bulkUpsert(database, columns, collection, rows, fields);
-			}),
-		readable
-	);
+	const snapshot = yield* snapshotCurrent();
 	// Marked only now: until the snapshot has landed, this database does not hold the workspace, and a
 	// later session that read the fingerprint would resume an empty one.
 	yield* markProvisioned(database, provisioning.fingerprint, snapshot.cursor);
 	return {
-		sql,
+		store,
 		cursor: snapshot.cursor,
 		fingerprint: provisioning.fingerprint,
 		rows: snapshot.rows,
@@ -299,6 +299,7 @@ export const openLocalDatabase = Effect.fn('ReplicaBootstrap.openLocalDatabase')
 		close: database.close,
 		engine: database,
 		shape: provisioning.shape,
-		readable: new Set(readable)
+		readable: new Set(readable),
+		resnapshot
 	};
 });

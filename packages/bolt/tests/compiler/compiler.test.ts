@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dateRange, defineModel, text } from '../../src/authoring/index.js';
+import { custom, defineModel, text } from '../../src/authoring/index.js';
 import { app, collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { describeModel } from '../../src/authoring/model-introspection.js';
 import { discoverWorkspace } from '../../src/compiler/compiler.js';
@@ -35,7 +35,7 @@ const effectiveDated = workspace({
 				defineModel({
 					code: text().notNull(),
 					name: text({ search: true }).notNull(),
-					effective_range: dateRange().notNull()
+					effective_range: custom('instant_range').notNull()
 				})
 			),
 			exclusions: [
@@ -189,7 +189,7 @@ describe('Bolt compiler owners', () => {
 		expect(exclusion).toBeGreaterThan(ids.indexOf('bolt:function-daterange'));
 		// The table it alters comes from the lineage, which runs after the whole `bolt:` foundation and
 		// before the plan's `collection:` supplements — the order `provisioningStatements` applies.
-		expect(exclusion).toBeGreaterThan(ids.indexOf('bolt:function-date'));
+		expect(exclusion).toBeGreaterThan(ids.indexOf('bolt:function-instant'));
 	});
 
 	it('refuses an exclusion whose name is not an identifier it can inline', () => {

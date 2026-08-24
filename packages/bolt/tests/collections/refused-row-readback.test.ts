@@ -76,7 +76,7 @@ const workspaceWith = (integrations: WorkspaceDefinition['integrations']): Works
 
 const definition = workspaceWith([]);
 
-/** A member of `writers`, and deliberately not an administrator: an admin bypasses the predicate. */
+/** A member of `writers`; its explicit policy is the only source of authority under test. */
 const writer = { userId: 'writer-1', tenantId: 'test-tenant', policies: [], teamPath: ['writers'] };
 
 /** Every record an `after` hook was handed, in the order the hooks happened to finish. */
@@ -104,6 +104,7 @@ const authored = {
 	automations: {
 		on_note: {
 			name: 'on_note',
+			policies: ['automation-data'],
 			trigger: { _tag: 'Change' as const, collection: 'notes', event: 'created' as const },
 			handler: () => undefined
 		}
@@ -136,6 +137,33 @@ const bodiesOf = (rows: ReadonlyArray<Readonly<Record<string, unknown>>>): Reado
 	rows.map((row) => String(row['body'])).toSorted();
 
 describe('a batch the subject may write only part of', () => {
+	it('runs a single-record change trigger only as its declared automation authority', async () => {
+		harness = await makeBoltTestRuntime(definition, { authored });
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				yield* collections.create(EffectId.make('single-authority'), writer, {
+					collection: 'notes',
+					id: '10000000-0000-4000-8000-000000000001',
+					values: { body: 'one note' }
+				});
+			})
+		);
+
+		const [task] = await harness.database.query('select input from bolt_task where command = $1', [
+			'automations.on_note'
+		]);
+		const input = task?.['input'] as { readonly bolt_run_as?: unknown } | undefined;
+		expect(input?.bolt_run_as).toEqual({
+			userId: 'automation:on_note',
+			tenantId: 'test-tenant',
+			teamPath: [],
+			policies: ['automation-data'],
+			admin: false
+		});
+		expect(input?.bolt_run_as).not.toEqual(writer);
+	}, 60_000);
+
 	it('answers with the rows that were stored and acts on no others', async () => {
 		harness = await makeBoltTestRuntime(definition, { authored });
 
@@ -176,28 +204,49 @@ describe('a batch the subject may write only part of', () => {
 		// The change trigger fired for the two records that exist, carrying each as `incoming_record`,
 		// and for neither of the two that do not.
 		expect((await enqueuedBodies(harness)).toSorted()).toEqual(['note 0', 'note 1']);
+		const tasks = await harness.database.query(
+			'select input from bolt_task where command = $1 order by effect_id',
+			['automations.on_note']
+		);
+		for (const task of tasks) {
+			const input = task['input'] as { readonly bolt_run_as?: unknown };
+			expect(input.bolt_run_as).toEqual({
+				userId: 'automation:on_note',
+				tenantId: 'test-tenant',
+				teamPath: [],
+				policies: ['automation-data'],
+				admin: false
+			});
+			expect(input.bolt_run_as).not.toEqual(writer);
+		}
 	}, 60_000);
 
-	it('leaves out an update that matched no row rather than echoing the patch', async () => {
+	it('fails a nonexistent update instead of treating the patch as an omitted row', async () => {
 		harness = await makeBoltTestRuntime(definition, { authored });
 
-		const answer = await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				const created = yield* collections.mutate(EffectId.make('refused-2'), writer, 'notes', [
-					{ body: 'kept' }
-				]);
-				const id = created[0]?.['id'];
-				// One update that lands and one that cannot: the second names an id no row carries, so
-				// its statement matches nothing, exactly as a refused insert does.
-				return yield* collections.mutate(EffectId.make('refused-3'), writer, 'notes', [
-					{ id: String(id), body: 'kept, edited' },
-					{ id: '00000000-0000-4000-8000-000000000000', body: 'never existed' }
-				]);
-			})
+		const outcome = await harness.runtime.runPromise(
+			Effect.result(
+				Effect.gen(function* () {
+					const collections = yield* Collections.Service;
+					const created = yield* collections.mutate(EffectId.make('refused-2'), writer, 'notes', [
+						{ body: 'kept' }
+					]);
+					const id = created[0]?.['id'];
+					// One update that lands and one that cannot: the second names an id no row carries, so
+					// its statement matches nothing, exactly as a refused insert does.
+					return yield* collections.mutate(EffectId.make('refused-3'), writer, 'notes', [
+						{ id: String(id), body: 'kept, edited' },
+						{ id: '00000000-0000-4000-8000-000000000000', body: 'never existed' }
+					]);
+				})
+			)
 		);
 
-		expect(bodiesOf(answer)).toEqual(['kept, edited']);
+		expect(outcome._tag).toBe('Failure');
+		if (outcome._tag === 'Failure')
+			expect(Collections.unwrapMutationPhase(outcome.failure)).toMatchObject({
+				message: expect.stringContaining('changed after update authorization')
+			});
 		expect(bodiesOf(await harness.database.query('select body from notes'))).toEqual([
 			'kept, edited'
 		]);
@@ -282,6 +331,7 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 	const described = describeIntegrations({
 		notes: {
 			partner: {
+				policies: [],
 				connection: defineConnection({ baseUrl: 'https://integration.invalid' }),
 				send: {
 					note_created: defineSend<{ readonly id: string; readonly body: string }>({

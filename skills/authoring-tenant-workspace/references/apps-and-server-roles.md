@@ -49,8 +49,11 @@ export default group({
 });
 ```
 
-The app `description` meta and the group `description` are both **required** — they are the manifest's
-only account of what an application is for, and the studio's application list is built from them.
+Every app should declare the `description` meta and every group its `description` — they are the
+manifest's only account of what an application is for, the studio's application list is built from
+them, and the shell renders an empty line where one is absent. Nothing enforces them, so treat a
+missing one as a review failure: a card that prints nothing is a failed surface, and the overview
+card's description is the one line that says what the workspace does.
 
 ### App media — icons, thumbnails, banners
 
@@ -58,16 +61,16 @@ These fields are **in-product** app chrome. They are not the template's website 
 that is `assets/thumbnail.svg` at the template root (see
 [template-repository.md](template-repository.md#marketing-thumbnail-declare-once)).
 
-| Field            | Where it renders                                                                                             | Required |
-| ---------------- | ------------------------------------------------------------------------------------------------------------ | -------- |
-| `bolt:icon`      | Sidebar, overview app cards, omni finder; opaque chip on the shell app media header when a banner is present | **yes**  |
-| `bolt:thumbnail` | `Frame ratio="banner"` (2:1) on the workspace overview; omni finder tile                                     | no       |
-| `bolt:banner`    | Always-visible compact shell chrome (`AppMediaHeader`): full-bleed image + dark scrim + title/description    | no       |
+| Field            | Where it renders                                                                                             | Required                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `bolt:icon`      | Sidebar, overview app cards, omni finder; opaque chip on the shell app media header when a banner is present | expected (icon fallbacks exist, but an unlabelled app is an unreadable sidebar) |
+| `bolt:thumbnail` | `Frame ratio="banner"` (2:1) on the workspace overview; a 16px thumb in omni-finder rows                     | no                                                                              |
+| `bolt:banner`    | Always-visible compact shell chrome (`AppMediaHeader`): full-bleed image + dark scrim + title/description    | no                                                                              |
 
 Not every app needs a thumbnail or banner. Overview cards keep a `Frame ratio="banner"` media slot
 with a website-style gradient and app-icon fallback when `bolt:thumbnail` is missing or fails to load;
-the omni finder shows the app icon in the same 6×6 tile a thumbnail would occupy — so grids and rows
-stay aligned whether or not an app ships images. App banners are omitted entirely when `bolt:banner`
+the omni finder shows a 16px thumb, or the app icon where there is none — so rows stay aligned
+whether or not an app ships images. App banners are omitted entirely when `bolt:banner`
 is missing or fails to load. When present, the shell renders a fixed Airbnb-style media header
 (image + bottom-weighted dark scrim + icon chip + localized title/description). Copy always sits on
 the scrim — never on the raw banner art — so contrast does not depend on light or dark imagery.
@@ -322,7 +325,10 @@ generated `client.invoke` property. Use `defineQueryHandler` for reactive, read-
 (`Schema.Struct`, `Schema.Union`, `Schema.Literals`, …) — the authoring boundary adapts them to
 `~standard` for dispatch validation, so there is no zod in authoring.
 
-## Optional seed
+## Fixtures (no seed role)
 
-`src/+seed.ts` may default-export tenant fixture behavior. Keep Colony reset data, policy seed, and sensitive
-statutory seed in Colony when they require system facilities. Author at most one tenant seed role.
+There is no `+seed.ts` role, and `+` files the compiler cannot place are a build error. Sample rows
+come from the `seed_bank` repository, loaded by Colony's `scripts/seed-from-bank.mjs` as one
+`<collection>.json` per collection per tree; the handle→tree mapping (`SEED_BANK_TREES`) is declared
+in that script, not derived (e.g. handle `norbital_bca` → tree `field-operations`). Fixture assets
+for `file()` columns live in the bank's asset/media trees. A handle with no tree is not seedable.

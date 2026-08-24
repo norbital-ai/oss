@@ -6,7 +6,7 @@ import { vector } from '@electric-sql/pglite-pgvector';
 import { Result } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { uuid } from 'drizzle-orm/pg-core';
-import { dateRange, defineModel, text } from '../../src/authoring/models-schema.js';
+import { custom, defineModel, text } from '../../src/authoring/models-schema.js';
 import { describeModel } from '../../src/authoring/model-introspection.js';
 import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { provisioningStatements } from '../support/bolt-test-layer.js';
@@ -93,7 +93,7 @@ describe('PostgreSQL schema and concurrency semantics', () => {
 						defineModel({
 							code: text().notNull(),
 							name: text({ search: true }).notNull(),
-							effective_range: dateRange().notNull()
+							effective_range: custom('instant_range').notNull()
 						})
 					),
 					exclusions: [

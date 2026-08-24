@@ -106,6 +106,28 @@ describe('workspace navigation', () => {
 		expect(applications[0]?.icon).toBe('lucide:user-round');
 	});
 
+	it('never exposes untranslated keys from built-in shell navigation', () => {
+		const seen: string[] = [];
+		const system = buildSystemNavigation({
+			isAdmin: true,
+			currentPath: '/',
+			i18n: {
+				has: (key) => key === 'bolt.shell.settings' || key === 'bolt.shell.people',
+				t: (key) => {
+					seen.push(key);
+					if (key === 'bolt.shell.settings') return '设置';
+					if (key === 'bolt.shell.people') return '人员';
+					return key;
+				}
+			}
+		});
+
+		expect(system.find((item) => item.key === 'settings')?.label).toBe('设置');
+		expect(system[0]?.children?.[0]?.label).toBe('人员');
+		expect(system.find((item) => item.key === 'approvals')?.label).toBe('Approvals');
+		expect(seen).not.toContain('bolt.shell.approvals');
+	});
+
 	it('resolves nested app titles from the leaf catalog key', () => {
 		const applications = buildApplicationNavigation({
 			apps: [{ name: 'hr_controller/people', label: 'people', parent: 'hr_controller' }],

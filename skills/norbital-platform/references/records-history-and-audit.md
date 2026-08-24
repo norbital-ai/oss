@@ -21,20 +21,29 @@ currently held by an open approval request.
 
 ## Temporal history
 
-Collections can retain full row history rather than overwriting in place. Past versions stay
-queryable, which is what makes two things possible:
+Every record's versions are retained in `bolt_collection_history`
+(`sequence, collection_name, record_id, operation, subject_id, snapshot`). A create stores the
+initial values; each update stores only the fields that changed; the read path folds them oldest
+first into full revisions `{ values, validFrom, validTo, version }`. The manifest reports every
+collection as `history: true`.
 
-- **Rollback that restores rather than guesses.** When an approval is rejected or withdrawn, the row
-  returns to its previous state because that state was kept, not reconstructed.
+That makes one thing possible:
+
 - **Answering "what did this look like then".** History is data, so a question about a past value is
-  a query rather than an archaeology exercise in logs.
+  a query rather than an archaeology exercise in logs. Read it with the history read grant
+  (`history` on the policy, with the same `where`/`fields` narrowing as `read`) through
+  `collections.history` on the server; the browser side is `client.history.findMany(collection,
+recordId, limit?)`.
 
-History is enabled per collection. The manifest reports whether a given collection has it.
+What history is **not** is a rollback mechanism. A rejected approval does not restore a previous
+state — it discards the provisional write (see approvals). Past versions are read-only evidence,
+not a rewind.
 
 ## Audit
 
-Mutations are recorded, so who changed what and when is answerable from stored data. This is
-separate from temporal history: history tells you what the row _was_, audit tells you _who acted_.
+Every mutation also appends to `bolt_audit` (`sequence, kind, subject_id, payload`) — a running,
+attributable event log: who acted, on what kind of event, with what payload. This is separate from
+temporal history: history tells you what the row _was_, audit tells you _who acted_ and when.
 
 ## Sync and the client replica
 
@@ -50,5 +59,7 @@ Two consequences worth stating to a confused user:
 
 - A write that appears to succeed and then shows as pending has not failed. That is write-then-lock
   working as designed.
-- A 409 conflict on editing a record usually means an open approval holds it, not that someone else
-  is editing it.
+- A write refused because an open approval holds a record comes back as an approval conflict naming
+  the request — not as a concurrency error between two editors. A record held by an approval is
+  invisible to a workspace's liveness predicate (`approval_id IS NULL`), so a "record not found"
+  while it is pending is the same approval.

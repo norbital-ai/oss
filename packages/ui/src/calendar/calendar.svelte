@@ -56,7 +56,7 @@ get along, so we shut typescript up by casting `value` to `never`.
 					</GridHead>
 					<GridBody>
 						{#each month.weeks as weekDates (weekDates)}
-							<GridRow class="mt-2 w-full">
+							<GridRow class="w-full">
 								{#each weekDates as date (date)}
 									<Cell {date} month={month.value}>
 										<Day />

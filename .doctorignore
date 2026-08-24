@@ -1,0 +1,12 @@
+# Borrow what this repository already declares is not source, rather than restating it.
+inherit: .gitignore .prettierignore
+
+# The analyzer and ignore reader, which are plain Node scripts rather than authored rules.
+packages/doctor/engine/
+
+# norbital-doctor's own source is checked, with four rules scoped out.
+#
+# It ships as a standalone Node CLI and must run in repositories that have no Effect runtime —
+# analysing one is its job. So Effect-owned control flow (EFF1-EFF3) and the blocking-IO rule (IO1)
+# describe an architecture it is deliberately outside of. Every other rule still applies.
+packages/doctor/src/  EFF1 EFF2 EFF3 IO1

@@ -58,7 +58,8 @@
 	const stableCount = $derived(column.totalCount ?? column.items.length);
 	const loadedCount = $derived(column.items.length);
 
-	const getItemKey = (index: number) => column.items[index]?._id ?? `skel:${column._id}:${index}`;
+	const columnId = $derived(column._id);
+	const getItemKey = (index: number) => column.items[index]?._id ?? `skel:${columnId}:${index}`;
 
 	const virtualizer = createVirtualizer({
 		count: () => stableCount,
@@ -149,15 +150,16 @@
 					{#snippet child({ draggedItemId })}
 						<div
 							bind:this={sortableColumn}
-							data-column-id={column._id}
+							data-column-id={columnId}
 							class="norbital-kanban-column flex flex-col"
 							style="gap: {ITEM_GAP}px;"
 						>
 							{#each column.items as item (item._id)}
-								<Sortable.Item id={item._id} isDragging={draggedItemId === item._id}>
+								{@const { _id: itemId } = item}
+								<Sortable.Item id={itemId} isDragging={draggedItemId === itemId}>
 									{#snippet child({ props })}
 										<div {...props} class="relative box-border w-full {props.class}">
-											{@render KanbanCard({ card: item, columnId: column._id, cardSnippet })}
+											{@render KanbanCard({ card: item, columnId, cardSnippet })}
 										</div>
 									{/snippet}
 								</Sortable.Item>
@@ -172,7 +174,7 @@
 					style="height: {totalSize}px"
 				>
 					<div
-						data-column-id={column._id}
+						data-column-id={columnId}
 						class="norbital-kanban-column"
 						style="position: absolute; inset: 0; transform: translateY({paddingTop}px);"
 					>
@@ -230,7 +232,7 @@
 		{/if}
 		{#if columnHeaderActionSnippet}
 			<div class="ml-auto">
-				{@render columnHeaderActionSnippet({ columnId: column._id })}
+				{@render columnHeaderActionSnippet({ columnId })}
 			</div>
 		{/if}
 	</Inline>

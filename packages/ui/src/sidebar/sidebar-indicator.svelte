@@ -139,25 +139,19 @@
 		scheduleUpdate(false);
 
 		const mo = new MutationObserver((mutations) => {
-			let shouldTrack = false;
-			let shouldAnimate = false;
-
-			for (const m of mutations) {
-				if (m.type === 'childList') {
-					shouldAnimate = true;
-				} else if (m.attributeName === 'data-state') {
-					shouldTrack = true;
-				} else if (m.attributeName === 'data-active') {
-					shouldAnimate = true;
-				}
-			}
+			// `data-state` is the collapse transition, which has to be followed frame by frame; a
+			// child list change or `data-active` is a single move the indicator can animate to.
+			const shouldTrack = mutations.some((m) => m.attributeName === 'data-state');
+			const shouldAnimate = mutations.some(
+				(m) => m.type === 'childList' || m.attributeName === 'data-active'
+			);
 
 			if (shouldTrack) {
 				scheduleUpdate(false);
 				startTracking();
-			} else if (shouldAnimate) {
-				scheduleUpdate(true);
+				return;
 			}
+			if (shouldAnimate) scheduleUpdate(true);
 		});
 
 		mo.observe(sidebarRootElement, {

@@ -13,25 +13,25 @@
 	import Icon from '@iconify/svelte';
 	import { Array as Array_, Effect, Result } from 'effect';
 	import type { Snippet } from 'svelte';
-	import { watch } from 'runed';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '#lib/button';
 	import * as Dialog from '#lib/dialog';
 	import { Textarea } from '#lib/textarea';
 	import { cn } from '#lib/utils';
-	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { useI18n } from '#lib/i18n';
 	import { Cluster, Grid, Inline, Stack } from '#lib/layout';
-	import { DataRenderer, formatDataValue, type Translate } from '#lib/data-renderer';
+	import { DataRenderer, formatDataValue } from '#lib/data-renderer';
 	import { CollectionForm } from '#lib/collection-form';
 	import CollectionRecordDetailTabs from './collection-record-detail-tabs.svelte';
 	import CollectionRecordDetailEmpty from './collection-record-detail-empty.svelte';
 	import { isSystemField } from '#lib/collection-table/collection-card-derivation';
 	import {
-		getOptionalCollectionClientContext,
+		getOptionalCollectionClientGetter,
 		getCollectionSurfaceRuntime,
 		resolveCollectionSurface
 	} from '#lib/collection-runtime';
 	import { approvalRequestIdForRecord } from './approval-anchor.js';
+	import { approvalActionsFor } from './approval-actions.js';
 
 	type Row = CollectionRecord;
 	type ErasedCollection = CollectionType<Row, object, object>;
@@ -39,7 +39,8 @@
 	type ApprovalActionState =
 		| { status: 'idle' }
 		| { status: 'pending' }
-		| { status: 'requesting_changes'; reason: string; pending: boolean };
+		| { status: 'requesting_changes'; reason: string; pending: boolean }
+		| { status: 'superseding'; reason: string; pending: boolean };
 
 	let {
 		collectionName,
@@ -53,7 +54,7 @@
 		onClose: () => void;
 	} = $props();
 
-	const { t } = useI18n<UiKeys>();
+	const { t } = useI18n();
 
 	/**
 	 * The record surface, resolved from the workspace rather than from whatever table is on screen.
@@ -63,7 +64,8 @@
 	 * surface by the shell. Reading them here is what lets a `?stack=` frame render a record whose
 	 * table is on an unopened tab, or on no screen at all.
 	 */
-	const client = getOptionalCollectionClientContext();
+	const clientGetter = getOptionalCollectionClientGetter();
+	const client = $derived(clientGetter?.());
 	const surfaceRuntime = getCollectionSurfaceRuntime();
 	const collectionSurface = $derived(
 		resolveCollectionSurface(surfaceRuntime?.surfaces, collectionName)
@@ -115,12 +117,18 @@
 
 	let approvalActionState = $state<ApprovalActionState>({ status: 'idle' });
 	let changeRequestOpen = $state(false);
+	let supersedeOpen = $state(false);
 	const approvalActionPending = $derived(
 		approvalActionState.status === 'pending' ||
-			(approvalActionState.status === 'requesting_changes' && approvalActionState.pending)
+			((approvalActionState.status === 'requesting_changes' ||
+				approvalActionState.status === 'superseding') &&
+				approvalActionState.pending)
 	);
 	const changeRequestReason = $derived(
 		approvalActionState.status === 'requesting_changes' ? approvalActionState.reason : ''
+	);
+	const supersedeReason = $derived(
+		approvalActionState.status === 'superseding' ? approvalActionState.reason : ''
 	);
 	const activeApprovalId = $derived(approvalRequestIdForRecord(collectionName, record));
 	const approvalQueryInput = $derived(
@@ -132,6 +140,7 @@
 		approvalQueryInput ? approvalQueryInput.approvals.findMany(approvalQueryInput.approvalId) : null
 	);
 	const approvalRequest = $derived(approvalQuery?.current?.[0]);
+	const approvalActions = $derived(approvalActionsFor(approvalRequest));
 	const approvalStatusMessage = $derived(
 		approvalQuery?.loading
 			? t('table.approvalLoading')
@@ -159,30 +168,21 @@
 			(field) => !isSystemField(field.name) && field.kind !== 'uuid' && !field.name.endsWith('_id')
 		);
 		const fallback = fallbackField
-			? formatDataValue(
-					fallbackField,
-					Reflect.get(row, fallbackField.name),
-					undefined,
-					t as Translate
-				)
+			? formatDataValue(fallbackField, Reflect.get(row, fallbackField.name), undefined, t)
 			: '';
 		return fallback && fallback !== '—' ? fallback : humanize(collectionName);
 	}
 
 	function formatRawStructuredValue(value: unknown): string {
 		if (value == null) return '—';
-		return Effect.runSync(
-			Effect.try(() => JSON.stringify(value, null, 2) ?? String(value)).pipe(
-				Effect.match({
-					onFailure: () => String(value),
-					onSuccess: (text) => text
-				})
-			)
+		return Result.getOrElse(
+			Result.try(() => JSON.stringify(value, null, 2) ?? String(value)),
+			() => String(value)
 		);
 	}
 
 	function approvalActionSuccessMessage(
-		action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE'
+		action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE' | 'SUPERSEDED'
 	): string {
 		switch (action) {
 			case 'APPROVED':
@@ -191,27 +191,34 @@
 				return t('table.approvalRejected');
 			case 'REQUEST_FOR_CHANGE':
 				return t('table.approvalChangesRequested');
+			case 'SUPERSEDED':
+				return t('table.approvalSuperseded');
 			default:
 				return action satisfies never;
 		}
 	}
 
 	function processApproval(
-		action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE',
+		action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE' | 'SUPERSEDED',
 		comments?: string
 	): Effect.Effect<boolean> {
 		const approvals = client?.approvals;
-		if (!activeApprovalId || !approvals) return Effect.succeed(false);
+		const allowed = action === 'SUPERSEDED' ? approvalActions.supersede : approvalActions.decide;
+		if (!allowed || !activeApprovalId || !approvals) return Effect.succeed(false);
 		const approvalId = activeApprovalId;
 		approvalActionState =
 			action === 'REQUEST_FOR_CHANGE'
 				? { status: 'requesting_changes', reason: comments ?? '', pending: true }
-				: { status: 'pending' };
-		return Effect.tryPromise(() =>
-			approvals.process({ approvalRequestId: approvalId, action, comments })
-		).pipe(
+				: action === 'SUPERSEDED'
+					? { status: 'superseding', reason: comments ?? '', pending: true }
+					: { status: 'pending' };
+		return Effect.tryPromise({
+			try: () => approvals.process({ approvalRequestId: approvalId, action, comments }),
+			catch: (cause) => cause
+		}).pipe(
 			Effect.map(() => {
 				if (action === 'REQUEST_FOR_CHANGE') changeRequestOpen = false;
+				if (action === 'SUPERSEDED') supersedeOpen = false;
 				approvalActionState = { status: 'idle' };
 				toast.success(approvalActionSuccessMessage(action));
 				return true;
@@ -222,7 +229,9 @@
 					approvalActionState =
 						action === 'REQUEST_FOR_CHANGE'
 							? { status: 'requesting_changes', reason: comments ?? '', pending: false }
-							: { status: 'idle' };
+							: action === 'SUPERSEDED'
+								? { status: 'superseding', reason: comments ?? '', pending: false }
+								: { status: 'idle' };
 					return false;
 				})
 			)
@@ -248,15 +257,40 @@
 	function requestChanges(): void {
 		const reason = changeRequestReason.trim();
 		if (!reason) return;
-		void Effect.runPromise(processApproval('REQUEST_FOR_CHANGE', reason));
+		Effect.runFork(processApproval('REQUEST_FOR_CHANGE', reason));
+	}
+
+	function openSupersede(): void {
+		approvalActionState = { status: 'superseding', reason: '', pending: false };
+		supersedeOpen = true;
+	}
+
+	function closeSupersede(): void {
+		if (approvalActionPending) return;
+		supersedeOpen = false;
+		approvalActionState = { status: 'idle' };
+	}
+
+	function updateSupersedeReason(reason: string): void {
+		if (approvalActionState.status !== 'superseding') return;
+		approvalActionState = { ...approvalActionState, reason };
+	}
+
+	function supersedeApproval(): void {
+		const reason = supersedeReason.trim();
+		if (!reason) return;
+		Effect.runFork(processApproval('SUPERSEDED', reason));
 	}
 
 	function withdrawApproval(): void {
 		const approvals = client?.approvals;
-		if (!activeApprovalId || !approvals) return;
+		if (!approvalActions.withdraw || !activeApprovalId || !approvals) return;
 		approvalActionState = { status: 'pending' };
 		void Effect.runPromise(
-			Effect.tryPromise(() => approvals.withdraw(activeApprovalId)).pipe(
+			Effect.tryPromise({
+				try: () => approvals.withdraw(activeApprovalId),
+				catch: (cause) => cause
+			}).pipe(
 				Effect.tap(() => Effect.sync(() => toast.success(t('table.approvalWithdrawn')))),
 				Effect.catch((error) =>
 					Effect.sync(() => {
@@ -312,10 +346,10 @@
 							'flex size-9 shrink-0 items-center justify-center rounded-full',
 							approvalRequest.status === 'APPROVED' && 'bg-success/10 text-success',
 							approvalRequest.status === 'REJECTED' && 'bg-destructive/10 text-destructive',
-							approvalRequest.status === 'REQUEST_FOR_CHANGE' &&
+							approvalRequest.status === 'CHANGES_REQUESTED' &&
 								'bg-warning/15 text-warning-foreground',
 							approvalRequest.status === 'ONGOING' && 'bg-brand/10 text-brand',
-							!['APPROVED', 'REJECTED', 'REQUEST_FOR_CHANGE', 'ONGOING'].includes(
+							!['APPROVED', 'REJECTED', 'CHANGES_REQUESTED', 'ONGOING'].includes(
 								approvalRequest.status
 							) && 'bg-muted text-muted-foreground'
 						)}
@@ -325,7 +359,7 @@
 								? 'lucide:circle-check'
 								: approvalRequest.status === 'REJECTED'
 									? 'lucide:circle-x'
-									: approvalRequest.status === 'REQUEST_FOR_CHANGE'
+									: approvalRequest.status === 'CHANGES_REQUESTED'
 										? 'lucide:message-square-warning'
 										: approvalRequest.status === 'ONGOING'
 											? 'lucide:clock-3'
@@ -344,44 +378,48 @@
 										'border-success/25 bg-success/10 text-success',
 									approvalRequest.status === 'REJECTED' &&
 										'border-destructive/25 bg-destructive/10 text-destructive',
-									approvalRequest.status === 'REQUEST_FOR_CHANGE' &&
+									approvalRequest.status === 'CHANGES_REQUESTED' &&
 										'border-warning/30 bg-warning/15 text-warning-foreground',
 									approvalRequest.status === 'ONGOING' && 'border-brand/25 bg-brand/10 text-brand'
 								)}>{humanize(approvalRequest.status)}</span
 							>
 						</Inline>
 						<p class="text-sm leading-5 text-muted-foreground">{approvalStatusMessage}</p>
-						<p
-							class="truncate font-mono text-micro text-muted-foreground"
-							title={approvalRequest.id}
-						>
-							{t('table.approvalRequestId')}: {approvalRequest.id}
-						</p>
 					</Stack>
 				</Inline>
-				{#if approvalRequest.status === 'ONGOING'}
+				{#if approvalActions.decide || approvalActions.supersede || approvalActions.withdraw}
 					<Cluster gap="sm" class="border-t pt-4">
-						<Button
-							disabled={approvalActionPending}
-							onclick={() => void Effect.runPromise(processApproval('APPROVED'))}
-						>
-							<Icon icon="lucide:check" class="mr-1.5 size-3.5" aria-hidden="true" />
-							{t('table.approve')}
-						</Button>
-						<Button variant="outline" disabled={approvalActionPending} onclick={openChangeRequest}
-							>{t('table.requestChanges')}</Button
-						>
-						<Button
-							variant="outline"
-							class="text-destructive hover:text-destructive"
-							disabled={approvalActionPending}
-							onclick={() => void Effect.runPromise(processApproval('REJECTED'))}
-						>
-							{t('table.reject')}</Button
-						>
-						<Button variant="ghost" disabled={approvalActionPending} onclick={withdrawApproval}
-							>{t('table.withdrawRequest')}</Button
-						>
+						{#if approvalActions.decide}
+							<Button
+								disabled={approvalActionPending}
+								onclick={() => void Effect.runPromise(processApproval('APPROVED'))}
+							>
+								<Icon icon="lucide:check" class="mr-1.5 size-3.5" aria-hidden="true" />
+								{t('table.approve')}
+							</Button>
+							<Button variant="outline" disabled={approvalActionPending} onclick={openChangeRequest}
+								>{t('table.requestChanges')}</Button
+							>
+							<Button
+								variant="outline"
+								class="text-destructive hover:text-destructive"
+								disabled={approvalActionPending}
+								onclick={() => void Effect.runPromise(processApproval('REJECTED'))}
+							>
+								{t('table.reject')}</Button
+							>
+						{/if}
+						{#if approvalActions.supersede}
+							<Button variant="outline" disabled={approvalActionPending} onclick={openSupersede}>
+								<Icon icon="lucide:shield-check" class="mr-1.5 size-3.5" aria-hidden="true" />
+								{t('table.supersedeApproval')}
+							</Button>
+						{/if}
+						{#if approvalActions.withdraw}
+							<Button variant="ghost" disabled={approvalActionPending} onclick={withdrawApproval}
+								>{t('table.withdrawRequest')}</Button
+							>
+						{/if}
 					</Cluster>
 				{/if}
 			</Stack>
@@ -496,15 +534,17 @@
 			<Dialog.Title>{t('table.requestChanges')}</Dialog.Title>
 			<Dialog.Description>{t('table.requestChangesDescription')}</Dialog.Description>
 		</Dialog.Header>
-		<label class="grid gap-1.5 text-sm font-medium">
-			{t('table.changeRequestReason')}
-			<Textarea
-				value={changeRequestReason}
-				placeholder={t('table.describeChangesPlaceholder')}
-				maxlength={1000}
-				required
-				oninput={(event) => updateChangeRequestReason(event.currentTarget.value)}
-			/>
+		<label class="text-sm font-medium">
+			<Stack gap="xs">
+				{t('table.changeRequestReason')}
+				<Textarea
+					value={changeRequestReason}
+					placeholder={t('table.describeChangesPlaceholder')}
+					maxlength={1000}
+					required
+					oninput={(event) => updateChangeRequestReason(event.currentTarget.value)}
+				/>
+			</Stack>
 		</label>
 		<Dialog.Footer>
 			<Dialog.Close disabled={approvalActionPending}>{t('common.cancel')}</Dialog.Close>
@@ -513,6 +553,36 @@
 				onclick={() => void requestChanges()}
 			>
 				{approvalActionPending ? t('table.requesting') : t('table.requestChanges')}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root open={supersedeOpen} onOpenChange={(open) => !open && closeSupersede()}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>{t('table.supersedeApproval')}</Dialog.Title>
+			<Dialog.Description>{t('table.supersedeApprovalDescription')}</Dialog.Description>
+		</Dialog.Header>
+		<label class="text-sm font-medium">
+			<Stack gap="xs">
+				{t('table.supersedeReason')}
+				<Textarea
+					value={supersedeReason}
+					placeholder={t('table.supersedeReasonPlaceholder')}
+					maxlength={1000}
+					required
+					oninput={(event) => updateSupersedeReason(event.currentTarget.value)}
+				/>
+			</Stack>
+		</label>
+		<Dialog.Footer>
+			<Dialog.Close disabled={approvalActionPending}>{t('common.cancel')}</Dialog.Close>
+			<Button
+				disabled={approvalActionPending || supersedeReason.trim().length === 0}
+				onclick={() => void supersedeApproval()}
+			>
+				{approvalActionPending ? t('table.supersedingApproval') : t('table.supersedeApproval')}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

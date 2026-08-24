@@ -119,7 +119,10 @@
 {#snippet uiContent()}
 	<!-- Shell owns the one horizontal inset; nested representations must not add another. -->
 	<Bound size="full" clip inset>
-		{#if loading || error || !found}
+		<!-- A background refresh retains the current record. Keep its stateful form mounted while that
+		     revalidation runs so a mutation failure can finish by painting its error instead of losing the
+		     form to a transient loading placeholder. -->
+		{#if error || !found}
 			{@render unavailableState()}
 		{:else}
 			{@render ui()}
@@ -129,7 +132,7 @@
 
 {#snippet approvalContent()}
 	<Scroll name={t('table.approvalRegion', { title })} inset>
-		{#if loading || error || !found}
+		{#if error || !found}
 			{@render unavailableState()}
 		{:else}
 			{@render approval()}
@@ -139,7 +142,7 @@
 
 {#snippet rawContent()}
 	<Scroll name={t('table.rawRegion', { title })} inset>
-		{#if loading || error || !found}
+		{#if error || !found}
 			{@render unavailableState()}
 		{:else}
 			{@render raw()}

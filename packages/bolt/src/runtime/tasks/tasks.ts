@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Number as ENumber, Schema } from 'effect';
+import { Clock, Context, Effect, Layer, Schema } from 'effect';
 import {
 	EffectId,
 	type DatabaseRequest,
@@ -7,9 +7,15 @@ import {
 import * as Database from '#lib/runtime/facilities/database.js';
 import type { CallContext } from '#lib/runtime/facilities/database.js';
 import { Tasks } from '#lib/runtime/facilities/services.js';
+import * as SyncWake from '#lib/runtime/sync/wake.js';
 import {
+	cancelStatement,
 	enqueueStatements,
 	makeQueue,
+	progressStatement,
+	resumeStatement,
+	statusStatement,
+	stopStatement,
 	type Declaration,
 	type Enqueue,
 	type Rejection,
@@ -46,6 +52,7 @@ export type Interface = Readonly<{
 		effectId: EffectIdType,
 		notLaterThanEpochMs: number
 	) => Effect.Effect<void, Database.FacilityError>;
+	/** Releases the guest isolate to its host without performing I/O or scheduling work. */
 	/** Enqueues in a transaction of its own — for callers with no write of their own to ride. */
 	readonly enqueue: (
 		effectId: EffectIdType,
@@ -76,29 +83,39 @@ export type Interface = Readonly<{
 		effectId: EffectIdType,
 		run: Run<E, R>
 	) => Effect.Effect<TickReport, E | Database.FacilityError, R>;
-	/**
-	 * The recent runs of one command, newest first.
-	 *
-	 * `status` answers about a task somebody already holds the id of, which is enough to watch a run
-	 * you started and useless for the question "what has this automation been doing" — the answer to
-	 * which is rows nobody in this session enqueued. Bounded rather than paged: a log surface wants
-	 * the last handful, and an unbounded read of a table that has drained a year of work is a
-	 * different feature with a different cost.
-	 */
-	readonly history: (
-		effectId: EffectIdType,
-		command: string,
-		limit: number
-	) => Effect.Effect<ReadonlyArray<Schema.Json>, Database.FacilityError>;
-	/** What a queued item came to, by the id its enqueuer was given. */
+	/** Internal lifecycle observation used only to stop an in-flight automation at facility fences. */
 	readonly status: (
 		effectId: EffectIdType,
 		taskId: string
 	) => Effect.Effect<Schema.Json | undefined, Database.FacilityError>;
-	/** Gives up on a queued item nobody wants any more. Running work is not interrupted. */
+	/** Replaces one automation task's durable progress snapshot. */
+	readonly progress: (
+		effectId: EffectIdType,
+		taskId: string,
+		value: Schema.Json
+	) => Effect.Effect<void, Database.FacilityError>;
+	/** Permanently cancels a non-automation task, scoped to its exact command. */
 	readonly cancel: (
 		effectId: EffectIdType,
-		taskId: string
+		taskId: string,
+		command: string
+	) => Effect.Effect<void, Database.FacilityError>;
+	/**
+	 * Stops one durable automation run without making it terminal.
+	 *
+	 * A running guest observes the state at its next authored facility boundary. The row, its input,
+	 * progress and idempotency key remain outside the guest so the same run can be resumed later.
+	 */
+	readonly stop: (
+		effectId: EffectIdType,
+		taskId: string,
+		command: string
+	) => Effect.Effect<void, Database.FacilityError>;
+	/** Resumes the same stopped row; no replacement task or copied input is created. */
+	readonly resume: (
+		effectId: EffectIdType,
+		taskId: string,
+		command: string
 	) => Effect.Effect<void, Database.FacilityError>;
 }>;
 
@@ -127,17 +144,8 @@ const asRequest = (statements: ReadonlyArray<Statement>): DatabaseRequest => {
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 const DatabaseRows = Schema.Array(JsonObject);
-
-/**
- * How long this invocation has left.
- *
- * Floored at one millisecond, exactly as `runtime/app.ts` floors the timeout it enforces against the
- * same field — one subtraction, one clamp, one meaning. The floor is why the runner has a floor of
- * its own: a tick that arrives past its deadline would otherwise hide a row for a millisecond and
- * burn an attempt on work it had no time to try.
- */
-const remainingMillis = (deadlineEpochMs: number, nowEpochMs: number): number =>
-	Math.max(1, deadlineEpochMs - nowEpochMs);
+/** Built once: every facility response this module reads goes through it. */
+const decodeDatabaseRows = Schema.decodeUnknownEffect(DatabaseRows);
 
 export const layer = (context: CallContext) =>
 	Layer.effect(
@@ -145,6 +153,7 @@ export const layer = (context: CallContext) =>
 		Effect.gen(function* () {
 			const database = yield* Database.Service;
 			const tasks = yield* Tasks.Service;
+			const syncWake = yield* SyncWake.Service;
 
 			/**
 			 * The queue's one dependency, built over the database facility.
@@ -161,7 +170,7 @@ export const layer = (context: CallContext) =>
 						.execute(EffectId.make(`${effectId}:${label}:${issued}`), asRequest(statements))
 						.pipe(
 							Effect.flatMap((response) =>
-								Schema.decodeUnknownEffect(DatabaseRows)(response.rows).pipe(
+								decodeDatabaseRows(response.rows).pipe(
 									Effect.mapError(
 										() =>
 											new Database.FacilityError({
@@ -209,47 +218,53 @@ export const layer = (context: CallContext) =>
 					);
 					yield* wake(EffectId.make(`${effectId}:wake`), soonest);
 					yield* database.execute(effectId, asRequest(enqueueStatements(enqueues)));
+					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['automation_run']);
 				}),
 				declare: Effect.fn('TaskQueue.declare')((effectId, declarations, nowEpochMs) =>
 					queueUnder(effectId, 'declare').declare(declarations, nowEpochMs)
 				),
 				tick: (effectId, run) =>
-					Effect.flatMap(Clock.currentTimeMillis, (nowEpochMs) =>
-						makeRunner(queueUnder(effectId, 'tick'), run).tick({
+					Effect.gen(function* () {
+						const nowEpochMs = yield* Clock.currentTimeMillis;
+						const report = yield* makeRunner(queueUnder(effectId, 'tick'), run).tick({
 							nowEpochMs,
-							remainingMillis: remainingMillis(context.deadlineEpochMs, nowEpochMs)
-						})
-					),
-				history: Effect.fn('TaskQueue.history')(function* (effectId, command, limit) {
-					const rows = yield* database.execute(effectId, {
-						_tag: 'Query',
-						// `created_at` and not `updated_at`: a row that failed and was retried updates, and
-						// ordering by that would shuffle a run up the list every time it was attempted again.
-						// When a run *started* is the thing a reader is placing on a timeline.
-						sql:
-							'select effect_id, status, attempts, error, created_at, updated_at ' +
-							'from bolt_task where command = $1 order by created_at desc limit $2',
-						parameters: [command, ENumber.clamp({ minimum: 1, maximum: 50 })(Math.trunc(limit))]
-					});
-					return rows.rows;
-				}),
+							// Floored at one millisecond, exactly as `runtime/app.ts` floors the timeout it
+							// enforces against the same deadline. A late tick must not burn an attempt on work
+							// it had no time to try.
+							remainingMillis: Math.max(1, context.deadlineEpochMs - nowEpochMs)
+						});
+						// `finish` also prunes old task rows. Announce every real tick rather than trying to
+						// predict whether its private queue writes changed an automation projection.
+						yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['automation_run']);
+						return report;
+					}),
 				status: Effect.fn('TaskQueue.status')(function* (effectId, taskId) {
-					const rows = yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: 'select status, attempts, max_attempts, error, result from bolt_task where effect_id = $1',
-						parameters: [taskId]
-					});
+					const rows = yield* database.execute(effectId, asRequest([statusStatement(taskId)]));
 					return rows.rows[0];
 				}),
-				cancel: Effect.fn('TaskQueue.cancel')(function* (effectId, taskId) {
-					// Only what has not started. A task already running is a fiber inside somebody else's
-					// invocation, and there is nothing here that could reach into it — saying otherwise on the
-					// row would be the queue reporting a stop it did not perform.
-					yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: "update bolt_task set status = 'failed', error = 'cancelled', updated_at = now() where effect_id = $1 and status = 'pending'",
-						parameters: [taskId]
-					});
+				progress: Effect.fn('TaskQueue.progress')(function* (effectId, taskId, value) {
+					yield* database.execute(effectId, asRequest([progressStatement(taskId, value)]));
+					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['automation_run']);
+				}),
+				cancel: Effect.fn('TaskQueue.cancel')(function* (effectId, taskId, command) {
+					yield* database.execute(effectId, asRequest([cancelStatement(taskId, command)]));
+				}),
+				stop: Effect.fn('TaskQueue.stop')(function* (effectId, taskId, command) {
+					// A claim remains `pending` while its worker runs. Moving it to `paused` therefore
+					// fences both queued and in-flight work in one atomic write. Every finish statement is
+					// conditional on `pending`, so a late success or failure cannot erase the stop.
+					yield* database.execute(effectId, asRequest([stopStatement(taskId, command)]));
+					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['automation_run']);
+				}),
+				resume: Effect.fn('TaskQueue.resume')(function* (effectId, taskId, command) {
+					// Announce before writing, exactly like enqueue: a crash may cause an empty tick, but
+					// can never leave durable work with nobody scheduled to look for it. `resuming` is a
+					// lease fence. If an old guest still owns the row, its claim-time run_at is preserved;
+					// otherwise the same row is immediately due. Only `take` turns the fence into pending.
+					const nowEpochMs = yield* Clock.currentTimeMillis;
+					yield* wake(EffectId.make(`${effectId}:wake`), nowEpochMs);
+					yield* database.execute(effectId, asRequest([resumeStatement(taskId, command)]));
+					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['automation_run']);
 				})
 			});
 		})

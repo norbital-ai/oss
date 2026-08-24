@@ -1,10 +1,16 @@
 import { createHash } from 'node:crypto';
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
-import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import { approveBy } from '../../src/authoring/approval-flow.js';
+import {
+	describePolicy,
+	policyRuntimeFunctionsFor
+} from '../../src/authoring/policy-introspection.js';
+import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { PendingApproval } from '../../src/runtime/collections/collections.js';
+import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -27,8 +33,7 @@ const rid = (name: string): string => {
  * The approval gate over real SQL.
  *
  * Approval was the one core system whose only evidence was a live probe. What a probe cannot show is
- * the part that matters most here — that a held write leaves *nothing* behind. `approvalLock` is a
- * claim about the database, so it is checked against the database.
+ * the part that matters most here — that a policy-routed hold is durable and visible.
  */
 
 let harness: BoltTestRuntime | undefined;
@@ -43,16 +48,25 @@ const gatedWorkspace = workspace({
 	collections: [
 		collection({
 			name: 'people',
-			fields: { name: field.string({ required: true }) },
-			approvalLock: true
+			fields: { name: field.string({ required: true }) }
 		})
 	],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+		describePolicy('admin', {
+			description: 'Creates people through one concrete review flow.',
+			grants: {
+				people: {
+					create: {
+						approval: { flow: () => approveBy('approvers'), superceded_by: [] }
+					}
+				}
+			}
+		})
 	],
 	teams: {
-		admin: ['admin']
+		admin: ['admin'],
+		approvers: []
 	},
 	automations: [],
 	integrations: [],
@@ -63,6 +77,13 @@ const gatedWorkspace = workspace({
 	requiredFacilities: []
 });
 
+const gatedFunctions = policyRuntimeFunctionsFor(gatedWorkspace.policies);
+const gatedAuthored = {
+	...emptyAuthoredRuntime,
+	policyAuthorizations: gatedFunctions.authorizations,
+	approvalFlows: gatedFunctions.approvalFlows
+};
+
 const rowCount = async (runtime: BoltTestRuntime, name: string): Promise<number> => {
 	const rows = await runtime.database.query(`select count(*)::int as total from ${name}`);
 	const [row] = rows;
@@ -71,7 +92,7 @@ const rowCount = async (runtime: BoltTestRuntime, name: string): Promise<number>
 
 describe('approval gate over SQL', () => {
 	it('writes the row a gated create requested, and holds it under the approval', async () => {
-		harness = await makeBoltTestRuntime(gatedWorkspace);
+		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
 
 		const failure = await runtime.runPromise(
@@ -100,7 +121,7 @@ describe('approval gate over SQL', () => {
 	});
 
 	it('records the held request so a reviewer can find and read it', async () => {
-		harness = await makeBoltTestRuntime(gatedWorkspace);
+		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
 
 		const failure = await runtime.runPromise(
@@ -137,6 +158,136 @@ describe('approval gate over SQL', () => {
 		});
 	});
 
+	it('commits a decision, its projections, audit, notification, and follow-up atomically', async () => {
+		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
+		const { runtime, effectId } = harness;
+		const failure = await runtime.runPromise(
+			Effect.flip(
+				Effect.gen(function* () {
+					yield* (yield* Collections.Service).create(effectId('create-decided'), adminSubject, {
+						collection: 'people',
+						id: rid('person-decided'),
+						values: { name: 'Margaret' }
+					});
+				})
+			)
+		);
+		expect(failure).toBeInstanceOf(PendingApproval);
+		if (!(failure instanceof PendingApproval)) return;
+		const pending = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Approvals.Service).status(
+					effectId('status-decided'),
+					failure.requestId
+				);
+			})
+		);
+		expect(pending?._tag).toBe('Pending');
+		if (pending?._tag !== 'Pending') return;
+		const reviewer = {
+			...adminSubject,
+			userId: 'reviewer-1',
+			teamPath: ['approvers'],
+			admin: false
+		};
+		const decided = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Approvals.Service).decide(
+					effectId('approve-decided'),
+					reviewer,
+					pending,
+					'approve'
+				);
+			})
+		);
+		expect(decided._tag).toBe('Approved');
+		expect(
+			await harness.database.query('select status, steps, proposed_values from approval_request')
+		).toEqual([
+			expect.objectContaining({
+				status: 'APPROVED',
+				steps: [],
+				proposed_values: { name: 'Margaret' }
+			})
+		]);
+		expect(
+			await harness.database.query(
+				"select kind, subject_id from bolt_audit where kind = 'approval_decided'"
+			)
+		).toEqual([{ kind: 'approval_decided', subject_id: 'reviewer-1' }]);
+		expect(
+			await harness.database.query('select recipient, payload from bolt_notifications')
+		).toEqual([
+			expect.objectContaining({
+				recipient: adminSubject.userId,
+				payload: expect.objectContaining({
+					approvalRequestId: failure.requestId,
+					status: 'APPROVED'
+				})
+			})
+		]);
+		expect(await harness.database.query('select command, input from bolt_task')).toEqual([
+			{ command: 'collections.resume', input: { requestId: failure.requestId } }
+		]);
+	});
+
+	it('lets every workspace administrator supersede without an authored superseding team', async () => {
+		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
+		const { runtime, effectId } = harness;
+		const failure = await runtime.runPromise(
+			Effect.flip(
+				Effect.gen(function* () {
+					yield* (yield* Collections.Service).create(
+						effectId('create-admin-superseded'),
+						adminSubject,
+						{
+							collection: 'people',
+							id: rid('person-admin-superseded'),
+							values: { name: 'Katherine' }
+						}
+					);
+				})
+			)
+		);
+		expect(failure).toBeInstanceOf(PendingApproval);
+		if (!(failure instanceof PendingApproval)) return;
+		const pending = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Approvals.Service).status(
+					effectId('status-admin-superseded'),
+					failure.requestId
+				);
+			})
+		);
+		expect(pending?._tag).toBe('Pending');
+		if (pending?._tag !== 'Pending') return;
+
+		const approvals = await runtime.runPromise(
+			Effect.gen(function* () {
+				const service = yield* Approvals.Service;
+				const capabilities = yield* service.capabilities(
+					effectId('capabilities-admin-superseded'),
+					adminSubject,
+					failure.requestId
+				);
+				const decided = yield* service.decide(
+					effectId('decide-admin-superseded'),
+					adminSubject,
+					pending,
+					'supersede',
+					'Workspace administrator emergency override'
+				);
+				return { capabilities, decided };
+			})
+		);
+		expect(approvals.capabilities.canSupersede).toBe(true);
+		expect(approvals.decided).toMatchObject({
+			_tag: 'Approved',
+			superseded: true,
+			reason: 'Workspace administrator emergency override'
+		});
+	});
+
 	it('leaves an ungated collection alone', async () => {
 		harness = await makeBoltTestRuntime();
 		const { runtime, effectId } = harness;
@@ -156,7 +307,7 @@ describe('approval gate over SQL', () => {
 	});
 
 	it('holds each write independently rather than letting one decision cover a batch', async () => {
-		harness = await makeBoltTestRuntime(gatedWorkspace);
+		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
 
 		const failure = await runtime.runPromise(
@@ -176,7 +327,7 @@ describe('approval gate over SQL', () => {
 	});
 
 	it('replicates a held write, because a reviewer reads through the replica', async () => {
-		harness = await makeBoltTestRuntime(gatedWorkspace);
+		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
 
 		await runtime.runPromise(

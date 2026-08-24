@@ -1,11 +1,24 @@
 import { Effect, Schema } from 'effect';
+import { and, count, eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
+import { SYSTEM_MODEL_TABLES } from '../../src/authoring/system-models.js';
 import { envoy, integration, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
 import * as Envoys from '../../src/runtime/envoys/envoys.js';
 import * as Database from '../../src/runtime/facilities/database.js';
-import { Notification } from '../../src/runtime/notifications/notifications.js';
+import {
+	Notification,
+	Service as NotificationsService
+} from '../../src/runtime/notifications/notifications.js';
+import { aliased, composer, executeBuilt, jsonTextEquals } from '../../src/runtime/persistence.js';
 import { makeBoltTestRuntime } from '../support/bolt-test-layer.js';
+
+const {
+	bolt_audit: audit,
+	bolt_envoy_registrations: envoyRegistrations,
+	bolt_notifications: notifications,
+	bolt_sync_outbox: syncOutbox
+} = SYSTEM_MODEL_TABLES;
 
 const supportEnvoy = () =>
 	envoy({
@@ -52,6 +65,7 @@ describe('Envoys, Integrations, and Notifications owners', () => {
 			integration({
 				name: 'accounts.erp',
 				collection: 'accounts',
+				policies: [],
 				connection: { baseUrl: 'https://erp.example/api' },
 				webhooks: [],
 				send: [],
@@ -120,11 +134,13 @@ describe('Envoys, Integrations, and Notifications owners', () => {
 			});
 			const registrations = await harness.runtime.runPromise(
 				Effect.flatMap(Database.Service, (database) =>
-					database.execute(harness.effectId('count'), {
-						_tag: 'Query',
-						sql: 'select count(*)::int as registrations from bolt_envoy_registrations',
-						parameters: []
-					})
+					executeBuilt(
+						harness.effectId('count'),
+						database,
+						composer
+							.select({ registrations: aliased(count(), 'registrations') })
+							.from(envoyRegistrations)
+					)
 				)
 			);
 			expect(registrations.rows[0]).toMatchObject({ registrations: 1 });
@@ -137,4 +153,85 @@ describe('Envoys, Integrations, and Notifications owners', () => {
 		expect(() =>
 			Schema.decodeUnknownSync(Notification)({ id: '', recipient: '', payload: {}, read: false })
 		).toThrow());
+
+	it('publishes an enqueued notification through the replica outbox', async () => {
+		const harness = await makeBoltTestRuntime(envoyedWorkspace());
+		try {
+			const notification = {
+				id: '019f6f10-0006-7000-8000-000000000001',
+				recipient: 'user-1',
+				payload: { text: 'Payroll approved' },
+				read: false
+			};
+			await harness.runtime.runPromise(
+				Effect.flatMap(NotificationsService, (notifications) =>
+					notifications.enqueue(harness.effectId('notification:enqueue'), notification)
+				)
+			);
+			// A replay is the same enqueue: neither the notification nor its audit evidence is duplicated.
+			await harness.runtime.runPromise(
+				Effect.flatMap(NotificationsService, (notifications) =>
+					notifications.enqueue(harness.effectId('notification:enqueue:replay'), notification)
+				)
+			);
+			const read = (query: Parameters<typeof executeBuilt>[2]) =>
+				harness.runtime.runPromise(
+					Effect.flatMap(Database.Service, (database) =>
+						executeBuilt(harness.effectId('notification:verify'), database, query)
+					)
+				);
+			expect(
+				(
+					await read(
+						composer
+							.select({
+								id: notifications.id,
+								recipient: notifications.recipient,
+								payload: notifications.payload,
+								read: notifications.read
+							})
+							.from(notifications)
+							.where(eq(notifications.id, notification.id))
+					)
+				).rows
+			).toEqual([notification]);
+			expect(
+				(
+					await read(
+						composer
+							.select({
+								collection_name: syncOutbox.collection_name,
+								record_id: syncOutbox.record_id,
+								operation: syncOutbox.operation
+							})
+							.from(syncOutbox)
+							.where(eq(syncOutbox.record_id, notification.id))
+					)
+				).rows
+			).toEqual([
+				{
+					collection_name: 'bolt_notifications',
+					record_id: notification.id,
+					operation: 'create'
+				}
+			]);
+			expect(
+				(
+					await read(
+						composer
+							.select({ kind: audit.kind, subject_id: audit.subject_id })
+							.from(audit)
+							.where(
+								and(
+									eq(audit.kind, 'notification_enqueued'),
+									jsonTextEquals(audit.payload, 'notificationId', notification.id)
+								)
+							)
+					)
+				).rows
+			).toEqual([{ kind: 'notification_enqueued', subject_id: notification.recipient }]);
+		} finally {
+			await harness.dispose();
+		}
+	});
 });

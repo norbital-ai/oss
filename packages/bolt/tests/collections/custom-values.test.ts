@@ -1,6 +1,7 @@
 import { Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
 import { collection, field } from '../../src/authoring/workspace-schema.js';
+import { platformCustomTypes } from '../../src/authoring/models-schema.js';
 import {
 	describeGeneratedColumnWrite,
 	describeInvalidCustomValue
@@ -106,6 +107,62 @@ describe('custom value validation', () => {
 		).toContain('event');
 	});
 
+	it('applies platform datatype options through the same factory-validation path', () => {
+		const invoices = collection({
+			name: 'invoices',
+			fields: {
+				amount: {
+					type: 'json',
+					required: true,
+					indexed: false,
+					customType: 'money',
+					customTypeOptions: { allowedCurrencies: ['SGD'] }
+				}
+			}
+		});
+		expect(
+			describeInvalidCustomValue(
+				invoices.fields,
+				{ amount: { value: 100, currency: 'SGD' } },
+				platformCustomTypes
+			)
+		).toBeUndefined();
+		expect(
+			describeInvalidCustomValue(
+				invoices.fields,
+				{ amount: { value: 100, currency: 'USD' } },
+				platformCustomTypes
+			)
+		).toContain('currency must be one of SGD');
+	});
+
+	it('validates every value when any custom datatype opts into multiple storage', () => {
+		const schedules = collection({
+			name: 'schedules',
+			fields: {
+				ranges: {
+					type: 'json',
+					required: true,
+					indexed: false,
+					customType: 'instant_range',
+					customTypeOptions: { multiple: true }
+				}
+			}
+		});
+		expect(
+			describeInvalidCustomValue(
+				schedules.fields,
+				{
+					ranges: [
+						{ start: '2026-08-24T00:00:00Z', end: '2026-08-24T01:00:00Z' },
+						{ start: 'not-an-instant', end: null }
+					]
+				},
+				platformCustomTypes
+			)
+		).toMatch(/^ranges\[1\] is not a valid instant_range:/);
+	});
+
 	it('leaves ordinary columns alone', () => {
 		const people = collection({
 			name: 'people',
@@ -121,18 +178,17 @@ describe('custom value validation', () => {
 		).toBeUndefined();
 	});
 
-	it('passes through a type it cannot resolve rather than guessing', () => {
+	it('passes through an unresolved type and resolves a schema factory with field options', () => {
 		expect(
 			describeInvalidCustomValue(leaveRequests.fields, { event: { nonsense: true } }, {})
 		).toBeUndefined();
-		// A definition whose `schema` is a factory needs options this layer does not have.
 		expect(
 			describeInvalidCustomValue(
 				leaveRequests.fields,
 				{ event: { nonsense: true } },
 				{ leave_event: { schema: () => leaveEvent } }
 			)
-		).toBeUndefined();
+		).toContain('event');
 	});
 });
 

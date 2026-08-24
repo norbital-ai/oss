@@ -13,10 +13,8 @@ const builderTypes: Readonly<Record<string, FieldType>> = {
 	numeric: 'number',
 	number: 'number',
 	boolean: 'boolean',
-	timestamp: 'datetime',
-	datetime: 'datetime',
+	instant: 'instant',
 	geolocation: 'json',
-	dateRange: 'json',
 	jsonb: 'json',
 	json: 'json',
 	vector: 'json',
@@ -65,6 +63,26 @@ const fieldWindows = (
 	}));
 };
 
+type CustomTypeReference = Readonly<{
+	readonly field: string;
+	/** Absent when the call is not a string literal, which is itself an invalid declaration. */
+	readonly name?: string;
+}>;
+
+/**
+ * Reads every authored `custom('<name>')` reference from model fields.
+ *
+ * A dynamic expression is deliberately returned without a name rather than ignored. Datatype
+ * identity is part of the compiled schema and renderer registry; if it is not a literal the
+ * compiler cannot prove that the schema, catalog, renderer, and generated type all name one thing.
+ */
+export const extractCustomTypeReferences = (source: string): ReadonlyArray<CustomTypeReference> =>
+	fieldWindows(source).flatMap(({ name: field, builder, window }) => {
+		if (builder !== 'custom') return [];
+		const match = window.match(/custom\(\s*(['"])([^'"]+)\1/);
+		return [{ field, ...(match?.[2] === undefined ? {} : { name: match[2] }) }];
+	});
+
 /** Reads defineModel column builders from an authored +model.ts without executing it. */
 export const extractModelFields = (source: string): Readonly<Record<string, FieldDefinition>> => {
 	const fields: Record<string, FieldDefinition> = {};
@@ -86,7 +104,7 @@ export const extractModelFields = (source: string): Readonly<Record<string, Fiel
  * Authoring builder name → UI field kind.
  *
  * These strings are what `DataRenderer` / filters / icons switch on. Emitting the builder name or
- * the schema `ScalarType` (e.g. `dateRange`, `datetime`) makes a built-in column fall through to
+ * the schema `ScalarType` (e.g. `instant`) makes a built-in column fall through to
  * the JSON textarea even though a dedicated renderer already exists.
  */
 const catalogKinds: Readonly<Record<string, string>> = {
@@ -97,12 +115,8 @@ const catalogKinds: Readonly<Record<string, string>> = {
 	numeric: 'numeric',
 	number: 'number',
 	boolean: 'boolean',
-	date: 'date',
-	timestamp: 'timestamp',
-	datetime: 'timestamp',
+	instant: 'instant',
 	uuid: 'uuid',
-	clockTime: 'clock_time',
-	dateRange: 'date-range',
 	geolocation: 'geolocation',
 	file: 'file',
 	vector: 'json',
@@ -115,13 +129,17 @@ const catalogKinds: Readonly<Record<string, string>> = {
 type CollectionCatalogField = Readonly<{
 	readonly name: string;
 	readonly kind: string;
-	/** Whether the column holds a list of its kind — today only `file({ multiple: true })`. */
+	/** Whether the JSON column holds a list of its kind. */
 	readonly array?: boolean;
 	readonly nullable: boolean;
 	/** A column the database computes; a form must not offer it as editable. */
 	readonly readOnly?: boolean;
 	readonly search?: boolean;
 	readonly values?: ReadonlyArray<string>;
+	/** The ISO codes a `money` datatype restricts its picker to, from `allowedCurrencies`. */
+	readonly currencies?: ReadonlyArray<string>;
+	/** The picker precision an instant or `instant_range` datatype declares. */
+	readonly precision?: 'day' | 'minute';
 	/**
 	 * The relationship this column is the foreign key of.
 	 *
@@ -148,8 +166,8 @@ export type CollectionCatalogEntry = Readonly<{
 	}>;
 }>;
 
-const enumValues = (window: string): ReadonlyArray<string> | undefined => {
-	const match = window.match(/enums\(\[([^\]]*)\]/);
+const stringListOption = (window: string, pattern: RegExp): ReadonlyArray<string> | undefined => {
+	const match = window.match(pattern);
 	const body = match?.[1];
 	if (body === undefined) return undefined;
 	const values = [...body.matchAll(/'([^']+)'/g)].flatMap((entry) =>
@@ -157,6 +175,9 @@ const enumValues = (window: string): ReadonlyArray<string> | undefined => {
 	);
 	return values.length === 0 ? undefined : values;
 };
+
+const enumValues = (window: string): ReadonlyArray<string> | undefined =>
+	stringListOption(window, /enums\(\[([^\]]*)\]/);
 
 /**
  * How the label terms are joined for the resolver that reads them.
@@ -187,6 +208,17 @@ const recordLabel = (source: string): string | undefined => {
 	return columns.length === 0 ? undefined : columns.join(LABEL_TERM_JOIN);
 };
 
+/** The `allowedCurrencies` option a `money`-typed column declares, as the list a renderer may offer. */
+const moneyCurrencies = (window: string): ReadonlyArray<string> | undefined => {
+	return stringListOption(window, /allowedCurrencies:\s*\[([^\]]*)\]/);
+};
+
+/** The `precision: 'day' | 'minute'` option an instant or instant range declares, for its picker. */
+const instantPrecision = (window: string): 'day' | 'minute' | undefined => {
+	const precision = window.match(/precision:\s*'([a-z]+)'/)?.[1];
+	return precision === 'day' || precision === 'minute' ? precision : undefined;
+};
+
 /** CollectionTable metadata: field kinds, search opt-in, and relations from `+relationship.ts`. */
 export const extractCollectionCatalog = (
 	name: string,
@@ -195,7 +227,13 @@ export const extractCollectionCatalog = (
 ): CollectionCatalogEntry => {
 	const fields: Array<CollectionCatalogField> = [];
 	for (const { name: fieldName, builder, window } of fieldWindows(source)) {
+		const customType = builder === 'custom' ? window.match(/custom\(\s*'([^']+)'/)?.[1] : undefined;
 		const values = builder === 'enums' ? enumValues(window) : undefined;
+		const currencies = customType === 'money' ? moneyCurrencies(window) : undefined;
+		const precision =
+			builder === 'instant' || customType === 'instant_range'
+				? instantPrecision(window)
+				: undefined;
 		const relation = relations.find(
 			(candidate) => candidate.from?.collection === name && candidate.from.column === fieldName
 		);
@@ -204,10 +242,7 @@ export const extractCollectionCatalog = (
 			// A `custom()` column is keyed by the type it declares, not by the word "custom": the renderer
 			// registry resolves by kind, and every custom column sharing one kind would mean every one
 			// of them rendering through whichever renderer happened to register last.
-			kind:
-				builder === 'custom'
-					? (window.match(/custom\(\s*'([^']+)'/)?.[1] ?? 'custom')
-					: (catalogKinds[builder] ?? 'text'),
+			kind: builder === 'custom' ? (customType ?? 'custom') : (catalogKinds[builder] ?? 'text'),
 			nullable: !window.includes('.notNull()'),
 			// Safe only because a field's window now ends at the next field: while the boundary ran
 			// past comments, this read `.generatedAlwaysAs(` from a later declaration and marked
@@ -218,6 +253,8 @@ export const extractCollectionCatalog = (
 			// Read from the declaration's own text, as every other flag here is.
 			...(window.includes('multiple: true') ? { array: true } : {}),
 			...(values === undefined ? {} : { values }),
+			...(currencies === undefined ? {} : { currencies }),
+			...(precision === undefined ? {} : { precision }),
 			...(relation === undefined
 				? {}
 				: {

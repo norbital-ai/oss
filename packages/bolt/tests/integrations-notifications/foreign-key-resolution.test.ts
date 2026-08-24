@@ -70,6 +70,7 @@ const columnOf = (row: Readonly<Record<string, unknown>>, column: string): strin
 
 const jobsModule = {
 	dispatch: {
+		policies: ['admin'],
 		connection: dispatch,
 		receive: {
 			job_updated: definePull({
@@ -118,6 +119,7 @@ const jobsModule = {
 /** The unchanged shape: a pure `(record) => Row`, no `resolve` anywhere near it. */
 const sitesModule = {
 	registry: {
+		policies: ['admin'],
 		connection: dispatch,
 		receive: {
 			sites_changed: definePull({
@@ -393,6 +395,7 @@ describe('a resolve nothing reads is refused where the workspace is compiled', (
 			describeIntegrations({
 				jobs: {
 					dispatch: {
+						policies: ['admin'],
 						connection: dispatch,
 						receive: {
 							job_updated: {

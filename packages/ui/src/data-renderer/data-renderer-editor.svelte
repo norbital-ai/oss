@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Effect, Schema } from 'effect';
+	import { Result, Schema } from 'effect';
 	import { humanize } from '@norbital-ai/std/string';
 	import { CodeEditor } from '#lib/code-editor';
 	import { Combobox } from '#lib/combobox';
@@ -18,11 +18,12 @@
 	import PhoneNumberRenderer from './phone_number/phone_number.renderer.svelte';
 	import TextRenderer from './text/text.renderer.svelte';
 	import TimeRenderer from './time/time.renderer.svelte';
-	import TimestamptzRenderer from './time_stamp/timestamp.renderer.svelte';
+	import InstantRenderer from './time_stamp/timestamp.renderer.svelte';
 	import TstzrangeRenderer from './time_stamp_range/timestamp_range.renderer.svelte';
 
 	const NUMERIC_KINDS = new Set(['numeric', 'number', 'integer']);
 	const SIMPLE_INPUT_KINDS = new Set(['text', 'string', 'uuid']);
+	const decodeStructuredJson = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Json));
 	const { t } = useI18n<UiKeys>();
 
 	let {
@@ -61,20 +62,14 @@
 			onValueChange?.(lastEmittedStructuredValue);
 			return;
 		}
-		Effect.runSync(
-			Effect.try(() => Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(next)).pipe(
-				Effect.match({
-					onFailure: () => {
-						structuredError = t('dataRenderer.invalidJson');
-					},
-					onSuccess: (parsed) => {
-						structuredError = '';
-						lastEmittedStructuredValue = parsed;
-						onValueChange?.(parsed);
-					}
-				})
-			)
-		);
+		const parsed = decodeStructuredJson(next);
+		if (Result.isFailure(parsed)) {
+			structuredError = t('dataRenderer.invalidJson');
+			return;
+		}
+		structuredError = '';
+		lastEmittedStructuredValue = parsed.success;
+		onValueChange?.(parsed.success);
 	}
 </script>
 
@@ -107,9 +102,9 @@
 		{onValueChange}
 		class={className}
 	/>
-{:else if field.kind === 'date' || field.kind === 'timestamp' || field.kind === 'timestamptz' || field.kind === 'datetime'}
-	<TimestamptzRenderer {field} {value} {disabled} {placeholder} {onValueChange} class={className} />
-{:else if field.kind === 'date-range' || field.kind === 'dateRange' || field.kind === 'tstzrange'}
+{:else if field.kind === 'instant'}
+	<InstantRenderer {field} {value} {disabled} {placeholder} {onValueChange} class={className} />
+{:else if field.kind === 'instant_range'}
 	<TstzrangeRenderer {field} {value} {disabled} {placeholder} {onValueChange} class={className} />
 {:else if field.kind === 'money'}
 	<MoneyRenderer {field} {value} {id} {disabled} {onValueChange} class={className} />
@@ -136,8 +131,6 @@
 		locale={localeEffective}
 		class={className}
 	/>
-{:else if field.kind === 'clock_time'}
-	<TimeRenderer {field} {value} {id} {disabled} {placeholder} {onValueChange} class={className} />
 {:else if field.kind === 'geolocation'}
 	<GeolocationRenderer
 		{field}

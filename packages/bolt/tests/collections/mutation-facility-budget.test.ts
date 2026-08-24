@@ -32,6 +32,7 @@ const authored = {
 	automations: {
 		on_note: {
 			name: 'on_note',
+			policies: ['automation-data'],
 			trigger: { _tag: 'Change' as const, collection: 'notes', event: 'created' as const },
 			handler: () => undefined
 		}

@@ -23,11 +23,21 @@ import { AUTH_MODELS, SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.j
  * tables are declared as Drizzle tables, the same way collections are.
  */
 
-/** The one capability this adapter needs from its host. */
-export type ExecuteQuery = (
-	sql: string,
-	parameters: ReadonlyArray<unknown>
-) => Effect.Effect<
+/**
+ * One statement emitted by Better Auth's Drizzle adapter.
+ *
+ * The SQL text is not an application authoring surface: `makeAuthStore` constructs this value only
+ * inside the proxy callback after Drizzle has rendered an adapter operation. Keeping it bundled
+ * makes that provenance explicit at the facility seam and prevents identity callers from growing a
+ * general `(sql, parameters)` helper beside the model-backed persistence composer.
+ */
+type AdapterStatement = Readonly<{
+	readonly sql: string;
+	readonly parameters: ReadonlyArray<unknown>;
+}>;
+
+/** The one generated-statement capability this adapter needs from its host. */
+export type ExecuteQuery = (statement: AdapterStatement) => Effect.Effect<
 	{
 		readonly rows: ReadonlyArray<Record<string, unknown>>;
 		readonly affectedRows: number;
@@ -53,7 +63,7 @@ const authSchema = Object.freeze(
 export const makeAuthStore = (execute: ExecuteQuery) => {
 	const database = drizzle((sql, parameters, method) =>
 		Effect.runPromise(
-			execute(sql, parameters).pipe(
+			execute({ sql, parameters }).pipe(
 				Effect.map((result) => ({
 					// `execute` asks for the driver's own result shape; `all` asks for rows to map. Only
 					// the latter is positional, and returning arrays for both is what makes `returning()`

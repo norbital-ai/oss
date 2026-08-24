@@ -116,11 +116,32 @@ export const ManifestIntegration = Schema.Struct({
 }).annotate({ identifier: 'BoltManifestIntegration' });
 export interface ManifestIntegration extends Schema.Schema.Type<typeof ManifestIntegration> {}
 
+/** One ordered DDL statement carried by an immutable Preview. */
+export const ManifestSchemaStep = Schema.Struct({
+	id: Schema.NonEmptyString,
+	sql: Schema.NonEmptyString
+}).annotate({ identifier: 'BoltManifestSchemaStep' });
+export interface ManifestSchemaStep extends Schema.Schema.Type<typeof ManifestSchemaStep> {}
+
+/**
+ * The exact schema plan compiled into an artifact.
+ *
+ * Studio reads this value from the candidate artifact rather than asking the currently routed
+ * runtime what its schema is. That distinction is what makes a pre-release DDL review meaningful:
+ * the old release cannot describe the database shape the candidate will apply.
+ */
+export const ManifestSchemaPlan = Schema.Struct({
+	fingerprint: Schema.NonEmptyString,
+	steps: Schema.Array(ManifestSchemaStep)
+}).annotate({ identifier: 'BoltManifestSchemaPlan' });
+export interface ManifestSchemaPlan extends Schema.Schema.Type<typeof ManifestSchemaPlan> {}
+
 export const BundleManifest = Schema.Struct({
 	protocolVersion: ProtocolVersion,
 	artifactId: Schema.NonEmptyString,
 	artifactVersion: Schema.NonEmptyString,
 	schemaFingerprint: Schema.NonEmptyString,
+	schemaPlan: ManifestSchemaPlan,
 	requiredFacilities: Schema.Array(FacilityName),
 	staticAssets: Schema.Array(StaticAsset),
 	/**

@@ -62,6 +62,56 @@ const recipient = 'conversation-migrations';
 
 /** One row as a facility hands it back: JSON, like everything else that crosses that boundary. */
 type Row = { readonly [column: string]: Schema.Json };
+type Statement = Readonly<{
+	readonly sql: string;
+	readonly parameters: ReadonlyArray<unknown>;
+}>;
+
+/** Matches Drizzle's intent without depending on quoting, aliases, or formatted whitespace. */
+const operationOn = (
+	statement: Pick<Statement, 'sql'>,
+	operation: 'select' | 'insert' | 'update',
+	table: string
+): boolean => {
+	const sql = statement.sql.replaceAll('"', '').replace(/\s+/g, ' ').trim().toLowerCase();
+	const marker =
+		operation === 'select'
+			? ` from ${table}`
+			: operation === 'insert'
+				? ` into ${table}`
+				: `update ${table}`;
+	return sql.startsWith(operation) && sql.includes(marker);
+};
+
+const jsonParameter = (value: unknown): unknown => {
+	if (typeof value !== 'string') return value;
+	try {
+		return JSON.parse(value);
+	} catch {
+		return value;
+	}
+};
+
+const authRows = (statement: Statement): ReadonlyArray<Row> | undefined => {
+	if (operationOn(statement, 'select', 'auth_config')) {
+		return [{ value: 'test-session-secret-that-is-long-enough-for-better-auth' }];
+	}
+	if (operationOn(statement, 'select', 'session')) {
+		return [
+			{
+				id: subject.userId,
+				tenantId: subject.tenantId,
+				email: null,
+				status: 'normal',
+				team_id: 'team-admin'
+			}
+		];
+	}
+	if (operationOn(statement, 'select', 'team')) {
+		return [{ id: 'team-admin', name: 'admin', parent_id: null, description: null }];
+	}
+	return undefined;
+};
 
 /**
  * The two conversations and one message log this exercise touches.
@@ -70,7 +120,7 @@ type Row = { readonly [column: string]: Schema.Json };
  * return: the ownership check, the sender's own title, and the transcript the receiving turn replays.
  */
 const store = (transcript: ReadonlyArray<Row>) => {
-	const writes: Array<ReadonlyArray<unknown>> = [];
+	const writes: Array<Statement> = [];
 	const titles: Readonly<Record<string, string>> = {
 		[sender]: 'Wrote bolt-owned auth module',
 		[recipient]: 'Migration and performance verification'
@@ -82,21 +132,51 @@ const store = (transcript: ReadonlyArray<Row>) => {
 					_tag: 'Success' as const,
 					value: { rows, affectedRows: rows.length }
 				});
-			if (request._tag !== 'Query') return answer([]);
-			const id = String(request.parameters[0] ?? '');
-			if (request.sql.includes('from "session" s')) return answer([subject]);
-			if (request.sql.includes('from chat_session')) {
-				const title = titles[id];
-				if (title === undefined) return answer([]);
-				return answer([{ id, user_id: subject.userId, agent_name: 'web', title }]);
+			const requested =
+				request._tag === 'Query'
+					? [{ sql: request.sql, parameters: request.parameters }]
+					: request.statements;
+			let rows: ReadonlyArray<Row> = [];
+			let inserted = 0;
+			for (const entry of requested) {
+				const statement = { sql: entry.sql, parameters: entry.parameters } satisfies Statement;
+				const authenticated = authRows(statement);
+				if (authenticated !== undefined) {
+					rows = authenticated;
+					continue;
+				}
+				const id = statement.parameters.find(
+					(parameter) => parameter === sender || parameter === recipient
+				);
+				if (operationOn(statement, 'select', 'chat_session')) {
+					const conversationId = typeof id === 'string' ? id : sender;
+					const title = titles[conversationId];
+					rows =
+						title === undefined
+							? []
+							: [
+									{
+										conversation_id: conversationId,
+										parent_id: null,
+										user_id: subject.userId,
+										sandbox_key: subject.userId,
+										agent_name: 'web',
+										title
+									}
+								];
+					continue;
+				}
+				if (operationOn(statement, 'select', 'chat_message')) {
+					rows = id === sender ? transcript : [];
+					continue;
+				}
+				if (operationOn(statement, 'insert', 'chat_message')) {
+					writes.push(statement);
+					inserted += 1;
+					rows = [{ id: `message-${inserted}` }];
+				}
 			}
-			if (request.sql.includes('from chat_message')) {
-				return answer(id === sender ? transcript : []);
-			}
-			if (request.sql.startsWith('insert into chat_message')) {
-				writes.push(request.parameters);
-			}
-			return answer([]);
+			return answer(rows);
 		}
 	};
 	return { database, writes };
@@ -149,11 +229,17 @@ describe('messages between sandbox agent sessions', () => {
 			new AbortController().signal
 		);
 		expect(result, JSON.stringify(result)).toMatchObject({ _tag: 'Success' });
-		const delivered = writes.find((parameters) => parameters[0] === recipient);
+		const delivered = writes.find(
+			(statement) =>
+				operationOn(statement, 'insert', 'chat_message') && statement.parameters.includes(recipient)
+		);
 		expect(delivered, 'the message never reached the recipient log').toBeDefined();
-		// Written as encoded JSON, like every other row in this log — the column is `jsonb`.
-		expect(() => JSON.parse(String(delivered?.[2]))).not.toThrow();
-		expect(parseAgentMessage(JSON.parse(String(delivered?.[2])))).toEqual({
+		// Locate the JSON payload by shape rather than coupling this assertion to a parameter index.
+		const storedMessage = delivered?.parameters
+			.map(jsonParameter)
+			.map(parseAgentMessage)
+			.find((message) => message !== null);
+		expect(storedMessage).toEqual({
 			kind: 'agent_message',
 			from: {
 				sessionId: sender,

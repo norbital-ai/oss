@@ -25,6 +25,19 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 	readonly #controllers = new Map<string, AbortController>();
 
 	/**
+	 * Mints the key an upload is stored under.
+	 *
+	 * Injected rather than read off the ambient `crypto`, so a test can pin the storage key and
+	 * assert what the file store was actually asked for. A caller that already holds an id still
+	 * wins: `beginUpload`'s `uploadId` is consulted first.
+	 */
+	readonly #newUploadId: () => string;
+
+	constructor(newUploadId: () => string = () => globalThis.crypto.randomUUID()) {
+		this.#newUploadId = newUploadId;
+	}
+
+	/**
 	 * Stores one file and reports it as the renderer's own result shape.
 	 *
 	 * The key is minted here and carries the file's own extension, because the host derives the media
@@ -58,7 +71,7 @@ export class WorkspaceUploadClient implements IFileUploadClient {
 		file: File,
 		options: BeginUploadOptions = {}
 	): { id: string; effect: Effect.Effect<UploadResult, unknown> } {
-		const id = options.uploadId ?? crypto.randomUUID();
+		const id = options.uploadId ?? this.#newUploadId();
 		const controller = new AbortController();
 		this.#controllers.set(id, controller);
 		const entry: UploadEntry = { id, file, stage: 'uploading', percent: 0 };

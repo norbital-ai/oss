@@ -5,6 +5,7 @@ export const manifest = {
 	artifactId: 'bolt-server-fixture',
 	artifactVersion: 'fixture-1',
 	schemaFingerprint: 'fixture-schema',
+	schemaPlan: { fingerprint: 'fixture-schema', steps: [] },
 	requiredFacilities: [],
 	staticAssets: [
 		{

@@ -35,7 +35,8 @@ const definition = workspace({
 			name: 'orders',
 			fields: {
 				reference: field.string({ required: true }),
-				status: field.string({ required: false })
+				status: field.string({ required: false }),
+				occurred_at: field.instant({ required: false })
 			}
 		}),
 		collection({
@@ -102,7 +103,8 @@ const authored = {
 						description: 'Stamps the status the workspace, not the caller, decides.',
 						handler: (context: unknown) => ({
 							...(context as { readonly input: Record<string, unknown> }).input,
-							status: 'accepted'
+							status: 'accepted',
+							occurred_at: new Date('2026-08-23T05:00:00.000Z')
 						})
 					}
 				}
@@ -201,6 +203,28 @@ describe('collections.mutate over the wire', () => {
 		// And a column only the database can fill: its default, applied at insert.
 		expect(record['row_version']).toBe(1);
 		expect(record['created_at']).toBeDefined();
+	});
+
+	it('encodes a Date stamped by an authored hook at every JSON write boundary', async () => {
+		harness = await open();
+
+		const response = await post(harness, 'collections.mutate', {
+			collection: 'orders',
+			values: { reference: 'ORD-DATE' }
+		});
+
+		const [record] = storedRecordsOf(response.value) ?? [];
+		expect(new Date(String(record?.['occurred_at'])).toISOString()).toBe(
+			'2026-08-23T05:00:00.000Z'
+		);
+		const [sync] = await harness.database.query(
+			"select record->>'occurred_at' as occurred_at from bolt_sync_outbox where collection_name = 'orders' order by created_at desc limit 1"
+		);
+		// PostgreSQL may render the same timestamptz with the session offset when the database trigger
+		// serialises NEW. The sync record must preserve the instant, not a particular ISO spelling.
+		expect(new Date(String(sync?.['occurred_at'])).toISOString()).toBe(
+			'2026-08-23T05:00:00.000Z'
+		);
 	});
 
 	it('writes a graph posted in one body as one parent and its children', async () => {

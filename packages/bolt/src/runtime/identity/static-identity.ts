@@ -38,9 +38,9 @@ export const automationPrincipalId = (automationName: string): string =>
  * - **Identity is the sender's, and only narrows.** `userId` becomes the matched account's, so a
  *   grant carrying `${requestor.id}` resolves to that person and returns *their* rows where
  *   the bare principal would match none. A narrowing, never a widening.
- * - **`admin` is dropped.** `AccessControl.decide` short-circuits on `subject.admin` before it
- *   consults a single policy, so carrying an administrator's flag across would make their phone a
- *   skeleton key — the one field that could defeat both rules above in a single hop.
+ * - **`admin` is dropped.** Administrative status selects narrow built-in controls that do not
+ *   belong to an envoy turn. Carrying it across would widen the declared envoy principal even
+ *   though tenant data still requires an explicit policy.
  *
  * Extracted rather than left inline in `receive` so it can be asserted on directly. An invariant
  * that can only be tested by running an agent turn is an invariant that gets tested once.

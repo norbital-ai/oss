@@ -2,7 +2,13 @@ import type { ModelDeclaration } from './models-schema.js';
 import type { SYSTEM_COLLECTION_MODELS } from './system-models.js';
 import type { RemoteQuery as ClientRemoteQuery } from '@norbital-ai/std/collection';
 export type { RemoteQuery } from '@norbital-ai/std/collection';
-export type { AutomationContext, AutomationTrigger } from './automations-schema.js';
+export type {
+	AutomationApi,
+	AutomationContext,
+	AutomationDefinition,
+	AutomationProgression,
+	AutomationTrigger
+} from './automations-schema.js';
 export {
 	describeHooks,
 	describeModel,
@@ -13,8 +19,11 @@ export {
 	approvalConfigurationId,
 	approvalStepId,
 	describeEnvoy,
-	describePolicy
+	describePolicy,
+	policyAuthorizationId,
+	policyRuntimeFunctionsFor
 } from './policy-introspection.js';
+export type { PolicyRuntimeFunction, PolicyRuntimeFunctions } from './policy-introspection.js';
 export { describeIntegrations, manifestIntegrations } from './integration-introspection.js';
 export { agentTools, describeMcpServer, describeSkill } from './workspace-schema.js';
 export type {

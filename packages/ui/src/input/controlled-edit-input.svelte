@@ -43,11 +43,14 @@
 	const toggleEditing = () => {
 		isEditing = !isEditing;
 		if (!isEditing) return;
-		void Effect.runPromise(
-			Effect.gen(function* () {
-				yield* Effect.promise(() => tick());
-				ref?.focus();
-			})
+		Effect.runFork(
+			Effect.promise(() => tick()).pipe(
+				Effect.map(() => ref?.focus()),
+				Effect.ignoreCause({
+					log: true,
+					message: '[ControlledEditInput] Failed to focus the editable input'
+				})
+			)
 		);
 	};
 </script>

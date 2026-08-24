@@ -1,66 +1,13 @@
 <script lang="ts">
-	import { Clock, Effect } from 'effect';
+	import { Effect, Schema } from 'effect';
+	import { onMount } from 'svelte';
 	import { FEATURE_COLOR_STYLES } from '@norbital-ai/ui/feature-colors';
 	import type { SystemClientApi } from '#lib/client/system-client.js';
-
-	const automationStyles = $derived(FEATURE_COLOR_STYLES.automations);
-	const remoteStyles = $derived(FEATURE_COLOR_STYLES.applications);
-	/**
-	 * What a manual run of each automation is doing, keyed by automation name.
-	 *
-	 * An automation otherwise only runs on its own schedule, which for the field-operations
-	 * reconciliation is `0 2 * * *` — so a workspace reset at any other hour shows unreconciled data
-	 * for the rest of the day with no way to ask for the work. The runtime already had the command;
-	 * what was missing was somebody able to press it.
-	 *
-	 * `automations.start` declares `subject` in its input schema, and the client deliberately does not
-	 * send one: the invocation boundary overwrites `subject` from the credential on every command
-	 * before any case reads it, which is what `MINTED_IDENTITY` is for. A run therefore happens as the
-	 * person who pressed the button and cannot be made to happen as anybody else.
-	 */
-	type AutomationRun = Readonly<{
-		readonly state: 'starting' | 'running' | 'failed';
-		readonly taskId?: string;
-		readonly detail?: string;
-		readonly at: number;
-	}>;
-	let runs = $state<Record<string, AutomationRun>>({});
-
-	const runAutomation = (name: string): Effect.Effect<void> => {
-		return Effect.gen(function* () {
-			const existing = visibleRun(name);
-			if (existing?.state === 'starting' || existing?.state === 'running') return;
-			runs = { ...runs, [name]: { state: 'starting', at: yield* Clock.currentTimeMillis } };
-			const started = yield* system.automations.start({ name, input: {} });
-			const taskId = started.taskId;
-			runs = {
-				...runs,
-				[name]: {
-					state: 'running',
-					at: yield* Clock.currentTimeMillis,
-					...(taskId ? { taskId } : {})
-				}
-			};
-			if (taskId === undefined) return;
-		}).pipe(
-			Effect.catch((cause) =>
-				Effect.gen(function* () {
-					runs = {
-						...runs,
-						[name]: {
-							state: 'failed',
-							at: yield* Clock.currentTimeMillis,
-							detail: cause instanceof Error ? cause.message : String(cause)
-						}
-					};
-				})
-			)
-		);
-	};
 	import Icon from '@iconify/svelte';
 	import EnvoysPanel from './envoys-panel.svelte';
 	import CollectionDetail from './collection-detail.svelte';
 	import EnvironmentPane from './environment-pane.svelte';
+	import { presentAutomationStatus, type AutomationRunStatus } from './automation-presentation.js';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Bound, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
@@ -74,6 +21,9 @@
 		StudioTool,
 		WorkspaceManifest
 	} from '#lib/client/ui/studio/studio-state.js';
+
+	const automationStyles = $derived(FEATURE_COLOR_STYLES.automations);
+	const remoteStyles = $derived(FEATURE_COLOR_STYLES.applications);
 
 	/**
 	 * The Manifest view's right-hand pane: one branch of the workspace, or one collection of it.
@@ -108,68 +58,105 @@
 		system: SystemClientApi;
 		onopenSource?: ((path: string) => void) | undefined;
 	} = $props();
+	let browserReady = $state(false);
+	let runFailures = $state<Record<string, string>>({});
+	const AutomationRunStatusValue = Schema.Literals([
+		'pending',
+		'paused',
+		'resuming',
+		'done',
+		'failed'
+	]);
+	const AutomationProgressValue = Schema.Struct({
+		progress: Schema.Number,
+		text: Schema.NullOr(Schema.String)
+	});
+	const automationRunStatus = (value: unknown): AutomationRunStatus | undefined =>
+		Schema.is(AutomationRunStatusValue)(value) ? value : undefined;
+	const automationProgress = (value: unknown) =>
+		Schema.is(AutomationProgressValue)(value) ? value : undefined;
+	const automationRunTime = (value: string | null): string =>
+		value === null ? 'Unknown time' : new Date(value).toLocaleString();
+	onMount(() => {
+		browserReady = true;
+	});
+
+	/**
+	 * The generated automation surface owns actions while ordinary live collection queries own state.
+	 * The manifest is dynamic, but both surfaces are name-keyed, so Studio needs no status endpoint,
+	 * timer, or second transport.
+	 */
+	const automationState = (name: string) => client?.automations[name];
+	const runAutomation = (name: string): Effect.Effect<void> => {
+		const automation = automationState(name);
+		if (automation === undefined) {
+			return Effect.sync(() => {
+				runFailures = { ...runFailures, [name]: 'The workspace automation client is unavailable.' };
+			});
+		}
+		return Effect.tryPromise({
+			try: () => automation.run({}),
+			catch: (cause) => cause
+		}).pipe(
+			Effect.match({
+				onFailure: (cause) => {
+					runFailures = {
+						...runFailures,
+						[name]: cause instanceof Error ? cause.message : String(cause)
+					};
+				},
+				onSuccess: () => {
+					const next = { ...runFailures };
+					delete next[name];
+					runFailures = next;
+				}
+			})
+		);
+	};
 
 	const historyQueries = $derived(
-		typeof window !== 'undefined'
+		browserReady && client !== undefined
 			? (manifest?.automations ?? []).map((automation) => ({
 					name: automation.name,
-					query: system.automations.history({ name: automation.name, limit: 10 })
+					query: client.db.automation_run.findMany({
+						where: { name: { eq: automation.name } },
+						orderBy: { created_at: 'desc' },
+						limit: 10
+					})
 				}))
 			: []
 	);
 	const historyQuery = (automation: string) =>
 		historyQueries.find(({ name }) => name === automation)?.query;
-	const statusQueries = $derived(
-		Object.entries(runs).flatMap(([name, run]) =>
-			run.state === 'running' && run.taskId !== undefined
-				? [{ name, taskId: run.taskId, query: system.automations.status({ taskId: run.taskId }) }]
-				: []
-		)
-	);
-	const statusQuery = (automation: string) =>
-		statusQueries.find(({ name }) => name === automation)?.query;
-	const visibleRun = (automation: string) => {
-		const run = runs[automation];
-		if (run === undefined) return undefined;
-		const query = statusQuery(automation);
-		if (query?.error !== undefined)
-			return {
-				...run,
-				state: 'failed' as const,
-				detail: query.error instanceof Error ? query.error.message : String(query.error)
-			};
-		const status = query?.current;
-		if (status?.status === 'done' || status?.status === 'failed')
-			return {
-				...run,
-				state: status.status,
-				...(status.error === undefined ? {} : { detail: status.error })
-			};
-		return run;
-	};
-
-	$effect(() => {
-		const active = statusQueries.filter(({ query }) => {
-			const state = query.current?.status;
-			return state !== 'done' && state !== 'failed';
-		});
-		if (active.length === 0) return;
-		const timer = setInterval(() => {
-			for (const { query } of active) void query.refresh();
-		}, 1_000);
-		return () => clearInterval(timer);
-	});
-
-	const refreshedHistory = new Set<string>();
-	$effect(() => {
-		for (const { name, taskId, query } of statusQueries) {
-			const status = query.current?.status;
-			const key = `${name}:${taskId}`;
-			if ((status !== 'done' && status !== 'failed') || refreshedHistory.has(key)) continue;
-			refreshedHistory.add(key);
-			void historyQuery(name)?.refresh();
+	const automationLifecycle = (
+		name: string,
+		action: 'stop' | 'resume',
+		taskId: string
+	): Effect.Effect<void> => {
+		const automation = automationState(name);
+		if (automation === undefined) {
+			return Effect.sync(() => {
+				runFailures = { ...runFailures, [name]: 'The workspace automation client is unavailable.' };
+			});
 		}
-	});
+		return Effect.tryPromise(() =>
+			action === 'stop' ? automation.stop(taskId) : automation.resume(taskId).then(() => undefined)
+		).pipe(
+			Effect.match({
+				onFailure: (cause) => {
+					runFailures = {
+						...runFailures,
+						[name]: cause instanceof Error ? cause.message : String(cause)
+					};
+				},
+				onSuccess: () => {
+					const next = { ...runFailures };
+					delete next[name];
+					runFailures = next;
+				}
+			})
+		);
+	};
 
 	const kind = $derived(selected.split(':')[0] ?? 'collections');
 	const name = $derived(selected.slice(kind.length + 1));
@@ -220,11 +207,13 @@
 {#snippet sourceLink(path: string)}
 	<button
 		type="button"
-		class="flex items-center gap-1 text-micro text-brand hover:underline"
+		class="text-micro text-brand hover:underline"
 		onclick={() => onopenSource?.(path)}
 	>
-		<Icon icon="lucide:arrow-right-circle" class="size-3" />
-		View source
+		<Inline as="span" gap="xs">
+			<Icon icon="lucide:arrow-right-circle" class="size-3" />
+			View source
+		</Inline>
 	</button>
 {/snippet}
 
@@ -368,7 +357,10 @@
 				<Stack gap="sm">
 					{#each workspace.automations as automation (automation.name)}
 						{@const path = `src/automation/+${automation.name}.ts`}
-						{@const run = visibleRun(automation.name)}
+						{@const execution = automationState(automation.name)}
+						{@const run = execution?.latest}
+						{@const latest = run?.current}
+						{@const latestStatus = presentAutomationStatus(latest?.status)}
 						{@const automationHistory = historyQuery(automation.name)}
 						<Stack gap="sm" class="rounded-lg border border-border/60 bg-card p-4 shadow-card">
 							<Inline align="start" justify="between" gap="sm">
@@ -399,10 +391,14 @@
 									<Button
 										size="sm"
 										variant="outline"
-										disabled={run?.state === 'starting' || run?.state === 'running'}
+										disabled={(execution?.pending ?? 0) > 0 || execution === undefined}
 										onclick={() => void Effect.runPromise(runAutomation(automation.name))}
 									>
-										{run?.state === 'starting' || run?.state === 'running' ? 'Running…' : 'Run now'}
+										{(execution?.pending ?? 0) > 0
+											? 'Running…'
+											: latest?.status === 'failed'
+												? 'Retry'
+												: 'Run now'}
 									</Button>
 									{#if files.includes(path)}
 										{@render sourceLink(path)}
@@ -410,6 +406,72 @@
 								</Inline>
 							</Inline>
 							<p class="font-mono text-micro text-muted-foreground">{path}</p>
+							{#if runFailures[automation.name] !== undefined}
+								<p class="text-micro text-destructive" role="alert">
+									Automation action failed: {runFailures[automation.name]}
+								</p>
+							{:else if run !== undefined}
+								<Inline
+									gap="sm"
+									align="center"
+									class="rounded-md bg-muted/45 px-2 py-1.5"
+									aria-live="polite"
+								>
+									<span class="text-micro font-semibold text-foreground">Latest manual run</span>
+									<span
+										class={cn(
+											'rounded-full px-1.5 py-0.5 text-micro font-semibold',
+											latestStatus.status === 'failed'
+												? 'bg-destructive/10 text-destructive'
+												: latestStatus.status === 'done'
+													? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+													: latestStatus.status === 'paused'
+														? 'bg-muted text-muted-foreground'
+														: 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+										)}>{latestStatus.label}</span
+									>
+									{#if latest?.progress !== null && latest?.progress !== undefined}
+										<span class="text-micro tabular-nums text-muted-foreground">
+											{Math.round(latest.progress.progress * 100)}%{latest.progress.text === null
+												? ''
+												: ` · ${latest.progress.text}`}
+										</span>
+									{/if}
+									{#if latest?.error !== null && latest?.error !== undefined}
+										<span class="min-w-0 truncate text-micro text-destructive">{latest.error}</span>
+									{/if}
+									{#if run.error !== undefined}
+										<span class="min-w-0 truncate text-micro text-destructive" role="alert">
+											Status unavailable · {run.error.message}
+										</span>
+									{/if}
+									{#if latestStatus.canStop}
+										<Button
+											size="sm"
+											variant="ghost"
+											aria-label={`Stop latest ${automation.name} run`}
+											onclick={() =>
+												void Effect.runPromise(
+													automationLifecycle(automation.name, 'stop', run.id)
+												)}
+										>
+											Stop
+										</Button>
+									{:else if latestStatus.canResume}
+										<Button
+											size="sm"
+											variant="ghost"
+											aria-label={`Resume latest ${automation.name} run`}
+											onclick={() =>
+												void Effect.runPromise(
+													automationLifecycle(automation.name, 'resume', run.id)
+												)}
+										>
+											Resume
+										</Button>
+									{/if}
+								</Inline>
+							{/if}
 							{#if automationHistory?.error !== undefined}
 								<p class="text-micro text-destructive">
 									Run history unavailable: {automationHistory.error instanceof Error
@@ -417,7 +479,7 @@
 										: String(automationHistory.error)}
 								</p>
 							{:else if automationHistory?.current !== undefined}
-								{@const rows = automationHistory.current.runs ?? []}
+								{@const rows = automationHistory.current}
 								{#if rows.length === 0}
 									<p class="text-micro text-muted-foreground">
 										No runs recorded. This automation has not run on its schedule or by hand.
@@ -425,61 +487,71 @@
 								{:else}
 									<Stack gap="xs" class="border-t border-border/60 pt-2">
 										<p class="text-micro font-semibold text-muted-foreground">Recent runs</p>
-										{#each rows as row (row.effect_id ?? row.created_at)}
+										{#each rows as row (row.task_id)}
+											{@const rowStatus = presentAutomationStatus(automationRunStatus(row.status))}
+											{@const progress = automationProgress(row.progress)}
 											<Inline gap="sm" align="center" class="min-w-0">
 												<span
 													class={cn(
 														'shrink-0 rounded-full px-1.5 py-0.5 text-micro font-semibold',
-														row.status === 'failed'
+														rowStatus.status === 'failed'
 															? 'bg-destructive/10 text-destructive'
-															: row.status === 'done'
+															: rowStatus.status === 'done'
 																? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
-																: 'bg-muted text-muted-foreground'
-													)}>{row.status ?? 'pending'}</span
+																: rowStatus.status === 'paused'
+																	? 'bg-muted text-muted-foreground'
+																	: 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+													)}>{rowStatus.label}</span
 												>
 												<span class="shrink-0 text-micro text-muted-foreground">
-													{row.created_at
-														? new Date(row.created_at).toLocaleString()
-														: 'unknown time'}
+													{automationRunTime(row.created_at)}
 												</span>
 												{#if (row.attempts ?? 0) > 1}
 													<span class="shrink-0 text-micro text-muted-foreground"
 														>· {row.attempts} attempts</span
 													>
 												{/if}
+												{#if progress !== undefined}
+													<span class="min-w-0 truncate text-micro text-muted-foreground">
+														· {Math.round(progress.progress * 100)}%{progress.text === null
+															? ''
+															: ` · ${progress.text}`}
+													</span>
+												{/if}
 												{#if row.error}
 													<span class="min-w-0 truncate text-micro text-destructive"
 														>· {row.error}</span
 													>
 												{/if}
+												{#if rowStatus.canStop}
+													<Button
+														size="sm"
+														variant="ghost"
+														aria-label={`Stop ${automation.name} run from ${automationRunTime(row.created_at)}`}
+														onclick={() =>
+															void Effect.runPromise(
+																automationLifecycle(automation.name, 'stop', row.task_id)
+															)}
+													>
+														Stop
+													</Button>
+												{:else if rowStatus.canResume}
+													<Button
+														size="sm"
+														variant="ghost"
+														aria-label={`Resume ${automation.name} run from ${automationRunTime(row.created_at)}`}
+														onclick={() =>
+															void Effect.runPromise(
+																automationLifecycle(automation.name, 'resume', row.task_id)
+															)}
+													>
+														Resume
+													</Button>
+												{/if}
 											</Inline>
 										{/each}
 									</Stack>
 								{/if}
-							{/if}
-							{#if run}
-								<!--
-									The last run this session started, and what came of it.
-
-									Deliberately says nothing about runs it did not start: the runtime reports a task
-									by id and there is no history endpoint to read, so a panel claiming to be a log
-									would be asserting a completeness it cannot have. "Nothing shown" here means
-									"nothing pressed here", not "nothing has run".
-								-->
-								<p
-									class={cn(
-										'text-micro',
-										run.state === 'failed' ? 'text-destructive' : 'text-muted-foreground'
-									)}
-								>
-									{run.state === 'starting'
-										? 'Starting…'
-										: run.state === 'running'
-											? `Running${run.taskId ? ` · task ${run.taskId.slice(0, 8)}` : ''}`
-											: run.state === 'done'
-												? `Finished at ${new Date(run.at).toLocaleTimeString()}`
-												: `Failed: ${run.detail ?? 'the host reported no reason'}`}
-								</p>
 							{/if}
 						</Stack>
 					{/each}

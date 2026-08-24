@@ -11,7 +11,8 @@ import type { TablesForModels } from '../../src/authoring/internals.js';
 declare module '../../src/authoring/index.js' {
 	interface WorkspaceAuthoringTypes {
 		readonly customTypeValues: {
-			readonly money: { readonly value: number; readonly currency: string };
+			readonly leave_event: unknown;
+			readonly pay_component_policy: unknown;
 		};
 	}
 }
@@ -72,6 +73,23 @@ type PricedRow = TablesForModels<{ readonly priced: typeof priced }>['priced']['
 exact<Exact<PricedRow['amount'], { readonly value: number; readonly currency: string } | null>>(
 	true
 );
+
+const scheduled = defineModel({ ranges: custom('instant_range', { multiple: true }) });
+type ScheduledRow = TablesForModels<{
+	readonly scheduled: typeof scheduled;
+}>['scheduled']['$inferSelect'];
+exact<
+	Exact<
+		ScheduledRow['ranges'],
+		ReadonlyArray<{ readonly start: string; readonly end: string | null }> | null
+	>
+>(true);
+
+const undeclaredCustomTypeDoesNotCompile = (): void => {
+	// @ts-expect-error — the generated platform + tenant datatype union is closed.
+	custom('undeclared_type');
+};
+void undeclaredCustomTypeDoesNotCompile;
 
 describe('custom type renderer value types', () => {
 	// The type assertions above are the subject; this keeps them inside a suite that runs, so a file

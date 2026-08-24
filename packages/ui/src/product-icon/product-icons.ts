@@ -24,7 +24,6 @@ export const PRODUCT_ICON_NAMES = [
 	...PRODUCT_SUBMODULE_ICON_NAMES,
 	'collections',
 	'studio',
-	'checkpoints',
 	'environment',
 	'organization',
 	'documentation',

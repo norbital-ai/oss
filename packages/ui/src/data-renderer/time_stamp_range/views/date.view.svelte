@@ -1,4 +1,4 @@
-<!-- fallow-ignore-file complexity -- the scalar/multiple temporal editor intentionally owns one cohesive calendar workflow -->
+<!-- the scalar/multiple temporal editor intentionally owns one cohesive calendar workflow -->
 <script lang="ts" generics="TMulti extends boolean">
 	// ==================================================================================
 	// IMPORTS
@@ -222,19 +222,23 @@
 		});
 	}
 
-	function handleTimeChange(updates: {
-		isStart?: boolean;
-		isEnd?: boolean;
-		time?: Time;
-		range?: TimeRange<Time>;
-	}) {
+	/**
+	 * What a time control changed. The three cases are exclusive, so they are stated as one
+	 * union rather than as flags that would have to be kept from disagreeing.
+	 */
+	type TimeEdit =
+		| { readonly kind: 'start'; readonly time: Time | undefined }
+		| { readonly kind: 'end'; readonly time: Time | undefined }
+		| { readonly kind: 'range'; readonly range: TimeRange<Time> | undefined };
+
+	function handleTimeChange(edit: TimeEdit) {
 		let { start: newStartTime, end: newEndTime } = activeTimes;
 
-		if (updates.isStart && updates.time) newStartTime = updates.time;
-		if (updates.isEnd && updates.time) newEndTime = updates.time;
-		if (updates.range) {
-			newStartTime = updates.range.start ?? newStartTime;
-			newEndTime = updates.range.end ?? newEndTime;
+		if (edit.kind === 'start' && edit.time) newStartTime = edit.time;
+		if (edit.kind === 'end' && edit.time) newEndTime = edit.time;
+		if (edit.kind === 'range' && edit.range) {
+			newStartTime = edit.range.start ?? newStartTime;
+			newEndTime = edit.range.end ?? newEndTime;
 		}
 
 		updateRange({
@@ -346,7 +350,7 @@
 {/snippet}
 
 {#snippet TriggerContent()}
-	<Icon icon="lucide:calendar" class="mr-2 size-4 shrink-0" />
+	<Icon icon="lucide:calendar" class="size-4 shrink-0" />
 	{#if !hasSelection}
 		<span class="truncate text-xs font-normal text-muted-foreground">
 			{#if typeof emptyPlaceholder === 'string'}
@@ -379,7 +383,7 @@
 
 {#snippet RangeListSidebar()}
 	{#if multi}
-		<Stack gap="md" class="min-w-[280px] border-l border-border bg-muted p-4">
+		<Stack gap="md" class="border-l border-border bg-muted p-4">
 			<Inline justify="between" gap="sm">
 				<h4 class="text-sm font-semibold text-foreground">
 					{t('dataRenderer.selectedRangesHeading', { count: ranges.length })}
@@ -394,7 +398,7 @@
 					</button>
 				{/if}
 			</Inline>
-			<Scroll axis="y" name={t('dataRenderer.selectedRangesScroll')} class="max-h-[300px]">
+			<Scroll axis="y" name={t('dataRenderer.selectedRangesScroll')}>
 				<Stack gap="sm">
 					{#each ranges as range, index (index)}
 						{@render RangeBadge(range, index, index === activeRangeIndex)}
@@ -411,10 +415,12 @@
 				type="button"
 				onclick={addNewRange}
 				disabled={cantMutate}
-				class="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:border-brand-300 hover:text-brand disabled:cursor-not-allowed disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
+				class="w-full rounded-lg border-2 border-dashed border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:border-brand-300 hover:text-brand disabled:cursor-not-allowed disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
 			>
-				<Icon icon="lucide:plus" class="h-4 w-4" />
-				{t('dataRenderer.addRange')}
+				<Inline gap="sm" justify="center">
+					<Icon icon="lucide:plus" class="h-4 w-4" />
+					{t('dataRenderer.addRange')}
+				</Inline>
 			</button>
 		</Stack>
 	{/if}
@@ -424,7 +430,7 @@
 	<div class={cn('group relative w-full', className)} {style}>
 		<Popover.Trigger
 			class={cn(
-				buttonVariants({ variant: 'outline', class: 'w-full justify-start' }),
+				buttonVariants({ variant: 'outline', class: 'w-full justify-start gap-2' }),
 				readonly && 'shadow-none',
 				borderless && 'border-none shadow-none'
 			)}
@@ -474,9 +480,9 @@
 							granularity={timeGranularity}
 							{hourCycle}
 							disabled={cantMutate}
-							onStartChange={(time) => handleTimeChange({ isStart: true, time })}
-							onEndChange={(time) => handleTimeChange({ isEnd: true, time })}
-							onRangeChange={(range) => handleTimeChange({ range })}
+							onStartChange={(time) => handleTimeChange({ kind: 'start', time })}
+							onEndChange={(time) => handleTimeChange({ kind: 'end', time })}
+							onRangeChange={(range) => handleTimeChange({ kind: 'range', range })}
 						/>
 					{/if}
 				{/if}

@@ -102,13 +102,10 @@ describe('a declarative collection mutation from the browser', () => {
 		cache.write('customers', [], ['customers']);
 
 		const queries = createLiveQueryRegistry();
-		let refreshRoot = 0;
+		let reexecuteRoot = 0;
 		const rootQuery = {
 			collections: ['orders'],
-			refresh: () => {
-				refreshRoot += 1;
-				return Promise.resolve();
-			}
+			reexecute: () => Effect.sync(() => (reexecuteRoot += 1))
 		};
 		queries.register(rootQuery);
 
@@ -119,7 +116,7 @@ describe('a declarative collection mutation from the browser', () => {
 		const orders = Reflect.get(proxy.db, 'orders') as CollectionWriter;
 
 		await orders.mutate({ reference: 'ORD-1' });
-		await vi.waitFor(() => expect(refreshRoot).toBe(1));
+		await vi.waitFor(() => expect(reexecuteRoot).toBe(1));
 
 		expect(await Effect.runPromise(cache.read('orders'))).toBeUndefined();
 		expect(await Effect.runPromise(cache.read('customers'))).toEqual([]);
@@ -168,29 +165,20 @@ describe('a declarative collection mutation from the browser', () => {
 		};
 
 		const queries = createLiveQueryRegistry();
-		let refreshLines = 0;
-		let refreshComponents = 0;
-		let refreshNotes = 0;
+		let reexecuteLines = 0;
+		let reexecuteComponents = 0;
+		let reexecuteNotes = 0;
 		const lineQuery = {
 			collections: ['order_lines'],
-			refresh: () => {
-				refreshLines += 1;
-				return Promise.resolve();
-			}
+			reexecute: () => Effect.sync(() => (reexecuteLines += 1))
 		};
 		const componentQuery = {
 			collections: ['components'],
-			refresh: () => {
-				refreshComponents += 1;
-				return Promise.resolve();
-			}
+			reexecute: () => Effect.sync(() => (reexecuteComponents += 1))
 		};
 		const noteQuery = {
 			collections: ['line_notes'],
-			refresh: () => {
-				refreshNotes += 1;
-				return Promise.resolve();
-			}
+			reexecute: () => Effect.sync(() => (reexecuteNotes += 1))
 		};
 		queries.register(lineQuery);
 		queries.register(componentQuery);
@@ -204,14 +192,14 @@ describe('a declarative collection mutation from the browser', () => {
 
 		await orders.mutate({ id: storedOrder.id, order_line_order: [] });
 		await vi.waitFor(() => {
-			expect(refreshLines).toBe(1);
-			expect(refreshComponents).toBe(1);
+			expect(reexecuteLines).toBe(1);
+			expect(reexecuteComponents).toBe(1);
 		});
 
 		expect(await Effect.runPromise(cache.read('order-lines'))).toBeUndefined();
 		expect(await Effect.runPromise(cache.read('components'))).toBeUndefined();
 		expect(await Effect.runPromise(cache.read('line-notes'))).toEqual([]);
-		expect(refreshNotes).toBe(0);
+		expect(reexecuteNotes).toBe(0);
 		expect(orders.pending).toBe(0);
 	});
 
@@ -249,29 +237,20 @@ describe('a declarative collection mutation from the browser', () => {
 		cache.write('customers', [], ['customers']);
 
 		const queries = createLiveQueryRegistry();
-		let refreshRoot = 0;
-		let refreshApproval = 0;
-		let refreshUnrelated = 0;
+		let reexecuteRoot = 0;
+		let reexecuteApproval = 0;
+		let reexecuteUnrelated = 0;
 		const rootQuery = {
 			collections: ['orders'],
-			refresh: () => {
-				refreshRoot += 1;
-				return Promise.resolve();
-			}
+			reexecute: () => Effect.sync(() => (reexecuteRoot += 1))
 		};
 		const approvalQuery = {
 			collections: [ANY_COLLECTION],
-			refresh: () => {
-				refreshApproval += 1;
-				return Promise.resolve();
-			}
+			reexecute: () => Effect.sync(() => (reexecuteApproval += 1))
 		};
 		const unrelatedQuery = {
 			collections: ['customers'],
-			refresh: () => {
-				refreshUnrelated += 1;
-				return Promise.resolve();
-			}
+			reexecute: () => Effect.sync(() => (reexecuteUnrelated += 1))
 		};
 		queries.register(rootQuery);
 		queries.register(approvalQuery);
@@ -287,14 +266,14 @@ describe('a declarative collection mutation from the browser', () => {
 			CollectionMutationPendingApproval
 		);
 		await vi.waitFor(() => {
-			expect(refreshRoot).toBe(1);
-			expect(refreshApproval).toBe(1);
+			expect(reexecuteRoot).toBe(1);
+			expect(reexecuteApproval).toBe(1);
 		});
 
 		expect(await Effect.runPromise(cache.read('orders'))).toBeUndefined();
 		expect(await Effect.runPromise(cache.read('approval-status'))).toBeUndefined();
 		expect(await Effect.runPromise(cache.read('customers'))).toEqual([]);
-		expect(refreshUnrelated).toBe(0);
+		expect(reexecuteUnrelated).toBe(0);
 		expect(orders.pending).toBe(0);
 	});
 
@@ -349,13 +328,10 @@ describe('a declarative collection mutation from the browser', () => {
 		cache.write('customers', [], ['customers']);
 
 		const queries = createLiveQueryRegistry();
-		let refreshRoot = 0;
+		let reexecuteRoot = 0;
 		const rootQuery = {
 			collections: ['orders'],
-			refresh: () => {
-				refreshRoot += 1;
-				return Promise.resolve();
-			}
+			reexecute: () => Effect.sync(() => (reexecuteRoot += 1))
 		};
 		queries.register(rootQuery);
 
@@ -366,7 +342,7 @@ describe('a declarative collection mutation from the browser', () => {
 		const orders = Reflect.get(proxy.db, 'orders') as CollectionWriter;
 
 		await expect(orders.mutate({ id: storedOrder.id, reference: 'ORD-2' })).rejects.toBeDefined();
-		await vi.waitFor(() => expect(refreshRoot).toBe(1));
+		await vi.waitFor(() => expect(reexecuteRoot).toBe(1));
 
 		expect(await Effect.runPromise(cache.read('orders'))).toBeUndefined();
 		expect(await Effect.runPromise(cache.read('customers'))).toEqual([]);

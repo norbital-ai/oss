@@ -29,13 +29,9 @@ import {
 } from '../support/bolt-test-layer.js';
 
 /**
- * A release names the teams its approvals route to, and activation makes them exist.
- *
- * `step.approvers` and `team.name` are the same string, bound by nothing but that. Before this,
- * a release could declare `approvers: ['Payroll Approvers']` against a workspace with no such row
- * and nothing would say so: the deploy succeeded, the surface listed the teams that happened to
- * exist, and the fault surfaced later as an approval request that no subject in the workspace was
- * eligible to decide — a record stuck ONGOING with no error anywhere naming the cause.
+ * A release can statically name teams allowed to supersede approvals, and activation makes those
+ * operational bindings visible. Concrete flow approvers come from live TypeScript and are checked
+ * against `TeamName`; only `superceded_by` survives into the manifest for this reconciliation pass.
  *
  * The case that matters is the first one below and it is driven through the real `bundle.activate`,
  * not through the reconciler alone: a test that called the function directly would prove the SQL and
@@ -58,22 +54,9 @@ const definition = workspace({
 					collection: 'payroll_runs',
 					action: 'update',
 					approval: {
-						id: 'payroll-run-approval',
-						name: 'Payroll run approval',
-						steps: [
-							{
-								id: 'sign-off',
-								name: 'Sign off',
-								// Declared in `+teams.ts` as holding nothing, which is what a review-only team
-								// is: `approvers` is a generated union of that file's keys, so a name it does
-								// not declare is a compile error rather than an approval nobody can decide.
-								//
-								// **No `team` row is seeded for either of them anywhere in this file.**
-								// Declaring a team is a statement in the release; the row is runtime, and the
-								// assertions below are what has to bring it into existence.
-								approvers: ['Payroll Approvers', 'Senior Management']
-							}
-						]
+						id: 'Payroll Officer:payroll_runs:update',
+						flow: true,
+						superceded_by: ['Payroll Approvers', 'Senior Management']
 					}
 				}
 			]
@@ -168,8 +151,8 @@ const activate = (database: Awaited<ReturnType<typeof makeTestDatabase>>) =>
 		new AbortController().signal
 	);
 
-describe('activation reconciles the teams a release names as approvers', () => {
-	it('creates a row for an approvers name that has none', async () => {
+describe('activation reconciles configured approval superseders', () => {
+	it('creates a row for a superceded_by name that has none', async () => {
 		const database = await provisionedDatabase();
 		try {
 			// Nothing exists before. Stated rather than assumed: if the harness seeded these rows, the
@@ -246,7 +229,7 @@ describe('activation reconciles the teams a release names as approvers', () => {
 });
 
 describe('the names a release declares', () => {
-	it('reads every approvers entry, folds duplicates, and keeps the authored spelling', () => {
+	it('reads every superceded_by entry, folds duplicates, and keeps the authored spelling', () => {
 		const twice = workspace({
 			...definition,
 			policies: [
@@ -258,14 +241,9 @@ describe('the names a release declares', () => {
 							collection: 'payroll_runs',
 							action: 'update',
 							approval: {
-								id: 'a',
-								name: 'A',
-								steps: [
-									{ id: 's1', name: 'S1', approvers: ['Payroll Approvers'] },
-									// The same team, typed differently, in a second step. One row is wanted, and
-									// the spelling that reaches the operator should be the first authored one.
-									{ id: 's2', name: 'S2', approvers: ['payroll approvers', 'Finance'] }
-								]
+								id: 'One:payroll_runs:update',
+								flow: true,
+								superceded_by: ['Payroll Approvers', 'payroll approvers', 'Finance']
 							}
 						}
 					]

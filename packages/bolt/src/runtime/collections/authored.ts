@@ -1,8 +1,10 @@
 import { Context, Duration, Effect, Option, Result, Schema, SchemaIssue } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
+import type { AutomationProgression } from '#lib/authoring/automations-schema.js';
 import type { FileRef } from '#lib/authoring/models-schema.js';
 import type { AuthoredIntegrationModule } from '#lib/authoring/integration-introspection.js';
+import type { PolicyRuntimeFunction } from '#lib/authoring/policy-introspection.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
 import type * as Collections from '#lib/runtime/collections/collections.js';
@@ -62,14 +64,19 @@ type AuthoredPipelineModule = Readonly<{
 
 type AuthoredAutomationModule = Readonly<{
 	readonly name: string;
+	/** The automation's immutable authority, compiled from its own declaration. */
+	readonly policies: ReadonlyArray<string>;
 	readonly trigger: Readonly<
 		| { readonly _tag: 'Schedule'; readonly cron: string }
+		| { readonly _tag: 'Manual' }
 		| {
 				readonly _tag: 'Change';
 				readonly collection: string;
 				readonly event: 'created' | 'updated' | 'deleted';
 		  }
 	>;
+	readonly input?: Schema.Codec<unknown, unknown>;
+	readonly output?: Schema.Codec<unknown, unknown>;
 	readonly handler: (api: unknown, context: unknown) => unknown;
 }>;
 
@@ -78,6 +85,10 @@ export type AuthoredRuntime = Readonly<{
 	readonly hooks: Readonly<Record<string, AuthoredCollectionHookModule>>;
 	readonly pipelines: Readonly<Record<string, AuthoredPipelineModule>>;
 	readonly automations: Readonly<Record<string, AuthoredAutomationModule>>;
+	/** Server-only write decisions. Their serializable policy grant carries only a derived marker. */
+	readonly policyAuthorizations: Readonly<Record<string, PolicyRuntimeFunction>>;
+	/** Server-only approval routers. Each call must return one branded concrete ApprovalFlow. */
+	readonly approvalFlows: Readonly<Record<string, PolicyRuntimeFunction>>;
 	/**
 	 * The live half of every `+integrations.ts`, keyed by `<collection>.<integration>`.
 	 *
@@ -92,6 +103,8 @@ export const emptyAuthoredRuntime: AuthoredRuntime = {
 	hooks: {},
 	pipelines: {},
 	automations: {},
+	policyAuthorizations: {},
+	approvalFlows: {},
 	integrations: {}
 };
 
@@ -249,6 +262,48 @@ export type AuthoredCollectionOps = Readonly<{
 	>;
 }>;
 
+/** A preflight the runtime may place in front of an authored operation. */
+type AuthoredOperationGuard = (operation: string) => Effect.Effect<void, unknown, never>;
+
+/**
+ * Places one guard immediately before every operation reachable through the authored API.
+ *
+ * Kept separate from `makeBoundAuthoringOps` deliberately: hooks, integrations, and remotes share
+ * those bindings but do not belong to a cancellable automation task. Only automation dispatch wraps
+ * its bound operations with this function.
+ */
+export const guardAuthoredCollectionOps = (
+	ops: AuthoredCollectionOps,
+	guard: AuthoredOperationGuard
+): AuthoredCollectionOps => ({
+	findMany: (collection, input) =>
+		guard(`db.${collection}.findMany`).pipe(Effect.andThen(ops.findMany(collection, input))),
+	findFirst: (collection, input) =>
+		guard(`db.${collection}.findFirst`).pipe(Effect.andThen(ops.findFirst(collection, input))),
+	count: (collection, input) =>
+		guard(`db.${collection}.count`).pipe(Effect.andThen(ops.count(collection, input))),
+	findNearest: (collection, input) =>
+		guard(`db.${collection}.findNearest`).pipe(Effect.andThen(ops.findNearest(collection, input))),
+	create: (collection, id, values) =>
+		guard(`db.${collection}.create`).pipe(Effect.andThen(ops.create(collection, id, values))),
+	update: (collection, id, values) =>
+		guard(`db.${collection}.update`).pipe(Effect.andThen(ops.update(collection, id, values))),
+	delete: (collection, id) =>
+		guard(`db.${collection}.delete`).pipe(Effect.andThen(ops.delete(collection, id))),
+	mutate: (collection, payloads, options) =>
+		guard(`db.${collection}.mutate`).pipe(
+			Effect.andThen(ops.mutate(collection, payloads, options))
+		),
+	runAutomation: (name, input, options) =>
+		guard(`automations.${name}.run`).pipe(Effect.andThen(ops.runAutomation(name, input, options))),
+	approvalFindMany: (input) =>
+		guard('db.approval_request.findMany').pipe(Effect.andThen(ops.approvalFindMany(input))),
+	approvalFindFirst: (input) =>
+		guard('db.approval_request.findFirst').pipe(Effect.andThen(ops.approvalFindFirst(input))),
+	infer: (input) => guard('ai.infer').pipe(Effect.andThen(ops.infer(input))),
+	readFileAsset: (file) => guard('files.read').pipe(Effect.andThen(ops.readFileAsset(file)))
+});
+
 /**
  * What an authored `readFileAsset` answers with, and what an inference image is built from.
  *
@@ -271,6 +326,12 @@ type AuthoredInferenceImage = Readonly<{
 	readonly detail?: 'auto' | 'low' | 'high';
 }>;
 
+/** Provider-neutral search controls carried from an authored inference to its host adapter. */
+type AuthoredInferenceWebSearch = Readonly<{
+	readonly maxResults: number;
+	readonly allowedDomains?: ReadonlyArray<string>;
+}>;
+
 /**
  * One authored inference as the ops surface carries it: the schema the answer must decode to, and
  * the picture words to judge against.
@@ -283,6 +344,7 @@ type InferenceRequest = Readonly<{
 	readonly schema: Schema.Codec<unknown, unknown>;
 	readonly prompt: string;
 	readonly model?: string;
+	readonly webSearch?: AuthoredInferenceWebSearch;
 	readonly images?: ReadonlyArray<AuthoredInferenceImage>;
 }>;
 
@@ -300,6 +362,12 @@ export type RuntimeAuthoringApi = Readonly<{
 	readonly readFileAsset: (file: FileRef) => Effect.Effect<AuthoredFileAsset, unknown, never>;
 }>;
 
+/** The automation-only extension. Hooks and remotes receive `RuntimeAuthoringApi` and cannot emit. */
+type RuntimeAutomationApi = RuntimeAuthoringApi &
+	Readonly<{
+		readonly progress: (value: AutomationProgression) => Effect.Effect<void, unknown, never>;
+	}>;
+
 /**
  * How much of a turn an authored `api.infer` may spend on pictures.
  *
@@ -308,6 +376,9 @@ export type RuntimeAuthoringApi = Readonly<{
  */
 const MAX_INFERENCE_IMAGES = 8;
 const MAX_INFERENCE_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/** Leaves grounded structured turns enough room to finish the required JSON instead of returning null. */
+export const MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS = 8_192;
 
 /**
  * Base64 over bytes, in chunks.
@@ -387,8 +458,8 @@ export const inferenceTurnContent = (
 	});
 
 /**
- * The delay `api.automations.run(..., { after })` asked for, in milliseconds, or `undefined` when
- * the value is not one.
+ * The delay `api.automations.run(..., { after })` asked for, in milliseconds, or `undefined` only
+ * when a supplied value is invalid. Omitting `after` means zero so the run is due immediately.
  *
  * A number is already milliseconds. A string goes to `Duration`, which accepts `'1 hour'`,
  * `'30 seconds'` and the rest of the vocabulary durations are written in everywhere else here. An
@@ -399,7 +470,8 @@ export const inferenceTurnContent = (
  * value an authored handler passed, and `Duration.fromInput` is the decode that checks it at run
  * time.
  */
-export const afterMillisOf = (after: string | number): number | undefined => {
+export const afterMillisOf = (after: string | number | undefined): number | undefined => {
+	if (after === undefined) return 0;
 	if (typeof after === 'number') return after;
 	const decoded = Duration.fromInput(after as Duration.Input);
 	return Option.isSome(decoded) ? Duration.toMillis(decoded.value) : undefined;
@@ -408,6 +480,89 @@ export const afterMillisOf = (after: string | number): number | undefined => {
 const asQueryInput = (
 	input: Readonly<Record<string, unknown>>
 ): Readonly<Record<string, unknown>> => input;
+
+/** The one field the grounding pass reads back off a research turn. Built once, not per turn. */
+const decodeResearchText = Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }));
+
+/**
+ * The `runAutomation` member of the authoring api, owned in one place.
+ *
+ * Two builders hand out `AuthoredCollectionOps`: the invocation-bound one below, and the one the
+ * collections layer assembles from its own internals. Both offer the same behaviour here, down to
+ * the refusal an author reads when the delay does not parse, so it is written once.
+ */
+export const runAutomationOp =
+	(
+		effectId: EffectIdType,
+		automations: Automations.Interface
+	): AuthoredCollectionOps['runAutomation'] =>
+	(name, input, options) =>
+		Effect.gen(function* () {
+			const after = options?.after;
+			const afterMillis = afterMillisOf(after);
+			if (afterMillis === undefined) {
+				return yield* new AuthoredRefusal({
+					message: `"${String(after)}" is not a delay ${name} can wait — pass milliseconds, '5 seconds', '1 hour', or another Effect duration.`
+				});
+			}
+			const taskId = yield* automations.start(effectId, name, input, { afterMillis });
+			return { taskId };
+		});
+
+/**
+ * The `infer` member of the authoring api, owned in one place.
+ *
+ * Structured inference is one behaviour — an optional grounding turn whose prose is fed back in as
+ * evidence, then the schema-constrained turn that has to answer in the author's shape. The two
+ * builders differ only in how they resolve a `file()` value, which is why that arrives as an
+ * argument rather than as a second copy of this.
+ */
+export const inferOp =
+	(
+		effectId: EffectIdType,
+		ai: AIInterface,
+		readAsset: (file: FileRef) => Effect.Effect<AuthoredFileAsset, Database.FacilityError>
+	): AuthoredCollectionOps['infer'] =>
+	(input) =>
+		Effect.gen(function* () {
+			const content = yield* inferenceTurnContent(input.prompt, input.images, readAsset);
+			const model = input.model ?? 'gpt-5';
+			const responseSchema = Schema.decodeUnknownSync(Schema.Json)(
+				Schema.toJsonSchemaDocument(input.schema).schema
+			);
+			const groundedMessages =
+				input.webSearch === undefined
+					? [{ role: 'user' as const, content }]
+					: yield* ai
+							.execute(effectId, {
+								_tag: 'Turn',
+								model,
+								messages: [{ role: 'user', content }],
+								tools: [],
+								maxOutputTokens: MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
+								webSearch: input.webSearch
+							})
+							.pipe(
+								Effect.map((research) => [
+									{ role: 'user' as const, content },
+									{ role: 'assistant' as const, content: decodeResearchText(research.output).text },
+									{
+										role: 'user' as const,
+										content:
+											'Encode the grounded research above as the requested JSON value. Preserve its evidence and do not add new claims.'
+									}
+								])
+							);
+			const response = yield* ai.execute(effectId, {
+				_tag: 'Turn',
+				model,
+				messages: groundedMessages,
+				tools: [],
+				maxOutputTokens: MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
+				responseSchema
+			});
+			return Schema.decodeUnknownSync(input.schema)(response.output);
+		});
 
 /**
  * Builds the Effect-native api an authored handler receives.
@@ -488,8 +643,8 @@ export const makeAuthoringApi = (
 			discard: true
 		});
 
-	const database = new Proxy<Readonly<Record<string, unknown>>>(
-		{},
+	const database = new Proxy<RuntimeAuthoringApi['db']>(
+		{ query },
 		{
 			get: (_target, property) =>
 				property === 'query'
@@ -512,6 +667,12 @@ export const makeAuthoringApi = (
 		readFileAsset: (file: FileRef) => ops.readFileAsset(file)
 	};
 };
+
+/** Adds the current durable run's progression capability without widening the ordinary API. */
+export const makeAutomationApi = (
+	api: RuntimeAuthoringApi,
+	progress: RuntimeAutomationApi['progress']
+): RuntimeAutomationApi => ({ ...api, progress });
 
 /**
  * The nearest-neighbour spelling, named field by field so the required ones are *present*.
@@ -581,6 +742,32 @@ export const makeBoundAuthoringOps = (
 				bytes
 			};
 		});
+	/**
+	 * One authored write is one declarative graph, even when its visible root has no relationships.
+	 *
+	 * This is load-bearing for before-hook writes. The graph planner stages every write a hook makes,
+	 * authorizes each exact prepared record, and either commits all of them or stores all of them as
+	 * one approval review. Calling the flat `create`/`update` paths here let a hook mutate a sibling
+	 * before the root reached its approval gate, leaving half of a business transition applied.
+	 *
+	 * The graph returns its authoritative stored root without requiring read entitlement. Falling back
+	 * is only defensive for a fixture or future implementation that returns no root; the runtime graph
+	 * always returns one on success.
+	 */
+	const synchronized = (
+		action: 'create' | 'update',
+		collection: string,
+		id: string,
+		values: Readonly<Record<string, unknown>>
+	): Effect.Effect<Readonly<Record<string, unknown>>, unknown> =>
+		collections
+			.mutate(effectId, subject, collection, [{ ...values, id }], false, 0, {
+				declarative: true,
+				root: { id, action }
+			})
+			.pipe(
+				Effect.map((rows) => rows[0] ?? ({ id, ...values } as Readonly<Record<string, unknown>>))
+			);
 	return {
 		findMany: (collection, input) =>
 			collections
@@ -595,28 +782,8 @@ export const makeBoundAuthoringOps = (
 			collections
 				.findNearest(effectId, subject, nearestInputOf(collection, input))
 				.pipe(Effect.flatMap(objectRowsOf)),
-		create: (collection, id, values) =>
-			Effect.gen(function* () {
-				yield* collections.create(effectId, subject, { collection, id, values });
-				const row = yield* collections.findFirst(effectId, subject, {
-					collection,
-					where: { id: { eq: id } }
-				});
-				return row === undefined
-					? ({ id: id, ...values } as Readonly<Record<string, unknown>>)
-					: (row as Readonly<Record<string, unknown>>);
-			}),
-		update: (collection, id, values) =>
-			Effect.gen(function* () {
-				yield* collections.update(effectId, subject, { collection, id, values });
-				const row = yield* collections.findFirst(effectId, subject, {
-					collection,
-					where: { id: { eq: id } }
-				});
-				return row === undefined
-					? ({ id: id, ...values } as Readonly<Record<string, unknown>>)
-					: (row as Readonly<Record<string, unknown>>);
-			}),
+		create: (collection, id, values) => synchronized('create', collection, id, values),
+		update: (collection, id, values) => synchronized('update', collection, id, values),
 		delete: (collection, id) => collections.delete(effectId, subject, collection, id),
 		mutate: (collection, payloads) =>
 			Effect.all(
@@ -651,18 +818,7 @@ export const makeBoundAuthoringOps = (
 		 * `bolt_run_as` stamp and the "is this automation declared?" check all happen in the one place
 		 * that has always owned them.
 		 */
-		runAutomation: (name, input, options) =>
-			Effect.gen(function* () {
-				const after = options?.after;
-				const afterMillis = after === undefined ? undefined : afterMillisOf(after);
-				if (afterMillis === undefined) {
-					return yield* new AuthoredRefusal({
-						message: `"${String(after)}" is not a delay ${name} can wait — pass milliseconds, '5 seconds', '1 hour', or another Effect duration.`
-					});
-				}
-				const taskId = yield* automations.start(effectId, name, input, { afterMillis });
-				return { taskId };
-			}),
+		runAutomation: runAutomationOp(effectId, automations),
 		approvalFindMany: (input) =>
 			collections
 				.findMany(effectId, subject, { collection: 'approval_request', ...input })
@@ -671,18 +827,7 @@ export const makeBoundAuthoringOps = (
 			collections
 				.findFirst(effectId, subject, { collection: 'approval_request', ...input })
 				.pipe(Effect.map((row) => row as Readonly<Record<string, unknown>> | undefined)),
-		infer: (input) =>
-			Effect.gen(function* () {
-				const content = yield* inferenceTurnContent(input.prompt, input.images, readAsset);
-				const response = yield* ai.execute(effectId, {
-					_tag: 'Turn',
-					model: input.model ?? 'gpt-5',
-					messages: [{ role: 'user', content }],
-					tools: [],
-					maxOutputTokens: 4_096
-				});
-				return Schema.decodeUnknownSync(input.schema)(response.output);
-			}),
+		infer: inferOp(effectId, ai, readAsset),
 		readFileAsset: (file) => readAsset(file)
 	};
 };

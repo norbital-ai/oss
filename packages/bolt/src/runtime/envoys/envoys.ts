@@ -1,6 +1,16 @@
-import { Context, Effect, Layer, Schema } from 'effect';
+import { Clock, Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
+import { and, asc, count, eq, inArray, isNull, lt, or } from 'drizzle-orm';
+import type { EnvoyDefinition } from '#lib/authoring/contracts-schema.js';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
+import * as ChatDocuments from '#lib/runtime/agents/documents.js';
+import {
+	chatDocumentStorageKey,
+	type ChatAttachment,
+	type InboundBatchMessage,
+	type StoredInboundBatch
+} from '#lib/runtime/agents/chat-messages.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import { PendingApproval } from '#lib/runtime/collections/collections.js';
@@ -9,13 +19,21 @@ import { Communication } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
+import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
-import { envoySubject } from '#lib/runtime/identity/static-identity.js';
+import { envoyPrincipalId, envoySubject } from '#lib/runtime/identity/static-identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
+import { composer, dbNow, dbNowPlusSeconds, executeBuilt } from '#lib/runtime/persistence.js';
 
-/** Carries envoy error through the typed envoys failure channel without losing diagnostic context. */
+const {
+	chat_session: chatSession,
+	bolt_envoy_inbound: boltEnvoyInbound,
+	bolt_envoy_receipts: boltEnvoyReceipts,
+	bolt_envoy_registrations: boltEnvoyRegistrations
+} = SYSTEM_MODEL_TABLES;
+
 class EnvoyError extends Schema.TaggedError<EnvoyError>()('Bolt.Envoys.Error', {
 	envoy: Schema.NonEmptyString,
 	message: Schema.NonEmptyString
@@ -23,40 +41,53 @@ class EnvoyError extends Schema.TaggedError<EnvoyError>()('Bolt.Envoys.Error', {
 	readonly category = 'envoy' as const;
 	readonly retryable = false;
 }
-export const EnvoyStatus = Schema.Struct({
+
+const EnvoyStatus = Schema.Struct({
 	envoy: Schema.NonEmptyString,
 	registered: Schema.Boolean,
 	received: Schema.Number,
 	replied: Schema.Number
 });
-export interface EnvoyStatus extends Schema.Schema.Type<typeof EnvoyStatus> {}
+interface EnvoyStatus extends Schema.Schema.Type<typeof EnvoyStatus> {}
 
-/**
- * One message a host took off a transport, with everything the transport knows about it.
- *
- * Notice what is *not* here: a subject. It used to be the second argument of `receive`, supplied by
- * the caller, and that could never be right — the host holds a socket, not a workspace identity, and
- * `subject` is a `MINTED_IDENTITY` field precisely so nothing outside this runtime decides who a
- * request is. A phone number is a fact about a wire; who that is, and what they may do, is resolved
- * below from the release's own declarations.
- */
+const MAX_INBOUND_ATTACHMENTS = 8;
+const MAX_INBOUND_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const MAX_INBOUND_ATTACHMENT_BASE64_LENGTH = Math.ceil(MAX_INBOUND_ATTACHMENT_BYTES / 3) * 4;
+const InboundAttachment = Schema.Struct({
+	provider: Schema.NonEmptyString,
+	attachmentId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+	mimeType: Schema.Literals(['image/jpeg', 'image/png']),
+	fileName: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+	byteLength: Schema.Number.check(
+		Schema.isInt(),
+		Schema.isBetween({ minimum: 1, maximum: MAX_INBOUND_ATTACHMENT_BYTES })
+	),
+	bytesBase64: Schema.String.check(
+		Schema.isMinLength(1),
+		Schema.isMaxLength(MAX_INBOUND_ATTACHMENT_BASE64_LENGTH),
+		Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)
+	)
+});
+
+/** One message a host took off a transport, containing wire facts and no claimed authority. */
 export const EnvoyDelivery = Schema.Struct({
-	/** The transport's own conversation address — a chat id, a group id. */
 	conversationId: Schema.NonEmptyString,
 	conversationKind: Schema.Literals(['dm', 'group']),
-	/**
-	 * The transport's own message id, which is what makes a redelivery recognisable.
-	 *
-	 * It must be the provider's and not one the host minted, or two deliveries of one message get two
-	 * ids and the deduplication below silently stops deduplicating.
-	 */
-	messageId: Schema.NonEmptyString,
-	/** How the agent was addressed in a group: directly, by mention, by reply, or not at all. */
+	messageId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+	sentAt: Schema.String.check(
+		Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/)
+	),
 	invocation: Schema.Literals(['direct', 'mention', 'reply', 'ambient']),
 	text: Schema.String,
+	attachments: Schema.Array(InboundAttachment).check(
+		Schema.makeFilter(
+			(attachments) =>
+				attachments.length <= MAX_INBOUND_ATTACHMENTS ||
+				`at most ${MAX_INBOUND_ATTACHMENTS} inbound attachments are accepted`
+		)
+	),
 	sender: Schema.optionalKey(
 		Schema.Struct({
-			/** The transport's address for the sender — a JID, a handle. Never an account id. */
 			id: Schema.NonEmptyString,
 			displayName: Schema.optionalKey(Schema.NonEmptyString)
 		})
@@ -64,59 +95,89 @@ export const EnvoyDelivery = Schema.Struct({
 });
 export interface EnvoyDelivery extends Schema.Schema.Type<typeof EnvoyDelivery> {}
 
-/**
- * What became of one delivery.
- *
- * Every arm is a state the runtime actually reached, and each is reported rather than folded into a
- * failure: a duplicate is not an error, a group message the envoy ignores is not an error, and an
- * unregistered sender on an `authenticated` envoy is the envoy working exactly as declared. Only
- * `answered` ran a model.
- *
- * `no_principal` is gone with the thing it reported. An envoy's authority came from a service row
- * placed in a team, and a workspace that declared no such team got no row — so the envoy refused
- * every message it ever received, which is what field-operations shipped. An envoy carries its
- * declared policies now, so there is no lookup left to come back empty.
- */
 const EnvoyOutcome = Schema.Struct({
-	status: Schema.Literals(['answered', 'duplicate', 'silent', 'registration_required']),
+	status: Schema.Literals(['buffered', 'duplicate', 'silent', 'registration_required']),
 	envoy: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
-	/** The reply the sender was given, when one was sent without running a model. */
-	text: Schema.optionalKey(Schema.String),
-	result: Schema.optionalKey(Agents.TurnResult)
+	text: Schema.optionalKey(Schema.String)
 });
-export interface EnvoyOutcome extends Schema.Schema.Type<typeof EnvoyOutcome> {}
+interface EnvoyOutcome extends Schema.Schema.Type<typeof EnvoyOutcome> {}
+
+const DrainReport = Schema.Struct({
+	envoy: Schema.NonEmptyString,
+	conversationId: Schema.NonEmptyString,
+	drained: Schema.Number,
+	status: Schema.Literals(['answered', 'failed', 'skipped'])
+});
+interface DrainReport extends Schema.Schema.Type<typeof DrainReport> {}
+
+const DRAIN_DEBOUNCE_MS = 3_000;
+const DRAIN_LEASE_SECONDS = 120;
+const MAX_DRAIN_MESSAGES = 32;
+const REGISTRATION_NOTICE_LIMITS = {
+	'envoys.registration': [{ window: '1 hour', limit: 1, key: 'sender' as const }]
+};
+
+const InboundRow = Schema.Struct({
+	id: Schema.NonEmptyString,
+	conversation_id: Schema.NonEmptyString,
+	transport_conversation_id: Schema.NonEmptyString,
+	external_message_id: Schema.NonEmptyString,
+	sender_external_id: Schema.NullOr(Schema.String),
+	sender_display_name: Schema.NullOr(Schema.String),
+	sent_at: Schema.NonEmptyString,
+	invocation: Schema.Literals(['direct', 'mention', 'reply', 'ambient']),
+	text: Schema.String,
+	attachments: Schema.Array(
+		Schema.Struct({
+			provider: Schema.NonEmptyString,
+			attachmentId: Schema.NonEmptyString,
+			file: Schema.Struct({
+				storage_key: Schema.NonEmptyString,
+				file_name: Schema.NonEmptyString,
+				file_size: Schema.Number,
+				mime_type: Schema.NonEmptyString
+			})
+		})
+	),
+	subject: Identity.Subject,
+	addressed: Schema.Boolean
+});
+type InboundRow = Schema.Schema.Type<typeof InboundRow>;
+const decodeInboundRow = Schema.decodeUnknownOption(InboundRow);
+const IdRow = Schema.Struct({ id: Schema.NonEmptyString });
+const decodeIdRow = Schema.decodeUnknownOption(IdRow);
+
+type EnvoyFailure =
+	| EnvoyError
+	| Workspace.WorkspaceLookupError
+	| AccessControl.AccessDenied
+	| Database.FacilityError
+	| ChatDocuments.ChatDocumentError
+	| Agents.SkillError
+	| Agents.ToolNotAllowed
+	| ApprovalConflict
+	| PendingApproval
+	| WhereCompileError
+	| RateLimits.RateLimited
+	| AuthoredRefusal
+	| InvocationBudget.NestingLimitExceeded;
 
 export type Interface = Readonly<{
 	readonly register: (
 		effectId: EffectId,
 		envoyName: string
 	) => Effect.Effect<void, EnvoyError | Database.FacilityError>;
-	/** Runs an agent turn, so it inherits every way that turn can fail, including a refused filter. */
 	readonly receive: (
 		effectId: EffectId,
 		envoyName: string,
 		delivery: EnvoyDelivery
-	) => Effect.Effect<
-		EnvoyOutcome,
-		| EnvoyError
-		| Workspace.WorkspaceLookupError
-		| AccessControl.AccessDenied
-		| Database.FacilityError
-		| Agents.SkillError
-		| Agents.ToolNotAllowed
-		| ApprovalConflict
-		| PendingApproval
-		| WhereCompileError
-		| RateLimits.RateLimited
-		// Inherited from `agents.turn`, which this yields directly: an envoy message *is* a turn,
-		// so anything that turn's tools can raise arrives here unchanged. Both are reachable — a
-		// tool reaching a collection whose hook refuses, and a turn that delegates hitting the
-		// nesting bound — and the delivery below is what makes the first one matter: a refusal has
-		// to reach the person who sent the message, not be reported to them as a broken envoy.
-		| AuthoredRefusal
-		| InvocationBudget.NestingLimitExceeded
-	>;
+	) => Effect.Effect<EnvoyOutcome, EnvoyFailure>;
+	readonly drain: (
+		effectId: EffectId,
+		envoyName: string,
+		conversationId: string
+	) => Effect.Effect<DrainReport, EnvoyFailure>;
 	readonly reply: (
 		effectId: EffectId,
 		envoyName: string,
@@ -128,257 +189,520 @@ export type Interface = Readonly<{
 		envoyName: string
 	) => Effect.Effect<EnvoyStatus, EnvoyError | Database.FacilityError>;
 }>;
-/** Identifies the envoys service in Effect's context so dependency wiring remains explicit and type checked. */
+
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Envoys');
+
 export const layer = Layer.effect(
 	Service,
 	Effect.gen(function* () {
 		const workspace = yield* Workspace.Service;
 		const agents = yield* Agents.Service;
+		const documents = yield* ChatDocuments.Service;
 		const identity = yield* Identity.Service;
 		const communication = yield* Communication.Service;
 		const database = yield* Database.Service;
+		const queue = yield* TaskQueue.Service;
 		const rateLimits = yield* RateLimits.Service;
 		const access = yield* AccessControl.Service;
 		const tenant = yield* TenantScope.Service;
+
 		const requireEnvoy = Effect.fn('Envoys.requireEnvoy')(function* (envoyName: string) {
 			const envoy = workspace.definition.envoys.find(({ name }) => name === envoyName);
 			if (envoy === undefined)
 				return yield* new EnvoyError({ envoy: envoyName, message: 'Unknown envoy' });
 			return envoy;
 		});
-		/**
-		 * Close one claimed message off with what became of it.
-		 *
-		 * Separate from the claim so the ledger records an *outcome* rather than an intention. It
-		 * cannot fail the delivery: the message has been answered by the time this runs, and losing
-		 * the audit line is not a reason to tell the sender their message failed — nor to answer it
-		 * twice on the redelivery that a raised error would invite.
-		 */
-		const settle = Effect.fn('Envoys.settle')(function* (
+
+		const bytesOf = (base64: string): Uint8Array => {
+			const binary = atob(base64);
+			return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+		};
+
+		const releaseLease = (effectId: EffectId, conversationId: string) =>
+			executeBuilt(
+				effectId,
+				database,
+				composer
+					.update(chatSession)
+					.set({ drain_lease_until: null })
+					.where(eq(chatSession.conversation_id, conversationId))
+			);
+
+		const enqueueDrain = Effect.fn('Envoys.enqueueDrain')(function* (
 			effectId: EffectId,
-			claimed: { readonly rows: ReadonlyArray<unknown> },
-			status: string
+			envoyName: string,
+			conversationId: string,
+			now: number
 		) {
-			const row = claimed.rows[0];
-			const id = row !== null && typeof row === 'object' ? Reflect.get(row, 'id') : undefined;
-			if (typeof id !== 'string') return;
-			yield* database
-				.execute(EffectId.make(`${effectId}:settle`), {
-					_tag: 'Query',
-					sql: 'update bolt_envoy_inbound set status = $2, answered_at = now() where "id" = $1::uuid',
-					parameters: [id, status]
-				})
-				.pipe(
-					Effect.catch((failure) =>
-						Effect.logWarning(
-							`envoys: could not record the outcome of an inbound message: ${failure.message}`
-						)
-					)
-				);
+			const bucket = Math.floor(now / DRAIN_DEBOUNCE_MS);
+			const taskId = `envoys.drain:${conversationId}:${bucket}`;
+			yield* queue.enqueue(effectId, [
+				{
+					command: 'envoys.drain',
+					input: { envoy: envoyName, conversationId },
+					effectId: taskId,
+					runAtEpochMs: now + DRAIN_DEBOUNCE_MS
+				}
+			]);
 		});
+
+		const recordReceipt = (
+			effectId: EffectId,
+			envoyName: string,
+			conversationId: string,
+			direction: 'inbound' | 'outbound',
+			senderId?: string
+		) =>
+			executeBuilt(
+				effectId,
+				database,
+				composer.insert(boltEnvoyReceipts).values({
+					envoy_name: envoyName,
+					conversation_id: conversationId,
+					direction,
+					sender_id: senderId ?? null
+				})
+			);
+
+		const send = Effect.fn('Envoys.send')(function* (
+			effectId: EffectId,
+			envoy: EnvoyDefinition & { readonly name: string },
+			recipient: string,
+			payload: Schema.Json
+		) {
+			yield* communication.execute(effectId, {
+				_tag: 'Send',
+				channel: envoy.transport,
+				recipient,
+				payload
+			});
+			yield* recordReceipt(EffectId.make(`${effectId}:receipt`), envoy.name, recipient, 'outbound');
+		});
+
 		return Service.of({
 			register: Effect.fn('Envoys.register')(function* (effectId, envoyName) {
 				yield* requireEnvoy(envoyName);
-				yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'insert into bolt_envoy_registrations (envoy_name) values ($1) on conflict do nothing',
-					parameters: [envoyName]
-				});
+				yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.insert(boltEnvoyRegistrations)
+						.values({ envoy_name: envoyName })
+						.onConflictDoNothing({ target: boltEnvoyRegistrations.envoy_name })
+				);
 			}),
+
 			receive: Effect.fn('Envoys.receive')(function* (effectId, envoyName, delivery) {
 				const envoy = yield* requireEnvoy(envoyName);
 				const senderId = delivery.sender?.id;
-				const reply = (text: string) =>
-					communication.execute(effectId, {
-						_tag: 'Send',
-						channel: envoy.transport,
-						recipient: delivery.conversationId,
-						payload: { text }
-					});
-
-				/**
-				 * A group message the envoy was not addressed by is not for the agent.
-				 *
-				 * Checked before the claim below, so an ambient message in a busy group costs a
-				 * declaration read rather than a row. `disabled` means the agent is not in groups at all;
-				 * `mention_or_reply` means it answers when spoken to and stays quiet otherwise.
-				 */
-				const addressed =
-					delivery.conversationKind !== 'group' ||
-					(envoy.groupMessages !== 'disabled' &&
-						(envoy.groupMessages !== 'mention_or_reply' ||
-							delivery.invocation === 'mention' ||
-							delivery.invocation === 'reply'));
-				if (!addressed)
+				const groupEnabled =
+					delivery.conversationKind !== 'group' || envoy.groupMessages !== 'disabled';
+				if (!groupEnabled) {
 					return {
 						status: 'silent' as const,
 						envoy: envoyName,
 						conversationId: delivery.conversationId
 					};
+				}
+				const addressed =
+					delivery.conversationKind !== 'group' ||
+					envoy.groupMessages === 'all' ||
+					delivery.invocation === 'mention' ||
+					delivery.invocation === 'reply';
 
-				/**
-				 * Claim this message exactly once, before anything expensive happens.
-				 *
-				 * The claim is the whole duplicate defence and its position is the point: a transport
-				 * that redelivers — and every one of them does — costs one failed insert here instead of
-				 * one agent run, one bill, and a second answer to a question already answered. An empty
-				 * `returning` *is* the duplicate, so no second read is needed to detect one.
-				 */
-				const claimed = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `insert into bolt_envoy_inbound
-					        (envoy_name, external_conversation_id, external_message_id, receipt_key,
-					         sender_external_id, sender_display_name, status)
-					      values ($1, $2, $3, $4, $5, $6, 'received')
-					      on conflict (receipt_key) do nothing
-					  returning "id"`,
-					parameters: [
-						envoyName,
-						delivery.conversationId,
-						delivery.messageId,
-						`${envoyName}:${delivery.conversationId}:${delivery.messageId}`,
-						senderId ?? null,
-						delivery.sender?.displayName ?? null
-					]
-				});
-				if (claimed.rows[0] === undefined)
-					return {
-						status: 'duplicate' as const,
-						envoy: envoyName,
-						conversationId: delivery.conversationId
-					};
-
-				/**
-				 * Who is speaking — and *only* who. This decides nothing about capability.
-				 *
-				 * `authenticated` means the envoy answers people who hold an account here, so an
-				 * unmatched sender is turned away before a model runs. `public` means it answers anyone,
-				 * so nobody is looked up at all.
-				 */
 				const linked =
 					envoy.audience === 'authenticated' && senderId !== undefined
 						? yield* identity.accountByTransportIdentity(effectId, envoy.transport, senderId)
 						: undefined;
 				if (envoy.audience === 'authenticated' && linked === undefined) {
+					const principal = envoySubject(envoy, tenant.tenantId, undefined);
+					const declared = access.limits(principal);
+					const noticeLimits = {
+						...declared,
+						'envoys.registration':
+							declared['envoys.registration'] ?? REGISTRATION_NOTICE_LIMITS['envoys.registration']
+					};
+					const admitted = yield* rateLimits
+						.admit(
+							'envoys.registration',
+							{
+								tenantId: tenant.tenantId,
+								userId: envoyPrincipalId(envoyName),
+								sender: senderId
+							},
+							noticeLimits
+						)
+						.pipe(
+							Effect.as(true),
+							Effect.catch(() => Effect.succeed(false))
+						);
 					const text =
 						'This agent is available only to registered members. Ask an administrator to verify this ' +
 						'number on your workspace account, then send your message again.';
-					yield* reply(text);
-					yield* settle(effectId, claimed, 'registration_required');
+					if (admitted) {
+						yield* communication.execute(effectId, {
+							_tag: 'Send',
+							channel: envoy.transport,
+							recipient: delivery.conversationId,
+							payload: { text }
+						});
+					}
 					return {
 						status: 'registration_required' as const,
 						envoy: envoyName,
 						conversationId: delivery.conversationId,
-						text
+						...(admitted ? { text } : {})
 					};
 				}
 
-				// The one rule that must not be wrong, named and asserted on in `envoy-subject.ts`:
-				// capability is the declaration's, identity becomes the sender's, `admin` is dropped.
 				const subject = envoySubject(envoy, tenant.tenantId, linked);
-
-				/**
-				 * The envoy's own rate policy, which is its policies' — it declares none of its own.
-				 *
-				 * Both halves of what the declaration used to carry are here. A `subject`-keyed rule
-				 * bounds the envoy as a whole, because an envoy is one subject and its senders therefore
-				 * share one bucket by construction; a `sender`-keyed rule gives each outside sender its
-				 * own. That is exactly `totalPerMinute` and `perSenderPerMinute`, said once, in the
-				 * vocabulary every other limit in the system is already written in.
-				 *
-				 * After the claim, so a redelivery of a message that was already answered costs a failed
-				 * insert rather than an admission; before the turn, so a refusal costs a map lookup
-				 * rather than the model run it is protecting.
-				 */
 				yield* rateLimits.admit(
 					'envoys.receive',
 					{
 						tenantId: subject.tenantId,
-						userId: subject.userId,
+						userId: envoyPrincipalId(envoyName),
 						sender: senderId
 					},
 					access.limits(subject)
 				);
 
-				/**
-				 * The receipt, written unconditionally now that admission is the limiter's answer.
-				 *
-				 * It used to be the limiter: an `insert … select … where (count) < cap` that admitted and
-				 * recorded in one statement, because counting and then inserting lets every message of a
-				 * simultaneous burst read the count from before any of them was written. That property
-				 * belonged to a per-envoy cap declared on the envoy; the cap is a policy limit now, and
-				 * a policy limit is enforced where every other one is. What remains here is a ledger,
-				 * which is all `status` ever read it as.
-				 */
-				yield* database.execute(EffectId.make(`${effectId}:receipt`), {
-					_tag: 'Query',
-					sql: 'insert into bolt_envoy_receipts (envoy_name, conversation_id, direction, sender_id) values ($1, $2, $3, $4)',
-					parameters: [envoyName, delivery.conversationId, 'inbound', senderId ?? 'anonymous']
-				});
-
-				const who =
-					delivery.sender === undefined
-						? `This message arrived on the ${envoy.transport} envoy "${envoyName}" from an unidentified sender.`
-						: `This message arrived on the ${envoy.transport} envoy "${envoyName}" from ${
-								delivery.sender.displayName ?? 'an unnamed contact'
-							} at ${delivery.sender.id}, who ${
-								linked === undefined
-									? 'holds no account in this workspace'
-									: 'is a registered member of this workspace'
-							}.`;
-
-				const result = yield* agents.turn(
-					effectId,
+				const conversationId = `${envoyName}:${delivery.conversationKind}:${delivery.conversationId}`;
+				yield* agents.start(
+					EffectId.make(`${effectId}:conversation`),
 					subject,
 					envoyName,
-					`${envoyName}:${delivery.conversationKind}:${delivery.conversationId}`,
-					delivery.text,
-					who
+					conversationId
 				);
-				yield* communication.execute(effectId, {
-					_tag: 'Send',
-					channel: envoy.transport,
-					recipient: delivery.conversationId,
-					payload: result.output
+
+				const claim = yield* executeBuilt(
+					EffectId.make(`${effectId}:claim`),
+					database,
+					composer
+						.insert(boltEnvoyInbound)
+						.values({
+							envoy_name: envoyName,
+							conversation_id: conversationId,
+							transport_conversation_id: delivery.conversationId,
+							external_message_id: delivery.messageId,
+							receipt_key: `${envoyName}:${delivery.conversationId}:${delivery.messageId}`,
+							sender_external_id: senderId ?? null,
+							sender_display_name: delivery.sender?.displayName ?? null,
+							sent_at: delivery.sentAt,
+							invocation: delivery.invocation,
+							text: delivery.text,
+							attachments: JSON.stringify([]),
+							subject: JSON.stringify(subject),
+							addressed,
+							status: 'receiving'
+						})
+						.onConflictDoNothing({ target: boltEnvoyInbound.receipt_key })
+						.returning({ id: boltEnvoyInbound.id })
+				);
+				const claimed = decodeIdRow(claim.rows[0]);
+				if (claimed._tag === 'None') {
+					return {
+						status: 'duplicate' as const,
+						envoy: envoyName,
+						conversationId: delivery.conversationId
+					};
+				}
+
+				const stored: Array<ChatAttachment> = [];
+				const finishBuffer = Effect.gen(function* () {
+					for (const [index, attachment] of delivery.attachments.entries()) {
+						const bytes = bytesOf(attachment.bytesBase64);
+						if (bytes.byteLength !== attachment.byteLength) {
+							return yield* new EnvoyError({
+								envoy: envoyName,
+								message: `attachment ${attachment.attachmentId} did not match its declared byte length`
+							});
+						}
+						const storageKey = chatDocumentStorageKey(
+							conversationId,
+							`${delivery.messageId}:${index}`,
+							attachment.fileName
+						);
+						const file = {
+							storage_key: storageKey,
+							file_name: attachment.fileName,
+							file_size: bytes.byteLength,
+							mime_type: attachment.mimeType
+						};
+						yield* documents.write(
+							EffectId.make(`${effectId}:attachment:${index}`),
+							conversationId,
+							file,
+							bytes,
+							{
+								source: 'envoy',
+								messageId: delivery.messageId,
+								provider: attachment.provider,
+								providerAttachmentId: attachment.attachmentId,
+								...(senderId === undefined ? {} : { senderId })
+							}
+						);
+						stored.push({
+							provider: attachment.provider,
+							attachmentId: attachment.attachmentId,
+							file
+						});
+					}
+					yield* executeBuilt(
+						EffectId.make(`${effectId}:buffer`),
+						database,
+						composer
+							.update(boltEnvoyInbound)
+							.set({ attachments: JSON.stringify(stored), status: 'pending' })
+							.where(eq(boltEnvoyInbound.id, claimed.value.id))
+					);
+					yield* recordReceipt(
+						EffectId.make(`${effectId}:receipt`),
+						envoyName,
+						delivery.conversationId,
+						'inbound',
+						senderId
+					);
+					if (addressed) {
+						const now = yield* Clock.currentTimeMillis;
+						yield* enqueueDrain(
+							EffectId.make(`${effectId}:enqueue`),
+							envoyName,
+							conversationId,
+							now
+						);
+					}
 				});
-				yield* settle(effectId, claimed, 'answered');
+				yield* finishBuffer.pipe(
+					Effect.onError(() =>
+						Effect.all([
+							...stored.map(({ file }, index) =>
+								documents.remove(
+									EffectId.make(`${effectId}:abandon-document:${index}`),
+									conversationId,
+									file.storage_key
+								)
+							),
+							executeBuilt(
+								EffectId.make(`${effectId}:abandon`),
+								database,
+								composer.delete(boltEnvoyInbound).where(eq(boltEnvoyInbound.id, claimed.value.id))
+							)
+						]).pipe(Effect.ignore)
+					)
+				);
 				return {
-					status: 'answered' as const,
+					status: addressed ? ('buffered' as const) : ('silent' as const),
 					envoy: envoyName,
-					conversationId: delivery.conversationId,
-					result
+					conversationId: delivery.conversationId
 				};
 			}),
+
+			drain: Effect.fn('Envoys.drain')(function* (effectId, envoyName, conversationId) {
+				const envoy = yield* requireEnvoy(envoyName);
+				const lease = yield* executeBuilt(
+					EffectId.make(`${effectId}:lease`),
+					database,
+					composer
+						.update(chatSession)
+						.set({ drain_lease_until: dbNowPlusSeconds(DRAIN_LEASE_SECONDS) })
+						.where(
+							and(
+								eq(chatSession.conversation_id, conversationId),
+								or(
+									isNull(chatSession.drain_lease_until),
+									lt(chatSession.drain_lease_until, dbNow())
+								)
+							)
+						)
+						.returning({ id: chatSession.id })
+				);
+				if (lease.rows.length === 0) {
+					return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
+				}
+
+				const pendingIds = composer
+					.select({ id: boltEnvoyInbound.id })
+					.from(boltEnvoyInbound)
+					.where(
+						and(
+							eq(boltEnvoyInbound.conversation_id, conversationId),
+							eq(boltEnvoyInbound.status, 'pending')
+						)
+					)
+					.orderBy(asc(boltEnvoyInbound.sent_at), asc(boltEnvoyInbound.created_at))
+					.limit(MAX_DRAIN_MESSAGES);
+				const claimed = yield* executeBuilt(
+					EffectId.make(`${effectId}:take`),
+					database,
+					composer
+						.update(boltEnvoyInbound)
+						.set({ status: 'draining' })
+						.where(inArray(boltEnvoyInbound.id, pendingIds))
+						.returning({
+							id: boltEnvoyInbound.id,
+							conversation_id: boltEnvoyInbound.conversation_id,
+							transport_conversation_id: boltEnvoyInbound.transport_conversation_id,
+							external_message_id: boltEnvoyInbound.external_message_id,
+							sender_external_id: boltEnvoyInbound.sender_external_id,
+							sender_display_name: boltEnvoyInbound.sender_display_name,
+							sent_at: boltEnvoyInbound.sent_at,
+							invocation: boltEnvoyInbound.invocation,
+							text: boltEnvoyInbound.text,
+							attachments: boltEnvoyInbound.attachments,
+							subject: boltEnvoyInbound.subject,
+							addressed: boltEnvoyInbound.addressed
+						})
+				);
+				const rows = claimed.rows
+					.flatMap((row) => {
+						const decoded = decodeInboundRow(row);
+						return decoded._tag === 'Some' ? [decoded.value] : [];
+					})
+					.toSorted((left, right) => left.sent_at.localeCompare(right.sent_at));
+				if (rows.length === 0) {
+					yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
+					return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
+				}
+				const trigger = [...rows].reverse().find(({ addressed }) => addressed);
+				if (trigger === undefined) {
+					yield* executeBuilt(
+						EffectId.make(`${effectId}:restore`),
+						database,
+						composer
+							.update(boltEnvoyInbound)
+							.set({ status: 'pending' })
+							.where(
+								inArray(
+									boltEnvoyInbound.id,
+									rows.map(({ id }) => id)
+								)
+							)
+					);
+					yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
+					return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
+				}
+
+				const messages: Array<InboundBatchMessage> = rows.map((row) => ({
+					sender: {
+						...(row.sender_external_id === null ? {} : { id: row.sender_external_id }),
+						...(row.sender_display_name === null ? {} : { displayName: row.sender_display_name })
+					},
+					sentAt: row.sent_at,
+					messageId: row.external_message_id,
+					text: row.text,
+					attachments: row.attachments,
+					invocation: row.invocation
+				}));
+				const batch: StoredInboundBatch = { kind: 'inbound_batch', messages };
+				const attempted = yield* agents
+					.turn(effectId, trigger.subject, envoyName, conversationId, batch)
+					.pipe(
+						Effect.map((result) => ({ ok: result.status === 'completed', result })),
+						Effect.catch((error) => Effect.succeed({ ok: false as const, error }))
+					);
+				let answered = false;
+				if (attempted.ok) {
+					answered = yield* send(
+						EffectId.make(`${effectId}:reply`),
+						envoy,
+						trigger.transport_conversation_id,
+						attempted.result.output
+					).pipe(
+						Effect.as(true),
+						Effect.catch(() => Effect.succeed(false))
+					);
+				}
+				const status = answered ? 'answered' : 'failed';
+				yield* executeBuilt(
+					EffectId.make(`${effectId}:settle`),
+					database,
+					composer
+						.update(boltEnvoyInbound)
+						.set({ status, answered_at: dbNow() })
+						.where(
+							inArray(
+								boltEnvoyInbound.id,
+								rows.map(({ id }) => id)
+							)
+						)
+				);
+				yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
+
+				const remaining = yield* executeBuilt(
+					EffectId.make(`${effectId}:remaining`),
+					database,
+					composer
+						.select({ count: count() })
+						.from(boltEnvoyInbound)
+						.where(
+							and(
+								eq(boltEnvoyInbound.conversation_id, conversationId),
+								eq(boltEnvoyInbound.status, 'pending')
+							)
+						)
+				);
+				const left = Number(
+					Reflect.get((remaining.rows[0] as object | undefined) ?? {}, 'count') ?? 0
+				);
+				if (left > 0) {
+					const now = yield* Clock.currentTimeMillis;
+					yield* enqueueDrain(EffectId.make(`${effectId}:requeue`), envoyName, conversationId, now);
+				}
+				return { envoy: envoyName, conversationId, drained: rows.length, status };
+			}),
+
 			reply: Effect.fn('Envoys.reply')(function* (effectId, envoyName, recipient, payload) {
 				const envoy = yield* requireEnvoy(envoyName);
-				yield* communication.execute(effectId, {
-					_tag: 'Send',
-					channel: envoy.transport,
-					recipient,
-					payload
-				});
-				yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'insert into bolt_envoy_receipts (envoy_name, conversation_id, direction) values ($1, $2, $3)',
-					parameters: [envoyName, recipient, 'outbound']
-				});
+				yield* send(effectId, envoy, recipient, payload);
 			}),
+
 			status: Effect.fn('Envoys.status')(function* (effectId, envoyName) {
 				yield* requireEnvoy(envoyName);
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: "select exists(select 1 from bolt_envoy_registrations where envoy_name = $1) as registered, count(*) filter (where direction = 'inbound') as received, count(*) filter (where direction = 'outbound') as replied from bolt_envoy_receipts where envoy_name = $1",
-					parameters: [envoyName]
-				});
-				const row = result.rows[0] ?? {};
-				const registered =
-					typeof row === 'object' && row !== null && Reflect.get(row, 'registered') === true;
-				const received =
-					typeof row === 'object' && row !== null ? Number(Reflect.get(row, 'received') ?? 0) : 0;
-				const replied =
-					typeof row === 'object' && row !== null ? Number(Reflect.get(row, 'replied') ?? 0) : 0;
-				return { envoy: envoyName, registered, received, replied };
+				const registration = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({ envoy_name: boltEnvoyRegistrations.envoy_name })
+						.from(boltEnvoyRegistrations)
+						.where(eq(boltEnvoyRegistrations.envoy_name, envoyName))
+						.limit(1)
+				);
+				const receivedRows = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({ count: count() })
+						.from(boltEnvoyReceipts)
+						.where(
+							and(
+								eq(boltEnvoyReceipts.envoy_name, envoyName),
+								eq(boltEnvoyReceipts.direction, 'inbound')
+							)
+						)
+				);
+				const repliedRows = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({ count: count() })
+						.from(boltEnvoyReceipts)
+						.where(
+							and(
+								eq(boltEnvoyReceipts.envoy_name, envoyName),
+								eq(boltEnvoyReceipts.direction, 'outbound')
+							)
+						)
+				);
+				return {
+					envoy: envoyName,
+					registered: registration.rows.length === 1,
+					received: Number(
+						Reflect.get((receivedRows.rows[0] as object | undefined) ?? {}, 'count') ?? 0
+					),
+					replied: Number(
+						Reflect.get((repliedRows.rows[0] as object | undefined) ?? {}, 'count') ?? 0
+					)
+				};
 			})
 		});
 	})

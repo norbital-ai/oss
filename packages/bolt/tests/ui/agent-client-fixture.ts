@@ -21,7 +21,6 @@ export const settledQuery = <T>(current: T): RemoteQuery<T> => ({
 	current,
 	loading: false,
 	error: undefined,
-	refresh: () => Effect.runPromise(Effect.void),
 	then: (onfulfilled, onrejected) =>
 		Effect.runPromise(Effect.succeed(current)).then(onfulfilled, onrejected)
 });

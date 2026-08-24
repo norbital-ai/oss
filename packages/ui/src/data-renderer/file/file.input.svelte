@@ -265,7 +265,8 @@
 {#snippet triggerContent()}
 	{#if hasValidFiles}
 		<Inline gap="sm">
-			<div class="flex items-center -space-x-1">
+			<!-- The thumbnails deliberately overlap, which is an offset rather than a gap. -->
+			<Inline gap="none" class="[&>*+*]:-ml-1">
 				{#each displayFiles as file (file.id)}
 					<div class="h-5 w-5 overflow-hidden rounded-full border border-border">
 						<FileThumbnail file_value={file} ratio={1} size="small" class="m-0 h-full w-full p-0" />
@@ -278,7 +279,7 @@
 						+{extraCount}
 					</div>
 				{/if}
-			</div>
+			</Inline>
 		</Inline>
 	{:else}
 		<Icon
@@ -384,10 +385,10 @@
 			<Button
 				variant="outline"
 				onclick={openFileBrowser}
-				class="border-dashed"
+				class="gap-2 border-dashed"
 				disabled={disabled || clientUploadBusy}
 			>
-				<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
+				<Icon icon="lucide:plus" class="h-4 w-4" />
 				{#if clientUploadBusy}
 					{UPLOAD_STAGE_MESSAGES.uploading}
 				{:else}
@@ -476,10 +477,10 @@
 				<Button
 					variant="outline"
 					onclick={openFileBrowser}
-					class="w-min border-dashed text-muted-foreground hover:text-foreground"
+					class="w-min gap-2 border-dashed text-muted-foreground hover:text-foreground"
 					disabled={disabled || clientUploadBusy}
 				>
-					<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
+					<Icon icon="lucide:plus" class="h-4 w-4" />
 					{#if clientUploadBusy}
 						{UPLOAD_STAGE_MESSAGES.uploading}
 					{:else}

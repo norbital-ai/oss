@@ -1,16 +1,24 @@
 <script lang="ts">
 	import type { SVGAttributes } from 'svelte/elements';
 	import { productLayerIconGeometry, type ProductIconName } from '#lib/product-icon/product-icons';
+	import { ThinkingOrb } from '#lib/thinking-orb';
 
 	let {
 		name,
+		/** The Agent orb's square size in px — the static product icons scale via `size-*` classes. */
+		size = 16,
 		class: className = '',
 		...restProps
-	}: SVGAttributes<SVGSVGElement> & { name: ProductIconName } = $props();
+	}: SVGAttributes<SVGSVGElement> & { name: ProductIconName; size?: number; class?: string } = $props();
 
 	const layerGeometry = $derived(productLayerIconGeometry(name));
 </script>
 
+{#if name === 'agent'}
+	<!-- The Agent mark is the thinking orb itself — the same animated sphere live surfaces render,
+	     so a listed `product:agent` means what the workspace means by an agent. -->
+	<ThinkingOrb {size} class={className} />
+{:else}
 <svg
 	viewBox="0 0 24 24"
 	fill="none"
@@ -109,23 +117,9 @@
 		<rect x="14" y="3" width="7" height="7" rx="1" />
 		<rect x="3" y="14" width="7" height="7" rx="1" />
 		<rect x="14" y="14" width="7" height="7" rx="1" class="accent-stroke" />
-	{:else if name === 'agent'}
-		<!-- Static, reduced-motion projection of the same dotted Agent orb used by live surfaces. -->
-		<circle cx="12" cy="4.25" r="0.8" />
-		<circle cx="17.5" cy="6.5" r="0.65" />
-		<circle cx="19.75" cy="12" r="0.85" class="accent-stroke" />
-		<circle cx="17.5" cy="17.5" r="0.65" />
-		<circle cx="12" cy="19.75" r="0.8" />
-		<circle cx="6.5" cy="17.5" r="0.65" />
-		<circle cx="4.25" cy="12" r="0.8" />
-		<circle cx="6.5" cy="6.5" r="0.65" />
-		<circle cx="12" cy="12" r="1.35" class="accent-stroke" />
 	{:else if name === 'studio'}
 		<path d="M8 4H4v4M16 4h4v4M20 16v4h-4M8 20H4v-4" />
 		<path d="m8 17 8-8" class="accent-stroke" />
-	{:else if name === 'checkpoints'}
-		<path d="m8.5 5 3.5-2 7 4-7 4-7-4 3.5-2ZM5 12l7 4 7-4M5 17l7 4 7-4" />
-		<path d="M5 7 8.5 5" class="accent-stroke" />
 	{:else if name === 'environment'}
 		<rect x="3" y="4" width="18" height="16" rx="2" />
 		<path d="m7 9 2 2-2 2" class="accent-stroke" />
@@ -167,6 +161,7 @@
 		<path d="M15.5 4.8A8 8 0 0 1 19 8" class="accent-stroke" />
 	{/if}
 </svg>
+{/if}
 
 <style>
 	.product-icon {

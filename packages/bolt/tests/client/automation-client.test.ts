@@ -1,0 +1,174 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
+import { EnvironmentName, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
+import { createBoltClient } from '../../src/client.js';
+import {
+	createWorkspaceApiProxy,
+	type AutomationRun,
+	type AutomationTaskSnapshot
+} from '../../src/client/runtime.js';
+import { createQueryCache } from '../../src/client/replica/query-cache.js';
+import { createLiveQueryRegistry } from '../../src/client/replica/live-queries.js';
+
+const scope = {
+	tenantId: TenantId.make('tenant'),
+	environment: EnvironmentName.make('test'),
+	releaseId: ReleaseId.make('release')
+};
+
+type AutomationSurface = Readonly<{
+	readonly run: (input: Record<string, unknown>) => Promise<AutomationRun>;
+	readonly stop: (taskId: string) => Promise<void>;
+	readonly resume: (taskId: string) => Promise<AutomationRun>;
+	readonly pending: number;
+	readonly latest: AutomationRun | undefined;
+}>;
+
+type AutomationRunRow = Readonly<{
+	readonly task_id: string;
+	readonly status: AutomationTaskSnapshot['status'];
+	readonly attempts: number;
+	readonly max_attempts: number;
+	readonly error: string | null;
+	readonly result: unknown;
+	readonly progress: AutomationTaskSnapshot['progress'];
+	readonly progress_sequence: number;
+	readonly progress_updated_at: string | null;
+	readonly next_run_at: string | null;
+}>;
+
+const runRow = (
+	taskId: string,
+	status: AutomationTaskSnapshot['status'] = 'pending'
+): AutomationRunRow => ({
+	task_id: taskId,
+	status,
+	attempts: 1,
+	max_attempts: 12,
+	error: null,
+	result: status === 'done' ? { outcome: 'stitched' } : null,
+	progress:
+		status === 'done'
+			? { progress: 1, text: 'Complete' }
+			: { progress: 0.25, text: `Reading ${taskId}` },
+	progress_sequence: status === 'done' ? 2 : 1,
+	progress_updated_at: '2026-08-23T06:00:00.000Z',
+	next_run_at: status === 'pending' || status === 'resuming' ? '2026-08-23T06:01:00.000Z' : null
+});
+
+const taskIdFrom = (input: unknown): string | undefined => {
+	if (typeof input !== 'object' || input === null) return undefined;
+	const where = Reflect.get(input, 'where');
+	if (typeof where !== 'object' || where === null) return undefined;
+	const task = Reflect.get(where, 'task_id');
+	if (typeof task !== 'object' || task === null) return undefined;
+	const id = Reflect.get(task, 'eq');
+	return typeof id === 'string' ? id : undefined;
+};
+
+describe('generated automation client state', () => {
+	it('changes only when the automation_run live collection is invalidated by sync', async () => {
+		let starts = 0;
+		let reads = 0;
+		const commands: Array<string> = [];
+		const rows = new Map<string, AutomationRunRow>();
+		const cache = createQueryCache('automation-client::live');
+		const queries = createLiveQueryRegistry();
+		const bolt = createBoltClient(scope, {
+			command: (command, input) => {
+				commands.push(command);
+				if (command === 'automations.start') {
+					const taskId = `run-${(starts += 1)}`;
+					rows.set(taskId, runRow(taskId));
+					return Promise.resolve({ taskId } as never);
+				}
+				if (command === 'collections.findFirst') {
+					reads += 1;
+					const taskId = taskIdFrom(input);
+					return Promise.resolve(
+						(taskId === undefined ? null : (rows.get(taskId) ?? null)) as never
+					);
+				}
+				throw new Error(`unexpected command ${command}`);
+			}
+		});
+		const proxy = createWorkspaceApiProxy({ bolt, db: {}, cache, queries });
+		const automation = Reflect.get(proxy.automations, 'rebuild') as AutomationSurface;
+
+		const run = await automation.run({ project_id: 'project-1' });
+		await vi.waitFor(() => expect(run.current?.progress?.text).toBe('Reading run-1'));
+		expect(automation.pending).toBe(1);
+		const readsBeforeChange = reads;
+
+		rows.set('run-1', runRow('run-1', 'done'));
+		// This is what the replica does after applying an outbox change. The automation surface itself
+		// has no watcher and cannot observe the changed backing map until this sync invalidation lands.
+		cache.invalidate(['automation_run']);
+		queries.reexecuteAffected(['automation_run']);
+		await vi.waitFor(() => expect(run.current?.status).toBe('done'));
+
+		expect(reads).toBe(readsBeforeChange + 1);
+		expect(automation.pending).toBe(0);
+		expect(commands).not.toContain('automations.status');
+		expect(Reflect.has(run, 'refresh')).toBe(false);
+		expect(Reflect.has(run, 'settled')).toBe(false);
+	});
+
+	it('stops and resumes the same durable row while sync remains the only state observer', async () => {
+		const taskId = 'historical-task:start';
+		const rows = new Map([[taskId, runRow(taskId, 'paused')]]);
+		const cache = createQueryCache('automation-client::lifecycle');
+		const queries = createLiveQueryRegistry();
+		const lifecycle: Array<Readonly<{ command: string; input: unknown }>> = [];
+		const bolt = createBoltClient(scope, {
+			command: (command, input) => {
+				if (command === 'collections.findFirst') {
+					const id = taskIdFrom(input);
+					return Promise.resolve((id === undefined ? null : (rows.get(id) ?? null)) as never);
+				}
+				if (command === 'automations.stop' || command === 'automations.resume') {
+					lifecycle.push({ command, input });
+					rows.set(taskId, runRow(taskId, command === 'automations.stop' ? 'paused' : 'resuming'));
+					return Promise.resolve(
+						(command === 'automations.stop' ? { stopped: true } : { resumed: true }) as never
+					);
+				}
+				throw new Error(`unexpected command ${command}`);
+			}
+		});
+		const proxy = createWorkspaceApiProxy({ bolt, db: {}, cache, queries });
+		const automation = Reflect.get(proxy.automations, 'rebuild') as AutomationSurface;
+
+		const run = await automation.resume(taskId);
+		await vi.waitFor(() => expect(run.current?.status).toBe('resuming'));
+		await run.stop();
+		// The command mutates server state but does not imperatively rewrite or refresh client state.
+		expect(run.current?.status).toBe('resuming');
+		cache.invalidate(['automation_run']);
+		queries.reexecuteAffected(['automation_run']);
+		await vi.waitFor(() => expect(run.current?.status).toBe('paused'));
+
+		expect(lifecycle).toEqual([
+			{ command: 'automations.resume', input: { name: 'rebuild', taskId } },
+			{ command: 'automations.stop', input: { name: 'rebuild', taskId } }
+		]);
+		expect(automation.latest).toBe(run);
+	});
+
+	it('contains no automation polling client or private progress transport', () => {
+		const client = readFileSync(
+			new URL('../../src/client/automation-client.svelte.ts', import.meta.url),
+			'utf8'
+		);
+		const runtime = readFileSync(new URL('../../src/client/runtime.ts', import.meta.url), 'utf8');
+		const studio = readFileSync(
+			new URL('../../src/client/ui/studio/manifest-pane.svelte', import.meta.url),
+			'utf8'
+		);
+
+		expect(client).not.toMatch(/setInterval|setTimeout|Effect\.sleep|poll/i);
+		expect(runtime).not.toContain("'automations.status'");
+		expect(runtime).not.toContain("'automations.history'");
+		expect(studio).toContain('client.db.automation_run.findMany');
+	});
+});

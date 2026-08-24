@@ -53,7 +53,12 @@ export function formatStructuredValue(value: unknown, pretty = false): string {
 	);
 }
 
-function formatTimestampRange(value: unknown, locale: string, t?: Translate): string {
+function formatInstantRange(
+	field: CollectionField,
+	value: unknown,
+	locale: string,
+	t?: Translate
+): string {
 	const lower = objectProperty(value, 'lower') ?? objectProperty(value, 'start');
 	const upper = objectProperty(value, 'upper') ?? objectProperty(value, 'end');
 	let start = lower;
@@ -65,12 +70,13 @@ function formatTimestampRange(value: unknown, locale: string, t?: Translate): st
 		start = match[1] || null;
 		end = match[2] || null;
 	}
-	const timestampField: CollectionField = {
+	const instantField: CollectionField = {
 		name: 'range_boundary',
-		kind: 'timestamptz',
-		nullable: true
+		kind: 'instant',
+		nullable: true,
+		...(field.precision === undefined ? {} : { precision: field.precision })
 	};
-	return `${formatScalar(timestampField, start, locale, t)} – ${end == null ? resolveText(t, 'dataRenderer.present') : formatScalar(timestampField, end, locale, t)}`;
+	return `${formatScalar(instantField, start, locale, t)} – ${end == null ? resolveText(t, 'dataRenderer.present') : formatScalar(instantField, end, locale, t)}`;
 }
 
 function formatDateRange(value: unknown, locale: string): string {
@@ -134,34 +140,27 @@ function formatScalar(
 					)
 			});
 		}
-		case 'date': {
+		case 'instant': {
 			const date = dateValue(value);
 			return date
-				? new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: 'UTC' }).format(date)
+				? new Intl.DateTimeFormat(
+						locale,
+						field.precision === 'day'
+							? { dateStyle: 'medium' }
+							: { dateStyle: 'medium', timeStyle: 'short' }
+					).format(date)
 				: String(value);
 		}
-		case 'timestamp':
-		case 'timestamptz':
-		case 'datetime': {
-			const date = dateValue(value);
-			return date
-				? new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
-				: String(value);
-		}
-		case 'date-range':
-		case 'dateRange':
-			return formatDateRange(value, locale);
+		case 'instant_range':
+			return formatInstantRange(field, value, locale, t);
 		case 'geolocation': {
 			const address = objectProperty(value, 'formatted_address');
 			return typeof address === 'string' ? address : resolveText(t, 'dataRenderer.null');
 		}
-		case 'tstzrange':
-			return formatTimestampRange(value, locale, t);
 		case 'enum':
 			return humanize(String(value));
 		case 'phone':
 			return formatPhoneDisplay(String(value), phoneCountryFromLocale(locale));
-		case 'clock_time':
 		case 'text':
 		case 'string':
 		case 'uuid':

@@ -1,4 +1,3 @@
-import type { RemoteQuery } from '@norbital-ai/std/collection';
 import { Effect } from 'effect';
 
 /**
@@ -16,16 +15,17 @@ import { Effect } from 'effect';
  * the dead entries are swept on the next pass rather than by a finalizer.
  */
 
-type LiveQuery = Readonly<{
+type LiveQueryRegistration = Readonly<{
 	/** The collections whose changes falsify this query's current answer. */
 	readonly collections: ReadonlyArray<string>;
-	readonly refresh: RemoteQuery<never>['refresh'];
+	/** Private sync-owned re-execution. This is deliberately absent from the public query object. */
+	readonly reexecute: () => Effect.Effect<void, unknown>;
 }>;
 
 export type LiveQueryRegistry = Readonly<{
-	readonly register: (query: LiveQuery) => void;
+	readonly register: (query: LiveQueryRegistration) => void;
 	/** Re-runs every live query that read one of these collections. Returns how many were re-run. */
-	readonly refreshAffected: (collections: ReadonlyArray<string>) => number;
+	readonly reexecuteAffected: (collections: ReadonlyArray<string>) => number;
 	/** Live registrations, dead references already swept. Exposed for tests. */
 	readonly size: () => number;
 }>;
@@ -33,11 +33,11 @@ export type LiveQueryRegistry = Readonly<{
 const ANY_COLLECTION = '*';
 
 export const createLiveQueryRegistry = (): LiveQueryRegistry => {
-	const registered = new Set<WeakRef<LiveQuery>>();
+	const registered = new Set<WeakRef<LiveQueryRegistration>>();
 
 	/** Drops collected entries and hands back what is still alive, in one pass. */
-	const sweep = (): ReadonlyArray<LiveQuery> => {
-		const alive: Array<LiveQuery> = [];
+	const sweep = (): ReadonlyArray<LiveQueryRegistration> => {
+		const alive: Array<LiveQueryRegistration> = [];
 		for (const reference of registered) {
 			const query = reference.deref();
 			if (query === undefined) {
@@ -53,24 +53,24 @@ export const createLiveQueryRegistry = (): LiveQueryRegistry => {
 		register: (query) => {
 			registered.add(new WeakRef(query));
 		},
-		refreshAffected: (collections) => {
+		reexecuteAffected: (collections) => {
 			if (collections.length === 0) return 0;
 			const changed = new Set(collections);
-			let refreshed = 0;
-			const refreshes: Array<Effect.Effect<void>> = [];
+			let reexecuted = 0;
+			const executions: Array<Effect.Effect<void>> = [];
 			for (const query of sweep()) {
 				const affected =
 					changed.has(ANY_COLLECTION) ||
 					query.collections.some((name) => name === ANY_COLLECTION || changed.has(name));
 				if (!affected) continue;
-				refreshed += 1;
+				reexecuted += 1;
 				// Failures land on the query's own `error` cell, which is where a reader already looks.
-				// Rethrowing here would take down the sync advance that triggered the refresh, so one
+				// Rethrowing here would take down the sync advance that triggered re-execution, so one
 				// collection the subject cannot read would stop every other query updating.
-				refreshes.push(Effect.promise(query.refresh).pipe(Effect.catch(() => Effect.void)));
+				executions.push(query.reexecute().pipe(Effect.catch(() => Effect.void)));
 			}
-			Effect.runFork(Effect.all(refreshes, { concurrency: 'unbounded', discard: true }));
-			return refreshed;
+			Effect.runFork(Effect.all(executions, { concurrency: 'unbounded', discard: true }));
+			return reexecuted;
 		},
 		size: () => sweep().length
 	};

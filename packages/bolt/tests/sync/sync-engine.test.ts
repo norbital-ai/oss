@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { Effect, Schema } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EffectId, success, type TransportRequest } from '@norbital-ai/bolt-protocol';
+import { approveBy } from '../../src/authoring/approval-flow.js';
+import { describePolicy } from '../../src/authoring/policy-introspection.js';
 import { policy } from '../../src/authoring/workspace-schema.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
@@ -214,6 +216,14 @@ describe('Sync engine over SQL', () => {
 		expect(await database.query('select team from people where id = $1', [rid('p1')])).toEqual([
 			{ team: 'analytical' }
 		]);
+		const updateEvent = await database.query(
+			"select record from bolt_sync_outbox where collection_name = 'people' and operation = 'update' order by xid desc, sequence desc limit 1"
+		);
+		expect(updateEvent[0]?.['record']).toMatchObject({
+			id: rid('p1'),
+			name: 'Ada',
+			team: 'analytical'
+		});
 
 		await runtime.runPromise(
 			Effect.gen(function* () {
@@ -353,11 +363,11 @@ describe('Sync engine over SQL', () => {
 		expect(field(changes[0]?.record ?? null, 'name')).toBe('Ada Lovelace');
 	});
 
-	it('serves a snapshot of seeded rows the log never saw, with a cursor to stream on from', async () => {
+	it('serves a snapshot of seeded rows with a cursor beyond their captured change', async () => {
 		harness = await makeBoltTestRuntime();
 		const { runtime, effectId, database } = harness;
-		// Written straight to the table, exactly as a seed, an import or a restore does — so the outbox
-		// knows nothing about it and a log-only replica would call this workspace empty.
+		// Written straight to the table, exactly as a seed, an import or a restore does. Database-owned
+		// capture means this path cannot bypass sync just because it did not call Collections.
 		await database.query("insert into people (id, name, team) values ($1, 'Seeded', 'core')", [
 			rid('seeded-1')
 		]);
@@ -365,7 +375,7 @@ describe('Sync engine over SQL', () => {
 			'select count(*)::int as count from bolt_sync_outbox',
 			[]
 		);
-		expect(outboxed[0]?.count).toBe(0);
+		expect(outboxed[0]?.count).toBe(1);
 
 		const page = await runtime.runPromise(
 			Effect.gen(function* () {
@@ -437,7 +447,9 @@ describe('Sync engine over SQL', () => {
 			// which also stops every file's metadata in the workspace landing in every browser.
 		).toEqual([
 			'approval_request',
+			'automation_run',
 			'bolt_notifications',
+			'chat_document',
 			'chat_message',
 			'chat_session',
 			'people',
@@ -474,7 +486,9 @@ describe('Sync engine over SQL', () => {
 			)
 		).toEqual([
 			'approval_request',
+			'automation_run',
 			'bolt_notifications',
+			'chat_document',
 			'chat_message',
 			'chat_session',
 			'requestor',
@@ -512,6 +526,16 @@ describe('Sync engine over SQL', () => {
 		const CONTRACTOR_TEAM = 'Contractors';
 		const APPROVER_TEAM = 'Approvers';
 		const REQUEST_ID = '019f6f10-0004-7000-8000-000000000001';
+		const concreteApproval = {
+			id: '019f6f10-0004-7000-8000-000000000101',
+			steps: [
+				{
+					id: '019f6f10-0004-7000-8000-000000000201',
+					approvers: [APPROVER_TEAM]
+				}
+			],
+			superceded_by: []
+		};
 		harness = await makeBoltTestRuntime(
 			testWorkspace({
 				policies: [
@@ -524,17 +548,7 @@ describe('Sync engine over SQL', () => {
 							{
 								collection: 'people',
 								action: 'create',
-								approval: {
-									id: '019f6f10-0004-7000-8000-000000000101',
-									name: 'People change approval',
-									steps: [
-										{
-											id: '019f6f10-0004-7000-8000-000000000201',
-											name: 'Review',
-											approvers: [APPROVER_TEAM]
-										}
-									]
-								}
+								approval: concreteApproval
 							}
 						]
 					})
@@ -561,7 +575,8 @@ describe('Sync engine over SQL', () => {
 					collection: 'people',
 					id: rid('p-approved'),
 					action: 'create',
-					values: { name: 'Grace' }
+					values: { name: 'Grace' },
+					approval: concreteApproval
 				});
 			})
 		);
@@ -589,6 +604,7 @@ describe('Sync engine over SQL', () => {
 		expect(await replicated(adminSubject, 'approval_request')).toEqual([REQUEST_ID]);
 		expect(await replicated(member('bystander', CONTRACTOR_TEAM), 'requestor')).toEqual([]);
 		expect(await replicated(party, 'requestor')).toHaveLength(1);
+		expect(await replicated(adminSubject, 'requestor')).toHaveLength(1);
 	});
 
 	it('publishes a declarative create approval to two mounted inboxes and resumes it atomically', async () => {
@@ -598,32 +614,23 @@ describe('Sync engine over SQL', () => {
 		harness = await makeBoltTestRuntime(
 			testWorkspace({
 				policies: [
-					policy({
-						name: 'requester',
-						effect: 'allow',
-						grants: [
-							{ collection: 'people', action: 'read' },
-							{
-								collection: 'people',
-								action: 'create',
-								approval: {
-									id: '019f6f10-0005-7000-8000-000000000101',
-									name: 'People create approval',
-									steps: [
-										{
-											id: '019f6f10-0005-7000-8000-000000000201',
-											name: 'Review',
-											approvers: [APPROVER_TEAM]
-										}
-									]
+					describePolicy('requester', {
+						description: 'Creates people through the approver team.',
+						grants: {
+							people: {
+								read: {},
+								create: {
+									approval: {
+										flow: () => approveBy(APPROVER_TEAM),
+										superceded_by: []
+									}
 								}
 							}
-						]
+						}
 					}),
-					policy({
-						name: 'reviewer',
-						effect: 'allow',
-						grants: [{ collection: 'people', action: 'read' }]
+					describePolicy('reviewer', {
+						description: 'Reads people under review.',
+						grants: { people: { read: {} } }
 					})
 				],
 				teams: { [REQUESTER_TEAM]: ['requester'], [APPROVER_TEAM]: ['reviewer'] }
@@ -758,9 +765,13 @@ describe('Sync engine over SQL', () => {
 		).toEqual([
 			{ collection_name: 'approval_request', operation: 'create' },
 			{ collection_name: 'requestor', operation: 'create' },
+			{ collection_name: 'bolt_notifications', operation: 'create' },
 			{ collection_name: 'approval_request', operation: 'update' }
 		]);
-		expect(published.at(-1)).toEqual({ topic: SYNC_TOPIC, collections: ['approval_request'] });
+		expect(published.at(-1)).toEqual({
+			topic: SYNC_TOPIC,
+			collections: ['approval_request', 'bolt_notifications']
+		});
 
 		const requesterDecision = await drainMountedClient(
 			harness,
@@ -770,12 +781,19 @@ describe('Sync engine over SQL', () => {
 		requesterClient = requesterDecision.client;
 		const approverDecision = await drainMountedClient(harness, approverClient, 'approver-decision');
 		approverClient = approverDecision.client;
-		for (const changes of [requesterDecision.changes, approverDecision.changes]) {
-			expect(changes.map(({ collection, operation }) => [collection, operation])).toEqual([
-				['approval_request', 'update']
-			]);
-			expect(field(changes[0]?.record ?? null, 'status')).toBe('APPROVED');
-		}
+		expect(
+			requesterDecision.changes.map(({ collection, operation }) => [collection, operation])
+		).toEqual([
+			['bolt_notifications', 'create'],
+			['approval_request', 'update']
+		]);
+		expect(field(requesterDecision.changes[0]?.record ?? null, 'recipient')).toBe(requester.userId);
+		expect(field(requesterDecision.changes[0]?.record ?? null, 'read')).toBe(false);
+		expect(field(requesterDecision.changes[1]?.record ?? null, 'status')).toBe('APPROVED');
+		expect(
+			approverDecision.changes.map(({ collection, operation }) => [collection, operation])
+		).toEqual([['approval_request', 'update']]);
+		expect(field(approverDecision.changes[0]?.record ?? null, 'status')).toBe('APPROVED');
 
 		await harness.runtime.runPromise(
 			Effect.gen(function* () {

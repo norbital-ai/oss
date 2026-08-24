@@ -47,7 +47,7 @@
 		{:else if singleErrorMessage}
 			{singleErrorMessage}
 		{:else if isMultipleErrors}
-			<Stack as="ul" gap="xs" class="ml-4 list-disc">
+			<Stack as="ul" gap="xs" class="ps-4 list-disc">
 				{#each errors ?? [] as error, index (index)}
 					{#if error?.message}
 						<li>{error.message}</li>

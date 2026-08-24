@@ -16,30 +16,35 @@ export type BoltClient = Readonly<{
 	) => Promise<S['Type']>; // repository-health:allow EFF2 -- BoltClient is the public browser command seam; every internal workflow immediately adapts its decoded Promise into Effect.
 }>;
 
+/** One page of a keyset read, built once rather than per call. */
+const CollectionPage = Schema.Struct({ rows: Schema.Array(Schema.Json) });
+
 /** Owns authenticated transport decoding and the collection, remote, and sync client views built on top of it. */
 const ClientFactories = {
 	bolt: (scope: InvocationScope, transport: BoltTransport): BoltClient => ({
 		scope,
-		command: (command, input, output, signal) =>
-			Effect.runPromise(
-				Effect.tryPromise(() => transport.command(command, input, signal)).pipe(
-					Effect.flatMap(Schema.decodeUnknownEffect(output))
-				)
-			)
+		command: (command, input, output, signal) => {
+			// Built before the request rather than inside the pipe: the decoder belongs to the schema the
+			// caller named, not to the response it happens to be applied to.
+			const decode = Schema.decodeUnknownEffect(output);
+			return Effect.runPromise(
+				Effect.tryPromise({
+					try: () => transport.command(command, input, signal),
+					catch: (cause) => cause
+				}).pipe(Effect.flatMap(decode))
+			);
+		}
 	}),
 	collection: (client: BoltClient, collection: string) => ({
 		// The command answers one keyset page. This view takes a row count and gives back rows, so it
 		// reads the page apart here rather than making every caller of it learn about cursors.
 		findMany: (limit = 100, signal?: AbortSignal) =>
 			Effect.runPromise(
-				Effect.tryPromise(() =>
-					client.command(
-						'collections.findMany',
-						{ collection, limit },
-						Schema.Struct({ rows: Schema.Array(Schema.Json) }),
-						signal
-					)
-				).pipe(Effect.map((page) => page.rows))
+				Effect.tryPromise({
+					try: () =>
+						client.command('collections.findMany', { collection, limit }, CollectionPage, signal),
+					catch: (cause) => cause
+				}).pipe(Effect.map((page) => page.rows))
 			)
 	}),
 	remote: (client: BoltClient, command: string) => (input: Schema.Json, signal?: AbortSignal) =>

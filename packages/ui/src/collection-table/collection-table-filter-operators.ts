@@ -51,15 +51,10 @@ export function collectionFilterOperatorOptions(
 			case 'numeric':
 			case 'number':
 			case 'integer':
-			case 'date':
-			case 'clock_time':
-			case 'timestamp':
-			case 'timestamptz':
-			case 'datetime':
+			case 'instant':
 				applicable = orderedOperators;
 				break;
-			case 'date-range':
-			case 'dateRange':
+			case 'instant_range':
 				applicable = [
 					{ value: 'contains_date', label: 'contains date' },
 					{ value: 'overlaps', label: 'overlaps' }
@@ -83,7 +78,9 @@ export function collectionFilterOperandField(
 	field: CollectionField,
 	operator: CollectionFilterOperator
 ): CollectionField {
-	return operator === 'contains_date' ? { name: field.name, kind: 'date', nullable: false } : field;
+	return operator === 'contains_date'
+		? { name: field.name, kind: 'instant', nullable: false, precision: 'day' }
+		: field;
 }
 
 export function collectionFilterQueryOperator(

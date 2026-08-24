@@ -181,17 +181,16 @@
 	}
 
 	function loadMarkdownPreview(url: string): Effect.Effect<PreviewContent> {
-		return Effect.gen(function* () {
-			const text = yield* fetchText(url);
-			return { type: 'markdown', renderedHtml: marked.parse(text, { async: false }) };
-		});
+		return fetchText(url).pipe(
+			Effect.map((text) => ({
+				type: 'markdown',
+				renderedHtml: marked.parse(text, { async: false })
+			}))
+		);
 	}
 
 	function loadTextPreview(url: string): Effect.Effect<PreviewContent> {
-		return Effect.gen(function* () {
-			const text = yield* fetchText(url);
-			return { type: 'text', content: text };
-		});
+		return fetchText(url).pipe(Effect.map((text) => ({ type: 'text', content: text })));
 	}
 
 	const previewLoaders: Record<PreviewKind, (url: string) => Effect.Effect<PreviewContent>> = {

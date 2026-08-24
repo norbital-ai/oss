@@ -13,12 +13,13 @@ templates/* ──────────────────────�
                                                Colony publishes + routes
 ```
 
-| Tree                    | Owns                                                             |
-| ----------------------- | ---------------------------------------------------------------- |
-| `oss/packages/*`        | Bolt compiler/runtime/protocol, UI, std, config package source   |
-| `templates*/*`          | Tenant source, assets, migrations, seed, template metadata       |
-| `norbital/apps/colony`  | Hosting, compilation orchestration, releases, routes, tenant DBs |
-| `norbital/apps/website` | Marketing/docs UI; public template pages fetched at build time   |
+| Tree                    | Owns                                                                                          |
+| ----------------------- | --------------------------------------------------------------------------------------------- |
+| `oss/packages/*`        | Bolt compiler/runtime/protocol, UI, std, config package source                                |
+| `templates*/*`          | Tenant source, assets, migrations, template metadata                                          |
+| `seed_bank`             | Per-template fixture trees (`<collection>.json` per collection, asset media) loaded by Colony |
+| `norbital/apps/colony`  | Hosting, compilation orchestration, releases, routes, tenant DBs                              |
+| `norbital/apps/website` | Marketing/docs UI; public template pages fetched at build time                                |
 
 Saving source changes only its owner. A tenant changes only after `bolt sync` emits a new artifact
 and Colony publishes and routes it.
@@ -31,10 +32,10 @@ failure, and owns:
 ```text
 .norbital/
 ├── diagnosis/                  # ignored
-├── dist/                       # ignored client/runtime output
-├── artifact/bundle.mjs        # ignored portable server artifact
-├── generated/                 # ignored registry, apps, workspace, client
-├── migrations/                # committed migration history
+├── dist/                       # ignored client build (workspace.js + assets/)
+├── artifact/                   # ignored portable server artifact (bundle.mjs, bundle-entry.mjs)
+├── generated/                  # ignored: models, types, collections, client, i18n-messages, app.css
+├── migrations/                 # committed migration history
 ├── types/**/$types.d.ts        # ignored
 └── tsconfig.json               # ignored
 ```

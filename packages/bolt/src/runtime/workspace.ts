@@ -33,12 +33,24 @@ export class DispatchError extends Schema.TaggedError<DispatchError>()('Bolt.Dis
 }
 
 /** Renders any thrown value as a non-empty, attributable sentence. */
-export const describeCause = (cause: unknown): string => {
+const describeCauseAt = (cause: unknown, seen: ReadonlySet<object>): string => {
 	if (typeof cause === 'string' && cause.length > 0) return cause;
-	if (cause instanceof Error && cause.message.length > 0) return cause.message;
 	if (cause !== null && typeof cause === 'object') {
+		if (seen.has(cause)) return 'A cyclic failure occurred';
+		const nextSeen = new Set(seen).add(cause);
 		const tag = Reflect.get(cause, '_tag');
 		const message = Reflect.get(cause, 'message');
+		const nested = Reflect.get(cause, 'cause');
+		// Phase wrappers are Error instances whose generated message serializes a native nested Error as
+		// `{}`. Prefer the attributable inner message while retaining the wrapper's phase and collection,
+		// otherwise Studio reports only that settlement failed and hides the line that actually broke.
+		if (typeof tag === 'string' && nested !== undefined && nested !== cause) {
+			const phase = Reflect.get(cause, 'phase');
+			const step = Reflect.get(cause, 'step');
+			const collection = Reflect.get(cause, 'collection');
+			const site = [phase, step, collection].filter((value) => typeof value === 'string').join(' ');
+			return `${tag}${site === '' ? '' : ` (${site})`}: ${describeCauseAt(nested, nextSeen)}`;
+		}
 		if (typeof message === 'string' && message.length > 0) {
 			return typeof tag === 'string' ? `${tag}: ${message}` : message;
 		}
@@ -49,11 +61,14 @@ export const describeCause = (cause: unknown): string => {
 			return detail === undefined || detail === '{}' ? tag : `${tag}: ${detail}`;
 		}
 	}
+	if (cause instanceof Error && cause.message.length > 0) return cause.message;
 	const rendered = String(cause);
 	return rendered.length > 0 && rendered !== '[object Object]'
 		? rendered
 		: 'An unattributed failure occurred';
 };
+
+export const describeCause = (cause: unknown): string => describeCauseAt(cause, new Set());
 
 export type Interface = Readonly<{
 	readonly definition: WorkspaceDefinition;

@@ -2,7 +2,7 @@
 	import { Button } from '#lib/button';
 	import * as Command from '#lib/command';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Inline, Stack } from '#lib/layout';
+	import { Inline, SCROLL_AXIS_CLASSES, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { humanize } from '@norbital-ai/std';
 	import { Effect } from 'effect';
@@ -184,11 +184,14 @@
 		isSelectingColor = false;
 		validatedInput = '';
 		colorSearchValue = '';
-		void Effect.runPromise(
-			Effect.gen(function* () {
-				yield* Effect.promise(() => tick());
-				inputElement?.focus();
-			})
+		Effect.runFork(
+			Effect.promise(() => tick()).pipe(
+				Effect.map(() => inputElement?.focus()),
+				Effect.ignoreCause({
+					log: true,
+					message: '[TagsInput] Failed to restore input focus'
+				})
+			)
 		);
 	};
 
@@ -253,7 +256,7 @@
 
 		<Command.Root
 			shouldFilter={false}
-			class="flex flex-col"
+			class="gap-2"
 			items={colorItems}
 			onValueChange={(value) => addTagWithColor(value as TagColor)}
 		>
@@ -307,7 +310,7 @@
 				{/if}
 			</Command.List>
 
-			<Inline justify="end" gap="sm" class="mt-2">
+			<Inline justify="end" gap="sm">
 				<Button
 					variant="secondary"
 					size="sm"
@@ -323,7 +326,8 @@
 {:else}
 	<div
 		class={cn(
-			'flex h-8 w-full flex-nowrap items-center gap-1 overflow-x-auto overflow-y-hidden rounded-md border border-input bg-background px-1.5 py-0 shadow-xs',
+			'flex h-8 w-full flex-nowrap items-center gap-1 rounded-md border border-input bg-background px-1.5 py-0 shadow-xs',
+			SCROLL_AXIS_CLASSES.x,
 			{ 'cursor-not-allowed opacity-50': disabled },
 			className
 		)}

@@ -1,11 +1,11 @@
 import { Cause, Clock, Effect, Layer, type Schema } from 'effect';
 import {
 	EffectId,
+	BundleManifest,
 	makeWireError,
 	PROTOCOL_VERSION,
 	type Activation,
 	type BoltBundle,
-	type BundleManifest,
 	type BundleResult,
 	type FacilityBindings,
 	type Invocation,
@@ -14,6 +14,7 @@ import {
 import type { WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
+import * as ChatDocuments from '#lib/runtime/agents/documents.js';
 import * as Approvals from '#lib/runtime/approvals/approvals.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
@@ -63,6 +64,8 @@ import * as InvocationBudget from '#lib/runtime/budget.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
 import { AuthoredRefusal } from '#lib/authoring/refusal.js';
+import { policyRuntimeFunctionsFor } from '#lib/authoring/policy-introspection.js';
+import { buildSchemaPlan } from '#lib/compiler/schema-plan.js';
 
 /** Owns invocation layer behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
 const InvocationLayers = {
@@ -131,10 +134,12 @@ const InvocationLayers = {
 		 * exactly one runtime message, `Wake`, which is why it is bound here beside `database` rather
 		 * than reached for separately by each of those services.
 		 */
-		const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(database, tasks)));
 		// Approval projections are replicated system collections, so their state transitions publish
 		// through the same durable outbox + wake path as authored collection writes.
 		const syncWake = SyncWake.layer.pipe(Layer.provide(transport));
+		const taskQueue = TaskQueue.layer(context).pipe(
+			Layer.provide(Layer.mergeAll(database, tasks, syncWake))
+		);
 		const approvals = Approvals.layer.pipe(
 			Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, syncWake))
 		);
@@ -159,6 +164,7 @@ const InvocationLayers = {
 			Layer.provide(
 				Layer.mergeAll(
 					workspaceLayer,
+					tenantScope,
 					access,
 					approvals,
 					automations,
@@ -180,6 +186,9 @@ const InvocationLayers = {
 			// automation would be the second shape of authored code rather than the same one.
 			Layer.provide(Layer.mergeAll(collections, automations, ai, files))
 		);
+		const chatDocuments = ChatDocuments.layer.pipe(
+			Layer.provide(Layer.mergeAll(database, files, syncWake))
+		);
 		const agents = Agents.layer.pipe(
 			Layer.provide(
 				Layer.mergeAll(
@@ -188,7 +197,9 @@ const InvocationLayers = {
 					collections,
 					ai,
 					database,
+					chatDocuments,
 					taskQueue,
+					syncWake,
 					files,
 					connector,
 					hostTools,
@@ -230,10 +241,13 @@ const InvocationLayers = {
 					identity,
 					agents,
 					communication,
+					files,
 					database,
 					access,
 					rateLimits,
-					tenantScope
+					tenantScope,
+					taskQueue,
+					chatDocuments
 				)
 			)
 		);
@@ -257,7 +271,9 @@ const InvocationLayers = {
 			)
 		);
 		const notifications = Notifications.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, identity, database, communication, tasks))
+			Layer.provide(
+				Layer.mergeAll(workspaceLayer, identity, database, communication, tasks, syncWake)
+			)
 		);
 		const hostConfig = Layer.succeed(HostConfig, hostConfigShape);
 		return Layer.mergeAll(
@@ -429,6 +445,8 @@ const activationLayer = (activation: Activation, facilities: FacilityBindings) =
 	const context = activationContext(activation);
 	const tasks = Tasks.layer(facilities.tasks, context);
 	const database = Database.layer(facilities.database, context);
+	const transport = Transport.layer(facilities.transport, context);
+	const syncWake = SyncWake.layer.pipe(Layer.provide(transport));
 	// The database is merged into the result rather than only provided to the queue: activation now
 	// writes to the tenant itself — the `team` rows an approval step names — and not only through
 	// `bolt_schedule`. Provided-but-not-merged left `Database.Service` unavailable to the activation
@@ -437,7 +455,9 @@ const activationLayer = (activation: Activation, facilities: FacilityBindings) =
 	return Layer.mergeAll(
 		tasks,
 		database,
-		TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(database, tasks)))
+		transport,
+		syncWake,
+		TaskQueue.layer(context).pipe(Layer.provide(Layer.mergeAll(database, tasks, syncWake)))
 	);
 };
 
@@ -829,28 +849,54 @@ const BundleDispatch = {
 };
 const run = BundleDispatch.run;
 
+/**
+ * The generated artifact predates conditional approvals and therefore constructs the four original
+ * authored-runtime members directly. `makeBundle` owns the fifth because it also has the described
+ * policy objects whose server-only predicates are held in `policy-introspection`'s WeakMap.
+ */
+type AuthoredRuntimeInput = Omit<AuthoredRuntime, 'policyAuthorizations' | 'approvalFlows'> &
+	Partial<Pick<AuthoredRuntime, 'policyAuthorizations' | 'approvalFlows'>>;
+
+/** Generated artifacts hand their static manifest to the runtime before its exact DDL is known. */
+type BundleManifestInput = Omit<BundleManifest, 'schemaFingerprint' | 'schemaPlan'> &
+	Partial<Pick<BundleManifest, 'schemaFingerprint' | 'schemaPlan'>>;
+
 /** Owns make bundle behavior at the runtime boundary so validation and typed semantics stay consistent for every caller. */
 const Bundles = {
 	make: (
 		workspace: WorkspaceDefinition,
-		manifest: BundleManifest,
+		manifest: BundleManifestInput,
 		remoteHandlers: Readonly<Record<string, RuntimeRemoteHandler>> = {},
 		toolHandlers: Readonly<Record<string, RuntimeRemoteHandler>> = {},
-		authored: AuthoredRuntime = emptyAuthoredRuntime
-	): BoltBundle => ({
-		protocolVersion: PROTOCOL_VERSION,
-		manifest,
-		dispatch: (invocation, facilities, signal) =>
-			run(
-				workspace,
-				facilities,
-				invocation,
-				signal,
-				mergeRuntimeHandlers(remoteHandlers, toolHandlers),
-				authored
-			),
-		activate: (activation, facilities, signal) =>
-			activate(workspace, manifest, activation, facilities, signal)
-	})
+		authored: AuthoredRuntimeInput = emptyAuthoredRuntime
+	): BoltBundle => {
+		const schemaPlan = buildSchemaPlan(workspace);
+		const exactManifest = BundleManifest.make({
+			...manifest,
+			schemaFingerprint: schemaPlan.fingerprint,
+			schemaPlan
+		});
+		const policyFunctions = policyRuntimeFunctionsFor(workspace.policies);
+		const runtime: AuthoredRuntime = {
+			...authored,
+			policyAuthorizations: authored.policyAuthorizations ?? policyFunctions.authorizations,
+			approvalFlows: authored.approvalFlows ?? policyFunctions.approvalFlows
+		};
+		return {
+			protocolVersion: PROTOCOL_VERSION,
+			manifest: exactManifest,
+			dispatch: (invocation, facilities, signal) =>
+				run(
+					workspace,
+					facilities,
+					invocation,
+					signal,
+					mergeRuntimeHandlers(remoteHandlers, toolHandlers),
+					runtime
+				),
+			activate: (activation, facilities, signal) =>
+				activate(workspace, exactManifest, activation, facilities, signal)
+		};
+	}
 };
 export const makeBundle = Bundles.make;

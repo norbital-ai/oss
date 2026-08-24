@@ -8,18 +8,18 @@ import {
 describe('extractModelFields', () => {
 	it('reads builder types and notNull from an authored model', () => {
 		const fields = extractModelFields(`
-import { date, defineModel, integer, reference, text } from '@norbital-ai/bolt/authoring';
+import { defineModel, instant, integer, reference, text } from '@norbital-ai/bolt/authoring';
 
 export default defineModel({
 	name: text({ search: true }).notNull(),
-	date_of_birth: date(),
+date_of_birth: instant({ precision: 'day' }),
 	dependents_count: integer().notNull().default(0),
 	source: reference({ TIME_ENTRY: 'time_entries', LEAVE_REQUEST: 'leave_requests' }).notNull()
 });
 `);
 		expect(fields).toEqual({
 			name: { type: 'string', required: true, indexed: false },
-			date_of_birth: { type: 'string', required: false, indexed: false },
+			date_of_birth: { type: 'instant', required: false, indexed: false },
 			dependents_count: { type: 'number', required: true, indexed: false },
 			source: { type: 'reference', required: true, indexed: false }
 		});
@@ -214,11 +214,11 @@ describe('built-in catalog kinds', () => {
 				count: integer().notNull(),
 				amount: numeric().notNull(),
 				active: boolean().notNull(),
-				born: date(),
-				occurred_at: timestamp(),
+				born: instant({ precision: 'day' }),
+				occurred_at: instant(),
 				id: uuid(),
-				starts: clockTime(),
-				period: dateRange().notNull(),
+				starts: custom('instant_range'),
+				period: custom('instant_range').notNull(),
 				where: geolocation(),
 				photo: file(),
 				embedding: vector({ dimensions: 8 }),
@@ -235,11 +235,11 @@ describe('built-in catalog kinds', () => {
 			count: 'integer',
 			amount: 'numeric',
 			active: 'boolean',
-			born: 'date',
-			occurred_at: 'timestamp',
+			born: 'instant',
+			occurred_at: 'instant',
 			id: 'uuid',
-			starts: 'clock_time',
-			period: 'date-range',
+			starts: 'instant_range',
+			period: 'instant_range',
 			where: 'geolocation',
 			photo: 'file',
 			embedding: 'json',
@@ -247,6 +247,10 @@ describe('built-in catalog kinds', () => {
 			pay: 'money',
 			source: 'reference'
 		});
+		expect(catalog.fields.find((field) => field.name === 'born')?.precision).toBe('day');
+		expect(catalog.fields.find((field) => field.name === 'occurred_at')).not.toHaveProperty(
+			'precision'
+		);
 	});
 });
 

@@ -118,6 +118,18 @@ export type MentionMenuItem =
 	  }
 	| { readonly kind: 'command'; readonly command: MentionCommand };
 
+/** One app as the menu row that mentions it. */
+const appMenuItem = (app: MentionAppHit): MentionMenuItem => ({
+	kind: 'app',
+	key: app.key,
+	label: app.label,
+	...(app.href ? { href: app.href } : {}),
+	...(app.description != null ? { description: app.description } : {})
+});
+
+/** One collection as the scope row that narrows the menu to it. */
+const scopeMenuItem = (collection: string): MentionMenuItem => ({ kind: 'scope', collection });
+
 /** Assembles the @ menu from the current prefix, collections, records, and apps. */
 export function buildMentionMenuEntries(
 	parsed: ParsedCommandQuery,
@@ -130,19 +142,10 @@ export function buildMentionMenuEntries(
 			return [{ kind: 'command', command: 'plan' }];
 		case 'record': {
 			if (parsed.collection) return records;
-			return filterCollections(parsed.text, collections).map((collection): MentionMenuItem => ({
-				kind: 'scope',
-				collection
-			}));
+			return filterCollections(parsed.text, collections).map(scopeMenuItem);
 		}
 		case 'app':
-			return filterApps(parsed.text, apps).map((app): MentionMenuItem => ({
-				kind: 'app',
-				key: app.key,
-				label: app.label,
-				...(app.href ? { href: app.href } : {}),
-				...(app.description != null ? { description: app.description } : {})
-			}));
+			return filterApps(parsed.text, apps).map(appMenuItem);
 		case 'command':
 			return [];
 		case null: {
@@ -151,20 +154,13 @@ export function buildMentionMenuEntries(
 					{ kind: 'command', command: 'record' },
 					{ kind: 'command', command: 'plan' },
 					{ kind: 'command', command: 'app' },
-					...collections.map((collection): MentionMenuItem => ({ kind: 'scope', collection }))
+					...collections.map(scopeMenuItem)
 				];
 			}
-			const scopes = filterCollections(parsed.text, collections).map(
-				(collection): MentionMenuItem => ({ kind: 'scope', collection })
-			);
-			const appMentions = filterApps(parsed.text, apps).map((app): MentionMenuItem => ({
-				kind: 'app',
-				key: app.key,
-				label: app.label,
-				...(app.href ? { href: app.href } : {}),
-				...(app.description != null ? { description: app.description } : {})
-			}));
-			return [...scopes, ...appMentions];
+			return [
+				...filterCollections(parsed.text, collections).map(scopeMenuItem),
+				...filterApps(parsed.text, apps).map(appMenuItem)
+			];
 		}
 		default:
 			// `scope` is `null` when the text carries no command prefix — there is nothing to mention
@@ -245,26 +241,29 @@ export function createMentionSources(options: MentionSourcesOptions = {}): Menti
 			const findRecords = options.findRecords;
 			if (findRecords === undefined) return Effect.succeed([]);
 			const text = query.trim();
-			return Effect.gen(function* () {
-				const result = findRecords(collection, {
+			return Effect.tryPromise(() =>
+				findRecords(collection, {
 					search: text,
 					limit: hitsPerSource
-				});
-				const rows = yield* Effect.tryPromise(() => result);
-				return rows.flatMap((entry): readonly MentionRecordHit[] => {
-					const row = Result.getOrElse(decodeMentionRow(entry), () => undefined);
-					if (row === undefined) return [];
-					const recordId = row.id ?? '';
-					if (!recordId) return [];
-					return [
-						{
-							collection,
-							recordId,
-							label: readRecordLabel(collection, row)
-						}
-					];
-				});
-			}).pipe(Effect.catch(() => Effect.succeed<readonly MentionRecordHit[]>([])));
+				})
+			).pipe(
+				Effect.map((rows) =>
+					rows.flatMap((entry): readonly MentionRecordHit[] => {
+						const row = Result.getOrElse(decodeMentionRow(entry), () => undefined);
+						if (row === undefined) return [];
+						const recordId = row.id ?? '';
+						if (!recordId) return [];
+						return [
+							{
+								collection,
+								recordId,
+								label: readRecordLabel(collection, row)
+							}
+						];
+					})
+				),
+				Effect.catch(() => Effect.succeed<readonly MentionRecordHit[]>([]))
+			);
 		}
 	};
 }

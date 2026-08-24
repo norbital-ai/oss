@@ -20,6 +20,7 @@ import {
 
 type SchemaStep = Readonly<{
 	readonly id: string;
+	/** Compiler-owned DDL, or the explicitly named bootstrap seed below; never application CRUD. */
 	readonly sql: string;
 }>;
 
@@ -101,7 +102,7 @@ const SchemaPlanValues = {
 				return 'double precision';
 			case 'boolean':
 				return 'boolean';
-			case 'datetime':
+			case 'instant':
 				return 'timestamptz';
 			case 'json':
 				return 'jsonb';
@@ -114,6 +115,64 @@ const SchemaPlanValues = {
 
 const systemRowFields = describeModel(defineSystemRowModel());
 const systemTableNames: ReadonlySet<string> = new Set(Object.keys(SYSTEM_MODELS));
+/** Additive initialization owned by the runtime table capability that requires it. */
+const systemTableInitializers: ReadonlyMap<string, SchemaStep> = new Map([
+	[
+		'approval_request',
+		{
+			id: 'collection:approval_request:zz-approval-teams-backfill',
+			// repository-health:allow SQL1 -- idempotent bootstrap backfill for approval rows created before the normalized team projections existed; migrate executes every initializer inside the schema transaction.
+			sql: `do $bolt_approval_team_backfill$ begin
+				if to_regclass('bolt_approvals') is not null then
+					update approval_request projected
+					set approver_teams = coalesce((
+						select jsonb_agg(distinct lower(approver.team_name))
+						from bolt_approvals approval
+						cross join lateral jsonb_array_elements(
+							case when jsonb_typeof(approval.state #> '{operation,approval,steps}') = 'array'
+							then approval.state #> '{operation,approval,steps}' else '[]'::jsonb end
+						) active(step_value)
+						cross join lateral jsonb_array_elements_text(
+							case when jsonb_typeof(active.step_value->'approvers') = 'array'
+							then active.step_value->'approvers' else '[]'::jsonb end
+						) approver(team_name)
+						where approval.request_id = projected.id::text
+					), '[]'::jsonb),
+					superseder_teams = coalesce((
+						select jsonb_agg(distinct lower(superseder.team_name))
+						from bolt_approvals approval
+						cross join lateral jsonb_array_elements_text(
+							case when jsonb_typeof(approval.state #> '{operation,approval,superceded_by}') = 'array'
+							then approval.state #> '{operation,approval,superceded_by}' else '[]'::jsonb end
+						) superseder(team_name)
+						where approval.request_id = projected.id::text
+						), '[]'::jsonb)
+					where projected.status = 'ONGOING'
+						and (projected.approver_teams = '[]'::jsonb or projected.superseder_teams = '[]'::jsonb);
+				end if;
+			end $bolt_approval_team_backfill$`
+		}
+	],
+	[
+		'bolt_audit',
+		{
+			id: 'collection:bolt_audit:zz-approval-request-backfill',
+			// repository-health:allow SQL1 -- idempotent bootstrap backfill for approval audit rows created before request_id was normalized; migrate owns the transaction.
+			sql: `update bolt_audit
+				set request_id = payload->>'requestId'
+				where request_id is null and payload ? 'requestId'`
+		}
+	],
+	[
+		'bolt_sync_horizon',
+		{
+			id: 'collection:bolt_sync_horizon:seed',
+			// repository-health:allow SQL1 -- bootstrap data: the singleton is part of provisioning the
+			// sync ledger, is idempotent, and runs only inside the schema plan's provisioning transaction.
+			sql: 'insert into bolt_sync_horizon (singleton) values (true) on conflict (singleton) do nothing'
+		}
+	]
+]);
 const internalSystemTables: ReadonlyArray<
 	CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
 > = Object.entries(INTERNAL_SYSTEM_MODELS).map(([name, declaration]) =>
@@ -266,9 +325,23 @@ const exclusionStep = (collectionName: string, exclusion: ModelExclusion): Schem
 	});
 	return {
 		id: `collection:${collectionName}:exclusion:${exclusion.name}`,
+		// repository-health:allow SQL1 -- guarded EXCLUDE-constraint DDL; the catalog read makes
+		// PostgreSQL's missing `ADD CONSTRAINT IF NOT EXISTS` behavior idempotent during provisioning.
 		sql: `do ${EXCLUSION_TAG} begin if not exists (select 1 from pg_constraint where conname = '${exclusion.name}' and conrelid = '${collectionName}'::regclass) then alter table ${quoteIdentifier(collectionName)} add constraint ${quoteIdentifier(exclusion.name)} exclude using gist (${elements.join(', ')}); end if; end ${EXCLUSION_TAG}`
 	};
 };
+
+/** Installs the database-owned sync capture for one collection after its table exists. */
+const syncTriggerSteps = (collectionName: string): ReadonlyArray<SchemaStep> => [
+	{
+		id: `sync-trigger:${collectionName}:1-drop`,
+		sql: `drop trigger if exists bolt_sync_capture on ${quoteIdentifier(collectionName)}`
+	},
+	{
+		id: `sync-trigger:${collectionName}:2-create`,
+		sql: `create trigger bolt_sync_capture after insert or update or delete on ${quoteIdentifier(collectionName)} for each row execute function bolt_capture_sync_change()`
+	}
+];
 
 /** Owns build schema plan behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
@@ -307,18 +380,33 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 			sql: "create or replace function bolt_assert(ok boolean, message text) returns void language plpgsql volatile parallel unsafe as $bolt_assert$ begin if ok is not true then raise exception '%', message using errcode = '40001'; end if; end $bolt_assert$"
 		},
 		{
-			// A STORED generated column refuses a STABLE expression, and `text::date` is only STABLE
-			// because it reads DateStyle. Authored values are canonical ISO dates, whose parse does not,
-			// so this wrapper is honestly immutable. Empty or absent projects NULL, which is what a
-			// union arm that does not carry the field needs.
-			id: 'bolt:function-date',
-			sql: "create or replace function bolt_date(value text) returns date language sql immutable parallel safe as $bolt_date$ select nullif(value, '')::date $bolt_date$"
+			// Day semantics live in the application value, but every projected column is still an
+			// instant. Canonical ISO days are anchored at UTC midnight so generated columns never fall
+			// back to PostgreSQL `date`, and the explicit zone keeps the result independent of the
+			// database session. Empty or absent projects NULL for union arms without the value.
+			id: 'bolt:function-instant',
+			sql: "create or replace function bolt_instant(value text) returns timestamptz language sql immutable parallel safe as $bolt_instant$ select nullif(value, '')::date::timestamp at time zone 'UTC' $bolt_instant$"
 		},
 		{
 			// Half-open [start, end): adjacent periods touch without overlapping, and a missing bound
 			// is unbounded.
 			id: 'bolt:function-daterange',
 			sql: "create or replace function bolt_daterange(payload jsonb) returns daterange language sql immutable parallel safe as $bolt_daterange$ select daterange(nullif(payload->>'start', '')::date, nullif(payload->>'end', '')::date, '[)') $bolt_daterange$"
+		},
+		{
+			// Every sync-visible row enters the ordered outbox because PostgreSQL changed it, not
+			// because each caller remembered a companion insert. That makes raw runtime writes and
+			// collection mutations identical to the replica and keeps the record plus its change in one
+			// transaction by construction.
+			id: 'bolt:function-sync-capture',
+			sql: `create or replace function bolt_capture_sync_change() returns trigger language plpgsql as $bolt_sync_capture$ begin if TG_OP = 'DELETE' then insert into bolt_sync_outbox (collection_name, record_id, operation) values (TG_TABLE_NAME, OLD.id::text, 'delete'); return OLD; end if; insert into bolt_sync_outbox (collection_name, record_id, operation, record) values (TG_TABLE_NAME, NEW.id::text, case when TG_OP = 'INSERT' then 'create' else 'update' end, to_jsonb(NEW)); return NEW; end $bolt_sync_capture$`
+		},
+		{
+			// The task queue remains private: command inputs are arbitrary and may contain secrets.
+			// Its automation rows project into a sync-visible collection inside the same transaction,
+			// so queue code writes one source of truth and the browser never reads the queue itself.
+			id: 'bolt:function-automation-run-projection',
+			sql: `create or replace function bolt_project_automation_run() returns trigger language plpgsql as $bolt_automation_run$ begin if TG_OP = 'DELETE' then if OLD.command like 'automations.%' then delete from automation_run where task_id = OLD.effect_id; end if; return OLD; end if; if NEW.command like 'automations.%' then insert into automation_run (task_id, name, status, attempts, max_attempts, progress, progress_sequence, progress_updated_at, result, error, next_run_at) values (NEW.effect_id, substring(NEW.command from length('automations.') + 1), NEW.status, NEW.attempts, NEW.max_attempts, NEW.progress, NEW.progress_sequence, NEW.progress_updated_at, NEW.result, NEW.error, case when NEW.status in ('pending', 'resuming') then NEW.run_at else null end) on conflict (task_id) do update set name = excluded.name, status = excluded.status, attempts = excluded.attempts, max_attempts = excluded.max_attempts, progress = excluded.progress, progress_sequence = excluded.progress_sequence, progress_updated_at = excluded.progress_updated_at, result = excluded.result, error = excluded.error, next_run_at = excluded.next_run_at, updated_at = now(), row_version = automation_run.row_version + 1; end if; return NEW; end $bolt_automation_run$`
 		}
 	];
 	/**
@@ -343,30 +431,51 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 				exclusionStep(collection.name, exclusion)
 			);
 			if (!systemTableNames.has(collection.name)) return exclusions;
+			const initializer = systemTableInitializers.get(collection.name);
 			const fields = Object.entries(collection.fields)
 				.sort(([left], [right]) => left.localeCompare(right))
-				.map(([name, field]) => renderColumn(name, field));
-			const sql = `create table if not exists ${SchemaPlanValues.quoteIdentifier(collection.name)} (${SYSTEM_COLUMNS}${fields.length === 0 ? '' : `, ${fields.join(', ')}`})`;
+				.map(([name, field]) => ({ name, sql: renderColumn(name, field) }));
+			const table = SchemaPlanValues.quoteIdentifier(collection.name);
+			const sql = `create table if not exists ${table} (${SYSTEM_COLUMNS}${fields.length === 0 ? '' : `, ${fields.map(({ sql }) => sql).join(', ')}`})`;
 			return [
 				{ id: `collection:${collection.name}`, sql },
+				// Runtime-owned tables have no authored Drizzle lineage. `create table if not exists`
+				// provisions a new tenant but leaves an existing table at its old shape, so adding a
+				// field to (for example) `bolt_task` used to make the new runtime query a column no
+				// deploy could create. Re-apply every declared field as an idempotent additive step.
+				// Existing columns are untouched; a newly required column without a default fails on
+				// populated data instead of pretending the migration succeeded.
+				...fields.map(({ name, sql }) => ({
+					id: `collection:${collection.name}:column:${name}`,
+					sql: `alter table ${table} add column if not exists ${sql}`
+				})),
 				...declaredIndexSteps(collection),
 				...modelIndexSteps(collection),
 				...searchIndexSteps(collection),
-				...(collection.name === 'bolt_sync_horizon'
-					? [
-							{
-								id: 'collection:bolt_sync_horizon:seed',
-								sql: 'insert into bolt_sync_horizon (singleton) values (true) on conflict (singleton) do nothing'
-							}
-						]
-					: []),
+				...(initializer === undefined ? [] : [initializer]),
 				...exclusions
 			];
 		})
 		.sort((left, right) => left.id.localeCompare(right.id));
-	const steps = [...foundation, ...collections].toSorted((left, right) =>
-		left.id.localeCompare(right.id)
-	);
+	const syncTriggers = workspace.collections
+		.filter((collection) => collection.sync !== false)
+		.flatMap(({ name }) => syncTriggerSteps(name));
+	const taskProjectionTriggers: ReadonlyArray<SchemaStep> = [
+		{
+			id: 'sync-trigger:bolt_task-automation-run:1-drop',
+			sql: 'drop trigger if exists bolt_project_automation_run on bolt_task'
+		},
+		{
+			id: 'sync-trigger:bolt_task-automation-run:2-create',
+			sql: 'create trigger bolt_project_automation_run after insert or update or delete on bolt_task for each row execute function bolt_project_automation_run()'
+		}
+	];
+	const steps = [
+		...foundation,
+		...collections,
+		...syncTriggers,
+		...taskProjectionTriggers
+	].toSorted((left, right) => left.id.localeCompare(right.id));
 	return { fingerprint: fingerprintSchemaSteps(steps), steps };
 };
 
@@ -403,6 +512,7 @@ export const identitySchemaSteps = (): ReadonlyArray<SchemaStep> =>
 	}).steps.filter(
 		(step) =>
 			!step.id.includes(':search:') &&
+			!step.id.startsWith('sync-trigger:') &&
 			// Derived from the declaration rather than from a naming convention. `team` and
 			// `auth_config` are just as necessary to authentication as Better Auth's four models, so a
 			// prefix or allowlist maintained beside the declarations could silently leave a new host

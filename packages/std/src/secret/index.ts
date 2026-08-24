@@ -296,74 +296,74 @@ type Opened =
 	| { readonly _tag: 'Value'; readonly value: string }
 	| { readonly _tag: 'Rejected'; readonly reason: string };
 
-const open = (key: Uint8Array, binding: string, stored: string): Effect.Effect<Opened> =>
-	Effect.gen(function* () {
-		const parts = stored.split('.');
-		const [version, nonce, ciphertext, tag] = parts;
-		if (
-			parts.length !== 4 ||
-			version !== VERSION ||
-			nonce === undefined ||
-			ciphertext === undefined ||
-			tag === undefined
-		)
-			// The plaintext case lands here, and saying so is the point: a value with no envelope was written
-			// before this vault encrypted anything, and no key will ever open it.
-			return {
-				_tag: 'Rejected' as const,
-				reason: `it is not a ${VERSION} envelope, so it was stored before this vault encrypted anything and predates the key`
-			};
-		const nonceBytes = fromBase64Url(nonce);
-		const tagBytes = fromBase64Url(tag);
-		const ciphertextBytes = fromBase64Url(ciphertext);
-		if (
-			nonceBytes === undefined ||
-			tagBytes === undefined ||
-			ciphertextBytes === undefined ||
-			nonceBytes.length !== NONCE_BYTES ||
-			tagBytes.length !== TAG_BYTES
-		)
-			return {
-				_tag: 'Rejected' as const,
-				reason:
-					'its nonce or authentication tag is the wrong size, so the stored value has been altered'
-			};
-		// Ciphertext and tag are handed back joined, which is how WebCrypto takes them — the envelope
-		// keeps them apart so a malformed value is rejected while parsing rather than sliced into
-		// pieces that then fail an authentication check for a misleading reason.
-		const joined = new Uint8Array(new ArrayBuffer(ciphertextBytes.length + tagBytes.length));
-		joined.set(ciphertextBytes);
-		joined.set(tagBytes, ciphertextBytes.length);
-		// Rejects when the tag does not verify. That is the branch that makes a tampered value fail
-		// rather than decrypt to garbage a caller would go on to use. Both WebCrypto calls are
-		// Promise-API edge work, and a rejection of either is a tampered or mis-keyed value — the
-		// defected promise failure is mapped into the same `Rejected` the parsing checks yield.
-		const outcome = yield* importKey(key, 'decrypt').pipe(
-			Effect.flatMap((cipher) =>
-				Effect.promise(() =>
-					crypto.subtle.decrypt(
-						{
-							name: 'AES-GCM',
-							iv: sourced(nonceBytes),
-							additionalData: utf8(binding),
-							tagLength: TAG_BYTES * 8
-						},
-						cipher,
-						joined
-					)
+const open = (key: Uint8Array, binding: string, stored: string): Effect.Effect<Opened> => {
+	const parts = stored.split('.');
+	const [version, nonce, ciphertext, tag] = parts;
+	if (
+		parts.length !== 4 ||
+		version !== VERSION ||
+		nonce === undefined ||
+		ciphertext === undefined ||
+		tag === undefined
+	)
+		// The plaintext case lands here, and saying so is the point: a value with no envelope was written
+		// before this vault encrypted anything, and no key will ever open it.
+		return Effect.succeed({
+			_tag: 'Rejected' as const,
+			reason: `it is not a ${VERSION} envelope, so it was stored before this vault encrypted anything and predates the key`
+		});
+	const nonceBytes = fromBase64Url(nonce);
+	const tagBytes = fromBase64Url(tag);
+	const ciphertextBytes = fromBase64Url(ciphertext);
+	if (
+		nonceBytes === undefined ||
+		tagBytes === undefined ||
+		ciphertextBytes === undefined ||
+		nonceBytes.length !== NONCE_BYTES ||
+		tagBytes.length !== TAG_BYTES
+	)
+		return Effect.succeed({
+			_tag: 'Rejected' as const,
+			reason:
+				'its nonce or authentication tag is the wrong size, so the stored value has been altered'
+		});
+	// Ciphertext and tag are handed back joined, which is how WebCrypto takes them — the envelope
+	// keeps them apart so a malformed value is rejected while parsing rather than sliced into
+	// pieces that then fail an authentication check for a misleading reason.
+	const joined = new Uint8Array(new ArrayBuffer(ciphertextBytes.length + tagBytes.length));
+	joined.set(ciphertextBytes);
+	joined.set(tagBytes, ciphertextBytes.length);
+	// Rejects when the tag does not verify. That is the branch that makes a tampered value fail
+	// rather than decrypt to garbage a caller would go on to use. Both WebCrypto calls are
+	// Promise-API edge work, and a rejection of either is a tampered or mis-keyed value — the
+	// defected promise failure is mapped into the same `Rejected` the parsing checks return.
+	return importKey(key, 'decrypt').pipe(
+		Effect.flatMap((cipher) =>
+			Effect.promise(() =>
+				crypto.subtle.decrypt(
+					{
+						name: 'AES-GCM',
+						iv: sourced(nonceBytes),
+						additionalData: utf8(binding),
+						tagLength: TAG_BYTES * 8
+					},
+					cipher,
+					joined
 				)
-			),
-			Effect.catchDefect(() => Effect.succeed(null))
-		);
-		if (outcome === null) {
-			return {
-				_tag: 'Rejected' as const,
-				reason:
-					'it failed its authentication tag, so it was altered, was written under a different key, or belongs to a different row'
-			};
-		}
-		return { _tag: 'Value' as const, value: new TextDecoder().decode(outcome) };
-	});
+			)
+		),
+		Effect.catchDefect(() => Effect.succeed(null)),
+		Effect.map((outcome) =>
+			outcome === null
+				? {
+						_tag: 'Rejected' as const,
+						reason:
+							'it failed its authentication tag, so it was altered, was written under a different key, or belongs to a different row'
+					}
+				: { _tag: 'Value' as const, value: new TextDecoder().decode(outcome) }
+		)
+	);
+};
 
 /**
  * How this cipher obtains its key, as a seam rather than an assumption.

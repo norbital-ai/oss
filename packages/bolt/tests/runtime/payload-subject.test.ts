@@ -8,12 +8,18 @@ import {
 	ReleaseId,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
+import { approveBy } from '../../src/authoring/approval-flow.js';
 import { defineEnvironment } from '../../src/authoring/environment-schema.js';
+import {
+	describePolicy,
+	policyRuntimeFunctionsFor
+} from '../../src/authoring/policy-introspection.js';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as AccessControl from '../../src/runtime/access/access-control.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { PendingApproval } from '../../src/runtime/collections/collections.js';
+import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	adminSubject,
@@ -122,6 +128,7 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	'approvals.request',
 	'approvals.decide',
 	'approvals.withdraw',
+	'approvals.capabilities',
 	'approvals.status',
 	'approvals.timeline',
 	'sync.diff',
@@ -190,16 +197,26 @@ const gatedWorkspace = workspace({
 	collections: [
 		collection({
 			name: 'people',
-			fields: { name: field.string({ required: true }) },
-			approvalLock: true
+			fields: { name: field.string({ required: true }) }
 		})
 	],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+		describePolicy('admin', {
+			description: 'Requires review before creating a person.',
+			grants: {
+				people: {
+					read: {},
+					create: {
+						approval: { flow: () => approveBy('approvers'), superceded_by: [] }
+					}
+				}
+			}
+		})
 	],
 	teams: {
-		admin: ['admin']
+		admin: ['admin'],
+		approvers: []
 	},
 	integrations: [],
 	prompt: 'You are the test workspace agent.',
@@ -209,6 +226,13 @@ const gatedWorkspace = workspace({
 	envoys: [],
 	requiredFacilities: []
 });
+
+const gatedFunctions = policyRuntimeFunctionsFor(gatedWorkspace.policies);
+const gatedAuthored = {
+	...emptyAuthoredRuntime,
+	policyAuthorizations: gatedFunctions.authorizations,
+	approvalFlows: gatedFunctions.approvalFlows
+};
 
 describe('payload-supplied identity', () => {
 	it('refuses every command that reads an identity out of its own input, on a task', async () => {
@@ -307,7 +331,7 @@ describe('payload-supplied identity', () => {
 	 * never had a payload subject to lose.
 	 */
 	it('still runs the approval-resume task, whose authority is the stored approval', async () => {
-		harness = await makeBoltTestRuntime(gatedWorkspace);
+		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
 		const id = recordId('person-1');
 

@@ -59,16 +59,6 @@ export type PlatformState = Readonly<{
 	readonly apps: ReadonlyArray<string>;
 	readonly envoys: ReadonlyArray<PlatformEnvoy>;
 }>;
-export type ChatMessage = Readonly<{
-	readonly id: string;
-	readonly role: 'user' | 'assistant' | 'tool';
-	readonly content: string;
-}>;
-export type AgentUiState = Readonly<{
-	readonly conversationId?: string;
-	readonly messages: ReadonlyArray<ChatMessage>;
-	readonly busy: boolean;
-}>;
 export type DetailLocation = Readonly<{ readonly collection: string; readonly recordId: string }>;
 export type BoltRoute = Readonly<{ readonly app: string; readonly path: string }>;
 

@@ -146,9 +146,11 @@
 		});
 	});
 
+	// The table instance is external state: it is fed through its own setters rather than by
+	// reaching into its fields, so the write is a call a reader can follow into the class.
 	$effect(() => {
-		table.data = sortedRows;
-		table.totalRows = sortedRows.length;
+		table.setData(sortedRows);
+		table.setTotalRows(sortedRows.length);
 	});
 
 	$effect(() => {
@@ -156,7 +158,7 @@
 		// grid through a refreshed tab snippet — without being allowed to collapse a row the person
 		// explicitly opened. Missing ids are intentionally retained so a transient empty result cannot
 		// erase the choice before the next snapshot arrives.
-		table.expanded.current = Object.fromEntries(resolvedExpandedRowIds.map((id) => [id, true]));
+		table.setExpanded(Object.fromEntries(resolvedExpandedRowIds.map((rowKey) => [rowKey, true])));
 	});
 </script>
 

@@ -17,13 +17,13 @@
 	bind:ref
 	bind:checked
 	class={cn(
-		'relative flex cursor-default items-center rounded-sm px-3 py-1.5 pr-2 text-sm outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground',
+		'relative flex cursor-default items-center gap-6 rounded-sm px-3 py-1.5 pr-2 text-sm outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground',
 		className
 	)}
 	{...restProps}
 >
 	{#snippet children()}
-		<Checkbox {checked} {indeterminate} class="mr-6" />
+		<Checkbox {checked} {indeterminate} />
 		{@render childrenProp?.({ checked, indeterminate })}
 	{/snippet}
 </ContextMenuPrimitive.CheckboxItem>

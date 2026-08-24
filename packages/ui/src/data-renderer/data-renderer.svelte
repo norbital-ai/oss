@@ -7,35 +7,29 @@
 	} from '#lib/data-renderer/geolocation/geolocation.utils';
 	import { StructuredValue } from '#lib/structured-value';
 	import { readFileRef } from '#lib/data-renderer/file/file.types';
-	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { useI18n } from '#lib/i18n';
 	import { cn } from '#lib/utils';
 	import DataRendererEditor from './data-renderer-editor.svelte';
 	import { getDataRendererRuntimeContext } from '#lib/data-renderer/data-renderer-runtime';
 	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
-	import { formatDataValue, type Translate } from '#lib/data-renderer/data-renderer.utils';
+	import { formatDataValue } from '#lib/data-renderer/data-renderer.utils';
 	import NumericRenderer from './numeric/numeric.renderer.svelte';
 
-	const { t } = useI18n<UiKeys>();
+	const { t } = useI18n();
 
 	const BUILTIN_DISPLAY_KINDS = new Set([
 		'boolean',
-		'date',
-		'date-range',
-		'dateRange',
 		'enum',
 		'file',
 		'geolocation',
 		'integer',
+		'instant',
+		'instant_range',
 		'money',
 		'numeric',
 		'number',
 		'phone',
-		'clock_time',
 		'string',
-		'timestamp',
-		'timestamptz',
-		'datetime',
-		'tstzrange',
 		'text',
 		'uuid'
 	]);
@@ -55,7 +49,7 @@
 		locale,
 		class: className
 	}: DataRendererProps = $props();
-	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
+	const localeEffective = $derived(locale ?? useI18n().intlLocale);
 	const rendererRuntime = getDataRendererRuntimeContext();
 	const autocompleteGeolocation =
 		rendererRuntime?.autocompleteGeolocation ?? (() => Effect.succeed([]));
@@ -75,15 +69,23 @@
 	 * the option set you want (a table column's `render`, a form field's `renderer`). Nothing about
 	 * the relation is inferred, and no surface fetches on your behalf.
 	 */
-	const displayedFiles = $derived.by((): ReadonlyArray<{ name: string; url: string }> => {
-		if (field.kind !== 'file' || field.relation) return [];
-		const candidates = Array.isArray(value) ? value : value == null ? [] : [value];
-		return candidates.flatMap((candidate) => {
-			const ref = readFileRef(candidate);
-			if (ref === null) return [];
-			return [{ name: ref.file_name, url: `/api/files/${encodeURIComponent(ref.storage_key)}` }];
-		});
-	});
+	const displayedFiles = $derived.by(
+		(): ReadonlyArray<{ id: string; name: string; url: string | null }> => {
+			if (field.kind !== 'file' || field.relation) return [];
+			const candidates = Array.isArray(value) ? value : value == null ? [] : [value];
+			return candidates.flatMap((candidate) => {
+				const ref = readFileRef(candidate);
+				if (ref === null) return [];
+				return [
+					{
+						id: ref.storage_key,
+						name: ref.file_name,
+						url: rendererRuntime?.fileUrl(ref.storage_key) ?? null
+					}
+				];
+			});
+		}
+	);
 	const isFileDisplay = $derived(field.kind === 'file' && !field.relation && mode !== 'edit');
 	const geolocationValue = $derived.by(
 		(): TGeolocationPickerValue | TGeolocationPickerValue[] | null =>
@@ -155,15 +157,19 @@
 		<span class={cn('text-muted-foreground', className)}>{placeholder}</span>
 	{:else}
 		<span class={cn('inline-flex flex-wrap gap-x-2 gap-y-1', className)}>
-			{#each displayedFiles as file (file.url)}
-				<a
-					href={file.url}
-					target="_blank"
-					rel="noreferrer"
-					class="truncate underline underline-offset-2"
-				>
-					{file.name}
-				</a>
+			{#each displayedFiles as file (file.id)}
+				{#if file.url === null}
+					<span class="truncate">{file.name}</span>
+				{:else}
+					<a
+						href={file.url}
+						target="_blank"
+						rel="noreferrer"
+						class="truncate underline underline-offset-2"
+					>
+						{file.name}
+					</a>
+				{/if}
 			{/each}
 		</span>
 	{/if}
@@ -181,6 +187,6 @@
 {:else if usesStructuredDisplay}
 	<StructuredValue {value} class={className} />
 {:else}
-	{@const displayValue = formatDataValue(field, value, localeEffective, t as Translate)}
+	{@const displayValue = formatDataValue(field, value, localeEffective, t)}
 	<span class={cn('block truncate', className)} title={displayValue}>{displayValue}</span>
 {/if}

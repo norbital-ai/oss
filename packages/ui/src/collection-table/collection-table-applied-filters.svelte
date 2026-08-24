@@ -30,7 +30,7 @@
 
 	function valueField(condition: CollectionAppliedFilterCondition): CollectionField {
 		if (condition.operator === 'contains_date') {
-			return { name: condition.field.name, kind: 'date', nullable: false };
+			return { name: condition.field.name, kind: 'instant', nullable: false, precision: 'day' };
 		}
 		return { ...condition.field, array: false };
 	}

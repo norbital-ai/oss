@@ -4,6 +4,7 @@ export type { RemoteQuery } from '@norbital-ai/std/collection';
 import { ApprovalState } from '#lib/runtime/approvals/approvals.js';
 import { createSyncClient, decodeChanges, decodeCursor } from '#lib/client/replica/sync-client.js';
 import {
+	ARBITRARY_QUERY_INVALIDATION,
 	ANY_COLLECTION,
 	cacheKeyFor,
 	collectionsFor,
@@ -27,18 +28,22 @@ import { createBoltClient, type BoltClient, type BoltTransport } from '#lib/clie
 import { createRemoteQuery } from './remote-query.svelte.js';
 import { projectRemoteQuery } from '#lib/client/replica/query-projection.svelte.js';
 import { CollectionMutationState } from './collection-mutation.svelte.js';
+import { AutomationExecutionState, AutomationTaskSnapshot } from './automation-client.svelte.js';
+export type {
+	AutomationClientApi,
+	AutomationProgression,
+	AutomationRun,
+	AutomationRunSnapshot,
+	AutomationTaskSnapshot,
+	ErasedAutomationClientApi
+} from './automation-client.svelte.js';
 import { workspaceSession } from '#lib/client/session.js';
 import { openLocalDatabase, type BootstrapTransport } from '#lib/client/replica/bootstrap.js';
 import { createLocalReader, type LocalReader } from '#lib/client/replica/local-reads.js';
 import { subscribeToChanges, type Subscription } from '#lib/client/replica/subscribe.js';
-import {
-	executeReplicaStatement,
-	type PGliteLike,
-	type ProvisioningStep,
-	replicaStatement
-} from '#lib/client/replica/pglite-sql.js';
+import type { PGliteLike, ProvisioningStep } from '#lib/client/replica/pglite-sql.js';
 import { openPGlite } from '#lib/client/replica/pglite-loader.js';
-import type { LocalSql } from '#lib/client/replica/pglite-sql.js';
+import { openReplicaInvalidationBus } from '#lib/client/replica/cross-tab-invalidation.js';
 import { createSystemClient } from '#lib/client/system-client.js';
 export type { SystemClientApi } from '#lib/client/system-client.js';
 
@@ -52,7 +57,7 @@ export interface CollectionPageQuery<Value> extends RemoteQuery<Value> {
  * Promise types cannot describe a rejection channel, so callers that care about this outcome catch
  * this exported class while the ordinary mutation result remains `Promise<void>`. A mutation is a
  * command, not a read: write-only policies may authorize it while denying the stored row, and live
- * queries own the refreshed value when the caller can read it.
+ * queries own the updated value when the caller can read it.
  */
 export class CollectionMutationPendingApproval extends Error {
 	readonly pending = true as const;
@@ -339,7 +344,21 @@ const commandEffect = (
 	command: string,
 	input: Schema.Json
 ): Effect.Effect<Schema.Json, unknown> =>
-	Effect.tryPromise(() => runtime.bolt.command(command, input, Schema.Json));
+	Effect.tryPromise({
+		try: () => runtime.bolt.command(command, input, Schema.Json),
+		catch: (cause) => cause
+	});
+
+const ApprovalCapabilityInput = Schema.Struct({ requestId: Schema.NonEmptyString });
+const ApprovalCapabilityRows = Schema.Array(
+	Schema.Struct({
+		id: Schema.NonEmptyString,
+		status: Schema.NonEmptyString,
+		canDecide: Schema.Boolean,
+		canSupersede: Schema.Boolean,
+		canWithdraw: Schema.Boolean
+	})
+);
 
 const decodedCommandEffect = <Output extends Schema.ConstraintDecoder<Schema.Json>>(
 	runtime: WorkspaceClientRuntime,
@@ -348,7 +367,10 @@ const decodedCommandEffect = <Output extends Schema.ConstraintDecoder<Schema.Jso
 	output: Output,
 	signal?: AbortSignal
 ): Effect.Effect<Output['Type'], unknown> =>
-	Effect.tryPromise(() => runtime.bolt.command(command, input, output, signal));
+	Effect.tryPromise({
+		try: () => runtime.bolt.command(command, input, output, signal),
+		catch: (cause) => cause
+	});
 
 /** Owns stateful remote-query construction without introducing a module-global runtime singleton. */
 const RemoteQueries = {
@@ -420,7 +442,6 @@ const PageQueries = {
 			get loading() {
 				return query.loading;
 			},
-			refresh: projected.refresh,
 			then: projected.then
 		};
 		return page;
@@ -445,7 +466,6 @@ const CountQueries = {
 			get loading() {
 				return query.loading;
 			},
-			refresh: projected.refresh,
 			then: projected.then
 		};
 	}
@@ -498,11 +518,105 @@ const GroupedQueries = {
 };
 
 type InvokeMethod = ReturnType<() => (input: Schema.Json) => RemoteQuery<Schema.Json>>;
+const AutomationStartResponse = Schema.Struct({ taskId: Schema.NonEmptyString });
+const AutomationStopResponse = Schema.Struct({ stopped: Schema.Literal(true) });
+const AutomationResumeResponse = Schema.Struct({ resumed: Schema.Literal(true) });
+const AutomationRunRow = Schema.Struct({
+	task_id: Schema.NonEmptyString,
+	status: Schema.Literals(['pending', 'paused', 'resuming', 'done', 'failed']),
+	attempts: Schema.Number,
+	max_attempts: Schema.Number,
+	error: Schema.NullOr(Schema.String),
+	result: Schema.NullOr(Schema.Json),
+	progress: Schema.NullOr(
+		Schema.Struct({ progress: Schema.Number, text: Schema.NullOr(Schema.String) })
+	),
+	progress_sequence: Schema.Number,
+	progress_updated_at: Schema.NullOr(Schema.String),
+	next_run_at: Schema.NullOr(Schema.String)
+});
+type AutomationRunRow = Schema.Schema.Type<typeof AutomationRunRow>;
+const projectAutomationRun = (row: AutomationRunRow | null): AutomationTaskSnapshot | null =>
+	row === null
+		? null
+		: {
+				status: row.status,
+				attempts: row.attempts,
+				maxAttempts: row.max_attempts,
+				error: row.error,
+				result: row.result,
+				progress: row.progress,
+				progressSequence: row.progress_sequence,
+				progressUpdatedAt: row.progress_updated_at,
+				nextRunAt: row.next_run_at
+			};
+
+/** Stable per-name automation state; the generated declaration supplies the exact registry. */
+const automationClient = (runtime: WorkspaceClientRuntime) => {
+	const surfaces = new Map<string, unknown>();
+	return new Proxy<Record<string, unknown>>(
+		{},
+		{
+			get: (_target, property) => {
+				if (typeof property !== 'string') return undefined;
+				const existing = surfaces.get(property);
+				if (existing !== undefined) return existing;
+				const state = new AutomationExecutionState(
+					(input) =>
+						decodedCommandEffect(
+							runtime,
+							'automations.start',
+							{ name: property, input },
+							AutomationStartResponse
+						),
+					(taskId) => {
+						const source = RemoteQueries.make(
+							runtime,
+							'collections.findFirst',
+							{ collection: 'automation_run', where: { task_id: { eq: taskId } } },
+							Schema.Json,
+							Schema.NullOr(AutomationRunRow)
+						);
+						return projectRemoteQuery(source, projectAutomationRun, projectAutomationRun);
+					},
+					(taskId) =>
+						decodedCommandEffect(
+							runtime,
+							'automations.stop',
+							{ name: property, taskId },
+							AutomationStopResponse
+						).pipe(Effect.asVoid),
+					(taskId) =>
+						decodedCommandEffect(
+							runtime,
+							'automations.resume',
+							{ name: property, taskId },
+							AutomationResumeResponse
+						).pipe(Effect.asVoid)
+				);
+				const created = {
+					run: state.run,
+					stop: state.stop,
+					resume: state.resume,
+					get pending() {
+						return state.pending;
+					},
+					get latest() {
+						return state.latest;
+					}
+				};
+				surfaces.set(property, created);
+				return created;
+			}
+		}
+	);
+};
 
 /** Groups workspace API construction with the stateful remote-query factory it exposes. */
 const WorkspaceApis = {
 	create: (runtime: WorkspaceClientRuntime, catalog: CollectionCatalog = {}) => ({
 		db: ClientDatabase.database(runtime, catalog),
+		automations: automationClient(runtime),
 		system: createSystemClient(runtime, (command, input, inputSchema, outputSchema, signal) =>
 			RemoteQueries.make(runtime, command, input, inputSchema, outputSchema, signal)
 		),
@@ -547,14 +661,16 @@ const WorkspaceApis = {
 		},
 		approvals: {
 			findMany: (approvalId: string) =>
-				PageQueries.make(runtime, 'collections.findMany', {
-					collection: 'approval_request',
-					where: { id: { eq: approvalId } },
-					limit: 1
-				}),
+				RemoteQueries.make(
+					runtime,
+					'approvals.capabilities',
+					{ requestId: approvalId },
+					ApprovalCapabilityInput,
+					ApprovalCapabilityRows
+				),
 			process: (input: {
 				readonly approvalRequestId: string;
-				readonly action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE';
+				readonly action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE' | 'SUPERSEDED';
 				readonly comments?: string;
 			}) =>
 				Effect.runPromise(
@@ -563,11 +679,13 @@ const WorkspaceApis = {
 							requestId: input.approvalRequestId
 						});
 						const decision =
-							input.action === 'APPROVED'
-								? 'approve'
-								: input.action === 'REQUEST_FOR_CHANGE'
-									? 'request_changes'
-									: 'reject';
+							input.action === 'SUPERSEDED'
+								? 'supersede'
+								: input.action === 'APPROVED'
+									? 'approve'
+									: input.action === 'REQUEST_FOR_CHANGE'
+										? 'request_changes'
+										: 'reject';
 						const decodedState = Schema.decodeUnknownResult(ApprovalState)(state);
 						if (Result.isFailure(decodedState)) return;
 						yield* commandEffect(runtime, 'approvals.decide', {
@@ -621,8 +739,11 @@ const invalidateWrite = (
 	runtime: WorkspaceClientRuntime,
 	collections: ReadonlyArray<string>
 ): void => {
-	runtime.cache?.invalidate(collections);
-	runtime.queries?.refreshAffected(collections);
+	invalidateRuntime(runtime, collections);
+	// A write this runtime just settled is already authoritative on the server. Announce it directly
+	// instead of making sibling tabs depend on the optional replica booting, leading, receiving SSE,
+	// and draining the outbox before their arbitrary `invoke.*` queries are re-run.
+	runtimeStates.access(runtime)?.invalidation?.announce([ARBITRARY_QUERY_INVALIDATION]);
 };
 
 /** Names the root and every explicitly synchronized relationship for immediate query invalidation. */
@@ -665,15 +786,15 @@ const mutationCollections = (
  * Drops every cached answer and re-runs every live query, after an approval decision.
  *
  * An approval decision is not a `db.*` write, so it never passed through `invalidateWrite`. The one
- * table that happened to own the open sheet refreshed its own rows by hand, and every other surface
+ * table that happened to own the open sheet reloaded its own rows by hand, and every other surface
  * showing the same record — a board, a second table, a nested sheet — stayed stale until something
  * else refetched. The decision commits against a record this call cannot name a collection for, so
  * `ANY_COLLECTION` is the honest scope: something changed, and nothing held is provably still true.
  * Approvals are rare and deliberate, which is what makes a full re-read the cheap half of the trade.
  */
 const invalidateApproval = (runtime: WorkspaceClientRuntime): void => {
-	runtime.cache?.invalidate([ANY_COLLECTION]);
-	runtime.queries?.refreshAffected([ANY_COLLECTION]);
+	invalidateRuntime(runtime, [ANY_COLLECTION]);
+	runtimeStates.access(runtime)?.invalidation?.announce([ARBITRARY_QUERY_INVALIDATION]);
 };
 
 /** Owns collection proxy behavior at the client boundary so validation and typed semantics stay consistent for every caller. */
@@ -723,8 +844,8 @@ const ClientDatabase = {
 						// A command can commit and then fail while settling an after-hook. The wire failure
 						// cannot prove that no state changed, so every outcome conservatively invalidates the
 						// submitted graph. This also covers approval acquisition before its typed rejection.
-						// Non-collection queries depend on ANY_COLLECTION, so the same names refresh approval
-						// status and timeline readers without component-owned refresh state.
+						// Non-collection queries depend on ANY_COLLECTION, so the same names re-execute approval
+						// status and timeline readers without component-owned reload state.
 						Effect.ensuring(Effect.sync(() => invalidateWrite(runtime, affected)))
 					)
 				);
@@ -768,11 +889,8 @@ const ClientDatabase = {
  * snapshot would apply updates to rows the replica does not hold; snapshotting before provisioning has
  * nowhere to put them.
  */
-/** The Postgres channel the leader announces on, so every tab invalidates off one applied batch. */
-const REPLICA_CHANNEL = 'bolt_replica_changed';
-
 /**
- * The replicas already running in this document, keyed by the scope they hold.
+ * The replicas already running in this document, keyed by their runtime and scope.
  *
  * Starting one is expensive and not idempotent: it opens a PGlite engine, snapshots the workspace
  * and subscribes to the change stream. Two callers for the same scope therefore meant two engines
@@ -781,27 +899,41 @@ const REPLICA_CHANNEL = 'bolt_replica_changed';
  * has. Handing back the running one makes "start the replica" the idempotent request every caller
  * already assumed it was.
  *
- * Keyed by scope rather than by runtime, because the storage a replica opens is keyed by scope: two
- * runtimes for one workspace would otherwise collide in exactly the place this is protecting. The
- * maps live inside one document-lifetime owner rather than as ambient mutable collections.
+ * Distinct runtimes deliberately get distinct PGlite worker clients. The workers still elect one
+ * database leader for the shared scope, while each runtime retains the invalidation endpoint tied to
+ * its own cache and live-query registry. This matters after HMR replaces the generated client: handing
+ * the new runtime the old runtime's replica makes the database look healthy while every newly mounted
+ * query remains outside the registry receiving sync advances.
  */
 type RuntimeAccessState = {
 	current: string;
 	cache: QueryCache;
 	readonly cacheNamespace: (accessScope: string) => string;
+	invalidation?: ReturnType<typeof openReplicaInvalidationBus>;
 };
 
 const RuntimeStates = {
 	make: () => {
-		const replicas = new Map<string, Effect.Effect<LocalReplica, unknown>>();
+		const replicas = new WeakMap<
+			WorkspaceClientRuntime,
+			Map<string, Effect.Effect<LocalReplica, unknown>>
+		>();
 		const accessStates = new WeakMap<WorkspaceClientRuntime, RuntimeAccessState>();
 		return {
-			replica: (key: string) => replicas.get(key),
-			rememberReplica: (key: string, replica: Effect.Effect<LocalReplica, unknown>) => {
-				replicas.set(key, replica);
+			replica: (runtime: WorkspaceClientRuntime, key: string) => replicas.get(runtime)?.get(key),
+			rememberReplica: (
+				runtime: WorkspaceClientRuntime,
+				key: string,
+				replica: Effect.Effect<LocalReplica, unknown>
+			) => {
+				const owned = replicas.get(runtime) ?? new Map();
+				owned.set(key, replica);
+				replicas.set(runtime, owned);
 			},
-			forgetReplica: (key: string) => {
-				replicas.delete(key);
+			forgetReplica: (runtime: WorkspaceClientRuntime, key: string) => {
+				const owned = replicas.get(runtime);
+				owned?.delete(key);
+				if (owned?.size === 0) replicas.delete(runtime);
 			},
 			access: (runtime: WorkspaceClientRuntime) => accessStates.get(runtime),
 			rememberAccess: (runtime: WorkspaceClientRuntime, state: RuntimeAccessState) => {
@@ -817,6 +949,27 @@ const normalizedAccessScope = (value: string): string => value.trim() || 'operat
 
 const accessScopeFor = (runtime: WorkspaceClientRuntime): string =>
 	runtimeStates.access(runtime)?.current ?? normalizedAccessScope(workspaceSession().accessScope);
+
+/** Invalidates this document's cache and mounted queries without rebroadcasting the message. */
+const invalidateRuntime = (
+	runtime: WorkspaceClientRuntime,
+	collections: ReadonlyArray<string>
+): void => {
+	runtime.cache?.invalidate(collections);
+	runtime.queries?.reexecuteAffected(collections);
+};
+
+/** Opens the invalidation endpoint owned by this runtime and its current authority. */
+const openRuntimeInvalidation = (
+	runtime: WorkspaceClientRuntime,
+	state: RuntimeAccessState
+): void => {
+	state.invalidation?.close();
+	state.invalidation = openReplicaInvalidationBus(
+		`${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}::${state.current}`,
+		(collections) => invalidateRuntime(runtime, collections)
+	);
+};
 
 /**
  * Moves one mounted client between policy scopes without rebuilding its component tree.
@@ -837,8 +990,9 @@ export const switchWorkspaceAccessScope = (
 	if (state.current === next) return;
 	state.current = next;
 	state.cache = createQueryCache(state.cacheNamespace(next));
+	openRuntimeInvalidation(runtime, state);
 	if (runtime.local !== undefined) delete runtime.local.current;
-	runtime.queries?.refreshAffected([ANY_COLLECTION]);
+	runtime.queries?.reexecuteAffected([ANY_COLLECTION]);
 };
 
 export const startLocalReplica = (
@@ -852,8 +1006,11 @@ export const startLocalReplica = (
 ) => {
 	const accessScope = normalizedAccessScope(options.accessScope ?? accessScopeFor(runtime));
 	switchWorkspaceAccessScope(runtime, accessScope);
+	const accessState = runtimeStates.access(runtime);
+	if (accessState !== undefined && accessState.invalidation === undefined)
+		openRuntimeInvalidation(runtime, accessState);
 	const key = `${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}::${accessScope}`;
-	let running = runtimeStates.replica(key);
+	let running = runtimeStates.replica(runtime, key);
 	if (running === undefined) {
 		// Cache the Effect, not a Promise: callers share the startup fiber while internal control flow
 		// remains in Effect. `runPromise` below is only the exported browser API adapter.
@@ -863,15 +1020,15 @@ export const startLocalReplica = (
 					Effect.map((replica) => ({
 						...replica,
 						stop: () => {
-							runtimeStates.forgetReplica(key);
+							runtimeStates.forgetReplica(runtime, key);
 							replica.stop();
 						}
 					})),
-					Effect.tapError(() => Effect.sync(() => runtimeStates.forgetReplica(key)))
+					Effect.tapError(() => Effect.sync(() => runtimeStates.forgetReplica(runtime, key)))
 				)
 			)
 		);
-		runtimeStates.rememberReplica(key, running);
+		runtimeStates.rememberReplica(runtime, key, running);
 	}
 	return Effect.runPromise(running);
 };
@@ -905,14 +1062,15 @@ const startReplica = (
 			yield* local.close();
 			return yield* Effect.fail(new Error('Local replica access scope changed during startup'));
 		}
+		const localReader = createLocalReader(local.store, local.shape, local.readable);
 		// The snapshot brought in rows no cursor accounts for, so everything cached predates it.
 		cache?.clear();
-		registry?.refreshAffected([ANY_COLLECTION]);
+		registry?.reexecuteAffected([ANY_COLLECTION]);
 
 		const invalidateNamed = (collections: ReadonlyArray<string>): void => {
 			if (cache === undefined || registry === undefined) return;
 			cache.invalidate(collections);
-			registry.refreshAffected(collections);
+			registry.reexecuteAffected(collections);
 		};
 
 		const collectionsIn = (changes: ReadonlyArray<SyncChange>): ReadonlyArray<string> =>
@@ -920,31 +1078,41 @@ const startReplica = (
 				? [ANY_COLLECTION]
 				: [...new Set(changes.map((change) => change.collection))];
 
-		/**
-		 * Tells the other tabs what this one just applied.
-		 *
-		 * Only the leader streams, so without this a second tab would hold a database moving quietly
-		 * underneath it while its own cache and rendered queries stayed on the old rows — stale in exactly
-		 * the way the replica exists to prevent, and invisible because nothing errored.
-		 *
-		 * `pg_notify` rather than a `BroadcastChannel`: the notification travels with the database, so it
-		 * cannot outrun the rows it describes, and a tab with no shared engine simply has no listener and
-		 * loses nothing.
-		 */
-		// The collections are JSON-stringified into a positional payload, never used as statements.
+		/** Tells sibling runtime documents what this leader just finished applying. */
 		const announceToTabs = (collections: ReadonlyArray<string>): Effect.Effect<void> =>
-			collections.length === 0
-				? Effect.void
-				: executeReplicaStatement(
-						local.engine,
-						replicaStatement('select pg_notify($1, $2)', [
-							REPLICA_CHANNEL,
-							JSON.stringify(collections)
-						])
-					).pipe(
-						Effect.catch(() => Effect.void),
-						Effect.asVoid
-					);
+			Effect.sync(() => runtimeStates.access(runtime)?.invalidation?.announce(collections));
+
+		/**
+		 * Repairs a projection that could not apply an incremental change.
+		 *
+		 * A row can become visible on an update even when this access-scoped replica never held its
+		 * create. Older releases also published update patches, which cannot be inserted into an empty
+		 * table with required columns. Retrying that same cursor forever leaves every later change
+		 * blocked behind it; rebuilding from the server's current snapshot is both cheaper and correct.
+		 */
+		const rebuildReplica = (): Effect.Effect<void, unknown> =>
+			Effect.gen(function* () {
+				/**
+				 * A resnapshot resets the local tables before it refills them. Keep that incomplete projection
+				 * out of the read path: a mutation can trigger a live-query read while the sync stream is
+				 * repairing an older cursor, and answering that read from the temporarily empty replica
+				 * paints "record no longer available" even though the authoritative row never disappeared.
+				 * Withdrawing only this replica's reader makes those overlapping reads fall back to the server.
+				 */
+				const readerWasInstalled = runtime.local?.current === localReader;
+				if (readerWasInstalled && runtime.local !== undefined) delete runtime.local.current;
+				yield* local.resnapshot();
+				if (
+					readerWasInstalled &&
+					runtime.local !== undefined &&
+					accessScopeFor(runtime) === options.accessScope
+				) {
+					runtime.local.current = localReader;
+				}
+				cache?.clear();
+				registry?.reexecuteAffected([ANY_COLLECTION]);
+				yield* announceToTabs([ANY_COLLECTION]);
+			});
 
 		const client = yield* createSyncClient({
 			transport: {
@@ -955,20 +1123,14 @@ const startReplica = (
 			sink: {
 				apply: (changes) =>
 					Effect.gen(function* () {
-						yield* Effect.forEach(changes, local.sql.applyChange, { discard: true });
+						yield* Effect.forEach(changes, local.store.applyChange, { discard: true }).pipe(
+							Effect.catch(() => rebuildReplica())
+						);
 						const collections = collectionsIn(changes);
 						yield* Effect.sync(() => invalidateNamed(collections));
 						yield* announceToTabs(collections);
 					}),
-				reset: () =>
-					Effect.gen(function* () {
-						yield* local.sql.reset();
-						yield* Effect.sync(() => {
-							cache?.clear();
-							registry?.refreshAffected([ANY_COLLECTION]);
-						});
-						yield* announceToTabs([ANY_COLLECTION]);
-					})
+				reset: rebuildReplica
 			},
 			initialCursor: local.cursor,
 			// Recorded in the replica's own database, in the same place as the rows it explains, so a reload
@@ -1060,7 +1222,7 @@ const startReplica = (
 		 * a confident empty result, which is worse than a slow correct one.
 		 */
 		if (runtime.local !== undefined && accessScopeFor(runtime) === options.accessScope) {
-			runtime.local.current = createLocalReader(local.engine, local.shape, local.readable);
+			runtime.local.current = localReader;
 		}
 
 		const stopWatchingLeader = local.engine.onLeaderChange(() => {
@@ -1074,32 +1236,9 @@ const startReplica = (
 			subscription = undefined;
 		});
 
-		/**
-		 * Every tab listens, including the leader's followers who never fetch anything themselves.
-		 *
-		 * This is what makes a second tab correct rather than merely cheap: it holds no stream and runs
-		 * no drain, so the only way it learns that its rendered queries are stale is the leader saying so
-		 * through the database they share.
-		 */
-		const stopListening = yield* local.engine
-			.listen(REPLICA_CHANNEL, (payload) => {
-				// The leader already invalidated its own; this is for everybody else.
-				if (leads()) return;
-				// The payload is `JSON.stringify(collections)`, and an unreadable announcement still means
-				// something changed — refreshing everything is the safe reading of it.
-				const named = Result.getOrElse(
-					Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Array(Schema.String)))(payload),
-					() => null
-				);
-				invalidateNamed(named ?? [ANY_COLLECTION]);
-			})
-			.pipe(Effect.catch(() => Effect.succeed(() => Effect.void)));
-
 		return {
-			sql: local.sql,
 			fingerprint: local.fingerprint,
 			rows: local.rows,
-			poke: catchUp,
 			leader: leads,
 			stop: () => {
 				// Withdrawn first: a closed database that is still being asked would fail every read that
@@ -1108,25 +1247,18 @@ const startReplica = (
 				stopWatchingLeader?.();
 				subscription?.stop();
 				client.stop();
-				Effect.runFork(
-					Effect.all(
-						[
-							stopListening().pipe(Effect.catch(() => Effect.void)),
-							local.close().pipe(Effect.catch(() => Effect.void))
-						],
-						{ concurrency: 'unbounded', discard: true }
-					)
-				);
+				const state = runtimeStates.access(runtime);
+				state?.invalidation?.close();
+				if (state !== undefined) delete state.invalidation;
+				Effect.runFork(local.close().pipe(Effect.catch(() => Effect.void)));
 			}
 		};
 	});
 
 export type LocalReplica = Readonly<{
-	readonly sql: LocalSql;
 	readonly fingerprint: string;
 	/** Rows loaded by the initial snapshot, for a host that wants to report the bootstrap. */
 	readonly rows: number;
-	readonly poke: () => void;
 	/** Whether this tab holds the shared database and therefore runs the sync loop. */
 	readonly leader: () => boolean;
 	readonly stop: () => void;
@@ -1183,6 +1315,7 @@ export const createBrowserWorkspaceRuntime = (
 		queries: createLiveQueryRegistry()
 	};
 	runtimeStates.rememberAccess(runtime, accessState);
+	openRuntimeInvalidation(runtime, accessState);
 	runtime.db = ClientDatabase.database(runtime, {});
 	return runtime;
 };

@@ -6,7 +6,11 @@
 	import type { DataRendererRuntime } from '#lib/data-renderer/data-renderer-runtime';
 	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 	import FileInput from './file.input.svelte';
-	import { readFileRef, type FileRef } from '#lib/data-renderer/file/file.types';
+	import {
+		fileRefFromFileValue,
+		fileValueFromFileRef,
+		readFileRef
+	} from '#lib/data-renderer/file/file.types';
 	import type { FileValue as TFileValue } from '#lib/file-value';
 
 	const MAX_WORKSPACE_FILE_SIZE = 10 * 1024 * 1024;
@@ -37,18 +41,12 @@
 	 * Writing the input's own shape back would persist a `url` and a `id` the server never
 	 * agreed to, so the conversion is explicit in both directions.
 	 */
-	const toFileValue = (ref: FileRef): TFileValue => ({
-		id: ref.storage_key,
-		name: ref.file_name,
-		size: ref.file_size,
-		type: ref.mime_type,
-		url: `/api/files/${encodeURIComponent(ref.storage_key)}`
-	});
 	const selectedFiles = $derived.by((): TFileValue[] => {
+		if (runtime === undefined) return [];
 		const candidates = Array.isArray(value) ? value : value == null ? [] : [value];
 		return candidates.flatMap((candidate) => {
 			const ref = readFileRef(candidate);
-			return ref === null ? [] : [toFileValue(ref)];
+			return ref === null ? [] : [fileValueFromFileRef(ref, runtime.fileUrl)];
 		});
 	});
 	const selectedFile = $derived(selectedFiles[0]);
@@ -59,12 +57,6 @@
 	 * Writing the input's own shape back would persist a `url` and a `id` the server never
 	 * agreed to, so the conversion is explicit in both directions.
 	 */
-	const toRef = (file: TFileValue): FileRef => ({
-		storage_key: file.id,
-		file_name: file.name,
-		file_size: file.size,
-		mime_type: file.type
-	});
 </script>
 
 {#if !client}
@@ -83,7 +75,7 @@
 		accept={acceptedTypes}
 		{disabled}
 		class={className}
-		onValueChange={(files) => onValueChange?.(files.map(toRef))}
+		onValueChange={(files) => onValueChange?.(files.map(fileRefFromFileValue))}
 	/>
 {:else}
 	<FileInput
@@ -94,6 +86,6 @@
 		accept={acceptedTypes}
 		{disabled}
 		class={className}
-		onValueChange={(file) => onValueChange?.(file ? toRef(file) : null)}
+		onValueChange={(file) => onValueChange?.(file ? fileRefFromFileValue(file) : null)}
 	/>
 {/if}

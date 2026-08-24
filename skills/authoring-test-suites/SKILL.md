@@ -57,10 +57,10 @@ Raise the level by widening what the assertion is _about_, never by widening wha
   one thing (the runtime) and states why the rest stays real: the handler's live graph would need
   Postgres, an isolate loader, and a gateway, "none of which say anything about who may call the
   endpoint" (`norbital/apps/colony/tests/hosting/operations-authority.test.ts:34`).
-- One test file should be about one thing that can be wrong. `settlement-lock.test.ts` covers a
+- One test file should be about one thing that can be wrong. `payslip-sources-lock.test.ts` covers a
   single rule at four levels because the rule is enforced in four places, and its header names all
   four and names what it deliberately does not cover
-  (`templates/hr-payroll/src/collections/payroll_runs/settlement-lock.test.ts:1`).
+  (`templates/hr-payroll/src/collections/payroll_runs/payslip-sources-lock.test.ts:1`).
 
 ## How to supply a dependency
 
@@ -107,7 +107,7 @@ port, so asserting it fired is asserting behaviour — but pair it with a state 
 `oss/packages/bolt/tests/client/replica.test.ts:189` follows `expect(onError).toHaveBeenCalled()`
 with the cursor that must not have advanced. And an ordering or dispatch sequence can be the
 behaviour, in which case record it and assert the recorded sequence, not the fact of a call
-(`templates/hr-payroll/src/collections/payroll_runs/settlement-lock.test.ts:255`).
+(`templates/hr-payroll/src/collections/payroll_runs/payslip-sources-lock.test.ts:236`).
 
 ## Never write these
 

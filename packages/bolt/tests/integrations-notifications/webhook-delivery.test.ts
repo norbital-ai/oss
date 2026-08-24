@@ -14,6 +14,7 @@ import {
 	type LedgerState,
 	type WebhookDependencies
 } from '../../src/runtime/integrations/webhook.js';
+import { verifyDelivery } from '../../src/runtime/integrations/signature.js';
 
 /**
  * What an inbound binding refuses, and what it lets through.
@@ -67,6 +68,7 @@ const binding: IntegrationWebhookDeclaration = {
 const integration: IntegrationDeclaration = {
 	name: 'rfis.reports',
 	collection: 'rfis',
+	policies: [],
 	receive: [],
 	webhooks: [binding],
 	send: []
@@ -210,6 +212,47 @@ const reportOf = async (
 const ONE_RFI = JSON.stringify({ rfis: [{ number: 'RFI-001', title: 'Slab penetration clash' }] });
 
 describe('webhook signature verification', () => {
+	it('verifies the portable SHA-512 and base64 branch', async () => {
+		const body = '{"event":"portable"}';
+		const digest = createHmac('sha512', SECRET).update(body, 'utf8').digest('base64');
+		const outcome = await Effect.runPromise(
+			verifyDelivery(
+				{
+					header: 'x-portable-signature',
+					secret: { env: 'PORTABLE_SECRET' },
+					algorithm: 'sha512',
+					encoding: 'base64'
+				},
+				SECRET,
+				{ headers: { 'x-portable-signature': digest }, body },
+				NOW
+			)
+		);
+
+		expect(outcome).toMatchObject({
+			verified: true,
+			proof: {
+				digest: createHmac('sha512', SECRET).update(body, 'utf8').digest('hex'),
+				replayChecked: false
+			}
+		});
+	});
+
+	it('retains the digest-length refusal for a short portable signature', async () => {
+		const outcome = await Effect.runPromise(
+			verifyDelivery(
+				{ header: 'x-signature', secret: { env: 'SECRET' } },
+				SECRET,
+				{ headers: { 'x-signature': '00' }, body: '{}' },
+				NOW
+			)
+		);
+		expect(outcome).toMatchObject({
+			verified: false,
+			refusal: { reason: expect.stringContaining('1 bytes where sha256 produces 32') }
+		});
+	});
+
 	/**
 	 * The default-deny case. An unsigned delivery is not a malformed request to be reported and moved
 	 * past — it is an anonymous write attempt against a public route, and the only correct answer is
@@ -544,7 +587,7 @@ describe('webhook declarations that cannot verify are refused at authoring time'
 	});
 });
 
-describe('the digest comparison is constant-time by construction', () => {
+describe('the portable digest verification is native by construction', () => {
 	/**
 	 * Asserted structurally rather than by measurement, and deliberately so.
 	 *
@@ -554,26 +597,36 @@ describe('the digest comparison is constant-time by construction', () => {
 	 * at random, and a green timing assertion over `===` would be an actively false assurance about
 	 * the one property nobody can see by reading the diff.
 	 *
-	 * So the property is pinned where it is actually decidable: the source either hands the two
-	 * digests to `timingSafeEqual` or it does not. This fails if somebody replaces that call with an
-	 * operator, which is the regression worth catching.
+	 * So the property is pinned where it is actually decidable: the source either hands the presented
+	 * digest to WebCrypto's HMAC verifier or it does not. This fails if somebody replaces that call
+	 * with a JavaScript operator, which is the regression worth catching.
 	 */
 	const source = readFileSync(
 		new URL('../../src/runtime/integrations/signature.ts', import.meta.url),
 		'utf8'
 	);
 
-	it('compares the digests with timingSafeEqual', () => {
-		expect(source).toContain('timingSafeEqual(provided, expected)');
+	it('hands the presented digest to native HMAC verification', () => {
+		expect(source).toContain(
+			"globalThis.crypto.subtle.verify('HMAC', key, signatureBytes, payloadBytes)"
+		);
+	});
+
+	it('contains no Node-only crypto or buffer dependency', () => {
+		const executable = source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/\/\/.*$/gmu, '');
+		expect(source).not.toContain("from 'node:crypto'");
+		expect(source).not.toContain("from 'node:buffer'");
+		expect(executable).not.toContain('Buffer.');
+		expect(source).toContain('globalThis.crypto.subtle');
 	});
 
 	/**
 	 * Stated as an exhaustive list rather than as a forbidden pattern, because the interesting claim
 	 * is not "no operator appears near a digest" — `provided === undefined` is a decode check and
-	 * `provided.length !== expected.length` is the guard `timingSafeEqual` requires. The claim is that
-	 * the *only* place the two digests meet an operator is that length guard, and that comparing their
-	 * contents goes through `timingSafeEqual`. A new `provided === expected` shows up here as an extra
-	 * entry.
+	 * `provided.length !== expected.length` preserves the specific malformed-length refusal. The claim
+	 * is that the *only* place the two digests meet an operator is that public length check, and that
+	 * comparing their contents goes through WebCrypto. A new `provided === expected` shows up here as
+	 * an extra entry.
 	 */
 	it('never compares the digests themselves with an equality operator', () => {
 		const comparisons = source
@@ -584,16 +637,5 @@ describe('the digest comparison is constant-time by construction', () => {
 			);
 
 		expect(comparisons).toEqual(['if (provided.length !== expected.length) {']);
-	});
-
-	/**
-	 * The length guard has to stay, because `timingSafeEqual` throws on operands of different lengths
-	 * — a short signature would crash the route rather than be refused by it.
-	 */
-	it('guards the length before the constant-time compare', () => {
-		expect(source).toContain('provided.length !== expected.length');
-		expect(source.indexOf('provided.length !== expected.length')).toBeLessThan(
-			source.indexOf('timingSafeEqual(provided, expected)')
-		);
 	});
 });

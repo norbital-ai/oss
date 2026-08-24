@@ -10,6 +10,8 @@ export type CustomTypeRendererMap = Readonly<Record<string, Component<DataRender
 export interface DataRendererRuntime {
 	autocompleteGeolocation(query: string): Effect.Effect<TGeolocationPickerValue[], unknown>;
 	createFileUploadClient(): IFileUploadClient;
+	/** Resolves a persisted storage key through the host that mounted the workspace. */
+	fileUrl(key: string): string;
 	renderStaticMap(input: StaticMapRequest): Effect.Effect<StaticMapImage, unknown>;
 	readonly customTypeRenderers: CustomTypeRendererMap;
 }

@@ -92,20 +92,108 @@ const manifest = buildManifest(definition, { artifactId: 'hr-tools' });
 const bundle = makeBundle(definition, manifest, {});
 const subject = { userId: 'admin-1', tenantId: 'tenant-1', teamPath: ['admin'], policies: [] };
 const subjectRow = {
-	userId: subject.userId,
+	id: subject.userId,
 	tenantId: subject.tenantId,
 	email: null,
 	status: 'normal',
-	teamPath: subject.teamPath
+	team_id: 'team-admin'
 };
+
+type QueryStatement = Readonly<{
+	readonly sql: string;
+	readonly parameters: ReadonlyArray<unknown>;
+}>;
+type PersistedPart = Readonly<Record<string, unknown>> &
+	Readonly<{
+		kind: string;
+		id?: unknown;
+		name?: string;
+	}>;
+type PersistedTurn = Readonly<Record<string, unknown>> &
+	Readonly<{
+		readonly id: string;
+		readonly status: string;
+		readonly parts: ReadonlyArray<PersistedPart>;
+	}>;
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+	typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isPersistedPart = (value: unknown): value is PersistedPart =>
+	isRecord(value) &&
+	typeof value.kind === 'string' &&
+	(value.name === undefined || typeof value.name === 'string');
+
+const isPersistedTurn = (value: unknown): value is PersistedTurn =>
+	isRecord(value) &&
+	typeof value.id === 'string' &&
+	typeof value.status === 'string' &&
+	Array.isArray(value.parts) &&
+	value.parts.every(isPersistedPart);
+
+const statementIntent = (statement: QueryStatement, operation: string, table: string): boolean => {
+	const sql = statement.sql.replaceAll('"', '').replaceAll(/\s+/g, ' ').trim().toLowerCase();
+	if (!sql.startsWith(`${operation.toLowerCase()} `)) return false;
+	const target = table.toLowerCase();
+	return (
+		sql.includes(` from ${target}`) ||
+		sql.includes(` into ${target}`) ||
+		sql.includes(`update ${target} `)
+	);
+};
+
+const jsonObjectParameter = (parameters: ReadonlyArray<unknown>): PersistedTurn | undefined => {
+	for (const parameter of parameters) {
+		let decoded = parameter;
+		for (let depth = 0; depth < 2 && typeof decoded === 'string'; depth += 1) {
+			try {
+				decoded = JSON.parse(decoded);
+			} catch {
+				break;
+			}
+		}
+		if (isPersistedTurn(decoded)) return decoded;
+	}
+	return undefined;
+};
+
+let returnedMessage = 0;
 const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 	call: (_metadata, request) => {
-		// Authentication reads Better Auth's session joined to its user table. Matching on
-		// `session` keeps this stub answering the query identity actually makes; matching
-		// the old `bolt_sessions` would have it answer nothing and every command would read as
-		// unauthenticated.
-		if (request._tag === 'Query' && request.sql.includes('session')) {
+		if (request._tag !== 'Query') {
+			return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 1 } });
+		}
+		if (statementIntent(request, 'select', 'session')) {
 			return Promise.resolve({ _tag: 'Success', value: { rows: [subjectRow], affectedRows: 0 } });
+		}
+		if (statementIntent(request, 'select', 'team')) {
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [
+						{
+							id: 'team-admin',
+							name: subject.teamPath[0],
+							parent_id: null,
+							description: null
+						}
+					],
+					affectedRows: 0
+				}
+			});
+		}
+		if (statementIntent(request, 'select', 'auth_config')) {
+			return Promise.resolve({
+				_tag: 'Success',
+				value: { rows: [{ value: 'test-session-secret-that-is-long-enough' }], affectedRows: 0 }
+			});
+		}
+		if (statementIntent(request, 'insert', 'chat_message')) {
+			returnedMessage += 1;
+			return Promise.resolve({
+				_tag: 'Success',
+				value: { rows: [{ id: `message-${returnedMessage}` }], affectedRows: 1 }
+			});
 		}
 		return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 1 } });
 	}
@@ -128,15 +216,15 @@ describe('Bolt agent tool loop', () => {
 		// fixture of what they are believed to hold would prove nothing about what is written.
 		const written: Array<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }> =
 			[];
-		let titleWrite: ReadonlyArray<unknown> | undefined;
+		let titleWrite: QueryStatement | undefined;
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			call: (metadata, request, signal) => {
 				if (
 					request._tag === 'Query' &&
-					request.sql.startsWith('update chat_session') &&
-					request.sql.includes('set title = case')
+					statementIntent(request, 'update', 'chat_session') &&
+					request.parameters.includes('What collections exist?')
 				) {
-					titleWrite = request.parameters;
+					titleWrite = request;
 				}
 				if (request._tag === 'Query' && request.sql.includes('chat_message')) {
 					written.push({ sql: request.sql, parameters: request.parameters });
@@ -183,26 +271,42 @@ describe('Bolt agent tool loop', () => {
 		expect(turns).toBe(2);
 		expect(Schema.decodeUnknownSync(BundleResult)(result)).toEqual(result);
 		expect(hostCalls).toEqual([]);
-		expect(titleWrite).toEqual(['conversation-tools', 'What collections exist?']);
+		expect(titleWrite).toBeDefined();
+		expect(titleWrite?.parameters).toEqual(
+			expect.arrayContaining(['conversation-tools', 'What collections exist?'])
+		);
 		// The conversation log is what replicates to the panel, so the turn and the call it made have to
 		// be in it: one assistant message per turn, and a call and its answer sharing an id so the two can
 		// be paired.
 		const appended = written
-			.filter((entry) => entry.sql.startsWith('insert'))
+			.filter((entry) => statementIntent(entry, 'insert', 'chat_message'))
 			.map((entry) => ({
-				role: entry.parameters[1],
-				content: JSON.parse(String(entry.parameters[2]))
+				role: entry.parameters.find(
+					(parameter) => parameter === 'user' || parameter === 'assistant'
+				),
+				content: jsonObjectParameter(entry.parameters)
 			}));
 		// One row per turn. It used to be one per round, which rendered this turn as two agent blocks.
 		expect(appended.map((entry) => entry.role)).toEqual(['user', 'assistant']);
 		expect(appended[1]?.content).toMatchObject({ status: 'running', subagent_id: null, parts: [] });
 		const rewrites = written
-			.filter((entry) => entry.sql.startsWith('update'))
-			.map((entry) => JSON.parse(String(entry.parameters[2])));
+			.filter((entry) => statementIntent(entry, 'update', 'chat_message'))
+			.flatMap((entry) => {
+				const turn = jsonObjectParameter(entry.parameters);
+				return turn === undefined ? [] : [turn];
+			});
+		const assistantAppend = appended[1];
+		if (assistantAppend?.content === undefined) {
+			throw new Error('expected the assistant append to contain a persisted turn');
+		}
 		// Every rewrite addresses the one turn it belongs to.
-		expect(new Set(rewrites.map((turn) => turn.id))).toEqual(new Set([appended[1]?.content.id]));
+		expect(new Set(rewrites.map((turn) => turn.id))).toEqual(new Set([assistantAppend.content.id]));
 		const finalTurn = rewrites.at(-1);
 		expect(finalTurn).toMatchObject({ status: 'completed' });
+		if (finalTurn === undefined) throw new Error('expected a completed persisted turn');
+		const firstPart = finalTurn.parts[0];
+		if (firstPart === undefined)
+			throw new Error('expected the persisted turn to contain a tool call');
 		expect(finalTurn.parts).toEqual([
 			{
 				kind: 'tool',
@@ -212,7 +316,7 @@ describe('Bolt agent tool loop', () => {
 			},
 			{
 				kind: 'tool-result',
-				id: finalTurn.parts[0].id,
+				id: firstPart.id,
 				name: 'describe_workspace',
 				output: expect.anything()
 			},
@@ -248,10 +352,15 @@ describe('Bolt agent tool loop', () => {
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			call: (metadata, request, signal) => {
 				if (request._tag === 'Query' && request.sql.includes('chat_message')) {
-					if (request.sql.startsWith('insert') && request.parameters[1] === 'assistant') {
-						stored = JSON.parse(String(request.parameters[2]));
+					if (
+						statementIntent(request, 'insert', 'chat_message') &&
+						request.parameters.includes('assistant')
+					) {
+						stored = jsonObjectParameter(request.parameters);
 					}
-					if (request.sql.startsWith('update')) stored = JSON.parse(String(request.parameters[2]));
+					if (statementIntent(request, 'update', 'chat_message')) {
+						stored = jsonObjectParameter(request.parameters);
+					}
 				}
 				return sessionDatabase.call(metadata, request, signal);
 			}
@@ -297,9 +406,8 @@ describe('Bolt agent tool loop', () => {
 		// Observed mid-turn: the call is already in the log, the turn has not settled, and no answer has
 		// been written for a call that has not returned.
 		expect(duringCall).toMatchObject({ status: 'running' });
-		const parts = (duringCall as { readonly parts: ReadonlyArray<{ readonly kind: string }> })
-			.parts;
-		expect(parts.map((part) => part.kind)).toEqual(['tool']);
+		if (!isPersistedTurn(duringCall)) throw new Error('expected a running persisted turn');
+		expect(duringCall.parts.map((part) => part.kind)).toEqual(['tool']);
 		expect(stored).toMatchObject({ status: 'completed' });
 	});
 
@@ -369,18 +477,26 @@ describe('Bolt agent tool loop', () => {
 		expect(result).toMatchObject({ _tag: 'Success' });
 		expect(turns).toBe(3);
 		const appended = written
-			.filter((entry) => entry.sql.startsWith('insert'))
-			.map((entry) => String(entry.parameters[1]));
+			.filter((entry) => statementIntent(entry, 'insert', 'chat_message'))
+			.map((entry) =>
+				String(
+					entry.parameters.find((parameter) => parameter === 'user' || parameter === 'assistant')
+				)
+			);
 		// One assistant row for two rounds. Two rows here is the defect this test exists for.
 		expect(appended).toEqual(['user', 'assistant']);
 		const rewrites = written
-			.filter((entry) => entry.sql.startsWith('update'))
-			.map((entry) => JSON.parse(String(entry.parameters[2])));
+			.filter((entry) => statementIntent(entry, 'update', 'chat_message'))
+			.flatMap((entry) => {
+				const turn = jsonObjectParameter(entry.parameters);
+				return turn === undefined ? [] : [turn];
+			});
 		const settled = rewrites.at(-1);
 		expect(settled).toMatchObject({ status: 'completed' });
+		if (settled === undefined) throw new Error('expected a completed persisted turn');
 		// The order is the turn's own order: what it said, what it called, what came back, twice over.
 		expect(
-			settled.parts.map((part: { readonly kind: string; readonly name?: string }) =>
+			settled.parts.map((part) =>
 				part.name === undefined ? part.kind : `${part.kind}:${part.name}`
 			)
 		).toEqual([
@@ -393,8 +509,17 @@ describe('Bolt agent tool loop', () => {
 		]);
 		// Every part belongs to the one turn, and the answers name the calls they answer.
 		expect(new Set(rewrites.map((turn) => turn.id)).size).toBe(1);
-		expect(settled.parts[2].id).toBe(settled.parts[1].id);
-		expect(settled.parts[4].id).toBe(settled.parts[3].id);
+		const [, firstCall, firstResult, secondCall, secondResult] = settled.parts;
+		if (
+			firstCall === undefined ||
+			firstResult === undefined ||
+			secondCall === undefined ||
+			secondResult === undefined
+		) {
+			throw new Error('expected both tool calls and their persisted results');
+		}
+		expect(firstResult.id).toBe(firstCall.id);
+		expect(secondResult.id).toBe(secondCall.id);
 		// Grew a part at a time rather than arriving whole — the reader can watch each one land.
 		expect(rewrites.map((turn) => turn.parts.length)).toEqual([1, 2, 3, 4, 5, 6, 6]);
 	});
@@ -483,7 +608,7 @@ describe('Bolt agent tool loop', () => {
 					method: 'POST',
 					url: 'https://mcp.example.test',
 					headers: {
-						accept: 'application/json, text/event-stream',
+						accept: 'application/json',
 						'content-type': 'application/json',
 						'mcp-protocol-version': '2026-07-28'
 					},
@@ -597,7 +722,7 @@ describe('Bolt agent tool loop', () => {
 			call: (metadata, request, signal) => {
 				if (
 					request._tag === 'Query' &&
-					request.sql.includes('from chat_session') &&
+					statementIntent(request, 'select', 'chat_session') &&
 					request.parameters[0] === targetSessionId
 				) {
 					return Promise.resolve({
@@ -605,8 +730,9 @@ describe('Bolt agent tool loop', () => {
 						value: {
 							rows: [
 								{
-									id: targetSessionId,
+									conversation_id: targetSessionId,
 									user_id: subject.userId,
+									sandbox_key: subject.userId,
 									agent_name: 'web',
 									title: 'Draft the offer'
 								}
@@ -615,8 +741,10 @@ describe('Bolt agent tool loop', () => {
 						}
 					});
 				}
-				if (request._tag === 'Query' && request.sql.includes('bolt_task')) {
-					enqueued.push(String(request.parameters[0]));
+				if (request._tag === 'Query' && statementIntent(request, 'insert', 'bolt_task')) {
+					enqueued.push(
+						String(request.parameters.find((parameter) => parameter === 'agents.turn'))
+					);
 				}
 				return sessionDatabase.call(metadata, request, signal);
 			}

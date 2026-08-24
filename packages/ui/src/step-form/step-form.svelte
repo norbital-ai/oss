@@ -67,31 +67,34 @@
 		<CardFooter class="flex justify-between">
 			<Button
 				variant="outline"
+				class="gap-2"
 				onclick={() => {
 					stepFormState.previous();
 				}}
 				disabled={stepFormState.currentStep === 0}
 			>
-				<Icon icon="lucide:chevron-left" class="mr-2 h-4 w-4" />
+				<Icon icon="lucide:chevron-left" class="h-4 w-4" />
 				{t('common.previous')}
 			</Button>
 			{#if stepFormState.currentStep === stepFormState.steps.length - 1}
 				<Button
 					type="submit"
+					class="gap-2"
 					disabled={disableSubmit || hasErrors || stepFormState.submission.isSubmitting}
 				>
 					<span>{t('common.submit')}</span>
-					<Icon icon="lucide:circle-arrow-right" class="ml-2 h-4 w-4" />
+					<Icon icon="lucide:circle-arrow-right" class="h-4 w-4" />
 				</Button>
 			{:else}
 				<Button
 					type="button"
+					class="gap-2"
 					onclick={() => {
 						stepFormState.next();
 					}}
 				>
 					{t('common.next')}
-					<Icon icon="lucide:chevron-right" class="ml-2 h-4 w-4" />
+					<Icon icon="lucide:chevron-right" class="h-4 w-4" />
 				</Button>
 			{/if}
 		</CardFooter>

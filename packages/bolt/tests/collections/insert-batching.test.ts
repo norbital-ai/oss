@@ -105,10 +105,11 @@ describe('the statements a batch of creates is', () => {
 		// One, not forty. This is the whole claim: 40 rows of one shape are one round trip.
 		expect(rows).toHaveLength(1);
 		expect(tuples(rows[0] ?? '')).toBe(40);
-		// And the two bookkeeping tables collapse with them — they were the other two thirds of the
-		// round trips a batch used to make.
+		// History remains one explicit batch statement. Sync bookkeeping is database-owned now: the
+		// collection trigger records each changed row in the same transaction, so the application must
+		// not manufacture a second outbox insert or another round trip.
 		expect(insertsInto(statements, 'bolt_collection_history')).toHaveLength(1);
-		expect(insertsInto(statements, 'bolt_sync_outbox')).toHaveLength(1);
+		expect(insertsInto(statements, 'bolt_sync_outbox')).toHaveLength(0);
 	}, 60_000);
 
 	/**

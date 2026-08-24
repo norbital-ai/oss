@@ -16,7 +16,7 @@ type ExtractFromObject<O extends Record<PropertyKey, unknown>, K> = K extends ke
 		? FilterUndefinedAndNull<O>[K] | undefined
 		: undefined;
 
-// fallow:ignore -- `any[]` is structurally necessary here: `any[] extends A`
+// `any[]` is structurally necessary here: `any[] extends A`
 // tests whether A is an array type. `unknown[]` would change the check's
 // assignability semantics and break generic inference.
 type ExtractFromArray<A extends readonly any[], K> = any[] extends A
@@ -32,7 +32,7 @@ type GetWithArray<O, K> = K extends []
 	: K extends [infer Key, ...infer Rest]
 		? O extends Record<PropertyKey, unknown>
 			? GetWithArray<ExtractFromObject<O, Key>, Rest>
-			: O extends readonly any[] // fallow:ignore -- necessary for array branch test
+			: O extends readonly any[] // necessary for array branch test
 				? GetWithArray<ExtractFromArray<O, Key>, Rest>
 				: undefined
 		: never;

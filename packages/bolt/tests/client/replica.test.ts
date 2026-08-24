@@ -126,6 +126,38 @@ describe('replica sync client', () => {
 		expect(store.row('p2')).toMatchObject({ name: 'Grace' });
 	});
 
+	it('resets a persisted projection whose cursor is ahead of a replacement database', async () => {
+		const store = createTestSink();
+		await Effect.runPromise(store.apply([change(9, 'create', 'local-only', { name: 'Stale' })]));
+		let resets = 0;
+		const persisted = { xid: 9, sequence: 4 };
+		const currentHead = { xid: 2, sequence: 1 };
+		const advanced: Array<SyncCursor> = [];
+
+		const client = await Effect.runPromise(
+			createSyncClient({
+				transport: {
+					head: () => Effect.succeed(currentHead),
+					diff: () => Effect.succeed([])
+				},
+				sink: {
+					apply: store.apply,
+					reset: () =>
+						Effect.sync(() => {
+							resets += 1;
+						}).pipe(Effect.andThen(store.reset()))
+				},
+				initialCursor: persisted,
+				onAdvance: (cursor) => Effect.sync(() => advanced.push(cursor))
+			})
+		);
+
+		expect(resets).toBe(1);
+		expect(store.row('local-only')).toBeUndefined();
+		expect(client.cursor()).toEqual(currentHead);
+		expect(advanced).toEqual([currentHead]);
+	});
+
 	it('reports each advance so live queries can re-run', async () => {
 		const { transport } = transportOf([[change(1, 'create', 'p1', { name: 'Ada' })]]);
 		const store = createTestSink();

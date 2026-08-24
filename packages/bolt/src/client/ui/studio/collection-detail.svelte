@@ -224,11 +224,13 @@
 			{#if collection.sourcePath !== undefined}
 				<button
 					type="button"
-					class="flex shrink-0 items-center gap-1 text-xs text-primary hover:underline"
+					class="shrink-0 text-xs text-primary hover:underline"
 					onclick={() => onopenSource?.(collection.sourcePath ?? '')}
 				>
-					<Icon icon="lucide:arrow-right-circle" class="size-3" />
-					View model
+					<Inline as="span" gap="xs">
+						<Icon icon="lucide:arrow-right-circle" class="size-3" />
+						View model
+					</Inline>
 				</button>
 			{/if}
 		</Inline>

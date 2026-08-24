@@ -150,7 +150,7 @@
 		searchInput: null as HTMLInputElement | null,
 		listContainer: null as HTMLDivElement | null
 	});
-	const comboboxId = `multi-step-combobox-${Math.random().toString(36).slice(2, 9)}`;
+	const comboboxId = $props.id();
 
 	/* ─────────────── Type Guards ─────────────── */
 	function isCustom<K extends keyof TValueMap>(def?: StepDef<K>): def is CustomStep<K> {
@@ -380,11 +380,14 @@
 	}
 
 	function focusInputSoon() {
-		void Effect.runPromise(
-			Effect.gen(function* () {
-				yield* Effect.promise(() => tick());
-				refs.searchInput?.focus();
-			})
+		Effect.runFork(
+			Effect.promise(() => tick()).pipe(
+				Effect.map(() => refs.searchInput?.focus()),
+				Effect.ignoreCause({
+					log: true,
+					message: '[MultiStepCombobox] Failed to focus the search input'
+				})
+			)
 		);
 	}
 
@@ -583,11 +586,7 @@
 {#snippet selectionBadges(selections: TValueMap[])}
 	<AutoTruncator items={selections} gap={4} class="min-w-0 flex-1 text-xs">
 		{#snippet children(item: TValueMap, selectionIndex: number)}
-			<Badge
-				variant="outline"
-				class="flex h-5 items-center gap-1 truncate px-2 py-0 text-xs"
-				data-truncate-item
-			>
+			<Badge variant="outline" class="h-5 gap-1 truncate px-2 py-0 text-xs" data-truncate-item>
 				{#each stepKeys as stepKey, keyIndex}
 					{@render stepValueLabel(item, stepKey, keyIndex, 'opacity-50', 'opacity-75')}
 				{/each}
@@ -741,7 +740,7 @@
 								</div>
 								<Command.List
 									bind:ref={refs.listContainer}
-									class="relative w-full overflow-auto bg-transparent p-1"
+									class="relative w-full bg-transparent p-1"
 									style={`max-height: ${Math.min(maxHeight, panelHeight - 140)}px;`}
 									id="{comboboxId}-listbox"
 									aria-label={ariaLabelListEffective}
@@ -796,10 +795,10 @@
 										</div>
 									{/snippet}
 									{#if currentIsLoading && filteredOptions.length === 0}
-										<div class="flex items-center justify-center p-3 text-xs">
-											<Spinner class="mr-2 h-3 w-3" />
+										<Inline gap="sm" justify="center" class="p-3 text-xs">
+											<Spinner class="h-3 w-3" />
 											{t('common.loading')}
-										</div>
+										</Inline>
 									{:else if commandItems.length === 0}
 										<div class="p-3 text-center text-xs">{t('common.noResultsFound')}</div>
 									{/if}

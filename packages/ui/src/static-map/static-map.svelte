@@ -64,40 +64,40 @@
 		}
 
 		void Effect.runPromise(
-			Effect.gen(function* () {
-				const module = yield* Effect.tryPromise(() => import('leaflet'));
-				if (cancelled) return;
-				leaflet = module;
-				map = module.map(container, {
-					attributionControl: true,
-					keyboard: true,
-					minZoom: 3,
-					maxZoom: 18,
-					scrollWheelZoom: true,
-					worldCopyJump: true,
-					zoomControl: true
-				});
-				map.setView([1.3521, 103.8198], 9, { animate: false });
+			Effect.tryPromise(() => import('leaflet')).pipe(
+				Effect.map((module) => {
+					if (cancelled) return;
+					leaflet = module;
+					map = module.map(container, {
+						attributionControl: true,
+						keyboard: true,
+						minZoom: 3,
+						maxZoom: 18,
+						scrollWheelZoom: true,
+						worldCopyJump: true,
+						zoomControl: true
+					});
+					map.setView([1.3521, 103.8198], 9, { animate: false });
 
-				const tiles = module.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-					attribution: '&copy; OpenStreetMap contributors',
-					crossOrigin: true,
-					maxZoom: 18
-				});
-				tiles.on('tileerror', () => {
-					errorMessage = 'The interactive basemap could not be loaded.';
-				});
-				tiles.addTo(map);
-				map.on('move zoom resize', updateMarkerPositions);
+					const tiles = module.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+						attribution: '&copy; OpenStreetMap contributors',
+						crossOrigin: true,
+						maxZoom: 18
+					});
+					tiles.on('tileerror', () => {
+						errorMessage = 'The interactive basemap could not be loaded.';
+					});
+					tiles.addTo(map);
+					map.on('move zoom resize', updateMarkerPositions);
 
-				resizeObserver = new ResizeObserver(() => {
-					map?.invalidateSize({ animate: false, pan: false });
-					updateMarkerPositions();
-				});
-				resizeObserver.observe(container);
-				ready = true;
-				fitMarkers();
-			}).pipe(
+					resizeObserver = new ResizeObserver(() => {
+						map?.invalidateSize({ animate: false, pan: false });
+						updateMarkerPositions();
+					});
+					resizeObserver.observe(container);
+					ready = true;
+					fitMarkers();
+				}),
 				Effect.catch((error) =>
 					Effect.sync(() => {
 						errorMessage = error.message;

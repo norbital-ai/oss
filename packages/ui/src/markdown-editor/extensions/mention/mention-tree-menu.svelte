@@ -5,7 +5,7 @@
 	 */
 	import Icon from '@iconify/svelte';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Scroll } from '#lib/layout';
+	import { Inline, Scroll } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
 	import { onMount } from 'svelte';
@@ -292,25 +292,16 @@
 					<button
 						type="button"
 						onclick={() => handleSelect(item)}
-						class="flex min-w-0 flex-1 items-center gap-2 py-0.5 pr-2 pl-1"
+						class="min-w-0 flex-1 py-0.5 pr-2 pl-1"
 					>
-						<!-- Icon -->
-						<Icon icon={item.icon} class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+						<Inline gap="sm">
+							<!-- Icon -->
+							<Icon icon={item.icon} class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
 
-						<!-- Label & Description with highlighting -->
-						<div class="flex min-w-0 flex-1 flex-col">
-							<span class="truncate text-start font-medium text-foreground">
-								{#each getHighlightedText(item.label, query) as part}
-									{#if part.highlight}
-										<mark class="bg-yellow-200 dark:bg-yellow-800">{part.text}</mark>
-									{:else}
-										{part.text}
-									{/if}
-								{/each}
-							</span>
-							{#if item.description}
-								<span class="truncate text-start text-muted-foreground">
-									{#each getHighlightedText(item.description, query) as part}
+							<!-- Label & Description with highlighting -->
+							<div class="flex min-w-0 flex-1 flex-col">
+								<span class="truncate text-start font-medium text-foreground">
+									{#each getHighlightedText(item.label, query) as part}
 										{#if part.highlight}
 											<mark class="bg-yellow-200 dark:bg-yellow-800">{part.text}</mark>
 										{:else}
@@ -318,8 +309,19 @@
 										{/if}
 									{/each}
 								</span>
-							{/if}
-						</div>
+								{#if item.description}
+									<span class="truncate text-start text-muted-foreground">
+										{#each getHighlightedText(item.description, query) as part}
+											{#if part.highlight}
+												<mark class="bg-yellow-200 dark:bg-yellow-800">{part.text}</mark>
+											{:else}
+												{part.text}
+											{/if}
+										{/each}
+									</span>
+								{/if}
+							</div>
+						</Inline>
 					</button>
 				</div>
 			{/each}

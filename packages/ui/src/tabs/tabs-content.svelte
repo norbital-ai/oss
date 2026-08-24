@@ -21,10 +21,15 @@
 		animate?: boolean;
 		contentPadding?: boolean;
 	} = $props();
+	/**
+	 * Sticky for `keepAlive`: a panel that has been shown once stays mounted after it is hidden.
+	 * The latch is set by the attachment on the kept-alive wrapper, which only ever mounts while
+	 * the panel is active — so no effect has to watch `active` to notice.
+	 */
 	let visited = $state(false);
-	$effect(() => {
-		if (active) visited = true;
-	});
+	const markVisited = () => {
+		visited = true;
+	};
 </script>
 
 <TabsPrimitive.Content
@@ -44,7 +49,7 @@
 >
 	{#if !lazyLoad || active || (keepAlive && visited)}
 		{#if keepAlive}
-			<div hidden={!active} class="h-full min-h-0 min-w-0 overflow-clip">
+			<div hidden={!active} class="h-full min-h-0 min-w-0 overflow-clip" {@attach markVisited}>
 				{@render children?.()}
 			</div>
 		{:else}

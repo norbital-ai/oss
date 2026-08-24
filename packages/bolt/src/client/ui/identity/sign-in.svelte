@@ -3,7 +3,7 @@
 	import { Button } from '@norbital-ai/ui/button';
 	import { Input } from '@norbital-ai/ui/input';
 	import { Label } from '@norbital-ai/ui/label';
-	import { Stack } from '@norbital-ai/ui/layout';
+	import { Inline, Stack } from '@norbital-ai/ui/layout';
 	import { PinInput } from '@norbital-ai/ui/pin-input';
 	import { Spinner } from '@norbital-ai/ui/spinner';
 	import {
@@ -31,17 +31,21 @@
 	let errorMessage = $state<string | undefined>(undefined);
 
 	const send = (): Effect.Effect<void> =>
-		Effect.gen(function* () {
-			if (submitting) return;
+		Effect.suspend(() => {
+			if (submitting) return Effect.void;
 			submitting = true;
 			errorMessage = undefined;
-			const result = yield* Effect.tryPromise(() => transport.sendCode(email.trim().toLowerCase()));
-			if (!result.ok) {
-				errorMessage = identityFailureMessage(locale, result.reason);
-				return;
-			}
-			code = '';
-			step = 'code';
+			return Effect.map(
+				Effect.tryPromise(() => transport.sendCode(email.trim().toLowerCase())),
+				(result) => {
+					if (!result.ok) {
+						errorMessage = identityFailureMessage(locale, result.reason);
+						return;
+					}
+					code = '';
+					step = 'code';
+				}
+			);
 		}).pipe(
 			Effect.catch(() => {
 				errorMessage = copy['bolt.identity.genericError'];
@@ -51,18 +55,20 @@
 		);
 
 	const verify = (): Effect.Effect<void> =>
-		Effect.gen(function* () {
-			if (submitting || code.length !== 6) return;
+		Effect.suspend(() => {
+			if (submitting || code.length !== 6) return Effect.void;
 			submitting = true;
 			errorMessage = undefined;
-			const result = yield* Effect.tryPromise(() =>
-				transport.verifyCode(email.trim().toLowerCase(), code)
+			return Effect.map(
+				Effect.tryPromise(() => transport.verifyCode(email.trim().toLowerCase(), code)),
+				(result) => {
+					if (!result.ok) {
+						errorMessage = identityFailureMessage(locale, result.reason);
+						return;
+					}
+					onAuthenticated();
+				}
 			);
-			if (!result.ok) {
-				errorMessage = identityFailureMessage(locale, result.reason);
-				return;
-			}
-			onAuthenticated();
 		}).pipe(
 			Effect.catch(() => {
 				errorMessage = copy['bolt.identity.genericError'];
@@ -110,10 +116,12 @@
 					<p class="text-sm text-destructive" role="alert">{errorMessage}</p>
 				{/if}
 				<Button type="submit" class="w-full" disabled={submitting}>
-					{#if submitting}
-						<Spinner class="mr-2 h-4 w-4" />
-					{/if}
-					{copy['bolt.identity.sendCode']}
+					<Inline as="span" gap="sm" justify="center">
+						{#if submitting}
+							<Spinner class="h-4 w-4" />
+						{/if}
+						{copy['bolt.identity.sendCode']}
+					</Inline>
 				</Button>
 			</Stack>
 		</form>
@@ -148,10 +156,12 @@
 					<p class="text-sm text-destructive" role="alert">{errorMessage}</p>
 				{/if}
 				<Button type="submit" class="w-full" disabled={submitting || code.length !== 6}>
-					{#if submitting}
-						<Spinner class="mr-2 h-4 w-4" />
-					{/if}
-					{copy['bolt.identity.verifyAndContinue']}
+					<Inline as="span" gap="sm" justify="center">
+						{#if submitting}
+							<Spinner class="h-4 w-4" />
+						{/if}
+						{copy['bolt.identity.verifyAndContinue']}
+					</Inline>
 				</Button>
 			</Stack>
 		</form>

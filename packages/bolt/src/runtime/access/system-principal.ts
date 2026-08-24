@@ -180,7 +180,7 @@ const headerValue = (
  * workspace code cannot reach it — unlike `process.env` in a plain process, which is why the sandbox
  * deliberately does not hand the context one.
  */
-export type HostConfigShape = Readonly<{
+type HostConfigShape = Readonly<{
 	/** The value of one key, `None` when the host has no value for it. `string` is the reason. */
 	readonly read: (key: string) => Effect.Effect<Option.Option<Redacted.Redacted<string>>, string>;
 }>;
@@ -356,7 +356,7 @@ const constantTimeEqual = (expected: string, actual: string): boolean => {
 };
 
 /** The shape `Identity.Subject` decodes to, restated structurally so this module imports no identity. */
-export type SystemSubject = Readonly<{
+type SystemSubject = Readonly<{
 	readonly userId: string;
 	readonly tenantId: string;
 	/** What selects `COLONY_SYSTEM_POLICY`, and the only key that does. */
@@ -368,9 +368,9 @@ export type SystemSubject = Readonly<{
 /**
  * The subject a verified signature runs as.
  *
- * Not an administrator. `admin` is deliberately absent, so `isAdministrator` is false and every
- * short-circuit it guards — `decide`, `rowPredicate`, `visibleApps`, `mayImpersonate` — stays shut.
- * The host's authority is the two grants `COLONY_SYSTEM_POLICY` enumerates and nothing else, which
+ * Not an administrator. `admin` is deliberately absent, so the administrator-selected membership
+ * controls and team preview stay shut. The host's authority is exactly the grants
+ * `COLONY_SYSTEM_POLICY` enumerates, which
  * is what makes "what can this credential do" a question with a written answer.
  *
  * It belongs to no team, so it holds no authored policy and is eligible to decide no approval.

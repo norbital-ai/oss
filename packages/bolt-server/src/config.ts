@@ -33,7 +33,7 @@ export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()
 	}
 ) {}
 
-export const ConfiguredProviderSettingsSchema = Schema.Struct({
+const ConfiguredProviderSettingsSchema = Schema.Struct({
 	name: Schema.NonEmptyString,
 	endpoint: Schema.optional(Schema.String),
 	credential: Schema.optional(Schema.Redacted(Schema.String))

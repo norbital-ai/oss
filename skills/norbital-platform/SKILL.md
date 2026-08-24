@@ -26,21 +26,23 @@ mode: an agent invents an admin console that does not exist, and the user goes l
 
 ## Where each kind of change lives
 
-| Change                                                          | Lives in                                   |
-| --------------------------------------------------------------- | ------------------------------------------ |
-| Add a field, change an enum's allowed values, add an index      | `src/collections/<name>/+model.ts`         |
-| Business logic around a write                                   | `src/collections/<name>/+hooks.ts`         |
-| Import and export shaping                                       | `src/collections/<name>/+pipelines.ts`     |
-| Who may read/write; approvals, apps, tools, MCP, skills, limits | `src/access/policies/+<name>.ts`           |
-| Which policies a team holds                                     | `src/access/+teams.ts`                     |
-| Screens                                                         | `src/apps/`                                |
-| Scheduled or event-triggered work                               | `src/automations/+<name>.ts`               |
-| Extra tools                                                     | `src/capabilities/tools/+<name>.ts`        |
-| Extra skills                                                    | `src/capabilities/skills/<name>/+skill.md` |
-| Remote MCP servers                                              | `src/capabilities/mcp/+<name>.ts`          |
-| Shared web/envoy prompt                                         | `src/+agents.md`                           |
-| Reachable transport agents                                      | `src/envoys/+<name>.ts`                    |
-| Query/command functions                                         | `src/functions/+<name>.ts`                 |
+| Change                                                                               | Lives in                                   |
+| ------------------------------------------------------------------------------------ | ------------------------------------------ |
+| Add a field, change an enum's allowed values, add an index                           | `src/collections/<name>/+model.ts`         |
+| Business logic around a write                                                        | `src/collections/<name>/+hooks.ts`         |
+| Import and export shaping                                                            | `src/collections/<name>/+pipelines.ts`     |
+| Who may read/write; write authorization, approvals, apps, tools, MCP, skills, limits | `src/access/policies/+<name>.ts`           |
+| Which policies a team holds                                                          | `src/access/+teams.ts`                     |
+| Pre-sign-in rate limits                                                              | `src/access/+anonymous_limits.ts`          |
+| Screens                                                                              | `src/apps/`                                |
+| Scheduled or event-triggered work                                                    | `src/automations/+<name>.ts`               |
+| Structured domain values (money is platform-owned)                                   | `src/datatypes/<name>/+definition.ts`      |
+| Extra tools                                                                          | `src/capabilities/tools/+<name>.ts`        |
+| Extra skills                                                                         | `src/capabilities/skills/<name>/+skill.md` |
+| Remote MCP servers                                                                   | `src/capabilities/mcp/+<name>.ts`          |
+| Shared web/envoy prompt                                                              | `src/+agents.md`                           |
+| Reachable transport agents                                                           | `src/envoys/+<name>.ts`                    |
+| Query/command functions                                                              | `src/functions/+<name>.ts`                 |
 
 Compiled output lands in `.norbital/` and is never hand-edited.
 
@@ -48,9 +50,10 @@ Runtime data — users, teams, team membership, records — lives in the databas
 app. The line between the two matters, and it runs straight through the middle of "teams": _which
 teams exist and who is on them_ is data an operator edits without a deploy, but _what a team may do_
 and _which team approves step two of the payroll flow_ are both source. A person belongs to exactly
-one team; there are no roles. A person's effective policies are the union declared by their team
-and its descendants. Static envoys and automations name policy arrays directly and are never rows
-in `user`.
+one team; there are no roles (an administrator is `user.status = 'admin'`, a status on the person,
+not a role). A person's authority is the policies held by their own team — `teamPath[0]`; the rest
+of the path is for row scope, and confers nothing. Static envoys and automations name policy arrays
+directly and are never rows in `user`.
 
 ## Reference routing
 

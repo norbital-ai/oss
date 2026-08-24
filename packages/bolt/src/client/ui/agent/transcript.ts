@@ -11,6 +11,7 @@ import {
 	parseStoredVerifierScheduled
 } from '#lib/client/ui/agent/goal-verdict.js';
 import { parseAgentMessage } from '#lib/runtime/agents/agent-message.js';
+import { chatInputForModel, parseStoredChatInput } from '#lib/runtime/agents/chat-messages.js';
 import { humanize } from '@norbital-ai/std';
 import { parseStoredSummary } from '#lib/client/ui/agent/intent.js';
 
@@ -22,6 +23,9 @@ function parsePublicMcpToolName(
 	return { server: name.slice(0, index), tool: name.slice(index + 1) };
 }
 
+// repository-health:allow AL8 -- a rendering view-model, not a message shape: `kind`, `key` and
+// `status` are panel concerns with no wire meaning, and this package exports no canonical message
+// type to compose from (`MessageRow` is a private Schema.Struct with a different field set).
 type PanelText = {
 	readonly kind: 'text';
 	readonly key: string;
@@ -151,6 +155,9 @@ export type PanelMessage =
 	| PanelVerifier;
 
 /** One typed `chat_message` row, with only its intentionally untyped jsonb content left to decode. */
+// repository-health:allow AL8 -- a structural projection of the row, so `projectStoredChatMessages`
+// is testable without the generated client; declaring the canonical type this rule asks for would
+// itself be a matching type literal.
 type StoredChatMessageRow = Readonly<{
 	readonly id: string;
 	readonly conversation_id: string;
@@ -191,6 +198,15 @@ const emptyJsonObject = (): typeof JsonObject.Type => ({});
  */
 export function projectStoredChatMessages(rows: readonly StoredChatMessageRow[]) {
 	const projected = rows.map((row) => {
+		const chatInput = parseStoredChatInput(row.content);
+		if (chatInput !== null) {
+			return {
+				id: row.id,
+				role: row.role,
+				parts: [{ kind: 'text', text: chatInputForModel(chatInput) }],
+				turn_id: row.turn_id
+			};
+		}
 		const relayed = parseAgentMessage(row.content);
 		if (relayed !== null) {
 			return {
@@ -801,13 +817,8 @@ export function withPendingEcho(
 	pending: string | null
 ): readonly PanelMessage[] {
 	if (pending === null) return messages;
-	// Only the visible tail is searched. A prompt that landed before a checkpoint is inside its
-	// `before`, and an echo alongside it would be a duplicate of a message the reader can already see.
-	const landed = messages.some(
-		(message) =>
-			(message.kind === 'text' && message.role === 'user' && message.content === pending) ||
-			(message.kind === 'checkpoint' && containsPrompt(message.before, pending))
-	);
-	if (landed) return messages;
+	// A prompt that landed before a checkpoint is inside its `before`, and an echo alongside it would
+	// be a duplicate of a message the reader can already see — which is what `containsPrompt` walks.
+	if (containsPrompt(messages, pending)) return messages;
 	return [...messages, { kind: 'text', key: 'pending', role: 'user', content: pending }];
 }

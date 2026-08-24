@@ -152,7 +152,7 @@ Not everything is a service. Authored template code receives an `api` object, an
 there is a hand-written object whose surface is exactly the calls the subject makes — and no more:
 
 ```
-templates/hr-payroll/src/collections/payroll_runs/settlement-lock.test.ts:221
+templates/hr-payroll/src/collections/payroll_runs/payslip-sources-lock.test.ts:220
 	"A database double whose surface is exactly the calls `clearRunResults` makes.
 	 Narrow on purpose. A broader fake would be a second, silently divergent description of the
 	 authoring api, and the one thing this has to be right about is which rows a release removes."
@@ -164,8 +164,8 @@ real thing, and a double that disagrees with reality is exactly the fixture prob
 proving a false premise. Keep it to what the subject calls.
 
 And note what that double is used for. It records into a `deleted` array, and the assertion is on
-the recorded _sequence and contents_ — locks released before payslips, another run's claims
-untouched (`:255`) — not on "delete was called". That is the difference between a double used to
+the recorded _sequence and contents_ — the run's payslips and only those, another run's claims
+untouched (`:236`) — not on "delete was called". That is the difference between a double used to
 observe behaviour and a mock used to observe wiring.
 
 ## Substituting a module: the last resort, and how to bound it

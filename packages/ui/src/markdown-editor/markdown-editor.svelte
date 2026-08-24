@@ -12,7 +12,7 @@
 	import { Input } from '#lib/input';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { MessageVars } from '@norbital-ai/std/i18n';
-	import { Inline } from '#lib/layout';
+	import { Inline, SCROLL_AXIS_CLASSES } from '#lib/layout';
 	import * as ToggleGroup from '#lib/toggle-group';
 	import { cn } from '#lib/utils';
 	import { createFileAttachmentExtension } from './extensions/attachment/attachment-extension.svelte';
@@ -461,7 +461,9 @@
 			editable: !readonly,
 			contentType: 'markdown',
 			editorProps: {
-				attributes: { class: cn('tiptap h-full max-w-none', !isInput && 'overflow-auto') },
+				attributes: {
+					class: cn('tiptap h-full max-w-none', !isInput && SCROLL_AXIS_CLASSES.both)
+				},
 				handleKeyDown: (_view, event) => {
 					if (mention.visible || refs.commandMenu?.style.display === 'block') return false;
 					return editorKeyDownBridge.handler?.(event) === true;
@@ -611,8 +613,8 @@
 			'w-full': type === 'default',
 			'flex h-8 w-full items-center rounded-md border border-input bg-background px-3 text-sm':
 				isInput,
-			'flex w-full overflow-auto rounded-md border border-input bg-background p-2 text-sm':
-				isTextarea,
+			'flex w-full rounded-md border border-input bg-background p-2 text-sm': isTextarea,
+			[SCROLL_AXIS_CLASSES.both]: isTextarea,
 			'resize-y': isTextarea && isInteractive,
 			'resize-none': isTextarea && !isInteractive,
 			'cursor-not-allowed opacity-50': readonly && (isInput || isTextarea)

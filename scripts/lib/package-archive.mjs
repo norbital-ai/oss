@@ -18,24 +18,27 @@ function parseJsonFragment(text, label) {
 	return parsed;
 }
 
-const reportCandidateFilename = (output, start) => {
-	let depth = 0;
-	let inString = false;
-	let escaped = false;
-	for (let index = start; index < output.length; index += 1) {
-		const character = output[index];
-		if (inString) {
-			if (escaped) {
-				escaped = false;
-			} else if (character === '\\') {
-				escaped = true;
-			} else if (character === '"') {
-				inString = false;
-			}
+/** The index of the quote closing the JSON string literal that opens at `start`. */
+const stringEnd = (output, start) => {
+	for (let index = start + 1; index < output.length; index += 1) {
+		// A backslash escapes whatever follows it, including a quote that would otherwise close here.
+		if (output[index] === '\\') {
+			index += 1;
 			continue;
 		}
+		if (output[index] === '"') return index;
+	}
+	return output.length;
+};
+
+/** The index just past the balanced object or array opening at `start`, or `undefined` if unclosed. */
+const balancedEnd = (output, start) => {
+	let depth = 0;
+	for (let index = start; index < output.length; index += 1) {
+		const character = output[index];
+		// Braces and brackets inside a string are text, so a string is skipped whole.
 		if (character === '"') {
-			inString = true;
+			index = stringEnd(output, index);
 			continue;
 		}
 		if (character === '{' || character === '[') {
@@ -44,16 +47,21 @@ const reportCandidateFilename = (output, start) => {
 		}
 		if (character !== '}' && character !== ']') continue;
 		depth -= 1;
-		if (depth !== 0) continue;
-		const result = safeParse(output.slice(start, index + 1));
-		if (result === null || typeof result !== 'object') {
-			// Lifecycle scripts may write JSON-like output before the pack report.
-			return undefined;
-		}
-		const filename = Array.isArray(result) ? result[0]?.filename : result.filename;
-		return filename ?? undefined;
+		if (depth === 0) return index + 1;
 	}
 	return undefined;
+};
+
+const reportCandidateFilename = (output, start) => {
+	const end = balancedEnd(output, start);
+	if (end === undefined) return undefined;
+	const result = safeParse(output.slice(start, end));
+	if (result === null || typeof result !== 'object') {
+		// Lifecycle scripts may write JSON-like output before the pack report.
+		return undefined;
+	}
+	const filename = Array.isArray(result) ? result[0]?.filename : result.filename;
+	return filename ?? undefined;
 };
 
 export function packedArchiveFilename(output, label = 'package pack') {

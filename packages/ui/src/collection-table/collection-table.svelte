@@ -16,13 +16,13 @@
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
 	import { Number as Number_ } from 'effect';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import * as Popover from '#lib/popover';
 	import * as Sheet from '#lib/sheet';
 	import { cn, renderSnippet, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
-	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { useI18n } from '#lib/i18n';
 	import { DataRenderer } from '#lib/data-renderer';
-	import { formatDataValue, type Translate } from '#lib/data-renderer';
+	import { formatDataValue } from '#lib/data-renderer';
 	import { Cover, Inline, Stack, Bound } from '#lib/layout';
 	import { CollectionQueryState } from '#lib/collection-query';
 	import {
@@ -76,11 +76,7 @@
 
 	const COLUMN_WIDTH_BOUNDS: Readonly<Record<string, readonly [number, number]>> = {
 		boolean: [72, 112],
-		clock_time: [96, 144],
-		date: [120, 168],
-		timestamp: [168, 240],
-		timestamptz: [168, 240],
-		datetime: [168, 240],
+		instant: [168, 240],
 		money: [120, 184],
 		numeric: [88, 168],
 		number: [88, 168],
@@ -152,7 +148,7 @@
 	// svelte-ignore state_referenced_locally -- a mounted collection surface keeps one generated client.
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionTable');
 	setCollectionClientContext(() => workspaceClient);
-	const { t } = useI18n<UiKeys>();
+	const { t } = useI18n();
 	const surfaceRuntime = getCollectionSurfaceRuntime();
 	const collectionSurface = $derived(
 		resolveCollectionSurface(surfaceRuntime?.surfaces, String(collection))
@@ -182,6 +178,12 @@
 	);
 	onMount(() => surfaceRuntime?.claimView(resolvedView));
 	const detailNavigation = getCollectionTableNavigationContext();
+	// svelte-ignore state_referenced_locally -- this table's route identity is fixed for its mount.
+	const releaseDetailClient = detailNavigation?.registerDetailClient(
+		resolvedDetailRouteKey,
+		workspaceClient
+	);
+	onDestroy(() => releaseDetailClient?.());
 	const searchEnabled = $derived(features.search !== false);
 	const filterEnabled = $derived(features.filter !== false);
 	const effectiveSelectable = $derived(
@@ -207,7 +209,7 @@
 	});
 
 	function resolvedRecordMetadata(record: Row): readonly ResolvedCollectionRecordMetadata[] {
-		return resolvedRecordMetadataFor(record, recordMetadata, t as Translate);
+		return resolvedRecordMetadataFor(record, recordMetadata, t);
 	}
 	/**
 	 * The one search + filter + page model this table runs on.
@@ -293,7 +295,7 @@
 				};
 			}),
 			effectiveSelectable,
-			t as Translate
+			t
 		)
 	);
 
@@ -346,7 +348,7 @@
 	const operationsEnabled = $derived(
 		exportPipelines.length > 0 || importPipelines.length > 0 || integrations.length > 0
 	);
-	const createLabel = $derived(createActionLabel(String(collection), undefined, t as Translate));
+	const createLabel = $derived(createActionLabel(String(collection), undefined, t));
 
 	/**
 	 * One card line, resolved the way the wide grid resolves the same cell.
@@ -365,7 +367,7 @@
 		const column = registeredColumns.find((candidate) => String(candidate.key) === name);
 		const rendered = column ? renderCell(column, record) : undefined;
 		if (typeof rendered === 'string' && rendered !== '') return rendered;
-		return formatAutoCardField(definition.fields, name, record, t as Translate);
+		return formatAutoCardField(definition.fields, name, record, t);
 	}
 
 	function autoCardTitle(record: Row): string {
@@ -445,6 +447,18 @@
 			? countQueryInput.operations.count(countQueryInput.query, countQueryInput.filterOptions)
 			: null
 	);
+	let columnTextMeasurement = $state.raw<{
+		readonly ready: boolean;
+		readonly measure?: (text: string) => number;
+	}>({ ready: false });
+	onMount(() => {
+		const context = document.createElement('canvas').getContext('2d');
+		if (context) context.font = '13px "Geist Variable", ui-sans-serif, system-ui, sans-serif';
+		columnTextMeasurement = {
+			ready: true,
+			...(context ? { measure: (text: string) => context.measureText(text).width } : {})
+		};
+	});
 
 	function recordId(row: Row): string {
 		const value = Reflect.get(row, recordIdField);
@@ -468,12 +482,9 @@
 	);
 
 	watch(
-		() => ({ rows: pageRows, columns: registeredColumns }),
-		({ rows, columns }) => {
-			if (initialFitApplied || !rows || columns.length === 0) return;
-			const canvas = typeof document === 'undefined' ? null : document.createElement('canvas');
-			const context = canvas?.getContext('2d');
-			if (context) context.font = '13px "Geist Variable", ui-sans-serif, system-ui, sans-serif';
+		() => ({ rows: pageRows, columns: registeredColumns, measurement: columnTextMeasurement }),
+		({ rows, columns, measurement }) => {
+			if (initialFitApplied || !measurement.ready || !rows || columns.length === 0) return;
 			const widths = Object.fromEntries(
 				columns.map((column) => {
 					const field = metadataFor(column);
@@ -483,17 +494,11 @@
 						const rendered = column.render?.({ row, field, value });
 						return typeof rendered === 'string' || typeof rendered === 'number'
 							? String(rendered)
-							: formatDataValue(field, value, undefined, t as Translate);
+							: formatDataValue(field, value, undefined, t);
 					});
 					return [
 						String(column.key),
-						column.width ??
-							fitCollectionColumnWidth(
-								field,
-								values,
-								header,
-								context ? (text) => context.measureText(text).width : undefined
-							)
+						column.width ?? fitCollectionColumnWidth(field, values, header, measurement.measure)
 					];
 				})
 			);
@@ -614,12 +619,7 @@
 			(field) => !isSystemField(field.name) && field.kind !== 'uuid' && !field.name.endsWith('_id')
 		);
 		const fallback = fallbackField
-			? formatDataValue(
-					fallbackField,
-					Reflect.get(record, fallbackField.name),
-					undefined,
-					t as Translate
-				)
+			? formatDataValue(fallbackField, Reflect.get(record, fallbackField.name), undefined, t)
 			: '';
 		return fallback && fallback !== '—' ? fallback : humanize(String(collection));
 	}
@@ -634,9 +634,7 @@
 					field.kind !== 'uuid' &&
 					!field.name.endsWith('_id')
 			)
-			.map((field) =>
-				formatDataValue(field, Reflect.get(record, field.name), undefined, t as Translate)
-			)
+			.map((field) => formatDataValue(field, Reflect.get(record, field.name), undefined, t))
 			.find((value) => value && value !== '—');
 		return fallback ?? t('table.recordDescription', { name: humanize(String(collection)) });
 	}
@@ -674,7 +672,8 @@
 {/snippet}
 
 {#snippet openRecordAction({ row, hovered }: { row: RowAPI<GridRow, unknown>; hovered: boolean })}
-	{@const isDetailActive = activeRecordId === row.id}
+	{@const { id: recordId } = row}
+	{@const isDetailActive = activeRecordId === recordId}
 	<button
 		type="button"
 		aria-label={t('table.detailOpen')}
@@ -709,17 +708,6 @@
 			}}
 		/>
 	{/if}
-	<Action
-		label={t('table.refreshCollectionData')}
-		icon="lucide:refresh-cw"
-		iconOnly
-		pending={rowsQuery?.loading === true || countQuery?.loading === true}
-		unavailable={disabled ? t('table.viewDisabled') : undefined}
-		onRun={() => {
-			void rowsQuery?.refresh();
-			void countQuery?.refresh();
-		}}
-	/>
 {/snippet}
 
 {#snippet toolbar()}

@@ -14,8 +14,7 @@
 	import { watch } from 'runed';
 	import { Cover, Grid, Inline, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
-	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { type Translate } from '#lib/data-renderer';
+	import { useI18n } from '#lib/i18n';
 	import { onMount } from 'svelte';
 	import { Effect } from 'effect';
 	import {
@@ -104,7 +103,7 @@
 	// svelte-ignore state_referenced_locally -- a mounted collection surface keeps one generated client.
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionKanban');
 	setCollectionClientContext(() => workspaceClient);
-	const { t } = useI18n<UiKeys>();
+	const { t } = useI18n();
 	const surfaceRuntime = getCollectionSurfaceRuntime();
 	const recordScope = getCollectionRecordScope();
 	const resolvedView = $derived(
@@ -198,7 +197,7 @@
 	const metadataById = $derived.by(() => {
 		const metadata = new Map<string, readonly ResolvedCollectionRecordMetadata[]>();
 		for (const [recordId, record] of recordById) {
-			metadata.set(recordId, resolvedRecordMetadataFor(record, recordMetadata, t as Translate));
+			metadata.set(recordId, resolvedRecordMetadataFor(record, recordMetadata, t));
 		}
 		return metadata;
 	});
@@ -399,7 +398,7 @@
 	 * `Card` snippet and this path is not taken at all.
 	 */
 	function cardText(name: string, record: Row): string {
-		return formatAutoCardField(definition.fields, name, record, t as Translate);
+		return formatAutoCardField(definition.fields, name, record, t);
 	}
 
 	function autoCardTitle(record: Row): string {

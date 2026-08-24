@@ -47,9 +47,6 @@ type WakeFrame = Schema.Schema.Type<typeof WakeFrame>;
 
 const decodeFrame = Schema.decodeUnknownOption(Schema.fromJsonString(WakeFrame));
 
-const encodeWake = (frame: WakeFrame): Uint8Array =>
-	new TextEncoder().encode(JSON.stringify(frame));
-
 export const decodeWake = (bytes: Uint8Array): WakeFrame =>
 	Option.getOrElse(decodeFrame(new TextDecoder().decode(bytes)), () => ({ collections: [] }));
 
@@ -76,13 +73,18 @@ export const layer = Layer.effect(
 						_tag: 'Publish',
 						topic: SYNC_TOPIC,
 						kind: 'text',
-						bytes: encodeWake({ collections: named })
+						bytes: new TextEncoder().encode(JSON.stringify({ collections: named }))
 					})
 					// Swallowed deliberately, and this is the only place in the write path where that is
 					// the right call: the row is already committed, so there is no outcome left to report
 					// and nothing a caller could do differently. A host with no transport bound at all
 					// lands here too, which is what lets the engine run in environments that have none.
-					.pipe(Effect.ignore);
+					// The timeout belongs inside the never-failing service. Putting it at call sites lets a
+					// timeout defect escape after `announce` has already swallowed the transport's cause.
+					.pipe(
+						Effect.timeout(250),
+						Effect.catchCause(() => Effect.void)
+					);
 			})
 		});
 	})

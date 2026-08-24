@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Effect, Schema } from 'effect';
-	import { onDestroy } from 'svelte';
+	import { onMount } from 'svelte';
 	import { Bound, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { workspaceSession } from '#lib/client/session.js';
@@ -65,9 +65,11 @@
 		connection: Schema.optionalKey(ConnectionSchema)
 	});
 
-	const manifestQuery = $derived(
-		typeof window === 'undefined' ? undefined : client.system.workspace.manifest({})
-	);
+	let browserReady = $state(false);
+	onMount(() => {
+		browserReady = true;
+	});
+	const manifestQuery = $derived(browserReady ? client.system.workspace.manifest({}) : undefined);
 	const envoys = $derived<ReadonlyArray<DeclaredEnvoy>>(manifestQuery?.current?.envoys ?? []);
 	const statusQueries = $derived(
 		envoys.map((envoy) => {
@@ -124,22 +126,6 @@
 	 */
 	const STATUS_DEADLINE_MS = 15_000;
 
-	/**
-	 * The transport rotates its pairing code every twenty seconds and there is nothing to push it
-	 * here, so the page asks. Polling stops the moment an envoy is connected or errors — a page left
-	 * open on a paired envoy should not keep a timer alive for the rest of the session.
-	 */
-	const POLL_MS = 3_000;
-	const polls = new Map<string, ReturnType<typeof setInterval>>();
-	const stopPolling = (envoy?: string): void => {
-		for (const [name, handle] of polls) {
-			if (envoy !== undefined && name !== envoy) continue;
-			clearInterval(handle);
-			polls.delete(name);
-		}
-	};
-	onDestroy(() => stopPolling());
-
 	/** Renders the transport's pairing payload as a QR the phone's camera can read. */
 	const renderQr = (envoy: string, payload: string | undefined) =>
 		Effect.gen(function* () {
@@ -189,13 +175,6 @@
 			connections[envoy] = next;
 			delete connectionErrors[envoy];
 			yield* renderQr(envoy, next.pairing);
-			if (next.state === 'connected' || next.state === 'error') stopPolling(envoy);
-			else if (!polls.has(envoy) && next.state !== 'disconnected') {
-				polls.set(
-					envoy,
-					setInterval(() => void Effect.runPromise(runPairing(envoy, provider, 'status')), POLL_MS)
-				);
-			}
 		}).pipe(
 			Effect.catch((cause) => {
 				// Shown verbatim. The refusals this host produces name what is wrong and what to do — no
@@ -203,7 +182,6 @@
 				// one transport — and replacing them with "pairing failed" throws all of that away.
 				connectionErrors[envoy] =
 					cause instanceof Error ? cause.message : 'The host refused this operation.';
-				stopPolling(envoy);
 				return Effect.void;
 			}),
 			Effect.ensuring(
@@ -239,7 +217,7 @@
 		for (const envoy of envoys) {
 			if (pairingStarted.has(envoy.name)) continue;
 			pairingStarted.add(envoy.name);
-			void Effect.runPromise(runPairing(envoy.name, envoy.transport, 'status'));
+			Effect.runFork(runPairing(envoy.name, envoy.transport, 'status'));
 		}
 	});
 </script>
@@ -303,7 +281,7 @@
 					class="size-60 max-w-full rounded-md bg-white p-2"
 				/>
 				<p class="max-w-sm text-center text-meta">
-					The code changes every few seconds; this refreshes on its own.
+					This is the code returned when pairing started. If it expires, restart pairing.
 				</p>
 			</Stack>
 		{/if}

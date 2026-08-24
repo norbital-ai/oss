@@ -116,6 +116,20 @@ const resolveNavigationLabel = (
 	return key === undefined ? fallback : i18n.t(key);
 };
 
+/**
+ * Resolve built-in shell copy without exposing an untranslated key.
+ *
+ * `I18nApi.t` intentionally returns the key when a catalog does not contain it, so a nullish
+ * fallback after `t(...)` can never run. Shell navigation may briefly combine a newer navigation
+ * model with an older compiled catalog during local linking or a rolling release; checking `has`
+ * preserves readable chrome in that state while still using the active locale when it is present.
+ */
+const resolveShellLabel = (
+	i18n: NavigationLabelResolver | undefined,
+	key: string,
+	fallback: string
+): string => (i18n?.has(key) === true ? i18n.t(key) : fallback);
+
 export const resolveAppHeaderTitle = (
 	i18n: NavigationLabelResolver | undefined,
 	id: string,
@@ -362,7 +376,7 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 			? [
 					{
 						key: 'workspace-people',
-						label: input.i18n?.t('bolt.shell.people') ?? 'People',
+						label: resolveShellLabel(input.i18n, 'bolt.shell.people', 'People'),
 						icon: 'lucide:users',
 						href: WORKSPACE_SETTINGS_PATH,
 						active: isUnder(input.currentPath, WORKSPACE_SETTINGS_PATH)
@@ -377,7 +391,7 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 			: [
 					{
 						key: 'settings',
-						label: input.i18n?.t('bolt.shell.settings') ?? 'Settings',
+						label: resolveShellLabel(input.i18n, 'bolt.shell.settings', 'Settings'),
 						icon: 'lucide:settings',
 						href: settingsChildren[0]?.href ?? WORKSPACE_SETTINGS_PATH,
 						active: settingsChildren.some((item) => item.active),
@@ -388,7 +402,7 @@ export const buildSystemNavigation = (input: SystemNavigationInput): WorkspaceNa
 		...settings,
 		{
 			key: 'approvals',
-			label: input.i18n?.t('bolt.shell.approvals') ?? 'Approvals',
+			label: resolveShellLabel(input.i18n, 'bolt.shell.approvals', 'Approvals'),
 			icon: 'lucide:shield-check',
 			href: APPROVALS_PATH,
 			active: isUnder(input.currentPath, APPROVALS_PATH)

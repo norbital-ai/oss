@@ -1,8 +1,12 @@
 <script lang="ts" module>
 	import type { Snippet } from 'svelte';
-	import type { LayoutAttributes, LayoutElement, LayoutGap } from '#lib/layout/layout.shared';
+	import type {
+		LayoutAttributes,
+		LayoutElement,
+		LayoutGap,
+		ScrollAxis
+	} from '#lib/layout/layout.shared';
 
-	export type ScrollAxis = 'x' | 'y' | 'both';
 	type ScrollLayout = 'block' | 'inline' | 'stack';
 	export interface ScrollProps extends LayoutAttributes {
 		as?: LayoutElement;
@@ -32,7 +36,7 @@
 
 <script lang="ts">
 	import { cn } from '#lib/utils';
-	import { GAP_CLASSES, INSET_CLASS } from '#lib/layout/layout.shared';
+	import { GAP_CLASSES, INSET_CLASS, SCROLL_AXIS_CLASSES } from '#lib/layout/layout.shared';
 	import { scrollAffordance } from './scroll-affordance.svelte.js';
 
 	let {
@@ -52,12 +56,6 @@
 		children,
 		...restProps
 	}: ScrollProps = $props();
-	const axisClasses: Record<ScrollAxis, string> = {
-		// Per-axis contain: an x-only reel must not trap vertical parent scroll.
-		x: 'overflow-x-auto overflow-y-clip overscroll-x-contain',
-		y: 'overflow-x-clip overflow-y-auto overscroll-y-contain',
-		both: 'overflow-auto overscroll-contain'
-	};
 	const layoutClasses: Record<ScrollLayout, string | undefined> = {
 		block: undefined,
 		// `flex-nowrap` and `[&>*]:shrink-0` say the same thing on the two axes: a scroll container
@@ -93,7 +91,7 @@
 	class={cn(
 		className,
 		'h-full max-h-full min-h-0 min-w-0 [scrollbar-gutter:stable] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-		axisClasses[axis],
+		SCROLL_AXIS_CLASSES[axis],
 		layoutClasses[layout],
 		layout !== 'block' && GAP_CLASSES[gap],
 		layout !== 'block' && alignClasses[resolvedAlign],

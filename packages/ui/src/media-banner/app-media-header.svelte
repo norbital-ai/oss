@@ -1,4 +1,4 @@
-<!-- fallow-ignore-file unrendered-component -- exported package app chrome rendered by bolt shell -->
+<!-- exported package app chrome rendered by bolt shell -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { IconWrapper } from '#lib/icon-wrapper';

@@ -79,10 +79,10 @@ export const layer = Layer.effect(
 					return Effect.fail(new AdmissionStopped({ operation: 'BoltServer.ServerHealth.admit' }));
 				}
 
-				return Effect.gen(function* () {
-					const idle = current.inFlight === 0 ? yield* Deferred.make<void>() : current.idle;
-					return [undefined, { ...current, inFlight: current.inFlight + 1, idle }] as const;
-				});
+				return Effect.map(
+					current.inFlight === 0 ? Deferred.make<void>() : Effect.succeed(current.idle),
+					(idle) => [undefined, { ...current, inFlight: current.inFlight + 1, idle }] as const
+				);
 			});
 		});
 

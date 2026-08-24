@@ -75,14 +75,7 @@
 				</Button>
 			</Inline>
 		{/each}
-		<Button
-			type="button"
-			variant="outline"
-			size="sm"
-			class="mt-2"
-			{disabled}
-			onclick={addArrayItem}
-		>
+		<Button type="button" variant="outline" size="sm" {disabled} onclick={addArrayItem}>
 			<Icon icon="lucide:plus" class="size-4" />
 			{t('dataRenderer.addValue')}
 		</Button>

@@ -1,4 +1,4 @@
-<!-- fallow-ignore-file complexity -- the scalar/multiple location editor intentionally composes search, selection, and map states -->
+<!-- the scalar/multiple location editor intentionally composes search, selection, and map states -->
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { Badge } from '#lib/badge';
@@ -85,27 +85,16 @@
 	const hasValidValues = $derived(selectedLocations.length > 0);
 
 	const locationOptions = $derived.by((): LocationOption[] => {
+		// One entry per formatted address, whichever source it arrived from.
 		const uniqueByAddress: Record<string, TGeolocationPickerValue> = {};
+		const remember = (geoValue: TGeolocationPickerValue | null | undefined): void => {
+			if (geoValue?.formatted_address) uniqueByAddress[geoValue.formatted_address] = geoValue;
+		};
 
-		if (value) {
-			if (multiple && Array.isArray(value)) {
-				value.forEach((selectedValue) => {
-					if (selectedValue?.formatted_address) {
-						uniqueByAddress[selectedValue.formatted_address] = selectedValue;
-					}
-				});
-			} else if (!multiple && !Array.isArray(value)) {
-				if (value.formatted_address) {
-					uniqueByAddress[value.formatted_address] = value;
-				}
-			}
-		}
+		if (multiple && Array.isArray(value)) value.forEach(remember);
+		else if (!multiple && value && !Array.isArray(value)) remember(value);
 
-		searchResource.current.forEach((geoValue) => {
-			if (geoValue?.formatted_address) {
-				uniqueByAddress[geoValue.formatted_address] = geoValue;
-			}
-		});
+		searchResource.current.forEach(remember);
 
 		return Object.entries(uniqueByAddress).map(([formattedAddress, geoValue]): LocationOption => ({
 			label: formattedAddress,
@@ -202,7 +191,7 @@
 	{#if addresses.length > 0}
 		<Inline gap="xs" class="truncate">
 			{#each addresses.slice(0, 2) as geoValue (geoValue.formatted_address)}
-				<Badge variant="outline" class="flex max-w-[200px] items-center gap-1 px-2 py-0.5">
+				<Badge variant="outline" class="max-w-[200px] gap-1">
 					<Icon
 						icon={geoValue.geometry ? 'lucide:map-pin' : 'lucide:map-pin-off'}
 						class={`h-3 w-3 shrink-0 ${geoValue.geometry ? 'text-success' : 'text-orange-500'}`}
@@ -226,7 +215,7 @@
 			{/each}
 
 			{#if addresses.length > 2}
-				<Badge variant="info" class="flex items-center gap-1 px-2 py-0.5">
+				<Badge variant="info" class="gap-1">
 					<Icon icon="lucide:more-horizontal" class="h-3 w-3" />
 					<span class="text-xs">
 						{t('misc.moreItems', { count: addresses.length - 2 })}
@@ -353,10 +342,10 @@
 			{/if}
 		</Carousel.Root>
 	{:else}
-		<div class="py-8 text-center text-muted-foreground">
-			<Icon icon="lucide:map-pin-off" class="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+		<Stack gap="sm" align="center" class="py-8 text-center text-muted-foreground">
+			<Icon icon="lucide:map-pin-off" class="h-8 w-8 text-muted-foreground" />
 			<p class="text-sm">{t('dataRenderer.noLocations')}</p>
-		</div>
+		</Stack>
 	{/if}
 {/snippet}
 

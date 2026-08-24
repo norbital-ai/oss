@@ -93,7 +93,7 @@
 		type TCreateColumnProps
 	} from '#lib/collection-table/internal';
 	import { collectionTableColumnCanSort } from '#lib/collection-table/collection-table.types';
-	import { Bound, Scroll, Stack } from '#lib/layout';
+	import { Bound, Inline, Scroll, Stack } from '#lib/layout';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn, renderSnippet } from '#lib/utils';
 	import { watch } from 'runed';
@@ -396,12 +396,14 @@
 		<div class="shrink-0 border-t border-border px-2 py-1">
 			<button
 				type="button"
-				class="flex h-8 items-center gap-1.5 rounded-sm px-2 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				class="h-8 rounded-sm px-2 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 				disabled={disabled || addRowDisabled}
 				onclick={() => commitRows([...rows, createRow()])}
 			>
-				<Icon icon="lucide:plus" class="size-4" />
-				<span>{addRowLabel}</span>
+				<Inline gap="xs" fill>
+					<Icon icon="lucide:plus" class="size-4" />
+					<span>{addRowLabel}</span>
+				</Inline>
 			</button>
 		</div>
 	{/if}

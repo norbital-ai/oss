@@ -1,5 +1,5 @@
 <script lang="ts" generics="TMulti extends boolean">
-	import { Clock, Effect } from 'effect';
+	import { Result } from 'effect';
 	import Icon from '@iconify/svelte';
 	import {
 		DateFormatter,
@@ -115,28 +115,20 @@
 	// Also update your formatting functions:
 	function formatDateForDisplay(dateStr: string): string {
 		if (variant === 'year' && /^\d{4}/.test(dateStr)) return dateStr.slice(0, 4);
-		return Effect.runSync(
-			Effect.try(() => df.format(parseUtcInstantZoned(dateStr).toDate())).pipe(
-				Effect.match({
-					onFailure: () => dateStr,
-					onSuccess: (formatted) => formatted
-				})
-			)
+		return Result.getOrElse(
+			Result.try(() => df.format(parseUtcInstantZoned(dateStr).toDate())),
+			() => dateStr
 		);
 	}
 
 	function formatDateRelative(dateStr: string): string {
-		return Effect.runSync(
-			Effect.try(() => {
+		return Result.getOrElse(
+			Result.try(() => {
 				const date = parseUtcInstantZoned(dateStr).toDate();
-				const now = new Date(Effect.runSync(Clock.currentTimeMillis));
+				const now = new Date();
 				return formatDistance(date, now, { addSuffix: true, locale: dateFnsLocale });
-			}).pipe(
-				Effect.match({
-					onFailure: () => dateStr,
-					onSuccess: (formatted) => formatted
-				})
-			)
+			}),
+			() => dateStr
 		);
 	}
 	function getDisplayDate(dateStr: string): string {
@@ -155,7 +147,7 @@
 
 		const earliest = dates[0];
 		const latest = dates[dates.length - 1];
-		const now = new Date(Effect.runSync(Clock.currentTimeMillis));
+		const now = new Date();
 
 		if (dateStrings.length === 2) {
 			return t('dataRenderer.dateSummaryTwo', {
@@ -233,7 +225,7 @@
 {/snippet}
 
 {#snippet TriggerContent()}
-	<Icon class="mr-2 h-4 w-4 shrink-0" icon="radix-icons:calendar" />
+	<Icon class="h-4 w-4 shrink-0" icon="radix-icons:calendar" />
 	{#if !hasSelection}
 		<span
 			class="truncate text-xs font-normal text-muted-foreground transition-all hover:font-medium"
@@ -278,7 +270,7 @@
 
 {#snippet SelectedDatesSidebar()}
 	{#if multi && hasSelection}
-		<Stack gap="sm" class="min-w-[220px] border-l border-border bg-muted p-3">
+		<Stack gap="sm" class="border-l border-border bg-muted p-3">
 			<Inline justify="between" gap="sm">
 				<h4 class="text-xs font-normal text-foreground transition-all hover:font-medium">
 					{t('dataRenderer.selectedDatesHeading', { count: selectedDateStrings.length })}
@@ -293,7 +285,7 @@
 					{t('dataRenderer.clearAll')}
 				</button>
 			</Inline>
-			<Scroll axis="y" name={t('dataRenderer.selectedDatesScroll')} class="max-h-[280px]">
+			<Scroll axis="y" name={t('dataRenderer.selectedDatesScroll')}>
 				<Stack gap="sm">
 					{#each selectedDateStrings as dateStr}
 						<Inline
@@ -341,7 +333,7 @@
 				class={cn(
 					buttonVariants({
 						variant: 'outline',
-						class: 'w-full justify-start bg-background shadow-xs'
+						class: 'w-full justify-start gap-2 bg-background shadow-xs'
 					}),
 					readonly && 'shadow-none',
 					borderless && 'border-none shadow-none'

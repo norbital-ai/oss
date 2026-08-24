@@ -10,7 +10,7 @@ import {
 import { getErrorMessage } from '../src/error/index.ts';
 import { currencyFractionDigits, ISO_CURRENCY, MoneyValueSchema } from '../src/finance/currency.ts';
 import { safeParse } from '../src/json/index.ts';
-import { hashDefinition, sha256Json } from '../src/reckon/hash.ts';
+import { hashDefinition, sha256Json, sha256Text } from '../src/reckon/hash.ts';
 import { humanize, textSearchMatches } from '../src/string/index.ts';
 import { treeFind, treeFlatten } from '../src/tree/index.ts';
 
@@ -86,6 +86,10 @@ describe('retained core utilities', () => {
 	});
 
 	it('preserves the synchronous portable SHA-256 bytes', () => {
+		assert.equal(
+			sha256Text('The quick brown fox jumps over the lazy dog'),
+			'd7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592'
+		);
 		assert.equal(
 			sha256Json({}),
 			'44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a'

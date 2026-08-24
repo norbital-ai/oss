@@ -80,76 +80,84 @@
 		     telling them where, and nothing was actually deleted to hide. -->
 		<details class="group/compaction w-full text-xs" role="note">
 			<summary
-				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+				class="min-w-0 cursor-pointer list-none rounded-lg px-2 py-1.5 text-muted-foreground transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
-				<Icon icon="lucide:notebook-tabs" class="size-3.5 shrink-0" />
-				<span class="shrink-0 whitespace-nowrap">
-					{message.fold === 'plan' ? t('bolt.agent.planFolded') : t('bolt.agent.contextCompacted')}
-				</span>
-				<span class="min-w-0 flex-1 truncate text-tiny text-muted-foreground/70">
-					{t('bolt.agent.messagesKept', { count: message.before.length })}
-				</span>
-				<Icon
-					icon="lucide:chevron-right"
-					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/compaction:rotate-90"
-				/>
-			</summary>
-			<Stack gap="sm" class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3">
-				<Inline gap="xs" role="tablist" aria-label={t('bolt.agent.compactedContextAria')}>
-					<button
-						type="button"
-						role="tab"
-						aria-selected={checkpointTab === 'summary'}
-						onclick={() => (checkpointTab = 'summary')}
-						class={`rounded-md px-2 py-0.5 text-tiny font-medium transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring ${
-							checkpointTab === 'summary'
-								? 'bg-primary/10 text-primary'
-								: 'text-muted-foreground hover:bg-muted hover:text-foreground'
-						}`}
-					>
-						{t('bolt.agent.whatAgentKept')}
-					</button>
-					<button
-						type="button"
-						role="tab"
-						aria-selected={checkpointTab === 'raw'}
-						onclick={() => (checkpointTab = 'raw')}
-						class={`rounded-md px-2 py-0.5 text-tiny font-medium transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring ${
-							checkpointTab === 'raw'
-								? 'bg-primary/10 text-primary'
-								: 'text-muted-foreground hover:bg-muted hover:text-foreground'
-						}`}
-					>
+				<Inline as="span" gap="sm" class="min-w-0">
+					<Icon icon="lucide:notebook-tabs" class="size-3.5 shrink-0" />
+					<span class="shrink-0 whitespace-nowrap">
 						{message.fold === 'plan'
-							? t('bolt.agent.planningConversation')
-							: t('bolt.agent.fullConversation')}
-					</button>
+							? t('bolt.agent.planFolded')
+							: t('bolt.agent.contextCompacted')}
+					</span>
+					<span class="min-w-0 flex-1 truncate text-tiny text-muted-foreground/70">
+						{t('bolt.agent.messagesKept', { count: message.before.length })}
+					</span>
+					<Icon
+						icon="lucide:chevron-right"
+						class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/compaction:rotate-90"
+					/>
 				</Inline>
-				<div role="tabpanel" class="min-w-0">
-					{#if checkpointTab === 'summary'}
-						<Scroll
-							name={t('bolt.agent.whatAgentKept')}
-							class="max-h-72 text-micro leading-relaxed text-foreground/90"
+			</summary>
+			<!-- The offset is the parent's, not the panel's: the rule the panel bumped against, and it
+			     is what the border rides on. -->
+			<div class="pt-1 pl-3.5">
+				<Stack gap="sm" class="border-l border-border/60 py-1 pl-3">
+					<Inline gap="xs" role="tablist" aria-label={t('bolt.agent.compactedContextAria')}>
+						<button
+							type="button"
+							role="tab"
+							aria-selected={checkpointTab === 'summary'}
+							onclick={() => (checkpointTab = 'summary')}
+							class={`rounded-md px-2 py-0.5 text-tiny font-medium transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring ${
+								checkpointTab === 'summary'
+									? 'bg-primary/10 text-primary'
+									: 'text-muted-foreground hover:bg-muted hover:text-foreground'
+							}`}
 						>
-							<ReadonlyMarkdown scale="reading" content={message.summary} class="content" />
-						</Scroll>
-					{:else}
-						<Scroll
-							as="ol"
-							name={message.fold === 'plan'
+							{t('bolt.agent.whatAgentKept')}
+						</button>
+						<button
+							type="button"
+							role="tab"
+							aria-selected={checkpointTab === 'raw'}
+							onclick={() => (checkpointTab = 'raw')}
+							class={`rounded-md px-2 py-0.5 text-tiny font-medium transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring ${
+								checkpointTab === 'raw'
+									? 'bg-primary/10 text-primary'
+									: 'text-muted-foreground hover:bg-muted hover:text-foreground'
+							}`}
+						>
+							{message.fold === 'plan'
 								? t('bolt.agent.planningConversation')
-								: t('bolt.agent.conversationBeforeCompaction')}
-							layout="stack"
-							gap="xs"
-							class="m-0 max-h-72 list-none p-0"
-						>
-							{#each message.before as earlier (earlier.key)}
-								<Self message={earlier} nested="history" />
-							{/each}
-						</Scroll>
-					{/if}
-				</div>
-			</Stack>
+								: t('bolt.agent.fullConversation')}
+						</button>
+					</Inline>
+					<div role="tabpanel" class="min-w-0">
+						{#if checkpointTab === 'summary'}
+							<Scroll
+								name={t('bolt.agent.whatAgentKept')}
+								class="max-h-72 text-micro leading-relaxed text-foreground/90"
+							>
+								<ReadonlyMarkdown scale="reading" content={message.summary} class="content" />
+							</Scroll>
+						{:else}
+							<Scroll
+								as="ol"
+								name={message.fold === 'plan'
+									? t('bolt.agent.planningConversation')
+									: t('bolt.agent.conversationBeforeCompaction')}
+								layout="stack"
+								gap="xs"
+								class="m-0 max-h-72 list-none p-0"
+							>
+								{#each message.before as earlier (earlier.key)}
+									<Self message={earlier} nested="history" />
+								{/each}
+							</Scroll>
+						{/if}
+					</div>
+				</Stack>
+			</div>
 		</details>
 	</li>
 {:else if message.kind === 'tool'}
@@ -164,123 +172,129 @@
 		     than in the flow of the conversation. -->
 		<details class="group/tool w-full">
 			<summary
-				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta whitespace-nowrap transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+				class="min-w-0 cursor-pointer list-none rounded-lg px-2 py-1.5 text-meta whitespace-nowrap transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
-				<Icon
-					icon={message.icon}
-					class={`size-3.5 shrink-0 ${
-						message.state === 'failed' ? 'text-destructive' : 'text-muted-foreground'
-					}`}
-				/>
-				<span class="shrink-0 font-medium whitespace-nowrap text-foreground/80">
-					{#if message.family === 'sandbox'}
-						{t('bolt.agent.sandboxAgent')} · {toolLabel(message)}
-					{:else}
-						{toolLabel(message)}
-					{/if}
-				</span>
-				{#if message.detail}
-					<span class="min-w-0 flex-1 truncate font-mono text-tiny">{message.detail}</span>
-				{/if}
-				{#if message.children.length > 0}
-					<span class="shrink-0 whitespace-nowrap text-tiny text-muted-foreground/70">
-						{t('bolt.agent.steps', { count: message.children.length })}
-					</span>
-				{/if}
-				{#if message.state === 'running'}
-					<Spinner class="size-3 shrink-0 text-foreground" label={t('bolt.agent.working')} />
-				{:else if message.state === 'needs_input'}
+				<Inline as="span" gap="sm" class="min-w-0">
 					<Icon
-						icon="lucide:message-circle-question"
-						class="size-3 shrink-0 text-muted-foreground"
+						icon={message.icon}
+						class={`size-3.5 shrink-0 ${
+							message.state === 'failed' ? 'text-destructive' : 'text-muted-foreground'
+						}`}
 					/>
-				{:else if message.state === 'failed'}
-					<Icon icon="lucide:circle-alert" class="size-3 shrink-0 text-destructive" />
-				{/if}
-				<Icon
-					icon="lucide:chevron-right"
-					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/tool:rotate-90"
-				/>
-			</summary>
-			<Stack gap="sm" class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3">
-				{#if message.state === 'needs_input' || (Array.isArray(message.elicitation) && message.elicitation.length > 0)}
-					<Stack gap="xs" class="min-w-0">
-						<span class="text-overline">
-							{t('bolt.agent.needsInput')}
-						</span>
-						{#if message.elicitation?.length}
-							{#each message.elicitation as request (request.id)}
-								<Stack gap="xs" class="min-w-0">
-									<p class="m-0 text-micro leading-relaxed text-foreground/90">{request.message}</p>
-									{#if typeof request.url === 'string'}
-										<p class="m-0 font-mono text-micro text-muted-foreground">{request.url}</p>
-									{/if}
-								</Stack>
-							{/each}
+					<span class="shrink-0 font-medium whitespace-nowrap text-foreground/80">
+						{#if message.family === 'sandbox'}
+							{t('bolt.agent.sandboxAgent')} · {toolLabel(message)}
 						{:else}
-							<p class="m-0 text-micro text-muted-foreground">{t('bolt.agent.elicitation')}</p>
+							{toolLabel(message)}
 						{/if}
-					</Stack>
-				{/if}
-				{#if message.input}
-					<Stack gap="xs" class="min-w-0">
-						<span class="text-overline">
-							{t('bolt.agent.input')}
+					</span>
+					{#if message.detail}
+						<span class="min-w-0 flex-1 truncate font-mono text-tiny">{message.detail}</span>
+					{/if}
+					{#if message.children.length > 0}
+						<span class="shrink-0 whitespace-nowrap text-tiny text-muted-foreground/70">
+							{t('bolt.agent.steps', { count: message.children.length })}
 						</span>
-						<Scroll
-							name={t('bolt.agent.input')}
-							axis="both"
-							class="m-0 max-h-56 rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90"
-						>
-							<pre class="m-0 font-inherit text-inherit">{message.input}</pre>
-						</Scroll>
-					</Stack>
-				{/if}
-				{#if message.children.length > 0}
-					<!-- The delegated agent's own transcript, rendered by this same component. -->
-					<Stack gap="xs" class="min-w-0">
-						<span class="text-overline">
-							{t('bolt.agent.delegatedTranscript')}
-						</span>
-						<Stack
-							as="ol"
-							gap="sm"
-							class="m-0 list-none p-0"
-							aria-label={t('bolt.agent.subagentTranscriptAria')}
-						>
-							{#each message.children as child (child.key)}
-								<Self message={child} nested="subagent" />
-							{/each}
+					{/if}
+					{#if message.state === 'running'}
+						<Spinner class="size-3 shrink-0 text-foreground" label={t('bolt.agent.working')} />
+					{:else if message.state === 'needs_input'}
+						<Icon
+							icon="lucide:message-circle-question"
+							class="size-3 shrink-0 text-muted-foreground"
+						/>
+					{:else if message.state === 'failed'}
+						<Icon icon="lucide:circle-alert" class="size-3 shrink-0 text-destructive" />
+					{/if}
+					<Icon
+						icon="lucide:chevron-right"
+						class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/tool:rotate-90"
+					/>
+				</Inline>
+			</summary>
+			<div class="pt-1 pl-3.5">
+				<Stack gap="sm" class="border-l border-border/60 py-1 pl-3">
+					{#if message.state === 'needs_input' || (Array.isArray(message.elicitation) && message.elicitation.length > 0)}
+						<Stack gap="xs" class="min-w-0">
+							<span class="text-overline">
+								{t('bolt.agent.needsInput')}
+							</span>
+							{#if message.elicitation?.length}
+								{#each message.elicitation as request (request.id)}
+									<Stack gap="xs" class="min-w-0">
+										<p class="m-0 text-micro leading-relaxed text-foreground/90">
+											{request.message}
+										</p>
+										{#if typeof request.url === 'string'}
+											<p class="m-0 font-mono text-micro text-muted-foreground">{request.url}</p>
+										{/if}
+									</Stack>
+								{/each}
+							{:else}
+								<p class="m-0 text-micro text-muted-foreground">{t('bolt.agent.elicitation')}</p>
+							{/if}
 						</Stack>
-					</Stack>
-				{/if}
-				{#if message.error}
-					<Stack gap="xs" class="min-w-0">
-						<span class="text-overline text-destructive">{t('bolt.agent.error')}</span>
-						<Scroll
-							name={t('bolt.agent.error')}
-							class="m-0 max-h-56 rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-micro leading-snug break-words whitespace-pre-wrap text-destructive"
-						>
-							<pre class="m-0 font-inherit text-inherit whitespace-pre-wrap">{message.error}</pre>
-						</Scroll>
-					</Stack>
-				{:else if message.output}
-					<Stack gap="xs" class="min-w-0">
-						<span class="text-overline">
-							{t('bolt.agent.result')}
-						</span>
-						<Scroll
-							name={t('bolt.agent.result')}
-							axis="both"
-							class="m-0 max-h-56 rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90"
-						>
-							<pre class="m-0 font-inherit text-inherit">{message.output}</pre>
-						</Scroll>
-					</Stack>
-				{:else if message.state === 'running'}
-					<p class="m-0 text-micro text-muted-foreground">{t('bolt.agent.waitingForResult')}</p>
-				{/if}
-			</Stack>
+					{/if}
+					{#if message.input}
+						<Stack gap="xs" class="min-w-0">
+							<span class="text-overline">
+								{t('bolt.agent.input')}
+							</span>
+							<Scroll
+								name={t('bolt.agent.input')}
+								axis="both"
+								class="m-0 max-h-56 rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90"
+							>
+								<pre class="m-0 font-inherit text-inherit">{message.input}</pre>
+							</Scroll>
+						</Stack>
+					{/if}
+					{#if message.children.length > 0}
+						<!-- The delegated agent's own transcript, rendered by this same component. -->
+						<Stack gap="xs" class="min-w-0">
+							<span class="text-overline">
+								{t('bolt.agent.delegatedTranscript')}
+							</span>
+							<Stack
+								as="ol"
+								gap="sm"
+								class="m-0 list-none p-0"
+								aria-label={t('bolt.agent.subagentTranscriptAria')}
+							>
+								{#each message.children as child (child.key)}
+									<Self message={child} nested="subagent" />
+								{/each}
+							</Stack>
+						</Stack>
+					{/if}
+					{#if message.error}
+						<Stack gap="xs" class="min-w-0">
+							<span class="text-overline text-destructive">{t('bolt.agent.error')}</span>
+							<Scroll
+								name={t('bolt.agent.error')}
+								class="m-0 max-h-56 rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-micro leading-snug break-words whitespace-pre-wrap text-destructive"
+							>
+								<pre class="m-0 font-inherit text-inherit whitespace-pre-wrap">{message.error}</pre>
+							</Scroll>
+						</Stack>
+					{:else if message.output}
+						<Stack gap="xs" class="min-w-0">
+							<span class="text-overline">
+								{t('bolt.agent.result')}
+							</span>
+							<Scroll
+								name={t('bolt.agent.result')}
+								axis="both"
+								class="m-0 max-h-56 rounded-md border bg-background p-2 font-mono text-micro leading-snug text-foreground/90"
+							>
+								<pre class="m-0 font-inherit text-inherit">{message.output}</pre>
+							</Scroll>
+						</Stack>
+					{:else if message.state === 'running'}
+						<p class="m-0 text-micro text-muted-foreground">{t('bolt.agent.waitingForResult')}</p>
+					{/if}
+				</Stack>
+			</div>
 		</details>
 	</li>
 {:else if message.kind === 'agent-message'}
@@ -329,14 +343,16 @@
 	<li class="message" data-role="reasoning">
 		<details class="group/reasoning w-full">
 			<summary
-				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+				class="min-w-0 cursor-pointer list-none rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
-				<Icon icon="lucide:brain" class="size-3.5 shrink-0" />
-				<span class="font-medium text-foreground/80">{t('bolt.agent.reasoning')}</span>
-				<Icon
-					icon="lucide:chevron-right"
-					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/reasoning:rotate-90"
-				/>
+				<Inline as="span" gap="sm" class="min-w-0">
+					<Icon icon="lucide:brain" class="size-3.5 shrink-0" />
+					<span class="font-medium text-foreground/80">{t('bolt.agent.reasoning')}</span>
+					<Icon
+						icon="lucide:chevron-right"
+						class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/reasoning:rotate-90"
+					/>
+				</Inline>
 			</summary>
 			<Stack
 				class="border-l border-border/60 py-1 pl-3 text-micro leading-relaxed text-foreground/80"
@@ -349,67 +365,75 @@
 	<li class="message my-1.5" data-role="verifier" data-testid="agent-verifier-scheduled">
 		<details class="group/verifier w-full" open>
 			<summary
-				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+				class="min-w-0 cursor-pointer list-none rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
-				<Icon icon="lucide:shield-check" class="size-3.5 shrink-0" />
-				<span class="font-medium text-foreground/80">{t('bolt.agent.verifierTriggered')}</span>
-				<Icon
-					icon="lucide:chevron-right"
-					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/verifier:rotate-90"
-				/>
+				<Inline as="span" gap="sm" class="min-w-0">
+					<Icon icon="lucide:shield-check" class="size-3.5 shrink-0" />
+					<span class="font-medium text-foreground/80">{t('bolt.agent.verifierTriggered')}</span>
+					<Icon
+						icon="lucide:chevron-right"
+						class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/verifier:rotate-90"
+					/>
+				</Inline>
 			</summary>
-			<Stack gap="xs" class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3">
-				<p class="m-0 text-tiny text-muted-foreground">{t('bolt.agent.verifierPromptHint')}</p>
-				<label class="sr-only" for="agent-verifier-scheduled-{message.key}"
-					>{t('bolt.agent.verifierPrompt')}</label
-				>
-				<Textarea
-					id="agent-verifier-scheduled-{message.key}"
-					data-testid="agent-verifier-prompt"
-					bind:value={prompt}
-					onblur={saveVerifierPrompt}
-					rows={3}
-					class="min-h-16 max-h-32 resize-none border-border/60 bg-muted/30 px-2.5 py-2 text-xs shadow-none focus-visible:ring-1"
-				/>
-			</Stack>
+			<div class="pt-1 pl-3.5">
+				<Stack gap="xs" class="border-l border-border/60 py-1 pl-3">
+					<p class="m-0 text-tiny text-muted-foreground">{t('bolt.agent.verifierPromptHint')}</p>
+					<label class="sr-only" for="agent-verifier-scheduled-{message.key}"
+						>{t('bolt.agent.verifierPrompt')}</label
+					>
+					<Textarea
+						id="agent-verifier-scheduled-{message.key}"
+						data-testid="agent-verifier-prompt"
+						bind:value={prompt}
+						onblur={saveVerifierPrompt}
+						rows={3}
+						class="min-h-16 max-h-32 resize-none border-border/60 bg-muted/30 px-2.5 py-2 text-xs shadow-none focus-visible:ring-1"
+					/>
+				</Stack>
+			</div>
 		</details>
 	</li>
 {:else if message.kind === 'goal'}
 	<li class="message my-1.5" data-role="goal" data-achieved={message.achieved}>
 		<details class="group/goal w-full">
 			<summary
-				class="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
+				class="min-w-0 cursor-pointer list-none rounded-lg px-2 py-1.5 text-meta transition-colors duration-150 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring"
 			>
-				<Icon
-					icon={message.achieved ? 'lucide:target' : 'lucide:circle-dashed'}
-					class={`size-3.5 shrink-0 ${message.achieved ? 'text-primary' : 'text-muted-foreground'}`}
-				/>
-				<span class="font-medium text-foreground/80">
-					{message.achieved ? t('bolt.agent.verified') : t('bolt.agent.notVerified')}
-				</span>
-				<Icon
-					icon="lucide:chevron-right"
-					class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/goal:rotate-90"
-				/>
+				<Inline as="span" gap="sm" class="min-w-0">
+					<Icon
+						icon={message.achieved ? 'lucide:target' : 'lucide:circle-dashed'}
+						class={`size-3.5 shrink-0 ${message.achieved ? 'text-primary' : 'text-muted-foreground'}`}
+					/>
+					<span class="font-medium text-foreground/80">
+						{message.achieved ? t('bolt.agent.verified') : t('bolt.agent.notVerified')}
+					</span>
+					<Icon
+						icon="lucide:chevron-right"
+						class="ml-auto size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150 group-open/goal:rotate-90"
+					/>
+				</Inline>
 			</summary>
-			<Stack
-				gap="xs"
-				class="mt-1 ml-3.5 border-l border-border/60 py-1 pl-3 text-micro leading-relaxed text-foreground/80"
-			>
-				<ReadonlyMarkdown scale="reading" content={message.summary} class="content" />
-				{#if message.gaps.length > 0}
-					<Stack gap="xs">
-						<span class="text-overline">
-							{t('bolt.agent.goalGaps')}
-						</span>
-						<ul class="m-0 list-disc pl-4 text-micro text-foreground/80">
-							{#each message.gaps as gap (gap)}
-								<li>{gap}</li>
-							{/each}
-						</ul>
-					</Stack>
-				{/if}
-			</Stack>
+			<div class="pt-1 pl-3.5">
+				<Stack
+					gap="xs"
+					class="border-l border-border/60 py-1 pl-3 text-micro leading-relaxed text-foreground/80"
+				>
+					<ReadonlyMarkdown scale="reading" content={message.summary} class="content" />
+					{#if message.gaps.length > 0}
+						<Stack gap="xs">
+							<span class="text-overline">
+								{t('bolt.agent.goalGaps')}
+							</span>
+							<ul class="m-0 list-disc pl-4 text-micro text-foreground/80">
+								{#each message.gaps as gap (gap)}
+									<li>{gap}</li>
+								{/each}
+							</ul>
+						</Stack>
+					{/if}
+				</Stack>
+			</div>
 		</details>
 	</li>
 {:else if message.kind === 'text'}

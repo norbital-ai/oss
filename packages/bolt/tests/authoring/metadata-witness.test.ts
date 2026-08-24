@@ -50,7 +50,6 @@ const MODEL_METADATA: Required<ModelMetadata> = {
 	recordLabel: '',
 	icon: '',
 	history: true,
-	approvalLock: true,
 	sync: true,
 	indexes: [],
 	exclusions: []
@@ -87,10 +86,7 @@ const WITNESSES: ReadonlyArray<Witness> = [
 			exclusions: 'renderArtifact',
 			recordLabel: 'extractCollectionCatalog',
 			// Lifted off `model.metadata` onto the collection descriptor beside `exclusions`, then
-			// projected by `workspace.manifest` so a host surface can read them. `approvalLock`'s runtime
-			// already worked — `Collections` intercepts a write on `definition.approvalLock` — it was the
-			// authoring surface that went nowhere, so declaring it on `defineModel` did nothing at all.
-			approvalLock: 'renderArtifact',
+			// projected by `workspace.manifest` so a host surface can read them.
 			description: 'renderArtifact',
 			icon: 'renderArtifact'
 		},
@@ -150,8 +146,8 @@ describe('authoring option witnesses', () => {
 			Object.keys(witness.acceptedButUnread).map((option) => `${witness.authoring}.${option}`)
 		);
 		// Update this literal when one is wired or deleted. `[]` is the goal state, and — with
-		// `approvalLock`, `description` and `icon` lifted onto the collection descriptor and projected
-		// by `workspace.manifest` — it is the state. Every authoring option this package accepts is
+		// With presentation metadata lifted onto the collection descriptor and projected by
+		// `workspace.manifest`, every authoring option this package accepts is
 		// now read by something.
 		expect(unread).toEqual([]);
 		for (const reason of WITNESSES.flatMap((witness) => Object.values(witness.acceptedButUnread))) {

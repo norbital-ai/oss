@@ -45,6 +45,8 @@
 {:else}
 	<Stack gap="sm" class="pb-2">
 		{#each pipelines as pipeline (pipeline.id)}
+			{@const { id: pipelineId } = pipeline}
+			{@const isRunning = pendingOperation === `${kind}:${pipelineId}`}
 			{@const reason = disabledReason(pipeline)}
 			<section class="rounded-md border border-border bg-background p-3 shadow-xs">
 				<Inline align="start" gap="md">
@@ -77,10 +79,8 @@
 						onclick={() => onRun(pipeline)}
 					>
 						<Icon
-							icon={pendingOperation === `${kind}:${pipeline.id}`
-								? 'lucide:loader-circle'
-								: 'lucide:play'}
-							class={cn('size-4', pendingOperation === `${kind}:${pipeline.id}` && 'animate-spin')}
+							icon={isRunning ? 'lucide:loader-circle' : 'lucide:play'}
+							class={cn('size-4', isRunning && 'animate-spin')}
 						/>
 						{t('table.run')}
 					</Button>

@@ -2,6 +2,7 @@ import type { CollectionField } from '@norbital-ai/ui/data-renderer';
 import type { CollectionClient } from '@norbital-ai/std/collection';
 import type { CollectionRegistryFor, PlatformSchema } from '#lib/authoring/internals.js';
 import type { CollectionMutationValues, SystemClientApi } from '#lib/client/runtime.js';
+import type { ErasedAutomationClientApi } from '#lib/client/automation-client.svelte.js';
 
 /** A record of an unknown collection: this surface renders whichever workspace it was compiled into. */
 type ErasedRecord = Readonly<Record<string, unknown>>;
@@ -51,6 +52,7 @@ type WorkspaceCollections = ErasedCollections & PlatformCollections;
 type WorkspaceReads = CollectionClient<WorkspaceCollections>;
 
 export type WorkspaceClient = Omit<WorkspaceReads, 'db'> & {
+	readonly automations: ErasedAutomationClientApi;
 	readonly db: WorkspaceReads['db'] & {
 		readonly bolt_notifications: Omit<
 			WorkspaceReads['db']['bolt_notifications'],

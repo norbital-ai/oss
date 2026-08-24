@@ -1,12 +1,11 @@
 import { Schema } from 'effect';
 import type { AnyPgColumnBuilder } from 'drizzle-orm/pg-core/columns/common';
-import { date as pgDate } from 'drizzle-orm/pg-core/columns/date';
 import { jsonb } from 'drizzle-orm/pg-core/columns/jsonb';
 import { numeric as pgNumeric } from 'drizzle-orm/pg-core/columns/numeric';
 import { text as pgText } from 'drizzle-orm/pg-core/columns/text';
 import { timestamp as pgTimestamp } from 'drizzle-orm/pg-core/columns/timestamp';
-import { uuid as pgUuid } from 'drizzle-orm/pg-core/columns/uuid';
 import { vector as pgVector } from 'drizzle-orm/pg-core/columns/vector_extension/vector';
+import { MoneyValueSchema } from '@norbital-ai/std/finance';
 import type { WorkspaceAuthoringTypes } from './index.js';
 
 /**
@@ -69,7 +68,6 @@ export interface ModelMetadata {
 	readonly recordLabel?: string | ReadonlyArray<string>;
 	readonly icon?: string;
 	readonly history?: boolean;
-	readonly approvalLock?: boolean;
 	/** Whether readable rows belong in the browser replica. Defaults to true. */
 	readonly sync?: boolean;
 	readonly indexes?: ReadonlyArray<ModelIndex>;
@@ -254,8 +252,25 @@ const ColumnAuthoring = {
 	// No `variant`. It was accepted and discarded, and no workspace in any template repository ever
 	// declared one — so there is nothing to preserve and nothing to implement against.
 	numeric: () => pgNumeric({ mode: 'number' }),
-	timestamp: () => pgTimestamp({ withTimezone: true }),
-	dateRange: () => jsonb().$type<{ readonly start?: string; readonly end?: string }>(),
+	/**
+	 * One absolute point in time, stored as PostgreSQL `timestamptz` at the database's full
+	 * precision. `precision` is deliberately application metadata only: it narrows the picker and
+	 * formatter without changing what is stored or creating a second temporal column type.
+	 */
+	instant: (options: { readonly precision?: InstantPrecision } = {}) => {
+		// `mode: 'string'` is the E2E contract, not a storage compromise. PostgreSQL still stores a
+		// full-precision timestamptz, while hooks, approvals, sync, browser mutations and JSON payloads
+		// all see the same serializable instant shape instead of alternating between Date and string.
+		const builder = pgTimestamp({ withTimezone: true, mode: 'string' });
+		const config = Reflect.get(builder, 'config');
+		if (config !== null && typeof config === 'object' && options.precision !== undefined)
+			Reflect.set(config, 'boltInstantPrecision', options.precision);
+		return builder;
+	},
+	/**
+	 * A contiguous run of wall-clock time with no calendar-day meaning, distinct from
+	 * `instantRange` (below) which is anchored to instants. See ISO 8601 'time range'.
+	 */
 	geolocation: () =>
 		jsonb().$type<{
 			readonly geometry: { readonly lon: number; readonly lat: number } | null;
@@ -389,17 +404,29 @@ export type FileRef = Readonly<{
 	readonly mime_type: string;
 }>;
 
+/**
+ * One span the platform understands natively: a started instant and the instant it closed at, if it
+ * has.
+ *
+ * `end` is `null` for an open span (live attendance), never absent — a range half missing is a
+ * different shape that only one workspace in the realm uses, and it can keep its own spelling.
+ */
+export type InstantRangeValue = Readonly<{
+	readonly start: string;
+	readonly end: string | null;
+}>;
+
+/** What an instant picker exposes; storage remains a full-precision instant in both cases. */
+export type InstantPrecision = 'day' | 'minute';
+
+/** What an instant-range renderer offers: calendar days, or date-times. */
+export type InstantRangePrecision = InstantPrecision;
+
 export const defineModel = ColumnAuthoring.defineModel;
 export const text = ColumnAuthoring.text;
 export const numeric = ColumnAuthoring.numeric;
-/** Uses Drizzle's native date builder directly so its fluent column type remains nominally identical for consumers. */
-export { pgDate as date };
-/** Owns timestamp behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-export const timestamp = ColumnAuthoring.timestamp;
-/** Local wall-clock value (`HH:mm`) intentionally uses the native text builder and carries no timezone conversion. */
-export { pgText as clockTime };
-/** Owns date range behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
-export const dateRange = ColumnAuthoring.dateRange;
+/** Owns the only temporal scalar at the authoring boundary. */
+export const instant = ColumnAuthoring.instant;
 /** Owns geolocation behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const geolocation = ColumnAuthoring.geolocation;
 /** Owns phone behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
@@ -412,28 +439,59 @@ export const vector = ColumnAuthoring.vector;
 export const hexToBinaryEmbedding = ColumnAuthoring.hexToBinaryEmbedding;
 /** Owns enums behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const enums = ColumnAuthoring.enums;
-type CustomTypeValueMap = WorkspaceAuthoringTypes extends {
-	readonly customTypeValues: infer Values;
-}
-	? Values
-	: Readonly<Record<never, never>>;
-type CustomTypeOptionsMap = WorkspaceAuthoringTypes extends {
-	readonly customTypeOptions: infer Options;
-}
-	? Options
-	: Readonly<Record<never, never>>;
+/**
+ * The platform-owned field *value* names a `custom()` column may declare, with their platform value
+ * types at the front and the workspace's own discovered datatypes merged in behind.
+ *
+ * `custom('name')` names a tenant datatype; the *value* type it resolves is sealed — a name that is
+ * neither a platform-owned value type here nor an augmented tenant `customTypeValues` key falls to
+ * `unknown` at the type level and is refused at sync time. This base map is why
+ * `custom('money')` / `custom('instant_range')` are typed in any workspace without the tenant
+ * restating them, and intersecting it with the augmented map is what makes the union carry both
+ * halves.
+ */
+type CustomTypeValueMap = PlatformCustomTypeValueMap &
+	(WorkspaceAuthoringTypes extends {
+		readonly customTypeValues: infer Values;
+	}
+		? Values
+		: Readonly<Record<never, never>>);
+type PlatformCustomTypeValueMap = Readonly<{
+	readonly [Name in keyof typeof platformCustomTypes]: CustomTypeOutput<
+		(typeof platformCustomTypes)[Name]
+	>;
+}>;
+type PlatformCustomTypeOptionsMap = Readonly<{
+	readonly [Name in keyof typeof platformCustomTypes]: CustomTypeFactoryOptions<
+		(typeof platformCustomTypes)[Name]
+	>;
+}>;
+type CustomTypeOptionsMap = PlatformCustomTypeOptionsMap &
+	(WorkspaceAuthoringTypes extends {
+		readonly customTypeOptions: infer Options;
+	}
+		? Options
+		: Readonly<Record<never, never>>);
 type CustomTypeValue<Name extends string> = Name extends keyof CustomTypeValueMap
 	? CustomTypeValueMap[Name]
 	: unknown;
+type CustomTypeName = Extract<keyof CustomTypeValueMap, string>;
+type CustomColumnOptions<Name extends string> = Readonly<{ multiple?: boolean }> &
+	(Name extends keyof CustomTypeOptionsMap
+		? [CustomTypeOptionsMap[Name]] extends [never]
+			? Readonly<Record<never, never>>
+			: Exclude<CustomTypeOptionsMap[Name], undefined>
+		: Readonly<Record<never, never>>);
 type CustomArguments<Name extends string> = Name extends keyof CustomTypeOptionsMap
 	? [CustomTypeOptionsMap[Name]] extends [never]
-		? readonly []
+		? readonly [options?: CustomColumnOptions<Name>]
 		: undefined extends CustomTypeOptionsMap[Name]
-			? readonly [options?: Exclude<CustomTypeOptionsMap[Name], undefined>]
-			: CustomTypeOptionsMap[Name] extends Readonly<Record<string, unknown>>
-				? readonly [options: CustomTypeOptionsMap[Name]]
-				: readonly []
-	: readonly [];
+			? readonly [options?: CustomColumnOptions<Name>]
+			: readonly [options: CustomColumnOptions<Name>]
+	: readonly [options?: CustomColumnOptions<Name>];
+type CustomColumnValue<Name extends string, Options> = Options extends { readonly multiple: true }
+	? ReadonlyArray<CustomTypeValue<Name>>
+	: CustomTypeValue<Name>;
 /** Binds augmented custom-type names to JSONB without weakening their consumer-provided value and option maps. */
 const customTypeColumn = {
 	/**
@@ -443,11 +501,38 @@ const customTypeColumn = {
 	 * knew that a column was a `leave_event` rather than arbitrary JSON, and the closed union the
 	 * author declared could not be enforced on write. Malformed values were stored rather than
 	 * refused, and the damage only showed up much later as columns generated from them reading null.
+	 *
+	 * The name is the generated union of platform types and this workspace's discovered datatypes.
+	 * Sync performs the same check over source before it emits that augmentation, so neither a type
+	 * cast nor an out-of-date generated file can smuggle an undeclared name into the artifact.
 	 */
-	create: <const Name extends string>(name: Name, ..._arguments: CustomArguments<Name>) => {
-		const builder = jsonb().$type<CustomTypeValue<Name>>();
+	create: <const Name extends CustomTypeName, const Arguments extends CustomArguments<Name>>(
+		name: Name,
+		...arguments_: Arguments
+	) => {
+		const options = arguments_[0];
+		if (
+			options !== undefined &&
+			(typeof options !== 'object' ||
+				options === null ||
+				Array.isArray(options) ||
+				!Schema.is(Schema.Json)(options))
+		)
+			throw new TypeError(`custom(${JSON.stringify(name)}) options must be JSON-serializable.`);
+		const builder = jsonb().$type<CustomColumnValue<Name, Arguments[0]>>();
 		const config = Reflect.get(builder, 'config');
-		if (config !== null && typeof config === 'object') Reflect.set(config, 'boltCustomType', name);
+		if (config !== null && typeof config === 'object') {
+			Reflect.set(config, 'boltCustomType', name);
+			if (options !== undefined) Reflect.set(config, 'boltCustomTypeOptions', options);
+			const precision = options === undefined ? undefined : Reflect.get(options, 'precision');
+			if (precision === 'day' || precision === 'minute')
+				Reflect.set(config, 'boltRangePrecision', precision);
+		}
+		Reflect.set(builder, 'array', () => {
+			throw new Error(
+				`custom(${JSON.stringify(name)}).array() is not supported: use custom(${JSON.stringify(name)}, { multiple: true }), which stores one JSON array in one jsonb column.`
+			);
+		});
 		return builder;
 	}
 };
@@ -477,34 +562,36 @@ const isRealCalendarDay = Schema.makeFilter(
 );
 const utcInstant = Schema.String.check(Schema.isPattern(UTC_INSTANT), isRealCalendarDay);
 
-const dateRangeValueSchema = Schema.Struct({ start: utcInstant, end: utcInstant });
 /**
- * The period a rule nested inside a custom type is in force for.
- *
- * Both bounds are required. The zod value this replaced declared both *optional* and was then used
- * five times in `hr-payroll` — twice through `.required()` and three times bare — but nothing on
- * either side of those three ever meant a half-open range: every renderer builds the pair, every
- * seeded row carries the pair, and an open-ended layer is written as a far-future `end`
- * (`9999-12-31T23:59:59.999Z`), never as an absent one. So the optional form was not a second shape
- * the domain has; it was a hole that let a range no reader can price reach the write boundary.
- * Restating it as an optional Effect schema plus a required one would preserve that hole and give
- * `.required()` a second life under another name.
- *
- * It carries `~standard` so it is both nestable in an author's `Schema.Struct` and directly usable
- * as a `defineCustomType` schema. `onExcessProperty: 'error'` is what makes a stray key a rejection
- * rather than a silent strip — a misspelled bound would otherwise validate as an absent one.
- *
- * Annotated rather than inferred: `Schema.toStandardSchemaV1` names its result through effect's own
- * `StandardSchemaV1` import of `@standard-schema/spec`, and a public export whose inferred type
- * reaches a dependency this package does not declare cannot be named in its declaration file — the
- * emitted `.d.ts` for the whole module silently disappeared over exactly that. The annotation is
- * `ReturnType` of the adapter's own instantiation, so the type is effect's and never restated.
+ * The nestable Effect form of a platform instant range — the same shape a `custom('instant_range')` column
+ * stores, as a schema a tenant custom type may embed as a field.
  */
-export const dateRangeSchema: ReturnType<
-	typeof Schema.toStandardSchemaV1<typeof dateRangeValueSchema>
-> = Schema.toStandardSchemaV1(dateRangeValueSchema, {
+export const instantRangeValueSchema = Schema.Struct({
+	start: utcInstant,
+	end: Schema.NullOr(utcInstant)
+});
+export type InstantRangeNested = Schema.Schema.Type<typeof instantRangeValueSchema>;
+
+/** The Standard Schema view used wherever `custom('instant_range')` is validated at a boundary. */
+export const instantRangeSchema: ReturnType<
+	typeof Schema.toStandardSchemaV1<typeof instantRangeValueSchema>
+> = Schema.toStandardSchemaV1(instantRangeValueSchema, {
 	parseOptions: { onExcessProperty: 'error' }
 });
+
+/**
+ * The nestable Effect form of a platform monetary value.
+ *
+ * This is `MoneyValueSchema` re-exported for the authoring surface: the two-file contract is the
+ * one place a tenant states a custom type, and a money field nested inside it should read the same
+ * schema the platform column does rather than restate it.
+ */
+export { MoneyValueSchema as moneyValueSchema };
+/** The Standard Schema view of a platform monetary value, for boundary validation. */
+export const moneySchema: ReturnType<typeof Schema.toStandardSchemaV1<typeof MoneyValueSchema>> =
+	Schema.toStandardSchemaV1(MoneyValueSchema, {
+		parseOptions: { onExcessProperty: 'error' }
+	});
 
 interface CustomTypeDefinition<
 	Name extends string,
@@ -540,8 +627,9 @@ const relationshipDelete = Symbol.for('@norbital-ai/bolt/relationship-on-delete'
  * A non-factory schema is adapted to a Standard Schema here, with `onExcessProperty: 'error'`, so
  * the runtime's `~standard` validator keeps refusing keys the author's `z.strictObject` refused —
  * the strictness is the platform's default for custom-type values, not an option each author
- * re-declares. A factory is left untouched: it takes options the runtime does not have, so it is
- * never validated there anyway.
+ * re-declares. A factory is left untouched and receives the options recorded by
+ * `custom(name, options)` at the write boundary. Platform and tenant definitions therefore take the
+ * same path.
  */
 const CustomTypeAuthoring = {
 	define: <
@@ -571,6 +659,51 @@ const CustomTypeAuthoring = {
 	}
 };
 export const defineCustomType = CustomTypeAuthoring.define;
+
+type MoneyOptions = Readonly<{ allowedCurrencies?: ReadonlyArray<string> }>;
+type InstantRangeOptions = Readonly<{ precision?: InstantRangePrecision }>;
+
+const moneySchemaFor = (options: MoneyOptions = {}) => {
+	const currencies = (options.allowedCurrencies ?? []).map((currency) => currency.trim());
+	const schema =
+		currencies.length === 0
+			? MoneyValueSchema
+			: MoneyValueSchema.check(
+					Schema.makeFilter(
+						(value) =>
+							currencies.includes(value.currency) ||
+							`currency must be one of ${currencies.join(', ')}`,
+						{ title: 'allowedCurrency' }
+					)
+				);
+	return Schema.toStandardSchemaV1(schema, { parseOptions: { onExcessProperty: 'error' } });
+};
+
+/**
+ * Platform-owned datatypes use the exact declaration contract a workspace datatype uses.
+ *
+ * The registry is injected while `src/datatypes/<name>/+definition.ts` files are discovered; that
+ * acquisition step is their only difference. Both definitions are created by `defineCustomType`,
+ * reached through `custom(name, options)`, merged into one runtime registry, validated through one
+ * Standard Schema path, and resolved by one renderer map keyed by the declared name.
+ */
+export const platformCustomTypes = Object.freeze({
+	money: defineCustomType({
+		name: 'money',
+		description:
+			'A monetary amount carried with its ISO 4217 currency code, so totals never silently mix currencies.',
+		schema: (options: MoneyOptions = {}) => moneySchemaFor(options)
+	}),
+	instant_range: defineCustomType({
+		name: 'instant_range',
+		description:
+			'A span of UTC instants: started and, when closed, ended — the platform owns the instant grammar and its open-range spellings.',
+		// Precision changes rendering, not the stored shape. Naming the option here makes it available
+		// through the same inferred second argument a tenant schema factory receives.
+		schema: (_options: InstantRangeOptions = {}) => instantRangeSchema
+	})
+});
+
 export const cascade = CustomTypeAuthoring.cascade;
 
 /**

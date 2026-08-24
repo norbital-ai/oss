@@ -110,7 +110,8 @@
 	},
 	"peerDependencies": {
 		"effect": "4.0.0-rc.111",
-		"svelte": "^5.0.0"
+		"svelte": "^5.0.0",
+		"@norbital-ai/doctor": "workspace:*"
 	},
 	"devDependencies": {
 		"@effect/vitest": "4.0.0-rc.111",
@@ -122,11 +123,15 @@
 		"svelte": "^5.56.10",
 		"svelte-check": "^4.7.6",
 		"typescript": "catalog:",
-		"vitest": "4.1.11"
+		"vitest": "4.1.11",
+		"@norbital-ai/doctor": "workspace:*"
 	},
 	"peerDependenciesMeta": {
 		"effect": {
 			"optional": false
+		},
+		"@norbital-ai/doctor": {
+			"optional": true
 		}
 	},
 	"repository": {

@@ -8,7 +8,7 @@
 	import ConversationSelector from './conversation-selector.svelte';
 	import ConversationScopePicker from './conversation-scope-picker.svelte';
 	import { Textarea } from '@norbital-ai/ui/textarea';
-	import { Bound, Center, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Center, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { Spinner } from '@norbital-ai/ui/spinner';
 	import { useAgentClient } from './client.svelte.js';
 	import { getPlatformStateContext } from '#lib/client/ui/state/platform.js';
@@ -69,6 +69,11 @@
 	import { formatFinderEntityForPrompt } from '#lib/client/ui/finder/finder-entity.js';
 	import { useI18n } from '@norbital-ai/ui/i18n';
 	import { resolveAgentIntent } from '#lib/client/ui/agent/intent.js';
+	import { workspaceSession } from '#lib/client/session.js';
+	import {
+		chatDocumentStorageKey,
+		type ChatDocumentRef
+	} from '#lib/runtime/agents/chat-messages.js';
 
 	const { t } = useI18n();
 	const agentClient = useAgentClient();
@@ -83,6 +88,9 @@
 	let { headerOrb = true }: { headerOrb?: boolean } = $props();
 
 	let draft = $state('');
+	let documents = $state<ChatDocumentRef[]>([]);
+	let uploadingDocument = $state(false);
+	let documentInput = $state<HTMLInputElement | null>(null);
 	const modelState = $derived(agentClient.models.state);
 	let session = $state<{
 		runId: string | undefined;
@@ -554,7 +562,12 @@
 			turns: activeTurns
 		})
 	);
-	const canSend = $derived(draft.trim().length > 0 && !composerLocked && !activeSessionIsReadOnly);
+	const canSend = $derived(
+		(draft.trim().length > 0 || documents.length > 0) &&
+			!composerLocked &&
+			!uploadingDocument &&
+			!activeSessionIsReadOnly
+	);
 	const previewIntent = $derived(
 		resolveAgentIntent({
 			message: draft,
@@ -683,9 +696,16 @@
 
 	/** Starts an agent turn with the current draft, mentions, and model selection. */
 	function send(): Effect.Effect<void> {
-		return Effect.gen(function* () {
+		return Effect.suspend(() => {
 			const { message, references } = serializeMentions(draft, mention.mentions);
-			if (!message || composerLocked || activeSessionIsReadOnly) return;
+			if (
+				(message.length === 0 && documents.length === 0) ||
+				composerLocked ||
+				uploadingDocument ||
+				activeSessionIsReadOnly
+			)
+				return Effect.void;
+			const sentDocuments = [...documents];
 			const { verify, verifierPrompt: resolvedVerifierPrompt } = previewIntent;
 			if (!activeChatId) session.composingNew = true;
 			session.pending = true;
@@ -702,8 +722,9 @@
 			mention.menuLoading = false;
 			mentionSearch.invalidate();
 			syncAgentSurface();
-			const result = yield* agentClient.start({
+			const started = agentClient.start({
 				message,
+				documents: sentDocuments,
 				// Only chips the picker created. An `@` that never matched is already in the text.
 				...(references.length > 0 ? { mentions: references } : {}),
 				...(activeRunId ? { runId: activeRunId } : {}),
@@ -718,12 +739,15 @@
 					? { model: modelState.selectedModel }
 					: {})
 			});
-			session.runId = result.runId;
-			session.chatId = result.chatId;
-			session.composingNew = false;
-			// Interactive start returns before inference; the replicated root turn owns in-flight after this.
-			session.pending = false;
-			syncAgentSurface();
+			return Effect.map(started, (result) => {
+				session.runId = result.runId;
+				session.chatId = result.chatId;
+				session.composingNew = false;
+				// Interactive start returns before inference; the replicated root turn owns in-flight after this.
+				session.pending = false;
+				documents = [];
+				syncAgentSurface();
+			});
 		}).pipe(
 			Effect.catch((cause) => {
 				const reason = cause instanceof Error ? cause.message : String(cause);
@@ -738,11 +762,76 @@
 		);
 	}
 
+	/** Opens a chat before writing bytes, then stores a document through the session-bound route. */
+	function uploadDocument(file: File): Effect.Effect<void> {
+		return Effect.gen(function* () {
+			if (composerLocked || uploadingDocument || activeSessionIsReadOnly) return;
+			uploadingDocument = true;
+			let conversationId = activeRunId;
+			if (conversationId === undefined) {
+				conversationId = globalThis.crypto.randomUUID();
+				yield* runtime.client.system.agents.start({
+					agent: runtime.agentName,
+					conversationId
+				});
+				session.runId = conversationId;
+				session.chatId = conversationId;
+				session.composingNew = false;
+				syncAgentSurface();
+			}
+			const storageKey = chatDocumentStorageKey(
+				conversationId,
+				globalThis.crypto.randomUUID(),
+				file.name
+			);
+			const stored = yield* Effect.tryPromise({
+				try: () => workspaceSession().chatDocuments.store(conversationId, storageKey, file),
+				catch: (cause) => cause
+			});
+			documents = [...documents, stored];
+		}).pipe(
+			Effect.catch((cause) => {
+				session.sendFailure = cause instanceof Error ? cause.message : String(cause);
+				return Effect.void;
+			}),
+			Effect.ensuring(
+				Effect.sync(() => {
+					uploadingDocument = false;
+					if (documentInput) documentInput.value = '';
+				})
+			)
+		);
+	}
+
+	function removeDocument(document: ChatDocumentRef): void {
+		const conversationId = activeRunId;
+		if (conversationId === undefined) return;
+		void workspaceSession()
+			.chatDocuments.remove(conversationId, document.storage_key)
+			.then(() => {
+				documents = documents.filter((candidate) => candidate.storage_key !== document.storage_key);
+			})
+			.catch((cause) => {
+				session.sendFailure = cause instanceof Error ? cause.message : String(cause);
+			});
+	}
+
+	function abandonDraftDocuments(): void {
+		const conversationId = activeRunId;
+		const abandoned = [...documents];
+		documents = [];
+		if (conversationId === undefined) return;
+		for (const document of abandoned) {
+			void workspaceSession().chatDocuments.remove(conversationId, document.storage_key);
+		}
+	}
+
 	/** Switches the panel to an existing replicated session. */
 	function selectConversation(value: string | null): void {
 		if (!value) return;
 		const row = sessions.find((candidate) => candidate.conversation_id === value);
 		if (!row) return;
+		if (row.conversation_id !== activeRunId) abandonDraftDocuments();
 		session.chatId = row.conversation_id;
 		session.runId = row.conversation_id;
 		session.composingNew = false;
@@ -767,6 +856,7 @@
 					publicEnvoyKeys
 				})
 			) {
+				abandonDraftDocuments();
 				session.chatId = undefined;
 				session.runId = undefined;
 				session.composingNew = false;
@@ -782,6 +872,7 @@
 		if (session.chatId) {
 			const current = sessions.find((row) => row.conversation_id === session.chatId);
 			if (current && sessionEnvoyId(current, selectorLabels) !== envoyId) {
+				abandonDraftDocuments();
 				session.chatId = undefined;
 				session.runId = undefined;
 				session.composingNew = false;
@@ -795,6 +886,7 @@
 
 	/** Clears the active thread so the next send creates a new conversation. */
 	function startConversation(): void {
+		abandonDraftDocuments();
 		scopeUserId = currentUserId;
 		selectedEnvoy = WEB_AGENT_ID;
 		session.chatId = undefined;
@@ -866,7 +958,7 @@
 		}
 		if (event.key === 'Enter' && !event.shiftKey) {
 			event.preventDefault();
-			void Effect.runPromise(send());
+			Effect.runFork(send());
 		}
 	}
 </script>
@@ -1080,35 +1172,61 @@
 					}}
 				>
 					<div class="px-3 pt-3 pb-1 sm:px-4 sm:pt-4" data-agent-composer>
-						<label class="sr-only" for="agent-chat-input">{t('bolt.agent.messageAgent')}</label>
-						<Textarea
-							id="agent-chat-input"
-							bind:value={draft}
-							bind:ref={mention.textarea}
-							onkeydown={onKeydown}
-							oninput={onComposerInput}
-							onkeyup={(event) => {
-								if (
-									menuOpen &&
-									(event.key === 'ArrowDown' ||
-										event.key === 'ArrowUp' ||
-										event.key === 'Escape' ||
-										event.key === 'Tab' ||
-										(event.key === 'Enter' && !event.shiftKey))
-								) {
-									return;
-								}
-								refreshTrigger();
-							}}
-							onclick={refreshTrigger}
-							aria-autocomplete="list"
-							aria-expanded={menuOpen}
-							aria-controls="agent-mention-menu"
-							placeholder={t('bolt.agent.composerPlaceholder')}
-							rows={1}
-							class={AGENT_COMPOSER_EDITOR_CLASS}
-							disabled={composerLocked}
-						/>
+						<Stack gap="sm">
+							{#if documents.length > 0}
+								<Inline gap="xs" class="flex-wrap">
+									{#each documents as document (document.storage_key)}
+										<Inline
+											as="span"
+											gap="xs"
+											class="max-w-full rounded-md bg-muted px-2 py-1 text-tiny text-foreground"
+										>
+											<Icon icon="lucide:paperclip" class="size-3 shrink-0" />
+											<span class="truncate">{document.file_name}</span>
+											<button
+												type="button"
+												class="rounded-sm text-muted-foreground hover:text-foreground"
+												aria-label={`${t('common.remove')} ${document.file_name}`}
+												onclick={() => removeDocument(document)}
+											>
+												<Icon icon="lucide:x" class="size-3" />
+											</button>
+										</Inline>
+									{/each}
+								</Inline>
+							{/if}
+							<div>
+								<label class="sr-only" for="agent-chat-input">{t('bolt.agent.messageAgent')}</label>
+								<Textarea
+									id="agent-chat-input"
+									bind:value={draft}
+									bind:ref={mention.textarea}
+									onkeydown={onKeydown}
+									oninput={onComposerInput}
+									onkeyup={(event) => {
+										if (
+											menuOpen &&
+											(event.key === 'ArrowDown' ||
+												event.key === 'ArrowUp' ||
+												event.key === 'Escape' ||
+												event.key === 'Tab' ||
+												(event.key === 'Enter' && !event.shiftKey))
+										) {
+											return;
+										}
+										refreshTrigger();
+									}}
+									onclick={refreshTrigger}
+									aria-autocomplete="list"
+									aria-expanded={menuOpen}
+									aria-controls="agent-mention-menu"
+									placeholder={t('bolt.agent.composerPlaceholder')}
+									rows={1}
+									class={AGENT_COMPOSER_EDITOR_CLASS}
+									disabled={composerLocked}
+								/>
+							</div>
+						</Stack>
 					</div>
 
 					{#if previewIntent.verify}
@@ -1148,12 +1266,12 @@
 						</details>
 					{/if}
 
-					<div
-						class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-1 gap-y-1 px-2.5 pt-1 pb-[max(0.625rem,env(safe-area-inset-bottom))]"
+					<Grid
+						tracks="minmax(0,1fr) auto"
+						gap="xs"
+						class="items-end px-2.5 pt-1 pb-[max(0.625rem,env(safe-area-inset-bottom))]"
 					>
-						<!-- Plan mode is restored. Auto-send-after-step and attach remain deferred — turn stepping
-				     and a session file store are not in this package yet. Usage figures below are the
-				     provider's own; anything the provider did not report is absent rather than estimated. -->
+						<!-- Usage figures are the provider's own; anything it did not report is absent. -->
 						<Inline
 							gap="sm"
 							class={`min-w-0 text-muted-foreground ${AGENT_COMPOSER_CONTROL_TEXT_CLASS}`}
@@ -1199,6 +1317,30 @@
 							{/if}
 						</Inline>
 						<Inline justify="end" align="center" gap="xs" class="min-w-0">
+							<input
+								type="file"
+								class="sr-only"
+								bind:this={documentInput}
+								onchange={(event) => {
+									const file = event.currentTarget.files?.[0];
+									if (file) void Effect.runPromise(uploadDocument(file));
+								}}
+							/>
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon"
+								class="size-8 shrink-0"
+								disabled={composerLocked || uploadingDocument}
+								aria-label={t('common.upload')}
+								onclick={() => documentInput?.click()}
+							>
+								{#if uploadingDocument}
+									<Spinner class="size-4" label={t('common.upload')} />
+								{:else}
+									<Icon icon="lucide:paperclip" class="size-4" />
+								{/if}
+							</Button>
 							<div class="min-w-0" title={t('bolt.agent.modelAndVariant')}>
 								<AgentModelPicker
 									bind:value={modelState.selectedModel}
@@ -1223,7 +1365,7 @@
 								{/if}
 							</Button>
 						</Inline>
-					</div>
+					</Grid>
 				</form>
 			</div>
 		{/if}

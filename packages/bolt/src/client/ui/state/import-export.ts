@@ -64,6 +64,9 @@ const CollectionTransfer = {
 	download: (input: CollectionExportInput, options: CollectionExportOptions = {}) =>
 		Effect.runPromise(
 			Effect.tryPromise(() =>
+				// repository-health:allow UI18 -- `collections.export` has no generated method, and a
+				// WorkspaceSession carries a BoltTransport rather than a client. Routing it needs a
+				// `collections` namespace on SystemClientApi: a public-API change, not a refactor.
 				workspaceSession().transport.command('collections.export', input)
 			).pipe(
 				Effect.flatMap(decodeExportManifest),
@@ -75,6 +78,7 @@ const CollectionTransfer = {
 	importRecords: (input: CollectionImportInput) =>
 		Effect.runPromise(
 			Effect.tryPromise(() =>
+				// repository-health:allow UI18 -- the import half of the same gap; see the note above.
 				workspaceSession().transport.command('collections.import', input)
 			).pipe(
 				Effect.flatMap(decodeImportResult),

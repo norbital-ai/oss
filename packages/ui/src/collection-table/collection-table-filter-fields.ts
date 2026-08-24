@@ -42,13 +42,10 @@ function collectionFilterFieldIcon(field: CollectionField): string {
 	switch (field.kind) {
 		case 'boolean':
 			return ENTITY_ICONS.datatype.bool;
-		case 'date':
-			return ENTITY_ICONS.ui.calendar;
-		case 'clock_time':
-			return ENTITY_ICONS.datatype.timestamptz;
-		case 'date-range':
-		case 'dateRange':
-			return ENTITY_ICONS.datatype['date-range'];
+		case 'instant':
+			return field.precision === 'day' ? ENTITY_ICONS.ui.calendar : ENTITY_ICONS.datatype.instant;
+		case 'instant_range':
+			return ENTITY_ICONS.datatype['instant_range'];
 		case 'enum':
 			return ENTITY_ICONS.datatype.enum;
 		case 'file':
@@ -61,11 +58,6 @@ function collectionFilterFieldIcon(field: CollectionField): string {
 		case 'number':
 		case 'integer':
 			return ENTITY_ICONS.datatype.numeric;
-		case 'timestamp':
-		case 'timestamptz':
-		case 'datetime':
-		case 'tstzrange':
-			return ENTITY_ICONS.datatype.timestamptz;
 		case 'uuid':
 			return ENTITY_ICONS.datatype.uuid;
 		case 'text':

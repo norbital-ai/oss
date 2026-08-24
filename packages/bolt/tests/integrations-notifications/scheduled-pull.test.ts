@@ -66,6 +66,7 @@ const Vendor = Schema.Struct({ code: Schema.NonEmptyString, title: Schema.NonEmp
 
 const authoredModule = {
 	erp: {
+		policies: ['admin'],
 		connection: erp,
 		receive: {
 			vendors: definePull({

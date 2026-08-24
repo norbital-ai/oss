@@ -9,7 +9,7 @@
  */
 
 import { safeParse } from '@norbital-ai/std';
-import { Cause, Effect, Schema } from 'effect';
+import { Cause, Clock, Effect, Schema } from 'effect';
 import { scopedStorageKey } from '#lib/storage-scope';
 import type { FormSchema } from '../form_state.svelte';
 
@@ -103,7 +103,14 @@ export class DraftStorage<T = Record<string, unknown>> {
 				}
 			})
 		);
-		void Effect.runPromise(hashEffect);
+		Effect.runFork(
+			hashEffect.pipe(
+				Effect.ignoreCause({
+					log: true,
+					message: `[DraftStorage] Failed to initialize draft storage: ${this.key}`
+				})
+			)
+		);
 	}
 
 	private init(): void {
@@ -171,18 +178,20 @@ export class DraftStorage<T = Record<string, unknown>> {
 		if (typeof window === 'undefined') return;
 		if (!this.schemaHash) return;
 
-		const draftData: DraftData<T> = {
-			data,
-			lastModified: Date.now(),
-			schemaHash: this.schemaHash
-		};
+		const schemaHash = this.schemaHash;
 
 		Effect.runSync(
-			Effect.try(() => {
-				localStorage.setItem(this.key, JSON.stringify(draftData));
-				this.exists = true;
-				this.hadSchemaMismatch = false;
-			}).pipe(
+			// The stamp comes from the runtime's clock rather than the ambient one, so a test can
+			// pin what a saved draft claims about when it was written.
+			Clock.currentTimeMillis.pipe(
+				Effect.flatMap((lastModified) =>
+					Effect.try(() => {
+						const draftData: DraftData<T> = { data, lastModified, schemaHash };
+						localStorage.setItem(this.key, JSON.stringify(draftData));
+						this.exists = true;
+						this.hadSchemaMismatch = false;
+					})
+				),
 				Effect.catch((error) => Effect.logWarning('[DraftStorage] Failed to save draft:', error))
 			)
 		);

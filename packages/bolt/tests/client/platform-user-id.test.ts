@@ -76,8 +76,11 @@ describe('the id the platform context publishes', () => {
 describe('workspace application loading', () => {
 	it('keeps the stale-import counter outside reactive state', () => {
 		const workspace = read('../../src/client/ui/shell/workspace.svelte');
-		expect(workspace).toMatch(/let appRequest = 0;/);
-		expect(workspace).toMatch(/const request = \+\+appRequest;/);
+		// A plain object rather than `$state`: the navigation effect increments it, and a reactive
+		// counter would make that effect subscribe to the value it writes.
+		expect(workspace).toMatch(/const appRequest = \{ latest: 0 \};/);
+		expect(workspace).toMatch(/const request = \+\+appRequest\.latest;/);
+		expect(workspace).not.toMatch(/\$state[^\n]*appRequest/);
 		expect(workspace).not.toMatch(/appMount\.request/);
 	});
 

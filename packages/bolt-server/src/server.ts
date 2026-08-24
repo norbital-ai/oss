@@ -17,7 +17,6 @@ import {
 	Fiber,
 	Layer,
 	ManagedRuntime,
-	Number as EffectNumber,
 	Option,
 	Result,
 	Schema,
@@ -319,111 +318,6 @@ const dispatchRealtime = Effect.fn('BoltServer.Server.dispatchRealtime')(functio
 	return realtime;
 });
 
-/** Writes one SSE frame and waits for Node backpressure without entering Promise control flow. */
-const writeSseFrame = (
-	response: ServerResponse,
-	frame: RealtimeOutput['frames'][number]
-): Effect.Effect<void, ServerTransportError> =>
-	Effect.callback<void, unknown>((resume, signal) => {
-		let settled = false;
-		const cleanup = () => {
-			response.off('drain', onDrain);
-			response.off('close', onClose);
-			signal.removeEventListener('abort', onAbort);
-		};
-		const settle = (effect: Effect.Effect<void, unknown>) => {
-			if (settled) return;
-			settled = true;
-			cleanup();
-			resume(effect);
-		};
-		function onDrain(): void {
-			settle(Effect.void);
-		}
-		function onClose(): void {
-			settle(Effect.fail(new Error('SSE client disconnected')));
-		}
-		function onAbort(): void {
-			settle(Effect.fail(signal.reason));
-		}
-
-		if (signal.aborted || response.destroyed) {
-			onAbort();
-			return;
-		}
-		const payload = JSON.stringify({
-			cursor: frame.cursor,
-			kind: frame.kind,
-			bytes: Buffer.from(frame.bytes).toString('base64')
-		});
-		if (response.write(`event: ${frame.kind}\ndata: ${payload}\n\n`)) {
-			settle(Effect.void);
-			return;
-		}
-		response.once('drain', onDrain);
-		response.once('close', onClose);
-		signal.addEventListener('abort', onAbort, { once: true });
-		return Effect.sync(cleanup);
-	}).pipe(
-		Effect.mapError(
-			(cause) =>
-				new ServerTransportError({
-					operation: 'BoltServer.Server.writeSse',
-					message: 'Unable to write Bolt SSE frames',
-					cause
-				})
-		)
-	);
-
-const handleSse = Effect.fn('BoltServer.Server.handleSse')(function* (
-	request: IncomingMessage,
-	response: ServerResponse,
-	url: URL,
-	configuration: ServerConfiguration,
-	facilities: FacilityBindings
-) {
-	const requestedConnectionId = url.searchParams.get('connectionId') ?? undefined;
-	const uuid = yield* UuidGeneration;
-	const connectionId = requestedConnectionId ?? uuid.next();
-	const afterCursor = url.searchParams.get('afterCursor') ?? undefined;
-	const requestedMaxFrames = Number(url.searchParams.get('maxFrames') ?? '64');
-	const maxFrames = Number.isInteger(requestedMaxFrames)
-		? EffectNumber.clamp({ minimum: 1, maximum: 256 })(requestedMaxFrames)
-		: 64;
-	let event: RealtimeEvent;
-	if (request.method === 'DELETE') {
-		if (requestedConnectionId === undefined) {
-			writeJson(response, 400, { code: 'bolt_server.connection_id_required' });
-			return;
-		}
-		event = Invocation.cases.Realtime.fields.event.cases.Cancel.make({
-			reason: 'SSE client cancelled the session'
-		});
-	} else if (request.method !== 'GET') {
-		response.statusCode = 405;
-		response.setHeader('allow', 'GET, DELETE');
-		response.end();
-		return;
-	} else if (requestedConnectionId === undefined) {
-		event = Invocation.cases.Realtime.fields.event.cases.Open.make({ protocol: 'sse' });
-	} else {
-		event = Invocation.cases.Realtime.fields.event.cases.Pull.make({
-			...(afterCursor === undefined ? {} : { afterCursor }),
-			maxFrames
-		});
-	}
-
-	const output = yield* dispatchRealtime(connectionId, event, configuration, facilities);
-	response.statusCode = 200;
-	response.setHeader('content-type', 'text/event-stream; charset=utf-8');
-	response.setHeader('cache-control', 'no-store');
-	response.setHeader('x-bolt-connection-id', connectionId);
-	yield* Effect.forEach(output?.frames ?? [], (frame) => writeSseFrame(response, frame), {
-		discard: true
-	});
-	response.end();
-});
-
 const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 	request: IncomingMessage,
 	response: ServerResponse,
@@ -433,10 +327,6 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 	const loader = yield* BundleLoader;
 	const health = yield* ServerHealth;
 	const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
-	if (url.pathname === '/__bolt/realtime/sse') {
-		return yield* handleSse(request, response, url, configuration, facilities);
-	}
-
 	if (url.pathname === '/healthz' || url.pathname === '/readyz') {
 		const snapshot = yield* health.snapshot();
 		const available = url.pathname === '/healthz' ? !snapshot.finalized : snapshot.ready;
@@ -757,15 +647,9 @@ const startServerEffect = <E>(
 					);
 					cancelConnections.add(cancel);
 
-					const protocol = request.headers['sec-websocket-protocol']?.split(',')[0]?.trim();
-					runtime.runFork(
-						enqueue(
-							Invocation.cases.Realtime.fields.event.cases.Open.make(
-								protocol === undefined || protocol.length === 0 ? {} : { protocol }
-							)
-						),
-						{ signal: shutdown.signal }
-					);
+					runtime.runFork(enqueue(Invocation.cases.Realtime.fields.event.cases.Open.make({})), {
+						signal: shutdown.signal
+					});
 					socket.on('message', (data, isBinary) => {
 						runtime.runFork(
 							enqueue(
@@ -893,7 +777,7 @@ const startServerEffect = <E>(
 		};
 	});
 
-/** Starts the HTTP, static, SSE, and WebSocket shell around one loaded Bolt bundle. */
+/** Starts the HTTP, static, and WebSocket shell around one loaded Bolt bundle. */
 export const startServer = <E>(
 	configuration: ServerConfiguration,
 	facilities: FacilityBindings,

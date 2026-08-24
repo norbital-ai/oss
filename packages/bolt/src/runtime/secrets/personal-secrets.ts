@@ -1,7 +1,10 @@
 import { Context, Effect, Layer, Option, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
+import { and, asc, eq, ne } from 'drizzle-orm';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
+import { composer, dbNow, executeBuilt } from '#lib/runtime/persistence.js';
 import {
 	SecretCipher,
 	bind,
@@ -21,6 +24,7 @@ import {
  */
 const personalBinding = (tenantId: string, userId: string, name: string): string =>
 	bind('bolt_personal_secrets', tenantId, userId, name);
+const { bolt_personal_secrets: boltPersonalSecrets } = SYSTEM_MODEL_TABLES;
 
 /**
  * Personal secrets: the credentials that belong to a *person*, not to the workspace.
@@ -158,11 +162,21 @@ const layer = Layer.effect(
 			name: string
 		) {
 			const { tenantId, userId } = yield* owner('read');
-			const result = yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: 'select value from bolt_personal_secrets where tenant_id = $1 and user_id = $2 and name = $3',
-				parameters: [tenantId, userId, name]
-			});
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({ value: boltPersonalSecrets.value })
+					.from(boltPersonalSecrets)
+					.where(
+						and(
+							eq(boltPersonalSecrets.tenant_id, tenantId),
+							eq(boltPersonalSecrets.user_id, userId),
+							eq(boltPersonalSecrets.name, name)
+						)
+					)
+					.limit(1)
+			);
 			const stored = rowText(result.rows[0], 'value');
 			// Unlike the workspace vault there is no declared default to fall back to: a default for a
 			// personal credential would be a shared one, which is the thing this table exists to avoid.
@@ -184,11 +198,19 @@ const layer = Layer.effect(
 				// Clearing is deleting, as in the workspace vault. Storing an empty string would make `read`
 				// return `''`, which is a value, and every downstream null check would pass on a credential
 				// that is not there.
-				yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'delete from bolt_personal_secrets where tenant_id = $1 and user_id = $2 and name = $3',
-					parameters: [tenantId, userId, name]
-				});
+				yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.delete(boltPersonalSecrets)
+						.where(
+							and(
+								eq(boltPersonalSecrets.tenant_id, tenantId),
+								eq(boltPersonalSecrets.user_id, userId),
+								eq(boltPersonalSecrets.name, name)
+							)
+						)
+				);
 				return;
 			}
 			// Sealed before the statement is even built, so a missing key refuses *ahead of* the write
@@ -198,32 +220,45 @@ const layer = Layer.effect(
 				personalBinding(tenantId, userId, name),
 				value
 			);
-			yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: `insert into bolt_personal_secrets (tenant_id, user_id, name, value) values ($1, $2, $3, $4)
-				      on conflict (tenant_id, user_id, name) do update set value = excluded.value, updated_at = now()`,
-				parameters: [tenantId, userId, name, sealed]
-			});
+			yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.insert(boltPersonalSecrets)
+					.values({ tenant_id: tenantId, user_id: userId, name, value: sealed })
+					.onConflictDoUpdate({
+						target: [
+							boltPersonalSecrets.tenant_id,
+							boltPersonalSecrets.user_id,
+							boltPersonalSecrets.name
+						],
+						set: { value: sealed, updated_at: dbNow() }
+					})
+			);
 		});
 
 		const status: Interface['status'] = Effect.fn('PersonalSecrets.status')(function* (
 			effectId: EffectId
 		) {
 			const { tenantId, userId } = yield* owner('status');
-			const result = yield* database.execute(effectId, {
-				_tag: 'Query',
-				// `configured` is computed in SQL rather than assumed from the row existing: `write` deletes
-				// on clear, so a row should always carry a value, and a row that does not is a fault worth
-				// reporting as "not set" instead of hiding behind its own presence. The value itself never
-				// leaves the database.
-				//
-				// It is a `length()` on the ciphertext, so this needs no key and does no decryption: the
-				// owner can still see which of their entries are set on a host whose key is missing or has
-				// been rotated, which is exactly when they most need to be told something is wrong.
-				sql: `select name, length(value) > 0 as configured, updated_at
-				      from bolt_personal_secrets where tenant_id = $1 and user_id = $2 order by name`,
-				parameters: [tenantId, userId]
-			});
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({
+						name: boltPersonalSecrets.name,
+						configured: ne(boltPersonalSecrets.value, '').as('configured'),
+						updated_at: boltPersonalSecrets.updated_at
+					})
+					.from(boltPersonalSecrets)
+					.where(
+						and(
+							eq(boltPersonalSecrets.tenant_id, tenantId),
+							eq(boltPersonalSecrets.user_id, userId)
+						)
+					)
+					.orderBy(asc(boltPersonalSecrets.name))
+			);
 			return result.rows.flatMap((row) => {
 				const name = rowText(row, 'name');
 				if (name === undefined || name === '') return [];
@@ -247,11 +282,19 @@ const layer = Layer.effect(
 			name: string
 		) {
 			const { tenantId, userId } = yield* owner('forget');
-			yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: 'delete from bolt_personal_secrets where tenant_id = $1 and user_id = $2 and name = $3',
-				parameters: [tenantId, userId, name]
-			});
+			yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.delete(boltPersonalSecrets)
+					.where(
+						and(
+							eq(boltPersonalSecrets.tenant_id, tenantId),
+							eq(boltPersonalSecrets.user_id, userId),
+							eq(boltPersonalSecrets.name, name)
+						)
+					)
+			);
 		});
 
 		return { read, write, status, forget };

@@ -114,6 +114,7 @@ export type IntegrationsModuleInput = Readonly<
 	Record<
 		string,
 		Readonly<{
+			readonly policies: unknown;
 			readonly connection?: unknown;
 			readonly receive?: Readonly<Record<string, IntegrationBindingInput>>;
 			readonly send?: Readonly<Record<string, IntegrationSendBindingInput>>;
@@ -644,6 +645,14 @@ export const describeIntegrations = (
 		for (const [integrationName, declaration] of Object.entries(module)) {
 			if (declaration === undefined || declaration === null) continue;
 			const name = `${collection}.${integrationName}`;
+			if (
+				!Array.isArray(declaration.policies) ||
+				declaration.policies.some((policy) => typeof policy !== 'string' || policy.trim() === '')
+			) {
+				throw new TypeError(
+					`Integration ${name} requires an explicit policies array. Use [] when it needs no data access.`
+				);
+			}
 			// Routed on which of the two the author declared, not on a `kind` tag they would have to
 			// remember: the shapes are already disjoint and the authoring union makes declaring both a
 			// compile error, so the presence of `webhook` is the discriminant.
@@ -673,6 +682,7 @@ export const describeIntegrations = (
 				integration({
 					name,
 					collection,
+					policies: [...declaration.policies],
 					...(connection === undefined ? {} : { connection }),
 					receive: pulls.map(([, parsed]) => parsed.declaration),
 					webhooks: webhooks.map(([, parsed]) => parsed.declaration),

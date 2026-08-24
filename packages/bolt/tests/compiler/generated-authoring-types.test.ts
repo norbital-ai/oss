@@ -53,8 +53,17 @@ export default {
 		);
 		await writeFile(
 			join(root, '.norbital', 'generated', 'types.ts'),
-			`import type { AnySchema } from '@norbital-ai/bolt/authoring';
-export type WorkspaceSchema = AnySchema;
+			`export type WorkspaceSchema = {
+	readonly tables: {
+		readonly records: {
+			readonly $inferSelect: { readonly id: string; readonly visible: string; readonly secret: string; readonly row_version: number };
+			readonly $inferInsert: { readonly visible: string; readonly secret?: string };
+			readonly $references?: Record<never, never>;
+		};
+	};
+	readonly relations: Record<never, never>;
+	readonly inputs: { readonly records: { readonly create: object; readonly update: object } };
+};
 `
 		);
 		await writeFile(
@@ -63,7 +72,7 @@ export type WorkspaceSchema = AnySchema;
 		);
 		await writeFile(
 			join(root, 'src', 'witness.ts'),
-			`import type { AppName, PolicyDefinition, TeamName } from '@norbital-ai/bolt/authoring';
+			`import { approveBy, noApproval, type AppName, type PolicyDefinition, type TeamName } from '@norbital-ai/bolt/authoring';
 const valid: TeamName = 'Reviewers';
 // @ts-expect-error -- a generated team union must still reject misspellings.
 const typo: TeamName = 'Reviewer';
@@ -74,15 +83,58 @@ const appGroupTypo: AppName = 'hr_controllers';
 export default {
 	description: 'Operator writes require review.',
 	capabilities: { apps: [appGroup] },
-	grants: [{
-		collection: 'records',
-		action: 'create',
-		approval: { steps: [{ key: 'review', approvers: [valid] }] }
-	}]
+	grants: {
+		records: {
+			create: {
+				fields: ['id', 'visible'],
+				authorize: ({ record }, api) => {
+					const id: string = record.id;
+					const visible: string = record.visible;
+					// @ts-expect-error -- database-generated columns do not exist on a prepared create.
+					void record.row_version;
+					void api.db.query.records;
+					void api.requestor.id;
+					void id;
+					return visible.length > 0;
+				},
+				approval: {
+					flow: ({ record }, api) => {
+						const visible: string = record.visible;
+						void api.db.query.records;
+						// @ts-expect-error -- the condition row is this grant's generated collection row.
+						void record.missing;
+						// @ts-expect-error -- policy decisions receive reads only, never mutation methods.
+						void api.db.records;
+						return visible === 'review' ? approveBy(valid) : noApproval;
+					},
+					superceded_by: [valid]
+				}
+			},
+			update: {
+				authorize: ({ previous, changes, record }) => {
+					const priorVersion: number = previous.row_version;
+					const nextVersion: number = record.row_version;
+					const changedVisible: string | undefined = changes.visible;
+					void priorVersion;
+					void nextVersion;
+					void changedVisible;
+					return true;
+				}
+			}
+		}
+	}
+} satisfies PolicyDefinition;
+const invalidFieldPolicy = {
+	description: 'A field mask must name a real row field.',
+	grants: { records: { read: { fields: [
+			// @ts-expect-error -- field masks are generated from this collection's row.
+			'missing'
+		] } } }
 } satisfies PolicyDefinition;
 void typo;
 void appLeaf;
 void appGroupTypo;
+void invalidFieldPolicy;
 `
 		);
 

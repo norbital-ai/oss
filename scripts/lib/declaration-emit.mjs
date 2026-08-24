@@ -14,6 +14,7 @@
  */
 import { globSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import ts from 'typescript';
 
 /**
  * Declaration files allowed to contain `any`, relative to a package's declaration root.
@@ -29,67 +30,6 @@ const declarationAnyAllowances = {
 	ui: ['**/*.svelte.d.ts', 'utils/index.d.ts', 'form/path.d.ts']
 };
 
-/**
- * Blank out comments and string bodies, preserving line numbering.
- *
- * Both `any` in prose ("before any delivery reaches the workspace") and `any` inside a string
- * literal are noise here; only `any` in type position is evidence. Template literals are treated as
- * strings — a degraded inference has never landed inside one, and reading them as code would flag
- * ordinary documentation text embedded in a template type.
- */
-const skipToNewline = (source, index) => {
-	while (index < source.length && source[index] !== '\n') index += 1;
-	return index;
-};
-
-const skipBlockComment = (source, index) => {
-	index += 2;
-	let newlines = '';
-	while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) {
-		if (source[index] === '\n') newlines += '\n';
-		index += 1;
-	}
-	return { index: index + 2, newlines };
-};
-
-const skipStringBody = (source, index, quote) => {
-	index += 1;
-	let newlines = '';
-	while (index < source.length && source[index] !== quote) {
-		if (source[index] === '\\') index += 1;
-		else if (source[index] === '\n') newlines += '\n';
-		index += 1;
-	}
-	return { index: index + 1, newlines };
-};
-
-function stripCommentsAndStrings(source) {
-	let output = '';
-	let index = 0;
-	while (index < source.length) {
-		const character = source[index];
-		if (character === '/' && source[index + 1] === '/') {
-			index = skipToNewline(source, index);
-			continue;
-		}
-		if (character === '/' && source[index + 1] === '*') {
-			const skipped = skipBlockComment(source, index);
-			index = skipped.index;
-			output += skipped.newlines;
-			continue;
-		}
-		if (character === '"' || character === "'" || character === '`') {
-			const skipped = skipStringBody(source, index, character);
-			index = skipped.index;
-			output += skipped.newlines;
-			continue;
-		}
-		output += character;
-		index += 1;
-	}
-	return output;
-}
-
 /** Every `any` in type position under `declarationRoot`, minus the package's stated allowances. */
 function findDegradedDeclarations(declarationRoot, allowances = []) {
 	const findings = [];
@@ -97,13 +37,22 @@ function findDegradedDeclarations(declarationRoot, allowances = []) {
 		const normalized = relativePath.split(path.sep).join('/');
 		if (allowances.some((pattern) => path.matchesGlob(normalized, pattern))) continue;
 		const source = readFileSync(path.join(declarationRoot, relativePath), 'utf8');
-		stripCommentsAndStrings(source)
-			.split('\n')
-			.forEach((line, offset) => {
-				if (/\bany\b/.test(line)) {
-					findings.push({ file: normalized, line: offset + 1, text: line.trim() });
-				}
-			});
+		const sourceFile = ts.createSourceFile(
+			normalized,
+			source,
+			ts.ScriptTarget.Latest,
+			true,
+			ts.ScriptKind.TS
+		);
+		const lines = source.split('\n');
+		const visit = (node) => {
+			if (node.kind === ts.SyntaxKind.AnyKeyword) {
+				const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+				findings.push({ file: normalized, line, text: lines[line - 1]?.trim() ?? 'any' });
+			}
+			ts.forEachChild(node, visit);
+		};
+		visit(sourceFile);
 	}
 	return findings;
 }

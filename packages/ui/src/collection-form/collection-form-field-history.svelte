@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { Effect, Schema } from 'effect';
+	import { Result, Schema } from 'effect';
 	import type { CollectionField, CollectionRecordHistoryEntry } from '@norbital-ai/std/collection';
 	import Icon from '@iconify/svelte';
-	import { formatDataValue, formatStructuredValue, type Translate } from '#lib/data-renderer';
-	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { formatDataValue, formatStructuredValue } from '#lib/data-renderer';
+	import { useI18n } from '#lib/i18n';
 	import { Label } from '#lib/label';
 	import { Inline, Scroll } from '#lib/layout';
 	import { Tooltip } from '#lib/tooltip';
@@ -69,8 +69,8 @@
 		locale
 	}: Props = $props();
 
-	const { t } = useI18n<UiKeys>();
-	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
+	const { t } = useI18n();
+	const localeEffective = $derived(locale ?? useI18n().intlLocale);
 
 	const fieldHistory = $derived(collectionFieldHistory(history, field.name));
 
@@ -80,8 +80,8 @@
 	 * throws on anything that is not a UTC ISO instant, so never feed it a calendar day.
 	 */
 	function formatRevisionInstant(instant: string): string {
-		return Effect.runSync(
-			Effect.try(() =>
+		return Result.getOrElse(
+			Result.try(() =>
 				formatUtcInstantLocal(instant, {
 					locale: localeEffective,
 					day: '2-digit',
@@ -90,12 +90,8 @@
 					hour: '2-digit',
 					minute: '2-digit'
 				})
-			).pipe(
-				Effect.match({
-					onFailure: () => instant,
-					onSuccess: (formatted) => formatted
-				})
-			)
+			),
+			() => instant
 		);
 	}
 
@@ -103,7 +99,7 @@
 	function revisionText(entryValue: unknown): string {
 		return entryValue != null && typeof entryValue === 'object'
 			? formatStructuredValue(entryValue)
-			: formatDataValue(field, entryValue, localeEffective, t as Translate);
+			: formatDataValue(field, entryValue, localeEffective, t);
 	}
 </script>
 
@@ -169,7 +165,7 @@
 						<ol aria-label={t('form.savedHistoryLabel', { label })}>
 							{#each fieldHistory as entry, index (`${entry.version}:${entry.validFrom}`)}
 								{@const text = revisionText(entry.value)}
-								<li class="flex items-baseline justify-between gap-2 py-1">
+								<Inline as="li" align="baseline" justify="between" gap="sm" class="py-1">
 									<span
 										class="min-w-0 flex-1 truncate text-xs text-foreground"
 										class:font-medium={index === 0}
@@ -183,7 +179,7 @@
 									>
 										{formatRevisionInstant(entry.validFrom)}
 									</time>
-								</li>
+								</Inline>
 							{/each}
 						</ol>
 					{/if}

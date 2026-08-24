@@ -1,17 +1,40 @@
 import { Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
 import {
-	clockTime,
+	defineAutomation,
 	defineCommandHandler,
 	defineConnection,
+	custom,
 	hexToBinaryEmbedding,
 	vector
 } from '../../src/authoring/index.js';
 import { defineAgentTool } from '../../src/authoring/agent-tools.js';
 
 describe('Bolt authoring contracts', () => {
+	it('makes manual invocation inherent and keeps automatic-trigger authoring closed', () => {
+		const spec = {
+			description: 'Exercise an automation trigger.',
+			policies: ['operator'],
+			handler: () => ({ ok: true })
+		} as const;
+		const manualOnly = defineAutomation({}, spec);
+		const scheduled = defineAutomation({ schedule: '0 6 * * *' }, spec);
+
+		expect(manualOnly.trigger).toEqual({});
+		expect(scheduled.trigger).toEqual({ schedule: '0 6 * * *' });
+		// Clean-cut means the removed spelling does not survive as an ignored structural extra.
+		if (false) {
+			// @ts-expect-error `manual` is not part of the authoring API; `{}` is manual-only.
+			defineAutomation({ manual: true }, spec);
+		}
+		expect(() => defineAutomation({ manual: true } as never, spec)).toThrow(
+			/unsupported property/u
+		);
+		expect(() => defineAutomation({ schedule: '' } as never, spec)).toThrow(/non-empty cron/u);
+	});
+
 	it('builds the missing temporal and vector column primitives', () => {
-		expect(clockTime().notNull).toBeTypeOf('function');
+		expect(custom('instant_range').notNull).toBeTypeOf('function');
 		expect(vector({ dimensions: 3 }).notNull).toBeTypeOf('function');
 		expect(() => vector({ dimensions: 0 })).toThrow();
 	});

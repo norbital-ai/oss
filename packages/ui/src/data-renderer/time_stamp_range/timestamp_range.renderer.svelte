@@ -55,7 +55,7 @@
 	<DateView
 		value={Array.isArray(pickerValue) ? pickerValue : []}
 		multi={true}
-		allowTime={field.kind === 'tstzrange'}
+		allowTime={field.precision !== 'day'}
 		emptyPlaceholder={placeholder === valuePlaceholderText
 			? t('dataRenderer.pickDateRanges')
 			: placeholder}
@@ -67,7 +67,7 @@
 	<DateView
 		value={!Array.isArray(pickerValue) ? pickerValue : {}}
 		multi={false}
-		allowTime={field.kind === 'tstzrange'}
+		allowTime={field.precision !== 'day'}
 		emptyPlaceholder={placeholder === valuePlaceholderText
 			? t('dataRenderer.pickDateRanges')
 			: placeholder}

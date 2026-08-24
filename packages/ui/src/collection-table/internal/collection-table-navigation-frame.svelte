@@ -3,6 +3,11 @@
 	import { Bound } from '#lib/layout';
 	import CollectionDetailActions from '../collection-detail-actions.svelte';
 	import CollectionRecordDetail from '../collection-record-detail.svelte';
+	import { untrack } from 'svelte';
+	import {
+		getOptionalCollectionClientContext,
+		setCollectionClientContext
+	} from '#lib/collection-runtime';
 	import type { CollectionDetailPreferences } from '../collection-detail-preferences.svelte.js';
 	import type {
 		CollectionTableNavigationTarget,
@@ -23,6 +28,18 @@
 	} = $props();
 
 	const fullScreen = $derived(preferences.isFullScreen(target.collectionName));
+	const fallbackClient = getOptionalCollectionClientContext();
+	const initialClient = untrack(
+		() => navigation.detailClient(target.routeKey, target.collectionName) ?? fallbackClient
+	);
+	if (initialClient) {
+		setCollectionClientContext(
+			() =>
+				navigation.detailClient(target.routeKey, target.collectionName) ??
+				fallbackClient ??
+				initialClient
+		);
+	}
 
 	function toggleFullScreen(): void {
 		preferences.toggleFullScreen(target.collectionName);

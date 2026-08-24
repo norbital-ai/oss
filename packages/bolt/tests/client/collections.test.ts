@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { Schema } from 'effect';
 import { EnvironmentName, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '../../src/client.js';
 import { createWorkspaceApiProxy } from '../../src/client/runtime.js';
@@ -10,6 +11,19 @@ const scope = {
 };
 
 describe('typed browser client', () => {
+	it('preserves the actionable transport failure through both client boundaries', async () => {
+		const failure = new Error('invalid_input: employees.created_at is managed by Bolt');
+		const bolt = createBoltClient(scope, { command: () => Promise.reject(failure) });
+
+		await expect(bolt.command('collections.mutate', {}, Schema.Json)).rejects.toBe(failure);
+
+		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
+		const employees = Reflect.get(proxy.db, 'employees') as {
+			mutate: (input: object) => Promise<void>;
+		};
+		await expect(employees.mutate({ id: 'employee-1', name: 'Updated' })).rejects.toBe(failure);
+	});
+
 	it('makes reactive remote invocations awaitable while preserving the live handle', async () => {
 		const commands: Array<string> = [];
 		const bolt = createBoltClient(scope, {
@@ -107,25 +121,32 @@ describe('typed browser client', () => {
 		const bolt = createBoltClient(scope, {
 			command: (command, input) => {
 				commands.push({ command, input });
-				return Promise.resolve({
-					rows: [{ id: 'request-1', status: 'ONGOING' }],
-					nextCursor: null
-				});
+				return Promise.resolve([
+					{
+						id: 'request-1',
+						status: 'ONGOING',
+						canDecide: false,
+						canSupersede: false,
+						canWithdraw: true
+					}
+				]);
 			}
 		});
 		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
 
 		expect(await proxy.approvals.findMany('request-1')).toEqual([
-			{ id: 'request-1', status: 'ONGOING' }
+			{
+				id: 'request-1',
+				status: 'ONGOING',
+				canDecide: false,
+				canSupersede: false,
+				canWithdraw: true
+			}
 		]);
 		expect(commands).toEqual([
 			{
-				command: 'collections.findMany',
-				input: {
-					collection: 'approval_request',
-					where: { id: { eq: 'request-1' } },
-					limit: 1
-				}
+				command: 'approvals.capabilities',
+				input: { requestId: 'request-1' }
 			}
 		]);
 	});

@@ -2,11 +2,12 @@
 	import Icon from '@iconify/svelte';
 	import * as Breadcrumb from '@norbital-ai/ui/breadcrumb';
 	import { CodeEditor } from '@norbital-ai/ui/code-editor';
-	import { Cover, Stack } from '@norbital-ai/ui/layout';
+	import { Cover, SCROLL_AXIS_CLASSES, Stack } from '@norbital-ai/ui/layout';
+	import { cn } from '@norbital-ai/ui/utils';
 	import { editorLanguage } from '#lib/client/ui/studio/studio-state.js';
 
 	/**
-	 * The Editor view's right-hand pane: one source file from the host revision, edited into the next.
+	 * The Editor view's right-hand pane: one source file from the personal workbench commit.
 	 *
 	 * Breadcrumbs sit on the file path; the editor fills the rest of the viewport. CodeMirror is
 	 * browser-only, and so is everything here: this component ships in the tenant's compiled client
@@ -33,11 +34,14 @@
 <Cover gap="none" data-testid="studio-source-editor">
 	{#snippet top()}
 		{#if pathSegments.length > 0}
+			<!-- The strip scrolls sideways rather than wrapping: a deep path is one line the reader drags,
+			     not a block that grows and pushes the editor down. `Breadcrumb.Root` owns its own element,
+			     so it names the scrollport token rather than being a `Scroll`. -->
 			<Breadcrumb.Root
-				class="shrink-0 overflow-x-auto border-b border-border/60 bg-muted/20"
+				class={cn('shrink-0 border-b border-border/60 bg-muted/20', SCROLL_AXIS_CLASSES.x)}
 				data-testid="studio-file-breadcrumb"
 			>
-				<Breadcrumb.List class="h-7 flex-nowrap gap-1 px-3 font-mono text-xs sm:gap-1">
+				<Breadcrumb.List class="h-7 flex-nowrap px-3 font-mono text-xs">
 					{#each pathSegments as segment, index (`${index}:${segment}`)}
 						<Breadcrumb.Item class="min-w-0 shrink-0 gap-1">
 							{#if index === pathSegments.length - 1}

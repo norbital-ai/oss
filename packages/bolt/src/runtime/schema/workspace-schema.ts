@@ -1,11 +1,33 @@
 import { Array, Context, Effect, Layer, Result, Schema } from 'effect';
+import { count, eq } from 'drizzle-orm';
+import { pgSchema, pgTable, text } from 'drizzle-orm/pg-core';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
 import { buildSchemaPlan, planTableNames, type SchemaPlan } from '#lib/compiler/schema-plan.js';
 export { fingerprintSchemaSteps } from '#lib/compiler/schema-plan.js';
 import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Database from '#lib/runtime/facilities/database.js';
+import {
+	composer,
+	currentSchema,
+	executeBuilt,
+	transactionBuilt,
+	transactionSql
+} from '#lib/runtime/persistence.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { withSystemCollections } from '#lib/runtime/schema/system-collections.js';
+
+const { bolt_schema_state: schemaState } = SYSTEM_MODEL_TABLES;
+// The lineage ledger predates system-row columns in existing tenants. Keep its runtime descriptor
+// to the one column this service owns so a migration can still record itself in that legacy shape.
+const migrationLedger = pgTable('__drizzle_migrations', {
+	tag: text().notNull().unique()
+});
+const informationSchemaColumns = pgSchema('information_schema').table('columns', {
+	table_name: text().notNull(),
+	column_name: text().notNull(),
+	table_schema: text().notNull()
+});
 
 export interface Interface {
 	readonly plan: () => SchemaPlan;
@@ -77,11 +99,17 @@ export const layer = Layer.effect(
 		 * `information_schema` is the only answer that can be wrong, so it is the only one worth asking.
 		 */
 		const verify = Effect.fn('WorkspaceSchema.verify')(function* (effectId: EffectId) {
-			const result = yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: 'select table_name, column_name from information_schema.columns where table_schema = current_schema()',
-				parameters: []
-			});
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({
+						table_name: informationSchemaColumns.table_name,
+						column_name: informationSchemaColumns.column_name
+					})
+					.from(informationSchemaColumns)
+					.where(eq(informationSchemaColumns.table_schema, currentSchema()))
+			);
 			const live = new Map<string, Set<string>>();
 			for (const row of result.rows) {
 				if (typeof row !== 'object' || row === null) continue;
@@ -153,11 +181,11 @@ export const layer = Layer.effect(
 		 * rather than assuming is what makes "pending" mean pending.
 		 */
 		const appliedTags = Effect.fn('WorkspaceSchema.appliedTags')(function* (effectId: EffectId) {
-			const result = yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: 'select tag from __drizzle_migrations',
-				parameters: []
-			});
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer.select({ tag: migrationLedger.tag }).from(migrationLedger)
+			);
 			return new Set(
 				result.rows.flatMap((row) => {
 					const tag = typeof row === 'object' && row !== null ? Reflect.get(row, 'tag') : undefined;
@@ -187,13 +215,10 @@ export const layer = Layer.effect(
 			yield* Effect.forEach(
 				lineage.filter((entry) => !applied.has(entry.tag)),
 				(entry) =>
-					database.execute(effectId, {
-						_tag: 'Transaction',
-						statements: [
-							...entry.statements.map((sql) => ({ sql, parameters: [] })),
-							{ sql: 'insert into __drizzle_migrations (tag) values ($1)', parameters: [entry.tag] }
-						]
-					}),
+					transactionBuilt(effectId, database, [
+						...entry.statements.map((statement) => transactionSql(statement)),
+						composer.insert(migrationLedger).values({ tag: entry.tag })
+					]),
 				{ concurrency: 1 }
 			);
 		});
@@ -220,13 +245,16 @@ export const layer = Layer.effect(
 			effectId: EffectId
 		) {
 			if (lineage.length === 0) return;
-			yield* database.execute(effectId, {
-				_tag: 'Transaction',
-				statements: lineage.map((entry) => ({
-					sql: 'insert into __drizzle_migrations (tag) values ($1) on conflict (tag) do nothing',
-					parameters: [entry.tag]
-				}))
-			});
+			yield* transactionBuilt(
+				effectId,
+				database,
+				lineage.map((entry) =>
+					composer
+						.insert(migrationLedger)
+						.values({ tag: entry.tag })
+						.onConflictDoNothing({ target: migrationLedger.tag })
+				)
+			);
 		});
 		return Service.of({
 			plan: () => schemaPlan,
@@ -258,28 +286,22 @@ export const layer = Layer.effect(
 				// Two statements rather than one guarded by `case`: PostgreSQL resolves every relation a query
 				// names at parse time, whichever branch would run, so a `case` guarding the count still fails
 				// with `relation "bolt_schema_state" does not exist` on the database this exists to recognise.
-				const stateTable = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: "select to_regclass('bolt_schema_state') is not null as present",
-					parameters: []
-				});
 				const readField = (row: Schema.Json | undefined, key: string): unknown =>
 					typeof row === 'object' && row !== null && !Array.isArray(row)
 						? Reflect.get(row, key)
 						: undefined;
-				const planned =
-					readField(stateTable.rows[0], 'present') === true
-						? Number(
-								readField(
-									(yield* database.execute(effectId, {
-										_tag: 'Query',
-										sql: 'select count(*) as count from bolt_schema_state',
-										parameters: []
-									})).rows[0],
-									'count'
-								) ?? 0
-							)
-						: 0;
+				const planned = !absent.has('bolt_schema_state')
+					? Number(
+							readField(
+								(yield* executeBuilt(
+									effectId,
+									database,
+									composer.select({ count: count() }).from(schemaState)
+								)).rows[0],
+								'count'
+							) ?? 0
+						)
+					: 0;
 				/**
 				 * An EXCLUDE constraint has to wait for the lineage that builds the table it constrains.
 				 *
@@ -294,20 +316,15 @@ export const layer = Layer.effect(
 				 * Split by id rather than by inspecting the SQL: `exclusionStep` is what mints these and it
 				 * is the same module that decides they belong to a collection.
 				 */
-				const isExclusion = (id: string) => id.includes(':exclusion:');
-				const [exclusionSteps, planSteps] = Array.partition(schemaPlan.steps, (step) =>
-					isExclusion(step.id) ? Result.fail(step) : Result.succeed(step)
+				const [postLineageSteps, planSteps] = Array.partition(schemaPlan.steps, (step) =>
+					step.id.includes(':exclusion:') || step.id.startsWith('sync-trigger:')
+						? Result.fail(step)
+						: Result.succeed(step)
 				);
-				yield* database.execute(effectId, {
-					_tag: 'Transaction',
-					statements: [
-						...planSteps.map(({ sql }) => ({ sql, parameters: [] })),
-						{
-							sql: 'insert into bolt_schema_state (fingerprint) values ($1)',
-							parameters: [schemaPlan.fingerprint]
-						}
-					]
-				});
+				yield* transactionBuilt(effectId, database, [
+					...planSteps.map(({ sql }) => transactionSql(sql)),
+					composer.insert(schemaState).values({ fingerprint: schemaPlan.fingerprint })
+				]);
 				// The lineage runs after the plan, never before: its DDL calls `bolt_date` and
 				// `bolt_daterange` and indexes with `gin_trgm_ops`, all of which the plan's foundation
 				// installs, and it records itself in a ledger the plan creates.
@@ -347,11 +364,12 @@ export const layer = Layer.effect(
 				const legacy = allAuthoredTablesPresent && recorded.size === 0 && planned > 0;
 				yield* legacy ? baselineLineage(effectId) : applyLineage(effectId);
 				// Now that the collections exist, whichever half created them.
-				if (exclusionSteps.length > 0) {
-					yield* database.execute(effectId, {
-						_tag: 'Transaction',
-						statements: exclusionSteps.map(({ sql }) => ({ sql, parameters: [] }))
-					});
+				if (postLineageSteps.length > 0) {
+					yield* transactionBuilt(
+						effectId,
+						database,
+						postLineageSteps.map(({ sql }) => transactionSql(sql))
+					);
 				}
 				// Neither half can be trusted to have finished the job. The plan can only add, so a collection
 				// whose table already exists in an older shape is skipped by every `if not exists` in it; the

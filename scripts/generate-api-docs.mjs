@@ -46,6 +46,13 @@ function hrefFromSlug(slug) {
 	return `/docs/api-reference/${slug}`;
 }
 
+function normalizeMarkdown(filePath) {
+	const markdown = fs.readFileSync(filePath, 'utf8');
+	const normalized = markdown.replace(/[\t ]+$/gm, '');
+	if (normalized !== markdown) fs.writeFileSync(filePath, normalized);
+	return normalized;
+}
+
 /** @returns {string[]} */
 function listMarkdownFiles(directory) {
 	/** @type {string[]} */
@@ -88,6 +95,34 @@ function parseModuleLinks(readmeMarkdown) {
 	return children;
 }
 
+/**
+ * The module pages under one package directory, titled from the scan where the scan saw them.
+ *
+ * The fallback is for a page the scan missed: its filename stands in for a heading.
+ *
+ * @param {string} packageDirectory
+ * @param {Map<string, ApiDocNavItem>} pagesBySlug
+ * @returns {ApiDocNavItem[]}
+ */
+function listModulePages(packageDirectory, pagesBySlug) {
+	/** @type {ApiDocNavItem[]} */
+	const pages = [];
+	for (const filePath of listMarkdownFiles(packageDirectory)) {
+		if (filePath.endsWith('README.md')) {
+			continue;
+		}
+		const slug = slugFromRelativePath(path.relative(OUTPUT_DIR, filePath));
+		pages.push(
+			pagesBySlug.get(slug) ?? {
+				title: path.basename(filePath, '.md'),
+				slug,
+				href: hrefFromSlug(slug)
+			}
+		);
+	}
+	return pages.sort((left, right) => left.title.localeCompare(right.title));
+}
+
 function main() {
 	if (!fs.existsSync(OUTPUT_DIR)) {
 		throw new Error(`Missing API docs output at ${OUTPUT_DIR}. Run typedoc first.`);
@@ -99,7 +134,7 @@ function main() {
 	for (const absolutePath of listMarkdownFiles(OUTPUT_DIR)) {
 		const relativePath = path.relative(OUTPUT_DIR, absolutePath);
 		const slug = slugFromRelativePath(relativePath);
-		const markdown = fs.readFileSync(absolutePath, 'utf8');
+		const markdown = normalizeMarkdown(absolutePath);
 		pagesBySlug.set(slug, {
 			title: extractTitle(markdown),
 			slug,
@@ -122,20 +157,7 @@ function main() {
 		const packageSlug = entry.name;
 		const children = readmeMarkdown
 			? parseModuleLinks(readmeMarkdown)
-			: listMarkdownFiles(path.join(packageRoot, entry.name))
-					.filter((filePath) => !filePath.endsWith('README.md'))
-					.map((filePath) => {
-						const slug = slugFromRelativePath(path.relative(OUTPUT_DIR, filePath));
-						const page = pagesBySlug.get(slug);
-						return (
-							page ?? {
-								title: path.basename(filePath, '.md'),
-								slug,
-								href: hrefFromSlug(slug)
-							}
-						);
-					})
-					.sort((left, right) => left.title.localeCompare(right.title));
+			: listModulePages(path.join(packageRoot, entry.name), pagesBySlug);
 
 		packages.push({
 			id: packageId,

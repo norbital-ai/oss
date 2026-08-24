@@ -1,4 +1,4 @@
-import { type Locale, DEFAULT_LOCALE } from './locale.js';
+import { DEFAULT_LOCALE } from './locale.js';
 
 /**
  * Flat, dot-namespaced message catalogs.
@@ -86,7 +86,7 @@ export function defineMessages<const C extends LocaleCatalogs>(catalogs: C): C {
  */
 export function translate(
 	catalogs: LocaleCatalogs,
-	locale: Locale,
+	locale: string,
 	key: string,
 	vars?: MessageVars
 ): string {

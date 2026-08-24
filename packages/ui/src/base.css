@@ -69,6 +69,8 @@
 	--brand: var(--brand-500);
 	--brand-foreground: oklch(0.99 0 0);
 	--brand-muted: var(--brand-100);
+	/** Product icon accents (and the Agent thinking orb's sweep) share one canonical brand stroke. */
+	--product-icon-accent: var(--brand);
 }
 
 .dark {
@@ -126,6 +128,8 @@
 	--brand: var(--brand-500);
 	--brand-foreground: oklch(0.985 0 0);
 	--brand-muted: var(--brand-900);
+	/** Product icon accents (and the Agent thinking orb's sweep) share one canonical brand stroke. */
+	--product-icon-accent: var(--brand);
 
 	/* Dark mode elevation — slightly higher shadow opacity to remain perceptible */
 	--shadow-card:

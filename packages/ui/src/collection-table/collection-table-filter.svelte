@@ -7,9 +7,9 @@
 	import { Combobox } from '#lib/combobox';
 	import { DataRenderer } from '#lib/data-renderer';
 	import RelationshipRenderer from '../data-renderer/relationship/relationship.renderer.svelte';
-	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { useI18n } from '#lib/i18n';
 	import { Indicator } from '#lib/indicator';
-	import { Inline, Scroll, Stack } from '#lib/layout';
+	import { Grid, Inline, Scroll, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { TreeCombobox } from '#lib/tree-combobox';
 	import { cn } from '#lib/utils';
@@ -21,7 +21,6 @@
 		type CollectionFilterField,
 		type FilterCollectionDefinition
 	} from '#lib/collection-table/collection-table-filter-fields';
-	import { type Translate } from '#lib/data-renderer';
 	import {
 		collectionFilterOperandField,
 		collectionFilterOperatorNeedsValue,
@@ -68,12 +67,12 @@
 		onCustomFilterChange?: () => void;
 	} = $props();
 
-	const { t } = useI18n<UiKeys>();
+	const { t } = useI18n();
 
 	let filters = $state<Filter[]>([]);
 	let nextId = $state(0);
 	const filterFields = $derived(collectionFilterFields(definition, collections));
-	const fieldTree = $derived(collectionFilterFieldTree(filterFields, t as Translate));
+	const fieldTree = $derived(collectionFilterFieldTree(filterFields, t));
 	// One count for both kinds. A derived predicate narrows the set exactly as a field condition
 	// does, so leaving it out of the badge would let an operator stare at a filtered board that
 	// claims to be unfiltered.
@@ -107,20 +106,30 @@
 	let seededIds = $state(new Set<number>());
 	let seedSettled = $state(false);
 
-	$effect(() => {
+	/**
+	 * Adopt the seeded rows once, as soon as the field picker has arrived. A latch, not a
+	 * derivation: it settles permanently and publishes the adopted rows to the host.
+	 */
+	function settleFilterSeed(
+		enabled: boolean,
+		signature: string | null,
+		fields: typeof filterFields,
+		cleared: string | null,
+		seeds: readonly CollectionTableInitialFilter[]
+	): void {
 		if (seedSettled) return;
-		if (!builderEnabled) return;
-		if (seedSignature === null) return;
+		if (!enabled) return;
+		if (signature === null) return;
 		// The field picker is derived from the collection definition, which may not have arrived yet;
 		// seeding against an empty field list would silently drop every row.
-		if (filterFields.length === 0) return;
-		if (clearedSeed.current === seedSignature) {
+		if (fields.length === 0) return;
+		if (cleared === signature) {
 			seedSettled = true;
 			return;
 		}
 		// Index the picker once per seeding pass instead of re-searching it per seed row.
-		const knownFieldValues = new Set(filterFields.map((field) => field.value));
-		const seeded = initialFilters.flatMap((seed) => {
+		const knownFieldValues = new Set(fields.map((field) => field.value));
+		const seeded = seeds.flatMap((seed) => {
 			if (!knownFieldValues.has(seed.field)) return [];
 			return [{ id: nextId++, field: seed.field, operator: seed.operator, value: seed.value }];
 		});
@@ -129,6 +138,18 @@
 		seededIds = new Set(seeded.map((row) => row.id));
 		filters = seeded;
 		publish();
+	}
+
+	// Named here rather than hidden behind the call: this latch is waiting on the field picker to
+	// arrive, and a reader should see that at the declaration. Tracking is unchanged.
+	$effect(() => {
+		settleFilterSeed(
+			builderEnabled,
+			seedSignature,
+			filterFields,
+			clearedSeed.current,
+			initialFilters
+		);
 	});
 
 	function markSeedCleared(): void {
@@ -268,19 +289,21 @@
 		<Scroll axis="y" name={t('table.appliedFilters')} class="max-h-80 min-w-0 p-3">
 			<Stack gap="xs">
 				{#each customFilters as customFilter (customFilter.id)}
-					<label class="grid gap-1.5 text-sm">
-						<span class="font-medium text-muted-foreground">{customFilter.label}</span>
-						<Combobox
-							ariaLabel={customFilter.label}
-							options={[...customFilter.options]}
-							value={customFilter.value}
-							allowClear
-							searchable={customFilter.searchable ?? customFilter.options.length > 8}
-							emptyPlaceholder={customFilter.placeholder}
-							searchPlaceholder={customFilter.searchPlaceholder}
-							{disabled}
-							onValueChange={(value) => setCustomFilter(customFilter, value)}
-						/>
+					<label class="text-sm">
+						<Stack gap="xs">
+							<span class="font-medium text-muted-foreground">{customFilter.label}</span>
+							<Combobox
+								ariaLabel={customFilter.label}
+								options={[...customFilter.options]}
+								value={customFilter.value}
+								allowClear
+								searchable={customFilter.searchable ?? customFilter.options.length > 8}
+								emptyPlaceholder={customFilter.placeholder}
+								searchPlaceholder={customFilter.searchPlaceholder}
+								{disabled}
+								onValueChange={(value) => setCustomFilter(customFilter, value)}
+							/>
+						</Stack>
 					</label>
 				{/each}
 				{#if builderEnabled && filters.length === 0}
@@ -291,8 +314,13 @@
 				{#each builderRows as filter (filter.id)}
 					{@const field = selectedField(filter)}
 					{@const operatorOptions = field ? collectionFilterOperatorOptions(field.field) : []}
-					<div
-						class="grid min-w-0 grid-cols-[minmax(0,1fr)_2rem] items-center gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))_2rem]"
+					<!-- One field column on a phone, three from `sm` up. The template is carried in a
+					     custom property so the breakpoint stays a class while `Grid` owns the track
+					     declaration. -->
+					<Grid
+						gap="sm"
+						tracks="var(--filter-row-columns)"
+						class="min-w-0 items-center [--filter-row-columns:minmax(0,1fr)_2rem] sm:[--filter-row-columns:repeat(3,minmax(0,1fr))_2rem]"
 					>
 						<div class="col-start-1 min-w-0 w-full sm:col-auto">
 							<TreeCombobox
@@ -354,7 +382,7 @@
 							onclick={() => removeFilter(filter.id)}
 							><Icon icon="lucide:x" class="size-3.5" /></Button
 						>
-					</div>
+					</Grid>
 				{/each}
 			</Stack>
 		</Scroll>

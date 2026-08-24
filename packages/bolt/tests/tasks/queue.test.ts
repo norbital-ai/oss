@@ -138,6 +138,57 @@ describe('bolt task queue over a host facility', () => {
 		expect(found.rows.map((row) => row.table_name)).toEqual(['bolt_schedule', 'bolt_task']);
 	});
 
+	it('adds automation progression columns to an existing task table without losing queued work', async () => {
+		const legacy = await PGlite.create('memory://');
+		try {
+			await legacy.exec(`create table bolt_task (
+				id uuid primary key default gen_random_uuid(),
+				created_at timestamp with time zone not null default now(),
+				updated_at timestamp with time zone not null default now(),
+				row_version integer not null default 1,
+				command text not null,
+				input jsonb not null,
+				status text not null default 'pending',
+				run_at timestamp with time zone not null default now(),
+				attempts integer not null default 0,
+				max_attempts integer not null default 12,
+				effect_id text not null unique,
+				result jsonb,
+				error text
+			)`);
+			await legacy.query(
+				`insert into bolt_task (command, input, effect_id) values ('automations.rebuild', '{}', 'legacy:1')`
+			);
+
+			for (const step of taskSchemaSteps()) await legacy.exec(step.sql);
+
+			const columns = await legacy.query<{ column_name: string }>(
+				"select column_name from information_schema.columns where table_name = 'bolt_task' and column_name like 'progress%' order by column_name"
+			);
+			expect(columns.rows.map(({ column_name }) => column_name)).toEqual([
+				'progress',
+				'progress_sequence',
+				'progress_updated_at'
+			]);
+			await expect(
+				legacy.query(
+					"select effect_id, progress, progress_sequence, progress_updated_at from bolt_task where effect_id = 'legacy:1'"
+				)
+			).resolves.toMatchObject({
+				rows: [
+					{
+						effect_id: 'legacy:1',
+						progress: null,
+						progress_sequence: 0,
+						progress_updated_at: null
+					}
+				]
+			});
+		} finally {
+			await legacy.close();
+		}
+	});
+
 	describe('declare', () => {
 		it('upserts what the release declares and deletes what it does not', async () => {
 			const now = at('2026-08-20T04:00:00.000Z');
@@ -347,6 +398,20 @@ describe('bolt task queue over a host facility', () => {
 			expect(retaken[0]?.attempts).toBe(2);
 		});
 
+		it('clears the prior failure when retry work is claimed', async () => {
+			await enqueue('retry');
+			const [first] = await queue().take([], { hideForMillis: 60_000, batchSize: 1 });
+			if (first === undefined) throw new Error('nothing to take');
+			await queue().finish([
+				{ _tag: 'Failed', task: first, error: 'provider unavailable', retryable: true }
+			]);
+			expect((await tasks())[0]?.error).toBe('provider unavailable');
+
+			await database.exec("update bolt_task set run_at = now() - interval '1 second'");
+			await queue().take([], { hideForMillis: 60_000, batchSize: 1 });
+			expect((await tasks())[0]?.error).toBeNull();
+		});
+
 		it('takes the oldest due work first and nothing that is not due', async () => {
 			const now = Date.now();
 			await enqueue('later', new Date(now - 60_000).toISOString());
@@ -392,10 +457,58 @@ describe('bolt task queue over a host facility', () => {
 			expect(row?.result).toEqual({ delivered: 2 });
 		});
 
+		it('preserves cancellation when an in-flight worker finishes later', async () => {
+			const task = await takeOne('cancelled-in-flight');
+			// `take` has handed the row to a worker but intentionally leaves its durable state pending.
+			// Cancellation can therefore race with either a success or failure reported by that worker.
+			await database.query(
+				"update bolt_task set status = 'failed', error = 'cancelled' where effect_id = $1 and status = 'pending'",
+				['cancelled-in-flight']
+			);
+			await queue().finish([{ _tag: 'Done', task, result: { delivered: 2 } }]);
+
+			const [row] = await tasks();
+			expect(row).toMatchObject({
+				status: 'failed',
+				error: 'cancelled',
+				result: null
+			});
+		});
+
+		it('fences a stopped in-flight run and reclaims the same row only after its lease', async () => {
+			const task = await takeOne('stopped-in-flight');
+			await database.query(
+				"update bolt_task set status = 'paused' where effect_id = $1 and status = 'pending'",
+				['stopped-in-flight']
+			);
+			// A late answer from the old guest cannot turn the stopped row terminal.
+			await queue().finish([{ _tag: 'Done', task, result: { delivered: 2 } }]);
+			expect((await tasks())[0]).toMatchObject({
+				effect_id: 'stopped-in-flight',
+				status: 'paused',
+				result: null
+			});
+
+			// Resume retains the claim-time lease as a fence. The old guest has until that instant to
+			// disappear, so neither it nor a new guest can own the same durable run concurrently.
+			await database.query(
+				"update bolt_task set status = 'resuming' where effect_id = $1 and status = 'paused'",
+				['stopped-in-flight']
+			);
+			expect(await queue().take([], { hideForMillis: 60_000, batchSize: 1 })).toEqual([]);
+			await database.exec("update bolt_task set run_at = now() - interval '1 second'");
+			const [resumed] = await queue().take([], { hideForMillis: 60_000, batchSize: 1 });
+			expect(resumed).toMatchObject({ effectId: 'stopped-in-flight', attempts: 2 });
+			expect((await tasks())[0]?.status).toBe('pending');
+		});
+
 		it('spaces a failure out rather than sleeping on it', async () => {
 			const task = await takeOne('one');
 			// Full jitter, pinned so the assertion is about the schedule and not about the die roll.
-			await queue().finish([{ _tag: 'Failed', task, error: 'status 503' }], () => 1);
+			await queue().finish(
+				[{ _tag: 'Failed', task, error: 'status 503', retryable: true }],
+				() => 1
+			);
 			const [row] = await tasks();
 			expect(row?.status).toBe('pending');
 			expect(row?.error).toBe('status 503');
@@ -409,7 +522,12 @@ describe('bolt task queue over a host facility', () => {
 		it('gives up when the attempts are spent, and leaves the row as the audit trail', async () => {
 			const task = await takeOne('one');
 			await queue().finish([
-				{ _tag: 'Failed', task: { ...task, attempts: 12, maxAttempts: 12 }, error: 'status 500' }
+				{
+					_tag: 'Failed',
+					task: { ...task, attempts: 12, maxAttempts: 12 },
+					error: 'status 500',
+					retryable: true
+				}
 			]);
 			const [row] = await tasks();
 			expect(row?.status).toBe('failed');
@@ -417,6 +535,17 @@ describe('bolt task queue over a host facility', () => {
 			// Re-driving is an update, which is why there is no dead-letter table to look in.
 			await database.exec("update bolt_task set status = 'pending', attempts = 0, run_at = now()");
 			expect(await queue().take([], { hideForMillis: 60_000, batchSize: 1 })).toHaveLength(1);
+		});
+
+		it('fails a non-retryable outcome immediately without spending the remaining attempts', async () => {
+			const task = await takeOne('one');
+			await queue().finish([
+				{ _tag: 'Failed', task, error: 'already committed', retryable: false }
+			]);
+			const [row] = await tasks();
+			expect(row?.status).toBe('failed');
+			expect(row?.attempts).toBe(1);
+			expect(row?.error).toBe('already committed');
 		});
 
 		it('prunes what nobody will read again, and only that', async () => {
@@ -546,7 +675,12 @@ describe('bolt task queue over a host facility', () => {
 			);
 			const report = await Effect.runPromise(
 				makeRunner(effectQueue(), (task) =>
-					Effect.succeed({ _tag: 'Failed' as const, task, error: 'partner unavailable' })
+					Effect.succeed({
+						_tag: 'Failed' as const,
+						task,
+						error: 'partner unavailable',
+						retryable: true
+					})
 				).tick({ nowEpochMs: Date.now(), remainingMillis: 60_000 })
 			);
 			expect(report.ran).toBe(1);

@@ -1,0 +1,47 @@
+{
+	"name": "@norbital-ai/doctor",
+	"version": "0.0.1",
+	"description": "Norbital Doctor: deterministic static code-quality analysis for TypeScript, JavaScript, and Svelte, with a CLI and a type-safe rule authoring surface.",
+	"type": "module",
+	"license": "AGPL-3.0-only",
+	"files": [
+		"build",
+		"docs",
+		"engine",
+		"package.json"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/norbital-ai/oss.git",
+		"directory": "packages/doctor"
+	},
+	"homepage": "https://github.com/norbital-ai/oss/tree/main/packages/doctor",
+	"bugs": {
+		"url": "https://github.com/norbital-ai/oss/issues"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"bin": {
+		"norbital-doctor": "./build/cli.js"
+	},
+	"exports": {
+		".": "./build/index.js",
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
+		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/doctor",
+		"lint": "tsc -p tsconfig.json --noEmit",
+		"test": "pnpm build && node --test engine/scripts/*.test.mjs tests/*.test.ts"
+	},
+	"dependencies": {
+		"typescript": "catalog:"
+	},
+	"devDependencies": {
+		"@norbital-ai/config": "workspace:*",
+		"@types/node": "^26.2.0",
+		"typescript": "catalog:"
+	}
+}

@@ -1,0 +1,18 @@
+{
+	"extends": "@norbital-ai/config/svelte.json",
+	"include": ["src/**/*.ts"],
+	"exclude": ["**/*.test.ts", "node_modules", "build", "engine"],
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["ES2022"],
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"outDir": "build",
+		"rootDir": "src",
+		"declaration": true,
+		"declarationMap": false,
+		"sourceMap": false,
+		"noEmit": false,
+		"types": ["node"]
+	}
+}

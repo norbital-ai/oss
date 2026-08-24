@@ -10,9 +10,9 @@ There is no platform release, no builder image, no runtime image, and no OCI pub
 existed to pin dependencies from outside a template that could not pin its own; a committed lockfile
 does that job directly, so the apparatus around it is gone.
 
-There is no prebuilt template bundle and no OSS checkpoint artifact. A compatible host produces one
-tenant build bundle from a tenant Git tree; a checkpoint references that bundle rather than storing
-a duplicate.
+There is no prebuilt template bundle and no OSS Preview artifact. A compatible host produces one
+tenant build bundle from the exact commit being previewed; Review reuses that same bundle rather
+than storing or provisioning a duplicate.
 
 ## Three independent trains
 
@@ -21,7 +21,7 @@ move only when their own owner moves them.
 
 | Train        | Moves when                                                                            |
 | ------------ | ------------------------------------------------------------------------------------- |
-| **Bolt**     | changesets → version bump → publish. A normal npm package.                            |
+| **Bolt**     | a change lands on `main` → republish the fixed `0.0.1` set, attested per archive.     |
 | **Template** | a developer edits source and pushes. It pins its own bolt version until they bump it. |
 | **Tenant**   | its owner says so. Forked from a template, managed independently.                     |
 
@@ -46,11 +46,16 @@ See the template repositories' own READMEs for the projection, lockfile, and dep
 
 ## Package archives
 
-`resolve-published-packages.mjs` reads each exact package version from an npm-compatible registry
-packument, downloads `dist.tarball`, and verifies `dist.integrity`. Each entry carries
-`{ name, version, tarball, integrity }` where `integrity` is an exact sha512 SRI, and the 16-hex
-`packageKey` hashes the sorted entries. Credentials are accepted through environment variables and
-are never written into any published file.
+`resolve-published-packages.mjs` resolves and verifies the release set. From the registry source it
+reads each exact package version from an npm-compatible registry packument, downloads
+`dist.tarball`, and verifies `dist.integrity`; from the workspace source it packs each public
+package from source in a staging directory and computes the sha512 integrity of its own archives.
+Each entry carries `{ name, version, tarball, integrity }` where `integrity` is an exact sha512 SRI,
+and the 16-hex `packageKey` hashes the sorted name/version/integrity content identity. The release workflow
+pins the canonical release identity by asserting the resolved key against `EXPECTED_PACKAGE_KEY`,
+then publishes each archive with `npm publish --provenance`; a version already on the registry is
+skipped so the set converges without a failed release. Credentials are accepted through environment
+variables and are never written into any published file.
 
 Two repository variables configure the pipeline:
 

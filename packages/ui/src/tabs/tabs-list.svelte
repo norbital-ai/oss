@@ -149,6 +149,7 @@
 		observeSlidingIndicatorResize,
 		SLIDING_INDICATOR_TRANSITION_CLASS
 	} from '#lib/sliding-indicator';
+	import { SCROLL_AXIS_CLASSES } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { Effect } from 'effect';
 	import { watch } from 'runed';
@@ -167,12 +168,10 @@
 	}: TabsListProps<T> & { style?: string | undefined } = $props();
 
 	const listLayoutClasses: Record<TabListLayout, string> = {
-		horizontal:
-			'relative flex max-w-full flex-nowrap items-center overflow-x-auto overflow-y-hidden overscroll-x-contain',
+		horizontal: `relative flex max-w-full flex-nowrap items-center ${SCROLL_AXIS_CLASSES.x}`,
 		vertical: 'relative mr-2 flex w-full flex-col items-stretch',
 		/** Horizontal with overflow scroll on narrow containers (never stacks vertically). */
-		responsive:
-			'relative flex w-full max-w-full flex-nowrap items-center overflow-x-auto overflow-y-hidden overscroll-x-contain'
+		responsive: `relative flex w-full max-w-full flex-nowrap items-center ${SCROLL_AXIS_CLASSES.x}`
 	};
 
 	const listHeightClasses = $derived.by(() => {
@@ -219,10 +218,13 @@
 	onMount(() => {
 		// Initial measurement after fonts load
 		void Effect.runPromise(
-			Effect.gen(function* () {
-				yield* Effect.promise(() => document.fonts.ready);
-				scheduleIndicatorMeasure(false);
-			})
+			Effect.promise(() => document.fonts.ready).pipe(
+				Effect.map(() => scheduleIndicatorMeasure(false)),
+				Effect.ignoreCause({
+					log: true,
+					message: '[TabsList] Failed to measure the indicator after fonts loaded'
+				})
+			)
 		);
 	});
 

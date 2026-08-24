@@ -6,51 +6,44 @@ import {
 	type RateLimitRule
 } from './rate-limits-schema.js';
 
-/**
- * Turning an authored policy file into the policy the runtime reads.
- *
- * The authored file states no name — the filename is the name — so this is where the two meet, and
- * it is the only place they do. A `name:` field restated inside the module is exactly how five of
- * six workspaces shipped a display-cased string that compiled and matched nothing at run time, and
- * there is no longer a field for it to be wrong in.
- *
- * Everything else here is normalization the runtime would otherwise each have to guess at: the four
- * capability lists always exist, `limits` always carries a resolved `key`, `effect` is always
- * `allow`, and `actions` is derived from the grants rather than restated beside them.
- */
+export type PolicyRuntimeFunction = (context: unknown, api: unknown) => unknown;
 
-/**
- * The approval an authored grant declares, before this module gives it an identity.
- *
- * `key` is the author's; everything else below is derived from where the grant sits.
- *
- * Schema-owned and validated once, because the declaration arrives from compiled authored
- * source that this module has never seen: the guard below is the whole verification an approval
- * is a list of steps rather than a summary of it.
- */
-const AuthoredApprovalSchema = Schema.Struct({
-	steps: Schema.Array(
-		Schema.Struct({
-			key: Schema.String,
-			approvers: Schema.Array(Schema.String),
-			description: Schema.optionalKey(Schema.String)
-		})
-	)
-});
-const isAuthoredApproval = Schema.is(AuthoredApprovalSchema);
+export type PolicyRuntimeFunctions = Readonly<{
+	readonly authorizations: Readonly<Record<string, PolicyRuntimeFunction>>;
+	readonly approvalFlows: Readonly<Record<string, PolicyRuntimeFunction>>;
+}>;
 
-const AuthoredGrant = Schema.Struct({
-	collection: Schema.String,
-	action: Schema.Literals(['read', 'create', 'update', 'delete', 'history']),
+const functionsByPolicy = new WeakMap<PolicyDeclaration, PolicyRuntimeFunctions>();
+
+const ACTIONS = ['read', 'history', 'create', 'update', 'delete'] as const;
+type PolicyAction = (typeof ACTIONS)[number];
+const READ_ACTIONS = new Set<PolicyAction>(['read', 'history']);
+const POLICY_KEYS = new Set(['description', 'grants', 'capabilities', 'limits']);
+const ACTION_KEYS = new Set<string>(ACTIONS);
+const READ_GRANT_KEYS = new Set(['where', 'fields']);
+const DELETE_GRANT_KEYS = new Set(['authorize', 'approval']);
+const WRITE_GRANT_KEYS = new Set(['fields', 'authorize', 'approval']);
+const APPROVAL_KEYS = new Set(['flow', 'superceded_by']);
+
+const AuthoredActionGrant = Schema.Struct({
 	where: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
 	fields: Schema.optionalKey(Schema.Array(Schema.String)),
+	authorize: Schema.optionalKey(Schema.Unknown),
 	approval: Schema.optionalKey(Schema.Unknown)
+});
+const AuthoredCollectionGrants = Schema.Struct({
+	read: Schema.optionalKey(AuthoredActionGrant),
+	history: Schema.optionalKey(AuthoredActionGrant),
+	create: Schema.optionalKey(AuthoredActionGrant),
+	update: Schema.optionalKey(AuthoredActionGrant),
+	delete: Schema.optionalKey(AuthoredActionGrant)
 });
 const PolicyCapabilities = Schema.Struct({
 	apps: Schema.optionalKey(Schema.Array(Schema.String)),
 	tools: Schema.optionalKey(Schema.Array(Schema.String)),
 	mcp: Schema.optionalKey(Schema.Array(Schema.String)),
-	skills: Schema.optionalKey(Schema.Array(Schema.String))
+	skills: Schema.optionalKey(Schema.Array(Schema.String)),
+	envoyHistory: Schema.optionalKey(Schema.Literal('this_envoy'))
 });
 const AuthoredRateLimitRule = Schema.Struct({
 	window: Schema.String,
@@ -59,7 +52,7 @@ const AuthoredRateLimitRule = Schema.Struct({
 });
 const AuthoredPolicy = Schema.Struct({
 	description: Schema.String,
-	grants: Schema.Array(AuthoredGrant),
+	grants: Schema.Record(Schema.String, AuthoredCollectionGrants),
 	capabilities: Schema.optionalKey(PolicyCapabilities),
 	limits: Schema.optionalKey(
 		Schema.Record(
@@ -73,81 +66,140 @@ const AuthoredEnvoy = Schema.Struct({
 	audience: Schema.Literals(['public', 'authenticated']),
 	policies: Schema.Array(Schema.String),
 	task: Schema.String,
-	groupMessages: Schema.optionalKey(Schema.Literals(['disabled', 'mention_or_reply', 'all']))
+	groupMessages: Schema.optionalKey(Schema.Literals(['disabled', 'mention_or_reply', 'all'])),
+	delegation: Schema.optionalKey(Schema.Literals(['enabled', 'disabled']))
 });
 
-/**
- * A grant's approval identity, derived rather than authored.
- *
- * `(policy, collection, action)` names exactly one grant — two grants are never the same grant — so
- * the id is unique by construction, stable across releases, and legible in a log line. Nothing has
- * to be issued, nothing can collide, and there is no authored UUID for a copy-paste to duplicate.
- *
- * `bolt_approvals` is keyed by `request_id text primary key` with the configuration carried in
- * `state jsonb`, so there is no foreign key a derived id has to satisfy.
- */
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === 'object' && value !== null && !Array.isArray(value);
+
+function requireExactKeys(
+	value: unknown,
+	allowed: ReadonlySet<string>,
+	location: string
+): asserts value is Record<string, unknown> {
+	if (!isRecord(value)) throw new TypeError(`${location} must be an object.`);
+	const unexpected = Object.keys(value).filter((key) => !allowed.has(key));
+	if (unexpected.length > 0) {
+		throw new TypeError(`${location} has unsupported ${unexpected.join(', ')} key(s).`);
+	}
+}
+
+const grantKeys = (action: PolicyAction): ReadonlySet<string> =>
+	READ_ACTIONS.has(action)
+		? READ_GRANT_KEYS
+		: action === 'delete'
+			? DELETE_GRANT_KEYS
+			: WRITE_GRANT_KEYS;
+
+const validateGrantFields = (grant: Record<string, unknown>, location: string): void => {
+	if (!('fields' in grant)) return;
+	if (!Array.isArray(grant.fields) || grant.fields.some((field) => typeof field !== 'string')) {
+		throw new TypeError(`${location}.fields must be an array of field names.`);
+	}
+	if (new Set(grant.fields).size !== grant.fields.length) {
+		throw new TypeError(`${location}.fields cannot repeat a field.`);
+	}
+};
+
+const validateGrantApproval = (grant: Record<string, unknown>, location: string): void => {
+	if (!('approval' in grant)) return;
+	requireExactKeys(grant.approval, APPROVAL_KEYS, `${location}.approval`);
+	if (typeof grant.approval.flow !== 'function') {
+		throw new TypeError(`${location}.approval.flow must be a function.`);
+	}
+	const superseders = grant.approval.superceded_by;
+	if (
+		!Array.isArray(superseders) ||
+		superseders.some((team) => typeof team !== 'string' || team.trim() === '') ||
+		new Set(superseders).size !== superseders.length
+	) {
+		throw new TypeError(`${location}.approval.superceded_by must be a unique array of team names.`);
+	}
+};
+
+const validateGrantShape = (
+	name: string,
+	collection: string,
+	action: string,
+	grant: unknown
+): void => {
+	const typedAction = action as PolicyAction;
+	const location = `Policy ${name}.grants.${collection}.${action}`;
+	requireExactKeys(grant, grantKeys(typedAction), location);
+	if ('authorize' in grant && typeof grant.authorize !== 'function') {
+		throw new TypeError(`${location}.authorize must be a function.`);
+	}
+	validateGrantFields(grant, location);
+	validateGrantApproval(grant, location);
+};
+
+const validatePolicyShape = (name: string, declaration: unknown): void => {
+	requireExactKeys(declaration, POLICY_KEYS, `Policy ${name}`);
+	const grants = declaration.grants;
+	if (!isRecord(grants)) {
+		throw new TypeError(
+			`Policy ${name}.grants must be a collection/action object. Grant arrays are not supported.`
+		);
+	}
+	for (const [collection, collectionGrants] of Object.entries(grants)) {
+		requireExactKeys(collectionGrants, ACTION_KEYS, `Policy ${name}.grants.${collection}`);
+		for (const [action, grant] of Object.entries(collectionGrants)) {
+			validateGrantShape(name, collection, action, grant);
+		}
+	}
+};
+
 export const approvalConfigurationId = (
 	policy: string,
 	collection: string,
 	action: string
 ): string => `${policy}:${collection}:${action}`;
 
-/**
- * A step's identity, derived from its `key` and never from its index.
- *
- * That is what makes reordering a policy's steps safe: an in-flight approval names the step it is
- * waiting on by key, so moving a step in the array cannot silently rebind it to a different one.
- */
-export const approvalStepId = (configurationId: string, key: string): string =>
-	`${configurationId}:${key}`;
+export const policyAuthorizationId = (policy: string, collection: string, action: string): string =>
+	`${policy}:${collection}:${action}:authorize`;
 
-/** A human-readable label for an approval, so a timeline reads as prose rather than as an id. */
-const label = (value: string): string =>
-	value.replaceAll('_', ' ').replace(/^./, (first) => first.toLocaleUpperCase());
+/** Approval stage identities are runtime-derived; authors never name stages. */
+export const approvalStepId = (configurationId: string, index: number): string =>
+	`${configurationId}:stage:${index + 1}`;
 
-/**
- * One authored grant, with its approval given the identity the runtime stores.
- *
- * The approval arrives as `{ steps: [{ key, approvers, description? }] }` and leaves as the
- * `ApprovalConfiguration` shape `approvals.ts` decodes — `id`, `name`, and a step `id` and `name`
- * per entry. Every one of those is computed here, from the grant's own coordinates.
- */
-const describeGrant = (policyName: string, grant: RuntimePolicyGrant): RuntimePolicyGrant => {
-	if (!isAuthoredApproval(grant.approval)) {
-		if (grant.approval === undefined) return grant;
-		throw new TypeError(
-			`Policy ${policyName} declares an approval on ${grant.action} of ${grant.collection} that is not a list of steps. Write it as { steps: [{ key, approvers }] }.`
-		);
-	}
-	const id = approvalConfigurationId(policyName, grant.collection, grant.action);
-	const keys = grant.approval.steps.map((step) => step.key);
-	if (new Set(keys).size !== keys.length) {
-		throw new TypeError(
-			`Policy ${policyName} repeats a step key on ${grant.action} of ${grant.collection}. A step's key is its identity, so two steps sharing one would be the same approval twice.`
-		);
-	}
-	return {
-		...grant,
-		approval: {
-			id,
-			name: `${label(policyName)} — ${grant.action} ${grant.collection}`,
-			steps: grant.approval.steps.map((step) => ({
-				id: approvalStepId(id, step.key),
-				name: label(step.key),
-				approvers: [...step.approvers],
-				...(step.description === undefined ? {} : { description: step.description })
-			}))
-		}
+const describeGrant = (
+	policyName: string,
+	collection: string,
+	action: PolicyAction,
+	grant: Readonly<Record<string, unknown>>,
+	authorizations: Map<string, PolicyRuntimeFunction>,
+	approvalFlows: Map<string, PolicyRuntimeFunction>
+): RuntimePolicyGrant => {
+	const described: RuntimePolicyGrant = {
+		collection,
+		action,
+		...(grant.where === undefined
+			? {}
+			: { where: grant.where as Readonly<Record<string, unknown>> }),
+		...(grant.fields === undefined ? {} : { fields: grant.fields as ReadonlyArray<string> })
 	};
+	if (typeof grant.authorize === 'function') {
+		const id = policyAuthorizationId(policyName, collection, action);
+		authorizations.set(id, grant.authorize as PolicyRuntimeFunction);
+		Object.assign(described, { authorization: { id, live: true } });
+	}
+	if (isRecord(grant.approval)) {
+		const id = approvalConfigurationId(policyName, collection, action);
+		approvalFlows.set(id, grant.approval.flow as PolicyRuntimeFunction);
+		Object.assign(described, {
+			approval: {
+				id,
+				flow: true,
+				superceded_by: Object.freeze([...(grant.approval.superceded_by as ReadonlyArray<string>)])
+			}
+		});
+	}
+	return Object.freeze(described);
 };
 
-/**
- * The authored policy file, plus the name its filename gave it.
- *
- * Called from the compiled artifact, where both halves are in hand: the module is imported live and
- * the name is a string literal the compiler wrote from the path.
- */
 export const describePolicy = (name: string, declaration: unknown): PolicyDeclaration => {
+	validatePolicyShape(name, declaration);
 	const decoded = Schema.decodeUnknownResult(AuthoredPolicy)(declaration);
 	if (Result.isFailure(decoded)) {
 		throw new TypeError(
@@ -155,22 +207,29 @@ export const describePolicy = (name: string, declaration: unknown): PolicyDeclar
 		);
 	}
 	const { capabilities, description, grants } = decoded.success;
-	if (description.trim() === '') {
-		throw new TypeError(`Policy ${name} requires a description.`);
-	}
+	if (description.trim() === '') throw new TypeError(`Policy ${name} requires a description.`);
 	const limits: Readonly<Record<string, ReadonlyArray<RateLimitRule>>> = resolvePolicyLimits(
 		decoded.success.limits
 	);
 	validatePolicyLimits(name, limits);
-	const described = grants.map((grant: RuntimePolicyGrant) => describeGrant(name, grant));
-	return Object.freeze({
+	const authorizations = new Map<string, PolicyRuntimeFunction>();
+	const approvalFlows = new Map<string, PolicyRuntimeFunction>();
+	const described = Object.keys(grants)
+		.sort()
+		.flatMap((collection) =>
+			ACTIONS.flatMap((action) => {
+				const grant = grants[collection]?.[action];
+				return grant === undefined
+					? []
+					: [describeGrant(name, collection, action, grant, authorizations, approvalFlows)];
+			})
+		);
+	const policy = Object.freeze({
 		name,
 		description,
-		// Always `allow`. A denylist beside an allowlist fails open — adding a grant silently hands it
-		// to every holder — so there is exactly one direction a policy can point.
 		effect: 'allow' as const,
 		actions: [...new Set(described.map(({ action }) => action))],
-		grants: described,
+		grants: Object.freeze(described),
 		capabilities: {
 			apps: capabilities?.apps ?? [],
 			tools: capabilities?.tools ?? [],
@@ -179,14 +238,33 @@ export const describePolicy = (name: string, declaration: unknown): PolicyDeclar
 		},
 		limits
 	});
+	functionsByPolicy.set(policy, {
+		authorizations: Object.freeze(Object.fromEntries(authorizations)),
+		approvalFlows: Object.freeze(Object.fromEntries(approvalFlows))
+	});
+	return policy;
 };
 
-/**
- * The authored envoy file, plus the name its filename gave it.
- *
- * Symmetrical with `describePolicy` and for the same reason: the module cannot state its own file
- * name, and nothing else about it comes from anywhere else.
- */
+export const policyRuntimeFunctionsFor = (
+	policies: ReadonlyArray<PolicyDeclaration>
+): PolicyRuntimeFunctions =>
+	Object.freeze({
+		authorizations: Object.freeze(
+			Object.fromEntries(
+				policies.flatMap((policy) =>
+					Object.entries(functionsByPolicy.get(policy)?.authorizations ?? {})
+				)
+			)
+		),
+		approvalFlows: Object.freeze(
+			Object.fromEntries(
+				policies.flatMap((policy) =>
+					Object.entries(functionsByPolicy.get(policy)?.approvalFlows ?? {})
+				)
+			)
+		)
+	});
+
 export const describeEnvoy = (
 	name: string,
 	declaration: unknown
@@ -197,11 +275,12 @@ export const describeEnvoy = (
 	readonly policies: ReadonlyArray<string>;
 	readonly task: string;
 	readonly groupMessages?: 'disabled' | 'mention_or_reply' | 'all';
+	readonly delegation?: 'enabled' | 'disabled';
 } => {
 	const decoded = Schema.decodeUnknownResult(AuthoredEnvoy)(declaration);
 	if (Result.isFailure(decoded)) {
 		throw new TypeError(
-			`Envoy ${name} does not export a valid envoy object. An envoy file default-exports { transport, audience, policies, task, groupMessages? }.`
+			`Envoy ${name} does not export a valid envoy object. An envoy file default-exports { transport, audience, policies, task, groupMessages?, delegation? }.`
 		);
 	}
 	if (decoded.success.transport.trim() === '') {
@@ -223,6 +302,7 @@ export const describeEnvoy = (
 		task: decoded.success.task.trim(),
 		...(decoded.success.groupMessages === undefined
 			? {}
-			: { groupMessages: decoded.success.groupMessages })
+			: { groupMessages: decoded.success.groupMessages }),
+		...(decoded.success.delegation === undefined ? {} : { delegation: decoded.success.delegation })
 	});
 };

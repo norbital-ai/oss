@@ -1,5 +1,8 @@
 import { Context, Effect, Layer, Number as ENumber, Schema } from 'effect';
+import { and, asc, eq, exists, gt, lt, max, or } from 'drizzle-orm';
+import { alias as tableAlias } from 'drizzle-orm/pg-core';
 import { EffectId } from '@norbital-ai/bolt-protocol';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
 import { PendingApproval } from '#lib/runtime/collections/collections.js';
@@ -10,8 +13,27 @@ import * as Workspace from '#lib/runtime/workspace.js';
 import { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
 import { decodeReferenceRow } from '#lib/runtime/collections/references.js';
+import {
+	aliased,
+	asText,
+	coalesce,
+	commitHorizon,
+	composer,
+	dbNowMinusDays,
+	dynamicTable,
+	executeBuilt,
+	greatest,
+	horizonSequence,
+	one,
+	qualified,
+	rowJson,
+	syncCursorJson,
+	uuidAfter
+} from '#lib/runtime/persistence.js';
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
+const { bolt_sync_horizon: syncHorizon, bolt_sync_outbox: syncOutbox } = SYSTEM_MODEL_TABLES;
+const newerSyncOutbox = tableAlias(syncOutbox, 'newer_sync_outbox');
 
 /** The `Schema.Json` predicate, built once: it is consulted for every value crossing the facility seam. */
 const isJson = Schema.is(Schema.Json);
@@ -28,7 +50,7 @@ const isJsonObject = Schema.is(JsonObject);
  * longest open write transaction, and that is the trade the alternative does not offer: without it
  * the log is fast and lossy.
  */
-const COMMIT_HORIZON = 'pg_snapshot_xmin(pg_current_snapshot())::text::bigint';
+const COMMIT_HORIZON = commitHorizon();
 
 /** Orders two cursors the way the outbox does. */
 const compareCursors = (left: SyncCursor, right: SyncCursor): number =>
@@ -39,6 +61,21 @@ export const SyncCursor = Schema.Struct({
 	sequence: Schema.Number.check(Schema.isInt())
 });
 export interface SyncCursor extends Schema.Schema.Type<typeof SyncCursor> {}
+
+/**
+ * PostgreSQL returns `bigint` columns as decimal strings through `pg`, while the in-memory test
+ * facility and JSON expressions return numbers. Both are the same database fact; normalize them at
+ * the database boundary so the public cursor remains the precise numeric wire shape above.
+ */
+const DatabaseInteger = Schema.Union([Schema.Number, Schema.NumberFromString]).check(
+	Schema.isInt()
+);
+const DatabaseSyncCursor = Schema.Struct({
+	...SyncCursor.fields,
+	xid: DatabaseInteger,
+	sequence: DatabaseInteger
+});
+export const decodeDatabaseSyncCursor = Schema.decodeUnknownEffect(DatabaseSyncCursor);
 export const SyncChange = Schema.Struct({
 	cursor: SyncCursor,
 	collection: Schema.NonEmptyString,
@@ -64,7 +101,7 @@ const SyncSnapshotPage = Schema.Struct({
 	/** The id to pass as `after` for the next page; `null` when the collection is exhausted. */
 	nextAfter: Schema.NullOr(Schema.String)
 });
-export interface SyncSnapshotPage extends Schema.Schema.Type<typeof SyncSnapshotPage> {}
+interface SyncSnapshotPage extends Schema.Schema.Type<typeof SyncSnapshotPage> {}
 
 /** Carries sync decode error through the typed sync failure channel without losing diagnostic context. */
 class SyncDecodeError extends Schema.TaggedError<SyncDecodeError>()('Bolt.Sync.DecodeError', {
@@ -94,10 +131,10 @@ export type Interface = Readonly<{
 	/**
 	 * The current state of one collection, plus the cursor the caller should stream on from.
 	 *
-	 * A replica cannot be built from the log alone: only writes through `Collections` reach the outbox,
-	 * so seeded, imported and directly-written rows are absent from it entirely. Replaying from the
-	 * origin against a freshly seeded workspace yields nothing and the replica concludes, correctly by
-	 * its own reasoning and wrongly in fact, that the workspace is empty.
+	 * A replica still starts from a snapshot rather than replaying an unbounded log. Database triggers
+	 * capture collection writes regardless of whether they came through `Collections`, a seed, an import,
+	 * or a runtime projection; the snapshot supplies current state while its cursor makes later outbox
+	 * changes an ordered continuation.
 	 */
 	readonly snapshot: (
 		effectId: EffectId,
@@ -183,14 +220,20 @@ export const layer = Layer.effect(
 				// position `diff` refuses to reach while any transaction below it is still open, so a client
 				// that stored it would sit one poll behind forever and a client comparing its cursor against
 				// it would conclude it had fallen off history.
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select coalesce(max(xid), 0) as xid, coalesce(max(sequence), 0) as sequence from bolt_sync_outbox where xid < ${COMMIT_HORIZON}`,
-					parameters: []
-				});
-				return yield* Schema.decodeUnknownEffect(SyncCursor)(
-					result.rows[0] ?? { xid: 0, sequence: 0 }
-				).pipe(Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync head row' })));
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({
+							xid: aliased(coalesce(max(syncOutbox.xid), 0), 'xid'),
+							sequence: aliased(coalesce(max(syncOutbox.sequence), 0), 'sequence')
+						})
+						.from(syncOutbox)
+						.where(lt(syncOutbox.xid, COMMIT_HORIZON))
+				);
+				return yield* decodeDatabaseSyncCursor(result.rows[0] ?? { xid: 0, sequence: 0 }).pipe(
+					Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync head row' }))
+				);
 			}),
 			diff: Effect.fn('Sync.diff')(function* (effectId, subject, cursor, limit) {
 				// Read from the mark retention writes, not from the oldest surviving row. The old test —
@@ -198,15 +241,19 @@ export const layer = Layer.effect(
 				// nothing ever deleted a row; the reset path was unreachable and a stranded client had no way
 				// to be told. A cursor at the origin is a new replica and is never reset: it is about to be
 				// served the whole log, or a snapshot.
-				const marked = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'select xid, sequence from bolt_sync_horizon where singleton',
-					parameters: []
-				});
+				const marked = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({ xid: syncHorizon.xid, sequence: syncHorizon.sequence })
+						.from(syncHorizon)
+						.where(eq(syncHorizon.singleton, true))
+						.limit(1)
+				);
 				const incompleteBelow =
 					marked.rows[0] === undefined
 						? undefined
-						: yield* Schema.decodeUnknownEffect(SyncCursor)(marked.rows[0]).pipe(
+						: yield* decodeDatabaseSyncCursor(marked.rows[0]).pipe(
 								Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync horizon row' }))
 							);
 				if (
@@ -229,38 +276,51 @@ export const layer = Layer.effect(
 					return predicate.allowed ? [{ name: collection.name, predicate }] : [];
 				});
 				if (readable.length === 0) return [];
-				const visibilityParameters: Array<Schema.Json> = [];
-				const visibilitySql = readable
-					.map(({ name, predicate }) => {
-						const collectionIndex = visibilityParameters.push(name);
-						const predicateOffset = visibilityParameters.length;
-						visibilityParameters.push(...predicate.parameters);
-						const sql = predicate.sql.replaceAll(
-							/\$(\d+)/g,
-							(_token, index: string) => `$${Number(index) + predicateOffset + 3}`
+				const visibility = readable.map(({ name, predicate }) => {
+					const visibleId = qualified('visible', 'id');
+					const visibleRows = composer
+						.select({ one: one() })
+						.from(dynamicTable(name, 'visible'))
+						.where(
+							and(
+								eq(asText(visibleId), syncOutbox.record_id),
+								AccessControl.predicateExpression(predicate)
+							)
 						);
-						const table = `"${name.replaceAll('"', '""')}"`;
-						return `(o.collection_name = $${collectionIndex + 3} and (o.operation = 'delete' or exists (select 1 from ${table} visible where visible.id::text = o.record_id and (${sql}))))`;
-					})
-					.join(' or ');
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					// `o.xid < ${COMMIT_HORIZON}` is what makes the stream lossless, and it is the whole of the
-					// fix for a bug that silently dropped writes. Rows are ordered by `(xid, sequence)`, which
-					// is *insert* order, while they become visible in *commit* order. A transaction that began
-					// before another and committed after it therefore carries a lower cursor than rows the
-					// client has already consumed, so the client's next `>` request skips it — permanently, with
-					// no error anywhere. Serving only rows below the oldest in-flight transaction means no row
-					// can ever appear behind a cursor that has already passed: a client is delayed by an open
-					// write, never robbed of one.
-					sql: `select jsonb_build_object('xid', o.xid, 'sequence', o.sequence) as cursor, o.collection_name as collection, o.record_id as "recordId", o.operation, o.record from bolt_sync_outbox o where (o.xid, o.sequence) > ($1, $2) and o.xid < ${COMMIT_HORIZON} and (${visibilitySql}) order by o.xid, o.sequence limit $3`,
-					parameters: [
-						cursor.xid,
-						cursor.sequence,
-						ENumber.clamp({ minimum: 1, maximum: 500 })(limit),
-						...visibilityParameters
-					]
+					return and(
+						eq(syncOutbox.collection_name, name),
+						or(eq(syncOutbox.operation, 'delete'), exists(visibleRows))
+					);
 				});
+				const size = ENumber.clamp({ minimum: 1, maximum: 500 })(limit);
+				// The commit-horizon predicate is what makes the stream lossless. Rows are inserted in
+				// transaction order but become visible in commit order; withholding every transaction at or
+				// above the oldest in-flight xid means no late commit can appear behind a cursor already served.
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({
+							cursor: aliased(syncCursorJson(syncOutbox.xid, syncOutbox.sequence), 'cursor'),
+							collection: aliased(syncOutbox.collection_name, 'collection'),
+							recordId: aliased(syncOutbox.record_id, 'recordId'),
+							operation: syncOutbox.operation,
+							record: syncOutbox.record
+						})
+						.from(syncOutbox)
+						.where(
+							and(
+								or(
+									gt(syncOutbox.xid, cursor.xid),
+									and(eq(syncOutbox.xid, cursor.xid), gt(syncOutbox.sequence, cursor.sequence))
+								),
+								lt(syncOutbox.xid, COMMIT_HORIZON),
+								or(...visibility)
+							)
+						)
+						.orderBy(asc(syncOutbox.xid), asc(syncOutbox.sequence))
+						.limit(size)
+				);
 				const changes = yield* Schema.decodeUnknownEffect(Schema.Array(SyncChange))(
 					result.rows
 				).pipe(Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync diff rows' })));
@@ -295,27 +355,31 @@ export const layer = Layer.effect(
 					});
 				}
 				const size = ENumber.clamp({ minimum: 1, maximum: 500 })(limit);
-				const table = `"${collection.replaceAll('"', '""')}"`;
 				// Keyset paging on the primary key, not offset: a snapshot of a live table is paged while it
 				// is being written, and `offset` re-reads shifted rows — skipping some and repeating others.
 				// Ordering by `id` also makes `after` a position rather than a count.
-				const parameters: Array<Schema.Json> = [];
-				const afterClause =
-					after === undefined ? 'true' : `r.id > $${parameters.push(after)}::uuid`;
-				const predicateOffset = parameters.length;
-				parameters.push(...predicate.parameters);
-				const visibility = predicate.sql.replaceAll(
-					/\$(\d+)/g,
-					(_token, index: string) => `$${Number(index) + predicateOffset}`
-				);
-				const pageSize = parameters.push(size + 1);
+				const snapshotId = qualified('snapshot_row', 'id');
 				// The horizon is read in the same statement as the rows, so it names the state these rows are
 				// consistent with rather than a moment before or after them.
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select (select coalesce(${COMMIT_HORIZON}, 0)) as "snapshotXid", to_jsonb(r) as record, r.id::text as id from ${table} r where ${afterClause} and (${visibility}) order by r.id limit $${pageSize}`,
-					parameters
-				});
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({
+							snapshotXid: aliased(coalesce(COMMIT_HORIZON, 0), 'snapshotXid'),
+							record: aliased(rowJson('snapshot_row'), 'record'),
+							id: aliased(asText(snapshotId), 'id')
+						})
+						.from(dynamicTable(collection, 'snapshot_row'))
+						.where(
+							and(
+								after === undefined ? undefined : uuidAfter(snapshotId, after),
+								AccessControl.predicateExpression(predicate)
+							)
+						)
+						.orderBy(snapshotId)
+						.limit(size + 1)
+				);
 				const rows = result.rows.slice(0, size);
 				const read = (row: Schema.Json, key: string): unknown =>
 					row !== null && typeof row === 'object' && !Array.isArray(row)
@@ -343,19 +407,53 @@ export const layer = Layer.effect(
 				const days = Math.max(1, Math.trunc(retentionDays));
 				// Only below the commit horizon: a row from a transaction that may still be open has no
 				// settled position, and collapsing around it would decide an ordering the database has not.
-				const collapsed = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `delete from bolt_sync_outbox o where o.xid < ${COMMIT_HORIZON} and exists (select 1 from bolt_sync_outbox newer where newer.collection_name = o.collection_name and newer.record_id = o.record_id and newer.xid < ${COMMIT_HORIZON} and (newer.xid, newer.sequence) > (o.xid, o.sequence)) returning 1`,
-					parameters: []
-				});
+				const collapsed = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.delete(syncOutbox)
+						.where(
+							and(
+								lt(syncOutbox.xid, COMMIT_HORIZON),
+								exists(
+									composer
+										.select({ one: one() })
+										.from(newerSyncOutbox)
+										.where(
+											and(
+												eq(newerSyncOutbox.collection_name, syncOutbox.collection_name),
+												eq(newerSyncOutbox.record_id, syncOutbox.record_id),
+												lt(newerSyncOutbox.xid, COMMIT_HORIZON),
+												or(
+													gt(newerSyncOutbox.xid, syncOutbox.xid),
+													and(
+														eq(newerSyncOutbox.xid, syncOutbox.xid),
+														gt(newerSyncOutbox.sequence, syncOutbox.sequence)
+													)
+												)
+											)
+										)
+								)
+							)
+						)
+						.returning({ removed: one() })
+				);
 				// Retention is the only operation that can strand a replica, because it can remove the newest
 				// row a record ever had. The mark moves to the highest cursor it deleted, and `diff` answers
 				// anything below that with a rebuild instead of a silently incomplete stream.
-				const pruned = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `delete from bolt_sync_outbox o where o.xid < ${COMMIT_HORIZON} and o.created_at < now() - ($1 || ' days')::interval returning o.xid, o.sequence`,
-					parameters: [String(days)]
-				});
+				const pruned = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.delete(syncOutbox)
+						.where(
+							and(
+								lt(syncOutbox.xid, COMMIT_HORIZON),
+								lt(syncOutbox.created_at, dbNowMinusDays(days))
+							)
+						)
+						.returning({ xid: syncOutbox.xid, sequence: syncOutbox.sequence })
+				);
 				const cursors = pruned.rows.flatMap((row) =>
 					row !== null && typeof row === 'object' && !Array.isArray(row)
 						? [
@@ -371,13 +469,24 @@ export const layer = Layer.effect(
 					undefined
 				);
 				if (highest !== undefined) {
-					yield* database.execute(effectId, {
-						_tag: 'Query',
-						// `greatest` because a later compaction must never move the mark backwards: that would
-						// re-admit cursors already declared stranded.
-						sql: 'update bolt_sync_horizon set xid = greatest(xid, $1), sequence = case when $1 > xid then $2 else greatest(sequence, $2) end where singleton',
-						parameters: [highest.xid, highest.sequence]
-					});
+					// `greatest` because a later compaction must never move the mark backwards: that would
+					// re-admit cursors already declared stranded.
+					yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.update(syncHorizon)
+							.set({
+								xid: greatest(syncHorizon.xid, highest.xid),
+								sequence: horizonSequence(
+									syncHorizon.xid,
+									syncHorizon.sequence,
+									highest.xid,
+									highest.sequence
+								)
+							})
+							.where(eq(syncHorizon.singleton, true))
+					);
 				}
 				return { collapsed: collapsed.rows.length, pruned: pruned.rows.length };
 			}),

@@ -1,6 +1,8 @@
 import { Clock, Context, Effect, Layer, Result, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
+import { and, asc, count, eq, inArray, isNull, lt, lte, min, or } from 'drizzle-orm';
 import type { AuthoredIntegrationModule } from '#lib/authoring/integration-introspection.js';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import {
 	AuthoredRuntimeService,
 	makeAuthoringApi,
@@ -23,6 +25,13 @@ import * as Database from '#lib/runtime/facilities/database.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import { Secrets, type Interface as SecretsInterface } from '#lib/runtime/secrets/secrets.js';
 import * as Workspace from '#lib/runtime/workspace.js';
+import {
+	composer,
+	dbNow,
+	dbNowPlusSeconds,
+	executeBuilt,
+	increment
+} from '#lib/runtime/persistence.js';
 import { describeCause } from '#lib/runtime/workspace.js';
 import {
 	runOutboxDrain,
@@ -60,6 +69,15 @@ const IdentifiedJsonRow = Schema.StructWithRest(Schema.Struct({ id: Schema.Strin
 	Schema.Record(Schema.String, Schema.Json)
 ]);
 const DueAtRow = Schema.Struct({ due_at: Schema.NullOr(Schema.String) });
+
+/**
+ * The two decoders this module applies per response, built once.
+ *
+ * Constructing a decoder compiles it; both of these sit on a per-record path — one per HTTP page,
+ * one per imported row — so building them here keeps that cost off the loop.
+ */
+const decodeIntegrationHttpResponse = Schema.decodeUnknownEffect(IntegrationHttpResponse);
+const decodePipelineRows = Schema.decodeUnknownEffect(Schema.Array(UnknownRow));
 const ClaimedDeliveryRow = Schema.Struct({
 	sequence: DatabaseNumber,
 	binding_name: Schema.String,
@@ -76,10 +94,7 @@ const InboxStatusRow = Schema.Struct({ status: Schema.String });
 const PullCursorRow = Schema.Struct({ cursor: Schema.Json });
 const FlushInput = Schema.Struct({ limit: Schema.optionalKey(Schema.Number) });
 const IntegrationStateRow = Schema.Struct({ enabled: Schema.Boolean, cursor: Schema.Json });
-const IntegrationCountsRow = Schema.Struct({
-	pending: DatabaseNumber,
-	failed: DatabaseNumber
-});
+const IntegrationCountRow = Schema.Struct({ count: DatabaseNumber });
 /**
  * What an operator can see about one integration without opening a database.
  *
@@ -88,14 +103,14 @@ const IntegrationCountsRow = Schema.Struct({
  * something a tenant believes was sent. `pending` was a hard-coded `0` for as long as there was
  * nothing to count.
  */
-export const IntegrationStatus = Schema.Struct({
+const IntegrationStatus = Schema.Struct({
 	name: Schema.NonEmptyString,
 	enabled: Schema.Boolean,
 	cursor: Schema.Json,
 	pending: Schema.Number,
 	failed: Schema.Number
 });
-export interface IntegrationStatus extends Schema.Schema.Type<typeof IntegrationStatus> {}
+interface IntegrationStatus extends Schema.Schema.Type<typeof IntegrationStatus> {}
 export type Interface = Readonly<{
 	readonly install: (
 		effectId: EffectId,
@@ -161,25 +176,15 @@ export const Service = Context.Service<Interface>('@norbital-ai/bolt/Integration
  * `integration:<name>`, so every row the mirror writes is attributable in `bolt_collection_history`
  * to the integration that wrote it rather than to whoever last touched the workspace.
  *
- * It is an administrator because a mirror writes rows nobody asked for and no row-scoped grant
- * describes that — the authority is the workspace's own declaration, the same authority that
- * installed the integration. That is a real grant and it is deliberately narrow in the one dimension
- * that can be narrowed: the collection is fixed by the declaration, so this subject can only ever
- * reach the table its own `+integrations.ts` named.
- *
- * Stated as the `admin` status rather than as `roles: ['admin']`, which is what it used to be and
- * what never worked: no workspace declares a policy called `admin`, so `subjectHasPolicy` matched
- * nothing and the mirror's authority came from nowhere. The status is the fact being asserted.
+ * Its authority is exactly the policies the integration declaration opts into. Naming a target
+ * collection in `+integrations.ts` is routing, not authorization: if none of those policies grants
+ * the required read/create/update coordinate, the mirror is refused like any other principal.
  */
-const integrationSubject = (name: string): Identity.Subject => ({
+const integrationSubject = (name: string, policies: ReadonlyArray<string>): Identity.Subject => ({
 	userId: `integration:${name}`,
 	tenantId: 'system',
 	teamPath: [],
-	// A static identity, so no team and no directly-named policies. Its authority is the `admin`
-	// status below and nothing a name can reach — which also means it can decide no approval, because
-	// eligibility is matched against the subject's own team and it has none.
-	policies: [],
-	admin: true
+	policies: [...policies]
 });
 
 /**
@@ -192,18 +197,18 @@ const integrationSubject = (name: string): Identity.Subject => ({
  * enough to cover a fifty-page pull whose every page backed off, short enough that a lost lease
  * costs one cycle of any realistic cron rather than a day of them.
  */
-const PULL_LEASE = '10 minutes';
+const PULL_LEASE_MS = 10 * 60 * 1000;
 
 /**
  * How long a claimed delivery may stay in flight before another drain may take it back.
  *
- * The same guarantee `PULL_LEASE` makes, for the same reason: a drain killed by a deadline or a
+ * The same guarantee `PULL_LEASE_MS` makes, for the same reason: a drain killed by a deadline or a
  * lost isolate never reaches its own settlement, and a claim with no expiry would leave that
  * delivery `inflight` forever — visible in `status`, and never sent. Reclaiming it costs at most a
  * duplicate delivery, which is a thing the at-least-once contract and the idempotency key already
  * account for; *not* reclaiming it costs the delivery.
  */
-const OUTBOX_CLAIM_LEASE = '10 minutes';
+const OUTBOX_CLAIM_LEASE_MS = 10 * 60 * 1000;
 
 /**
  * Which rows a drain may take: due and pending, or claimed so long ago the claimant must be gone.
@@ -213,7 +218,20 @@ const OUTBOX_CLAIM_LEASE = '10 minutes';
  * second drain that computed the same candidates from its own snapshot blocks on the row, re-checks
  * this against the version the first wrote, and finds a fresh `updated_at`.
  */
-const OUTBOX_CLAIMABLE = `(status = 'pending' or (status = 'inflight' and updated_at < now() - interval '${OUTBOX_CLAIM_LEASE}'))`;
+const {
+	bolt_integrations: boltIntegrations,
+	bolt_integration_inbox: boltIntegrationInbox,
+	bolt_integration_outbox: boltIntegrationOutbox
+} = SYSTEM_MODEL_TABLES;
+
+const outboxClaimable = (staleBefore: ReturnType<typeof dbNowPlusSeconds>) =>
+	or(
+		eq(boltIntegrationOutbox.status, 'pending'),
+		and(
+			eq(boltIntegrationOutbox.status, 'inflight'),
+			lt(boltIntegrationOutbox.updated_at, staleBefore)
+		)
+	);
 
 /**
  * Reads `min(next_attempt_at)` back out of the facility's JSON.
@@ -223,6 +241,14 @@ const OUTBOX_CLAIMABLE = `(status = 'pending' or (status = 'inflight' and update
  * driver hands back for a timestamp is a string here and could be a `Date` elsewhere, and the
  * failure of guessing wrong would be a wake that never happens rather than an error anybody sees.
  */
+/**
+ * An epoch instant as ISO-8601 text, for the label a follow-up task is keyed on.
+ *
+ * A pure conversion of an instant the row already carries — nothing here reads a clock — so it sits
+ * beside `readDueAt` rather than inside the drain that uses it.
+ */
+const instantLabel = (epochMs: number): string => new Date(epochMs).toISOString();
+
 const readDueAt = (row: Schema.Json | undefined): number | undefined => {
 	const decoded = Schema.decodeUnknownResult(DueAtRow)(row);
 	if (Result.isFailure(decoded) || decoded.success.due_at === null) return undefined;
@@ -260,6 +286,9 @@ const claimedDeliveries = (rows: ReadonlyArray<Schema.Json>): ReadonlyArray<Clai
 const cursorsOf = (value: Schema.Json): Readonly<Record<string, string>> =>
 	Result.getOrElse(Schema.decodeUnknownResult(CursorMap)(value), () => ({}));
 
+/** Drizzle's connection-free `.toSQL()` path does not run JSONB column encoders. */
+const encodedJson = (value: Schema.Json): string => JSON.stringify(value) ?? 'null';
+
 /**
  * How many rows one source record is assumed to be able to fan out into.
  *
@@ -273,7 +302,7 @@ const MAX_FAN_OUT = 64;
 /** A ceiling on the whole lookup, so a large batch times a wide fan-out still cannot page unboundedly. */
 const MAX_EXISTING_ROWS = 5000;
 
-export type LayerServices =
+type LayerServices =
 	| Workspace.Interface
 	| ConnectorInterface
 	| Database.Interface
@@ -327,7 +356,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 					})
 					.pipe(
 						Effect.flatMap((response) =>
-							Schema.decodeUnknownEffect(IntegrationHttpResponse)(response.output).pipe(
+							decodeIntegrationHttpResponse(response.output).pipe(
 								Effect.mapError((issue) => ({
 									message: `connector answered something that is not an HTTP response: ${describeCause(issue)}`,
 									retryable: false
@@ -402,7 +431,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 					makeBoundAuthoringOps(effectId, subject, collections, ai, files, automations)
 				);
 				return runAuthoredHandler(() => declared.handler({ input: [record], api }, api)).pipe(
-					Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(UnknownRow))),
+					Effect.flatMap(decodePipelineRows),
 					Effect.catch((error) => Effect.fail({ message: describeCause(error) }))
 				);
 			},
@@ -459,49 +488,70 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				 * exactly one caller sees `new`.
 				 */
 				remember: (effectId, entry) =>
-					database
-						.execute(effectId, {
-							_tag: 'Query',
-							sql: "insert into bolt_integration_inbox (integration_name, binding_name, receipt_id, payload, status) values ($1, $2, $3, $4, 'pending') on conflict (integration_name, receipt_id) do nothing returning receipt_id",
-							parameters: [integrationName, entry.binding, entry.receiptId, entry.payload]
-						})
-						.pipe(
-							Effect.flatMap((inserted): Effect.Effect<LedgerState, Database.FacilityError> =>
-								inserted.rows.length === 1
-									? Effect.succeed('new')
-									: database
-											.execute(effectId, {
-												_tag: 'Query',
-												sql: 'select status from bolt_integration_inbox where integration_name = $1 and receipt_id = $2',
-												parameters: [integrationName, entry.receiptId]
-											})
-											.pipe(
-												Effect.map((existing) => {
-													const status = Schema.decodeUnknownResult(InboxStatusRow)(
-														existing.rows[0]
-													);
-													// Anything other than a recorded `absorbed` is treated as unfinished and
-													// absorbed again. The upsert makes that harmless, and the opposite default
-													// would silently drop the redelivery meant to finish an interrupted batch.
-													return Result.isSuccess(status) && status.success.status === 'absorbed'
-														? 'absorbed'
-														: 'pending';
-												})
+					executeBuilt(
+						effectId,
+						database,
+						composer
+							.insert(boltIntegrationInbox)
+							.values({
+								integration_name: integrationName,
+								binding_name: entry.binding,
+								receipt_id: entry.receiptId,
+								payload: encodedJson(entry.payload),
+								status: 'pending'
+							})
+							.onConflictDoNothing({
+								target: [boltIntegrationInbox.integration_name, boltIntegrationInbox.receipt_id]
+							})
+							.returning({ receipt_id: boltIntegrationInbox.receipt_id })
+					).pipe(
+						Effect.flatMap((inserted): Effect.Effect<LedgerState, Database.FacilityError> =>
+							inserted.rows.length === 1
+								? Effect.succeed('new')
+								: executeBuilt(
+										effectId,
+										database,
+										composer
+											.select({ status: boltIntegrationInbox.status })
+											.from(boltIntegrationInbox)
+											.where(
+												and(
+													eq(boltIntegrationInbox.integration_name, integrationName),
+													eq(boltIntegrationInbox.receipt_id, entry.receiptId)
+												)
 											)
-							),
-							Effect.mapError((error) => ({ message: describeCause(error) }))
+											.limit(1)
+									).pipe(
+										Effect.map((existing) => {
+											const status = Schema.decodeUnknownResult(InboxStatusRow)(existing.rows[0]);
+											// Anything other than a recorded `absorbed` is treated as unfinished and
+											// absorbed again. The upsert makes that harmless, and the opposite default
+											// would silently drop the redelivery meant to finish an interrupted batch.
+											return Result.isSuccess(status) && status.success.status === 'absorbed'
+												? 'absorbed'
+												: 'pending';
+										})
+									)
 						),
+						Effect.mapError((error) => ({ message: describeCause(error) }))
+					),
 				settle: (effectId, entry) =>
-					database
-						.execute(effectId, {
-							_tag: 'Query',
-							sql: "update bolt_integration_inbox set status = 'absorbed', processed_at = now() where integration_name = $1 and receipt_id = $2",
-							parameters: [entry.integration, entry.receiptId]
-						})
-						.pipe(
-							Effect.asVoid,
-							Effect.mapError((error) => ({ message: describeCause(error) }))
-						)
+					executeBuilt(
+						effectId,
+						database,
+						composer
+							.update(boltIntegrationInbox)
+							.set({ status: 'absorbed', processed_at: dbNow() })
+							.where(
+								and(
+									eq(boltIntegrationInbox.integration_name, entry.integration),
+									eq(boltIntegrationInbox.receipt_id, entry.receiptId)
+								)
+							)
+					).pipe(
+						Effect.asVoid,
+						Effect.mapError((error) => ({ message: describeCause(error) }))
+					)
 			};
 		};
 
@@ -513,7 +563,13 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 		 * header-authenticated connection cannot work in one direction and not the other.
 		 */
 		const deliverDependencies = (integrationName: string): DeliverDependencies => {
-			const bound = dependencies(integrationName, integrationSubject(integrationName));
+			const declared = workspace.definition.integrations.find(
+				(integration) => integration.name === integrationName
+			);
+			const bound = dependencies(
+				integrationName,
+				integrationSubject(integrationName, declared?.policies ?? [])
+			);
 			return {
 				request: bound.request,
 				secret: bound.secret,
@@ -530,7 +586,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				 * skip a record's backing-off head and select the delivery behind it, which is exactly the
 				 * silent reordering this is written to prevent.
 				 *
-				 * The outer `OUTBOX_CLAIMABLE` is the **concurrency arbiter**, and the same predicate is what
+				 * The outer `outboxClaimable` is the **concurrency arbiter**, and the same predicate is what
 				 * recovers an abandoned claim. A cron drain and a manual flush genuinely overlap, and both
 				 * would compute the same candidate set from their own snapshot; under read-committed the
 				 * second update blocks on the row and then re-checks this predicate against the version the
@@ -538,71 +594,112 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				 * the same `inflight` row with an `updated_at` that keeps ageing, so the lease expires and
 				 * the next drain takes it back rather than leaving it queued forever.
 				 */
-				claim: (effectId, integrationName_, limit) =>
-					database
-						.execute(effectId, {
-							_tag: 'Query',
-							sql: `update bolt_integration_outbox set status = 'inflight', attempts = attempts + 1, updated_at = now()
-						where sequence in (
-							select head.sequence from (
-								select distinct on (collection_name, record_id) sequence, next_attempt_at
-								from bolt_integration_outbox
-								where integration_name = $1 and ${OUTBOX_CLAIMABLE}
-								order by collection_name, record_id, sequence
-							) head
-							where head.next_attempt_at <= now()
-							order by head.sequence
-							limit $2
+				claim: (effectId, integrationName_, limit) => {
+					const staleBefore = dbNowPlusSeconds(-OUTBOX_CLAIM_LEASE_MS / 1000);
+					const heads = composer
+						.selectDistinctOn(
+							[boltIntegrationOutbox.collection_name, boltIntegrationOutbox.record_id],
+							{
+								sequence: boltIntegrationOutbox.sequence,
+								next_attempt_at: boltIntegrationOutbox.next_attempt_at
+							}
 						)
-						and ${OUTBOX_CLAIMABLE}
-						returning sequence, binding_name, collection_name, record_id, operation, path, payload, attempts`,
-							parameters: [integrationName_, limit]
-						})
-						.pipe(
-							// Sorted here rather than trusted from `returning`, which has no defined order: the
-							// drain delivers in the order it reads, so an unsorted batch would undo the ordering the
-							// claim just went to the trouble of establishing.
-							Effect.map((result) =>
-								claimedDeliveries(result.rows).toSorted(
-									(left, right) => left.sequence - right.sequence
+						.from(boltIntegrationOutbox)
+						.where(
+							and(
+								eq(boltIntegrationOutbox.integration_name, integrationName_),
+								outboxClaimable(staleBefore)
+							)
+						)
+						.orderBy(
+							asc(boltIntegrationOutbox.collection_name),
+							asc(boltIntegrationOutbox.record_id),
+							asc(boltIntegrationOutbox.sequence)
+						)
+						.as('head');
+					const candidates = composer
+						.select({ sequence: heads.sequence })
+						.from(heads)
+						.where(lte(heads.next_attempt_at, dbNow()))
+						.orderBy(asc(heads.sequence))
+						.limit(limit);
+					return executeBuilt(
+						effectId,
+						database,
+						composer
+							.update(boltIntegrationOutbox)
+							.set({
+								status: 'inflight',
+								attempts: increment(boltIntegrationOutbox.attempts),
+								updated_at: dbNow()
+							})
+							.where(
+								and(
+									inArray(boltIntegrationOutbox.sequence, candidates),
+									outboxClaimable(staleBefore)
 								)
-							),
-							Effect.mapError((error) => ({ message: describeCause(error) }))
+							)
+							.returning({
+								sequence: boltIntegrationOutbox.sequence,
+								binding_name: boltIntegrationOutbox.binding_name,
+								collection_name: boltIntegrationOutbox.collection_name,
+								record_id: boltIntegrationOutbox.record_id,
+								operation: boltIntegrationOutbox.operation,
+								path: boltIntegrationOutbox.path,
+								payload: boltIntegrationOutbox.payload,
+								attempts: boltIntegrationOutbox.attempts
+							})
+					).pipe(
+						// Sorted here rather than trusted from `returning`, which has no defined order: the
+						// drain delivers in the order it reads, so an unsorted batch would undo the ordering the
+						// claim just went to the trouble of establishing.
+						Effect.map((result) =>
+							claimedDeliveries(result.rows).toSorted(
+								(left, right) => left.sequence - right.sequence
+							)
 						),
-				settle: (effectId, settlement) =>
-					database
-						.execute(
-							effectId,
-							settlement._tag === 'Delivered'
+						Effect.mapError((error) => ({ message: describeCause(error) }))
+					);
+				},
+				settle: (effectId, settlement) => {
+					const changes =
+						settlement._tag === 'Delivered'
+							? {
+									status: 'delivered',
+									delivered_at: dbNow(),
+									last_status: settlement.status,
+									last_error: null,
+									updated_at: dbNow()
+								}
+							: settlement._tag === 'Retry'
 								? {
-										_tag: 'Query',
-										sql: "update bolt_integration_outbox set status = 'delivered', delivered_at = now(), last_status = $2, last_error = null, updated_at = now() where sequence = $1",
-										parameters: [settlement.sequence, settlement.status]
+										// Back to `pending` with a future due time. The backoff lives in the row rather
+										// than in a sleep, so a partner that is down for an hour costs an hour of ticks
+										// and not an invocation held open until a host's deadline kills it.
+										status: 'pending',
+										next_attempt_at: dbNowPlusSeconds(settlement.delayMs / 1000),
+										last_status: settlement.status,
+										last_error: settlement.reason,
+										updated_at: dbNow()
 									}
-								: settlement._tag === 'Retry'
-									? {
-											_tag: 'Query',
-											// Back to `pending` with a future due time. The backoff lives in the row rather
-											// than in a sleep, so a partner that is down for an hour costs an hour of ticks
-											// and not an invocation held open until a host's deadline kills it.
-											sql: "update bolt_integration_outbox set status = 'pending', next_attempt_at = now() + ($4::double precision * interval '1 millisecond'), last_status = $2, last_error = $3, updated_at = now() where sequence = $1",
-											parameters: [
-												settlement.sequence,
-												settlement.status,
-												settlement.reason,
-												settlement.delayMs
-											]
-										}
-									: {
-											_tag: 'Query',
-											sql: "update bolt_integration_outbox set status = 'failed', last_status = $2, last_error = $3, updated_at = now() where sequence = $1",
-											parameters: [settlement.sequence, settlement.status, settlement.reason]
-										}
-						)
-						.pipe(
-							Effect.asVoid,
-							Effect.mapError((error) => ({ message: describeCause(error) }))
-						)
+								: {
+										status: 'failed',
+										last_status: settlement.status,
+										last_error: settlement.reason,
+										updated_at: dbNow()
+									};
+					return executeBuilt(
+						effectId,
+						database,
+						composer
+							.update(boltIntegrationOutbox)
+							.set(changes)
+							.where(eq(boltIntegrationOutbox.sequence, settlement.sequence))
+					).pipe(
+						Effect.asVoid,
+						Effect.mapError((error) => ({ message: describeCause(error) }))
+					);
+				}
 			};
 		};
 
@@ -623,11 +720,23 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 			effectId: EffectId,
 			name: string
 		) {
-			const result = yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: `insert into bolt_integrations (name, enabled, cursor, lease_until) values ($1, true, null, now() + interval '${PULL_LEASE}') on conflict (name) do update set lease_until = excluded.lease_until where bolt_integrations.lease_until is null or bolt_integrations.lease_until < now() returning cursor`,
-				parameters: [name]
-			});
+			const leaseUntil = dbNowPlusSeconds(PULL_LEASE_MS / 1000);
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.insert(boltIntegrations)
+					.values({ name, enabled: true, cursor: null, lease_until: leaseUntil })
+					.onConflictDoUpdate({
+						target: boltIntegrations.name,
+						set: { lease_until: leaseUntil },
+						setWhere: or(
+							isNull(boltIntegrations.lease_until),
+							lt(boltIntegrations.lease_until, dbNow())
+						)!
+					})
+					.returning({ cursor: boltIntegrations.cursor })
+			);
 			const row = result.rows[0];
 			if (row === undefined) return null;
 			return yield* Schema.decodeUnknownEffect(PullCursorRow)(row).pipe(
@@ -641,33 +750,20 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 			);
 		});
 
-		/**
-		 * Persists what this run advanced and hands the lease back.
-		 *
-		 * The merge happens in the database — `cursor || $2` — rather than in this process. A run that
-		 * pulled one binding must leave every other binding's cursor exactly as it found it, and a
-		 * client-side `{ ...stored, ...advanced }` cannot promise that: `stored` is a snapshot from the
-		 * top of the run, so it writes back a stale value for every binding it did not touch.
-		 */
-		const releasePull = (
-			effectId: EffectId,
-			name: string,
-			cursors: Readonly<Record<string, string>>
-		) =>
-			database.execute(effectId, {
-				_tag: 'Query',
-				sql: "update bolt_integrations set cursor = coalesce(cursor, '{}'::jsonb) || $2::jsonb, lease_until = null, updated_at = now() where name = $1",
-				parameters: [name, cursors]
-			});
-
 		return Service.of({
 			install: Effect.fn('Integrations.install')(function* (effectId, name) {
 				yield* requireIntegration(name);
-				yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'insert into bolt_integrations (name, enabled, cursor) values ($1, true, $2) on conflict (name) do update set enabled = true',
-					parameters: [name, null]
-				});
+				yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.insert(boltIntegrations)
+						.values({ name, enabled: true, cursor: null })
+						.onConflictDoUpdate({
+							target: boltIntegrations.name,
+							set: { enabled: true }
+						})
+				);
 				yield* queue.enqueue(EffectId.make(`${effectId}:pull`), [
 					{
 						command: 'integrations.pull',
@@ -729,7 +825,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				}
 				const overrides = cursorsOf(cursor);
 				const stored = cursorsOf(claim.cursor);
-				const subject = integrationSubject(name);
+				const subject = integrationSubject(name, integration.policies);
 				const bound = dependencies(name, subject);
 				const reports: Array<BindingReport> = [];
 				const failures: Array<{ readonly binding: string; readonly reason: string }> = [];
@@ -752,12 +848,23 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 					}
 					reports.push(outcome.success);
 				}
-				// Only what this run advanced. Everything else is left to the database's own merge, so a
-				// binding this run did not touch keeps whatever the run that did touch it wrote.
+				// Only what this run advanced. Everything else comes from the cursor snapshot acquired with
+				// this run's exclusive lease, so a binding this run did not touch keeps its stored position.
 				const cursors: Record<string, string> = {};
 				for (const report of reports)
 					if (report.cursor !== null) cursors[report.binding] = report.cursor;
-				yield* releasePull(effectId, name, cursors);
+				yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.update(boltIntegrations)
+						.set({
+							cursor: encodedJson({ ...stored, ...cursors }),
+							lease_until: null,
+							updated_at: dbNow()
+						})
+						.where(eq(boltIntegrations.name, name))
+				);
 				return {
 					integration: name,
 					collection: integration.collection,
@@ -811,7 +918,7 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 						message: `${name}.${bindingName} is declared but its authored binding did not reach the runtime`
 					});
 				}
-				const subject = integrationSubject(name);
+				const subject = integrationSubject(name, integration.policies);
 				const report = yield* runWebhookDelivery(
 					webhookDependencies(name, subject),
 					effectId,
@@ -884,14 +991,22 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				 * Read after the drain rather than before it, so it sees what this drain just settled: a
 				 * delivery that succeeded is no longer claimable and does not pull the next wake earlier.
 				 */
-				const pending = yield* database.execute(EffectId.make(`${effectId}:due`), {
-					_tag: 'Query',
-					sql: `select min(next_attempt_at) as due_at from bolt_integration_outbox where integration_name = $1 and ${OUTBOX_CLAIMABLE}`,
-					parameters: [name]
-				});
+				const pending = yield* executeBuilt(
+					EffectId.make(`${effectId}:due`),
+					database,
+					composer
+						.select({ due_at: min(boltIntegrationOutbox.next_attempt_at) })
+						.from(boltIntegrationOutbox)
+						.where(
+							and(
+								eq(boltIntegrationOutbox.integration_name, name),
+								outboxClaimable(dbNowPlusSeconds(-OUTBOX_CLAIM_LEASE_MS / 1000))
+							)
+						)
+				);
 				const dueAt = readDueAt(pending.rows[0]);
 				if (dueAt !== undefined) {
-					const taskId = `flush:${name}@${new Date(dueAt).toISOString()}`;
+					const taskId = `flush:${name}@${instantLabel(dueAt)}`;
 					// Keyed on the instant rather than on this invocation, so two drains that both find the
 					// same next backoff queue one task between them instead of two.
 					yield* queue.enqueue(EffectId.make(`${effectId}:next`), [
@@ -917,11 +1032,14 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				yield* requireIntegration(name);
 				// A reconcile is a full re-read: the cursor is cleared first, so the enqueued pull starts
 				// from the beginning and the idempotent upsert absorbs everything it has already seen.
-				yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'update bolt_integrations set cursor = null where name = $1',
-					parameters: [name]
-				});
+				yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.update(boltIntegrations)
+						.set({ cursor: null })
+						.where(eq(boltIntegrations.name, name))
+				);
 				yield* queue.enqueue(EffectId.make(`${effectId}:pull`), [
 					{
 						command: 'integrations.pull',
@@ -932,19 +1050,26 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 			}),
 			disable: Effect.fn('Integrations.disable')(function* (effectId, name) {
 				yield* requireIntegration(name);
-				yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'update bolt_integrations set enabled = false where name = $1',
-					parameters: [name]
-				});
+				yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.update(boltIntegrations)
+						.set({ enabled: false })
+						.where(eq(boltIntegrations.name, name))
+				);
 			}),
 			status: Effect.fn('Integrations.status')(function* (effectId, name) {
 				yield* requireIntegration(name);
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'select enabled, cursor from bolt_integrations where name = $1',
-					parameters: [name]
-				});
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({ enabled: boltIntegrations.enabled, cursor: boltIntegrations.cursor })
+						.from(boltIntegrations)
+						.where(eq(boltIntegrations.name, name))
+						.limit(1)
+				);
 				const record = Result.getOrElse(
 					Schema.decodeUnknownResult(IntegrationStateRow)(result.rows[0]),
 					() => ({ enabled: false, cursor: null })
@@ -952,21 +1077,46 @@ export const layer: Layer.Layer<Interface, never, LayerServices> = Layer.effect(
 				// The outbound queue's depth, counted rather than assumed. `inflight` counts as pending
 				// because a drain that died mid-batch left rows in it, and reporting those as neither
 				// pending nor failed is how a stuck queue looks empty.
-				const outbox = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: "select count(*) filter (where status in ('pending', 'inflight')) as pending, count(*) filter (where status = 'failed') as failed from bolt_integration_outbox where integration_name = $1",
-					parameters: [name]
-				});
-				const counts = Result.getOrElse(
-					Schema.decodeUnknownResult(IntegrationCountsRow)(outbox.rows[0]),
-					() => ({ pending: 0, failed: 0 })
+				const pendingRows = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({ count: count() })
+						.from(boltIntegrationOutbox)
+						.where(
+							and(
+								eq(boltIntegrationOutbox.integration_name, name),
+								inArray(boltIntegrationOutbox.status, ['pending', 'inflight'])
+							)
+						)
 				);
+				const failedRows = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({ count: count() })
+						.from(boltIntegrationOutbox)
+						.where(
+							and(
+								eq(boltIntegrationOutbox.integration_name, name),
+								eq(boltIntegrationOutbox.status, 'failed')
+							)
+						)
+				);
+				const pending = Result.getOrElse(
+					Schema.decodeUnknownResult(IntegrationCountRow)(pendingRows.rows[0]),
+					() => ({ count: 0 })
+				).count;
+				const failed = Result.getOrElse(
+					Schema.decodeUnknownResult(IntegrationCountRow)(failedRows.rows[0]),
+					() => ({ count: 0 })
+				).count;
 				return {
 					name,
 					enabled: record.enabled,
 					cursor: record.cursor,
-					pending: counts.pending,
-					failed: counts.failed
+					pending,
+					failed
 				};
 			})
 		});

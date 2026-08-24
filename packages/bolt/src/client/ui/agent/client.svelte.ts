@@ -2,6 +2,7 @@ import { Effect, Schema } from 'effect';
 import { getContext, setContext } from 'svelte';
 import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
+import type { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
 import {
 	createAgentModelController,
 	type AgentModelController,
@@ -15,6 +16,7 @@ type InteractiveAgentStartInput = {
 	readonly intent?: 'do' | 'plan';
 	readonly verifierPrompt?: string;
 	readonly model?: string;
+	readonly documents?: ReadonlyArray<ChatDocumentRef>;
 	readonly mentions?: readonly {
 		readonly collection: string;
 		readonly recordId: string;
@@ -87,33 +89,40 @@ const AGENT_CLIENT_CONTEXT = Symbol('norbital.agent-client');
 
 function startInteractiveAgent(
 	active: AgentRuntimeConfig,
-	input: InteractiveAgentStartInput
+	input: InteractiveAgentStartInput,
+	randomId: () => string = () => globalThis.crypto.randomUUID()
 ): Effect.Effect<AgentChatStartResult, AgentClientFailure> {
-	const conversationId = input.runId ?? crypto.randomUUID();
-	return Effect.gen(function* () {
-		yield* agentRequest(
+	const conversationId = input.runId ?? randomId();
+	return Effect.map(
+		agentRequest(
 			'start',
 			active.client.system.agents.start({
 				agent: active.agentName,
 				conversationId
 			})
-		);
-		Effect.runFork(
-			agentRequest(
-				'turn',
-				active.client.system.agents.turn({
-					agent: active.agentName,
-					conversationId,
-					message: input.message
-				})
-			).pipe(
-				Effect.catch((failure) =>
-					Effect.logError('Agent turn transport failed after the conversation was started', failure)
+		),
+		() => {
+			Effect.runFork(
+				agentRequest(
+					'turn',
+					active.client.system.agents.turn({
+						agent: active.agentName,
+						conversationId,
+						message: input.message,
+						documents: input.documents ?? []
+					})
+				).pipe(
+					Effect.catch((failure) =>
+						Effect.logError(
+							'Agent turn transport failed after the conversation was started',
+							failure
+						)
+					)
 				)
-			)
-		);
-		return { runId: conversationId, chatId: conversationId };
-	});
+			);
+			return { runId: conversationId, chatId: conversationId };
+		}
+	);
 }
 
 function updateAgentVerifier(
@@ -123,16 +132,13 @@ function updateAgentVerifier(
 		readonly prompt: string;
 	}
 ): Effect.Effect<{ readonly accepted: true }, AgentClientFailure> {
-	return Effect.gen(function* () {
-		yield* agentRequest(
-			'updateVerifier',
-			active.client.system.agents.updateVerifier({
-				conversationId: input.runId,
-				verifier: { prompt: input.prompt }
-			})
-		);
-		return { accepted: true };
-	});
+	return agentRequest(
+		'updateVerifier',
+		active.client.system.agents.updateVerifier({
+			conversationId: input.runId,
+			verifier: { prompt: input.prompt }
+		})
+	).pipe(Effect.as({ accepted: true } as const));
 }
 
 /** Builds one mounted workspace's agent state and actions. */

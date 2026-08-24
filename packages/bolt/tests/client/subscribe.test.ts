@@ -39,6 +39,16 @@ const declareSession = (): void => {
 			remove: async () => undefined,
 			urlFor: (key: string) => key
 		},
+		chatDocuments: {
+			store: async (_conversation, key, file) => ({
+				storage_key: key,
+				file_name: file.name,
+				file_size: file.size,
+				mime_type: file.type || 'application/octet-stream'
+			}),
+			remove: async () => undefined,
+			urlFor: (_conversation, key) => key
+		},
 		operations: { read: async () => null, run: async () => null }
 	});
 };

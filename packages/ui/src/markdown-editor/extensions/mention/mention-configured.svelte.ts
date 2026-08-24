@@ -425,53 +425,24 @@ export const ConfiguredMention = Mention.extend<ExtendedMentionOptions>({
 	},
 
 	addKeyboardShortcuts() {
+		/**
+		 * Backspace and Delete do the same thing to the mention on either side of the cursor:
+		 * announce which one is going, then remove the whole node rather than a character of it.
+		 */
+		const deleteAdjacentMention = (side: 'before' | 'after'): boolean => {
+			const { $from: from } = this.editor.state.selection;
+			const adjacent = side === 'before' ? from.nodeBefore : from.nodeAfter;
+			if (!adjacent || adjacent.type.name !== this.name) return false;
+
+			const mentionId = adjacent.attrs.id;
+			if (this.options.onMentionDelete && mentionId) this.options.onMentionDelete(mentionId);
+
+			return this.editor.commands.deleteNode(this.name);
+		};
+
 		return {
-			Backspace: () => {
-				const { state } = this.editor;
-				const { selection } = state;
-				const { $from: from } = selection;
-
-				// Check if cursor is right after a mention
-				const nodeBeforeCursor = from.nodeBefore;
-				if (nodeBeforeCursor && nodeBeforeCursor.type.name === this.name) {
-					// Get the mention's ID
-					const mentionId = nodeBeforeCursor.attrs.id;
-
-					// Call the onDelete callback
-					const opts = this.options;
-					if (opts.onMentionDelete && mentionId) {
-						opts.onMentionDelete(mentionId);
-					}
-
-					// Delete the node
-					return this.editor.commands.deleteNode(this.name);
-				}
-
-				return false;
-			},
-			Delete: () => {
-				const { state } = this.editor;
-				const { selection } = state;
-				const { $from: from } = selection;
-
-				// Check if cursor is right before a mention
-				const nodeAfterCursor = from.nodeAfter;
-				if (nodeAfterCursor && nodeAfterCursor.type.name === this.name) {
-					// Get the mention's ID
-					const mentionId = nodeAfterCursor.attrs.id;
-
-					// Call the onDelete callback
-					const opts = this.options;
-					if (opts.onMentionDelete && mentionId) {
-						opts.onMentionDelete(mentionId);
-					}
-
-					// Delete the node
-					return this.editor.commands.deleteNode(this.name);
-				}
-
-				return false;
-			}
+			Backspace: () => deleteAdjacentMention('before'),
+			Delete: () => deleteAdjacentMention('after')
 		};
 	}
 });

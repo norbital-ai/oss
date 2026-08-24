@@ -127,3 +127,22 @@ test('reads `any` in a doc comment as prose rather than a degraded type', () => 
 	);
 	assert.equal(runBuild(packageRoot, [process.execPath, emitter, '{}']).status, 0);
 });
+
+test('accepts `any` as a declared property name while still rejecting the any type', () => {
+	const valid = scaffoldPackage(
+		{ name: 'probe' },
+		{
+			'index.d.ts':
+				'export interface MatcherSet { any: ReadonlyArray<string>; }\nexport declare const set: MatcherSet;\n'
+		}
+	);
+	assert.equal(runBuild(valid.packageRoot, [process.execPath, valid.emitter, '{}']).status, 0);
+
+	const invalid = scaffoldPackage(
+		{ name: 'probe' },
+		{ 'index.d.ts': 'export interface MatcherSet { any: ReadonlyArray<any>; }\n' }
+	);
+	const failed = runBuild(invalid.packageRoot, [process.execPath, invalid.emitter, '{}']);
+	assert.equal(failed.status, 1);
+	assert.match(failed.output, /index\.d\.ts:1/);
+});

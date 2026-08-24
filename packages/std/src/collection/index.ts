@@ -29,8 +29,6 @@ export interface RemoteQuery<T> extends PromiseLike<T> {
 	readonly current: T | undefined;
 	readonly loading: boolean;
 	readonly error: Error | undefined;
-	// repository-health:allow EFF2 -- Generated browser query refresh is intentionally Promise-shaped at the public client boundary.
-	refresh(): Promise<void>;
 }
 
 export interface CollectionPage<TRow extends object = CollectionRecord> {
@@ -83,6 +81,8 @@ export interface CollectionField<TName extends string = string> {
 	readonly array?: boolean;
 	readonly readOnly?: boolean;
 	readonly values?: readonly string[] | undefined;
+	/** How precisely an instant range is picked: calendar days, or date-times. */
+	readonly precision?: 'day' | 'minute' | undefined;
 	readonly options?: Readonly<Record<string, unknown>>;
 	readonly currencies?: readonly string[];
 	readonly mimeTypes?: readonly string[];
@@ -263,6 +263,12 @@ export interface CollectionOperations<TCollection extends CollectionType<object,
 export interface CollectionApprovalRequest {
 	readonly id: string;
 	readonly status: string;
+	/** Whether this principal may decide the request's current step. */
+	readonly canDecide: boolean;
+	/** Whether this principal may explicitly finish every remaining step. */
+	readonly canSupersede: boolean;
+	/** Whether this principal is the requestor and may withdraw the open request. */
+	readonly canWithdraw: boolean;
 }
 
 export interface CollectionApprovalOperations {
@@ -271,7 +277,7 @@ export interface CollectionApprovalOperations {
 	) => RemoteQuery<readonly CollectionApprovalRequest[]>;
 	readonly process: (input: {
 		readonly approvalRequestId: string;
-		readonly action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE';
+		readonly action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE' | 'SUPERSEDED';
 		readonly comments?: string;
 		// repository-health:allow EFF2 -- Generated browser approval actions intentionally expose completion as Promise<void> at the public client boundary.
 	}) => Promise<void>;

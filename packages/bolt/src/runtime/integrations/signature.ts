@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { Effect, Result } from 'effect';
 import type { WebhookSignatureSpec } from '#lib/authoring/contracts-schema.js';
 import { WEBHOOK_DEFAULT_TOLERANCE_SECONDS } from '#lib/authoring/workspace-schema.js';
 
@@ -6,21 +6,17 @@ import { WEBHOOK_DEFAULT_TOLERANCE_SECONDS } from '#lib/authoring/workspace-sche
  * Whether a pushed delivery really came from the source, decided before anything reads its body.
  *
  * This module is the whole of the platform's trust in an inbound delivery, so it is deliberately
- * one pure function over bytes: no database, no Effect, no facilities. Everything it needs — the
- * declared scheme, the resolved secret, the raw body, the headers, and the current time — is passed
- * in, which is what makes every branch of it directly testable, including the ones that are supposed
- * to refuse.
+ * one operation over bytes: no database and no facilities. Everything it needs — the declared
+ * scheme, the resolved secret, the raw body, the headers, and the current time — is passed in. Its
+ * Effect exists only because browser WebCrypto is asynchronous, which keeps every branch directly
+ * testable, including the ones that are supposed to refuse.
  *
  * Three properties are load-bearing, and each one is a way this has gone wrong elsewhere.
  *
- * **The digest is compared in constant time.** `timingSafeEqual`, never `===` and never `!==`, on
- * the decoded bytes. A byte-at-a-time comparison leaks where the first difference is, and a signature
- * is exactly the kind of value an attacker can submit a few million guesses at: with an early-exit
- * compare, the time to reject tells them how much of their guess was right, and a digest can be
- * recovered one byte at a time instead of being brute-forced whole. The difference is not
- * theoretical — it is the gap between 2^256 work and 32 × 256 work. No test can observe this
- * reliably, so `signature.test.ts` asserts it structurally: it reads this file and fails if a
- * comparison operator is applied to a digest.
+ * **The digest is compared in constant time.** WebCrypto's native HMAC verification checks the
+ * presented bytes, never `===` and never `!==` in JavaScript. A byte-at-a-time early exit leaks where
+ * the first difference is, and a signature is exactly the kind of value an attacker can submit a
+ * few million guesses at: the time to reject tells them how much of their guess was right.
  *
  * **The digest is taken over the raw body.** `body` is the bytes as they arrived, not a
  * re-serialisation of parsed JSON. `JSON.stringify(JSON.parse(x))` is not `x` — key order,
@@ -100,14 +96,64 @@ const decodeSignature = (value: string, encoding: 'hex' | 'base64'): Uint8Array 
 	if (trimmed === '') return undefined;
 	if (encoding === 'hex') {
 		if (!/^[0-9a-fA-F]+$/u.test(trimmed) || trimmed.length % 2 !== 0) return undefined;
-		return Uint8Array.from(Buffer.from(trimmed, 'hex'));
+		const decoded = new Uint8Array(trimmed.length / 2);
+		for (let index = 0; index < decoded.length; index += 1) {
+			decoded[index] = Number.parseInt(trimmed.slice(index * 2, index * 2 + 2), 16);
+		}
+		return decoded;
 	}
 	if (!/^[A-Za-z0-9+/]+={0,2}$/u.test(trimmed)) return undefined;
-	const decoded = Buffer.from(trimmed, 'base64');
-	return decoded.toString('base64').replace(/=+$/u, '') === trimmed.replace(/=+$/u, '')
-		? Uint8Array.from(decoded)
+	// `atob` refuses a length no base64 string can have, and that refusal is one of the answers this
+	// function exists to give rather than an exception to swallow — so it goes through Effect's error
+	// channel and comes back as a `Result` this reads like any other branch.
+	const decoded = Effect.runSync(
+		Effect.result(
+			Effect.try(() => Uint8Array.from(atob(trimmed), (character) => character.charCodeAt(0)))
+		)
+	);
+	if (Result.isFailure(decoded)) return undefined;
+	let binary = '';
+	for (const byte of decoded.success) binary += String.fromCharCode(byte);
+	return btoa(binary).replace(/=+$/u, '') === trimmed.replace(/=+$/u, '')
+		? decoded.success
 		: undefined;
 };
+
+/** HMAC digest and native verification through the API shared by browsers, Node and sandboxes. */
+const hmacProof = Effect.fn('Integrations.hmacProof')(function* (
+	algorithm: 'sha256' | 'sha512',
+	secret: string,
+	payload: string,
+	provided: Uint8Array
+) {
+	const hash = algorithm === 'sha512' ? 'SHA-512' : 'SHA-256';
+	const encoder = new TextEncoder();
+	const payloadBytes = encoder.encode(payload);
+	const key = yield* Effect.promise(() =>
+		globalThis.crypto.subtle.importKey(
+			'raw',
+			encoder.encode(secret),
+			{ name: 'HMAC', hash },
+			false,
+			['sign', 'verify']
+		)
+	);
+	const digest = yield* Effect.promise(() =>
+		globalThis.crypto.subtle.sign('HMAC', key, payloadBytes)
+	);
+	// Copy onto a concrete ArrayBuffer. A caller's Uint8Array may legally be backed by a
+	// SharedArrayBuffer, while WebCrypto accepts only BufferSource over ArrayBuffer.
+	const signatureBytes = new Uint8Array(provided.length);
+	signatureBytes.set(provided);
+	const matches = yield* Effect.promise(() =>
+		globalThis.crypto.subtle.verify('HMAC', key, signatureBytes, payloadBytes)
+	);
+	return { expected: new Uint8Array(digest), matches };
+});
+
+/** Lowercase hexadecimal, used for the verified digest's stable delivery key. */
+const hex = (bytes: Uint8Array): string =>
+	[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
 /** Seconds since the epoch, from the two forms sources actually send. */
 const timestampMs = (value: string): number | undefined => {
@@ -139,12 +185,12 @@ type Delivery = Readonly<{
  * Every refusal returns a reason rather than throwing, because refusing is a normal outcome here
  * rather than an exceptional one, and the caller records it.
  */
-export const verifyDelivery = (
+export const verifyDelivery = Effect.fn('Integrations.verifyDelivery')(function* (
 	signature: WebhookSignatureSpec,
 	secret: string,
 	delivery: Delivery,
 	nowMs: number
-): SignatureOutcome => {
+) {
 	// A secret the vault answered with but which is empty verifies everything against an empty key.
 	// That is worse than having no secret at all, because the route looks configured.
 	if (secret === '') {
@@ -191,20 +237,19 @@ export const verifyDelivery = (
 	const signedPayload = (signature.signedPayload ?? '{body}')
 		.replaceAll('{timestamp}', stamp ?? '')
 		.replaceAll('{body}', delivery.body);
-	const expected = Uint8Array.from(
-		createHmac(algorithm, secret).update(signedPayload, 'utf8').digest()
-	);
+	const proof = yield* hmacProof(algorithm, secret, signedPayload, provided);
+	const expected = proof.expected;
 
-	// Length first, because `timingSafeEqual` throws on operands of different lengths. This leaks
-	// nothing: a digest's length is fixed by its algorithm and is therefore already public.
+	// Length first. This leaks nothing: a digest's length is fixed by its algorithm and is therefore
+	// already public.
 	if (provided.length !== expected.length) {
 		return refuse(
 			`the ${signature.header} signature is ${provided.length} bytes where ${algorithm} produces ${expected.length}`
 		);
 	}
-	// Constant time, on purpose. See this module's header: an early-exit comparison turns recovering a
-	// digest from a brute-force search into a byte-at-a-time one.
-	if (!timingSafeEqual(provided, expected)) {
+	// Native HMAC verification, on purpose. See this module's header: a JavaScript early-exit
+	// comparison turns recovering a digest from a brute-force search into a byte-at-a-time one.
+	if (!proof.matches) {
 		return refuse(
 			`the ${signature.header} signature does not match the body under the declared secret`
 		);
@@ -213,8 +258,8 @@ export const verifyDelivery = (
 	if (signature.timestamp === undefined || stamp === undefined) {
 		return {
 			verified: true,
-			proof: { digest: Buffer.from(expected).toString('hex'), replayChecked: false }
-		};
+			proof: { digest: hex(expected), replayChecked: false }
+		} satisfies SignatureOutcome;
 	}
 	const sentMs = timestampMs(stamp);
 	if (sentMs === undefined) {
@@ -232,6 +277,6 @@ export const verifyDelivery = (
 	}
 	return {
 		verified: true,
-		proof: { digest: Buffer.from(expected).toString('hex'), replayChecked: true }
-	};
-};
+		proof: { digest: hex(expected), replayChecked: true }
+	} satisfies SignatureOutcome;
+});

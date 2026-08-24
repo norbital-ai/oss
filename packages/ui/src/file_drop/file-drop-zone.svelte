@@ -221,8 +221,8 @@
 		>
 			{#if !hasFiles}
 				<div class={cn('flex h-full items-center justify-center', isCompact ? 'p-3' : 'p-6')}>
-					<div class="text-center">
-						<Icon icon="lucide:upload" class="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+					<Stack gap="sm" align="center" class="text-center">
+						<Icon icon="lucide:upload" class="h-8 w-8 text-muted-foreground" />
 						<div class="text-sm font-medium text-muted-foreground">
 							{canUpload ? t('misc.dropFilesHere') : t('misc.maximumFilesReached')}
 						</div>
@@ -244,7 +244,7 @@
 								{/if}
 							</div>
 						{/if}
-					</div>
+					</Stack>
 				</div>
 			{:else}
 				<Stack gap="none" fill>
@@ -260,10 +260,12 @@
 									e.stopPropagation();
 									document.getElementById(id!)?.click();
 								}}
-								class="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-brand hover:bg-brand-100 focus:ring-2 focus:ring-brand focus:ring-offset-1 focus:outline-none"
+								class="rounded px-2 py-1 text-xs font-medium text-brand hover:bg-brand-100 focus:ring-2 focus:ring-brand focus:ring-offset-1 focus:outline-none"
 							>
-								<Icon icon="lucide:plus" class="h-3 w-3" />
-								{t('common.add')}
+								<Inline gap="xs">
+									<Icon icon="lucide:plus" class="h-3 w-3" />
+									{t('common.add')}
+								</Inline>
 							</button>
 						{/if}
 					</Inline>

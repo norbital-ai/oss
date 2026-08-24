@@ -26,7 +26,7 @@
 	<Collapsible.Trigger class={cn('flex w-full place-items-center items-center gap-1', className)}>
 		{@render content?.({ open: open ?? false })}
 	</Collapsible.Trigger>
-	<Collapsible.Content class="ml-3.75 border-l">
+	<Collapsible.Content class="ms-3.75 border-s">
 		<Inline align="start" gap="none" class="relative">
 			<div class="mx-2 h-full w-[1px] shrink-0 bg-border"></div>
 			<Stack gap="none" grow>

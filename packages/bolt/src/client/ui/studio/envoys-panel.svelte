@@ -1,6 +1,6 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import Icon from '@iconify/svelte';
-	import { Button } from '@norbital-ai/ui/button';
 	import { Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { ProductIcon } from '@norbital-ai/ui/product-icon';
 	import { FEATURE_COLOR_STYLES } from '@norbital-ai/ui/feature-colors';
@@ -44,9 +44,13 @@
 		onopenSource?: ((path: string) => void) | undefined;
 	} = $props();
 	const agentStyles = $derived(FEATURE_COLOR_STYLES.agents);
+	let browserReady = $state(false);
+	onMount(() => {
+		browserReady = true;
+	});
 
 	const connectionQueries = $derived(
-		typeof window !== 'undefined'
+		browserReady
 			? envoys.map((envoy) => ({
 					name: envoy.name,
 					query: system.envoys.status({ envoy: envoy.name })
@@ -55,11 +59,9 @@
 	);
 	const connectionQuery = (envoy: string) =>
 		connectionQueries.find(({ name }) => name === envoy)?.query;
-	const connectionsPending = $derived(connectionQueries.some(({ query }) => query.loading));
 
-	// The read is the browser's: server rendering must not issue a Bolt command, and a reader who
-	// opens Envoys has already asked the question the read answers. The capability check expresses
-	// that boundary directly without publishing mount lifecycle as application state.
+	// The read starts at the browser lifecycle boundary: server rendering must not issue a Bolt
+	// command, and a reader who opens Envoys has already asked the question the read answers.
 </script>
 
 {#snippet sectionHeading(label: string, count: number)}
@@ -125,19 +127,6 @@
 		{:else}
 			<Inline gap="sm" align="center" class="min-h-7">
 				{@render sectionHeading('Declared', envoys.length)}
-				<Button
-					type="button"
-					size="sm"
-					variant="ghost"
-					class="ml-auto h-6 shrink-0 gap-1 px-2 text-micro"
-					disabled={connectionsPending}
-					onclick={() => {
-						for (const { query } of connectionQueries) void query.refresh();
-					}}
-				>
-					<Icon icon="lucide:refresh-cw" class="size-3" />
-					Re-read status
-				</Button>
 			</Inline>
 			<Stack gap="sm">
 				{#each envoys as envoy (envoy.name)}
@@ -186,11 +175,13 @@
 							{#if envoy.sourcePath !== undefined}
 								<button
 									type="button"
-									class="ml-auto flex shrink-0 items-center gap-1 text-micro text-brand hover:underline"
+									class="ml-auto shrink-0 text-micro text-brand hover:underline"
 									onclick={() => onopenSource?.(envoy.sourcePath ?? '')}
 								>
-									<Icon icon="lucide:arrow-right-circle" class="size-3" />
-									View source
+									<Inline as="span" gap="xs">
+										<Icon icon="lucide:arrow-right-circle" class="size-3" />
+										View source
+									</Inline>
 								</button>
 							{/if}
 						</Inline>
@@ -226,11 +217,13 @@
 							</Stack>
 							<button
 								type="button"
-								class="flex shrink-0 items-center gap-1 text-micro text-brand hover:underline"
+								class="shrink-0 text-micro text-brand hover:underline"
 								onclick={() => onopenSource?.(tool.sourcePath)}
 							>
-								<Icon icon="lucide:arrow-right-circle" class="size-3" />
-								View source
+								<Inline as="span" gap="xs">
+									<Icon icon="lucide:arrow-right-circle" class="size-3" />
+									View source
+								</Inline>
 							</button>
 						</Inline>
 					{/each}

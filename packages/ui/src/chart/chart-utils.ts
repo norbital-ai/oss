@@ -83,11 +83,14 @@ export function getPayloadConfigFromPayload(
 		configLabelKey = payload.key;
 	} else if (payload.label === key) {
 		configLabelKey = payload.label;
-	} else if (key in payload && typeof payload[key as keyof typeof payload] === 'string') {
-		configLabelKey = payload[key as keyof typeof payload] as string;
+	} else {
+		const payloadValue = Reflect.get(payload, key);
+		if (typeof payloadValue === 'string') configLabelKey = payloadValue;
 	}
 
-	return configLabelKey in config ? config[configLabelKey] : config[key as keyof typeof config];
+	return Object.hasOwn(config, configLabelKey)
+		? config[configLabelKey]
+		: config[key as keyof typeof config];
 }
 
 type ChartContextValue = {

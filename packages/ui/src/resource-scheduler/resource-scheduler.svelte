@@ -14,6 +14,7 @@
 		ResourceSchedulerCell,
 		ResourceSchedulerCollision,
 		ResourceSchedulerItem,
+		ResourceSchedulerPlacement,
 		ResourceSchedulerProps,
 		ResourceSchedulerResource
 	} from './resource-scheduler.types.js';
@@ -136,12 +137,7 @@
 	}
 
 	function collision(
-		change: {
-			readonly itemId?: string;
-			readonly resourceId: string;
-			readonly start: string;
-			readonly end: string;
-		},
+		change: ResourceSchedulerPlacement,
 		kind: ResourceSchedulerCollision['kind']
 	): boolean {
 		const start = new Date(change.start).getTime();
@@ -344,12 +340,13 @@
 			{#each virtualRows as virtualRow (virtualRow.key)}
 				{@const resource = resources[virtualRow.index]}
 				{#if resource}
-					{@const resourceItems = itemsByResource.get(resource.id) ?? []}
+					{@const { id: resourceId } = resource}
+					{@const resourceItems = itemsByResource.get(resourceId) ?? []}
 					{@const selectedCount = resourceItems.filter((item) => selected.has(item.id)).length}
 					<div
 						class="absolute left-0 border-b"
 						style={`top:${virtualRow.start}px;height:${rowHeight}px;width:${totalWidth}px`}
-						data-resource-id={resource.id}
+						data-resource-id={resourceId}
 						role="presentation"
 						onpointerdown={(event) => beginCreate(event, resource.id)}
 						onpointermove={updateCreate}
@@ -421,6 +418,7 @@
 										<div class="min-w-0 overflow-hidden">
 											<Inline gap="xs" class="mt-1">
 												{#each visibleItems as item (item.id)}
+													{@const { id: schedulerItemId } = item}
 													<button
 														type="button"
 														class={cn(
@@ -430,7 +428,7 @@
 																: 'cursor-grab active:cursor-grabbing',
 															selected.has(item.id) && 'ring-2 ring-ring'
 														)}
-														data-scheduler-item={item.id}
+														data-scheduler-item={schedulerItemId}
 														aria-pressed={selected.has(item.id)}
 														aria-disabled={item.editable === false}
 														title={item.lockedReason ?? item.label}
@@ -480,6 +478,7 @@
 									></button>
 								{/each}
 								{#each resourceItems.filter(visible) as item (item.id)}
+									{@const { id: schedulerItemId } = item}
 									{@const position = resourceSchedulerIntervalPosition(
 										item.start,
 										item.end,
@@ -497,7 +496,7 @@
 											selected.has(item.id) && 'ring-2 ring-ring'
 										)}
 										style={`left:${position.left}px;width:${position.width}px`}
-										data-scheduler-item={item.id}
+										data-scheduler-item={schedulerItemId}
 										aria-pressed={selected.has(item.id)}
 										aria-disabled={item.editable === false}
 										title={item.lockedReason}

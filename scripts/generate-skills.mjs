@@ -71,17 +71,19 @@ const validateSkill = ({ frontmatter }, directoryName, filePath) => {
 };
 
 /** Validate and return the skills delivered directly from the canonical skill tree. */
-export const loadSkills = (skillsRoot = canonicalSkillsRoot) =>
-	readdirSync(skillsRoot, { withFileTypes: true })
-		.filter((entry) => entry.isDirectory())
-		.map(({ name }) => {
-			const filePath = path.join(skillsRoot, name, 'SKILL.md');
-			if (!existsSync(filePath)) fail(`${filePath}: every skill directory requires SKILL.md`);
-			const parsed = parseSkillMarkdown(readFileSync(filePath, 'utf8'), filePath);
-			validateSkill(parsed, name, filePath);
-			return { name, directory: path.join(skillsRoot, name) };
-		})
-		.sort((left, right) => left.name.localeCompare(right.name));
+export const loadSkills = (skillsRoot = canonicalSkillsRoot) => {
+	const skills = [];
+	for (const entry of readdirSync(skillsRoot, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const { name } = entry;
+		const filePath = path.join(skillsRoot, name, 'SKILL.md');
+		if (!existsSync(filePath)) fail(`${filePath}: every skill directory requires SKILL.md`);
+		const parsed = parseSkillMarkdown(readFileSync(filePath, 'utf8'), filePath);
+		validateSkill(parsed, name, filePath);
+		skills.push({ name, directory: path.join(skillsRoot, name) });
+	}
+	return skills.sort((left, right) => left.name.localeCompare(right.name));
+};
 
 const expectedLink = (skillsRoot, linksRoot, name) =>
 	path.relative(linksRoot, path.join(skillsRoot, name)).split(path.sep).join('/');

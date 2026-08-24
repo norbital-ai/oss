@@ -7,6 +7,8 @@ import { ConfigProvider, Effect, Layer, ManagedRuntime, Schema } from 'effect';
 import {
 	EffectId,
 	InvocationId,
+	type AIRequest,
+	type AIResponse,
 	type CommunicationRequest,
 	type CommunicationResponse,
 	type ConnectorRequest,
@@ -15,6 +17,8 @@ import {
 	type DatabaseResponse,
 	type FacilityBinding,
 	type FacilityCall,
+	type FileRequest,
+	type FileResponse,
 	type IdentityHookRequest,
 	type IdentityHookResponse,
 	type TaskRequest,
@@ -33,13 +37,14 @@ import {
 	type WorkspaceDefinition,
 	type WorkspaceMigrationEntry
 } from '../../src/authoring/workspace-schema.js';
+import { policyRuntimeFunctionsFor } from '../../src/authoring/policy-introspection.js';
 import { buildSchemaPlan, collectionIndexName } from '../../src/compiler/schema-plan.js';
 import { planWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
 import {
 	boolean,
 	doublePrecision,
 	jsonb,
-	timestamp,
+	timestamp as pgInstant,
 	uuid as uuidColumn,
 	type AnyPgColumnBuilder
 } from 'drizzle-orm/pg-core';
@@ -77,8 +82,8 @@ const drizzleColumns = (
 						? doublePrecision(name)
 						: field.type === 'boolean'
 							? boolean(name)
-							: field.type === 'datetime'
-								? timestamp(name, { withTimezone: true })
+							: field.type === 'instant'
+								? pgInstant(name, { withTimezone: true, mode: 'string' })
 								: field.type === 'json'
 									? jsonb(name)
 									: authoredText({ search: field.search === true });
@@ -144,6 +149,7 @@ export const provisioningStatements = async (
 
 import * as AccessControl from '../../src/runtime/access/access-control.js';
 import * as Agents from '../../src/runtime/agents/agents.js';
+import * as ChatDocuments from '../../src/runtime/agents/documents.js';
 import * as Automations from '../../src/runtime/automations/automations.js';
 import * as Envoys from '../../src/runtime/envoys/envoys.js';
 import * as Integrations from '../../src/runtime/integrations/integrations.js';
@@ -348,7 +354,6 @@ export type TestWorkspaceInput = Readonly<{
 	readonly collections?: ReadonlyArray<{
 		readonly name: string;
 		readonly fields: Readonly<Record<string, FieldDefinition>>;
-		readonly approvalLock?: boolean;
 		readonly description?: string;
 		readonly icon?: string;
 	}>;
@@ -433,8 +438,10 @@ export const makeBoltTestRuntime = async (
 	 * import and a test builds by hand.
 	 */
 	bindings: {
+		readonly ai?: FacilityBinding<AIRequest, AIResponse>;
 		readonly connector?: FacilityBinding<ConnectorRequest, ConnectorResponse>;
 		readonly communication?: FacilityBinding<CommunicationRequest, CommunicationResponse>;
+		readonly files?: FacilityBinding<FileRequest, FileResponse>;
 		readonly identityHooks?: FacilityBinding<IdentityHookRequest, IdentityHookResponse>;
 		/** Bound when a test wants to observe what the write path announces on the sync topic. */
 		readonly transport?: FacilityBinding<TransportRequest, TransportResponse>;
@@ -508,20 +515,32 @@ export const makeBoltTestRuntime = async (
 
 	const facilities = Layer.mergeAll(
 		Database.layer(database.binding, context),
-		AI.layer(undefined, context),
+		AI.layer(bindings.ai, context),
 		Communication.layer(bindings.communication, context),
 		Connector.layer(bindings.connector, context),
-		Files.layer(undefined, context),
+		Files.layer(bindings.files, context),
 		HostTools.layer(undefined, context),
 		IdentityHooks.layer(bindings.identityHooks, context),
 		Tasks.layer(tasks.binding, context),
 		Transport.layer(bindings.transport, context)
 	);
 	const workspaceLayer = Workspace.layer(provisioned);
-	const authoredLayer = Layer.succeed(
-		AuthoredRuntimeService,
-		bindings.authored ?? emptyAuthoredRuntime
-	);
+	// A compiled tenant runtime carries the live closures captured while its strict policy modules
+	// are described. Mirror that boundary here so a test cannot accidentally serialize the marker
+	// half of a policy and omit the implementation half.
+	const declaredPolicyFunctions = policyRuntimeFunctionsFor(definition.policies);
+	const suppliedAuthored = bindings.authored ?? emptyAuthoredRuntime;
+	const authoredLayer = Layer.succeed(AuthoredRuntimeService, {
+		...suppliedAuthored,
+		policyAuthorizations: {
+			...declaredPolicyFunctions.authorizations,
+			...suppliedAuthored.policyAuthorizations
+		},
+		approvalFlows: {
+			...declaredPolicyFunctions.approvalFlows,
+			...suppliedAuthored.approvalFlows
+		}
+	});
 	const foundation = Layer.provideMerge(
 		Layer.mergeAll(Identity.layer, AccessControl.layer),
 		Layer.merge(workspaceLayer, facilities)
@@ -529,7 +548,8 @@ export const makeBoltTestRuntime = async (
 	// The task queue, over the database facility and the host's timer. Everything that used to enqueue
 	// through the tasks facility — automations, approvals, integrations, agents — writes a `bolt_task`
 	// row through this instead, and wakes the host through the facility bound above.
-	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(facilities));
+	const wake = Layer.provideMerge(SyncWake.layer, facilities);
+	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(facilities, wake)));
 	// The budget an invocation carries. Zero depth, because a test drives the runtime directly rather
 	// than through a task the runtime itself enqueued — which is the only thing that produces a
 	// non-zero one. Provided rather than defaulted so a service that starts consulting it fails here
@@ -553,19 +573,22 @@ export const makeBoltTestRuntime = async (
 	// Collections announces every committed write on the sync topic, so the wake has to be present for
 	// the write path to resolve at all. The harness binds no transport, which is the point: the
 	// announcement is `Effect.ignore`d, so a runtime with nowhere to publish still writes normally.
-	const wake = Layer.provideMerge(SyncWake.layer, facilities);
 	const data = Layer.provideMerge(Approvals.layer, Layer.mergeAll(foundation, taskQueue, wake));
 	const collections = Layer.provideMerge(
 		Collections.layer,
-		Layer.mergeAll(data, authoredLayer, wake, taskQueue, automations)
+		Layer.mergeAll(data, authoredLayer, wake, taskQueue, automations, tenantScope)
 	);
 	// Dispatch resolves authored remotes through this registry, and the registry resolves them
 	// through Collections — so it layers over them, not alongside the facilities. No handlers are
 	// registered: a test that calls one should fail on the missing name, not a missing service.
 	const remotes = Layer.provideMerge(remoteRegistryLayer({}), collections);
+	const chatDocuments = ChatDocuments.layer.pipe(Layer.provide(Layer.mergeAll(facilities, wake)));
 	// Dispatch routes agent commands too, so the service has to be present for the command surface to
 	// typecheck — its AI facility is bound unavailable, so calling one fails rather than pretending.
-	const agents = Layer.provideMerge(Agents.layer, Layer.mergeAll(remotes, taskQueue, budget));
+	const agents = Layer.provideMerge(
+		Agents.layer,
+		Layer.mergeAll(remotes, taskQueue, budget, wake, chatDocuments)
+	);
 	// The rest of the command surface dispatch routes. Their facilities are bound unavailable, so a
 	// test that reaches one fails loudly instead of succeeding against a stub.
 	// Secrets sits under the rest rather than beside it: `Integrations` resolves a connection's
@@ -589,7 +612,17 @@ export const makeBoltTestRuntime = async (
 	);
 	const surfaces = Layer.provideMerge(
 		Layer.mergeAll(Envoys.layer, Integrations.layer, Notifications.layer, WorkspaceSchema.layer),
-		Layer.mergeAll(vault, authoredLayer, budget, taskQueue, automations, rateLimits, tenantScope)
+		Layer.mergeAll(
+			vault,
+			authoredLayer,
+			budget,
+			taskQueue,
+			automations,
+			rateLimits,
+			tenantScope,
+			wake,
+			chatDocuments
+		)
 	);
 	const complete = Layer.provideMerge(
 		Sync.layer,
@@ -609,7 +642,7 @@ export const makeBoltTestRuntime = async (
 	};
 };
 
-/** The admin subject every data test acts as unless it is specifically testing refusal. */
+/** A subject with both explicit `admin` team grants and administrative status. */
 export const adminSubject: Identity.Subject = {
 	userId: 'admin-1',
 	tenantId: TEST_TENANT,
@@ -617,15 +650,8 @@ export const adminSubject: Identity.Subject = {
 	// A person holds policies through their team, never directly. The array is what a *static*
 	// identity carries, and this fixture is a person.
 	policies: [],
-	/**
-	 * What makes the name true, and it was missing.
-	 *
-	 * `isAdministrator` is `subject.admin === true`, read from `user.status` — a status on
-	 * the person. `teamPath: ['admin']` is the roles-era spelling of the same idea and has selected
-	 * nothing since teams replaced roles: no `+teams.ts` maps a team called `admin` to anything, so
-	 * this fixture was an ordinary member wearing an administrator's name. Every case asserting
-	 * "an administrator sees all" through it was asserting that an ordinary member does.
-	 */
+	// Administrative status does not itself grant tenant data. Data access in test workspaces comes
+	// from the explicitly declared `admin` team and its policies above.
 	admin: true
 };
 

@@ -3,9 +3,9 @@ import { Effect } from 'effect';
 import { sql } from 'drizzle-orm';
 import type { AnyPgColumnBuilder } from 'drizzle-orm/pg-core';
 import {
-	date,
 	bytea,
 	defineModel,
+	instant,
 	integer,
 	numeric,
 	reference,
@@ -18,6 +18,7 @@ import type { ModelDeclaration } from '../../src/authoring/models-schema.js';
 import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
 import {
 	compileHostModelSchema,
+	orderGeneratedColumnDependencies,
 	planWorkspaceMigration,
 	type WorkspaceSnapshot
 } from '../../src/compiler/schema-migrations.js';
@@ -94,7 +95,12 @@ describe('schema plan scope', () => {
 					name: collectionName,
 					fields: describeModelColumns(
 						defineModel(
-							{ amount: numeric(), sequence: integer(), effective_on: date(), note: text() },
+							{
+								amount: numeric(),
+								sequence: integer(),
+								effective_on: instant({ precision: 'day' }),
+								note: text()
+							},
 							{ recordLabel: 'note' }
 						).columns
 					)
@@ -126,7 +132,7 @@ describe('schema plan scope', () => {
 
 	it('still renders the foundation every lineage depends on', () => {
 		const ids = planStepIds('component_entries');
-		// The lineage calls `bolt_date` in generated columns and indexes with `gin_trgm_ops`; both
+		// The lineage calls `bolt_instant` in generated columns and indexes with `gin_trgm_ops`; both
 		// come from here, and `bolt:` ids sort before `collection:` ids so they exist first.
 		expect(ids.some((id) => id.startsWith('bolt:extension-'))).toBe(true);
 		expect(ids).toContain('collection:bolt_sync_outbox');
@@ -224,6 +230,49 @@ describe('Bolt Drizzle-driven schema migration', () => {
 		);
 		expect(migration?.statements[0]).toContain('GENERATED ALWAYS AS');
 		expect(migration?.statements[0]).toContain('STORED');
+	});
+
+	it('adds ordinary dependencies before a generated column declared ahead of them', async () => {
+		const previous = await snapshotOf(withColumn({}));
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: withColumn({
+					label: text()
+						.notNull()
+						.generatedAlwaysAs(sql`upper("origin")`),
+					origin: text().notNull().default('human')
+				}),
+				relations: [],
+				previous
+			})
+		);
+		const statements = migration?.statements ?? [];
+		const origin = statements.findIndex((statement) => statement.includes('ADD COLUMN "origin"'));
+		const label = statements.findIndex((statement) => statement.includes('ADD COLUMN "label"'));
+		const labelNotNull = statements.findIndex((statement) =>
+			statement.includes('ALTER COLUMN "label" SET NOT NULL')
+		);
+		expect(origin).toBeGreaterThanOrEqual(0);
+		expect(label).toBeGreaterThan(origin);
+		expect(labelNotNull).toBe(label + 1);
+	});
+
+	it('reorders only add-column slots for the same table', () => {
+		expect(
+			orderGeneratedColumnDependencies([
+				'ALTER TABLE "left" ADD COLUMN "derived" text GENERATED ALWAYS AS ("origin") STORED;',
+				'DROP INDEX "unrelated";',
+				'ALTER TABLE "right" ADD COLUMN "derived" text GENERATED ALWAYS AS ("origin") STORED;',
+				'ALTER TABLE "left" ADD COLUMN "origin" text;',
+				'ALTER TABLE "right" ADD COLUMN "origin" text;'
+			])
+		).toEqual([
+			'ALTER TABLE "left" ADD COLUMN "origin" text;',
+			'DROP INDEX "unrelated";',
+			'ALTER TABLE "right" ADD COLUMN "origin" text;',
+			'ALTER TABLE "left" ADD COLUMN "derived" text GENERATED ALWAYS AS ("origin") STORED;',
+			'ALTER TABLE "right" ADD COLUMN "derived" text GENERATED ALWAYS AS ("origin") STORED;'
+		]);
 	});
 
 	/**

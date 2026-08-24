@@ -9,7 +9,7 @@ import {
 	uuid
 } from 'drizzle-orm/pg-core';
 import { compileModelTables } from './model-introspection.js';
-import { defineModel, text, timestamp, type ModelIndex } from './models-schema.js';
+import { defineModel, instant, text, type ModelIndex } from './models-schema.js';
 import type { TransportIdentity } from '../runtime/envoys/transport-identity.js';
 
 const systemIndex = (column: string): ModelIndex => ({ columns: [column] });
@@ -43,15 +43,29 @@ const approvalRequestModel = defineModel(
 		action: text().notNull(),
 		status: text().notNull(),
 		steps: jsonb().notNull(),
+		/** Folded team names allowed to decide the active step; queryable without inspecting private state. */
+		approver_teams: jsonb()
+			.notNull()
+			.default(sql`'[]'::jsonb`),
+		/** Folded team names allowed to supersede the active flow. */
+		superseder_teams: jsonb()
+			.notNull()
+			.default(sql`'[]'::jsonb`),
 		locked_record_refs: jsonb().notNull(),
 		/** Exact scalar and explicitly included relationship graph the reviewer is deciding on. */
 		proposed_values: jsonb().notNull().default({}),
-		closed_at: timestamp(),
+		closed_at: instant(),
 		closed_by: text()
 	},
 	{
 		history: false,
-		indexes: [systemIndex('collection_name'), systemIndex('record_id'), systemIndex('status')]
+		indexes: [
+			systemIndex('collection_name'),
+			systemIndex('record_id'),
+			systemIndex('status'),
+			{ columns: ['approver_teams'], method: 'gin' },
+			{ columns: ['superseder_teams'], method: 'gin' }
+		]
 	}
 );
 
@@ -173,7 +187,7 @@ const authUserModel = defineModel(
 
 const authSessionModel = defineModel(
 	{
-		expiresAt: timestamp().notNull(),
+		expiresAt: instant().notNull(),
 		token: text().notNull(),
 		ipAddress: text(),
 		userAgent: text(),
@@ -194,8 +208,8 @@ const authAccountModel = defineModel(
 		accessToken: text(),
 		refreshToken: text(),
 		idToken: text(),
-		accessTokenExpiresAt: timestamp(),
-		refreshTokenExpiresAt: timestamp(),
+		accessTokenExpiresAt: instant(),
+		refreshTokenExpiresAt: instant(),
 		scope: text(),
 		password: text()
 	},
@@ -210,7 +224,7 @@ const authVerificationModel = defineModel(
 	{
 		identifier: text().notNull(),
 		value: text().notNull(),
-		expiresAt: timestamp().notNull()
+		expiresAt: instant().notNull()
 	},
 	{ history: false, sync: false, indexes: [systemIndex('identifier')] }
 );
@@ -267,8 +281,8 @@ const scheduleModel = defineModel(
 		command: text().notNull(),
 		crontab: text().notNull(),
 		input: jsonb().notNull(),
-		next_run_at: timestamp().notNull(),
-		last_fired_at: timestamp()
+		next_run_at: instant().notNull(),
+		last_fired_at: instant()
 	},
 	{
 		history: false,
@@ -283,10 +297,14 @@ const taskModel = defineModel(
 		command: text().notNull(),
 		input: jsonb().notNull(),
 		status: text().notNull().default('pending'),
-		run_at: timestamp().notNull().defaultNow(),
+		run_at: instant().notNull().defaultNow(),
 		attempts: integer().notNull().default(0),
 		max_attempts: integer().notNull().default(12),
 		effect_id: text().notNull().unique('bolt_task_effect_id'),
+		/** Latest automation progression; null for tasks that are not automations or have not emitted. */
+		progress: jsonb(),
+		progress_sequence: integer().notNull().default(0),
+		progress_updated_at: instant(),
 		result: jsonb(),
 		error: text()
 	},
@@ -303,6 +321,33 @@ const taskModel = defineModel(
 	}
 );
 
+/**
+ * The safe, sync-visible projection of one private queue row that runs an automation.
+ *
+ * `bolt_task.input` can contain secrets and arbitrary command payloads, so the queue itself must
+ * never replicate. A database trigger owns this projection from the same row instead: task state is
+ * still written once, while clients receive only lifecycle, progress, error and typed result.
+ */
+const automationRunModel = defineModel(
+	{
+		task_id: text().notNull().unique(),
+		name: text().notNull(),
+		status: text().notNull(),
+		attempts: integer().notNull().default(0),
+		max_attempts: integer().notNull().default(12),
+		progress: jsonb(),
+		progress_sequence: integer().notNull().default(0),
+		progress_updated_at: instant(),
+		result: jsonb(),
+		error: text(),
+		next_run_at: instant()
+	},
+	{
+		history: false,
+		indexes: [systemIndex('task_id'), systemIndex('name'), systemIndex('status')]
+	}
+);
+
 const approvalStateModel = defineModel(
 	{
 		request_id: text().notNull().unique(),
@@ -312,25 +357,16 @@ const approvalStateModel = defineModel(
 	{ history: false, sync: false }
 );
 
-const automationRunModel = defineModel(
-	{
-		effect_id: text().notNull().unique(),
-		automation_name: text().notNull(),
-		task_id: text(),
-		state: text().notNull(),
-		input: jsonb().notNull()
-	},
-	{ history: false, sync: false }
-);
-
 const auditModel = defineModel(
 	{
 		sequence: bigserial({ mode: 'number' }).unique(),
 		kind: text().notNull(),
 		subject_id: text().notNull(),
+		/** Query key for approval events; other audit kinds leave it null. */
+		request_id: text(),
 		payload: jsonb().notNull()
 	},
-	{ history: false, sync: false, indexes: [systemIndex('sequence')] }
+	{ history: false, sync: false, indexes: [systemIndex('sequence'), systemIndex('request_id')] }
 );
 
 const envoyRegistrationModel = defineModel(
@@ -358,16 +394,33 @@ const envoyReceiptModel = defineModel(
 const envoyInboundModel = defineModel(
 	{
 		envoy_name: text().notNull(),
-		conversation_id: uuid().notNull(),
-		external_conversation_id: text().notNull(),
+		conversation_id: text().notNull(),
+		transport_conversation_id: text().notNull(),
 		external_message_id: text().notNull(),
 		receipt_key: text().notNull().unique(),
 		sender_external_id: text(),
 		sender_display_name: text(),
-		status: text().notNull(),
-		answered_at: timestamp()
+		sent_at: instant().notNull(),
+		invocation: text().notNull(),
+		text: text().notNull(),
+		attachments: jsonb()
+			.notNull()
+			.default(sql`'[]'::jsonb`),
+		subject: jsonb().notNull(),
+		addressed: boolean().notNull(),
+		status: text().notNull().default('pending'),
+		answered_at: instant()
 	},
-	{ history: false, sync: false }
+	{
+		history: false,
+		sync: false,
+		indexes: [
+			{
+				name: 'bolt_envoy_inbound_pending',
+				columns: ['conversation_id', 'status', 'sent_at']
+			}
+		]
+	}
 );
 
 const integrationModel = defineModel(
@@ -375,7 +428,7 @@ const integrationModel = defineModel(
 		name: text().notNull().unique(),
 		enabled: boolean().notNull().default(true),
 		cursor: jsonb(),
-		lease_until: timestamp()
+		lease_until: instant()
 	},
 	{ history: false, sync: false }
 );
@@ -387,8 +440,8 @@ const integrationInboxModel = defineModel(
 		binding_name: text(),
 		payload: jsonb().notNull(),
 		status: text().notNull().default('pending'),
-		processed_at: timestamp(),
-		received_at: timestamp().notNull().defaultNow()
+		processed_at: instant(),
+		received_at: instant().notNull().defaultNow()
 	},
 	{
 		history: false,
@@ -415,10 +468,10 @@ const integrationOutboxModel = defineModel(
 		payload: jsonb(),
 		status: text().notNull().default('pending'),
 		attempts: integer().notNull().default(0),
-		next_attempt_at: timestamp().notNull().defaultNow(),
+		next_attempt_at: instant().notNull().defaultNow(),
 		last_status: integer(),
 		last_error: text(),
-		delivered_at: timestamp()
+		delivered_at: instant()
 	},
 	{
 		history: false,
@@ -442,10 +495,12 @@ const conversationModel = defineModel(
 		parent_id: text(),
 		agent_name: text().notNull(),
 		user_id: text().notNull(),
+		sandbox_key: text().notNull(),
 		title: text(),
 		verifier: jsonb(),
 		visibility: text().notNull().default('personal'),
 		envoy_key: text(),
+		drain_lease_until: instant(),
 		usage_cost_usd: doublePrecision().notNull().default(0),
 		usage_cost_micro_units: bigint({ mode: 'number' }).notNull().default(0),
 		usage_cost_currency: text(),
@@ -456,6 +511,32 @@ const conversationModel = defineModel(
 	{
 		history: false,
 		indexes: [systemIndex('envoy_key'), systemIndex('parent_id')]
+	}
+);
+
+/**
+ * One document owned by one chat session.
+ *
+ * The object-store key is deliberately not the authority. Every chat upload, whichever surface it
+ * arrived through, creates one of these rows and every chat read resolves the key through it. That
+ * keeps the workbench a place for delegated agent sessions rather than a shared document namespace.
+ */
+const chatDocumentModel = defineModel(
+	{
+		conversation_id: text().notNull(),
+		storage_key: text().notNull().unique(),
+		file_name: text().notNull(),
+		file_size: integer().notNull(),
+		mime_type: text().notNull(),
+		source: text().notNull(),
+		message_id: text(),
+		provider: text(),
+		provider_attachment_id: text(),
+		sender_id: text()
+	},
+	{
+		history: false,
+		indexes: [systemIndex('conversation_id')]
 	}
 );
 
@@ -530,7 +611,7 @@ const notificationModel = defineModel(
 		recipient: text().notNull(),
 		payload: jsonb().notNull(),
 		read: boolean().notNull().default(false),
-		delivered_at: timestamp()
+		delivered_at: instant()
 	},
 	{ history: false, indexes: [systemIndex('recipient')] }
 );
@@ -538,7 +619,7 @@ const notificationModel = defineModel(
 const schemaStateModel = defineModel(
 	{
 		fingerprint: text().notNull(),
-		applied_at: timestamp().notNull().defaultNow()
+		applied_at: instant().notNull().defaultNow()
 	},
 	{ history: false, sync: false }
 );
@@ -634,12 +715,13 @@ export const SYSTEM_COLLECTION_MODELS = Object.freeze({
 	team: teamModel,
 	chat_session: conversationModel,
 	chat_message: agentMessageModel,
+	chat_document: chatDocumentModel,
+	automation_run: automationRunModel,
 	bolt_notifications: notificationModel
 });
 
 export const INTERNAL_SYSTEM_MODELS = Object.freeze({
 	bolt_approvals: approvalStateModel,
-	bolt_automation_runs: automationRunModel,
 	bolt_audit: auditModel,
 	bolt_envoy_registrations: envoyRegistrationModel,
 	bolt_envoy_receipts: envoyReceiptModel,

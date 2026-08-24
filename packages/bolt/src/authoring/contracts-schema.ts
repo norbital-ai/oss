@@ -9,6 +9,7 @@ import type {
 	ReferenceTargets
 } from './models-schema.js';
 import type { RateLimitKey, RateLimitRule, RateLimitRules } from './rate-limits-schema.js';
+import type { ApprovalFlow } from './approval-flow.js';
 // Type-only, and therefore erased: `workspace-schema.ts` already imports `EnvoyDefinition` from
 // here, so a value import in this direction would be a real cycle.
 import type { HttpConnection, PrivateEnvReference } from './workspace-schema.js';
@@ -221,9 +222,6 @@ type SchemaReferenceFilter<Value> = {
 	readonly isNull?: boolean;
 	readonly isNotNull?: boolean;
 };
-export interface SchemaRawOperators {
-	readonly sql: (strings: TemplateStringsArray, ...values: ReadonlyArray<unknown>) => unknown;
-}
 type SchemaWhere<Row extends object, References extends object = Readonly<Record<never, never>>> = {
 	readonly [K in keyof Row]?: K extends keyof References
 		? SchemaReferenceFilter<Row[K]>
@@ -232,10 +230,6 @@ type SchemaWhere<Row extends object, References extends object = Readonly<Record
 	readonly AND?: ReadonlyArray<SchemaWhere<Row, References>>;
 	readonly OR?: ReadonlyArray<SchemaWhere<Row, References>>;
 	readonly NOT?: SchemaWhere<Row, References>;
-	readonly RAW?: (
-		table: Readonly<Record<keyof Row, unknown>>,
-		operators: SchemaRawOperators
-	) => unknown;
 	readonly $sql?: string;
 };
 export interface SchemaQueryConfig<S extends AnySchema, N extends TableName<S>> {
@@ -415,11 +409,20 @@ interface ApprovalRequestQuery {
  * the whole description of the file, so pass `record.photo`, not an id off it — and the runtime
  * reads the object it names, inlines the bytes on the turn, and refuses a non-image, more than
  * eight of them, or more than 20 MiB in total rather than dropping any silently.
+ *
+ * `webSearch` is provider-neutral on purpose. An author can bound result count and sources without
+ * naming the host's gateway or its server-tool dialect; the host adapter owns that translation.
  */
 interface StructuredInferenceInput<Output> {
 	readonly schema: Schema.Schema<Output>;
 	readonly prompt: string;
 	readonly model?: string;
+	readonly webSearch?: Readonly<{
+		/** Maximum results returned by each search call. */
+		readonly maxResults: number;
+		/** Optional allow-list of domains the provider may search. */
+		readonly allowedDomains?: ReadonlyArray<string>;
+	}>;
 	readonly images?: ReadonlyArray<{
 		readonly file: FileRef;
 		readonly detail?: 'auto' | 'low' | 'high';
@@ -441,10 +444,11 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 		};
 	};
 	/**
-	 * The third door: run a declared automation from code, in the background, with retry.
+	 * Manually run a declared automation from code, in the background, with retry.
 	 *
-	 * The other two are `defineAutomation({ schedule })` — run this on a clock — and
-	 * `defineAutomation({ trigger })` — run this when a record changes. This is the one an author
+	 * Every automation has this manual entry point. `defineAutomation({ schedule })` additionally
+	 * starts it on a clock, `defineAutomation({ trigger })` additionally starts it when a record
+	 * changes, and `defineAutomation({})` has no automatic start. This is the entry point an author
 	 * previously had no way to say, and the alternatives were both bad: a hook must either fail the
 	 * user's write or swallow the error, and a change trigger is lost if it throws.
 	 *
@@ -638,18 +642,22 @@ type CreateBefore<S extends AnySchema, N extends TableName<S>, Prepared> = (cont
 	readonly prepared: Prepared;
 	readonly api: HookApi<S>;
 }) => Effect.Effect<CreateGraph<S, N>, unknown, never> | CreateGraph<S, N>;
-type CreateAfter<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
+type CreateAfter<S extends AnySchema, N extends TableName<S>> = (context: {
 	readonly record: SchemaRow<S, N>;
-	/**
-	 * The same value `prepare` returned for this batch.
-	 *
-	 * Read *before* the write, which is the one thing to know about it here: it is reference data
-	 * this batch needed, not a view of the world after the commit. An `after` hook that needs the
-	 * post-commit truth reads for it.
-	 */
-	readonly prepared: Prepared;
 	readonly api: AfterHookApi<S>;
 }) => Effect.Effect<void, unknown, never> | void;
+type UpdateAfterContext<S extends AnySchema, N extends TableName<S>> = Readonly<{
+	/** The stored row immediately before this update. */
+	readonly previous: SchemaRow<S, N>;
+	/** The prepared patch that was committed, including values derived by `update.before`. */
+	readonly changes: MutationUpdateFor<S, N>;
+	/** The exact row committed by this update. */
+	readonly record: SchemaRow<S, N>;
+	readonly api: AfterHookApi<S>;
+}>;
+type UpdateAfter<S extends AnySchema, N extends TableName<S>> = (
+	context: UpdateAfterContext<S, N>
+) => Effect.Effect<void, unknown, never> | void;
 
 /**
  * The reads a whole batch needs, done once.
@@ -687,7 +695,7 @@ type CreatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (con
  *   prepare,               // ONCE for the batch  ─┐
  *   perRecord: {           //                      │  what prepare returns
  *     before,              // ONCE per record  ◄───┤  arrives here as `prepared`
- *     after                // ONCE per record  ◄───┘
+ *     after                // ONCE per settled record, with the stored `record`
  *   }
  * }
  * ```
@@ -708,7 +716,8 @@ export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepare
 		readonly prepare?: CreatePrepare<S, N, Prepared>;
 		readonly perRecord?: {
 			readonly before?: DescribedHook<CreateBefore<S, N, Prepared>>;
-			readonly after?: DescribedHook<CreateAfter<S, N, Prepared>>;
+			/** Runs only after the create is settled; an approval hold defers it until approval. */
+			readonly after?: DescribedHook<CreateAfter<S, N>>;
 		};
 	};
 	readonly update?: {
@@ -721,12 +730,8 @@ export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepare
 					readonly api: HookApi<S>;
 				}) => Effect.Effect<MutationUpdateFor<S, N>, unknown, never> | MutationUpdateFor<S, N>
 			>;
-			readonly after?: DescribedHook<
-				(context: {
-					readonly record: SchemaRow<S, N>;
-					readonly api: AfterHookApi<S>;
-				}) => Effect.Effect<void, unknown, never> | void
-			>;
+			/** Runs only after the update is settled; an approval hold defers it until approval. */
+			readonly after?: DescribedHook<UpdateAfter<S, N>>;
 		};
 	};
 	readonly delete?: {
@@ -1082,6 +1087,8 @@ export type CollectionIntegrations<S extends AnySchema, N extends TableName<S>> 
 	Record<
 		string,
 		{
+			/** The complete authority this static integration principal holds. Empty means no data access. */
+			readonly policies: ReadonlyArray<PolicyName>;
 			/** Omitted by an integration that only receives pushed deliveries: there is nothing to request. */
 			readonly connection?: HttpConnection;
 			readonly receive?: Readonly<Record<string, CollectionReceiveBinding<S, N>>>;
@@ -1091,46 +1098,82 @@ export type CollectionIntegrations<S extends AnySchema, N extends TableName<S>> 
 >;
 
 /**
- * One step of an approval, declared on the grant it gates.
+ * The exact prepared JavaScript value a write rule decides against.
  *
- * There is no `id` and no `name` here, and their absence is what makes this safe. A request's
- * identity derives from `(policy, collection, action, key)`, so two grants are never the same
- * approval and there is no authored identifier to collide, to copy-paste, or to renumber. The
- * templates carried hand-written UUID pairs — `variationApproval('019f6f10-…-003', '019f6f10-…-103')`
- * — which is the only part of an approval anybody could get wrong, and it is gone.
- *
- * `key` is required and is what the id derives from, so reordering a policy's steps cannot silently
- * rebind an approval that is already in flight. Order carries no meaning; the key does.
+ * A create has not acquired database defaults yet, so its record is the prepared insert plus the
+ * runtime-assigned id. An update has a complete stored row on both sides and exposes only the
+ * prepared patch as `changes`. A delete sees the complete stored row it is about to remove.
  */
-type PolicyApprovalStep = {
-	/** Stable within the grant, and what the request id derives from. Never an index. */
-	readonly key: string;
-	/**
-	 * The teams that may decide this step, as keys of `src/access/+teams.ts`.
-	 *
-	 * `TeamName`, not `string`. `approvals.decide` matches these against the subject's team by name,
-	 * so a misspelling produces an approval nobody can ever decide and nothing raises — which is what
-	 * `approvers: ['HR Manger']` did. A typo is a compile error now.
-	 */
-	readonly approvers: ReadonlyArray<TeamName>;
-	readonly description?: string;
+export type PolicyWriteContext<
+	StoredRecord,
+	Action extends 'create' | 'update' | 'delete',
+	CreateRecord = StoredRecord,
+	Changes = Partial<StoredRecord>
+> = Action extends 'update'
+	? Readonly<{
+			readonly previous: Readonly<StoredRecord>;
+			readonly changes: Readonly<Changes>;
+			readonly record: Readonly<StoredRecord>;
+		}>
+	: Action extends 'create'
+		? Readonly<{ readonly record: Readonly<CreateRecord> }>
+		: Readonly<{ readonly record: Readonly<StoredRecord> }>;
+
+type PolicyWriteDecision<
+	S extends AnySchema,
+	StoredRecord,
+	Action extends 'create' | 'update' | 'delete',
+	CreateRecord = StoredRecord,
+	Changes = Partial<StoredRecord>
+> = (
+	context: PolicyWriteContext<StoredRecord, Action, CreateRecord, Changes>,
+	api: PolicyDecisionApi<S>
+) => boolean | Effect.Effect<boolean>;
+
+/**
+ * One function chooses one concrete approval flow.
+ *
+ * The author uses ordinary TypeScript or Effect control flow and returns `approveBy(...).thenBy(...)`
+ * or `noApproval`. `superceded_by` names additional teams allowed to finish every remaining step;
+ * administrators always hold that capability and are deliberately implicit here.
+ */
+type PolicyApproval<
+	S extends AnySchema,
+	StoredRecord,
+	Action extends 'create' | 'update' | 'delete',
+	CreateRecord = StoredRecord,
+	Changes = Partial<StoredRecord>
+> = {
+	readonly flow: (
+		context: PolicyWriteContext<StoredRecord, Action, CreateRecord, Changes>,
+		api: PolicyDecisionApi<S>
+	) => ApprovalFlow | Effect.Effect<ApprovalFlow>;
+	readonly superceded_by: ReadonlyArray<TeamName>;
 };
 
 /**
- * The approval on one grant.
+ * What write authorization and approval-flow functions may reach: reads, and nothing else.
  *
- * A field on the grant rather than a thing declared elsewhere and referenced, and that is a safety
- * property rather than a brevity one. A separate `approvals/` category would invent two failure
- * modes to solve none: a grant naming a workflow that does not exist, and a workflow that exists
- * which no grant binds. Inline has neither, because there is no reference. Two grants that want the
- * same steps share an ordinary `const`, which is TypeScript rather than a framework concept.
+ * Deciding whether a write may proceed or who must sign it must not itself write. The read surface
+ * is the same `db.query` a hook gets, without the mutation half of that hook API.
  */
-type PolicyApproval = { readonly steps: ReadonlyArray<PolicyApprovalStep> };
+export type PolicyDecisionApi<S extends AnySchema = DefaultWorkspaceSchema> = Readonly<{
+	readonly db: Readonly<{ readonly query: BeforeApi<S>['db']['query'] }>;
+	readonly requestor: Readonly<{
+		readonly id: string;
+		readonly userId: string;
+		readonly tenantId: string;
+		readonly email?: string;
+		readonly team?: TeamName;
+		readonly teamPath: ReadonlyArray<TeamName>;
+		readonly admin: boolean;
+	}>;
+}>;
 
 /**
  * An envoy: an agent that is not the web agent, with its own identity and one transport.
  *
- * Five fields, and each answers a question no policy can be asked. Everything a policy *can* answer
+ * Each field answers a question no policy can be asked. Everything a policy *can* answer
  * is deliberately absent — `tools`, `mcp`, `skills`, `collections`, `access`, `rateLimits`, `model`,
  * `maxTokens`, `description` and `prompt` were all on the shape this replaces, and every one of them
  * was a second place to say something the model already says once. A field that can be said twice is
@@ -1162,15 +1205,105 @@ export interface EnvoyDefinition {
 	/** The standing instruction for this envoy's turns, on top of the workspace's `+agents.md`. */
 	readonly task: string;
 	readonly groupMessages?: 'disabled' | 'mention_or_reply' | 'all';
+	/**
+	 * Whether this envoy may create and coordinate delegated sandbox-agent sessions.
+	 *
+	 * Delegation is enabled when omitted for compatibility. Disable it for narrow ingress envoys that
+	 * must act alone, even though the same principal-scoped sandbox tools remain available elsewhere.
+	 */
+	readonly delegation?: 'enabled' | 'disabled';
 }
-type PolicyGrant<S extends AnySchema> = {
-	readonly [N in TableName<S>]: {
-		readonly collection: N;
-		readonly action: 'read' | 'create' | 'update' | 'delete' | 'history';
-		readonly where?: SchemaWhere<SchemaRow<S, N>>;
-		readonly approval?: PolicyApproval;
-	};
-}[TableName<S>];
+/**
+ * The only columns a grant exposes or accepts for its action.
+ *
+ * System row columns such as `id` are part of `SchemaRow`, so the mask is checked against the same
+ * complete row the runtime filters. Omitting it leaves the grant unrestricted by field.
+ */
+type PolicyGrantFields<S extends AnySchema, N extends TableName<S>> = ReadonlyArray<
+	keyof SchemaRow<S, N> & string
+>;
+
+/**
+ * Reading is a filter, and that is the whole of it.
+ *
+ * `where` selects which rows are visible and nothing else happens to them, so a read grant has no
+ * approval to carry: nobody signs off on somebody having looked. It used to be one shape for all
+ * five actions, which made `approval` on a `read` typecheck and then do nothing at all — a grant
+ * that reads as a control and enforces none. It is a compile error now.
+ *
+ * `history` sits here for the same reason: reading what a record used to be is still reading.
+ */
+type PolicyReadGrant<S extends AnySchema, N extends TableName<S>> = {
+	readonly where?: SchemaWhere<SchemaRow<S, N>>;
+	readonly fields?: PolicyGrantFields<S, N>;
+};
+
+/**
+ * A create is authorized against its prepared candidate.
+ *
+ * The action key itself is the opt-in; an empty object means every prepared candidate, while an
+ * absent `create` key means no create authority. `authorize` is server-only Effect code and
+ * `approval` resolves one concrete review path after authorization succeeds.
+ */
+type PolicyCreateGrant<S extends AnySchema, N extends TableName<S>> = {
+	readonly fields?: PolicyGrantFields<S, N>;
+	readonly authorize?: PolicyWriteDecision<
+		S,
+		SchemaRow<S, N>,
+		'create',
+		{ readonly id: string } & MutationInsertFor<S, N>
+	>;
+	readonly approval?: PolicyApproval<
+		S,
+		SchemaRow<S, N>,
+		'create',
+		{ readonly id: string } & MutationInsertFor<S, N>
+	>;
+};
+
+type PolicyUpdateGrant<S extends AnySchema, N extends TableName<S>> = {
+	readonly fields?: PolicyGrantFields<S, N>;
+	readonly authorize?: PolicyWriteDecision<
+		S,
+		SchemaRow<S, N>,
+		'update',
+		SchemaRow<S, N>,
+		MutationUpdateFor<S, N>
+	>;
+	readonly approval?: PolicyApproval<
+		S,
+		SchemaRow<S, N>,
+		'update',
+		SchemaRow<S, N>,
+		MutationUpdateFor<S, N>
+	>;
+};
+
+type PolicyDeleteGrant<S extends AnySchema, N extends TableName<S>> = {
+	readonly authorize?: PolicyWriteDecision<S, SchemaRow<S, N>, 'delete'>;
+	readonly approval?: PolicyApproval<S, SchemaRow<S, N>, 'delete'>;
+};
+
+type PolicyCollectionGrants<S extends AnySchema, N extends TableName<S>> = Readonly<{
+	readonly read?: PolicyReadGrant<S, N>;
+	readonly history?: PolicyReadGrant<S, N>;
+	readonly create?: PolicyCreateGrant<S, N>;
+	readonly update?: PolicyUpdateGrant<S, N>;
+	readonly delete?: PolicyDeleteGrant<S, N>;
+}>;
+
+/**
+ * One slot per collection/action coordinate.
+ *
+ * The old array could state the same coordinate twice and `rowPredicate` would union it, so an
+ * unrestricted sibling silently erased a narrowed one. An object has one key for that coordinate;
+ * absence is denial, presence is the whole rule, and there is no merge order to misunderstand.
+ */
+type PolicyGrants<S extends AnySchema> = Readonly<
+	Partial<{
+		readonly [N in TableName<S>]: PolicyCollectionGrants<S, N>;
+	}>
+>;
 
 /**
  * What a policy grants beyond data: the tools, servers, skills and apps its holders may reach.
@@ -1188,6 +1321,8 @@ export interface PolicyCapabilities {
 	readonly tools?: ReadonlyArray<DeclaredToolName>;
 	readonly mcp?: ReadonlyArray<McpServerName>;
 	readonly skills?: ReadonlyArray<DeclaredSkillName>;
+	/** Allows an envoy to reach other sessions owned by the same declaration through history search. */
+	readonly envoyHistory?: 'this_envoy';
 }
 
 /**
@@ -1215,7 +1350,7 @@ type PolicyLimits = Readonly<
  */
 export interface PolicyDefinition<S extends AnySchema = DefaultWorkspaceSchema> {
 	readonly description: string;
-	readonly grants: ReadonlyArray<PolicyGrant<S>>;
+	readonly grants: PolicyGrants<S>;
 	readonly capabilities?: PolicyCapabilities;
 	readonly limits?: PolicyLimits;
 }

@@ -74,9 +74,65 @@ describe('the test database transaction result', () => {
 });
 
 describe('declarative settlement under a later writer', () => {
+	it('reports an authored defect after commit as a non-retryable settle failure', async () => {
+		harness = await makeBoltTestRuntime(definition, {
+			authored: {
+				...emptyAuthoredRuntime,
+				hooks: {
+					notes: {
+						create: {
+							perRecord: {
+								after: {
+									description: 'fails after the transaction is already committed',
+									handler: () => {
+										throw new Error('settlement exploded');
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		});
+
+		const outcome = await harness.runtime.runPromise(
+			Effect.result(
+				Effect.gen(function* () {
+					return yield* (yield* Collections.Service).mutate(
+						EffectId.make('defective-declarative-settle'),
+						adminSubject,
+						'notes',
+						[{ body: 'already committed' }],
+						false,
+						0,
+						{ declarative: true }
+					);
+				})
+			)
+		);
+
+		expect(outcome._tag).toBe('Failure');
+		if (outcome._tag !== 'Failure') return;
+		expect(outcome.failure).toBeInstanceOf(Collections.MutationPhaseFailure);
+		expect(outcome.failure).toMatchObject({
+			phase: 'settle',
+			step: 'after-hook',
+			collection: 'notes',
+			retryable: false
+		});
+		expect((outcome.failure as Collections.MutationPhaseFailure).committed).toHaveLength(1);
+		expect(Collections.unwrapMutationPhase(outcome.failure)).toMatchObject({
+			message: 'settlement exploded'
+		});
+		expect(await harness.database.query('select body from notes')).toEqual([
+			{ body: 'already committed' }
+		]);
+	}, 60_000);
+
 	it('hands hooks and change events the row captured by writer A before writer B wins', async () => {
 		const id = recordId('settle-race-note');
 		const afterBodies: Array<string> = [];
+		const afterTransitions: Array<Readonly<Record<string, unknown>>> = [];
 		let armInterleave = false;
 		let interleaved = false;
 		let database: BoltTestRuntime['database'] | undefined;
@@ -89,8 +145,18 @@ describe('declarative settlement under a later writer', () => {
 							after: {
 								description: 'records the exact row committed by this mutation',
 								handler: (context: unknown) => {
-									const record = (context as { readonly record: Record<string, unknown> }).record;
+									const transition = context as {
+										readonly previous: Record<string, unknown>;
+										readonly changes: Record<string, unknown>;
+										readonly record: Record<string, unknown>;
+									};
+									const { record } = transition;
 									afterBodies.push(String(record['body']));
+									afterTransitions.push({
+										previous: transition.previous['body'],
+										changes: transition.changes['body'],
+										record: record['body']
+									});
 								}
 							}
 						}
@@ -100,6 +166,7 @@ describe('declarative settlement under a later writer', () => {
 			automations: {
 				on_note_updated: {
 					name: 'on_note_updated',
+					policies: ['automation-data'],
 					trigger: { _tag: 'Change' as const, collection: 'notes', event: 'updated' as const },
 					handler: () => undefined
 				}
@@ -143,6 +210,9 @@ describe('declarative settlement under a later writer', () => {
 			{ body: 'writer B' }
 		]);
 		expect(afterBodies).toEqual(['writer A']);
+		expect(afterTransitions).toEqual([
+			{ previous: 'original', changes: 'writer A', record: 'writer A' }
+		]);
 		expect(answer.map((row) => row['body'])).toEqual(['writer A']);
 
 		const tasks = await database.query(

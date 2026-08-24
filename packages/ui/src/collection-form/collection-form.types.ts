@@ -94,7 +94,7 @@ export interface CollectionFormFieldProps<
  */
 export interface CollectionFormFieldComponent<TFieldName extends string = string> {
 	new <TRenderer extends Component<never> = Component<CollectionFormRendererProps>>(
-		options: ComponentConstructorOptions<CollectionFormFieldProps<TFieldName, TRenderer>> // repository-health:allow LEGACY2 -- Svelte 5.56's generated isomorphic component shape still requires this constructor arm to preserve generic renderer inference through snippets; the call signature below supplies the Svelte 5 runtime API.
+		options: ComponentConstructorOptions<CollectionFormFieldProps<TFieldName, TRenderer>> // repository-health:allow LEGACY2 -- Svelte 5.56's checker lowers component calls through a constructor shape; this type-only arm preserves renderer inference while the call signature below remains the runtime API.
 	): SvelteComponent<CollectionFormFieldProps<TFieldName, TRenderer>>;
 	<TRenderer extends Component<never> = Component<CollectionFormRendererProps>>(
 		this: void,

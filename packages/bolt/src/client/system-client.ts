@@ -1,5 +1,6 @@
 import { Effect, Schema } from 'effect';
 import { TurnResult } from '#lib/runtime/agents/agent-schemas.js';
+import { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
 import { WorkspaceAccessSchema } from '#lib/client/ui/settings/rows.js';
 import { AiModelCatalogSchema } from '#lib/client/ui/agent/agent-model-state.svelte.js';
 import {
@@ -17,24 +18,28 @@ const AgentStartInput = Schema.Struct({
 const AgentTurnInput = Schema.Struct({
 	agent: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
-	message: Schema.String
+	message: Schema.String,
+	documents: Schema.optionalKey(Schema.Array(ChatDocumentRef))
+});
+const AgentDocumentBindInput = Schema.Struct({
+	conversationId: Schema.NonEmptyString,
+	file: ChatDocumentRef
+});
+const AgentDocumentInput = Schema.Struct({
+	conversationId: Schema.NonEmptyString,
+	storageKey: Schema.NonEmptyString
 });
 const AgentVerifierInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
 	verifier: Schema.Struct({ prompt: Schema.String })
 });
-const AutomationHistoryInput = Schema.Struct({
-	name: Schema.NonEmptyString,
-	limit: Schema.Number
-});
-const AutomationStartInput = Schema.Struct({
-	name: Schema.NonEmptyString,
-	input: Schema.Json
-});
-const TaskInput = Schema.Struct({ taskId: Schema.NonEmptyString });
 const EnvoyInput = Schema.Struct({ envoy: Schema.NonEmptyString });
 const SecretWriteInput = Schema.Struct({ name: Schema.NonEmptyString, value: Schema.String });
 const ImpersonateTeamInput = Schema.Struct({ teamId: Schema.NonEmptyString });
+const AccessDecisionInput = Schema.Struct({
+	action: Schema.NonEmptyString,
+	resource: Schema.NonEmptyString
+});
 const WorkspaceAccessInput = Schema.Struct({ tenantId: Schema.NonEmptyString });
 
 const VisibleAppsResponse = Schema.Struct({ apps: Schema.Array(Schema.String) });
@@ -44,35 +49,23 @@ const ImpersonationResponse = Schema.Struct({
 	activeTeamIds: Schema.Array(Schema.String),
 	teams: Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String }))
 });
+const AccessDecisionResponse = Schema.Struct({
+	allowed: Schema.Boolean,
+	reason: Schema.NonEmptyString
+});
 const SchemaPlanResponse = Schema.Struct({
 	fingerprint: Schema.String,
 	steps: Schema.Array(Schema.Struct({ id: Schema.String, sql: Schema.String }))
 });
-const AutomationHistoryRow = Schema.Struct({
-	effect_id: Schema.optionalKey(Schema.String),
-	status: Schema.optionalKey(Schema.String),
-	attempts: Schema.optionalKey(Schema.Number),
-	error: Schema.optionalKey(Schema.NullOr(Schema.String)),
-	created_at: Schema.optionalKey(Schema.String)
-});
-const AutomationHistoryResponse = Schema.Struct({
-	runs: Schema.optionalKey(Schema.Array(AutomationHistoryRow))
-});
-const AutomationStartResponse = Schema.Struct({
-	taskId: Schema.optionalKey(Schema.String)
-});
-const AutomationStatusResponse = Schema.NullOr(
-	Schema.Struct({
-		status: Schema.optionalKey(Schema.String),
-		error: Schema.optionalKey(Schema.String)
-	})
-);
 
 const AgentStartResponse = Schema.Struct({
 	started: Schema.Literal(true),
 	conversationId: Schema.NonEmptyString
 });
 const AgentVerifierResponse = Schema.Struct({ updated: Schema.Literal(true) });
+const AgentDocumentBindResponse = Schema.Struct({ bound: Schema.Literal(true) });
+const AgentDocumentResolveResponse = Schema.Struct({ file: ChatDocumentRef });
+const AgentDocumentRemoveResponse = Schema.Struct({ removed: Schema.Literal(true) });
 const SecretWriteResponse = Schema.Struct({
 	saved: Schema.Literal(true),
 	name: Schema.NonEmptyString
@@ -119,6 +112,20 @@ export type SystemClientApi = Readonly<{
 			CommandOutput<typeof AgentStartResponse>
 		>;
 		turn: SystemOperation<CommandInput<typeof AgentTurnInput>, CommandOutput<typeof TurnResult>>;
+		documents: Readonly<{
+			bind: SystemOperation<
+				CommandInput<typeof AgentDocumentBindInput>,
+				CommandOutput<typeof AgentDocumentBindResponse>
+			>;
+			resolve: SystemOperation<
+				CommandInput<typeof AgentDocumentInput>,
+				CommandOutput<typeof AgentDocumentResolveResponse>
+			>;
+			remove: SystemOperation<
+				CommandInput<typeof AgentDocumentInput>,
+				CommandOutput<typeof AgentDocumentRemoveResponse>
+			>;
+		}>;
 		updateVerifier: SystemOperation<
 			CommandInput<typeof AgentVerifierInput>,
 			CommandOutput<typeof AgentVerifierResponse>
@@ -137,6 +144,10 @@ export type SystemClientApi = Readonly<{
 		>;
 	}>;
 	access: Readonly<{
+		explain: SystemQuery<
+			CommandInput<typeof AccessDecisionInput>,
+			CommandOutput<typeof AccessDecisionResponse>
+		>;
 		impersonation: SystemQuery<
 			CommandInput<typeof EmptyInput>,
 			CommandOutput<typeof ImpersonationResponse>
@@ -144,20 +155,6 @@ export type SystemClientApi = Readonly<{
 		impersonateTeam: SystemOperation<
 			CommandInput<typeof ImpersonateTeamInput>,
 			CommandOutput<typeof VisibleAppsResponse>
-		>;
-	}>;
-	automations: Readonly<{
-		history: SystemQuery<
-			CommandInput<typeof AutomationHistoryInput>,
-			CommandOutput<typeof AutomationHistoryResponse>
-		>;
-		start: SystemOperation<
-			CommandInput<typeof AutomationStartInput>,
-			CommandOutput<typeof AutomationStartResponse>
-		>;
-		status: SystemQuery<
-			CommandInput<typeof TaskInput>,
-			CommandOutput<typeof AutomationStatusResponse>
 		>;
 	}>;
 	envoys: Readonly<{
@@ -238,6 +235,26 @@ export const createSystemClient = (
 	agents: {
 		start: command(runtime, 'agents.start', AgentStartInput, AgentStartResponse),
 		turn: command(runtime, 'agents.turn', AgentTurnInput, TurnResult),
+		documents: {
+			bind: command(
+				runtime,
+				'agents.documents.bind',
+				AgentDocumentBindInput,
+				AgentDocumentBindResponse
+			),
+			resolve: command(
+				runtime,
+				'agents.documents.resolve',
+				AgentDocumentInput,
+				AgentDocumentResolveResponse
+			),
+			remove: command(
+				runtime,
+				'agents.documents.remove',
+				AgentDocumentInput,
+				AgentDocumentRemoveResponse
+			)
+		},
 		updateVerifier: command(
 			runtime,
 			'agents.updateVerifier',
@@ -248,6 +265,7 @@ export const createSystemClient = (
 	ai: { models: query(makeQuery, 'ai.models', EmptyInput, AiModelCatalogSchema) },
 	apps: { visible: query(makeQuery, 'apps.visible', EmptyInput, VisibleAppsResponse) },
 	access: {
+		explain: query(makeQuery, 'access.explain', AccessDecisionInput, AccessDecisionResponse),
 		impersonation: query(makeQuery, 'access.impersonation', EmptyInput, ImpersonationResponse),
 		impersonateTeam: command(
 			runtime,
@@ -255,16 +273,6 @@ export const createSystemClient = (
 			ImpersonateTeamInput,
 			VisibleAppsResponse
 		)
-	},
-	automations: {
-		history: query(
-			makeQuery,
-			'automations.history',
-			AutomationHistoryInput,
-			AutomationHistoryResponse
-		),
-		start: command(runtime, 'automations.start', AutomationStartInput, AutomationStartResponse),
-		status: query(makeQuery, 'automations.status', TaskInput, AutomationStatusResponse)
 	},
 	envoys: { status: query(makeQuery, 'envoys.status', EnvoyInput, EnvoyStatusSchema) },
 	identity: {

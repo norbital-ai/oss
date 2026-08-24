@@ -1,9 +1,8 @@
 import { type LocaleCatalogs, type KeysOf, type MessageVars, translate } from './catalog.js';
-import { type Locale, DEFAULT_LOCALE, intlLocale as intlLocaleFor } from './locale.js';
+import { DEFAULT_LOCALE, intlLocale as intlLocaleFor } from './locale.js';
 
 export type { LocaleCatalogs, MessageCatalog, MessageVars, KeysOf } from './catalog.js';
 export { defineMessages, translate, interpolate } from './catalog.js';
-export type { Locale } from './locale.js';
 export {
 	SUPPORTED_LOCALES,
 	DEFAULT_LOCALE,
@@ -29,7 +28,7 @@ export type TranslateFn<Keys extends string = string> = (key: Keys, vars?: Messa
  */
 export interface I18nRuntime<Keys extends string = string> {
 	/** The active application locale. */
-	readonly locale: Locale;
+	readonly locale: string;
 	/** The locale order the catalogs ship (toggle order, primary first). */
 	readonly locales: readonly string[];
 	/** The `Intl.*` locale string for the active locale (`en-US` / `zh-CN`). */
@@ -37,9 +36,9 @@ export interface I18nRuntime<Keys extends string = string> {
 	/** Translate a typed key, with `{placeholder}` interpolation. */
 	readonly t: TranslateFn<Keys>;
 	/** True when the key exists in any locale of the catalog set. */
-	has(key: string): boolean;
+	has(key: string): key is Keys;
 	/** Switch the active locale. */
-	setLocale(locale: Locale): void;
+	setLocale(locale: string): void;
 }
 
 /**
@@ -51,9 +50,9 @@ export interface I18nRuntime<Keys extends string = string> {
  */
 export function createI18n<C extends LocaleCatalogs>(
 	catalogs: C,
-	initialLocale: Locale = DEFAULT_LOCALE
+	initialLocale: string = DEFAULT_LOCALE
 ): I18nRuntime<KeysOf<C>> {
-	let locale: Locale = initialLocale;
+	let locale = initialLocale;
 	const api: I18nRuntime<KeysOf<C>> = {
 		get locale() {
 			return locale;
@@ -67,10 +66,10 @@ export function createI18n<C extends LocaleCatalogs>(
 		t(key, vars) {
 			return translate(catalogs, locale, key, vars);
 		},
-		has(key) {
+		has(key: string): key is KeysOf<C> {
 			return Object.values(catalogs).some((catalog) => key in catalog);
 		},
-		setLocale(next: Locale) {
+		setLocale(next: string) {
 			locale = next;
 		}
 	};

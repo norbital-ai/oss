@@ -43,6 +43,7 @@ const authoredModule = {
 	audience: 'public',
 	policies: ['sales_rep'],
 	groupMessages: 'disabled',
+	delegation: 'disabled',
 	task: 'Answer questions about quotes and accounts for this customer.'
 } as const;
 

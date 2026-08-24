@@ -11,8 +11,8 @@
 		RemoteQuery
 	} from '@norbital-ai/std/collection';
 	import { Button } from '#lib/button';
-	import { FormState, maybeAsync, type FormSchema, type TranslateFn } from '#lib/form';
-	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { FormState, maybeAsync, type FormSchema } from '#lib/form';
+	import { useI18n } from '#lib/i18n';
 	import { Cluster, Cover, Grid, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
@@ -21,6 +21,7 @@
 		optionalCollectionRecordId,
 		pickFieldNames
 	} from '#lib/collection-table/collection-card-derivation';
+	import { pickWritableFormValues } from './collection-form-values';
 	import CollectionFormField, {
 		setCollectionFormFieldContext
 	} from './collection-form-field.svelte';
@@ -42,6 +43,7 @@
 		getCollectionClientForSurface,
 		setCollectionClientContext
 	} from '#lib/collection-runtime';
+	import { submitCollectionMutation } from './collection-mutation-outcome';
 
 	function validateFieldValue(
 		field: CollectionField,
@@ -196,13 +198,17 @@
 	// svelte-ignore state_referenced_locally -- a mounted collection surface keeps one generated client.
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionForm');
 	setCollectionClientContext(() => workspaceClient);
+	const definition = $derived(workspaceClient.collections[String(collection)]);
 	// Field kinds whose form control spans the full intrinsic grid width (RFC IV.2 / V.4).
 	const FULL_WIDTH_FORM_KINDS: ReadonlySet<string> = new Set(['text', 'json', 'matrix', 'file']);
 
-	const { t } = useI18n<UiKeys>();
+	const { t } = useI18n();
 
 	// svelte-ignore state_referenced_locally
-	const initialValues: Record<string, unknown> = { ...defaultValues };
+	const initialValues: Record<string, unknown> = pickWritableFormValues(
+		definition.fields,
+		defaultValues ?? {}
+	);
 	/**
 	 * Create or update, decided from the record itself.
 	 *
@@ -223,7 +229,6 @@
 	const deleteRestriction = $derived(
 		recordId ? collectionRecordRestriction(resolvedRecordMetadata, 'delete') : null
 	);
-	const definition = $derived(workspaceClient.collections[String(collection)]);
 	// Auto field emission (RFC V.4): a `fields` pick wins over the model-ordered writable set; both
 	// are ignored when a `children` composition is provided.
 	const autoFieldNames = $derived(
@@ -278,14 +283,15 @@
 		disabled: () => loading || disabled || updateRestriction != null,
 		submitSuccessBehavior: 'commit',
 		successMessage: null,
-		translate: t as TranslateFn,
+		translate: t,
 		remoteFn:
 			() =>
 			(data): Effect.Effect<void, unknown> => {
 				const values = Object.fromEntries(Object.entries(data));
 				if (onSubmit) return onSubmit(values);
-				return Effect.tryPromise(() =>
-					operations.mutate(recordId ? { id: recordId, ...values } : values)
+				const writableValues = pickWritableFormValues(definition.fields, values);
+				return submitCollectionMutation(() =>
+					operations.mutate(recordId ? { id: recordId, ...writableValues } : writableValues)
 				);
 			},
 		onSuccess: () => onAfterSubmit?.()
@@ -297,8 +303,7 @@
 
 	function loadHistory(): void {
 		if (!recordId || !workspaceClient.history) return;
-		if (historyQuery?.error) void historyQuery.refresh();
-		else historyRequested = true;
+		historyRequested = true;
 	}
 
 	setCollectionFormFieldContext({

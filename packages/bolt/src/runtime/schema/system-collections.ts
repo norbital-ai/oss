@@ -45,6 +45,8 @@ export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	collections.requestor,
 	collections.chat_session,
 	collections.chat_message,
+	collections.chat_document,
+	collections.automation_run,
 	collections.bolt_notifications
 ]);
 
@@ -70,23 +72,21 @@ const RAISED_BY_SUBJECT =
 	'where party."user_id" = ${requestor.id}';
 
 /**
- * The name of this subject's one team, folded — reached by a join, because no token names it.
+ * The name of this subject's one team, folded.
  *
- * `AccessControl.subjectValue` resolves exactly three paths — `requestor.id`,
- * `requestor.tenantId`, `requestor.email` — so a team is something the predicate has to go and look
- * up. `user.team_id` is one team, nullable, and a subject nobody has placed yields no row:
- * the scalar subquery is then `null`, `lower(...) = null` is `null`, and the approver leg below
- * matches nothing. Absence narrows, which is the only safe direction for it to go.
+ * This must come from the invocation subject, not from `user.team_id`. An administrator previewing
+ * another team keeps their own persisted user row and changes `subject.teamPath`; reading the row
+ * here made that preview's application grants move while its approval inbox stayed on the
+ * administrator's real team. `${requestor.team}` is a bound operand sourced from `teamPath[0]`, the
+ * same value `Approvals.decide` checks. A subject with no team resolves the token to `null`, so the
+ * approver leg matches nothing. Absence narrows, which is the safe direction for it to go.
  *
  * The subject's own team and not the whole of `teamPath`. `Approvals.decide` matches
  * `step.approvers` against `teamPath[0]` — the subject's own team — so anything wider here would
  * show a member approvals they are not eligible to decide, and `teamPath` runs *downward* through
  * the hierarchy unconditionally, which is the opposite of "their higher ups".
  */
-const SUBJECT_TEAM_NAME =
-	'select lower(subject_team."name") from "user" subject_user ' +
-	'join "team" subject_team on subject_team."id" = subject_user."team_id" ' +
-	'where subject_user."id"::text = ${requestor.id}';
+const SUBJECT_TEAM_NAME = 'lower(${requestor.team})';
 
 /**
  * The approval requests this subject's team is named as an approver of — the "higher ups" leg.
@@ -103,8 +103,8 @@ const SUBJECT_TEAM_NAME =
  * request. `Approvals.decide` resolves the same path (`approvalConfigurations.resolve`) before it
  * decides eligibility, so read scope and decide eligibility are two readings of one value.
  *
- * `jsonb_typeof(...) = 'array'` guards both unnests rather than trusting the shape: a legacy or
- * hand-written state whose `steps` is not an array would otherwise raise
+ * `jsonb_typeof(...) = 'array'` guards both unnests rather than trusting persisted bytes: malformed
+ * state whose `steps` is not an array would otherwise raise
  * `cannot extract elements from an object` from inside a permission check, which turns a narrowing
  * into an outage. Folded comparison, because every other comparison of a team name in this runtime
  * is folded — `TEAM_LOOKUP_SQL`, `policiesHeldByTeam`, `Approvals.decide` — and two spellings must
@@ -124,24 +124,21 @@ const APPROVED_BY_SUBJECT_TEAM =
 	SUBJECT_TEAM_NAME +
 	')';
 
-/**
- * Requests held by a collection-level `approvalLock` have no authored step configuration. At
- * request time the approval service snapshots the teams whose declared policies grant the generic
- * Approvals capability; this leg gives those same teams inbox discovery without widening the row to
- * every authenticated member.
- */
-const GENERICALLY_APPROVED_BY_SUBJECT_TEAM =
+/** Configured teams that may supersede the concrete flow also need inbox discovery. */
+const SUPERSEDED_BY_SUBJECT_TEAM =
 	'select approval.request_id from bolt_approvals approval ' +
 	'cross join lateral jsonb_array_elements_text(' +
-	"case when jsonb_typeof(approval.state #> '{operation,genericApprovers}') = 'array' " +
-	"then approval.state #> '{operation,genericApprovers}' else '[]'::jsonb end" +
+	"case when jsonb_typeof(approval.state #> '{operation,approval,superceded_by}') = 'array' " +
+	"then approval.state #> '{operation,approval,superceded_by}' else '[]'::jsonb end" +
 	') as approver(team_name) ' +
 	'where lower(team_name) = (' +
 	SUBJECT_TEAM_NAME +
 	')';
 
 /**
- * An approval request is readable by its parties and by whoever may decide it.
+ * An approval request is readable by its parties and by whoever may decide it. Workspace
+ * administrators are included because every administrator may supersede every pending flow by
+ * definition; this does not grant them any authored tenant collection.
  *
  * Written against unqualified column names on purpose: the same predicate is spliced into three
  * statements that alias the table differently — `findMany` uses none, `Sync.snapshot` uses `r`,
@@ -151,12 +148,12 @@ const GENERICALLY_APPROVED_BY_SUBJECT_TEAM =
  */
 const READABLE_APPROVAL_REQUEST = Object.freeze({
 	$sql:
-		'"id"::text in (' +
+		'${requestor.admin} = true or "id"::text in (' +
 		RAISED_BY_SUBJECT +
 		') or "id"::text in (' +
 		APPROVED_BY_SUBJECT_TEAM +
 		') or "id"::text in (' +
-		GENERICALLY_APPROVED_BY_SUBJECT_TEAM +
+		SUPERSEDED_BY_SUBJECT_TEAM +
 		')'
 });
 
@@ -174,17 +171,22 @@ const READABLE_APPROVAL_REQUEST = Object.freeze({
  */
 const READABLE_REQUESTOR = Object.freeze({
 	$sql:
-		'"approval_request_id" in (' +
+		'${requestor.admin} = true or "approval_request_id" in (' +
 		RAISED_BY_SUBJECT +
 		') or "approval_request_id" in (' +
 		APPROVED_BY_SUBJECT_TEAM +
 		') or "approval_request_id" in (' +
-		GENERICALLY_APPROVED_BY_SUBJECT_TEAM +
+		SUPERSEDED_BY_SUBJECT_TEAM +
 		')'
 });
 
 const OWN_CONVERSATION = Object.freeze({ $sql: '"user_id" = ${requestor.id}' });
 const OWN_CONVERSATION_MESSAGE = Object.freeze({
+	$sql:
+		'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
+		'where owned."user_id" = ${requestor.id})'
+});
+const OWN_CONVERSATION_DOCUMENT = Object.freeze({
 	$sql:
 		'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
 		'where owned."user_id" = ${requestor.id})'
@@ -295,6 +297,15 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 			where: OWN_CONVERSATION_MESSAGE
 		},
 		{
+			collection: collections.chat_document.name,
+			action: 'read' as const,
+			where: OWN_CONVERSATION_DOCUMENT
+		},
+		{
+			collection: collections.automation_run.name,
+			action: 'read' as const
+		},
+		{
 			collection: collections.bolt_notifications.name,
 			action: 'read' as const,
 			where: OWN_NOTIFICATION
@@ -309,6 +320,25 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 });
 
 /**
+ * Workspace administration is deliberately narrow authority, not blanket tenant-data access.
+ *
+ * `user.status = admin` opts a subject into this one runtime-owned policy. The policy then grants
+ * only membership administration and workspace environment management. It names no tenant
+ * collection or tenant app, so an administrator sees workspace data only by holding or previewing
+ * an explicitly declared team policy. Adding another administrative capability requires adding
+ * another coordinate here.
+ */
+const WORKSPACE_ADMINISTRATION_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclaration>({
+	name: 'bolt.workspace-administration',
+	description:
+		'Explicit membership and environment administration for subjects designated as administrators.',
+	effect: 'allow',
+	administrator: true,
+	actions: ['manage', 'impersonate'],
+	capabilities: { apps: ['identity', 'secrets'] }
+});
+
+/**
  * The policies the runtime owns, present in every workspace whether or not it authored any.
  *
  * They are merged here, at the same seam the runtime's own collections are merged, and for the same
@@ -318,14 +348,14 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
  * removing a bad one meant rebuilding every workspace to be rid of it. Merged at definition load,
  * a change to this list takes effect the moment the runtime does.
  *
- * Neither is a bypass. Both are ordinary declarations evaluated by `decide` with the authored ones,
- * and an authored `deny` still wins over either. What is unusual about them is only how a subject
- * reaches one: no team can declare either name, so each carries the flag that selects it —
- * `authenticated` for the read policy, `system` for the host's — and those two flags are the whole
- * of what `PolicyDeclaration` has and `PolicyDefinition` does not.
+ * None is a bypass. All are ordinary declarations evaluated by `decide` with the authored ones,
+ * and an authored `deny` still wins. What is unusual is only how a subject reaches one: no team can
+ * declare these names, so each carries a selector — `authenticated` for scoped system reads,
+ * `administrator` for membership controls, or `system` for the host principal.
  */
 const BUILT_IN_POLICIES: ReadonlyArray<PolicyDeclaration> = Object.freeze([
 	SYSTEM_READ_POLICY,
+	WORKSPACE_ADMINISTRATION_POLICY,
 	COLONY_SYSTEM_POLICY
 ]);
 

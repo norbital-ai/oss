@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { SCROLL_AXIS_CLASSES } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
 	import { watch } from 'runed';
@@ -72,18 +73,32 @@
 		}
 	);
 
-	// Scroll the indicator into view after the DOM flush that follows a
-	// keyboard selection change. $effect runs post-flush, so no tick() promise
-	// chain is needed.
-	$effect(() => {
-		if (commandState.inputMode !== 'keyboard') return;
-		const target = commandState.resolvedIndicatorValue;
+	/**
+	 * Scroll the keyboard indicator into view. The DOM flush that follows a keyboard selection has
+	 * already happened by the time an effect runs, so no tick() promise chain is needed.
+	 */
+	function revealKeyboardIndicator(
+		inputMode: typeof commandState.inputMode,
+		target: typeof commandState.resolvedIndicatorValue,
+		items: typeof commandState.visibleItems
+	): void {
+		if (inputMode !== 'keyboard') return;
 		if (!target) return;
 
-		const indicatorIndex = commandState.visibleItems.findIndex((item) => item.value === target);
+		const indicatorIndex = items.findIndex((item) => item.value === target);
 		if (indicatorIndex === -1) return;
 
 		virtualizer.scrollToIndex(indicatorIndex, { align: 'auto' });
+	}
+
+	// The reads are named here rather than hidden behind the call, so what re-runs this is legible
+	// at the declaration. Tracking is unchanged: the call is synchronous either way.
+	$effect(() => {
+		revealKeyboardIndicator(
+			commandState.inputMode,
+			commandState.resolvedIndicatorValue,
+			commandState.visibleItems
+		);
 	});
 
 	function handleMouseEnter() {
@@ -118,7 +133,7 @@
 
 <div
 	bind:this={ref}
-	class={cn('relative overflow-y-auto', className)}
+	class={cn('relative', SCROLL_AXIS_CLASSES.y, className)}
 	onmouseenter={handleMouseEnter}
 	onmouseleave={handleMouseLeave}
 	onmousemove={handleMouseMove}

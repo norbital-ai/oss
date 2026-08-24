@@ -1,41 +1,37 @@
 # Collections and Modeling
 
-## Column types the platform owns
+## Column and custom types the platform owns
 
-**Read this table before you reach for `custom()`. If a type is here, the platform owns it — do not
-hand-write a schema or a renderer for it.** Everything below is a named export of
-`@norbital-ai/bolt/authoring`, and every one renders natively with its own display and input.
+**Read this table before declaring a datatype. If a type is here, the platform owns it — do not
+hand-write a schema or renderer for it.** Storage primitives are named builders from
+`@norbital-ai/bolt/authoring`. Platform-owned structured values use the same `custom()` accessor as
+tenant-defined datatypes.
 
-| import                   | stores           | notes                                                    |
-| ------------------------ | ---------------- | -------------------------------------------------------- |
-| `text()`                 | text             | `{ search: true }` puts it in the search index           |
-| `numeric()`              | exact decimal    | never `number` for anything you do arithmetic on         |
-| `integer()`              | integer          |                                                          |
-| `boolean()`              | boolean          |                                                          |
-| `uuid()`                 | uuid             | foreign keys and ids                                     |
-| `date()`                 | date             | no time component                                        |
-| `timestamp()`            | timestamptz      | an instant                                               |
-| `clockTime()`            | wall-clock time  | a time of day with no date                               |
-| `dateRange()`            | a start/end pair | one value, so the ends cannot separate                   |
-| `enums([...])`           | a closed set     | the members reach the manifest                           |
-| `file()`                 | a file           | the column carries the file                              |
-| `geolocation()`          | a point          | picker and map come with it                              |
-| `phone()`                | a phone number   |                                                          |
-| `vector({ dimensions })` | an embedding     |                                                          |
-| `jsonb()`                | opaque JSON      | last resort; nothing can query or render it meaningfully |
+| import                   | stores                | notes                                                                                                 |
+| ------------------------ | --------------------- | ----------------------------------------------------------------------------------------------------- |
+| `text()`                 | text                  | `{ search: true }` puts it in the search index                                                        |
+| `numeric()`              | exact decimal         | never `number` for anything you do arithmetic on                                                      |
+| `integer()`              | integer               |                                                                                                       |
+| `boolean()`              | boolean               |                                                                                                       |
+| `uuid()`                 | uuid                  | foreign keys and ids                                                                                  |
+| `instant()`              | timestamptz           | an instant; `{ precision: 'day' }` narrows the picker/formatter only (no second column type)          |
+| `custom('instant_range', options?)` | `{ start, end }`      | a span of UTC instants; options: `{ precision: 'day' \| 'minute', multiple?: true }`                    |
+| `custom('money', options?)`         | `{ value, currency }` | JSONB validated by `MoneyValueSchema`; options: `{ allowedCurrencies: […] }`                             |
+| `enums([...])`           | a closed set          | the members reach the manifest                                                                        |
+| `file()`                 | a file                | the column carries the file (`{ mimeTypes?, multiple?: true }`)                                       |
+| `geolocation()`          | a point               | picker and map come with it                                                                           |
+| `phone()`                | a phone number        |                                                                                                       |
+| `vector({ dimensions })` | an embedding          |                                                                                                       |
+| `jsonb()`                | opaque JSON           | last resort; nothing can query or render it meaningfully                                              |
 
-`custom('<name>')` is the escape hatch for a shape **none of the above covers** — `money`,
-`payslip_source`, `leave_event`, `work_pattern`. It is not a way to add flavour to a type that
-already exists.
-
-> **The rule: never hand-write something the platform owns.** If a universal shape is missing from
-> the table, keep the workspace datatype intact until the platform owns both a field builder and a
-> renderer for it. A renderer alone does not make a datatype built in.
+`custom('<name>')` accesses every structured datatype — whether platform-injected (`money`,
+`instant_range`) or tenant-discovered (`work_pattern`, `leave_event`, `settlement_policy`). Platform
+and tenant types share the same declaration, schema-factory, validation, renderer, and access
+contracts. A tenant datatype may not shadow a platform-owned name.
 
 `std/finance` is a **separate concern**: it converts money values at storage boundaries with
-`currencyFractionDigits`, `toMinorUnits`, and `fromMinorUnits`. A workspace `money` datatype
-declares the column shape; these helpers keep decimal and minor-unit representations coherent. Never
-fold one into the other.
+`currencyFractionDigits`, `toMinorUnits`, and `fromMinorUnits`. The `custom('money')` column shape and
+these helpers stay coherent through the shared `MoneyValueSchema`. Never fold one into the other.
 
 ## Collection model
 
@@ -88,9 +84,10 @@ export default defineModel({
 });
 ```
 
-Read it with `api.readFileAsset(record.photo)` and pass it to a model with
-`images: [{ file: record.photo }]`. There is no id to resolve and no second table: the metadata is a
-field of the record that owns it, so it inherits that record's row predicate and field mask.
+Read it with `api.readFileAsset(record.photo)` (returns the id, name, mime type, size and bytes) and
+pass it to inference as `images: [{ file: record.photo, detail: 'high' }]`. There is no id to
+resolve and no second table: the metadata is a field of the record that owns it, so it inherits that
+record's row predicate and field mask.
 
 **Use `file({ multiple: true })`, never `file().array()`.** `.array()` throws at declaration. A
 dimensioned builder records only its dimensions and drops the scalar type, so the write would bind a
@@ -121,16 +118,19 @@ indexes: [
 ```
 
 Nearest-neighbor search is **server-only** (`api.db.query.<collection>.findNearest` in hooks /
-functions / automations). The browser replica remaps `vector` to text and cannot evaluate distance
-operators. A future per-record omni embedding system column reuses this same path — do not invent a
-parallel one.
+functions / automations); the browser client exposes no distance operators. The replica loads the
+pgvector extension but the client query surface declares no `findNearest` — do not invent a parallel
+one to reach for it.
 
 ## Temporal fields
 
-Choose temporal primitives by domain meaning, not by maximum precision: `date()` for calendar days,
-`clockTime()` for local wall-clock values, `timestamp()` for absolute instants, and `dateRange()` for
-UTC instant intervals selected/displayed in the client timezone. Read
-[dates-and-time.md](dates-and-time.md) before authoring temporal models, seeds, hooks, imports, or
+There is one temporal column type and one span type. `instant()` is the timestamptz column — a
+calendar day-with-a-timezone-identity is `instant({ precision: 'day' })` (`work_date:
+instant({ precision: 'day' })` in hr-payroll), and the picker is what narrows. `custom('instant_range')` is
+the span (`{ start, end }`, UTC instants, `end` nullable for an open span). Wall-clock and
+calendar-day values that must never shift are plain text columns validated with
+`@norbital-ai/std/date` (`isCalendarDate`, `isClockTime`). Read
+[dates-and-time.md](dates-and-time.md) before authoring temporal models, fixtures, hooks, imports, or
 filters.
 
 ## Relationships
@@ -311,8 +311,11 @@ definition must never import or re-export its schema from a collection. Keep sca
 The compiler discovers the renderer statically; manual imports, registration calls, and runtime renderer
 registries do not exist.
 
-`money` currently follows this contract. Do not replace it with separate amount and currency
-columns: keep it as one custom value until Bolt owns both a `money()` field builder and the renderer.
+Platform datatypes follow this exact contract too. Their `defineCustomType` definitions and
+renderers are injected by Bolt instead of discovered under the tenant's `src/datatypes/` tree; that
+is the only difference. Use `custom('money', { allowedCurrencies: [...] })` and never separate amount
+and currency columns — the value keeps the pair together and narrows the currency code, so totals
+never silently mix currencies.
 
 Custom-type schemas are **Effect Schema**, never zod. Compose with `Schema.Struct`, `Schema.Union`,
 `Schema.Literals`, and `Schema.NullOr` from `effect`, and export the value type as

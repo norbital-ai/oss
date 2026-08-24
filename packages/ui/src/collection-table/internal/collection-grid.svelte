@@ -374,7 +374,7 @@
 
 	// Re-measure columns when layouts change
 	watch(
-		() => scrollLayouts.map((l) => `${l.id}:${l.width}`).join(','),
+		() => scrollLayouts.map(({ id, width }) => `${id}:${width}`).join(','),
 		() => {
 			colVirtualizer.measure();
 		}
@@ -490,7 +490,7 @@
 									{#each sortedItems as id (id)}
 										{@const layout = scrollLayouts.find((l) => l.id === id)}
 										{#if layout}
-											<Sortable.Item id={layout.id} isDragging={draggedItemId === layout.id}>
+											<Sortable.Item {id} isDragging={draggedItemId === id}>
 												{#snippet child({ props })}
 													{@render renderHeaderCell(layout, props)}
 												{/snippet}
@@ -624,7 +624,8 @@
 			</Inline>
 
 			{@const canResize = layout.canResize && !disabled}
-			{@const isResizing = resizer.activeColumnId === inst.id}
+			{@const { id: columnId } = inst}
+			{@const isResizing = resizer.activeColumnId === columnId}
 			{#if canResize}
 				<button
 					type="button"
@@ -724,8 +725,10 @@
 	<Inline justify="center" align="center" class="min-h-48 p-8">
 		<Alert.Root variant="destructive" class="max-w-md">
 			<Icon icon="lucide:alert-circle" class="h-4 w-4" />
-			<Alert.Title>{t('table.loadError')}</Alert.Title>
-			<Alert.Description class="mt-2">{error}</Alert.Description>
+			<Stack gap="sm">
+				<Alert.Title>{t('table.loadError')}</Alert.Title>
+				<Alert.Description>{error}</Alert.Description>
+			</Stack>
 		</Alert.Root>
 	</Inline>
 {/snippet}

@@ -22,6 +22,7 @@ export const publicPackageDirectories = [
 	'bolt-protocol',
 	'bolt-server',
 	'config',
+	'doctor',
 	'std',
 	'ui'
 ];

@@ -10,11 +10,12 @@ export const ENTITY_ICONS = {
 	// ── Data types (Postgres column types) ──────────────────────────
 	datatype: {
 		bool: 'lucide:toggle-left',
-		'date-range': 'lucide:calendar-range',
+		instant_range: 'lucide:calendar-range',
 		enum: 'lucide:list',
 		extension: 'lucide:puzzle',
 		file: 'lucide:file-image',
 		geolocation: 'lucide:map-pin',
+		instant: 'lucide:clock',
 		money: 'lucide:banknote',
 		numeric: 'lucide:hash',
 		range: 'lucide:sliders-horizontal',
@@ -22,7 +23,6 @@ export const ENTITY_ICONS = {
 		relationship: 'lucide:table-2',
 		team: 'lucide:users',
 		text: 'lucide:text',
-		timestamptz: 'lucide:clock',
 		user: 'lucide:user',
 		uuid: 'lucide:key'
 	},

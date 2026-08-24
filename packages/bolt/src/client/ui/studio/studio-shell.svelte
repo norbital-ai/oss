@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { Effect, Schema } from 'effect';
 	import Icon from '@iconify/svelte';
-	import CommandPane from './command-pane.svelte';
+	import OperationsPane from './operations-pane.svelte';
 	import ManifestPane from './manifest-pane.svelte';
 	import ManifestTree from './manifest-tree.svelte';
 	import SourceEditor from './source-editor.svelte';
@@ -10,13 +10,19 @@
 	import ReviewSidebar from './review-sidebar.svelte';
 	import AuthoringToolbar from './authoring-toolbar.svelte';
 	import { Button } from '@norbital-ai/ui/button';
-	import { Bound, Cluster, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
+	import { Bound, Cluster, Cover, Inline, INSET_X_CLASS, Stack } from '@norbital-ai/ui/layout';
 	import * as Sheet from '@norbital-ai/ui/sheet';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import { workspaceSession } from '#lib/client/session.js';
+	import {
+		settleSourceCommit,
+		sourceCommitFiles,
+		sourceDraftValue,
+		updateSourceDrafts,
+		type SourceDrafts
+	} from '#lib/client/ui/studio/source-drafts.js';
 	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 	import {
-		LIVE_READ_ONLY_NOTICE,
 		manifestSections,
 		releaseControls,
 		studioEnvironments,
@@ -29,20 +35,8 @@
 	} from '#lib/client/ui/studio/studio-state.js';
 
 	/**
-	 * Workspace Studio: Authoring, Review and the Command panel over one tenant.
-	 *
-	 * Authoring is the workspace as it declares itself — the manifest tree and its panels — and the
-	 * source that declares it, edited into a revision the host holds. Review is where a proposed
-	 * release would be read. The Command panel is the tenant's own runtime: what is routed, what it
-	 * is holding, and the release operations that may still be applied to it.
-	 *
-	 * The page owns one gutter and one chrome rhythm: heading, root rail, then a nested rail that
-	 * belongs to whichever root tab is open. Authoring and Review both hang their navigator in the
-	 * same fixed-width slot, so switching between them never moves the viewport.
-	 *
-	 * Every control is driven by a command that exists. Where the host has no capability the Studio
-	 * says so in the surface that would have used it, rather than offering a control that quietly
-	 * does nothing or an empty list that reads as "none".
+	 * Workspace Studio exposes one authoring path: personal Workbench → Preview → Review → Live.
+	 * Runtime diagnostics remain a secondary administrator-only surface.
 	 */
 
 	/**
@@ -56,6 +50,7 @@
 	let { client }: { client: WorkspaceClient } = $props();
 
 	const OperationsStateSchema = Schema.Struct({
+		capabilities: Schema.Struct({ canDecideReview: Schema.Boolean }),
 		entries: Schema.Array(
 			Schema.Struct({
 				tenantId: Schema.String,
@@ -77,9 +72,69 @@
 		readiness: Schema.Struct({ accepting: Schema.Boolean, outstanding: Schema.Number }),
 		source: Schema.Struct({
 			tenantId: Schema.String,
-			revision: Schema.Natural,
+			workspaceKey: Schema.String,
+			baseCommit: Schema.NonEmptyString,
+			commit: Schema.NonEmptyString,
 			files: Schema.Record(Schema.String, Schema.String)
 		}),
+		sourceHistory: Schema.Array(
+			Schema.Struct({
+				commit: Schema.NonEmptyString,
+				parent: Schema.NonEmptyString,
+				changes: Schema.Array(
+					Schema.Struct({
+						path: Schema.NonEmptyString,
+						before: Schema.NullOr(Schema.String),
+						after: Schema.String
+					})
+				)
+			})
+		),
+		conflicts: Schema.Array(Schema.NonEmptyString),
+		releaseRequests: Schema.Array(
+			Schema.Struct({
+				id: Schema.NonEmptyString,
+				tenantId: Schema.NonEmptyString,
+				environmentId: Schema.NonEmptyString,
+				workspaceKey: Schema.NonEmptyString,
+				authorId: Schema.NonEmptyString,
+				commit: Schema.NonEmptyString,
+				baseCommit: Schema.NonEmptyString,
+				previewEnvironmentId: Schema.NonEmptyString,
+				baseReleaseId: Schema.NullOr(Schema.NonEmptyString),
+				releaseId: Schema.NonEmptyString,
+				artifactId: Schema.NonEmptyString,
+				checksum: Schema.NonEmptyString,
+				schemaPlan: Schema.Struct({
+					fingerprint: Schema.NonEmptyString,
+					steps: Schema.Array(
+						Schema.Struct({ id: Schema.NonEmptyString, sql: Schema.NonEmptyString })
+					)
+				}),
+				status: Schema.Literals(['open', 'approving', 'approved', 'changes_requested', 'rejected']),
+				reason: Schema.NullOr(Schema.String),
+				changedFiles: Schema.Array(
+					Schema.Struct({
+						path: Schema.NonEmptyString,
+						before: Schema.NullOr(Schema.String),
+						after: Schema.String
+					})
+				)
+			})
+		),
+		needsRebase: Schema.Boolean,
+		preview: Schema.NullOr(
+			Schema.Struct({
+				workspaceKey: Schema.NonEmptyString,
+				commit: Schema.NonEmptyString,
+				baseCommit: Schema.NonEmptyString,
+				previewEnvironmentId: Schema.NonEmptyString,
+				releaseId: Schema.NonEmptyString,
+				artifactId: Schema.NonEmptyString,
+				expiresAtEpochMs: Schema.Number
+			})
+		),
+		deploymentHistory: Schema.Array(Schema.NonEmptyString),
 		workbenches: Schema.Array(Schema.Struct({ workspaceKey: Schema.String, open: Schema.Boolean })),
 		facilities: Schema.Array(Schema.Struct({ name: Schema.String, available: Schema.Boolean }))
 	});
@@ -95,24 +150,25 @@
 	 */
 	let view = $state<{
 		rootTab: StudioRootTab;
-		authoring: AuthoringView;
+		workbench: AuthoringView;
 		review: StudioReviewTab;
 		selected: string;
 		expanded: ReadonlyArray<string>;
 		environmentId: string | undefined;
 	}>({
-		rootTab: 'authoring',
-		authoring: 'manifest',
+		rootTab: 'workbench',
+		workbench: 'manifest',
 		review: 'requests',
 		selected: 'collections',
 		expanded: ['collections'],
 		environmentId: undefined
 	});
-	/** The file open in the Editor and its working copy; a commit writes exactly this pair. */
+	/** The file open in the Editor. Working copies live separately so switching files cannot lose one. */
 	let editor = $state({ path: '', value: '' });
-	const manifestQuery = $derived(
-		typeof window === 'undefined' ? undefined : client.system.workspace.manifest({})
-	);
+	/** Every source file changed against the host snapshot, committed together by Preview. */
+	let sourceDrafts = $state<SourceDrafts>({});
+	let browserReady = $state(false);
+	const manifestQuery = $derived(browserReady ? client.system.workspace.manifest({}) : undefined);
 	const workspace = $derived({
 		manifest: manifestQuery?.current,
 		error:
@@ -122,9 +178,7 @@
 					? manifestQuery.error.message
 					: String(manifestQuery.error)
 	});
-	const environmentQuery = $derived(
-		typeof window === 'undefined' ? undefined : client.system.secrets.status({})
-	);
+	const environmentQuery = $derived(browserReady ? client.system.secrets.status({}) : undefined);
 	const vault = $derived({
 		entries: environmentQuery?.current ?? [],
 		error:
@@ -136,6 +190,8 @@
 	});
 	/** The last thing the host said, and whether a command it was told to run is still running. */
 	let host = $state({ status: 'Loading managed host state…', busy: false });
+	/** The release request selected in Review; absent means the newest request. */
+	let selectedRequestId = $state<string | undefined>();
 	/**
 	 * Whether the navigator is open as a sheet.
 	 *
@@ -153,6 +209,13 @@
 	 * transport and one host operations seam, and this page uses exactly those.
 	 */
 	const session = workspaceSession();
+	const rootTabs = $derived([
+		{ name: 'workbench', label: 'Workbench', content: '' },
+		{ name: 'review', label: 'Review', content: '' },
+		...(snapshot?.capabilities.canDecideReview === true
+			? [{ name: 'operations', label: 'Operations', content: '' }]
+			: [])
+	] satisfies TabConfig[]);
 	const sections = $derived(manifestSections(workspace.manifest, vault.entries));
 	const sourceFiles = $derived(snapshot?.source.files ?? {});
 	const files = $derived(Object.keys(sourceFiles).sort());
@@ -170,34 +233,66 @@
 	const missingFacilities = $derived(unavailableFacilities(snapshot?.facilities ?? []));
 	const controls = $derived(
 		releaseControls({
-			environment: activeEnvironment,
 			busy: host.busy,
 			accepting: snapshot?.readiness.accepting ?? false,
 			hasRelease: (activeEnvironment?.releaseId ?? '') !== ''
 		})
 	);
-	const readOnly = $derived(activeEnvironment?.readOnly === true);
-	const isAuthoring = $derived(view.rootTab === 'authoring');
+	const readOnly = false;
+	const isWorkbench = $derived(view.rootTab === 'workbench');
 	const isReview = $derived(view.rootTab === 'review');
-	const isCommand = $derived(view.rootTab === 'command');
+	const isOperations = $derived(view.rootTab === 'operations');
+	const sourceDraftCount = $derived(Object.keys(sourceDrafts).length);
+	const currentCommitAlreadyRequested = $derived(
+		(snapshot?.releaseRequests ?? []).some((request) => request.commit === snapshot?.source.commit)
+	);
+	const requestReviewDisabled = $derived(
+		!controls.canRequestReview ||
+			sourceDraftCount > 0 ||
+			snapshot?.preview == null ||
+			snapshot.preview.commit !== snapshot.source.commit ||
+			currentCommitAlreadyRequested
+	);
+	const requestReviewReason = $derived(
+		controls.reason ??
+			(sourceDraftCount > 0
+				? 'Preview saves every draft before Review.'
+				: snapshot?.preview == null || snapshot.preview.commit !== snapshot?.source.commit
+					? 'Build Preview for the current workbench first.'
+					: currentCommitAlreadyRequested
+						? 'This workbench commit is already in Review.'
+						: 'Send this exact Preview to Review.')
+	);
 
 	/** Opens an authored file in the Editor; "View model" and "View source" both land here. */
 	const openSource = (path: string): void => {
 		if (path === '') return;
-		view.authoring = 'editor';
+		view.workbench = 'editor';
 		view.selected = `source:${path}`;
-		editor = { path, value: snapshot?.source.files[path] ?? '' };
+		editor = { path, value: sourceDraftValue(sourceDrafts, sourceFiles, path) };
+	};
+
+	const updateEditor = (value: string): void => {
+		if (editor.path === '') return;
+		sourceDrafts = updateSourceDrafts(sourceDrafts, sourceFiles, editor.path, value);
+		editor = { ...editor, value };
+	};
+
+	const openCurrentReview = (): void => {
+		const request = [...(snapshot?.releaseRequests ?? [])]
+			.reverse()
+			.find((candidate) => candidate.commit === snapshot?.source.commit);
+		selectedRequestId = request?.id;
+		view.rootTab = 'review';
+		view.review = 'requests';
 	};
 
 	const actions = {
 		/**
-		 * Reads host state. It deliberately does not claim `busy`.
-		 *
-		 * This runs on a timer, and `busy` is what disables the release controls: claiming it here
-		 * greyed out Commit and Build every five seconds and flashed "a command is already running"
-		 * under them, for a poll nobody asked for.
+		 * Reads host state once when Studio mounts and after a host operation succeeds. It deliberately
+		 * does not claim `busy`, because the read itself does not block release controls.
 		 */
-		reload: (): Effect.Effect<void> =>
+		readHostState: (): Effect.Effect<void> =>
 			Effect.gen(function* () {
 				const raw = yield* Effect.tryPromise(() => session.operations.read());
 				snapshot = yield* Schema.decodeUnknownEffect(OperationsStateSchema)(raw);
@@ -211,40 +306,134 @@
 					return Effect.void;
 				})
 			),
-		operation: (body: Schema.Json, describe: () => string): Effect.Effect<void> =>
+		operation: (
+			body: Schema.Json,
+			describe: () => string,
+			afterSuccess?: () => void,
+			afterFailure?: (message: string) => void
+		): Effect.Effect<void> =>
 			Effect.gen(function* () {
 				host.busy = true;
 				yield* Effect.tryPromise(() => session.operations.run(body));
 				host.status = describe();
-				yield* actions.reload();
+				yield* actions.readHostState();
+				afterSuccess?.();
 			}).pipe(
 				Effect.catch((cause) => {
-					host.status = `Failed: ${cause instanceof Error ? cause.message : String(cause)}`;
-					return Effect.void;
+					const message = cause instanceof Error ? cause.message : String(cause);
+					return actions.readHostState().pipe(
+						Effect.tap(() =>
+							Effect.sync(() => {
+								if (afterFailure === undefined) host.status = `Failed: ${message}`;
+								else afterFailure(message);
+							})
+						)
+					);
 				}),
 				Effect.ensuring(Effect.sync(() => (host.busy = false)))
 			),
-		build: () =>
-			actions.operation({ action: 'build' }, () => 'Compiled the source and routed the release'),
+		requestReview: () =>
+			actions.operation(
+				{ action: 'release_request', operation: 'open' },
+				() => 'Sent the exact Preview to Review',
+				() => {
+					view.rootTab = 'review';
+					view.review = 'requests';
+					selectedRequestId = snapshot?.releaseRequests.at(-1)?.id;
+				}
+			),
+		reviewPreview: (requestId: string) =>
+			actions.operation(
+				{ action: 'preview', operation: 'review', requestId },
+				() => 'Opened the exact Preview under Review',
+				() => window.location.reload()
+			),
+		approveRelease: (requestId: string) =>
+			actions.operation(
+				{ action: 'release_request', operation: 'approve', requestId },
+				() => 'Approved and released the exact reviewed Preview'
+			),
+		requestReleaseChanges: (requestId: string, reason: string) =>
+			actions.operation(
+				{ action: 'release_request', operation: 'request_changes', requestId, reason },
+				() => 'Requested changes and retired that Preview'
+			),
+		rejectRelease: (requestId: string, reason: string) =>
+			actions.operation(
+				{ action: 'release_request', operation: 'reject', requestId, reason },
+				() => 'Rejected the Review and retired that Preview'
+			),
 		rollback: () =>
 			actions.operation({ action: 'rollback' }, () => 'Rolled back to the previous release'),
-		commit: () =>
+		preview: () => {
+			const committedFiles = sourceCommitFiles(sourceDrafts);
+			return Effect.gen(function* () {
+				host.busy = true;
+				if (Object.keys(committedFiles).length > 0) {
+					yield* Effect.tryPromise(() =>
+						session.operations.run({
+							action: 'source',
+							expectedCommit: snapshot?.source.commit ?? '',
+							files: committedFiles
+						})
+					);
+					sourceDrafts = settleSourceCommit(sourceDrafts, committedFiles);
+					yield* actions.readHostState();
+				}
+				yield* Effect.tryPromise(() =>
+					session.operations.run({ action: 'preview', operation: 'build' })
+				);
+				host.status = 'Preview ready';
+				yield* actions.readHostState();
+				window.location.reload();
+			}).pipe(
+				Effect.catch((cause) => {
+					const message = cause instanceof Error ? cause.message : String(cause);
+					return actions.readHostState().pipe(
+						Effect.tap(() =>
+							Effect.sync(() => {
+								if (message.includes('DDL was generated')) {
+									host.status = 'Migration ready — review or edit it, then Preview again.';
+									const migration = Object.keys(snapshot?.source.files ?? {})
+										.filter(
+											(path) =>
+												path.startsWith('.norbital/migrations/') && path.endsWith('/migration.sql')
+										)
+										.sort()
+										.at(-1);
+									if (migration !== undefined) openSource(migration);
+								} else {
+									host.status = `Failed: ${message}`;
+								}
+							})
+						)
+					);
+				}),
+				Effect.ensuring(Effect.sync(() => (host.busy = false)))
+			);
+		},
+		rebaseWorkbench: () =>
 			actions.operation(
-				{
-					action: 'source',
-					expectedRevision: snapshot?.source.revision ?? 0,
-					files: { [editor.path]: editor.value }
-				},
-				() => `Committed ${editor.path}`
+				{ action: 'workbench', operation: 'rebase' },
+				() => 'Rebased onto the latest Live commit',
+				undefined,
+				(message) => {
+					const first = snapshot?.conflicts[0];
+					if (first === undefined) {
+						host.status = `Failed: ${message}`;
+						return;
+					}
+					host.status = `Resolve ${snapshot?.conflicts.length ?? 1} conflicted file${
+						(snapshot?.conflicts.length ?? 1) === 1 ? '' : 's'
+					}, then Rebase again.`;
+					openSource(first);
+				}
 			)
 	};
 
 	onMount(() => {
-		void Effect.runPromise(actions.reload());
-		const interval = setInterval(() => {
-			void Effect.runPromise(actions.reload());
-		}, 5_000);
-		return () => clearInterval(interval);
+		browserReady = true;
+		Effect.runFork(actions.readHostState());
 	});
 </script>
 
@@ -254,20 +443,19 @@
 	where the sidebar would have.
 -->
 {#snippet navigator()}
-	{#if isAuthoring}
+	{#if isWorkbench}
 		<ManifestTree
 			{sections}
 			{files}
 			{fileSizes}
 			selected={view.selected}
 			expanded={view.expanded}
-			view={view.authoring}
+			view={view.workbench}
 			{readOnly}
 			onselect={(key) => {
 				view.selected = key;
 				if (key.startsWith('source:')) {
-					const path = key.slice('source:'.length);
-					editor = { path, value: snapshot?.source.files[path] ?? '' };
+					openSource(key.slice('source:'.length));
 				}
 				navigatorSheetOpen = false;
 			}}
@@ -278,7 +466,14 @@
 			}}
 		/>
 	{:else}
-		<ReviewSidebar source={snapshot?.source} />
+		<ReviewSidebar
+			requests={snapshot?.releaseRequests ?? []}
+			{selectedRequestId}
+			onselect={(requestId) => {
+				selectedRequestId = requestId;
+				navigatorSheetOpen = false;
+			}}
+		/>
 	{/if}
 {/snippet}
 
@@ -290,14 +485,14 @@
 			<Stack as="header" gap="xs">
 				<h1 class="text-heading">Workspace Studio</h1>
 				<p class="max-w-2xl text-meta">
-					Author, review, and operate the source and releases behind this workspace.
+					Edit safely, preview the exact result, then ask for review.
 				</p>
 			</Stack>
 			<Cluster gap="sm" align="center" shrink={false}>
 				<Tabs
 					value={view.rootTab}
 					onValueChange={(next) => {
-						if (next === 'authoring' || next === 'review' || next === 'command') {
+						if (next === 'workbench' || next === 'review' || next === 'operations') {
 							view.rootTab = next;
 						}
 					}}
@@ -307,13 +502,9 @@
 					layout="responsive"
 					class="min-w-0 flex-1 !shrink"
 					listClass="mx-0 w-full"
-					config={[
-						{ name: 'authoring', label: 'Authoring', content: '' },
-						{ name: 'review', label: 'Review', content: '' },
-						{ name: 'command', label: 'Command panel', content: '' }
-					] satisfies TabConfig[]}
+					config={rootTabs}
 				/>
-				{#if !isCommand}
+				{#if !isOperations}
 					<Button
 						variant="ghost"
 						size="sm"
@@ -328,21 +519,32 @@
 			</Cluster>
 		</Stack>
 
-		{#if !isCommand}
+		{#if !isOperations}
 			<!-- The root rail and every nested tab surface share one page gutter. Keeping the gutter on
-			     this parent prevents Authoring and Review from drifting independently. -->
-			<Stack gap="none" shrink={false} class="px-4 sm:px-6">
-				{#if isAuthoring}
+			     this parent prevents Workbench and Review from drifting independently. -->
+			<Stack gap="none" shrink={false} class={INSET_X_CLASS}>
+				{#if isWorkbench}
 					<AuthoringToolbar
-						{environments}
-						{activeEnvironment}
 						hostStatus={host.status}
-						view={view.authoring}
-						commitDisabled={!controls.canCommit || editor.path === ''}
-						commitReason={controls.reason ?? 'Open a file in the Editor to commit it.'}
-						onenvironment={(id) => (view.environmentId = id)}
-						onview={(next) => (view.authoring = next)}
-						oncommit={() => void Effect.runPromise(actions.commit())}
+						view={view.workbench}
+						previewReady={sourceDraftCount === 0 &&
+							snapshot?.preview?.commit === snapshot?.source.commit}
+						updateRequired={snapshot?.needsRebase === true}
+						updateDisabled={host.busy || snapshot?.readiness.accepting !== true}
+						updateReason={controls.reason ?? 'Rebase onto the latest Live commit.'}
+						previewDisabled={!controls.canPreview || snapshot?.needsRebase === true}
+						previewReason={controls.reason ??
+							(snapshot?.needsRebase === true
+								? 'Rebase onto Live before Preview.'
+								: 'Preview is ready to build.')}
+						reviewRequested={currentCommitAlreadyRequested}
+						reviewDisabled={requestReviewDisabled}
+						reviewReason={requestReviewReason}
+						onview={(next) => (view.workbench = next)}
+						onpreview={() => void Effect.runPromise(actions.preview())}
+						onreview={() => void Effect.runPromise(actions.requestReview())}
+						onopenreview={openCurrentReview}
+						onrebase={() => void Effect.runPromise(actions.rebaseWorkbench())}
 					/>
 				{:else}
 					<!-- Row 2b: Review chrome -->
@@ -367,27 +569,15 @@
 							class="min-w-0 max-w-full !shrink"
 							listClass="mx-0 w-fit max-w-full"
 							config={[
-								{ name: 'requests', label: 'Release requests', content: '' },
-								{ name: 'history', label: 'History', content: '' },
-								{ name: 'schema', label: 'Schema', content: '' }
+								{ name: 'requests', label: 'Changes', content: '' },
+								{ name: 'schema', label: 'Schema', content: '' },
+								{ name: 'history', label: 'History', content: '' }
 							] satisfies TabConfig[]}
 						/>
 					</Cluster>
 				{/if}
 
-				{#if isAuthoring && readOnly}
-					<Inline
-						gap="xs"
-						shrink={false}
-						class="h-6 border-b border-amber-500/30 bg-amber-500/10 px-2 text-amber-900 dark:text-amber-100"
-						role="status"
-						data-testid="studio-readonly-notice"
-					>
-						<Icon icon="lucide:info" class="size-3 shrink-0" />
-						<span class="truncate text-xs leading-none">{LIVE_READ_ONLY_NOTICE}</span>
-					</Inline>
-				{/if}
-				{#if isAuthoring && missingFacilities.length > 0}
+				{#if isWorkbench && missingFacilities.length > 0}
 					<Inline
 						gap="xs"
 						shrink={false}
@@ -401,7 +591,7 @@
 						</span>
 					</Inline>
 				{/if}
-				{#if isAuthoring && workspace.error !== undefined}
+				{#if isWorkbench && workspace.error !== undefined}
 					<Inline
 						gap="xs"
 						shrink={false}
@@ -419,17 +609,13 @@
 		{/if}
 	{/snippet}
 
-	<!-- One page gutter for every root tab. Letting the Command panel drop it is what made its
-	     heading sit a step further left than Authoring's. -->
-	<Inline align="stretch" gap="none" fill class="px-4 sm:px-6">
-		{#if isCommand}
+	<!-- One page gutter for every root tab. -->
+	<Inline align="stretch" gap="none" fill class={INSET_X_CLASS}>
+		{#if isOperations}
 			<Bound size="full" grow clip class="bg-background font-sans">
-				<CommandPane
+				<OperationsPane
 					{snapshot}
 					{controls}
-					busy={host.busy}
-					onrefresh={() => void Effect.runPromise(actions.reload())}
-					onbuild={() => void Effect.runPromise(actions.build())}
 					onrollback={() => void Effect.runPromise(actions.rollback())}
 				/>
 			</Bound>
@@ -451,8 +637,22 @@
 				data-testid="studio-viewport"
 			>
 				{#if isReview}
-					<ReviewPane tab={view.review} source={snapshot?.source} system={client.system} />
-				{:else if view.authoring === 'manifest'}
+					<ReviewPane
+						tab={view.review}
+						releaseRequests={snapshot?.releaseRequests ?? []}
+						{selectedRequestId}
+						sourceHistory={snapshot?.sourceHistory ?? []}
+						deploymentHistory={snapshot?.deploymentHistory ?? []}
+						busy={host.busy}
+						canDecide={snapshot?.capabilities.canDecideReview === true}
+						onpreview={(requestId) => void Effect.runPromise(actions.reviewPreview(requestId))}
+						onapprove={(requestId) => void Effect.runPromise(actions.approveRelease(requestId))}
+						onrequestchanges={(requestId, reason) =>
+							void Effect.runPromise(actions.requestReleaseChanges(requestId, reason))}
+						onreject={(requestId, reason) =>
+							void Effect.runPromise(actions.rejectRelease(requestId, reason))}
+					/>
+				{:else if view.workbench === 'manifest'}
 					<ManifestPane
 						manifest={workspace.manifest}
 						{sections}
@@ -472,7 +672,7 @@
 						value={editor.value}
 						fileCount={files.length}
 						{readOnly}
-						onValueChange={(value) => (editor = { ...editor, value })}
+						onValueChange={updateEditor}
 					/>
 				{/if}
 			</Bound>
@@ -486,7 +686,7 @@
 			<Sheet.Header class="shrink-0 border-b border-border px-4 py-3 pr-12">
 				<Sheet.Title>Workspace navigator</Sheet.Title>
 				<Sheet.Description>
-					The branches of this workspace's manifest, and the source files behind them.
+					{isWorkbench ? 'Workspace sections and source files.' : 'Reviews for this workspace.'}
 				</Sheet.Description>
 			</Sheet.Header>
 			<Stack gap="none" grow class="min-h-0 bg-card">

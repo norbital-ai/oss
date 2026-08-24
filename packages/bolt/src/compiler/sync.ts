@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { isBuiltin } from 'node:module';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { build } from 'vite';
+import { build, type Plugin } from 'vite';
 import { Effect, Schema } from 'effect';
 import { PROTOCOL_VERSION } from '@norbital-ai/bolt-protocol';
 import {
@@ -12,6 +13,7 @@ import {
 	type SkillDeclaration,
 	type WorkspaceMigrationEntry
 } from '../authoring/workspace-schema.js';
+import { platformCustomTypes } from '../authoring/models-schema.js';
 import {
 	BOLT_TENANT_REQUEST_PREFIX,
 	BOLT_TENANT_STATIC_PREFIX,
@@ -21,12 +23,40 @@ import { appCapabilityNames } from './compiler.js';
 import { extractAppMetadata, extractGroupMetadata } from './app-metadata.js';
 import {
 	extractCollectionCatalog,
+	extractCustomTypeReferences,
 	extractModelFields,
 	extractRelationships,
 	type CollectionCatalogEntry
 } from './model-fields.js';
 
 const boltPackageRoot = fileURLToPath(new URL('../..', import.meta.url));
+
+/**
+ * Refuses Node builtins anywhere in the executable tenant-runtime graph.
+ *
+ * Vite's browser compatibility fallback is deliberately permissive: it turns `node:crypto` into
+ * an object-shaped external instead of failing the build. That is useful for a dependency whose
+ * Node branch is provably unreachable in a browser. It is fatal for an authored hook imported by
+ * the server artifact, because an ESM named import reads `createHash` while the bundle is evaluated
+ * and the proxy throws before any hook or automation can run.
+ *
+ * The compiler itself remains a Node program and may use builtins. This plugin is installed only on
+ * the second Vite build below, whose entry is the generated tenant artifact; the boundary therefore
+ * rejects a capability the isolate does not expose instead of trying to make compiler-only code
+ * portable or waiting for Colony to discover it at invocation time.
+ */
+export const tenantRuntimeBoundary = (): Plugin => ({
+	name: '@norbital-ai/bolt:tenant-runtime-boundary',
+	enforce: 'pre',
+	resolveId(source, importer) {
+		if (!isBuiltin(source)) return null;
+		const owner = importer === undefined ? 'the tenant artifact entry' : importer;
+		this.error(
+			`Tenant runtime module ${owner} imports Node builtin ${JSON.stringify(source)}. ` +
+				'Bolt artifacts run in a portable isolate; use a Web Platform API or move the operation behind a facility.'
+		);
+	}
+});
 
 /** Tests file presence without blocking the compiler's Effect-owned workflow. */
 const fileExists = (path: string): Effect.Effect<boolean> =>
@@ -68,6 +98,17 @@ const PackageMetadataFile = Schema.Struct({
 });
 
 const I18nMessagesFile = Schema.Record(Schema.String, Schema.String);
+
+/**
+ * The two file decoders, built once.
+ *
+ * Both are read per workspace and per locale, and a decoder is compiled when it is constructed:
+ * building them beside the schema keeps that cost out of the read.
+ */
+const decodePackageMetadataFile = Schema.decodeUnknownSync(
+	Schema.fromJsonString(PackageMetadataFile)
+);
+const decodeI18nMessagesFile = Schema.decodeUnknownSync(Schema.fromJsonString(I18nMessagesFile));
 
 type I18nCatalogs = Readonly<{
 	readonly en: Readonly<Record<string, string>>;
@@ -241,15 +282,17 @@ type RenderArtifactInput = Readonly<{
 class WorkspaceCompiler {
 	/** Owns read package metadata behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly readPackageMetadata = (root: string) =>
-		Effect.gen(function* () {
-			const source = yield* Effect.tryPromise(() => readFile(join(root, 'package.json'), 'utf8'));
-			const value = Schema.decodeUnknownSync(Schema.fromJsonString(PackageMetadataFile))(source);
-			return {
-				name: value.name ?? basename(root),
-				version: value.version ?? '0.0.0-local',
-				description: value.description ?? 'Bolt workspace'
-			};
-		});
+		Effect.map(
+			Effect.tryPromise(() => readFile(join(root, 'package.json'), 'utf8')),
+			(source) => {
+				const value = decodePackageMetadataFile(source);
+				return {
+					name: value.name ?? basename(root),
+					version: value.version ?? '0.0.0-local',
+					description: value.description ?? 'Bolt workspace'
+				};
+			}
+		);
 
 	/** Owns files under behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly filesUnder = (root: string) => {
@@ -304,7 +347,15 @@ class WorkspaceCompiler {
 		return `import { defineModels } from '@norbital-ai/bolt/authoring/internals';\n${WorkspaceCompiler.importLines(models, root, 'model')}\n\nexport const models = defineModels({\n${entries}\n});\nexport type Models = typeof models;\n`;
 	};
 
-	/** Owns render custom types behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
+	/**
+	 * Owns render custom types behavior at the compiler boundary so validation and typed semantics
+	 * stay consistent for every caller.
+	 *
+	 * Platform-owned datatypes and discovered tenant datatypes are one map, exactly as collections
+	 * are: the platform's entries are supplied (imported from `@norbital-ai/bolt/authoring`) and the
+	 * workspace's are discovered, and both land in the same `customTypes` table so a write validates
+	 * and renders through one path.
+	 */
 	static readonly renderCustomTypes = (
 		definitions: ReadonlyArray<string>,
 		root: string
@@ -312,7 +363,7 @@ class WorkspaceCompiler {
 		const entries = definitions
 			.map((path, index) => `\t${JSON.stringify(basename(dirname(path)))}: definition${index}`)
 			.join(',\n');
-		return `import type { CustomTypeOutput } from '@norbital-ai/bolt/authoring';\n${WorkspaceCompiler.importLines(definitions, root, 'definition')}\n\nexport const customTypes = {\n${entries}\n} as const;\nexport type CustomKind = keyof typeof customTypes;\nexport type CustomValue<K extends CustomKind> = CustomTypeOutput<(typeof customTypes)[K]>;\n`;
+		return `import type { CustomTypeOutput } from '@norbital-ai/bolt/authoring';\nimport { platformCustomTypes } from '@norbital-ai/bolt/authoring';\n${WorkspaceCompiler.importLines(definitions, root, 'definition')}\n\nexport const customTypes = {\n\t...platformCustomTypes,\n${entries}\n} as const;\nexport type CustomKind = keyof typeof customTypes;\nexport type CustomValue<K extends CustomKind> = CustomTypeOutput<(typeof customTypes)[K]>;\n`;
 	};
 
 	/**
@@ -369,19 +420,16 @@ class WorkspaceCompiler {
 	/** Owns read i18n messages behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly readI18nMessages = (root: string) => {
 		const readLocale = (locale: 'en' | 'zh'): Effect.Effect<Readonly<Record<string, string>>> =>
-			Effect.gen(function* () {
-				const path = join(root, 'src', 'i18n', `messages.${locale}.json`);
-				const source = yield* Effect.tryPromise(() => readFile(path, 'utf8')).pipe(
-					Effect.catch(() => Effect.succeed<string | undefined>(undefined))
-				);
-				return source === undefined
-					? {}
-					: Schema.decodeUnknownSync(Schema.fromJsonString(I18nMessagesFile))(source);
-			});
-		return Effect.gen(function* () {
-			const [en, zh] = yield* Effect.all([readLocale('en'), readLocale('zh')] as const);
-			return { en, zh };
-		});
+			Effect.tryPromise(() =>
+				readFile(join(root, 'src', 'i18n', `messages.${locale}.json`), 'utf8')
+			).pipe(
+				Effect.catch(() => Effect.succeed<string | undefined>(undefined)),
+				Effect.map((source) => (source === undefined ? {} : decodeI18nMessagesFile(source)))
+			);
+		return Effect.map(Effect.all([readLocale('en'), readLocale('zh')] as const), ([en, zh]) => ({
+			en,
+			zh
+		}));
 	};
 
 	/** Owns render i18n messages behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
@@ -402,7 +450,7 @@ class WorkspaceCompiler {
 
 	/** Owns render collection catalog declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderCollectionCatalogDeclaration = (): string =>
-		`export declare const collectionCatalog: Readonly<Record<string, {\n\treadonly name: string;\n\treadonly recordLabel?: string;\n\treadonly fields: ReadonlyArray<{ readonly name: string; readonly kind: string; readonly nullable: boolean; readonly readOnly?: boolean; readonly search?: boolean; readonly values?: ReadonlyArray<string> }>;\n\treadonly relationships: ReadonlyArray<{ readonly name: string; readonly target: string; readonly cardinality: 'one' | 'many'; readonly cascade?: true }>;\n}>>;\n`;
+		`export declare const collectionCatalog: Readonly<Record<string, {\n\treadonly name: string;\n\treadonly recordLabel?: string;\n\treadonly fields: ReadonlyArray<{ readonly name: string; readonly kind: string; readonly nullable: boolean; readonly readOnly?: boolean; readonly search?: boolean; readonly values?: ReadonlyArray<string>; readonly currencies?: ReadonlyArray<string>; readonly precision?: 'day' | 'minute' }>;\n\treadonly relationships: ReadonlyArray<{ readonly name: string; readonly target: string; readonly cardinality: 'one' | 'many'; readonly cascade?: true }>;\n}>>;\n`;
 
 	/**
 	 * The declared relations, as a type.
@@ -531,13 +579,14 @@ class WorkspaceCompiler {
 
 	/** Owns render client runtime declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderClientRuntimeDeclaration = (): string =>
-		`declare module 'virtual:bolt/client-runtime' {\n\timport type { CollectionCatalog, SystemClientApi, WorkspaceClientRuntime } from '@norbital-ai/bolt/client-runtime';\n\texport function createBrowserWorkspaceRuntime(): WorkspaceClientRuntime;\n\texport function createWorkspaceApiProxy(runtime: WorkspaceClientRuntime, catalog?: CollectionCatalog): { readonly db: object; readonly invoke: object; readonly collections: object; readonly system: SystemClientApi };\n\texport function startLocalReplica(runtime: WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }): Promise<unknown>;\n\texport function switchWorkspaceAccessScope(runtime: WorkspaceClientRuntime, accessScope: string): void;\n}\n`;
+		`declare module 'virtual:bolt/client-runtime' {\n\timport type { CollectionCatalog, ErasedAutomationClientApi, SystemClientApi, WorkspaceClientRuntime } from '@norbital-ai/bolt/client-runtime';\n\texport function createBrowserWorkspaceRuntime(): WorkspaceClientRuntime;\n\texport function createWorkspaceApiProxy(runtime: WorkspaceClientRuntime, catalog?: CollectionCatalog): { readonly db: object; readonly automations: ErasedAutomationClientApi; readonly invoke: object; readonly collections: object; readonly system: SystemClientApi };\n\texport function startLocalReplica(runtime: WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }): Promise<unknown>;\n\texport function switchWorkspaceAccessScope(runtime: WorkspaceClientRuntime, accessScope: string): void;\n}\n`;
 
 	/** Owns render client declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderClientDeclaration = (
 		hooks: ReadonlyArray<string>,
 		functions: ReadonlyArray<string>,
-		root: string
+		root: string,
+		automations: ReadonlyArray<string> = []
 	): string => {
 		const hookEntries = hooks
 			.map(
@@ -551,7 +600,13 @@ class WorkspaceCompiler {
 					`\treadonly ${JSON.stringify(basename(path).slice(1, -3))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
 			)
 			.join('\n');
-		return `import type { CollectionRegistryFor, InvokeClientApi, PlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { CollectionMutationValues, SystemClientApi } from '@norbital-ai/bolt/client-runtime';\nimport type { CollectionClient } from '@norbital-ai/std/collection';\nimport type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';\nimport type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';\nimport type { Component } from 'svelte';\nimport type { WorkspaceSchema } from './types.js';\ntype CollectionHooks = {\n${hookEntries}\n};\ntype MutationRegistry<S extends { readonly tables: Readonly<Record<string, { readonly $inferSelect: object; readonly $inferInsert: object }>>; readonly relations: Readonly<Record<string, unknown>> }, Registry> = { readonly [N in keyof Registry]: Registry[N] & { readonly mutation: CollectionMutationValues<S, N & keyof S['tables'] & string> } };\ntype TenantCollections = MutationRegistry<WorkspaceSchema, CollectionRegistryFor<WorkspaceSchema, CollectionHooks>>;\ntype PlatformCollections = MutationRegistry<PlatformSchema, CollectionRegistryFor<PlatformSchema>>;\ntype Collections = TenantCollections & PlatformCollections;\ntype TenantDatabase = { readonly [N in keyof TenantCollections]: CollectionClient<TenantCollections>['db'][N] };\ntype PlatformDatabase = { readonly [N in Exclude<keyof PlatformCollections, keyof TenantCollections>]: CollectionClient<PlatformCollections>['db'][N] };\ntype Invoke = {\n${invokeEntries}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceMutation<N extends keyof TenantCollections> = TenantCollections[N]['mutation'];\nexport type Client = Omit<CollectionClient<Collections>, 'db'> & { readonly db: TenantDatabase & PlatformDatabase; readonly invoke: InvokeClientApi<Invoke>; readonly system: SystemClientApi };\nexport declare const client: Client;\nexport declare const runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime;\nexport declare const changeAccessScope: (accessScope: string) => void;\nexport declare const startLocalReplica: (runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }) => Promise<{ readonly stop: () => void }>;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<Component>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<CustomTypeRendererMap[string]>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string }>>;\nexport declare const policyNames: ReadonlyArray<string>;\n`;
+		const automationEntries = automations
+			.map(
+				(path) =>
+					`\treadonly ${JSON.stringify(basename(path).slice(1, -3))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
+			)
+			.join('\n');
+		return `import type { CollectionRegistryFor, InvokeClientApi, PlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { AutomationClientApi, CollectionMutationValues, SystemClientApi } from '@norbital-ai/bolt/client-runtime';\nimport type { CollectionClient } from '@norbital-ai/std/collection';\nimport type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';\nimport type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';\nimport type { Component } from 'svelte';\nimport type { WorkspaceSchema } from './types.js';\ntype CollectionHooks = {\n${hookEntries}\n};\ntype AutomationRegistry = {\n${automationEntries}\n};\ntype MutationRegistry<S extends { readonly tables: Readonly<Record<string, { readonly $inferSelect: object; readonly $inferInsert: object }>>; readonly relations: Readonly<Record<string, unknown>> }, Registry> = { readonly [N in keyof Registry]: Registry[N] & { readonly mutation: CollectionMutationValues<S, N & keyof S['tables'] & string> } };\ntype TenantCollections = MutationRegistry<WorkspaceSchema, CollectionRegistryFor<WorkspaceSchema, CollectionHooks>>;\ntype PlatformCollections = MutationRegistry<PlatformSchema, CollectionRegistryFor<PlatformSchema>>;\ntype Collections = TenantCollections & PlatformCollections;\ntype TenantDatabase = { readonly [N in keyof TenantCollections]: CollectionClient<TenantCollections>['db'][N] };\ntype PlatformDatabase = { readonly [N in Exclude<keyof PlatformCollections, keyof TenantCollections>]: CollectionClient<PlatformCollections>['db'][N] };\ntype Invoke = {\n${invokeEntries}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceMutation<N extends keyof TenantCollections> = TenantCollections[N]['mutation'];\nexport type Client = Omit<CollectionClient<Collections>, 'db'> & { readonly db: TenantDatabase & PlatformDatabase; readonly automations: AutomationClientApi<AutomationRegistry>; readonly invoke: InvokeClientApi<Invoke>; readonly system: SystemClientApi };\nexport declare const client: Client;\nexport declare const runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime;\nexport declare const changeAccessScope: (accessScope: string) => void;\nexport declare const startLocalReplica: (runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }) => Promise<{ readonly stop: () => void }>;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<Component>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<CustomTypeRendererMap[string]>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string }>>;\nexport declare const policyNames: ReadonlyArray<string>;\n`;
 	};
 
 	/** Owns render client runtime behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
@@ -582,6 +637,7 @@ class WorkspaceCompiler {
 					`\t${JSON.stringify(basename(dirname(path)))}: () => import(${JSON.stringify(WorkspaceCompiler.runtimeSourceImport(root, path))}).then((module) => module.default)`
 			)
 			.join(',\n');
+		// Tenant `+renderer.svelte` files, discovered — keyed by the datatype name they sit beside.
 		const customRendererLoaders = customRenderers
 			.map(
 				(path) =>
@@ -599,7 +655,7 @@ class WorkspaceCompiler {
 					})}`
 			)
 			.join(',\n');
-		return `import './app.css';\n// The workspace stylesheet rides this module, not the entry.\n//\n// Vite links an entry's CSS from the HTML document it generates, and this build generates no\n// document — so a sheet imported by the entry is emitted beside it and never loaded. A sheet\n// imported by a *dynamically* imported chunk is different: Vite's own preload helper inserts the\n// link before the chunk executes. This module is only ever reached through \`import('$bolt/client')\`\n// inside \`mountWorkspace\`, so the supported mechanism applies and nothing has to rewrite chunk\n// text to make the workspace render styled.\nimport { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startLocalReplica, switchWorkspaceAccessScope } from 'virtual:bolt/client-runtime';\nimport { collectionCatalog } from './collections.js';\nconst runtime = createBrowserWorkspaceRuntime();\nexport const client = createWorkspaceApiProxy(runtime, collectionCatalog);\n// The replica is started by whoever owns its lifetime, never by importing this module.\n//\n// It used to start here, at module scope. But this module is also what a host imports to read\n// \`appLoaders\` — so merely reaching for the app registry opened a database, and it opened one\n// before anybody had signed in: \`sync.provisioning\` answered 401 and the replica gave up on a\n// workspace it would have been allowed to read a moment later. A host that then started its own\n// replica after sign-in got a second engine for the same scope, because starting one is not\n// idempotent.\n//\n// \`startLocalReplica\` is re-exported instead, so the owner starts it once it has a session and can\n// stop it on teardown. PGlite is several megabytes of WebAssembly, so bringing it up after the page\n// is interactive — rather than before first paint — remains the point.\nexport const changeAccessScope = (accessScope) => switchWorkspaceAccessScope(runtime, accessScope);\nexport { runtime, startLocalReplica };\nexport const appLoaders = {\n${loaders}\n};\nexport const representationLoaders = {\n${representationLoaders}\n};\nexport const customTypeRendererLoaders = {\n${customRendererLoaders}\n};\nexport const appGroups = {\n${groupEntries}\n};\nexport const appMeta = ${JSON.stringify(appMeta)};\nexport const policyNames = ${JSON.stringify(policies)};\n`;
+		return `import './app.css';\n// The workspace stylesheet rides this module, not the entry.\n//\n// Vite links an entry's CSS from the HTML document it generates, and this build generates no\n// document — so a sheet imported by the entry is emitted beside it and never loaded. A sheet\n// imported by a *dynamically* imported chunk is different: Vite's own preload helper inserts the\n// link before the chunk executes. This module is only ever reached through \`import('$bolt/client')\`\n// inside \`mountWorkspace\`, so the supported mechanism applies and nothing has to rewrite chunk\n// text to make the workspace render styled.\nimport { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startLocalReplica, switchWorkspaceAccessScope } from 'virtual:bolt/client-runtime';\nimport { collectionCatalog } from './collections.js';\nimport { platformCustomTypeRenderers } from '@norbital-ai/ui/data-renderer';\nconst runtime = createBrowserWorkspaceRuntime();\nexport const client = createWorkspaceApiProxy(runtime, collectionCatalog);\n// The replica is started by whoever owns its lifetime, never by importing this module.\n//\n// It used to start here, at module scope. But this module is also what a host imports to read\n// \`appLoaders\` — so merely reaching for the app registry opened a database, and it opened one\n// before anybody had signed in: \`sync.provisioning\` answered 401 and the replica gave up on a\n// workspace it would have been allowed to read a moment later. A host that then started its own\n// replica after sign-in got a second engine for the same scope, because starting one is not\n// idempotent.\n//\n// \`startLocalReplica\` is re-exported instead, so the owner starts it once it has a session and can\n// stop it on teardown. PGlite is several megabytes of WebAssembly, so bringing it up after the page\n// is interactive — rather than before first paint — remains the point.\nexport const changeAccessScope = (accessScope) => switchWorkspaceAccessScope(runtime, accessScope);\nexport { runtime, startLocalReplica };\nexport const appLoaders = {\n${loaders}\n};\nexport const representationLoaders = {\n${representationLoaders}\n};\n// Platform datatypes' renderers are injected, not discovered: the same map a workspace's own\n// \`src/datatypes/<name>/+renderer.svelte\` files land in, keyed by the kind the catalog emits. A\n// tenant datatype cannot reach here — the compiler rejects a platform-owned name before this runs.\nexport const customTypeRendererLoaders = {\n...platformCustomTypeRenderers,\n${customRendererLoaders}\n};\nexport const appGroups = {\n${groupEntries}\n};\nexport const appMeta = ${JSON.stringify(appMeta)};\nexport const policyNames = ${JSON.stringify(policies)};\n`;
 	};
 
 	/**
@@ -703,15 +759,15 @@ class WorkspaceCompiler {
 	/** Owns embedded assets behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly embeddedAssets = (root: string, workspaceKey: string) => {
 		const read = (path: string, servedAt: string) =>
-			Effect.gen(function* () {
-				const bytes = yield* Effect.tryPromise(() => readFile(path));
-				return {
+			Effect.map(
+				Effect.tryPromise(() => readFile(path)),
+				(bytes) => ({
 					path: servedAt,
 					contentType: WorkspaceCompiler.contentType(path),
 					sha256: createHash('sha256').update(bytes).digest('hex'),
 					base64: bytes.toString('base64')
-				};
-			});
+				})
+			);
 		return Effect.gen(function* () {
 			const dist = join(root, '.norbital', 'dist');
 			const built = (yield* WorkspaceCompiler.filesUnder(dist)).toSorted();
@@ -1011,7 +1067,7 @@ class WorkspaceCompiler {
 		const automationEntries = automations
 			.map(
 				(name, index) =>
-					`{ name: ${JSON.stringify(name)}, trigger: 'schedule' in automation${index}.trigger ? { _tag: 'Schedule', cron: automation${index}.trigger.schedule } : { _tag: 'Change', collection: automation${index}.trigger.trigger.collection, event: automation${index}.trigger.trigger.event }, policies: automation${index}.spec.policies, handler: automation${index}.spec.handler }`
+					`{ name: ${JSON.stringify(name)}, trigger: typeof automation${index}.trigger.schedule === 'string' ? { _tag: 'Schedule', cron: automation${index}.trigger.schedule } : automation${index}.trigger.trigger === undefined ? { _tag: 'Manual' } : { _tag: 'Change', collection: automation${index}.trigger.trigger.collection, event: automation${index}.trigger.trigger.event }, policies: automation${index}.spec.policies, ...(automation${index}.spec.input === undefined ? {} : { input: automation${index}.spec.input }), ...(automation${index}.spec.output === undefined ? {} : { output: automation${index}.spec.output }), handler: automation${index}.spec.handler }`
 			)
 			.join(', ');
 		// Imported live, as models, policies and tools are, rather than being read out of the file's text.
@@ -1030,12 +1086,18 @@ class WorkspaceCompiler {
 		// Custom-type definitions are imported live, exactly as models and hooks are. A schema is a live
 		// object and cannot survive `JSON.stringify`, so a serialised declaration would have carried the
 		// names and lost the only part that can actually validate a value.
-		const customTypeImports = customTypeDefinitions
-			.map(
+		//
+		// Platform-owned datatypes ride the same map: `platformCustomTypes` from the authoring module is
+		// spread first, then the workspace's own — so a write validates against either provenance
+		// through one path, and a tenant definition that redeclares a platform name is rejected by the
+		// discovery check rather than silently winning the spread.
+		const customTypeImports = [
+			"import { platformCustomTypes } from '@norbital-ai/bolt/authoring';",
+			...customTypeDefinitions.map(
 				(path, index) =>
 					`import customType${index} from ${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))};`
 			)
-			.join('\n');
+		].join('\n');
 		// `+integrations.ts`, keyed by the collection directory that declares it — the same derivation
 		// hooks and pipelines use. Imported live for the reason above and then some: a binding's `input` is
 		// a `Schema.Codec` and its `identity.value` is a closure, so a source scrape would recover the URL
@@ -1101,7 +1163,7 @@ class WorkspaceCompiler {
 					`${JSON.stringify(basename(path).slice(1, -3))}: (input, api) => tool${index}.run(api, Schema.decodeUnknownSync(tool${index}.input)(input))`
 			)
 			.join(',\n\t');
-		return `import { makeBundle } from '@norbital-ai/bolt/runtime';\nimport { describeEnvoy, describeHooks, describeIntegrations, compileModel, describePolicy, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';\n${modelImports}\n${hookImports}\n${policyImports}\n${functionImports}\n${toolImports}\n${automationImports}\n${pipelineImports}\n${envoyImports}\n${customTypeImports}\n${integrationImports}\n${environmentImport}\n${rateLimitImport}\n${teamsImport}\n// Keyed by file name, because a policy's name *is* its file and the module states none. Only what\n// the workspace declares reaches this map: two synthetic policies used to be appended and both were\n// mistakes of the same kind — authority modelled as a group. \`admin\` granted every action on every\n// app to a founder, which administration status already does; \`local-authoring\` granted the same to\n// every authenticated subject in any workspace that had authored no policies at all.\nconst authoredPolicies = {${policyEntries}};\n// A policy's name is its filename, attached here and stated nowhere else. \`describePolicy\` also\n// normalises the four capability lists, resolves every rate rule's key, and derives an approval's\n// identity from (policy, collection, action, step key) — so there is no authored id anywhere for a\n// copy-paste to duplicate and no \`name:\` field to disagree with the file it is in.\nconst policies = Object.entries(authoredPolicies).map(([name, declaration]) => describePolicy(name, declaration));\nconst declaredModels = {${modelEntries}};\nconst declaredHooks = {${hookEntriesByCollection}};\nconst collectionSourcePaths = {${sourcePaths}};\nconst declaredCustomTypes = {${customTypeEntries}};\nconst declaredEnvoys = {${envoyEntries}};\nconst declaredPipelines = {${pipelineEntriesByCollection}};\nconst declaredIntegrationModules = {${integrationEntries}};\n// Split here, at artifact boot, because the two halves go to two different places: the declarations\n// join the workspace definition a host can read, and the live schemas and closures ride in the\n// authored runtime beside hooks and pipelines.\nconst describedIntegrations = describeIntegrations(declaredIntegrationModules);\nconst declaredAutomations = Object.fromEntries([${automationEntries}].map((automation) => [automation.name, automation]));\nconst declaredWorkspace = ${JSON.stringify(workspace, null, 2)};\n// The declaration is the authority: it carries generated expressions and enum members that\n// reading the source text cannot recover.\nconst collections = declaredWorkspace.collections.map((collection) =>\n\tcompileModel(collection, declaredModels[collection.name], {\n\t\thooks: describeHooks(declaredHooks[collection.name]),\n\t\tsourcePath: collectionSourcePaths[collection.name]\n\t})\n);\n// The authored module is the authority on every field but its name, which comes from the file.\nconst envoys = declaredWorkspace.envoys.map(({ name }) => describeEnvoy(name, declaredEnvoys[name]));\n// An automation's declaration is the trigger and the name the descriptor carries, plus the policies\n// the module declares — its authority, which used to be whatever its trigger happened to hold.\nconst automations = declaredWorkspace.automations.map((automation) => ({ ...automation, ...(declaredAutomations[automation.name] === undefined ? {} : { trigger: declaredAutomations[automation.name].trigger, policies: declaredAutomations[automation.name].policies }) }));\nconst workspace = { ...declaredWorkspace, collections, envoys, automations, policies, customTypes: declaredCustomTypes, integrations: describedIntegrations.declarations${environmentEntry}${rateLimitEntry}${teamsEntry} };\nconst encodedAssets = ${JSON.stringify(assets)};\nconst staticAssets = encodedAssets.map(({ base64, ...asset }) => ({ ...asset, bytes: Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)) }));\n// Integrations are projected here rather than baked into the literal above, for the same reason\n// they are spliced into the workspace here: they only exist once the live modules have been\n// imported and split. The manifest literal is written at compile time and cannot hold them, which\n// is why \`buildManifest\` publishing them reached every test and no artifact.\nconst manifestValue = { ...${JSON.stringify(manifest, null, 2)}, staticAssets, integrations: manifestIntegrations(describedIntegrations.declarations) };\nconst remoteHandlers = {\n\t${functionEntries}\n};\nconst toolHandlers = {\n\t${toolEntries}\n};\nconst authoredRuntime = { hooks: declaredHooks, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };
+		return `import { makeBundle } from '@norbital-ai/bolt/runtime';\nimport { describeEnvoy, describeHooks, describeIntegrations, compileModel, describePolicy, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';\n${modelImports}\n${hookImports}\n${policyImports}\n${functionImports}\n${toolImports}\n${automationImports}\n${pipelineImports}\n${envoyImports}\n${customTypeImports}\n${integrationImports}\n${environmentImport}\n${rateLimitImport}\n${teamsImport}\n// Keyed by file name, because a policy's name *is* its file and the module states none. Only what\n// the workspace declares reaches this map: two synthetic policies used to be appended and both were\n// mistakes of the same kind — authority modelled as a group. \`admin\` granted every action on every\n// app to a founder even though administrative status must not imply tenant access; \`local-authoring\` granted the same to\n// every authenticated subject in any workspace that had authored no policies at all.\nconst authoredPolicies = {${policyEntries}};\n// A policy's name is its filename, attached here and stated nowhere else. \`describePolicy\` also\n// normalises the four capability lists, resolves every rate rule's key, and derives an approval's\n// identity from (policy, collection, action, step key) — so there is no authored id anywhere for a\n// copy-paste to duplicate and no \`name:\` field to disagree with the file it is in.\nconst policies = Object.entries(authoredPolicies).map(([name, declaration]) => describePolicy(name, declaration));\nconst declaredModels = {${modelEntries}};\nconst declaredHooks = {${hookEntriesByCollection}};\nconst collectionSourcePaths = {${sourcePaths}};\nconst declaredCustomTypes = { ...platformCustomTypes, ${customTypeEntries} };\nconst declaredEnvoys = {${envoyEntries}};\nconst declaredPipelines = {${pipelineEntriesByCollection}};\nconst declaredIntegrationModules = {${integrationEntries}};\n// Split here, at artifact boot, because the two halves go to two different places: the declarations\n// join the workspace definition a host can read, and the live schemas and closures ride in the\n// authored runtime beside hooks and pipelines.\nconst describedIntegrations = describeIntegrations(declaredIntegrationModules);\nconst declaredAutomations = Object.fromEntries([${automationEntries}].map((automation) => [automation.name, automation]));\nconst declaredWorkspace = ${JSON.stringify(workspace, null, 2)};\n// The declaration is the authority: it carries generated expressions and enum members that\n// reading the source text cannot recover.\nconst collections = declaredWorkspace.collections.map((collection) =>\n\tcompileModel(collection, declaredModels[collection.name], {\n\t\thooks: describeHooks(declaredHooks[collection.name]),\n\t\tsourcePath: collectionSourcePaths[collection.name]\n\t})\n);\n// The authored module is the authority on every field but its name, which comes from the file.\nconst envoys = declaredWorkspace.envoys.map(({ name }) => describeEnvoy(name, declaredEnvoys[name]));\n// An automation's declaration is the trigger and the name the descriptor carries, plus the policies\n// the module declares — its authority, which used to be whatever its trigger happened to hold.\nconst automations = declaredWorkspace.automations.map((automation) => ({ ...automation, ...(declaredAutomations[automation.name] === undefined ? {} : { trigger: declaredAutomations[automation.name].trigger, policies: declaredAutomations[automation.name].policies }) }));\nconst workspace = { ...declaredWorkspace, collections, envoys, automations, policies, customTypes: declaredCustomTypes, integrations: describedIntegrations.declarations${environmentEntry}${rateLimitEntry}${teamsEntry} };\nconst encodedAssets = ${JSON.stringify(assets)};\nconst staticAssets = encodedAssets.map(({ base64, ...asset }) => ({ ...asset, bytes: Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)) }));\n// Integrations are projected here rather than baked into the literal above, for the same reason\n// they are spliced into the workspace here: they only exist once the live modules have been\n// imported and split. The manifest literal is written at compile time and cannot hold them, which\n// is why \`buildManifest\` publishing them reached every test and no artifact.\nconst manifestValue = { ...${JSON.stringify(manifest, null, 2)}, staticAssets, integrations: manifestIntegrations(describedIntegrations.declarations) };\nconst remoteHandlers = {\n\t${functionEntries}\n};\nconst toolHandlers = {\n\t${toolEntries}\n};\nconst authoredRuntime = { hooks: declaredHooks, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };
 const bundle = makeBundle(workspace, manifestValue, remoteHandlers, toolHandlers, authoredRuntime);\nexport const protocolVersion = bundle.protocolVersion;\nexport const manifest = bundle.manifest;\nexport const dispatch = bundle.dispatch;\nexport const activate = bundle.activate;\nexport default bundle;\n`;
 	};
 
@@ -1158,12 +1220,10 @@ export const readWorkspaceMigrations = (workspaceRoot: string) =>
 			.toSorted();
 		return yield* Effect.all(
 			tags.map((tag) =>
-				Effect.gen(function* () {
-					const source = yield* Effect.tryPromise(() =>
-						readFile(join(migrationsRoot, tag, 'migration.sql'), 'utf8')
-					);
-					return { tag, statements: migrationStatements(source) };
-				})
+				Effect.map(
+					Effect.tryPromise(() => readFile(join(migrationsRoot, tag, 'migration.sql'), 'utf8')),
+					(source) => ({ tag, statements: migrationStatements(source) })
+				)
 			),
 			{ concurrency: 'unbounded' }
 		);
@@ -1227,6 +1287,54 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 			)
 			.sort();
 		const datatypeNames = definitions.map((path) => basename(dirname(path)));
+		/**
+		 * A tenant datatype may not redeclare a platform-owned one.
+		 *
+		 * `money` and `worked_intervals` lived in `src/datatypes/` in templates because the platform
+		 * did not own them yet. The platform owns `money` and `instant_range` now, so a child
+		 * named after a platform type is either a dead restatement or a shadowing one — and the
+		 * artifact spreads `platformCustomTypes` first, so the tenant's would shadow it. The platform
+		 * name wins, always: the workspace keeps its `custom()` column, validation and renderer become
+		 * the platform's, and this failure is what tells it the directory has nothing left to add.
+		 *
+		 * The rejected set is the registry's own names, never a second list: a platform datatype is
+		 * born reserved the moment it is declared, and a new one needs no change here.
+		 */
+		const shadowed = datatypeNames.filter((name) => name in platformCustomTypes);
+		if (shadowed.length > 0) {
+			return yield* Effect.fail(
+				new Error(
+					`Bolt sync found ${shadowed.length} datatype${shadowed.length === 1 ? '' : 's'} that redeclare${shadowed.length === 1 ? 's' : ''} a platform-owned type:\n  - src/datatypes/${shadowed.join('\n  - src/datatypes/')}/+definition.ts\n\nThe platform already owns ${shadowed.join(', ')}. Use ${shadowed.map((name) => `custom(${JSON.stringify(name)})`).join(' or ')} instead of declaring the datatype, and delete the directory. A datatype may only declare a name the platform does not own; discovery is the only difference between platform and tenant definitions.`
+				)
+			);
+		}
+		const declaredDatatypeNames = new Set([...Object.keys(platformCustomTypes), ...datatypeNames]);
+		const customTypeProblems = (yield* Effect.all(
+			models.map((path) =>
+				Effect.map(
+					Effect.tryPromise(() => readFile(path, 'utf8')),
+					(source) =>
+						extractCustomTypeReferences(source).flatMap((reference) => {
+							const model = compiler.posix(relative(root, path));
+							if (reference.name === undefined)
+								return [`${model}:${reference.field} calls custom() with a non-literal name`];
+							return declaredDatatypeNames.has(reference.name)
+								? []
+								: [
+										`${model}:${reference.field} references undeclared datatype ${JSON.stringify(reference.name)}`
+									];
+						})
+				)
+			),
+			{ concurrency: 'unbounded' }
+		)).flat();
+		if (customTypeProblems.length > 0) {
+			return yield* Effect.fail(
+				new Error(
+					`Bolt sync refused custom() declarations that are not sealed by the platform registry or src/datatypes/:\n  - ${customTypeProblems.join('\n  - ')}\n\nDeclare each tenant datatype at src/datatypes/<name>/+definition.ts and use the same literal name. Platform types use the same custom('<name>') access pattern; only their discovery source differs.`
+				)
+			);
+		}
 		const appFiles = files
 			.filter(
 				(path) =>
@@ -1559,33 +1667,35 @@ const WorkspaceSynchronization = {
 				relationshipSource === undefined ? [] : extractRelationships(relationshipSource);
 			const collectionCatalog = yield* Effect.all(
 				models.map((path) =>
-					Effect.gen(function* () {
-						const source = yield* Effect.tryPromise(() => readFile(path, 'utf8'));
-						return extractCollectionCatalog(basename(dirname(path)), source, relations);
-					})
+					Effect.map(
+						Effect.tryPromise(() => readFile(path, 'utf8')),
+						(source) => extractCollectionCatalog(basename(dirname(path)), source, relations)
+					)
 				),
 				{ concurrency: 'unbounded' }
 			);
 			const appMetaEntries = yield* Effect.all(
 				appFiles.map((path) =>
-					Effect.gen(function* () {
-						const source = yield* Effect.tryPromise(() => readFile(path, 'utf8'));
-						const meta = extractAppMetadata(source);
-						const name = compiler
-							.posix(relative(join(root, 'src', 'apps'), path))
-							.replace(/(^|\/)\+/, '$1')
-							.replace(/\.svelte$/, '');
-						return [
-							name,
-							{
-								...(meta.title === null ? {} : { label: meta.title }),
-								...(meta.icon === null ? {} : { icon: meta.icon }),
-								...(meta.description === null ? {} : { description: meta.description }),
-								...(meta.banner === null ? {} : { banner: meta.banner }),
-								...(meta.thumbnail === null ? {} : { thumbnail: meta.thumbnail })
-							}
-						] as const;
-					})
+					Effect.map(
+						Effect.tryPromise(() => readFile(path, 'utf8')),
+						(source) => {
+							const meta = extractAppMetadata(source);
+							const name = compiler
+								.posix(relative(join(root, 'src', 'apps'), path))
+								.replace(/(^|\/)\+/, '$1')
+								.replace(/\.svelte$/, '');
+							return [
+								name,
+								{
+									...(meta.title === null ? {} : { label: meta.title }),
+									...(meta.icon === null ? {} : { icon: meta.icon }),
+									...(meta.description === null ? {} : { description: meta.description }),
+									...(meta.banner === null ? {} : { banner: meta.banner }),
+									...(meta.thumbnail === null ? {} : { thumbnail: meta.thumbnail })
+								}
+							] as const;
+						}
+					)
 				),
 				{ concurrency: 'unbounded' }
 			);
@@ -1599,18 +1709,20 @@ const WorkspaceSynchronization = {
 			);
 			const groupEntries = yield* Effect.all(
 				groupFiles.map((path) =>
-					Effect.gen(function* () {
-						const source = yield* Effect.tryPromise(() => readFile(path, 'utf8'));
-						const meta = extractGroupMetadata(source);
-						const name = compiler.posix(relative(join(root, 'src', 'apps'), dirname(path)));
-						return {
-							name,
-							...(meta.label === null ? {} : { label: meta.label }),
-							...(meta.description === null ? {} : { description: meta.description }),
-							...(meta.icon === null ? {} : { icon: meta.icon }),
-							...(meta.defaultChild === null ? {} : { defaultChild: meta.defaultChild })
-						};
-					})
+					Effect.map(
+						Effect.tryPromise(() => readFile(path, 'utf8')),
+						(source) => {
+							const meta = extractGroupMetadata(source);
+							const name = compiler.posix(relative(join(root, 'src', 'apps'), dirname(path)));
+							return {
+								name,
+								...(meta.label === null ? {} : { label: meta.label }),
+								...(meta.description === null ? {} : { description: meta.description }),
+								...(meta.icon === null ? {} : { icon: meta.icon }),
+								...(meta.defaultChild === null ? {} : { defaultChild: meta.defaultChild })
+							};
+						}
+					)
 				),
 				{ concurrency: 'unbounded' }
 			);
@@ -1632,7 +1744,7 @@ const WorkspaceSynchronization = {
 							envoys: envoyNames,
 							mcpServers: mcpServerNames,
 							skills: skillNames,
-							datatypes: datatypeNames,
+							datatypes: [...Object.keys(platformCustomTypes), ...datatypeNames].toSorted(),
 							automations: automationNames,
 							// Relative to `.norbital/generated/`, which is where this module is written.
 							teamsImport:
@@ -1662,7 +1774,7 @@ const WorkspaceSynchronization = {
 					compiler.write(join(generated, 'types.ts'), compiler.renderTypes(relations)),
 					compiler.write(
 						join(generated, 'client.d.ts'),
-						compiler.renderClientDeclaration(hookFiles, functionFiles, root)
+						compiler.renderClientDeclaration(hookFiles, functionFiles, root, automationFiles)
 					),
 					compiler.write(
 						join(generated, 'client.js'),
@@ -1774,40 +1886,45 @@ const WorkspaceSynchronization = {
 			const artifactPath = join(artifactDirectory, 'bundle.mjs');
 			const appDescriptors = yield* Effect.all(
 				appFiles.map((path, index) =>
-					Effect.gen(function* () {
-						const source = yield* Effect.tryPromise(() => readFile(path, 'utf8'));
-						const meta = extractAppMetadata(source);
-						const name =
-							appNames[index] ?? compiler.posix(relative(join(root, 'src', 'apps'), path));
-						return {
-							name,
-							label: meta.title ?? name,
-							...(meta.icon === null ? {} : { icon: meta.icon }),
-							...(meta.description === null ? {} : { description: meta.description }),
-							// The app header renders a banner and the overview cards render a thumbnail. Both were
-							// extracted and then dropped here, so every app header was image-less.
-							...(meta.banner === null ? {} : { banner: meta.banner }),
-							...(meta.thumbnail === null ? {} : { thumbnail: meta.thumbnail })
-						};
-					})
+					Effect.map(
+						Effect.tryPromise(() => readFile(path, 'utf8')),
+						(source) => {
+							const meta = extractAppMetadata(source);
+							const name =
+								appNames[index] ?? compiler.posix(relative(join(root, 'src', 'apps'), path));
+							return {
+								name,
+								label: meta.title ?? name,
+								...(meta.icon === null ? {} : { icon: meta.icon }),
+								...(meta.description === null ? {} : { description: meta.description }),
+								// The app header renders a banner and the overview cards render a thumbnail. Both were
+								// extracted and then dropped here, so every app header was image-less.
+								...(meta.banner === null ? {} : { banner: meta.banner }),
+								...(meta.thumbnail === null ? {} : { thumbnail: meta.thumbnail })
+							};
+						}
+					)
 				),
 				{ concurrency: 'unbounded' }
 			);
 			const hooksByCollection = new Map(hookFiles.map((path) => [basename(dirname(path)), path]));
 			const collectionDescriptors = yield* Effect.all(
 				models.map((path) =>
-					Effect.gen(function* () {
-						const name = basename(dirname(path));
-						const hooksPath = hooksByCollection.get(name);
-						return {
-							name,
-							path,
-							sourcePath: compiler.posix(relative(root, path)),
-							...(hooksPath === undefined ? {} : { hooksPath }),
-							// Source extraction is the fallback only. The artifact reads the real declaration.
-							fields: extractModelFields(yield* Effect.tryPromise(() => readFile(path, 'utf8')))
-						};
-					})
+					Effect.map(
+						Effect.tryPromise(() => readFile(path, 'utf8')),
+						(source) => {
+							const name = basename(dirname(path));
+							const hooksPath = hooksByCollection.get(name);
+							return {
+								name,
+								path,
+								sourcePath: compiler.posix(relative(root, path)),
+								...(hooksPath === undefined ? {} : { hooksPath }),
+								// Source extraction is the fallback only. The artifact reads the real declaration.
+								fields: extractModelFields(source)
+							};
+						}
+					)
 				),
 				{ concurrency: 'unbounded' }
 			);
@@ -1862,6 +1979,7 @@ const WorkspaceSynchronization = {
 				build({
 					root,
 					configFile: false,
+					plugins: [tenantRuntimeBoundary()],
 					/**
 					 * Node's `global`, for dependencies that still reach for it.
 					 *

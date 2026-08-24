@@ -1,6 +1,5 @@
 import { getContext, setContext } from 'svelte';
 import {
-	type Locale,
 	type LocaleCatalogs,
 	type KeysOf,
 	type MessageVars,
@@ -16,7 +15,7 @@ import { uiMessages } from '#lib/i18n/messages';
 /** The translation API a component consumes. `Keys` is the catalog key union. */
 export interface I18nApi<Keys extends string = string> {
 	/** The active application locale. */
-	readonly locale: Locale;
+	readonly locale: string;
 	/** The locale order the catalogs ship (toggle order, primary first). */
 	readonly locales: readonly string[];
 	/** The `Intl.*` locale string for the active locale (`en-US` / `zh-CN`). */
@@ -24,9 +23,9 @@ export interface I18nApi<Keys extends string = string> {
 	/** Translate a typed key, with `{placeholder}` interpolation. */
 	readonly t: (key: Keys, vars?: MessageVars) => string;
 	/** True when the key exists in any locale of the catalog set. */
-	has(key: string): boolean;
+	has(key: string): key is Keys;
 	/** Switch the active locale; persists the choice and sets `<html lang>`. */
-	setLocale(locale: Locale): void;
+	setLocale(locale: string): void;
 }
 
 /**
@@ -38,19 +37,20 @@ export interface I18nApi<Keys extends string = string> {
  */
 class I18nState<C extends LocaleCatalogs> {
 	readonly #catalogs: C;
-	locale = $state<Locale>('en');
+	locale = $state('en');
 
-	constructor(catalogs: C, initialLocale: Locale) {
+	constructor(catalogs: C, initialLocale: string) {
 		this.#catalogs = catalogs;
 		this.locale = initialLocale;
 	}
 
-	t = (key: KeysOf<C>, vars?: MessageVars): string =>
+	t = (key: string, vars?: MessageVars): string =>
 		translate(this.#catalogs, this.locale, key, vars);
 
-	has = (key: string): boolean => Object.values(this.#catalogs).some((catalog) => key in catalog);
+	has = (key: string): key is KeysOf<C> =>
+		Object.values(this.#catalogs).some((catalog) => key in catalog);
 
-	setLocale(next: Locale): void {
+	setLocale(next: string): void {
 		if (next === this.locale) return;
 		this.locale = next;
 		storeLocale(next);
@@ -89,7 +89,7 @@ const I18N_CONTEXT_KEY = Symbol('@norbital-ai/ui/i18n');
  */
 export function provideI18n<C extends LocaleCatalogs>(
 	catalogs: C,
-	initialLocale?: Locale
+	initialLocale?: string
 ): I18nApi<KeysOf<C>> {
 	const browserLanguages = (globalThis as { navigator?: { languages?: readonly string[] } })
 		.navigator?.languages;
@@ -113,7 +113,20 @@ export function useI18n<Keys extends string = string>(): I18nApi<Keys> {
 	const state =
 		getContext<(() => I18nState<LocaleCatalogs> | null) | undefined>(I18N_CONTEXT_KEY)?.() ??
 		fallbackI18nState;
-	return state as I18nApi<Keys>;
+	return {
+		get locale() {
+			return state.locale;
+		},
+		get locales() {
+			return state.locales;
+		},
+		get intlLocale() {
+			return state.intlLocale;
+		},
+		t: (key, vars) => state.t(key, vars),
+		has: (key: string): key is Keys => state.has(key),
+		setLocale: (locale) => state.setLocale(locale)
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -131,10 +144,10 @@ const fallbackI18nState = new I18nState(uiMessages, 'en');
  * Switch the ui package's fallback locale for apps that do not install a
  * provider (only possible once `@norbital-ai/ui` ships the i18n module).
  */
-export function setGlobalLocale(locale: Locale): void {
+export function setGlobalLocale(locale: string): void {
 	fallbackI18nState.setLocale(locale);
 }
 
-export function getGlobalLocale(): Locale {
+export function getGlobalLocale(): string {
 	return fallbackI18nState.locale;
 }

@@ -114,7 +114,7 @@
 		value={commandValue}
 		items={commandItems}
 		shouldFilter={false}
-		class="flex flex-col gap-1"
+		class="gap-1"
 		activeValue={initialActiveValue}
 		onValueChange={onCommandSelect}
 	>
@@ -143,7 +143,7 @@
 		{/if}
 		<Command.List
 			bind:ref={listContainerRef}
-			class="relative gap-1 overflow-auto p-1"
+			class="relative gap-1 p-1"
 			style="max-height: {maxHeight}px;"
 			id="{comboboxId}-listbox"
 			{itemHeight}

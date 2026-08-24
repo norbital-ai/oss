@@ -28,12 +28,12 @@ describe('policies held through a team', () => {
 		expect([...held].toSorted()).toEqual(['employee', 'hr_manager']);
 	});
 
-	it('unions every team on the path, so an inheriting team holds what sits beneath it', () => {
+	it('uses descendant teams for scope but never inherits their policies', () => {
 		const held = policiesHeld(
 			definition({ Manager: ['supervisor'], Employee: ['employee'] }),
 			subject(['Manager', 'Employee'])
 		);
-		expect([...held].toSorted()).toEqual(['employee', 'supervisor']);
+		expect([...held]).toEqual(['supervisor']);
 	});
 
 	it('holds nothing when the subject belongs to no team', () => {

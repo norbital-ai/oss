@@ -15,6 +15,8 @@ Starter workspaces live in their own repository:
 - [`@norbital-ai/std`](./packages/std) — common schema, date, CEL, finance, collection contract, and
   utility modules
 - [`@norbital-ai/config`](./packages/config) — shared TypeScript and Svelte configuration
+- [`@norbital-ai/doctor`](./packages/doctor) — deterministic static code-quality analysis with a
+  CLI and a type-safe rule authoring surface
 
 Templates are authored in [`norbital-ai/templates`](https://github.com/norbital-ai/templates),
 which is also where `refs/heads/templates/*` is published from. This repository holds no template
@@ -22,18 +24,19 @@ source.
 
 ## Documentation
 
-Docs live next to the code they describe — there is no root `docs/` folder:
+Docs live next to the code they describe:
 
 | Area                | Location                                                                     |
 | ------------------- | ---------------------------------------------------------------------------- |
-| Bolt framework      | [`packages/bolt/src/`](./packages/bolt/src)                                  |
-| UI, std, config     | `packages/<name>/docs/`                                                      |
+| Package guides      | package-local `docs/` and `README.md` (`packages/<name>/`)                   |
+| API reference       | [`docs/api-reference/`](./docs/api-reference) generated via `pnpm docs:api`  |
+| Design proposals    | [`docs/rfcs/`](./docs/rfcs)                                                  |
 | Template workspaces | [`norbital-ai/templates`](https://github.com/norbital-ai/templates)          |
 | Release contracts   | [`release/README.md`](./release/README.md), [`RELEASING.md`](./RELEASING.md) |
 
 ## Development
 
-Requires Node.js 26+ and pnpm 11.15.1.
+Requires Node.js 26+ and pnpm 11 (the workspace pins `pnpm@11.22.0`).
 
 ```sh
 pnpm install
@@ -46,9 +49,10 @@ create temporary standalone archives, validate their contents, and delete the ar
 Consumers install released packages from the configured registry; no consumer reads this repository
 through a sibling path.
 
-Public packages intentionally remain at `0.0.1` throughout beta. A package change on `main` replaces
-the complete fixed-version package set in GitHub Packages; consumers must commit the resulting
-lockfile integrity update. See [`RELEASING.md`](./RELEASING.md) for the release workflow.
+Public packages intentionally remain at `0.0.1` throughout beta. A package change on `main`
+republishes the complete seven-package fixed-version set in GitHub Packages; consumers must commit
+the resulting lockfile integrity update. See [`RELEASING.md`](./RELEASING.md) for the release
+workflow.
 
 Template source is published as deterministic root-projected Git refs, each carrying its own
 `norbital.template.json` and its own committed `pnpm-lock.yaml`. There is no platform release and no

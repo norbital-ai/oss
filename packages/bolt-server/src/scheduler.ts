@@ -149,8 +149,7 @@ export const makeScheduler = (options: SchedulerOptions): Scheduler => {
 		announcedDuringRun = undefined;
 		armedFor = undefined;
 		void Effect.runPromise(
-			Effect.gen(function* () {
-				const nextDueAtEpochMs = yield* options.tick();
+			Effect.map(options.tick(), (nextDueAtEpochMs) => {
 				running = false;
 				consecutiveFailures = 0;
 				// `null` means no timer; the next wake, boot, or rescan re-arms it.

@@ -84,12 +84,14 @@ export const makeLocalFilesBinding = (
 					const entries = yield* Effect.tryPromise(() =>
 						readdir(prefixPath, { recursive: true, withFileTypes: true })
 					);
-					const keys = entries
-						.filter((entry) => entry.isFile())
-						.map((entry) =>
-							relative(root, resolve(entry.parentPath, entry.name)).split(sep).join('/')
-						)
-						.sort();
+					// One pass over the tree: a recursive listing of a large prefix is the expensive part, and
+					// a filter/map chain walks it twice before the sort walks it a third time.
+					const keys: Array<string> = [];
+					for (const entry of entries) {
+						if (!entry.isFile()) continue;
+						keys.push(relative(root, resolve(entry.parentPath, entry.name)).split(sep).join('/'));
+					}
+					keys.sort();
 					return FileResponse.make({ keys });
 				})
 			)

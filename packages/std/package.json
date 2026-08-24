@@ -59,6 +59,10 @@
 			"types": "./build/reckon/index.d.ts",
 			"default": "./build/reckon/index.js"
 		},
+		"./reckon/hash": {
+			"types": "./build/reckon/hash.d.ts",
+			"default": "./build/reckon/hash.js"
+		},
 		"./rate-limit": {
 			"types": "./build/rate-limit/index.d.ts",
 			"default": "./build/rate-limit/index.js"

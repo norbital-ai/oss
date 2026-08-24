@@ -10,6 +10,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import Button, { buttonVariants } from '../button/button.svelte';
 	import { Inline, Stack } from '#lib/layout';
+	import { removeScalarRow, scalarPickerPayload } from '#lib/utils/scalar-picker';
 	import { Number as Number_ } from 'effect';
 
 	const { t } = useI18n<UiKeys>();
@@ -192,18 +193,7 @@
 	// ============================================================================
 	const notifyParent = () => {
 		if (readonly || !onValueChange) return;
-
-		// Only send meaningful progress values to parent
-		const meaningfulProgress = editingProgress.filter(isValidProgress);
-
-		if (!multiple) {
-			// Single mode: pass the first meaningful value or null
-			const result = meaningfulProgress[0] || null;
-			onValueChange(result);
-		} else {
-			// Multiple mode: pass array of meaningful values
-			onValueChange(meaningfulProgress);
-		}
+		onValueChange(scalarPickerPayload(editingProgress.filter(isValidProgress), multiple));
 	};
 
 	const updateProgress = (index: number, progress: number) => {
@@ -224,13 +214,7 @@
 
 	const removeProgress = (index: number) => {
 		if (readonly || disabled) return;
-
-		// For single mode, reset to 0 instead of removing
-		if (!multiple && editingProgress.length <= 1) {
-			editingProgress = [0];
-		} else {
-			editingProgress = editingProgress.filter((_, i) => i !== index);
-		}
+		editingProgress = removeScalarRow(editingProgress, index, multiple);
 		notifyParent();
 	};
 
@@ -310,10 +294,10 @@
 						{/each}
 					</Stack>
 				{:else}
-					<div class="py-4 text-center">
-						<Icon icon="lucide:trending-up" class="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+					<Stack gap="sm" align="center" class="py-4 text-center">
+						<Icon icon="lucide:trending-up" class="h-8 w-8 text-muted-foreground" />
 						<p class="text-sm text-muted-foreground">{t('misc.noProgressAssigned')}</p>
-					</div>
+					</Stack>
 				{/if}
 			</Stack>
 		</Popover.Content>
@@ -380,8 +364,8 @@
 						<p class="text-sm text-muted-foreground">
 							{t('misc.addFirstProgressHint')}
 						</p>
-						<Button variant="outline" onclick={addProgress} class="border-dashed" {disabled}>
-							<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
+						<Button variant="outline" onclick={addProgress} class="gap-2 border-dashed" {disabled}>
+							<Icon icon="lucide:plus" class="h-4 w-4" />
 							{t('misc.addFirstProgress')}
 						</Button>
 					</Stack>
@@ -455,10 +439,10 @@
 						<Button
 							variant="outline"
 							onclick={addProgress}
-							class="w-full border-dashed text-muted-foreground hover:text-foreground"
+							class="w-full gap-2 border-dashed text-muted-foreground hover:text-foreground"
 							{disabled}
 						>
-							<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
+							<Icon icon="lucide:plus" class="h-4 w-4" />
 							{t('misc.addProgress')}
 						</Button>
 					</Stack>

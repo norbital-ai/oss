@@ -53,13 +53,15 @@
 
 	function loadChildren(): Effect.Effect<void> {
 		if (!onToggle || loading) return Effect.void;
-		return Effect.gen(function* () {
+		return Effect.suspend(() => {
 			loading = true;
 			loadError = '';
-			const loaded = yield* onToggle(entry.path);
-			children = loaded;
-			loading = false;
+			return onToggle(entry.path);
 		}).pipe(
+			Effect.map((loaded) => {
+				children = loaded;
+				loading = false;
+			}),
 			Effect.catch((error) => {
 				loadError = error instanceof Error ? error.message : t('misc.failedToLoadFolder');
 				children = [];
@@ -70,27 +72,18 @@
 	}
 
 	function toggleDirectory(): Effect.Effect<void> {
-		return Effect.gen(function* () {
-			if (loading) return;
-			if (open) {
-				open = false;
-				return;
-			}
-			if (children.length === 0) {
-				yield* loadChildren();
-			}
-			open = true;
+		return Effect.suspend(() => {
+			if (loading) return Effect.void;
+			if (open) return Effect.sync(() => void (open = false));
+			const loaded = children.length === 0 ? loadChildren() : Effect.void;
+			return loaded.pipe(Effect.map(() => void (open = true)));
 		});
 	}
 
 	function handleRowClick(): Effect.Effect<void> {
-		return Effect.gen(function* () {
-			if (isDirectory) {
-				yield* toggleDirectory();
-				return;
-			}
-			onSelect?.(entry.path, entry);
-		});
+		return Effect.suspend(() =>
+			isDirectory ? toggleDirectory() : Effect.sync(() => onSelect?.(entry.path, entry))
+		);
 	}
 
 	function handleDeleteClick(event: MouseEvent): void {

@@ -3,7 +3,7 @@
 	import { Button } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Indicator } from '#lib/indicator';
-	import { Cluster, Inline, Stack } from '#lib/layout';
+	import { Cluster, Inline, SCROLL_AXIS_CLASSES, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import type { SelectionDraft, StepsConfig } from '#lib/multi-step-combobox/types';
@@ -68,7 +68,11 @@
 				</Button>
 			{/if}
 		</Inline>
-		<ul role="listbox" aria-label={ariaLabel} class="flex-1 overflow-auto px-2 py-2">
+		<ul
+			role="listbox"
+			aria-label={ariaLabel}
+			class={cn('flex-1 px-2 py-2', SCROLL_AXIS_CLASSES.both)}
+		>
 			{#if selections.length === 0}
 				<li
 					class="rounded-md border border-dashed border-muted-foreground/30 bg-background px-4 py-6 text-center text-meta"

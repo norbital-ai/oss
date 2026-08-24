@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
+import { SYSTEM_MODEL_TABLES } from '../../src/authoring/system-models.js';
 import { envoy } from '../../src/authoring/workspace-schema.js';
 import * as Agents from '../../src/runtime/agents/agents.js';
 import type * as Identity from '../../src/runtime/identity/identity.js';
+import { composer } from '../../src/runtime/persistence.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -11,6 +13,7 @@ import {
 } from '../support/bolt-test-layer.js';
 
 let harness: BoltTestRuntime | undefined;
+const { chat_session: chatSession, chat_message: chatMessage } = SYSTEM_MODEL_TABLES;
 afterEach(async () => {
 	await harness?.dispose();
 	harness = undefined;
@@ -138,25 +141,39 @@ describe('agent conversation inbox authority', () => {
 	it('keeps personal threads isolated and exposes only exact declared-public envoy rows to admins', async () => {
 		harness = await makeBoltTestRuntime(testWorkspace({ envoys: [publicDesk, memberDesk] }));
 		for (const row of fixtures) {
-			await harness.database.query(
-				`insert into chat_session
-					(conversation_id, agent_name, user_id, title, visibility, envoy_key, parent_id)
-				 values ($1, $2, $3, $4, $5, $6, $7)`,
-				[
-					row.id,
-					row.agent,
-					row.user,
-					`Title: ${row.id}`,
-					row.visibility,
-					row.envoyKey,
-					row.parentId ?? null
-				]
-			);
+			const inserted = composer
+				.insert(chatSession)
+				.values({
+					conversation_id: row.id,
+					agent_name: row.agent,
+					user_id: row.user,
+					sandbox_key:
+						row.id === 'mislabelled-private'
+							? row.user
+							: row.envoyKey === null
+								? row.user
+								: `envoy:${row.envoyKey}`,
+					title: `Title: ${row.id}`,
+					visibility: row.visibility,
+					envoy_key: row.envoyKey,
+					parent_id: row.parentId ?? null
+				})
+				.toSQL();
+			await harness.database.query(inserted.sql, inserted.params);
 		}
-		await harness.database.query(
-			"insert into chat_message (conversation_id, role, content) values ($1, 'user', $2::jsonb)",
-			['public-dm', JSON.stringify('Can I get a quote?')]
-		);
+		const message = composer
+			.insert(chatMessage)
+			.values({
+				conversation_id: 'public-dm',
+				role: 'user',
+				content: JSON.stringify({
+					kind: 'user_message',
+					text: 'Can I get a quote?',
+					documents: []
+				})
+			})
+			.toSQL();
+		await harness.database.query(message.sql, message.params);
 
 		const adminRows = await listFor(harness, adminSubject);
 		expect(adminRows.map(({ id }) => id).sort()).toEqual(
@@ -181,7 +198,11 @@ describe('agent conversation inbox authority', () => {
 
 		const publicHistory = await historyFor(harness, adminSubject, 'public-dm');
 		expect(publicHistory.messages).toEqual([
-			{ role: 'user', content: 'Can I get a quote?', turn_id: null }
+			{
+				role: 'user',
+				content: { kind: 'user_message', text: 'Can I get a quote?', documents: [] },
+				turn_id: null
+			}
 		]);
 		await expect(historyFor(harness, adminSubject, 'member-personal')).rejects.toMatchObject({
 			_tag: 'Bolt.AccessControl.AccessDenied'

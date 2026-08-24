@@ -26,7 +26,7 @@ describe('bolt-owned identity over a host facility', () => {
 
 	beforeAll(async () => {
 		database = await PGlite.create('memory://');
-		execute = (sql, parameters) =>
+		execute = ({ sql, parameters }) =>
 			Effect.promise(async () => {
 				const result = await database.query<Record<string, unknown>>(sql, [...parameters]);
 				return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
@@ -185,7 +185,7 @@ describe('the code a development environment issues', () => {
 		// environment, so its absence is a misconfiguration to surface, not a mode to infer.
 		const database = await PGlite.create('memory://');
 		try {
-			const run: ExecuteQuery = (sql, parameters) =>
+			const run: ExecuteQuery = ({ sql, parameters }) =>
 				Effect.promise(async () => {
 					const result = await database.query<Record<string, unknown>>(sql, [...parameters]);
 					return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };

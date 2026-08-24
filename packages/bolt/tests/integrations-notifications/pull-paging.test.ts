@@ -67,6 +67,7 @@ const harness = (answers: ReadonlyArray<Answer>) => {
 const integrationOf = (binding: IntegrationPullDeclaration): IntegrationDeclaration => ({
 	name: 'items.source',
 	collection: 'items',
+	policies: [],
 	connection: { baseUrl: 'https://source.example' },
 	receive: [binding],
 	webhooks: [],

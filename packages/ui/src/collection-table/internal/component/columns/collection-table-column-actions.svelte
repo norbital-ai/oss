@@ -3,12 +3,12 @@
 		COLLECTION_TABLE_SELECTION_COLUMN_ID,
 		type ColumnAPI,
 		type TableAPI
-	} from '../../collection-table-state.svelte';
+	} from '#lib/collection-table/internal/collection-table-state.svelte';
 	import Icon from '@iconify/svelte';
 	import { buttonVariants } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Indicator } from '#lib/indicator';
-	import { Stack } from '#lib/layout';
+	import { Inline, Stack } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { Separator } from '#lib/separator';
 	import { cn } from '#lib/utils';
@@ -43,88 +43,102 @@
 			</Indicator>
 		</Popover.Trigger>
 
-		<Popover.Content align="start" class="flex flex-col gap-2 p-2 py-4">
-			<Stack gap="xs">
-				<div class="text-overline px-2">
-					{t('table.display')}
-				</div>
-
-				{#if inst.enableHiding}
-					<button
-						class="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
-						onclick={() => inst.toggleVisibility()}
-					>
-						<Icon icon={inst.isVisible ? 'lucide:eye-off' : 'lucide:eye'} class="mr-2 h-3 w-3" />
-						{inst.isVisible ? t('table.hideColumn') : t('table.showColumn')}
-					</button>
-				{/if}
-
-				{#if inst.enablePinning}
-					<button
-						class="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted disabled:opacity-40"
-						disabled={inst.id === COLLECTION_TABLE_SELECTION_COLUMN_ID}
-						onclick={() => inst.id !== COLLECTION_TABLE_SELECTION_COLUMN_ID && inst.togglePin()}
-					>
-						<Icon icon={inst.isPinned ? 'lucide:pin-off' : 'lucide:pin'} class="mr-2 h-3 w-3" />
-						{inst.isPinned ? t('table.unpinColumn') : t('table.pinColumn')}
-					</button>
-				{/if}
-
-				{#if displayOptions.length > 0 && onDisplayChange}
-					<Separator />
+		<Popover.Content align="start" class="p-2 py-4">
+			<Stack gap="sm">
+				<Stack gap="xs">
 					<div class="text-overline px-2">
-						{t('table.format')}
+						{t('table.display')}
 					</div>
-					{#each displayOptions as option (option.value)}
+
+					{#if inst.enableHiding}
 						<button
-							class="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
-							onclick={() => onDisplayChange(option.value)}
+							class="w-full rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
+							onclick={() => inst.toggleVisibility()}
 						>
-							<Icon
-								icon={currentDisplay === option.value ? 'lucide:check' : 'lucide:circle'}
-								class="mr-2 h-3 w-3"
-							/>
-							{option.label}
+							<Inline gap="sm">
+								<Icon icon={inst.isVisible ? 'lucide:eye-off' : 'lucide:eye'} class="h-3 w-3" />
+								{inst.isVisible ? t('table.hideColumn') : t('table.showColumn')}
+							</Inline>
 						</button>
-					{/each}
+					{/if}
+
+					{#if inst.enablePinning}
+						<button
+							class="w-full rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted disabled:opacity-40"
+							disabled={inst.id === COLLECTION_TABLE_SELECTION_COLUMN_ID}
+							onclick={() => inst.id !== COLLECTION_TABLE_SELECTION_COLUMN_ID && inst.togglePin()}
+						>
+							<Inline gap="sm">
+								<Icon icon={inst.isPinned ? 'lucide:pin-off' : 'lucide:pin'} class="h-3 w-3" />
+								{inst.isPinned ? t('table.unpinColumn') : t('table.pinColumn')}
+							</Inline>
+						</button>
+					{/if}
+
+					{#if displayOptions.length > 0 && onDisplayChange}
+						<Separator />
+						<div class="text-overline px-2">
+							{t('table.format')}
+						</div>
+						{#each displayOptions as option (option.value)}
+							<button
+								class="w-full rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
+								onclick={() => onDisplayChange(option.value)}
+							>
+								<Inline gap="sm">
+									<Icon
+										icon={currentDisplay === option.value ? 'lucide:check' : 'lucide:circle'}
+										class="h-3 w-3"
+									/>
+									{option.label}
+								</Inline>
+							</button>
+						{/each}
+					{/if}
+				</Stack>
+
+				{#if inst.enableResizing}
+					<div class="mt-1">
+						<Separator />
+						<div class="text-overline px-2 pt-2">
+							{t('table.sizing')}
+						</div>
+						<Stack gap="none">
+							<button
+								class="w-full rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
+								onclick={() => {
+									delete table.columnSizing.current[inst.id];
+								}}
+							>
+								<Inline gap="sm">
+									<Icon icon="lucide:undo-2" class="h-3.5 w-3.5" />
+									{t('table.resetWidth')}
+								</Inline>
+							</button>
+							<button
+								class="w-full rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
+								onclick={() => {
+									table.fitColumn(inst.id);
+								}}
+							>
+								<Inline gap="sm">
+									<Icon icon="lucide:scan" class="h-3.5 w-3.5" />
+									{t('table.fitColumn')}
+								</Inline>
+							</button>
+							<button
+								class="w-full rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
+								onclick={() => table.fitAllColumns()}
+							>
+								<Inline gap="sm">
+									<Icon icon="lucide:scan-line" class="h-3.5 w-3.5" />
+									{t('table.fitAll')}
+								</Inline>
+							</button>
+						</Stack>
+					</div>
 				{/if}
 			</Stack>
-
-			{#if inst.enableResizing}
-				<div class="mt-1">
-					<Separator />
-					<div class="text-overline px-2 pt-2">
-						{t('table.sizing')}
-					</div>
-					<Stack gap="none">
-						<button
-							class="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
-							onclick={() => {
-								delete table.columnSizing.current[inst.id];
-							}}
-						>
-							<Icon icon="lucide:undo-2" class="mr-2 h-3.5 w-3.5" />
-							{t('table.resetWidth')}
-						</button>
-						<button
-							class="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
-							onclick={() => {
-								table.fitColumn(inst.id);
-							}}
-						>
-							<Icon icon="lucide:scan" class="mr-2 h-3.5 w-3.5" />
-							{t('table.fitColumn')}
-						</button>
-						<button
-							class="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
-							onclick={() => table.fitAllColumns()}
-						>
-							<Icon icon="lucide:scan-line" class="mr-2 h-3.5 w-3.5" />
-							{t('table.fitAll')}
-						</button>
-					</Stack>
-				</div>
-			{/if}
 		</Popover.Content>
 	</Popover.Root>
 {/if}

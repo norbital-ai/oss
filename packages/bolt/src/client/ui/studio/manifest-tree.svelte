@@ -16,7 +16,7 @@
 	} from '#lib/client/ui/studio/studio-state.js';
 
 	/**
-	 * The authoring navigator: the workspace's own manifest under Manifest, its files under Editor.
+	 * The workbench navigator: the workspace's own manifest under Manifest, its files under Editor.
 	 *
 	 * A branch header both selects the branch and opens it, so it is one `<button>` rather than a
 	 * collapsible trigger with a second button inside it — that markup is invalid, and it is why
@@ -123,28 +123,35 @@
 					</button>
 
 					{#if open}
-						<div class="ml-5 border-l border-border/50 pl-2">
-							{#each section.entries as entry (entry.name)}
-								<button
-									type="button"
-									class={cn(
-										'flex w-full items-center gap-1.5 truncate rounded-sm px-2 py-1 text-left transition-colors',
-										selectedKind === section.id && selectedName === entry.name
-											? 'bg-accent text-foreground'
-											: 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
-									)}
-									title={entry.detail ?? entry.name}
-									onclick={() => onselect?.(`${section.id}:${entry.name}`)}
-								>
-									<IconWrapper name={entry.icon ?? 'lucide:box'} class="size-3 shrink-0" />
-									<span class={cn('truncate', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}>{entry.name}</span
+						<!-- The indent belongs to the row that owns the children, so it is this element's
+						     padding rather than a margin the nested list carries away with it. -->
+						<div class="pl-5">
+							<div class="border-l border-border/50 pl-2">
+								{#each section.entries as entry (entry.name)}
+									<button
+										type="button"
+										class={cn(
+											'flex w-full items-center gap-1.5 truncate rounded-sm px-2 py-1 text-left transition-colors',
+											selectedKind === section.id && selectedName === entry.name
+												? 'bg-accent text-foreground'
+												: 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
+										)}
+										title={entry.detail ?? entry.name}
+										onclick={() => onselect?.(`${section.id}:${entry.name}`)}
 									>
-								</button>
-							{:else}
-								<p class={cn('px-2 py-1 text-muted-foreground', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}>
-									None declared.
-								</p>
-							{/each}
+										<IconWrapper name={entry.icon ?? 'lucide:box'} class="size-3 shrink-0" />
+										<span class={cn('truncate', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}
+											>{entry.name}</span
+										>
+									</button>
+								{:else}
+									<p
+										class={cn('px-2 py-1 text-muted-foreground', WORKSPACE_SIDEBAR_ITEM_TEXT_CLASS)}
+									>
+										None declared.
+									</p>
+								{/each}
+							</div>
 						</div>
 					{/if}
 				</Stack>

@@ -3,7 +3,7 @@ import type { RemoteQuery } from '@norbital-ai/std/collection';
 /**
  * Projects one reactive query without creating a second lifecycle owner.
  *
- * The source still owns loading, errors, refresh, and settlement. This adapter changes only the
+ * The source still owns loading, errors, and settlement. This adapter changes only the
  * value a collection facade exposes. Keeping the thenable bridge in a Svelte client module also
  * leaves the Effect-owned runtime free of native Promise control.
  */
@@ -34,8 +34,6 @@ class ProjectedRemoteQuery<Source, Value> implements RemoteQuery<Value> {
 	get loading(): boolean {
 		return this.#source.loading;
 	}
-
-	refresh = () => this.#source.refresh();
 
 	then = <TResult1 = Value, TResult2 = never>(
 		// repository-health:allow EFF2 -- PromiseLike.then requires this callback result shape; the adapter owns no Promise lifecycle and delegates settlement to the source RemoteQuery.

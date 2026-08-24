@@ -13,7 +13,10 @@ node_modules/
 **/yarn.lock
 
 # Build output
+# The generated API reference lives under a `build/` path but is committed: the public website
+# serves it from the repository, so the tree must exist on the default branch.
 **/build/
+!docs/api-reference/**/build/
 **/build.staging/
 **/build.retired/
 **/.svelte-kit/

@@ -1,10 +1,13 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
+import { eq } from 'drizzle-orm';
 import {
 	describeEnvironment,
 	type EnvironmentVariableView
 } from '#lib/authoring/environment-schema.js';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Database from '#lib/runtime/facilities/database.js';
+import { composer, dbNow, executeBuilt } from '#lib/runtime/persistence.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import {
 	SecretCipher,
@@ -22,6 +25,7 @@ import {
  * opening as a personal one, or as one of Colony's host-side browser sessions.
  */
 const workspaceBinding = (name: string): string => bind('bolt_secrets', name);
+const { bolt_secrets: boltSecrets } = SYSTEM_MODEL_TABLES;
 
 /**
  * The Secrets vault: the values behind a workspace's `+env.ts` declaration.
@@ -125,19 +129,20 @@ const layer = Layer.effect(
 				: Effect.succeed(entry);
 		};
 
-		const storedValue = (effectId: EffectId, name: string) =>
-			database.execute(effectId, {
-				_tag: 'Query',
-				sql: 'select value from bolt_secrets where name = $1',
-				parameters: [name]
-			});
-
 		const read: Interface['read'] = Effect.fn('Secrets.read')(function* (
 			effectId: EffectId,
 			name: string
 		) {
 			const variable = yield* requireDeclared(name);
-			const result = yield* storedValue(effectId, name);
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({ value: boltSecrets.value })
+					.from(boltSecrets)
+					.where(eq(boltSecrets.name, name))
+					.limit(1)
+			);
 			const [row] = result.rows;
 			const stored =
 				row !== null && typeof row === 'object' && !Array.isArray(row)
@@ -155,11 +160,13 @@ const layer = Layer.effect(
 		});
 
 		const status: Interface['status'] = Effect.fn('Secrets.status')(function* (effectId: EffectId) {
-			const result = yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: 'select name, updated_at from bolt_secrets',
-				parameters: []
-			});
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({ name: boltSecrets.name, updated_at: boltSecrets.updated_at })
+					.from(boltSecrets)
+			);
 			const stored = new Map<string, string | undefined>();
 			for (const row of result.rows) {
 				if (row === null || typeof row !== 'object' || Array.isArray(row)) continue;
@@ -188,11 +195,11 @@ const layer = Layer.effect(
 			if (value === '') {
 				// Clearing is deleting. Storing an empty string would make `read` return `''`, which is a
 				// value, and every downstream null check would pass on a secret that is not there.
-				yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'delete from bolt_secrets where name = $1',
-					parameters: [name]
-				});
+				yield* executeBuilt(
+					effectId,
+					database,
+					composer.delete(boltSecrets).where(eq(boltSecrets.name, name))
+				);
 				return;
 			}
 			// Sealed before the statement is built, so a missing key refuses *ahead of* the write. There is
@@ -202,12 +209,17 @@ const layer = Layer.effect(
 				workspaceBinding(name),
 				value
 			);
-			yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: `insert into bolt_secrets (tenant_id, name, value, updated_by) values ('', $1, $2, $3)
-				      on conflict (tenant_id, name) do update set value = excluded.value, updated_at = now(), updated_by = excluded.updated_by`,
-				parameters: [name, sealed, updatedBy]
-			});
+			yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.insert(boltSecrets)
+					.values({ tenant_id: '', name, value: sealed, updated_by: updatedBy })
+					.onConflictDoUpdate({
+						target: [boltSecrets.tenant_id, boltSecrets.name],
+						set: { value: sealed, updated_by: updatedBy, updated_at: dbNow() }
+					})
+			);
 		});
 
 		return { read, status, write };

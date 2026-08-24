@@ -143,6 +143,7 @@ type Order = Readonly<{
 /** The binding under test in most of this file: every create, and an update that changed `status`. */
 const ordersModule = (baseUrl: string) => ({
 	partner: {
+		policies: [],
 		connection: defineConnection({
 			baseUrl,
 			authentication: { type: 'bearer', token: { env: 'PARTNER_TOKEN' } }
@@ -177,6 +178,7 @@ const ordersModule = (baseUrl: string) => ({
 /** A binding whose body throws, to prove an authored mistake does not fail the tenant's write. */
 const brokenModule = (baseUrl: string) => ({
 	partner: {
+		policies: [],
 		connection: defineConnection({ baseUrl }),
 		send: {
 			broken: defineSend<Order>({
@@ -193,6 +195,7 @@ const brokenModule = (baseUrl: string) => ({
 /** A binding addressing a column the collection does not have, to prove the path is not guessed at. */
 const unaddressableModule = (baseUrl: string) => ({
 	partner: {
+		policies: [],
 		connection: defineConnection({ baseUrl }),
 		send: {
 			unaddressable: defineSend<Order>({
@@ -348,6 +351,19 @@ const advancePastBackoff = async (): Promise<void> => {
  * ---------------------------------------------------------------------------------------------- */
 
 describe('an outbound declaration that cannot deliver is refused at compile time', () => {
+	it('requires an explicit policy list, where an empty list means no data access', () => {
+		expect(() =>
+			describeIntegrations({
+				orders: {
+					partner: {
+						connection: { baseUrl: 'https://partner.example' },
+						send: { anything: { send: { method: 'POST', path: '/orders' }, on: 'create' } }
+					} as never
+				}
+			})
+		).toThrow(/explicit policies array/);
+	});
+
 	/**
 	 * A send has nowhere to go without a `baseUrl`, exactly as a pull does. Before this, `connection`
 	 * was required only when a pull was declared — so a webhook-plus-send integration compiled fine
@@ -358,6 +374,7 @@ describe('an outbound declaration that cannot deliver is refused at compile time
 			describeIntegrations({
 				orders: {
 					partner: {
+						policies: [],
 						send: { anything: { send: { method: 'POST', path: '/orders' }, on: 'create' } }
 					}
 				}
@@ -375,6 +392,7 @@ describe('an outbound declaration that cannot deliver is refused at compile time
 			describeIntegrations({
 				orders: {
 					partner: {
+						policies: [],
 						connection: { baseUrl: 'https://partner.example' },
 						send: { anything: { send: { path: '/orders' }, on: 'create' } }
 					}

@@ -1,6 +1,6 @@
 [**Norbital API Reference v0.0.1**](../README.md)
 
----
+***
 
 [Norbital API Reference](/docs/api-reference/README.md) / std/build
 
@@ -14,7 +14,7 @@
 
 Re-exports [getErrorMessage](/docs/api-reference/std/build/error.md#geterrormessage)
 
----
+***
 
 <a id="humanize"></a>
 
@@ -22,7 +22,7 @@ Re-exports [getErrorMessage](/docs/api-reference/std/build/error.md#geterrormess
 
 Re-exports [humanize](/docs/api-reference/std/build/string.md#humanize)
 
----
+***
 
 <a id="safeparse"></a>
 

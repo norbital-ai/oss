@@ -15,6 +15,14 @@ export type BoltPluginOptions = Readonly<{
 }>;
 
 const WorkspaceNameFileSchema = Schema.Struct({ name: Schema.optional(Schema.String) });
+/** Built once: a decoder is compiled where it is constructed, and this one runs per manifest read. */
+const decodeWorkspaceNameFile = Schema.decodeUnknownEffect(
+	Schema.fromJsonString(WorkspaceNameFileSchema)
+);
+const WORKSPACE_ENTRY_STYLESHEET_PLACEHOLDER = '__BOLT_ENTRY_STYLESHEET__';
+const WORKSPACE_ENTRY_STYLESHEET_REFERENCE = 'virtual:bolt/application-stylesheet.css';
+const WORKSPACE_ENTRY_STYLESHEET_ID = `\0${WORKSPACE_ENTRY_STYLESHEET_REFERENCE}`;
+const WORKSPACE_ENTRY_STYLESHEET_MARKER = '--bolt-framework-stylesheet';
 
 /**
  * What the organization is called, from the workspace's own manifest.
@@ -24,27 +32,27 @@ const WorkspaceNameFileSchema = Schema.Struct({ name: Schema.optional(Schema.Str
  * belongs to the workspace, so it is baked into the workspace's own bundle and travels with it.
  * Unreadable or nameless files fall through to `package.json`, then to the `Bolt` default.
  */
-const workspaceTitleOf = (root: string): Effect.Effect<string> =>
-	Effect.gen(function* () {
-		for (const file of ['norbital.template.json', 'package.json']) {
-			const title = yield* Effect.tryPromise(() => readFile(join(root, file), 'utf8')).pipe(
-				Effect.flatMap((source) =>
-					Schema.decodeUnknownEffect(Schema.fromJsonString(WorkspaceNameFileSchema))(source)
-				),
-				Effect.map(({ name }) => name ?? ''),
-				Effect.result
-			);
-			if (Result.isSuccess(title) && title.success.length > 0) return title.success;
-		}
-		return 'Bolt';
-	});
+const workspaceTitleOf = (root: string): Effect.Effect<string> => {
+	/** The `name` one manifest carries, or the empty string when it is missing or unreadable. */
+	const named = (file: string): Effect.Effect<string> =>
+		Effect.tryPromise(() => readFile(join(root, file), 'utf8')).pipe(
+			Effect.flatMap(decodeWorkspaceNameFile),
+			Effect.map(({ name }) => name ?? ''),
+			Effect.result,
+			Effect.map((title) => (Result.isSuccess(title) ? title.success : ''))
+		);
+	return named('norbital.template.json').pipe(
+		Effect.flatMap((title) => (title.length > 0 ? Effect.succeed(title) : named('package.json'))),
+		Effect.map((title) => (title.length > 0 ? title : 'Bolt'))
+	);
+};
 
 /** Owns the virtual client runtime/application modules and the emitted workspace client. */
 const VitePlugins = {
 	bolt: (options: BoltPluginOptions = {}): PluginOption => {
 		const clientRuntimeId = '\0virtual:bolt/client-runtime';
 		const applicationId = '\0virtual:bolt/application';
-		const workspaceRoot = process.cwd();
+		let workspaceRoot = process.cwd();
 		const compiler: Plugin = {
 			name: '@norbital-ai/bolt',
 			// `pre` so the audit below reads the authored markup rather than the JavaScript
@@ -75,44 +83,53 @@ const VitePlugins = {
 					].join('\n')
 				);
 			},
-			config: () => ({
-				define: { __BOLT_WORKSPACE__: JSON.stringify(options.workspace ?? 'bolt.workspace.ts') },
-				resolve: {
-					alias: { $bolt: resolve(workspaceRoot, '.norbital/generated') },
-					dedupe: ['effect', 'svelte']
-				},
-				build: {
-					outDir: '.norbital/dist',
-					/**
-					 * The previous build is removed before this one writes.
-					 *
-					 * `bolt sync` embeds every file under `.norbital/dist` into the artifact, so a file
-					 * left behind by an older build ships inside a newer artifact — a stale client served
-					 * as though it were this release's. Emptying makes the directory a report of exactly
-					 * one build rather than an accumulation.
-					 */
-					emptyOutDir: true,
-					rollupOptions: {
-						input: 'virtual:bolt/application',
+			config: (config) => {
+				// Programmatic callers can build a workspace selected by `root` without changing the
+				// process working directory. The CLI's `--root` option relies on that contract.
+				workspaceRoot = resolve(config.root ?? process.cwd());
+				return {
+					define: { __BOLT_WORKSPACE__: JSON.stringify(options.workspace ?? 'bolt.workspace.ts') },
+					resolve: {
+						alias: { $bolt: resolve(workspaceRoot, '.norbital/generated') },
+						dedupe: ['effect', 'svelte']
+					},
+					build: {
+						outDir: '.norbital/dist',
 						/**
-						 * The entry keeps its exports.
+						 * The previous build is removed before this one writes.
 						 *
-						 * An app build defaults this to `false`, which drops the entry signature: the
-						 * emitted entry was 29 bytes of `import"./client-….js";` and `mountWorkspace` was
-						 * unreachable, so the artifact carried a client nothing could start.
+						 * `bolt sync` embeds every file under `.norbital/dist` into the artifact, so a file
+						 * left behind by an older build ships inside a newer artifact — a stale client served
+						 * as though it were this release's. Emptying makes the directory a report of exactly
+						 * one build rather than an accumulation.
 						 */
-						preserveEntrySignatures: 'strict',
-						output: { entryFileNames: WORKSPACE_ENTRY_FILE_NAME }
+						emptyOutDir: true,
+						rollupOptions: {
+							input: 'virtual:bolt/application',
+							/**
+							 * The entry keeps its exports.
+							 *
+							 * An app build defaults this to `false`, which drops the entry signature: the
+							 * emitted entry was 29 bytes of `import"./client-….js";` and `mountWorkspace` was
+							 * unreachable, so the artifact carried a client nothing could start.
+							 */
+							preserveEntrySignatures: 'strict',
+							output: { entryFileNames: WORKSPACE_ENTRY_FILE_NAME }
+						}
 					}
-				}
-			}),
+				};
+			},
 			resolveId: (id) =>
 				id === 'virtual:bolt/client-runtime'
 					? clientRuntimeId
 					: id === 'virtual:bolt/application'
 						? applicationId
-						: null,
+						: id === WORKSPACE_ENTRY_STYLESHEET_REFERENCE
+							? WORKSPACE_ENTRY_STYLESHEET_ID
+							: null,
 			load: (id) => {
+				if (id === WORKSPACE_ENTRY_STYLESHEET_ID)
+					return `.bolt-app { ${WORKSPACE_ENTRY_STYLESHEET_MARKER}: 1; }`;
 				// Every generated-client import must be re-exported here. This virtual module is a separate
 				// resolution boundary: an omission survives `bolt sync` and fails only when Vite builds a
 				// tenant, which is how the old replica bootstrap remained broken unnoticed.
@@ -123,22 +140,46 @@ const VitePlugins = {
 						workspaceTitleOf(workspaceRoot).pipe(
 							Effect.map((title) =>
 								[
+									`import ${JSON.stringify(WORKSPACE_ENTRY_STYLESHEET_REFERENCE)};`,
 									`import { mountWorkspace as mountBoltWorkspace } from '@norbital-ai/bolt/client/workspace';`,
 									`import { Effect } from 'effect';`,
 									`const title = ${JSON.stringify(title)};`,
+									`const applicationStylesheet = ${JSON.stringify(WORKSPACE_ENTRY_STYLESHEET_PLACEHOLDER)};`,
+									`let applicationStylesheetReady;`,
+									`const loadApplicationStylesheet = () => {`,
+									`\tif (applicationStylesheet.length === 0) return Promise.resolve();`,
+									`\tif (applicationStylesheetReady !== undefined) return applicationStylesheetReady;`,
+									`\tapplicationStylesheetReady = new Promise((resolve, reject) => {`,
+									`\t\tconst href = new URL(applicationStylesheet, import.meta.url).href;`,
+									`\t\tif (Array.from(document.styleSheets).some((sheet) => sheet.href === href)) {`,
+									`\t\t\tresolve();`,
+									`\t\t\treturn;`,
+									`\t\t}`,
+									`\t\tconst existing = Array.from(document.querySelectorAll('link[rel="stylesheet"]')).find((link) => link.href === href);`,
+									`\t\tconst link = existing ?? Object.assign(document.createElement('link'), { rel: 'stylesheet', href });`,
+									`\t\tlink.addEventListener('load', () => resolve(), { once: true });`,
+									`\t\tlink.addEventListener('error', () => reject(new Error(\`Workspace framework stylesheet failed to load: \${href}\`)), { once: true });`,
+									`\t\tif (existing === undefined) document.head.append(link);`,
+									`\t});`,
+									`\treturn applicationStylesheetReady;`,
+									`};`,
 									``,
 									`/**`,
 									` * Mounts this workspace into an element the host owns.`,
 									` *`,
 									` * The only export, and the whole of what a host may do with an artifact's client. The`,
-									` * generated modules are imported *inside* the callback rather than at the top of this`,
-									` * file: importing the generated client builds the browser runtime, whose query cache is`,
-									` * namespaced by tenant and environment, and \`mountWorkspace\` declares the session`,
-									` * before it calls this. Statically importing them would build that cache from a session`,
-									` * that had not been declared yet.`,
+									` * generated workspace is imported *inside* the callback rather than at the top of this file:`,
+									` * importing it builds a browser runtime whose query cache is namespaced by tenant and`,
+									` * environment, and \`mountWorkspace\` declares the session before it calls that loader.`,
+									` *`,
+									` * The framework shell itself is part of this entry chunk. Its scoped CSS is emitted beside`,
+									` * the entry, but an artifact has no HTML document for Vite to add a link to. The compiler`,
+									` * fills the stylesheet placeholder above with the emitted asset and this await prevents the`,
+									` * shell from mounting before that sheet has applied.`,
 									` */`,
-									`export const mountWorkspace = (target, options) =>`,
-									`\tmountBoltWorkspace(target, {`,
+									`export const mountWorkspace = async (target, options) => {`,
+									`\tawait loadApplicationStylesheet();`,
+									`\treturn mountBoltWorkspace(target, {`,
 									`\t\t...options,`,
 									`\t\tloadWorkspace: () => Effect.runPromise(`,
 									`\t\t\tEffect.all({`,
@@ -163,6 +204,7 @@ const VitePlugins = {
 									`\t\t\t)`,
 									`\t\t)`,
 									`\t});`,
+									`};`,
 									``
 								].join('\n')
 							)
@@ -179,17 +221,40 @@ const VitePlugins = {
 			 * appeared much later, in a browser, as a missing export on a module the host had just
 			 * fetched over the network.
 			 *
-			 * The workspace stylesheet is not this hook's business. It is imported by the *generated
-			 * client*, which is only ever reached through a dynamic import, so Vite's own preload helper
-			 * inserts the link before that chunk runs. An earlier version of this rewrote the entry
-			 * chunk's text to inject a `<link>`; that was a mechanism invented to work around importing
-			 * the sheet in the wrong place.
+			 * There are two stylesheets with different owners. The workspace's Tailwind sheet is imported
+			 * by the generated client, which Vite reaches dynamically and preloads itself. The framework
+			 * shell's scoped styles belong to this entry chunk. Because an artifact build generates no HTML,
+			 * nothing else can link that entry stylesheet; fill the stable placeholder in the entry's own
+			 * loader with the asset Vite emitted for it.
 			 */
-			generateBundle: (_output, bundle) => {
-				const entry = Object.values(bundle).find(
-					(output) => output.type === 'chunk' && output.isEntry
-				);
-				if (entry === undefined) throw new Error('Bolt client build did not emit an entry chunk');
+			generateBundle: {
+				// Vite emits CSS assets in its own generate hook. Running after ordinary hooks makes the
+				// marker-bearing entry sheet observable here without depending on its content-hashed name.
+				order: 'post',
+				handler: (_output, bundle) => {
+					const entry = Object.values(bundle).find(
+						(output) => output.type === 'chunk' && output.isEntry
+					);
+					if (entry === undefined || entry.type !== 'chunk')
+						throw new Error('Bolt client build did not emit an entry chunk');
+					// One pass: the marker test reads every asset's whole source, so it runs once per output
+					// rather than once per surviving link in a filter/map/sort chain.
+					const stylesheets: Array<string> = [];
+					for (const output of Object.values(bundle)) {
+						if (output.type !== 'asset' || !output.fileName.endsWith('.css')) continue;
+						if (!String(output.source).includes(WORKSPACE_ENTRY_STYLESHEET_MARKER)) continue;
+						stylesheets.push(output.fileName);
+					}
+					stylesheets.sort();
+					const [stylesheet] = stylesheets;
+					if (stylesheets.length !== 1 || stylesheet === undefined)
+						throw new Error(
+							`Bolt client entry emitted ${stylesheets.length} marked framework stylesheets; expected one`
+						);
+					if (!entry.code.includes(WORKSPACE_ENTRY_STYLESHEET_PLACEHOLDER))
+						throw new Error('Bolt client entry lost its framework stylesheet placeholder');
+					entry.code = entry.code.replace(WORKSPACE_ENTRY_STYLESHEET_PLACEHOLDER, stylesheet);
+				}
 			},
 			closeBundle: () =>
 				Effect.runPromise(

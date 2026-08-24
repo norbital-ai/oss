@@ -195,6 +195,44 @@ describe('the schedule set, before and after the owner changed', () => {
 		.map((entry) => entry.name)
 		.toSorted();
 
+	it('registers every automation for manual invocation while scheduling only cron declarations', () => {
+		const workspace = {
+			...workspaceFrom([]),
+			automations: [
+				{
+					name: 'manual_only',
+					trigger: { _tag: 'Manual' },
+					policies: [],
+					command: 'automations.manual_only'
+				},
+				{
+					name: 'nightly',
+					trigger: { _tag: 'Schedule', cron: '0 0 * * *' },
+					policies: [],
+					command: 'automations.nightly'
+				},
+				{
+					name: 'on_change',
+					trigger: { _tag: 'Change', collection: 'records', event: 'updated' },
+					policies: [],
+					command: 'automations.on_change'
+				}
+			]
+		} as WorkspaceDefinition;
+		const registered = ActivationCommands.forWorkspace(workspace).map(({ key }) => key);
+
+		expect(registered).toEqual(
+			expect.arrayContaining([
+				'automations.manual_only',
+				'automations.nightly',
+				'automations.on_change'
+			])
+		);
+		expect(ActivationCommands.schedulesFor(workspace, 'test-tenant').map(({ key }) => key)).toEqual(
+			['automations.nightly']
+		);
+	});
+
 	it('finds the crons the templates actually declare, so the diff has something to be about', () => {
 		const all = templates.flatMap(declaredCrons);
 		// A parity test over an empty set passes vacuously and proves nothing, so this asserts the

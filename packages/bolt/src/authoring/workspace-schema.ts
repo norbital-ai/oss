@@ -25,7 +25,7 @@ import type { ModelExclusion, ModelIndex } from './models-schema.js';
  * authored Drizzle builder and has always rendered `uuid`; only the schema plan flattened it, so a
  * Bolt-provisioned database and a lineage-provisioned one disagreed on every foreign key.
  */
-export type ScalarType = 'string' | 'uuid' | 'number' | 'boolean' | 'datetime' | 'json';
+export type ScalarType = 'string' | 'uuid' | 'number' | 'boolean' | 'instant' | 'json';
 export type FieldType = ScalarType | 'reference';
 
 interface ReferenceTargetDefinition {
@@ -90,6 +90,10 @@ export interface FieldDefinition<TType extends FieldType = FieldType> {
 	readonly values?: ReadonlyArray<string>;
 	/** The `custom('<name>')` type this column was declared as, when it was declared as one. */
 	readonly customType?: string;
+	/** The JSON options passed to `custom('<name>', options)`, used by its schema and renderer. */
+	readonly customTypeOptions?: Readonly<Record<string, Schema.Json>>;
+	/** Picker precision for an instant or instant range; storage remains full precision. */
+	readonly precision?: 'day' | 'minute';
 	/**
 	 * Explicit search opt-in, authored as `text({ search: true })`.
 	 *
@@ -175,7 +179,7 @@ export const field = {
 	string: makeField('string'),
 	number: makeField('number'),
 	boolean: makeField('boolean'),
-	datetime: makeField('datetime'),
+	instant: makeField('instant'),
 	json: makeField('json'),
 	uuid: makeField('uuid')
 };
@@ -183,7 +187,6 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
 	readonly name: string;
 	readonly fields: Fields;
 	readonly history: boolean;
-	readonly approvalLock?: boolean;
 	/** Whether readable rows belong in the browser replica. Defaults to true. */
 	readonly sync?: boolean;
 	/**
@@ -213,7 +216,6 @@ interface CollectionOptions<Fields extends Readonly<Record<string, FieldDefiniti
 	readonly name: string;
 	readonly fields: Fields;
 	readonly history?: boolean;
-	readonly approvalLock?: boolean;
 	readonly sync?: boolean;
 	readonly description?: string;
 	readonly icon?: string;
@@ -416,6 +418,8 @@ export interface IntegrationSendDeclaration {
 export interface IntegrationDeclaration {
 	readonly name: string;
 	readonly collection: string;
+	/** Explicit policies held by this integration's static principal. */
+	readonly policies: ReadonlyArray<string>;
 	/**
 	 * Where this integration's requests go — absent for an integration that only receives pushes.
 	 *
@@ -522,7 +526,7 @@ const assertVerifiableSignature = (binding: string, signature: WebhookSignatureS
 		);
 	}
 	if (
-		'parameter' in (signature.timestamp ?? {}) &&
+		Object.hasOwn(signature.timestamp ?? {}, 'parameter') &&
 		signature.parameter === undefined &&
 		signature.prefix === undefined
 	) {
@@ -839,6 +843,7 @@ export interface RuntimePolicyGrant {
 	readonly action: 'read' | 'create' | 'update' | 'delete' | 'history';
 	readonly where?: Readonly<Record<string, unknown>>;
 	readonly fields?: ReadonlyArray<string>;
+	readonly authorization?: unknown;
 	readonly approval?: unknown;
 }
 
@@ -872,6 +877,14 @@ export interface PolicyDeclaration {
 	 * second way to name one.
 	 */
 	readonly system?: boolean;
+	/**
+	 * Selects the runtime-owned workspace-administration policy.
+	 *
+	 * Administrator status is a holder selector, not an access bypass. The selected policy still has
+	 * to enumerate every action/resource coordinate it grants, exactly like the system and
+	 * authenticated policies above. Authored policies cannot set this flag.
+	 */
+	readonly administrator?: boolean;
 	/**
 	 * Selects every subject that signed in, and nothing an author writes should carry it either.
 	 *

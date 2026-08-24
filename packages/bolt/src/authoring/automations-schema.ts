@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 import type {
 	AnySchema,
 	BeforeApi,
@@ -12,6 +12,7 @@ export interface AutomationDeclaration {
 	readonly name: string;
 	readonly trigger:
 		| { readonly _tag: 'Schedule'; readonly cron: string }
+		| { readonly _tag: 'Manual' }
 		| {
 				readonly _tag: 'Change';
 				readonly collection: string;
@@ -29,27 +30,81 @@ export interface AutomationDeclaration {
 }
 
 export type AutomationTrigger<S extends AnySchema = AnySchema> =
-	| { readonly schedule: string }
+	/** No automatic trigger. The automation is still manually runnable, like every automation. */
+	| { readonly schedule?: string; readonly trigger?: never }
 	| {
+			/** An additional automatic start when a row changes. Manual invocation remains available. */
 			readonly trigger: {
 				readonly collection: TableName<S>;
 				readonly event: 'created' | 'updated' | 'deleted';
 			};
+			readonly schedule?: never;
 	  };
-export type AutomationContext<T extends AutomationTrigger<S>, S extends AnySchema> = {
-	readonly args: Readonly<Record<string, unknown>>;
+
+/**
+ * Keeps the public declaration a closed object even though `defineAutomation` needs a generic to
+ * preserve its literal trigger and infer the incoming-record shape. A bare generic constraint would
+ * otherwise accept legacy or misspelled properties as structural extras.
+ */
+type ExactAutomationTrigger<T> = T &
+	Readonly<Record<Exclude<keyof T, 'schedule' | 'trigger'>, never>>;
+
+type AutomationInput<I extends Schema.Top | undefined> = I extends Schema.Top
+	? Schema.Schema.Type<I>
+	: Readonly<Record<string, Schema.Json>>;
+type AutomationOutput<O extends Schema.Top | undefined> = O extends Schema.Top
+	? Schema.Schema.Type<O>
+	: Readonly<Record<string, unknown>>;
+
+/** One durable, coalesced progress snapshot for an automation run. */
+export const AutomationProgression = Schema.Struct({
+	/** Normalized completion, from 0 (not started) through 1 (complete). */
+	progress: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+	/** Displayed verbatim until the next progression replaces it. */
+	text: Schema.NullOr(Schema.String)
+});
+export type AutomationProgression = Schema.Schema.Type<typeof AutomationProgression>;
+
+/**
+ * The capability an authored automation has in addition to the ordinary server API.
+ *
+ * It is deliberately absent from hooks and remotes. Progress belongs to a durable background run;
+ * a hook is part of somebody else's atomic write and must never acquire an I/O checkpoint API that
+ * can outlive or partially report that write.
+ */
+export type AutomationApi<S extends AnySchema = DefaultWorkspaceSchema> = BeforeApi<S> & {
+	/** Replaces this run's current progress snapshot and advances its monotonic sequence. */
+	readonly progress: (value: AutomationProgression) => Effect.Effect<void>;
+};
+
+export type AutomationContext<
+	T extends AutomationTrigger<S>,
+	S extends AnySchema,
+	I extends Schema.Top | undefined = undefined
+> = {
+	readonly args: AutomationInput<I>;
 	readonly scope: T extends {
 		readonly trigger: { readonly collection: infer N extends TableName<S> };
 	}
 		? { readonly incoming_record: SchemaRow<S, N> }
 		: Readonly<Record<string, unknown>>;
 };
-interface AutomationDefinition<
+
+type AutomationInputDeclaration<I extends Schema.Top | undefined> = I extends Schema.Top
+	? Readonly<{ readonly input: I }>
+	: Readonly<{ readonly input?: undefined }>;
+type AutomationOutputDeclaration<O extends Schema.Top | undefined> = O extends Schema.Top
+	? Readonly<{ readonly output: O }>
+	: Readonly<{ readonly output?: undefined }>;
+
+export interface AutomationDefinition<
 	S extends AnySchema = DefaultWorkspaceSchema,
-	T extends AutomationTrigger<S> = AutomationTrigger<S>
+	T extends AutomationTrigger<S> = AutomationTrigger<S>,
+	I extends Schema.Top | undefined = undefined,
+	O extends Schema.Top | undefined = undefined
 > {
 	readonly trigger: T;
-	readonly spec: {
+	readonly spec: Readonly<{
 		readonly description: string;
 		/**
 		 * The policies this automation runs under — its authority *and* its toolset.
@@ -60,12 +115,12 @@ interface AutomationDefinition<
 		 */
 		readonly policies: ReadonlyArray<PolicyName>;
 		readonly handler: (
-			api: BeforeApi<S>,
-			context: AutomationContext<T, S>
-		) =>
-			| Effect.Effect<Readonly<Record<string, unknown>>, unknown, never>
-			| Readonly<Record<string, unknown>>;
-	};
+			api: AutomationApi<S>,
+			context: AutomationContext<T, S, I>
+		) => Effect.Effect<AutomationOutput<O>, unknown, never> | AutomationOutput<O>;
+	}> &
+		AutomationInputDeclaration<I> &
+		AutomationOutputDeclaration<O>;
 }
 
 /**
@@ -76,11 +131,13 @@ interface AutomationDefinition<
 interface DefineAutomation {
 	<
 		S extends AnySchema = DefaultWorkspaceSchema,
-		const T extends AutomationTrigger<S> = AutomationTrigger<S>
+		const T extends AutomationTrigger<S> = AutomationTrigger<S>,
+		const I extends Schema.Top | undefined = undefined,
+		const O extends Schema.Top | undefined = undefined
 	>(
-		trigger: T,
-		spec: AutomationDefinition<S, T>['spec']
-	): AutomationDefinition<S, T>;
+		trigger: ExactAutomationTrigger<T>,
+		spec: AutomationDefinition<S, T, I, O>['spec']
+	): AutomationDefinition<S, T, I, O>;
 }
 
 /** Owns declaration retention and automation validation behind their public call contracts. */
@@ -90,6 +147,42 @@ const AutomationAuthoring: {
 } = {
 	declaration: (declaration) => declaration,
 	definition: (trigger, spec) => {
+		const authored = trigger as Readonly<Record<string, unknown>>;
+		const unsupported = Object.keys(authored).filter(
+			(key) => key !== 'schedule' && key !== 'trigger'
+		);
+		if (unsupported.length > 0) {
+			throw new Error(
+				`Automation automatic-trigger declaration has unsupported ${unsupported.length === 1 ? 'property' : 'properties'}: ${unsupported.join(', ')}. Use {}, { schedule }, or { trigger }.`
+			);
+		}
+		const hasSchedule = Object.hasOwn(authored, 'schedule');
+		const hasChange = Object.hasOwn(authored, 'trigger');
+		if (hasSchedule && hasChange) {
+			throw new Error(
+				'An automation can declare one automatic trigger: schedule or change, not both'
+			);
+		}
+		if (hasSchedule) {
+			if (typeof authored['schedule'] !== 'string' || authored['schedule'].trim() === '') {
+				throw new Error('An automation schedule must be a non-empty cron expression');
+			}
+		}
+		if (hasChange) {
+			const change = authored['trigger'];
+			if (typeof change !== 'object' || change === null) {
+				throw new Error('An automation change trigger must name a collection and event');
+			}
+			const collection = Reflect.get(change, 'collection');
+			const event = Reflect.get(change, 'event');
+			if (
+				typeof collection !== 'string' ||
+				collection.trim() === '' ||
+				(event !== 'created' && event !== 'updated' && event !== 'deleted')
+			) {
+				throw new Error('An automation change trigger must name a collection and valid event');
+			}
+		}
 		if (spec.description.trim() === '') throw new Error('Automation description cannot be empty');
 		if (spec.policies.length === 0) {
 			throw new Error(

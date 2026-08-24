@@ -70,7 +70,6 @@
 			type="button"
 			variant="outline"
 			size="sm"
-			class="mt-2"
 			{disabled}
 			onclick={() => onValueChange?.([...values, false])}
 		>

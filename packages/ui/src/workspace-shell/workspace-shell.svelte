@@ -81,10 +81,7 @@
 		switchingOrganization = organization;
 		Effect.runFork(
 			Effect.ensuring(
-				Effect.gen(function* () {
-					const change = onOrganizationChange(organizationId);
-					if (change) yield* change;
-				}),
+				Effect.suspend(() => onOrganizationChange(organizationId) ?? Effect.void),
 				Effect.sync(() => {
 					switchingOrganization = null;
 				})

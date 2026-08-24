@@ -91,7 +91,8 @@
 		{:else}
 			<div class="divide-y" role="list">
 				{#each rows as row (row.id)}
-					{@const isDetailActive = activeRecordId != null && activeRecordId === row.id}
+					{@const { id: recordId } = row}
+					{@const isDetailActive = activeRecordId != null && activeRecordId === recordId}
 					{@const metadata = getRecordMetadata(row.record)}
 					<Inline
 						gap="none"
@@ -101,7 +102,7 @@
 							isDetailActive ? 'bg-accent/50' : row.selected ? 'bg-accent/40' : 'hover:bg-muted/40'
 						)}
 						data-detail-active={isDetailActive ? 'true' : undefined}
-						data-record-id={row.id}
+						data-record-id={recordId}
 						aria-current={isDetailActive ? 'true' : undefined}
 						role="listitem"
 					>
@@ -136,7 +137,7 @@
 						</a>
 						<CollectionRecordMetadataView
 							{metadata}
-							class="my-auto mr-2 max-w-[min(45%,14rem)] shrink-0 justify-end"
+							class="my-auto max-w-[min(45%,14rem)] shrink-0 justify-end pr-2"
 						/>
 						{#if rowActions?.length}
 							<Inline gap="xs" class="pr-1">

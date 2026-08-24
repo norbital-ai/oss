@@ -1,13 +1,60 @@
 import { deriveRecordId } from '#lib/runtime/derive-record-id.js';
 import { Clock, Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
+import { and, asc, eq, exists, isNull, notExists } from 'drizzle-orm';
+import { compileModelTable } from '#lib/authoring/model-introspection.js';
+import { defineModel } from '#lib/authoring/models-schema.js';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import * as Database from '#lib/runtime/facilities/database.js';
+import {
+	aliased,
+	always,
+	bound,
+	composer,
+	dbNow,
+	excluded,
+	executeBuilt,
+	jsonb,
+	jsonTextEquals
+} from '#lib/runtime/persistence.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
-import { enqueueFromCte } from '#lib/runtime/tasks/queue.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import * as SyncWake from '#lib/runtime/sync/wake.js';
-import * as Workspace from '#lib/runtime/workspace.js';
+
+const {
+	approval_request: approvalRequestTable,
+	requestor: requestorTable,
+	bolt_approvals: approvalStateTable,
+	bolt_audit: auditTable,
+	bolt_notifications: notificationTable,
+	bolt_task: taskTable
+} = SYSTEM_MODEL_TABLES;
+
+type ApprovalProjection = Readonly<{
+	readonly collectionName: string;
+	readonly recordId: string;
+	readonly action: string;
+	readonly status: string;
+	readonly steps: Schema.Json;
+	readonly approverTeams: Schema.Json;
+	readonly supersederTeams: Schema.Json;
+	readonly lockedRecordRefs: Schema.Json;
+	readonly proposedValues: Schema.Json;
+	readonly closedAt: string | null;
+	readonly closedBy: string | null;
+}>;
+
+type ApprovalFollowup = Readonly<{
+	readonly command: string;
+	readonly effectId: string;
+	readonly input: Schema.Json;
+}>;
+
+type ApprovalNotification = Readonly<{
+	readonly id: string;
+	readonly payload: Schema.Json;
+}>;
 
 export const ApprovalState = Schema.TaggedUnion({
 	Pending: {
@@ -18,6 +65,8 @@ export const ApprovalState = Schema.TaggedUnion({
 	Approved: {
 		requestId: Schema.NonEmptyString,
 		decidedBy: Schema.NonEmptyString,
+		superseded: Schema.optionalKey(Schema.Literal(true)),
+		reason: Schema.optionalKey(Schema.NonEmptyString),
 		operation: Schema.optionalKey(Schema.Json)
 	},
 	// The two terminal refusals carry the operation for the same reason `Approved` does: the record
@@ -51,6 +100,14 @@ export const ApprovalState = Schema.TaggedUnion({
 export type ApprovalState = typeof ApprovalState.Type;
 
 /** The `approval_request.status` vocabulary authored reports filter on. */
+/**
+ * An epoch instant as the ISO-8601 text a row stores.
+ *
+ * A pure conversion of a reading the workflow already took from `Clock`, so it lives out here rather
+ * than inside the workflow, where a bare `new Date` reads as a second source of time.
+ */
+const instantLabel = (epochMs: number): string => new Date(epochMs).toISOString();
+
 const APPROVAL_STATUS: Readonly<Record<ApprovalState['_tag'], string>> = {
 	Pending: 'ONGOING',
 	Approved: 'APPROVED',
@@ -60,24 +117,24 @@ const APPROVAL_STATUS: Readonly<Record<ApprovalState['_tag'], string>> = {
 	Withdrawn: 'WITHDRAWN'
 };
 
-const ApprovalTimelineEvent = Schema.Struct({
+// repository-health:allow EXP1 -- Exported dependent Layer declarations require this cross-module schema name during declaration emit.
+export const ApprovalTimelineEvent = Schema.Struct({
 	kind: Schema.NonEmptyString,
 	subjectId: Schema.NonEmptyString,
 	payload: Schema.Json
 });
+// repository-health:allow EXP1 -- Exported dependent Layer declarations require this cross-module row type during declaration emit.
 export interface ApprovalTimelineEvent extends Schema.Schema.Type<typeof ApprovalTimelineEvent> {}
 
 const ApprovalConfiguration = Schema.Struct({
 	id: Schema.NonEmptyString,
-	name: Schema.NonEmptyString,
 	steps: Schema.Array(
 		Schema.Struct({
 			id: Schema.NonEmptyString,
-			name: Schema.NonEmptyString,
-			approvers: Schema.Array(Schema.NonEmptyString),
-			description: Schema.optionalKey(Schema.String)
+			approvers: Schema.Array(Schema.NonEmptyString).check(Schema.isNonEmpty())
 		})
-	)
+	).check(Schema.isNonEmpty()),
+	superceded_by: Schema.Array(Schema.NonEmptyString)
 });
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 
@@ -100,7 +157,7 @@ export class ApprovalConflict extends Schema.TaggedError<ApprovalConflict>()(
 const ApprovalTransitions = {
 	decide: (
 		state: ApprovalState,
-		decision: 'approve' | 'reject' | 'request_changes',
+		decision: 'approve' | 'reject' | 'request_changes' | 'supersede',
 		actor: string,
 		reason = '',
 		steps = 1
@@ -111,6 +168,20 @@ const ApprovalTransitions = {
 				reason: 'approval is no longer pending'
 			});
 		switch (decision) {
+			case 'supersede':
+				if (reason.trim() === '')
+					return new ApprovalConflict({
+						requestId: state.requestId,
+						reason: 'superseding an approval requires a reason'
+					});
+				return {
+					_tag: 'Approved',
+					requestId: state.requestId,
+					decidedBy: actor,
+					superseded: true,
+					reason: reason.trim(),
+					operation: state.operation
+				};
 			case 'reject':
 				return {
 					_tag: 'Rejected',
@@ -161,9 +232,15 @@ const ApprovalTransitions = {
 };
 export const decideState = ApprovalTransitions.decide;
 
-export type ApprovalRecordLock = Readonly<{
+type ApprovalRecordLock = Readonly<{
 	readonly collection: string;
 	readonly id: string;
+}>;
+
+type ApprovalCapabilities = Readonly<{
+	readonly canDecide: boolean;
+	readonly canSupersede: boolean;
+	readonly canWithdraw: boolean;
 }>;
 
 export type Interface = Readonly<{
@@ -178,7 +255,7 @@ export type Interface = Readonly<{
 		effectId: EffectId,
 		subject: Identity.Subject,
 		state: ApprovalState,
-		decision: 'approve' | 'reject' | 'request_changes',
+		decision: 'approve' | 'reject' | 'request_changes' | 'supersede',
 		reason?: string
 	) => Effect.Effect<
 		ApprovalState,
@@ -202,6 +279,12 @@ export type Interface = Readonly<{
 		effectId: EffectId,
 		requestId: string
 	) => Effect.Effect<ApprovalState | undefined, Database.FacilityError | ApprovalConflict>;
+	/** Actions the current principal may take on the current durable state. */
+	readonly capabilities: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		requestId: string
+	) => Effect.Effect<ApprovalCapabilities, Database.FacilityError | ApprovalConflict>;
 	readonly pendingForRecord: (
 		effectId: EffectId,
 		collection: string,
@@ -227,9 +310,7 @@ export const layer = Layer.effect(
 		const access = yield* AccessControl.Service;
 		const queue = yield* TaskQueue.Service;
 		const wake = yield* SyncWake.Service;
-		const workspace = yield* Workspace.Service;
-		const reportedStalePolicies = new Set<string>();
-		/** Resolves the durable configuration embedded at request time, with authored grants as a legacy-state fallback. */
+		/** Resolves only the concrete configuration embedded when the flow was selected. */
 		const approvalConfigurations = {
 			resolve: (state: ApprovalState) => {
 				if (
@@ -241,14 +322,6 @@ export const layer = Layer.effect(
 					return undefined;
 				const embedded = Reflect.get(state.operation, 'approval');
 				if (Schema.is(ApprovalConfiguration)(embedded)) return embedded;
-				const collection = Reflect.get(state.operation, 'collection');
-				if (typeof collection !== 'string') return undefined;
-				for (const policy of workspace.definition.policies) {
-					for (const grant of policy.grants ?? []) {
-						if (grant.collection === collection && Schema.is(ApprovalConfiguration)(grant.approval))
-							return grant.approval;
-					}
-				}
 				return undefined;
 			}
 		};
@@ -263,40 +336,146 @@ export const layer = Layer.effect(
 			);
 		});
 		const status = Effect.fn('Approvals.status')(function* (effectId: EffectId, requestId: string) {
-			const result = yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: 'select state from bolt_approvals where request_id = $1',
-				parameters: [requestId]
-			});
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({ state: approvalStateTable.state })
+					.from(approvalStateTable)
+					.where(eq(approvalStateTable.request_id, requestId))
+					.limit(1)
+			);
 			const row = result.rows[0];
 			const state = typeof row === 'object' && row !== null ? Reflect.get(row, 'state') : undefined;
 			if (state === undefined) return undefined;
 			return yield* decodeState(requestId, state);
+		});
+		/**
+		 * The decision entitlement for this exact durable step.
+		 *
+		 * Kept beside the mutation that consumes it: the browser projection and `decide` both read this
+		 * answer, so adding a new approval shape cannot make a button appear that the command will deny.
+		 */
+		const decisionCapability = (subject: Identity.Subject, state: ApprovalState) => {
+			if (state._tag !== 'Pending') {
+				return { allowed: false, reason: 'approval is no longer pending' };
+			}
+			const configuration = approvalConfigurations.resolve(state);
+			if (configuration === undefined) return access.explain(subject, 'approve', 'approvals');
+			const step = configuration.steps[state.step];
+			const allowed =
+				step !== undefined &&
+				step.approvers.some(
+					(team: string) => team.toLocaleLowerCase() === subject.teamPath[0]?.toLocaleLowerCase()
+				);
+			return {
+				allowed,
+				reason: allowed
+					? 'subject is an approver for the active step'
+					: 'subject is not an approver for the active step'
+			};
+		};
+		const supersedeCapability = (subject: Identity.Subject, state: ApprovalState) => {
+			if (state._tag !== 'Pending') {
+				return { allowed: false, reason: 'approval is no longer pending' };
+			}
+			const configuration = approvalConfigurations.resolve(state);
+			if (configuration === undefined)
+				return { allowed: false, reason: 'approval configuration is missing or malformed' };
+			if (subject.admin === true) {
+				return { allowed: true, reason: 'workspace administrator may supersede the approval' };
+			}
+			const team = subject.teamPath[0]?.toLocaleLowerCase();
+			const allowed =
+				team !== undefined &&
+				configuration.superceded_by.some(
+					(candidate: string) => candidate.toLocaleLowerCase() === team
+				);
+			return {
+				allowed,
+				reason: allowed
+					? 'subject team may supersede the approval'
+					: 'subject may not supersede the approval'
+			};
+		};
+		const isRequestor = Effect.fn('Approvals.isRequestor')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			requestId: string
+		) {
+			const requestor = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({ id: requestorTable.id })
+					.from(requestorTable)
+					.where(
+						and(
+							eq(requestorTable.approval_request_id, requestId),
+							eq(requestorTable.user_id, subject.userId)
+						)
+					)
+					.limit(1)
+			);
+			return requestor.rows.length > 0;
+		});
+		const capabilities = Effect.fn('Approvals.capabilities')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			requestId: string
+		) {
+			const current = yield* status(effectId, requestId);
+			if (current?._tag !== 'Pending')
+				return { canDecide: false, canSupersede: false, canWithdraw: false };
+			return {
+				canDecide: decisionCapability(subject, current).allowed,
+				canSupersede: supersedeCapability(subject, current).allowed,
+				canWithdraw: yield* isRequestor(effectId, subject, requestId)
+			};
 		});
 		const pendingForRecord = Effect.fn('Approvals.pendingForRecord')(function* (
 			effectId: EffectId,
 			collection: string,
 			id: string
 		) {
-			const result = yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: "select state from bolt_approvals where state->>'_tag' = 'Pending' and state->'operation'->>'collection' = $1 and state->'operation'->>'id' = $2 limit 1",
-				parameters: [collection, id]
-			});
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({ id: approvalRequestTable.id })
+					.from(approvalRequestTable)
+					.where(
+						and(
+							eq(approvalRequestTable.collection_name, collection),
+							eq(approvalRequestTable.record_id, id),
+							eq(approvalRequestTable.status, 'ONGOING')
+						)
+					)
+					.limit(1)
+			);
 			const row = result.rows[0];
-			const state = typeof row === 'object' && row !== null ? Reflect.get(row, 'state') : undefined;
-			if (state === undefined) return undefined;
-			return yield* decodeState(`${collection}:${id}`, state);
+			const requestId =
+				typeof row === 'object' && row !== null ? Reflect.get(row, 'id') : undefined;
+			if (typeof requestId !== 'string') return undefined;
+			return yield* status(effectId, requestId);
 		});
 		const timeline = Effect.fn('Approvals.timeline')(function* (
 			effectId: EffectId,
 			requestId: string
 		) {
-			const result = yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: 'select kind, subject_id as "subjectId", payload from bolt_audit where payload->>\'requestId\' = $1 order by sequence',
-				parameters: [requestId]
-			});
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({
+						kind: auditTable.kind,
+						subjectId: auditTable.subject_id,
+						payload: auditTable.payload
+					})
+					.from(auditTable)
+					.where(eq(auditTable.request_id, requestId))
+					.orderBy(asc(auditTable.sequence))
+			);
 			const events: Array<ApprovalTimelineEvent> = [];
 			for (const row of result.rows) {
 				events.push(
@@ -320,23 +499,165 @@ export const layer = Layer.effect(
 				typeof fields['collection'] === 'string' ? fields['collection'] : 'unknown';
 			const recordId = typeof fields['id'] === 'string' ? fields['id'] : 'unknown';
 			const action = typeof fields['action'] === 'string' ? fields['action'] : 'update';
+			const configuration = approvalConfigurations.resolve(state);
+			const activeStep = state._tag === 'Pending' ? configuration?.steps[state.step] : undefined;
 			const nowEpochMs = yield* Clock.currentTimeMillis;
 			return {
 				collectionName,
 				recordId,
 				action,
 				status: APPROVAL_STATUS[state._tag],
-				steps: JSON.stringify(state._tag === 'Pending' ? [{ step: state.step }] : []),
-				lockedRecordRefs: JSON.stringify(
+				steps: state._tag === 'Pending' ? [{ step: state.step }] : [],
+				approverTeams: (activeStep?.approvers ?? []).map((team: string) =>
+					team.toLocaleLowerCase()
+				),
+				supersederTeams:
+					state._tag === 'Pending'
+						? (configuration?.superceded_by ?? []).map((team: string) => team.toLocaleLowerCase())
+						: [],
+				lockedRecordRefs:
 					collectionName === 'unknown'
 						? []
-						: [{ collection_name: collectionName, record_id: recordId }]
-				),
-				proposedValues: JSON.stringify(fields['values'] ?? {}),
-				closedAt: state._tag === 'Pending' ? null : new Date(nowEpochMs).toISOString(),
+						: [{ collection_name: collectionName, record_id: recordId }],
+				proposedValues: fields['values'] ?? {},
+				closedAt: state._tag === 'Pending' ? null : instantLabel(nowEpochMs),
 				closedBy: closedBy ?? null
 			};
 		});
+		/**
+		 * One guarded approval transition and all of its projections, composed as a single statement.
+		 * Every dependent CTE reads from `updated`, so losing the optimistic state check writes nothing.
+		 */
+		const transitionQuery = (
+			requestId: string,
+			next: ApprovalState,
+			actor: string,
+			auditKind: string,
+			projection: ApprovalProjection,
+			followup?: ApprovalFollowup,
+			notification?: ApprovalNotification
+		) => {
+			const updated = composer.$with('updated').as(
+				composer
+					.update(approvalStateTable)
+					.set({ state: next })
+					.where(
+						and(
+							eq(approvalStateTable.request_id, requestId),
+							jsonTextEquals(approvalStateTable.state, '_tag', 'Pending')
+						)
+					)
+					.returning({ state: approvalStateTable.state })
+			);
+			const audited = composer.$with('audited').as(
+				composer
+					.insert(auditTable)
+					.select(
+						composer
+							.select({
+								kind: aliased(bound(auditKind), 'kind'),
+								subject_id: aliased(bound(actor), 'subject_id'),
+								request_id: aliased(bound(requestId), 'request_id'),
+								payload: updated.state
+							})
+							.from(updated)
+					)
+					.returning({ sequence: auditTable.sequence })
+			);
+			const projected = composer.$with('projected').as(
+				composer
+					.insert(approvalRequestTable)
+					.select(
+						composer
+							.select({
+								id: aliased(bound(requestId), 'id'),
+								collection_name: aliased(bound(projection.collectionName), 'collection_name'),
+								record_id: aliased(bound(projection.recordId), 'record_id'),
+								action: aliased(bound(projection.action), 'action'),
+								status: aliased(bound(projection.status), 'status'),
+								steps: aliased(jsonb(projection.steps), 'steps'),
+								approver_teams: aliased(jsonb(projection.approverTeams), 'approver_teams'),
+								superseder_teams: aliased(jsonb(projection.supersederTeams), 'superseder_teams'),
+								locked_record_refs: aliased(
+									jsonb(projection.lockedRecordRefs),
+									'locked_record_refs'
+								),
+								proposed_values: aliased(jsonb(projection.proposedValues), 'proposed_values'),
+								closed_at: aliased(bound(projection.closedAt), 'closed_at'),
+								closed_by: aliased(bound(projection.closedBy), 'closed_by')
+							})
+							.from(updated)
+					)
+					.onConflictDoUpdate({
+						target: approvalRequestTable.id,
+						set: {
+							status: excluded(approvalRequestTable.status),
+							steps: excluded(approvalRequestTable.steps),
+							approver_teams: excluded(approvalRequestTable.approver_teams),
+							superseder_teams: excluded(approvalRequestTable.superseder_teams),
+							proposed_values: excluded(approvalRequestTable.proposed_values),
+							closed_at: excluded(approvalRequestTable.closed_at),
+							closed_by: excluded(approvalRequestTable.closed_by),
+							updated_at: dbNow()
+						}
+					})
+					.returning({ id: approvalRequestTable.id })
+			);
+			const queued =
+				followup === undefined
+					? undefined
+					: composer.$with('queued').as(
+							composer
+								.insert(taskTable)
+								.select(
+									composer
+										.select({
+											command: aliased(bound(followup.command), 'command'),
+											input: aliased(jsonb(followup.input), 'input'),
+											effect_id: aliased(bound(followup.effectId), 'effect_id')
+										})
+										.from(updated)
+								)
+								.onConflictDoNothing({ target: taskTable.effect_id })
+								.returning({ id: taskTable.id })
+						);
+			const notified =
+				notification === undefined
+					? undefined
+					: composer.$with('notified').as(
+							composer
+								.insert(notificationTable)
+								.select(
+									composer
+										.select({
+											id: aliased(bound(notification.id), 'id'),
+											recipient: requestorTable.user_id,
+											payload: aliased(jsonb(notification.payload), 'payload'),
+											read: aliased(bound(false), 'read')
+										})
+										.from(requestorTable)
+										.innerJoin(updated, eq(requestorTable.approval_request_id, requestId))
+								)
+								.onConflictDoNothing({ target: notificationTable.id })
+								.returning({ id: notificationTable.id })
+						);
+			if (queued === undefined) {
+				return composer
+					.with(updated, audited, projected)
+					.select({ state: updated.state })
+					.from(updated);
+			}
+			if (notified === undefined) {
+				return composer
+					.with(updated, audited, projected, queued)
+					.select({ state: updated.state })
+					.from(updated);
+			}
+			return composer
+				.with(updated, audited, projected, queued, notified)
+				.select({ state: updated.state })
+				.from(updated);
+		};
 		const conflict = Effect.fn('Approvals.conflict')(function* (
 			effectId: EffectId,
 			requestId: string,
@@ -359,59 +680,102 @@ export const layer = Layer.effect(
 			const collection =
 				typeof operation['collection'] === 'string' ? operation['collection'] : undefined;
 			const recordId = typeof operation['id'] === 'string' ? operation['id'] : undefined;
-			const quotedCollection =
-				collection === undefined ? undefined : `"${collection.replaceAll('"', '""')}"`;
-			const releaseCte =
-				quotedCollection === undefined || recordId === undefined
-					? ''
-					: `, released as (
-						update ${quotedCollection} as target set approval_id = null
-						where target.approval_id = $1::uuid and target.id = $13::uuid
-							and exists (select 1 from updated)
-						returning target.id::text as id, to_jsonb(target) as record
-					), lock_synced as (
-						insert into bolt_sync_outbox (collection_name, record_id, operation, record)
-						select $14, id, 'update', record from released
-						returning sequence
-					)`;
-			const parameters: Array<Schema.Json> = [
-				requestId,
-				next,
-				current.decidedBy,
-				projection.collectionName,
-				projection.recordId,
-				projection.action,
-				projection.status,
-				projection.steps,
-				projection.lockedRecordRefs,
-				projection.closedAt,
-				projection.closedBy,
-				projection.proposedValues,
-				...(recordId === undefined || collection === undefined ? [] : [recordId, collection])
-			];
-			const updated = yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: `with updated as (
-					update bolt_approvals set state = $2
-					where request_id = $1 and state->>'_tag' = 'Approved'
-					returning state
-				), audited as (
-					insert into bolt_audit (kind, subject_id, payload)
-					select 'approval_conflicted', $3, state from updated
-					returning sequence
-				), projected as (
-					insert into approval_request (id, collection_name, record_id, action, status, steps, locked_record_refs, proposed_values, closed_at, closed_by)
-					select $1::uuid, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $12::jsonb, $10, $11 from updated
-					on conflict (id) do update set status = excluded.status, steps = excluded.steps, proposed_values = excluded.proposed_values, closed_at = excluded.closed_at, closed_by = excluded.closed_by, updated_at = now()
-					returning id::text as id, to_jsonb(approval_request) as record
-				), synced as (
-					insert into bolt_sync_outbox (collection_name, record_id, operation, record)
-					select 'approval_request', id, 'update', record from projected
-					returning sequence
-				)${releaseCte}
-				select state from updated`,
-				parameters
-			});
+			const updatedState = composer.$with('updated').as(
+				composer
+					.update(approvalStateTable)
+					.set({ state: next })
+					.where(
+						and(
+							eq(approvalStateTable.request_id, requestId),
+							jsonTextEquals(approvalStateTable.state, '_tag', 'Approved')
+						)
+					)
+					.returning({ state: approvalStateTable.state })
+			);
+			const audited = composer.$with('audited').as(
+				composer
+					.insert(auditTable)
+					.select(
+						composer
+							.select({
+								kind: aliased(bound('approval_conflicted'), 'kind'),
+								subject_id: aliased(bound(current.decidedBy), 'subject_id'),
+								request_id: aliased(bound(requestId), 'request_id'),
+								payload: updatedState.state
+							})
+							.from(updatedState)
+					)
+					.returning({ sequence: auditTable.sequence })
+			);
+			const projected = composer.$with('projected').as(
+				composer
+					.insert(approvalRequestTable)
+					.select(
+						composer
+							.select({
+								id: aliased(bound(requestId), 'id'),
+								collection_name: aliased(bound(projection.collectionName), 'collection_name'),
+								record_id: aliased(bound(projection.recordId), 'record_id'),
+								action: aliased(bound(projection.action), 'action'),
+								status: aliased(bound(projection.status), 'status'),
+								steps: aliased(jsonb(projection.steps), 'steps'),
+								approver_teams: aliased(jsonb(projection.approverTeams), 'approver_teams'),
+								superseder_teams: aliased(jsonb(projection.supersederTeams), 'superseder_teams'),
+								locked_record_refs: aliased(
+									jsonb(projection.lockedRecordRefs),
+									'locked_record_refs'
+								),
+								proposed_values: aliased(jsonb(projection.proposedValues), 'proposed_values'),
+								closed_at: aliased(bound(projection.closedAt), 'closed_at'),
+								closed_by: aliased(bound(projection.closedBy), 'closed_by')
+							})
+							.from(updatedState)
+					)
+					.onConflictDoUpdate({
+						target: approvalRequestTable.id,
+						set: {
+							status: excluded(approvalRequestTable.status),
+							steps: excluded(approvalRequestTable.steps),
+							approver_teams: excluded(approvalRequestTable.approver_teams),
+							superseder_teams: excluded(approvalRequestTable.superseder_teams),
+							proposed_values: excluded(approvalRequestTable.proposed_values),
+							closed_at: excluded(approvalRequestTable.closed_at),
+							closed_by: excluded(approvalRequestTable.closed_by),
+							updated_at: dbNow()
+						}
+					})
+					.returning({ id: approvalRequestTable.id })
+			);
+			const released =
+				collection === undefined || recordId === undefined
+					? undefined
+					: (() => {
+							const target = compileModelTable(collection, defineModel({}));
+							return composer.$with('released').as(
+								composer
+									.update(target)
+									.set({ approval_id: null })
+									.where(
+										and(
+											eq(target.approval_id, requestId),
+											eq(target.id, recordId),
+											exists(composer.select({ state: updatedState.state }).from(updatedState))
+										)
+									)
+									.returning({ id: target.id })
+							);
+						})();
+			const transition =
+				released === undefined
+					? composer
+							.with(updatedState, audited, projected)
+							.select({ state: updatedState.state })
+							.from(updatedState)
+					: composer
+							.with(updatedState, audited, projected, released)
+							.select({ state: updatedState.state })
+							.from(updatedState);
+			const updated = yield* executeBuilt(effectId, database, transition);
 			if (updated.rows.length === 0)
 				return yield* new ApprovalConflict({
 					requestId,
@@ -426,61 +790,16 @@ export const layer = Layer.effect(
 		return Service.of({
 			request: Effect.fn('Approvals.request')(
 				function* (effectId, subject, requestId, operation, lock) {
-					let durableOperation = operation;
-					// One decode of the operation at the seam: a collection-gated write arrives as a
-					// `{ collection, ... }` object, and the data-browser command that posted it names the
-					// collection it gated. Anything else is some other operation shape and is not gated.
-					const gated = Schema.decodeUnknownOption(
-						Schema.Struct({
-							collection: Schema.String,
-							approval: Schema.optionalKey(Schema.Json)
-						}),
-						{ onExcessProperty: 'ignore' }
-					)(operation);
 					const operationObject = Schema.decodeUnknownOption(JsonObject)(operation);
 					if (
-						gated._tag === 'Some' &&
-						gated.value.approval === undefined &&
-						operationObject._tag === 'Some'
-					) {
-						// The policies this subject's team declares, resolved the one way any policy is
-						// selected — by name, against the team map the release carries.
-						const held = AccessControl.policiesHeld(
-							workspace.definition,
-							subject,
-							reportedStalePolicies
-						);
-						const configuration = workspace.definition.policies
-							.filter((policy) => held.has(policy.name.toLocaleLowerCase()))
-							.flatMap((policy) => policy.grants ?? [])
-							.find(
-								(grant) =>
-									grant.collection === gated.value.collection && grant.approval !== undefined
-							)?.approval;
-						if (isJsonObject(configuration))
-							durableOperation = { ...operationObject.value, approval: configuration };
-						else {
-							const genericApprovers = Object.keys(workspace.definition.teams ?? {}).filter(
-								(team) => {
-									const candidate = { ...subject, teamPath: [team], admin: false };
-									const candidatePolicies = AccessControl.policiesHeld(
-										workspace.definition,
-										candidate,
-										reportedStalePolicies
-									);
-									return AccessControl.decide(
-										workspace.definition.policies,
-										candidate,
-										'approve',
-										'approvals',
-										candidatePolicies
-									).allowed;
-								}
-							);
-							if (genericApprovers.length > 0)
-								durableOperation = { ...operationObject.value, genericApprovers };
-						}
-					}
+						operationObject._tag === 'None' ||
+						!Schema.is(ApprovalConfiguration)(operationObject.value['approval'])
+					)
+						return yield* new ApprovalConflict({
+							requestId,
+							reason: 'approval requests require one concrete embedded approval flow'
+						});
+					const durableOperation = operationObject.value;
 					const state: ApprovalState = {
 						_tag: 'Pending',
 						requestId,
@@ -489,82 +808,134 @@ export const layer = Layer.effect(
 					};
 					const projection = yield* projectionOf(state);
 					const requestorId = deriveRecordId(`${requestId}:${subject.userId}`);
-					const parameters: Array<Schema.Json> = [];
-					const bind = (value: Schema.Json): string => `$${parameters.push(value)}`;
-					const requestParameter = bind(requestId);
-					const tenantParameter = bind(subject.tenantId);
-					const stateParameter = bind(state);
-					const subjectParameter = bind(subject.userId);
-					const collectionParameter = bind(projection.collectionName);
-					const recordParameter = bind(projection.recordId);
-					const actionParameter = bind(projection.action);
-					const statusParameter = bind(projection.status);
-					const stepsParameter = bind(projection.steps);
-					const refsParameter = bind(projection.lockedRecordRefs);
-					const proposedParameter = bind(projection.proposedValues);
-					const closedAtParameter = bind(projection.closedAt);
-					const closedByParameter = bind(projection.closedBy);
-					const requestorParameter = bind(requestorId);
-					const quotedLockCollection =
-						lock === undefined ? undefined : `"${lock.collection.replaceAll('"', '""')}"`;
-					const lockIdParameter = lock === undefined ? undefined : bind(lock.id);
-					const lockCollectionParameter = lock === undefined ? undefined : bind(lock.collection);
-					const lockCtes =
+					const locked =
 						lock === undefined
-							? ''
-							: `locked as (
-							update ${quotedLockCollection} as target set approval_id = ${requestParameter}::uuid
-							where target.id = ${lockIdParameter}::uuid and target.approval_id is null
-								and not exists (select 1 from bolt_approvals where request_id = ${requestParameter})
-							returning target.id::text as id, to_jsonb(target) as record
-						),`;
-					const insertedSource =
-						lock === undefined
-							? `values (${requestParameter}, ${tenantParameter}, ${stateParameter})`
-							: `select ${requestParameter}, ${tenantParameter}, ${stateParameter} from locked`;
-					const lockSyncCte =
-						lock === undefined
-							? ''
-							: `, lock_synced as (
-							insert into bolt_sync_outbox (collection_name, record_id, operation, record)
-							select ${lockCollectionParameter}, locked.id, 'update', locked.record
-							from locked join inserted on true
-							returning sequence
-						)`;
-					const inserted = yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: `with ${lockCtes} inserted as (
-						insert into bolt_approvals (request_id, tenant_id, state)
-						${insertedSource}
-						on conflict (request_id) do nothing
-						returning state
-					), audited as (
-						insert into bolt_audit (kind, subject_id, payload)
-						select 'approval_requested', ${subjectParameter}, state from inserted
-						returning sequence
-					), projected as (
-						insert into approval_request (id, collection_name, record_id, action, status, steps, locked_record_refs, proposed_values, closed_at, closed_by)
-						select ${requestParameter}::uuid, ${collectionParameter}, ${recordParameter}, ${actionParameter}, ${statusParameter}, ${stepsParameter}::jsonb, ${refsParameter}::jsonb, ${proposedParameter}::jsonb, ${closedAtParameter}, ${closedByParameter} from inserted
-						on conflict (id) do update set status = excluded.status, steps = excluded.steps, proposed_values = excluded.proposed_values, closed_at = excluded.closed_at, closed_by = excluded.closed_by, updated_at = now()
-						returning id::text as id, to_jsonb(approval_request) as record
-					), request_synced as (
-						insert into bolt_sync_outbox (collection_name, record_id, operation, record)
-						select 'approval_request', id, 'create', record from projected
-						returning sequence
-					), requestor_projected as (
-						insert into requestor (id, approval_request_id, user_id)
-						select ${requestorParameter}::uuid, ${requestParameter}, ${subjectParameter}
-						from inserted join request_synced on true
-						on conflict (id) do nothing
-						returning id::text as id, to_jsonb(requestor) as record
-					), requestor_synced as (
-						insert into bolt_sync_outbox (collection_name, record_id, operation, record)
-						select 'requestor', id, 'create', record from requestor_projected
-						returning sequence
-					)${lockSyncCte}
-					select state from inserted`,
-						parameters
-					});
+							? undefined
+							: (() => {
+									const target = compileModelTable(lock.collection, defineModel({}));
+									return composer.$with('locked').as(
+										composer
+											.update(target)
+											.set({ approval_id: requestId })
+											.where(
+												and(
+													eq(target.id, lock.id),
+													isNull(target.approval_id),
+													notExists(
+														composer
+															.select({ id: approvalStateTable.id })
+															.from(approvalStateTable)
+															.where(eq(approvalStateTable.request_id, requestId))
+													)
+												)
+											)
+											.returning({ id: target.id })
+									);
+								})();
+					const insertedState = composer.$with('inserted').as(
+						(lock === undefined || locked === undefined
+							? composer.insert(approvalStateTable).values({
+									request_id: requestId,
+									tenant_id: subject.tenantId,
+									state
+								})
+							: composer.insert(approvalStateTable).select(
+									composer
+										.select({
+											request_id: aliased(bound(requestId), 'request_id'),
+											tenant_id: aliased(bound(subject.tenantId), 'tenant_id'),
+											state: aliased(jsonb(state), 'state')
+										})
+										.from(locked)
+								)
+						)
+							.onConflictDoNothing({ target: approvalStateTable.request_id })
+							.returning({ state: approvalStateTable.state })
+					);
+					const audited = composer.$with('audited').as(
+						composer
+							.insert(auditTable)
+							.select(
+								composer
+									.select({
+										kind: aliased(bound('approval_requested'), 'kind'),
+										subject_id: aliased(bound(subject.userId), 'subject_id'),
+										request_id: aliased(bound(requestId), 'request_id'),
+										payload: insertedState.state
+									})
+									.from(insertedState)
+							)
+							.returning({ sequence: auditTable.sequence })
+					);
+					const projected = composer.$with('projected').as(
+						composer
+							.insert(approvalRequestTable)
+							.select(
+								composer
+									.select({
+										id: aliased(bound(requestId), 'id'),
+										collection_name: aliased(bound(projection.collectionName), 'collection_name'),
+										record_id: aliased(bound(projection.recordId), 'record_id'),
+										action: aliased(bound(projection.action), 'action'),
+										status: aliased(bound(projection.status), 'status'),
+										steps: aliased(jsonb(projection.steps), 'steps'),
+										approver_teams: aliased(jsonb(projection.approverTeams), 'approver_teams'),
+										superseder_teams: aliased(
+											jsonb(projection.supersederTeams),
+											'superseder_teams'
+										),
+										locked_record_refs: aliased(
+											jsonb(projection.lockedRecordRefs),
+											'locked_record_refs'
+										),
+										proposed_values: aliased(jsonb(projection.proposedValues), 'proposed_values'),
+										closed_at: aliased(bound(projection.closedAt), 'closed_at'),
+										closed_by: aliased(bound(projection.closedBy), 'closed_by')
+									})
+									.from(insertedState)
+							)
+							.onConflictDoUpdate({
+								target: approvalRequestTable.id,
+								set: {
+									status: excluded(approvalRequestTable.status),
+									steps: excluded(approvalRequestTable.steps),
+									approver_teams: excluded(approvalRequestTable.approver_teams),
+									superseder_teams: excluded(approvalRequestTable.superseder_teams),
+									proposed_values: excluded(approvalRequestTable.proposed_values),
+									closed_at: excluded(approvalRequestTable.closed_at),
+									closed_by: excluded(approvalRequestTable.closed_by),
+									updated_at: dbNow()
+								}
+							})
+							.returning({ id: approvalRequestTable.id })
+					);
+					const requestorProjected = composer.$with('requestor_projected').as(
+						composer
+							.insert(requestorTable)
+							.select(
+								composer
+									.select({
+										id: aliased(bound(requestorId), 'id'),
+										approval_request_id: aliased(bound(requestId), 'approval_request_id'),
+										user_id: aliased(bound(subject.userId), 'user_id')
+									})
+									.from(insertedState)
+									.innerJoin(projected, always())
+							)
+							.onConflictDoNothing({ target: requestorTable.id })
+							.returning({ id: requestorTable.id })
+					);
+					const requestQuery =
+						locked === undefined
+							? composer
+									.with(insertedState, audited, projected, requestorProjected)
+									.select({ state: insertedState.state })
+									.from(insertedState)
+							: composer
+									.with(locked, insertedState, audited, projected, requestorProjected)
+									.select({ state: insertedState.state })
+									.from(insertedState);
+					const inserted = yield* executeBuilt(effectId, database, requestQuery);
 					if (inserted.rows.length > 0) {
 						const collections = [
 							'approval_request',
@@ -603,30 +974,17 @@ export const layer = Layer.effect(
 						requestId: state.requestId,
 						reason: 'approval request was not found'
 					});
+				const capability =
+					decision === 'supersede'
+						? supersedeCapability(subject, current)
+						: decisionCapability(subject, current);
+				if (!capability.allowed)
+					return yield* new AccessControl.AccessDenied({
+						action: 'approve',
+						resource: current.requestId,
+						reason: capability.reason
+					});
 				const configuration = approvalConfigurations.resolve(current);
-				if (configuration === undefined) {
-					yield* access.authorize(subject, 'approve', 'approvals');
-				} else {
-					const step = configuration.steps[current._tag === 'Pending' ? current.step : 0];
-					const eligible =
-						step !== undefined &&
-						// One team, matched folded — the same rule the policy side uses, read from the one
-						// place the subject's own team lives. It used to be an array compared
-						// case-sensitively, which is how `approvers: ['HR Manger']` produced an approval
-						// nobody could ever decide; folding closed the casing half of that and left the
-						// typo half open, which is why `approvers` is now a generated union and a
-						// misspelling fails the build instead.
-						step.approvers.some(
-							(team: string) =>
-								team.toLocaleLowerCase() === subject.teamPath[0]?.toLocaleLowerCase()
-						);
-					if (!eligible)
-						return yield* new AccessControl.AccessDenied({
-							action: 'approve',
-							resource: current.requestId,
-							reason: 'subject is not an approver for the active step'
-						});
-				}
 				const next = decideState(
 					current,
 					decision,
@@ -655,52 +1013,52 @@ export const layer = Layer.effect(
 						EffectId.make(`${effectId}:approval-followup-wake`),
 						yield* Clock.currentTimeMillis
 					);
-				const taskCte =
-					followup === undefined ? undefined : enqueueFromCte('queued', 'updated', followup, 13);
-				const updated = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `with updated as (
-						update bolt_approvals set state = $2
-						where request_id = $1 and state->>'_tag' = 'Pending'
-						returning state
-					), audited as (
-						insert into bolt_audit (kind, subject_id, payload)
-						select 'approval_decided', $3, state from updated
-						returning sequence
-					), projected as (
-						insert into approval_request (id, collection_name, record_id, action, status, steps, locked_record_refs, proposed_values, closed_at, closed_by)
-						select $1::uuid, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $12::jsonb, $10, $11 from updated
-						on conflict (id) do update set status = excluded.status, steps = excluded.steps, proposed_values = excluded.proposed_values, closed_at = excluded.closed_at, closed_by = excluded.closed_by, updated_at = now()
-						returning id::text as id, to_jsonb(approval_request) as record
-					), synced as (
-						insert into bolt_sync_outbox (collection_name, record_id, operation, record)
-						select 'approval_request', id, 'update', record from projected
-						returning sequence
-					)${taskCte?.sql ?? ''}
-					select state from updated`,
-					parameters: [
+				const notification =
+					next._tag === 'Approved' || next._tag === 'Rejected' || next._tag === 'ChangesRequested'
+						? {
+								id: deriveRecordId(`${next.requestId}:decision:${next._tag}`),
+								payload: {
+									text:
+										next._tag === 'Approved'
+											? next.superseded === true
+												? `Approval superseded for ${projection.collectionName} ${projection.recordId}: ${next.reason}`
+												: `Approval approved for ${projection.collectionName} ${projection.recordId}.`
+											: next._tag === 'Rejected'
+												? `Approval rejected for ${projection.collectionName} ${projection.recordId}.`
+												: `Changes requested for ${projection.collectionName} ${projection.recordId}: ${next.reason}`,
+									approvalRequestId: next.requestId,
+									collection: projection.collectionName,
+									recordId: projection.recordId,
+									status: projection.status
+								} satisfies Schema.Json
+							}
+						: undefined;
+				const updated = yield* executeBuilt(
+					effectId,
+					database,
+					transitionQuery(
 						state.requestId,
 						next,
 						subject.userId,
-						projection.collectionName,
-						projection.recordId,
-						projection.action,
-						projection.status,
-						projection.steps,
-						projection.lockedRecordRefs,
-						projection.closedAt,
-						projection.closedBy,
-						projection.proposedValues,
-						...(taskCte?.parameters ?? [])
-					]
-				});
+						next._tag === 'Approved' && next.superseded === true
+							? 'approval_superseded'
+							: 'approval_decided',
+						projection,
+						followup,
+						notification
+					)
+				);
 				if (updated.rows.length === 0)
 					return yield* new ApprovalConflict({
 						requestId: state.requestId,
 						reason: 'approval decision lost a competing update'
 					});
+				const changed = [
+					'approval_request',
+					...(notification === undefined ? [] : ['bolt_notifications'])
+				];
 				yield* wake
-					.announce(EffectId.make(`${effectId}:approval-decision-wake`), ['approval_request'])
+					.announce(EffectId.make(`${effectId}:approval-decision-wake`), changed)
 					.pipe(Effect.timeout(250), Effect.ignore);
 				return next;
 			}),
@@ -711,12 +1069,7 @@ export const layer = Layer.effect(
 						requestId: state.requestId,
 						reason: 'approval is no longer pending'
 					});
-				const requestor = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'select 1 from requestor where approval_request_id = $1 and user_id = $2 limit 1',
-					parameters: [state.requestId, subject.userId]
-				});
-				if (requestor.rows.length === 0)
+				if (!(yield* isRequestor(effectId, subject, state.requestId)))
 					return yield* new AccessControl.AccessDenied({
 						action: 'withdraw',
 						resource: state.requestId,
@@ -734,53 +1087,15 @@ export const layer = Layer.effect(
 					EffectId.make(`${effectId}:approval-withdraw-followup-wake`),
 					yield* Clock.currentTimeMillis
 				);
-				const discardTask = enqueueFromCte(
-					'queued',
-					'updated',
-					{
+				const updated = yield* executeBuilt(
+					effectId,
+					database,
+					transitionQuery(state.requestId, next, subject.userId, 'approval_withdrawn', projection, {
 						command: 'collections.discard',
 						input: { requestId: next.requestId },
 						effectId: discardEffectId
-					},
-					13
+					})
 				);
-				const updated = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `with updated as (
-						update bolt_approvals set state = $2
-						where request_id = $1 and state->>'_tag' = 'Pending'
-						returning state
-					), audited as (
-						insert into bolt_audit (kind, subject_id, payload)
-						select 'approval_withdrawn', $3, state from updated
-						returning sequence
-					), projected as (
-						insert into approval_request (id, collection_name, record_id, action, status, steps, locked_record_refs, proposed_values, closed_at, closed_by)
-						select $1::uuid, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $12::jsonb, $10, $11 from updated
-						on conflict (id) do update set status = excluded.status, steps = excluded.steps, proposed_values = excluded.proposed_values, closed_at = excluded.closed_at, closed_by = excluded.closed_by, updated_at = now()
-						returning id::text as id, to_jsonb(approval_request) as record
-					), synced as (
-						insert into bolt_sync_outbox (collection_name, record_id, operation, record)
-						select 'approval_request', id, 'update', record from projected
-						returning sequence
-					)${discardTask.sql}
-					select state from updated`,
-					parameters: [
-						state.requestId,
-						next,
-						subject.userId,
-						projection.collectionName,
-						projection.recordId,
-						projection.action,
-						projection.status,
-						projection.steps,
-						projection.lockedRecordRefs,
-						projection.closedAt,
-						projection.closedBy,
-						projection.proposedValues,
-						...discardTask.parameters
-					]
-				});
 				if (updated.rows.length === 0)
 					return yield* new ApprovalConflict({
 						requestId: state.requestId,
@@ -793,6 +1108,7 @@ export const layer = Layer.effect(
 			}),
 			conflict,
 			status,
+			capabilities,
 			pendingForRecord,
 			timeline,
 			authorizeResume: Effect.fn('Approvals.authorizeResume')(function* (state) {

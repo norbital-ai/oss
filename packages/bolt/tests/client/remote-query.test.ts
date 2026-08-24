@@ -5,8 +5,8 @@ import { createRemoteQuery } from '../../src/client/remote-query.svelte.js';
 /**
  * What a failing remote tells the reader.
  *
- * `refresh` catches so the reactive `error` cell can hold the cause, which left the awaited half with
- * nothing but "the value is undefined" to say — it raised `Remote invocation completed without a
+ * The query loader records the cause in the reactive `error` cell, which previously left the awaited
+ * half with nothing but "the value is undefined" to say — it raised `Remote invocation completed without a
  * value`, naming neither the command nor the reason. A remote failing on
  * `operator does not exist: text = uuid` reached the screen as "could not be loaded" and the console
  * as a sentence about undefined, and the Postgres message the server had already put in the response
@@ -19,6 +19,7 @@ describe('remote query failure reporting', () => {
 		await expect(Promise.resolve(query)).rejects.toThrow('operator does not exist: text = uuid');
 		expect(query.error).toBe(cause);
 		expect(query.current).toBeUndefined();
+		expect(Reflect.has(query, 'refresh')).toBe(false);
 	});
 
 	/** A command that answers nothing at all still has to say so, rather than resolving `undefined`. */

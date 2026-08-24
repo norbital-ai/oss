@@ -46,17 +46,18 @@
 	let saved = $state<string | null>(null);
 
 	const save = (name: string): Effect.Effect<void> =>
-		Effect.gen(function* () {
+		Effect.suspend(() => {
 			saving = name;
 			saved = null;
 			saveError = null;
-			yield* client.system.secrets.write({ name, value: drafts[name] ?? '' });
-			// The draft is dropped rather than kept: holding a secret in a component's state after it is
-			// stored keeps a copy alive in the page for no reason.
-			drafts = Object.fromEntries(Object.entries(drafts).filter(([key]) => key !== name));
-			saved = name;
-			void statusQuery.refresh();
+			return client.system.secrets.write({ name, value: drafts[name] ?? '' });
 		}).pipe(
+			Effect.map(() => {
+				// The draft is dropped rather than kept: holding a secret in a component's state after it is
+				// stored keeps a copy alive in the page for no reason.
+				drafts = Object.fromEntries(Object.entries(drafts).filter(([key]) => key !== name));
+				saved = name;
+			}),
 			Effect.catch((cause) => {
 				saveError = cause instanceof Error ? cause.message : 'Unable to store the value.';
 				return Effect.void;

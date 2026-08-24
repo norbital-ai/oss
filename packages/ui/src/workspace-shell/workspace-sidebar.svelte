@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { mode, toggleMode } from 'mode-watcher';
-	import type { Snippet } from 'svelte';
+	import { onMount, type Snippet } from 'svelte';
 	import * as Avatar from '#lib/avatar';
 	import { Button } from '#lib/button';
 	import { Combobox } from '#lib/combobox';
@@ -91,10 +91,7 @@
 		switchingOrganizationId = organizationId;
 		Effect.runFork(
 			Effect.ensuring(
-				Effect.gen(function* () {
-					const change = onOrganizationChange(organizationId);
-					if (change) yield* change;
-				}),
+				Effect.suspend(() => onOrganizationChange(organizationId) ?? Effect.void),
 				Effect.sync(() => {
 					switchingOrganizationId = null;
 				})
@@ -107,10 +104,7 @@
 		signOutPending = true;
 		Effect.runFork(
 			Effect.ensuring(
-				Effect.gen(function* () {
-					const action = onSignOut();
-					if (action) yield* action;
-				}),
+				Effect.suspend(() => onSignOut() ?? Effect.void),
 				Effect.sync(() => {
 					signOutPending = false;
 				})
@@ -123,7 +117,7 @@
 	);
 	const impersonationTeams = $derived(impersonation?.teams ?? []);
 	const impersonationOptions = $derived(
-		impersonationTeams.map((team) => ({ value: team.id, label: team.name ?? team.id }))
+		impersonationTeams.map((team) => ({ value: team.id, label: team.name ?? t('misc.unnamed') }))
 	);
 	const impersonationActiveTeamId = $derived(
 		impersonation && impersonation.isActive ? (impersonation.activeTeamIds[0] ?? null) : null
@@ -140,7 +134,7 @@
 	 * and a Mac would keep reading it until something else forced an update.
 	 */
 	let shortcutModifier = $state(detectShortcutModifier());
-	$effect(() => {
+	onMount(() => {
 		shortcutModifier = detectShortcutModifier();
 	});
 	const sidebarShortcut = $derived(formatShortcut(shortcutModifier, 'B'));
@@ -158,10 +152,7 @@
 		impersonationBusy = true;
 		Effect.runFork(
 			Effect.ensuring(
-				Effect.gen(function* () {
-					const action = onImpersonate(teamId);
-					if (action) yield* action;
-				}),
+				Effect.suspend(() => onImpersonate(teamId) ?? Effect.void),
 				Effect.sync(() => {
 					impersonationBusy = false;
 				})
@@ -174,10 +165,7 @@
 		impersonationBusy = true;
 		Effect.runFork(
 			Effect.ensuring(
-				Effect.gen(function* () {
-					const action = onStopImpersonating();
-					if (action) yield* action;
-				}),
+				Effect.suspend(() => onStopImpersonating() ?? Effect.void),
 				Effect.sync(() => {
 					impersonationBusy = false;
 				})
@@ -191,7 +179,7 @@
 		{#if organization.logoUrl}
 			<Avatar.Image src={organization.logoUrl} alt={organization.name} class="object-cover" />
 		{/if}
-		<Avatar.Fallback identifier={organization.id}>
+		<Avatar.Fallback identifier={organization.name}>
 			{organizationFallback(organization)}
 		</Avatar.Fallback>
 	</Avatar.Root>
@@ -210,8 +198,9 @@
 	{#key sidebar.isMobile}
 		<!-- The whole outlined trigger is the organization switch affordance. A chevron adds a
 			second, falsely active control and competes with the adjacent shell controls. -->
+		{@const { id: activeOrganizationId } = model.activeOrganization}
 		<Combobox
-			value={model.activeOrganization.id}
+			value={activeOrganizationId}
 			options={organizationOptions}
 			display={organizationSelection}
 			searchPlaceholder={t('misc.searchOrganizations')}

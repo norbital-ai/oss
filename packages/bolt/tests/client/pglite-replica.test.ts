@@ -6,13 +6,14 @@ import { vector } from '@electric-sql/pglite-pgvector';
 import { createHash } from 'node:crypto';
 import { Effect } from 'effect';
 import {
-	createPGliteSql,
+	createPGliteStore,
 	markProvisioned,
 	provision,
 	readReplicaState,
 	writeReplicaCursor
 } from '../../src/client/replica/pglite-sql.js';
 import { adaptPGlite } from '../../src/client/replica/pglite-loader.js';
+import { createLocalReader, type LocalReader } from '../../src/client/replica/local-reads.js';
 import { provisioningStatements, testWorkspace } from '../support/bolt-test-layer.js';
 
 /**
@@ -42,20 +43,47 @@ const provisionedReplica = async () => {
 	const driver = adaptPGlite(database);
 	const definition = testWorkspace();
 	await Effect.runPromise(provision(driver, await provisioningStatements(definition)));
+	const store = await Effect.runPromise(
+		createPGliteStore(
+			driver,
+			Object.fromEntries(definition.collections.map(({ name, fields }) => [name, fields]))
+		)
+	);
 	return {
 		database,
-		sql: await Effect.runPromise(
-			createPGliteSql(
-				driver,
-				Object.fromEntries(definition.collections.map(({ name, fields }) => [name, fields]))
-			)
+		store
+	};
+};
+
+const readerFor = async () => {
+	const replica = await provisionedReplica();
+	const definition = testWorkspace();
+	return {
+		...replica,
+		reader: createLocalReader(
+			replica.store,
+			{
+				collections: definition.collections.map(({ name, fields }) => ({ name, fields })),
+				relations: definition.relations ?? []
+			},
+			new Set(definition.collections.map(({ name }) => name))
 		)
 	};
 };
 
+const findRows = async (
+	reader: LocalReader,
+	input: Readonly<Record<string, unknown>>
+): Promise<ReadonlyArray<Readonly<Record<string, unknown>>>> => {
+	const answer = await Effect.runPromise(reader.answer('collections.findMany', input as never));
+	if (answer === undefined || answer === null || typeof answer !== 'object') return [];
+	const rows = Reflect.get(answer, 'rows');
+	return Array.isArray(rows) ? rows : [];
+};
+
 describe('the browser replica on PGlite', () => {
 	it('provisions the tenant schema and answers a real query over it', async () => {
-		const { database, sql } = await provisionedReplica();
+		const { database, store, reader } = await readerFor();
 
 		// The columns exist because the lineage created them, not because the client guessed a mapping.
 		const columns = await database.query<{ column_name: string }>(
@@ -66,7 +94,7 @@ describe('the browser replica on PGlite', () => {
 		);
 
 		await Effect.runPromise(
-			sql.applyChange({
+			store.applyChange({
 				cursor: { xid: 1, sequence: 1 },
 				collection: 'people',
 				recordId: rid('p1'),
@@ -76,14 +104,18 @@ describe('the browser replica on PGlite', () => {
 		);
 		// An ordinary `where` + `order by`, which the `Map` projection could never have answered.
 		expect(
-			await Effect.runPromise(
-				sql.query('select name from people where team = $1 order by name', ['core'])
-			)
+			(
+				await findRows(reader, {
+					collection: 'people',
+					where: { team: { eq: 'core' } },
+					orderBy: { name: 'asc' }
+				})
+			).map((row) => ({ name: row['name'] }))
 		).toEqual([{ name: 'Ada' }]);
 	});
 
 	it('converges when the same change arrives twice, because the stream is at-least-once', async () => {
-		const { sql } = await provisionedReplica();
+		const { store, reader } = await readerFor();
 		const change = {
 			cursor: { xid: 1, sequence: 1 },
 			collection: 'people',
@@ -93,17 +125,17 @@ describe('the browser replica on PGlite', () => {
 		};
 		// A snapshot is paged while the workspace is being written, so a row that commits mid-page is
 		// delivered by both the snapshot and the log. That has to converge rather than raise.
-		await Effect.runPromise(sql.applyChange(change));
-		await Effect.runPromise(sql.applyChange(change));
+		await Effect.runPromise(store.applyChange(change));
+		await Effect.runPromise(store.applyChange(change));
 		expect(
-			await Effect.runPromise(sql.query('select count(*)::int as count from people', []))
-		).toEqual([{ count: 1 }]);
+			await Effect.runPromise(reader.answer('collections.count', { collection: 'people' } as never))
+		).toBe(1);
 	});
 
 	it('merges an update onto the row it already holds rather than replacing it', async () => {
-		const { sql } = await provisionedReplica();
+		const { store, reader } = await readerFor();
 		await Effect.runPromise(
-			sql.applyChange({
+			store.applyChange({
 				cursor: { xid: 1, sequence: 1 },
 				collection: 'people',
 				recordId: rid('p1'),
@@ -113,7 +145,7 @@ describe('the browser replica on PGlite', () => {
 		);
 		// An update carries the columns that changed, not the whole row.
 		await Effect.runPromise(
-			sql.applyChange({
+			store.applyChange({
 				cursor: { xid: 1, sequence: 2 },
 				collection: 'people',
 				recordId: rid('p1'),
@@ -121,15 +153,39 @@ describe('the browser replica on PGlite', () => {
 				record: { name: 'Ada Lovelace' }
 			})
 		);
-		expect(await Effect.runPromise(sql.query('select name, team from people', []))).toEqual([
-			{ name: 'Ada Lovelace', team: 'core' }
-		]);
+		expect(
+			(await findRows(reader, { collection: 'people' })).map((row) => ({
+				name: row['name'],
+				team: row['team']
+			}))
+		).toEqual([{ name: 'Ada Lovelace', team: 'core' }]);
+	});
+
+	it('installs a full update when the row was not previously visible to this replica', async () => {
+		const { store, reader } = await readerFor();
+		await Effect.runPromise(
+			store.applyChange({
+				cursor: { xid: 2, sequence: 1 },
+				collection: 'people',
+				recordId: rid('newly-visible'),
+				operation: 'update',
+				record: { id: rid('newly-visible'), name: 'Visible now', team: 'core' }
+			})
+		);
+		expect(
+			(
+				await findRows(reader, {
+					collection: 'people',
+					where: { id: { eq: rid('newly-visible') } }
+				})
+			).map((row) => ({ name: row['name'], team: row['team'] }))
+		).toEqual([{ name: 'Visible now', team: 'core' }]);
 	});
 
 	it('applies a delete, and drops everything on a reset', async () => {
-		const { sql } = await provisionedReplica();
+		const { store, reader } = await readerFor();
 		await Effect.runPromise(
-			sql.applyChange({
+			store.applyChange({
 				cursor: { xid: 1, sequence: 1 },
 				collection: 'people',
 				recordId: rid('p1'),
@@ -138,7 +194,7 @@ describe('the browser replica on PGlite', () => {
 			})
 		);
 		await Effect.runPromise(
-			sql.applyChange({
+			store.applyChange({
 				cursor: { xid: 1, sequence: 2 },
 				collection: 'people',
 				recordId: rid('p1'),
@@ -146,11 +202,11 @@ describe('the browser replica on PGlite', () => {
 			})
 		);
 		expect(
-			await Effect.runPromise(sql.query('select count(*)::int as count from people', []))
-		).toEqual([{ count: 0 }]);
+			await Effect.runPromise(reader.answer('collections.count', { collection: 'people' } as never))
+		).toBe(0);
 
 		await Effect.runPromise(
-			sql.applyChange({
+			store.applyChange({
 				cursor: { xid: 1, sequence: 3 },
 				collection: 'people',
 				recordId: rid('p2'),
@@ -158,10 +214,10 @@ describe('the browser replica on PGlite', () => {
 				record: { name: 'Grace', team: 'core' }
 			})
 		);
-		await Effect.runPromise(sql.reset());
+		await Effect.runPromise(store.reset());
 		expect(
-			await Effect.runPromise(sql.query('select count(*)::int as count from people', []))
-		).toEqual([{ count: 0 }]);
+			await Effect.runPromise(reader.answer('collections.count', { collection: 'people' } as never))
+		).toBe(0);
 	});
 
 	it('skips provisioning when the local database already matches the fingerprint', async () => {

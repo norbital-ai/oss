@@ -2,10 +2,6 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import DateView from './views/date.view.svelte';
 	import TimeView from './views/time.view.svelte';
-	import {
-		calendarDateToInstant,
-		instantToCalendarDate
-	} from '#lib/data-renderer/time_stamp/date.utils';
 	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 
 	const { t } = useI18n<UiKeys>();
@@ -31,28 +27,20 @@
 		return Array.isArray(value) ? value.flatMap((item) => instantString(item) ?? []) : [];
 	});
 	const datePickerValue = $derived.by((): string | string[] | null => {
-		const toInstant = (item: unknown): string | null => {
-			const instant = instantString(item);
-			if (!instant) return null;
-			return /^\d{4}-\d{2}-\d{2}$/.test(instant) ? calendarDateToInstant(instant) : instant;
-		};
-		if (!field.array) return toInstant(value);
+		if (!field.array) return instantString(value);
 		if (!Array.isArray(value)) return [];
-		return value.flatMap((item) => toInstant(item) ?? []);
+		return value.flatMap((item) => instantString(item) ?? []);
 	});
 
 	function updateDate(next: string | string[] | null): void {
-		onValueChange?.(
-			Array.isArray(next)
-				? next.flatMap((item) => instantToCalendarDate(item) ?? [])
-				: next == null
-					? null
-					: instantToCalendarDate(next)
-		);
+		// Day precision changes only what the picker exposes. The selected value remains the exact
+		// instant emitted by the calendar in the viewer's timezone; it is never collapsed to a bare
+		// YYYY-MM-DD string or stored in a second temporal representation.
+		onValueChange?.(next);
 	}
 </script>
 
-{#if field.kind === 'date' && field.array}
+{#if field.precision === 'day' && field.array}
 	<DateView
 		value={Array.isArray(datePickerValue) ? datePickerValue : []}
 		multi={true}
@@ -61,7 +49,7 @@
 		class={className}
 		onValueChange={updateDate}
 	/>
-{:else if field.kind === 'date'}
+{:else if field.precision === 'day'}
 	<DateView
 		value={typeof datePickerValue === 'string' ? datePickerValue : null}
 		multi={false}

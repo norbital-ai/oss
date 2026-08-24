@@ -7,6 +7,7 @@
  * `lib/yalc-consumers.mjs` for why that second step cannot be skipped.
  *
  *   --only=bolt,ui   narrow to those packages (and, through turbo, whatever they build on)
+ *   --build-target-only  build only the selected packages, reusing verified dependency outputs
  *   --push           push to installations as well as publishing to the store
  *   --force          push even where every installation already holds this exact build
  *   --report=<file>  write what happened as JSON, so a caller does not have to re-derive it
@@ -26,7 +27,8 @@ const allPackages = [
 	{ name: '@norbital-ai/std', directory: 'packages/std' },
 	{ name: '@norbital-ai/ui', directory: 'packages/ui' },
 	{ name: '@norbital-ai/bolt', directory: 'packages/bolt' },
-	{ name: '@norbital-ai/bolt-server', directory: 'packages/bolt-server' }
+	{ name: '@norbital-ai/bolt-server', directory: 'packages/bolt-server' },
+	{ name: '@norbital-ai/doctor', directory: 'packages/doctor' }
 ];
 
 const argumentValue = (flag) =>
@@ -63,6 +65,7 @@ const packages =
 
 const push = process.argv.includes('--push');
 const force = process.argv.includes('--force');
+const buildTargetOnly = process.argv.includes('--build-target-only');
 const reportPath = argumentValue('--report');
 
 const run = (command, args, cwd = repositoryRoot) => {
@@ -70,7 +73,7 @@ const run = (command, args, cwd = repositoryRoot) => {
 };
 
 const workspaceVersions = Object.fromEntries(
-	['bolt-protocol', 'bolt', 'bolt-server', 'std', 'ui', 'config'].flatMap((directory) => {
+	['bolt-protocol', 'bolt', 'bolt-server', 'std', 'ui', 'config', 'doctor'].flatMap((directory) => {
 		const manifestPath = path.join(repositoryRoot, 'packages', directory, 'package.json');
 		if (!existsSync(manifestPath)) return [];
 		const manifest = readManifest(manifestPath);
@@ -177,14 +180,16 @@ const buildable = packages.filter(
 		readManifest(path.join(repositoryRoot, directory, 'package.json')).scripts?.build
 );
 if (buildable.length > 0) {
-	run('pnpm', [
+	const buildArguments = [
 		'exec',
 		'turbo',
 		'run',
 		'build',
 		'--concurrency=1',
 		...buildable.map(({ name }) => `--filter=${name}`)
-	]);
+	];
+	if (buildTargetOnly) buildArguments.push('--only');
+	run('pnpm', buildArguments);
 }
 
 /** Where yalc has pushed this package, so the rewrite can follow it. */

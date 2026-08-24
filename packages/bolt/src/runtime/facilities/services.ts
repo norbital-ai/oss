@@ -46,8 +46,7 @@ const AILayers = {
 	make: (binding: FacilityBinding<AIRequest, AIResponse> | undefined, context: CallContext) =>
 		Layer.effect(
 			AIService,
-			Effect.gen(function* () {
-				const issued = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
+			Effect.map(Ref.make<ReadonlyMap<string, number>>(new Map()), (issued) => {
 				const distinct = (id: EffectId) =>
 					Ref.modify(issued, (current) => {
 						const used = current.get(id) ?? 0;

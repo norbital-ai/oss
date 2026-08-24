@@ -67,17 +67,13 @@ export interface CollectionTableColumn<TRow extends object> {
 
 const COLLECTION_TABLE_SCALAR_SORT_KINDS = new Set([
 	'boolean',
-	'clock_time',
-	'date',
 	'enum',
 	'integer',
+	'instant',
 	'number',
 	'numeric',
 	'phone',
 	'text',
-	'timestamp',
-	'timestamptz',
-	'datetime',
 	'uuid'
 ]);
 

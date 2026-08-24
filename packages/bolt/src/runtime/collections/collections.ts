@@ -1,5 +1,20 @@
 import { deriveRecordId } from '#lib/runtime/derive-record-id.js';
-import { Clock, Context, Effect, Layer, Number as ENumber, Result, Schema } from 'effect';
+import {
+	and,
+	asc,
+	count as countRows,
+	desc,
+	eq,
+	getColumns,
+	inArray,
+	isNotNull,
+	notInArray,
+	sql,
+	type SQL,
+	type SQLChunk
+} from 'drizzle-orm';
+import { alias as tableAlias, pgTable, text, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { Cause, Clock, Context, Effect, Layer, Number as ENumber, Result, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import * as Approvals from '#lib/runtime/approvals/approvals.js';
@@ -11,9 +26,12 @@ import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import { Subject } from '#lib/runtime/identity/identity.js';
+import { automationSubject } from '#lib/runtime/identity/static-identity.js';
+import * as TenantScope from '#lib/runtime/tenant.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { searchableColumns } from '#lib/authoring/model-introspection.js';
 import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import type {
 	CollectionDefinition,
 	FieldDefinition,
@@ -31,7 +49,7 @@ import {
 	compileOrderTerms,
 	compileWhere,
 	makeWhereContext,
-	renderOrderBy,
+	whereExpression,
 	WhereCompileError,
 	type OrderTerm,
 	type WhereContext
@@ -45,16 +63,59 @@ import {
 import {
 	afterMillisOf,
 	AuthoredRuntimeService,
+	inferOp,
 	makeAuthoringApi,
+	MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
 	nearestInputOf,
 	objectRowsOf,
 	runAuthoredHandler,
+	runAutomationOp,
 	inferenceTurnContent,
 	type AuthoredCollectionOps,
-	type AuthoredCollectionHookModule
+	type AuthoredCollectionHookModule,
+	type RuntimeAuthoringApi
 } from '#lib/runtime/collections/authored.js';
 import { AuthoredRefusal, refusalAt, type RefusalSite } from '#lib/authoring/refusal.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
+import { approvalFlowDescriptor } from '#lib/authoring/approval-flow.js';
+import { approvalStepId } from '#lib/authoring/policy-introspection.js';
+import {
+	aliased,
+	composer,
+	executeBuilt,
+	lessThanOrEqual,
+	rowJson,
+	toStatement,
+	transactionSql,
+	vectorDistance
+} from '#lib/runtime/persistence.js';
+
+const {
+	bolt_collection_history: collectionHistoryTable,
+	bolt_integration_outbox: integrationOutboxTable
+} = SYSTEM_MODEL_TABLES;
+
+/**
+ * A query-only Drizzle descriptor for one runtime collection.
+ *
+ * `WorkspaceDefinition` deliberately carries portable field metadata rather than Drizzle builders.
+ * Reads need column names, not DDL types, so every physical column is described as text here: the
+ * descriptor emits quoted identifiers and bound values but never creates or migrates a table.
+ * Logical references are omitted and their generated physical UUID arms are included instead.
+ */
+const collectionQueryTable = (name: string, fields: Readonly<Record<string, FieldDefinition>>) => {
+	const names = new Set<string>(SYSTEM_COLUMN_NAMES);
+	for (const [field, definition] of Object.entries(fields)) {
+		if (definition.reference === undefined) names.add(field);
+		else for (const target of definition.reference.targets) names.add(target.storageColumn);
+	}
+	const columns = Object.fromEntries([...names].map((column) => [column, text()]));
+	// repository-health:allow DDL1 -- query-only Drizzle descriptor; this call emits no DDL.
+	return pgTable(name, columns);
+};
+
+const columnsOf = (table: ReturnType<typeof collectionQueryTable>) =>
+	getColumns(table) as Readonly<Record<string, AnyPgColumn>>;
 
 const Predicate = Schema.TaggedUnion({
 	Equal: { field: Schema.NonEmptyString, value: Schema.Json },
@@ -68,16 +129,131 @@ type CompiledQuery = Readonly<{
 	readonly sql: string;
 	readonly parameters: ReadonlyArray<Schema.Json>;
 }>;
-export type HistoryEntry = Readonly<{
-	readonly collection: string;
-	readonly recordId: string;
-	readonly operation: 'create' | 'update' | 'delete';
+
+/** Lifts only this module's closed where/search/cursor compiler output into Drizzle. */
+const queryFragment = (query: CompiledQuery): SQL => {
+	const chunks: Array<SQLChunk> = [];
+	let offset = 0;
+	for (const match of query.sql.matchAll(/\$(\d+)/g)) {
+		chunks.push(sql.raw(query.sql.slice(offset, match.index)));
+		chunks.push(sql.param(query.parameters[Number(match[1]) - 1] ?? null));
+		offset = match.index + match[0].length;
+	}
+	chunks.push(sql.raw(query.sql.slice(offset)));
+	return sql.join(chunks, sql.empty());
+};
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
+const PolicyAuthorizationMarker = Schema.Struct({
+	id: Schema.NonEmptyString,
+	live: Schema.Literal(true)
+});
+const isPolicyAuthorizationMarker = Schema.is(PolicyAuthorizationMarker);
+const PolicyApprovalMarker = Schema.Struct({
+	id: Schema.NonEmptyString,
+	flow: Schema.Literal(true),
+	superceded_by: Schema.Array(Schema.NonEmptyString)
+});
+const isPolicyApprovalMarker = Schema.is(PolicyApprovalMarker);
+const ResolvedApprovalConfiguration = Schema.Struct({
+	id: Schema.NonEmptyString,
+	steps: Schema.Array(
+		Schema.Struct({
+			id: Schema.NonEmptyString,
+			approvers: Schema.Array(Schema.NonEmptyString).check(Schema.isNonEmpty())
+		})
+	).check(Schema.isNonEmpty()),
+	superceded_by: Schema.Array(Schema.NonEmptyString)
+});
+const isResolvedApprovalConfiguration = Schema.is(ResolvedApprovalConfiguration);
+const APPROVAL_READ_METHODS = ['findMany', 'findFirst', 'count', 'findNearest'] as const;
+
+/**
+ * Removes every mutation method from the live authoring api before an approval predicate receives it.
+ *
+ * The generated type already exposes only `db.query`; this is its runtime twin. Reusing the query
+ * proxy directly would be insufficient because it deliberately points at the same collection object
+ * hooks use, including `create` and `update`. Each collection wrapper below is frozen and copies only
+ * the four read operations, so untyped authored JavaScript cannot turn a policy decision into a write.
+ */
+const policyDecisionApi = (api: RuntimeAuthoringApi, subject: Identity.Subject): unknown => {
+	const query = Reflect.get(api.db, 'query');
+	const readOnlyTarget: Record<string, unknown> = Object.create(null);
+	const readOnlyQuery = new Proxy(readOnlyTarget, {
+		get: (_target, collection) => {
+			if (typeof collection !== 'string' || typeof query !== 'object' || query === null)
+				return undefined;
+			const collectionApi = Reflect.get(query, collection);
+			if (typeof collectionApi !== 'object' || collectionApi === null) return undefined;
+			return Object.freeze(
+				Object.fromEntries(
+					APPROVAL_READ_METHODS.flatMap((method) => {
+						const operation = Reflect.get(collectionApi, method);
+						return typeof operation === 'function' ? [[method, operation] as const] : [];
+					})
+				)
+			);
+		}
+	});
+	return Object.freeze({
+		db: Object.freeze({ query: readOnlyQuery }),
+		requestor: Object.freeze({
+			id: subject.userId,
+			userId: subject.userId,
+			tenantId: subject.tenantId,
+			...(subject.email === undefined ? {} : { email: subject.email }),
+			...(subject.teamPath[0] === undefined ? {} : { team: subject.teamPath[0] }),
+			teamPath: Object.freeze([...subject.teamPath]),
+			admin: subject.admin === true
+		})
+	});
+};
+const PersistedCollectionHistoryRow = Schema.Struct({
+	sequence: Schema.Number,
+	created_at: Schema.String,
+	snapshot: Schema.NullOr(JsonObject)
+});
+type PersistedCollectionHistoryRow = typeof PersistedCollectionHistoryRow.Type;
+type CollectionHistorySnapshot = Readonly<{
+	readonly values: Readonly<Record<string, Schema.Json>>;
+	readonly validFrom: string;
+	readonly validTo: string | null;
 	readonly version: number;
 }>;
-const JsonObject = Schema.Record(Schema.String, Schema.Json);
 
 /** The `JsonObject` predicate, built once: it is consulted for every row the facility hands back. */
 const isJsonObject = Schema.is(JsonObject);
+
+/**
+ * Drizzle's connectionless `toSQL()` does not run a JSONB column's driver encoder.
+ *
+ * The facility receives plain parameters rather than a Drizzle session, so JSON values must cross
+ * this boundary as JSON text. PostgreSQL then parses the bound text using the target JSONB column's
+ * type. SQL null stays null; a JSON null is not used by these bookkeeping rows.
+ */
+const encodedJsonb = (value: Exclude<Schema.Json, null>): string => JSON.stringify(value);
+
+/**
+ * Rebuilds full record revisions from the patch log stored by collection mutations.
+ *
+ * A create stores the initial values, while each update stores only the fields that changed. The
+ * browser history contract is deliberately different: every entry is a complete record snapshot
+ * with an effective interval. Folding oldest-first is therefore part of the persistence boundary,
+ * not a presentation concern a form should have to rediscover.
+ */
+const collectionHistorySnapshots = (
+	rows: ReadonlyArray<PersistedCollectionHistoryRow>
+): ReadonlyArray<CollectionHistorySnapshot> => {
+	const accumulated: Record<string, Schema.Json> = {};
+	return rows.map((row, index) => {
+		if (row.snapshot !== null) Object.assign(accumulated, row.snapshot);
+		return {
+			values: { ...accumulated },
+			validFrom: row.created_at,
+			validTo: rows[index + 1]?.created_at ?? null,
+			version: row.sequence
+		};
+	});
+};
 
 /** Stable structural identity for approval configurations authored with different key order. */
 const approvalFingerprint = (value: Schema.Json | undefined): string => {
@@ -88,6 +264,23 @@ const approvalFingerprint = (value: Schema.Json | undefined): string => {
 		.toSorted(([left], [right]) => left.localeCompare(right))
 		.map(([key, entry]) => `${JSON.stringify(key)}:${approvalFingerprint(entry)}`)
 		.join(',')}}`;
+};
+
+/**
+ * Structural identity of the concrete route a reviewer will actually follow.
+ *
+ * Configuration and stage ids identify the policy coordinate that produced a route; they are not
+ * part of the route itself. An atomic graph may legitimately contain, for example, a create and an
+ * update governed by the same HR-manager flow. Comparing their derived ids rejected that graph even
+ * though every record resolved to the same approvers and supersede boundary. Policy-coordinate ids
+ * remain in `executionInvariants` below, so changing either grant still invalidates a pending review.
+ */
+const approvalRouteFingerprint = (value: Schema.Json | undefined): string => {
+	if (!isResolvedApprovalConfiguration(value)) return approvalFingerprint(value);
+	return approvalFingerprint({
+		steps: value.steps.map((step) => ({ approvers: step.approvers })),
+		superceded_by: value.superceded_by
+	});
 };
 
 /**
@@ -187,6 +380,8 @@ export class MutationPhaseFailure extends Schema.TaggedError<MutationPhaseFailur
 	'Bolt.Collections.MutationPhaseFailure',
 	{
 		phase: MutationPhase,
+		/** The exact post-commit operation, when `phase` is `settle`. */
+		step: Schema.optionalKey(Schema.Literals(['wake', 'after-hook', 'change-events'])),
 		collection: Schema.NonEmptyString,
 		/**
 		 * The ids the transaction carried, and only on `settle`.
@@ -217,11 +412,18 @@ export const mutationPhaseFailure = (
 	phase: MutationPhase,
 	collection: string,
 	committed: ReadonlyArray<string>,
-	cause: unknown
+	cause: unknown,
+	step?: MutationPhaseFailure['step']
 ): MutationPhaseFailure =>
 	cause instanceof MutationPhaseFailure
 		? cause
-		: new MutationPhaseFailure({ phase, collection, committed, cause });
+		: new MutationPhaseFailure({
+				phase,
+				collection,
+				committed,
+				cause,
+				...(step === undefined ? {} : { step })
+			});
 
 /**
  * The failure underneath a phase wrapper, or the value itself when it is not one.
@@ -343,17 +545,18 @@ export const groupedInsertStatements = (
 	rows: ReadonlyArray<PlannedInsert>
 ): ReadonlyArray<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
 	const groups = new Map<string, Array<PlannedInsert>>();
-	rows
-		.map((row, index) => ({ row, index }))
-		.sort((left, right) => left.row.layer - right.row.layer || left.index - right.index)
-		.forEach(({ row, index }) => {
-			// A predicated row is keyed on where it stands, so it is a group of one: it keeps the exact
-			// statement it has today, in the position it has today.
-			const key = row.where === undefined ? insertSignature(row) : `\u0000row ${index}`;
-			const group = groups.get(key);
-			if (group === undefined) groups.set(key, [row]);
-			else group.push(row);
-		});
+	// Indexed once, ordered once, grouped once. The index is carried because it is both the tiebreak
+	// that keeps the original order stable and the key a predicated row is grouped under.
+	const ordered = rows.map((row, index) => ({ row, index }));
+	ordered.sort((left, right) => left.row.layer - right.row.layer || left.index - right.index);
+	for (const { row, index } of ordered) {
+		// A predicated row is keyed on where it stands, so it is a group of one: it keeps the exact
+		// statement it has today, in the position it has today.
+		const key = row.where === undefined ? insertSignature(row) : `\u0000row ${index}`;
+		const group = groups.get(key);
+		if (group === undefined) groups.set(key, [row]);
+		else group.push(row);
+	}
 	const statements: Array<{
 		readonly sql: string;
 		readonly parameters: ReadonlyArray<Schema.Json>;
@@ -365,10 +568,12 @@ export const groupedInsertStatements = (
 		if (first === undefined) continue;
 		const columns = first.columns.map(quoteIdentifier).join(', ');
 		if (first.where !== undefined) {
-			statements.push({
-				sql: `insert into ${quoteIdentifier(first.table)} (${columns}) select ${tuple(first, 0)} where ${offsetParameters(first.where.sql, first.columns.length)}`,
-				parameters: [...first.parameters, ...first.where.parameters]
-			});
+			statements.push(
+				transactionSql(
+					`insert into ${quoteIdentifier(first.table)} (${columns}) select ${tuple(first, 0)} where ${offsetParameters(first.where.sql, first.columns.length)}`,
+					[...first.parameters, ...first.where.parameters]
+				)
+			);
 			continue;
 		}
 		// Every row of a group carries the same number of parameters, which is what makes the ceiling
@@ -377,12 +582,14 @@ export const groupedInsertStatements = (
 		const chunk = Math.max(Math.floor(MAX_STATEMENT_PARAMETERS / perRow), 1);
 		for (let start = 0; start < group.length; start += chunk) {
 			const slice = group.slice(start, start + chunk);
-			statements.push({
-				sql: `insert into ${quoteIdentifier(first.table)} (${columns}) values ${slice
-					.map((row, index) => `(${tuple(row, index * perRow)})`)
-					.join(', ')}`,
-				parameters: slice.flatMap((row) => [...row.parameters])
-			});
+			statements.push(
+				transactionSql(
+					`insert into ${quoteIdentifier(first.table)} (${columns}) values ${slice
+						.map((row, index) => `(${tuple(row, index * perRow)})`)
+						.join(', ')}`,
+					slice.flatMap((row) => [...row.parameters])
+				)
+			);
 		}
 	}
 	return statements;
@@ -510,7 +717,7 @@ type MutationInput = Readonly<{
  * parent's `many` edge. Programmatic workspaces sometimes put them directly on `many`. Both spell
  * the same ownership fact, so the runtime resolves both and every graph consumer shares the answer.
  */
-export type WritableManyRelation = Readonly<{
+type WritableManyRelation = Readonly<{
 	readonly name: string;
 	readonly parentCollection: string;
 	readonly parentColumn: string;
@@ -727,7 +934,12 @@ export type Interface = Readonly<{
 		payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
 		elevated?: boolean,
 		depth?: number,
-		options?: { readonly batchSize?: number; readonly declarative?: boolean }
+		options?: {
+			readonly batchSize?: number;
+			readonly declarative?: boolean;
+			/** Explicit only for an invocation-bound create/update whose chosen id must not imply action. */
+			readonly root?: Readonly<{ readonly id: string; readonly action: 'create' | 'update' }>;
+		}
 	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, BatchMutationError>;
 	readonly update: (
 		effectId: EffectId,
@@ -757,11 +969,34 @@ export type Interface = Readonly<{
 		subject: Identity.Subject,
 		collection: string,
 		id: string
-	) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
+	) => Effect.Effect<ReadonlyArray<CollectionHistorySnapshot>, QueryError>;
 }>;
 
 /** Identifies the collections service in Effect's context so dependency wiring remains explicit and type checked. */
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Collections');
+
+/**
+ * Encodes the one authored scalar that is not itself JSON.
+ *
+ * Timestamp builders deliberately expose `Date` at the generated authoring surface, so a hook can
+ * stamp `new Date()` without erasing the model's type. Database facilities, history snapshots, sync
+ * records and approval payloads are all JSON boundaries, though. Normalising at the collection
+ * boundary keeps the domain value precise inside the hook and gives every canonical write side
+ * effect the same ISO value. Browser submissions already arrive in this form; encoding them again
+ * is therefore a no-op.
+ */
+const encodeMutationValues = (
+	values: Readonly<Record<string, unknown>>,
+	fields: Readonly<Record<string, FieldDefinition>>
+): Readonly<Record<string, Schema.Json>> =>
+	Object.fromEntries(
+		Object.entries(values).map(([name, value]) => [
+			name,
+			fields[name]?.type === 'instant' && value instanceof Date && Number.isFinite(value.getTime())
+				? value.toISOString()
+				: (value as Schema.Json)
+		])
+	);
 
 /**
  * Drops values the database computes. A `generatedAlwaysAs` column rejects any write, so a caller
@@ -769,7 +1004,7 @@ export const Service = Context.Service<Interface>('@norbital-ai/bolt/Collections
  * statement outright on a column it never chose to set.
  */
 const writableValues = (
-	values: Readonly<Record<string, Schema.Json>>,
+	values: Readonly<Record<string, unknown>>,
 	definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>
 ): Readonly<Record<string, Schema.Json>> => {
 	const generated = Object.entries(definition.fields)
@@ -779,9 +1014,10 @@ const writableValues = (
 		generated.length === 0
 			? values
 			: Object.fromEntries(Object.entries(values).filter(([name]) => !generated.includes(name)));
-	return encodeReferenceValues(writable, definition.fields) as Readonly<
-		Record<string, Schema.Json>
-	>;
+	return encodeReferenceValues(
+		encodeMutationValues(writable, definition.fields),
+		definition.fields
+	) as Readonly<Record<string, Schema.Json>>;
 };
 
 /**
@@ -792,18 +1028,20 @@ const writableValues = (
 const compiledFilter = (
 	input: QueryInput,
 	context: WhereContext
-): Effect.Effect<CompiledQuery, WhereCompileError> => {
+): Effect.Effect<SQL, WhereCompileError> => {
 	if (input.where === undefined) {
 		return Effect.succeed(
-			input.predicate === undefined
-				? { sql: 'true', parameters: [] }
-				: compilePredicate(input.predicate)
+			queryFragment(
+				input.predicate === undefined
+					? { sql: 'true', parameters: [] }
+					: compilePredicate(input.predicate)
+			)
 		);
 	}
 	const compiled = compileWhere(input.where, context);
 	return Result.isFailure(compiled)
 		? Effect.fail(compiled.failure)
-		: Effect.succeed(compiled.success);
+		: Effect.succeed(whereExpression(compiled.success));
 };
 
 /**
@@ -816,8 +1054,7 @@ const compiledFilter = (
  */
 const searchClause = (
 	fields: Readonly<Record<string, FieldDefinition>>,
-	term: string | undefined,
-	offset: number
+	term: string | undefined
 ): CompiledQuery => {
 	const trimmed = term?.trim() ?? '';
 	// The same reader the trigram indexes are emitted from, so the columns searched and the columns
@@ -827,7 +1064,7 @@ const searchClause = (
 	// A term against a collection that opted no column in matches nothing. Returning `true` here would
 	// hand back every row, which is how a search box comes to look like it does nothing at all.
 	if (searchable.length === 0) return { sql: 'false', parameters: [] };
-	const clauses = searchable.map((name) => `${quoteIdentifier(name)}::text ilike $${offset + 1}`);
+	const clauses = searchable.map((name) => `${quoteIdentifier(name)}::text ilike $1`);
 	return { sql: clauses.join(' or '), parameters: [`%${trimmed}%`] };
 };
 
@@ -927,15 +1164,11 @@ const CollectionCursor = {
 	 * null with `>` yields null rather than false, so the null cases are spelled out; without them a
 	 * page boundary landing on a nullable column silently drops every row that follows.
 	 */
-	seek: (
-		terms: ReadonlyArray<OrderTerm>,
-		values: ReadonlyArray<CursorValue>,
-		offset: number
-	): CompiledQuery => {
+	seek: (terms: ReadonlyArray<OrderTerm>, values: ReadonlyArray<CursorValue>): CompiledQuery => {
 		const parameters: Array<CursorValue> = [];
 		const bind = (value: CursorValue): string => {
 			parameters.push(value);
-			return `$${offset + parameters.length}`;
+			return `$${parameters.length}`;
 		};
 		const branches: Array<string> = [];
 		for (let index = 0; index < terms.length; index += 1) {
@@ -982,14 +1215,13 @@ export const encodeCollectionCursor = CollectionCursor.encode;
 const seekFilter = (
 	after: string | undefined,
 	terms: ReadonlyArray<OrderTerm>,
-	collection: string,
-	offset: number
+	collection: string
 ): Effect.Effect<CompiledQuery, WhereCompileError> => {
 	if (after === undefined) return Effect.succeed({ sql: 'true', parameters: [] });
 	const values = CollectionCursor.decode(after, terms, collection);
 	return Result.isFailure(values)
 		? Effect.fail(values.failure)
-		: Effect.succeed(CollectionCursor.seek(terms, values.success, offset));
+		: Effect.succeed(CollectionCursor.seek(terms, values.success));
 };
 
 /**
@@ -1013,6 +1245,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 		Service,
 		Effect.gen(function* () {
 			const workspace = yield* Workspace.Service;
+			const tenant = yield* TenantScope.Service;
 			const access = yield* AccessControl.Service;
 			const database = yield* Database.Service;
 			const approvals = yield* Approvals.Service;
@@ -1021,6 +1254,17 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			const queue = yield* TaskQueue.Service;
 			const automations = yield* Automations.Service;
 			const authored = yield* AuthoredRuntimeService;
+			const queryTables = new Map<string, ReturnType<typeof collectionQueryTable>>();
+			const queryTableFor = (
+				name: string,
+				fields: Readonly<Record<string, FieldDefinition>>
+			): ReturnType<typeof collectionQueryTable> => {
+				const existing = queryTables.get(name);
+				if (existing !== undefined) return existing;
+				const table = collectionQueryTable(name, fields);
+				queryTables.set(name, table);
+				return table;
+			};
 			// Announced from here rather than from the command boundary, because this is the only place
 			// every write actually passes through: a command, an agent tool, an import, an automation and a
 			// replica's own `sync.mutate` all land on these three functions. Announcing at `dispatch` would
@@ -1052,7 +1296,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 * predicate and silently dropping the event: the write lands, and the reason is a row an
 			 * operator can find.
 			 */
-			/** The columns an integration delivery is written with, in the order its parameters arrive. */
+			/** The columns a batched integration delivery writes, in stable parameter order. */
 			const outboxDeliveryColumns = [
 				'integration_name',
 				'binding_name',
@@ -1063,13 +1307,26 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				'payload',
 				'status',
 				'last_error'
-			];
+			] as const;
+			type OutboxDeliveryValues = Readonly<{
+				readonly integration_name: string;
+				readonly binding_name: string;
+				readonly collection_name: string;
+				readonly record_id: string;
+				readonly operation: 'create' | 'update' | 'delete';
+				readonly path: string | null;
+				readonly payload: string | null;
+				readonly status: 'pending' | 'failed';
+				readonly last_error: string | null;
+			}>;
+			const outboxDeliveryParameters = (values: OutboxDeliveryValues): ReadonlyArray<Schema.Json> =>
+				outboxDeliveryColumns.map((column) => values[column]);
 			/**
-			 * The deliveries this write queues, as parameters rather than as statements.
+			 * The deliveries this write queues, as structured values rather than SQL.
 			 *
-			 * Parameters, because a batch writes all of its deliveries as one multi-row insert and only a
-			 * single write needs them rendered one at a time. `outboxStatements` below is that rendering,
-			 * unchanged, for the update and delete paths.
+			 * A create batch flattens these values into a grouped insert, while update and delete compose
+			 * typed Drizzle inserts in `outboxStatements`. Both paths therefore share the same row shape
+			 * without keeping a handwritten domain statement beside it.
 			 */
 			const outboxDeliveries = (
 				subject: Identity.Subject,
@@ -1080,7 +1337,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				previous: Readonly<Record<string, unknown>> | undefined
 			): ReadonlyArray<{
 				readonly integration: string;
-				readonly parameters: ReadonlyArray<Schema.Json>;
+				readonly values: OutboxDeliveryValues;
 			}> => {
 				const subscriptions = subscriptionsFor(collection);
 				if (subscriptions.length === 0 || !watchesOperation(subscriptions, operation)) return [];
@@ -1092,17 +1349,17 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				});
 				return entries.map((entry) => ({
 					integration: entry.integration,
-					parameters: [
-						entry.integration,
-						entry.binding,
-						entry.collection,
-						entry.recordId,
-						entry.operation,
-						entry.path,
-						entry.payload,
-						entry.refusal === null ? 'pending' : 'failed',
-						entry.refusal
-					]
+					values: {
+						integration_name: entry.integration,
+						binding_name: entry.binding,
+						collection_name: entry.collection,
+						record_id: entry.recordId,
+						operation: entry.operation,
+						path: entry.path,
+						payload: entry.payload === null ? null : encodedJsonb(entry.payload),
+						status: entry.refusal === null ? 'pending' : 'failed',
+						last_error: entry.refusal
+					}
 				}));
 			};
 			/**
@@ -1156,10 +1413,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			}> => {
 				const deliveries = outboxDeliveries(subject, collection, id, operation, values, previous);
 				return [
-					...deliveries.map(({ parameters }) => ({
-						sql: `insert into bolt_integration_outbox (${outboxDeliveryColumns.join(', ')}) values (${outboxDeliveryColumns.map((_, index) => `$${index + 1}`).join(', ')})`,
-						parameters
-					})),
+					...deliveries.map(({ values }) =>
+						toStatement(composer.insert(integrationOutboxTable).values(values).toSQL())
+					),
 					...outboxDrains(
 						effectId,
 						deliveries.map(({ integration }) => integration)
@@ -1196,11 +1452,13 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				id: string
 			) {
 				const definition = yield* workspace.collection(collection);
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select * from ${quoteIdentifier(collection)} where id = $1`,
-					parameters: [id]
-				});
+				const table = queryTableFor(collection, definition.fields);
+				const columns = columnsOf(table);
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer.select(columns).from(table).where(eq(columns['id']!, id)).limit(1)
+				);
 				const row = result.rows[0];
 				return typeof row === 'object' && row !== null
 					? decodeReferenceRow(row as Readonly<Record<string, unknown>>, definition.fields)
@@ -1322,103 +1580,85 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				 */
 				depth = 0,
 				staged?: HookWriteOps
-			): AuthoredCollectionOps => ({
-				findMany: (collection, input) =>
-					findMany(effectId, subject, { collection, ...input }).pipe(Effect.flatMap(objectRowsOf)),
-				findFirst: (collection, input) =>
-					findMany(effectId, subject, { collection, ...input, limit: 1 }).pipe(
-						Effect.map((rows) => rows[0] as Readonly<Record<string, unknown>> | undefined)
-					),
-				count: (collection, input) =>
-					findMany(effectId, subject, { collection, ...input }).pipe(
-						Effect.map((rows) => rows.length)
-					),
-				findNearest: (collection, input) =>
-					findNearest(effectId, subject, nearestInputOf(collection, input)).pipe(
-						Effect.flatMap(objectRowsOf)
-					),
-				runAutomation: (name, input, options) =>
-					Effect.gen(function* () {
-						const after = options?.after;
-						const afterMillis = after === undefined ? undefined : afterMillisOf(after);
-						if (afterMillis === undefined) {
-							return yield* new AuthoredRefusal({
-								message: `"${String(after)}" is not a delay ${name} can wait — pass milliseconds, '5 seconds', '1 hour', or another Effect duration.`
-							});
-						}
-						const taskId = yield* automations.start(effectId, name, input, { afterMillis });
-						return { taskId };
-					}),
-				/**
-				 * Answers with the row the database holds, and refuses when it holds none.
-				 *
-				 * These two used to end `row ?? { id: id, ...values }` — the caller's own payload
-				 * handed back as though it had been stored. `readBack` did the same thing on the batch path
-				 * and this was the other half of it.
-				 *
-				 * Refusing rather than answering `undefined`, which is the opposite of what the batch path
-				 * does, and deliberately: there a refused row is one of many and the batch legitimately
-				 * proceeds without it, while here an authored hook asked for one record and the next line it
-				 * runs will use what comes back. A hook that silently continued on an invented record would
-				 * write the consequences of a create that never happened. The access predicate refusing the
-				 * insert is the way this is reached, so the refusal says that rather than reporting a fault.
-				 */
-				create:
-					staged?.create ??
-					((collection, id, values) =>
-						Effect.gen(function* () {
-							yield* create(effectId, subject, { collection, id, values }, depth);
-							const row = yield* readRowElevated(effectId, collection, id);
-							if (row === undefined) return yield* storedNothing('create', collection, id);
-							return row;
-						})),
-				update:
-					staged?.update ??
-					((collection, id, values) =>
-						Effect.gen(function* () {
-							yield* update(effectId, subject, { collection, id, values }, depth);
-							const row = yield* readRowElevated(effectId, collection, id);
-							if (row === undefined) return yield* storedNothing('update', collection, id);
-							return row;
-						})),
-				delete:
-					staged?.delete ??
-					((collection, id) => deleteRecord(effectId, subject, collection, id, depth)),
-				mutate:
-					staged?.mutate ??
-					((collection, payloads, options) =>
-						mutate(effectId, subject, collection, payloads, elevated, depth, options)),
-				approvalFindMany: (input) =>
-					findMany(effectId, subject, { collection: 'approval_request', ...input }).pipe(
-						Effect.map((rows) => rows as ReadonlyArray<Readonly<Record<string, unknown>>>)
-					),
-				approvalFindFirst: (input) =>
-					findMany(effectId, subject, { collection: 'approval_request', ...input, limit: 1 }).pipe(
-						Effect.map((rows) => rows[0] as Readonly<Record<string, unknown>> | undefined)
-					),
-				infer: (input) =>
-					Effect.gen(function* () {
-						const content = yield* inferenceTurnContent(input.prompt, input.images, (file) =>
-							readAsset(effectId, file)
-						);
-						const response = yield* ai.execute(effectId, {
-							_tag: 'Turn',
-							model: input.model ?? 'gpt-5',
-							messages: [{ role: 'user', content }],
-							tools: [],
-							maxOutputTokens: 4_096
-						});
-						return Schema.decodeUnknownSync(input.schema)(response.output);
-					}),
-				readFileAsset: (file) => readAsset(effectId, file)
-			});
+			): AuthoredCollectionOps => {
+				return {
+					findMany: (collection, input) =>
+						findMany(effectId, subject, { collection, ...input }).pipe(
+							Effect.flatMap(objectRowsOf)
+						),
+					findFirst: (collection, input) =>
+						findMany(effectId, subject, { collection, ...input, limit: 1 }).pipe(
+							Effect.map((rows) => rows[0] as Readonly<Record<string, unknown>> | undefined)
+						),
+					count: (collection, input) =>
+						findMany(effectId, subject, { collection, ...input }).pipe(
+							Effect.map((rows) => rows.length)
+						),
+					findNearest: (collection, input) =>
+						findNearest(effectId, subject, nearestInputOf(collection, input)).pipe(
+							Effect.flatMap(objectRowsOf)
+						),
+					runAutomation: runAutomationOp(effectId, automations),
+					/**
+					 * Answers with the row the database holds, and refuses when it holds none.
+					 *
+					 * These two used to end `row ?? { id: id, ...values }` — the caller's own payload
+					 * handed back as though it had been stored. `readBack` did the same thing on the batch path
+					 * and this was the other half of it.
+					 *
+					 * Refusing rather than answering `undefined`, which is the opposite of what the batch path
+					 * does, and deliberately: there a refused row is one of many and the batch legitimately
+					 * proceeds without it, while here an authored hook asked for one record and the next line it
+					 * runs will use what comes back. A hook that silently continued on an invented record would
+					 * write the consequences of a create that never happened. The access predicate refusing the
+					 * insert is the way this is reached, so the refusal says that rather than reporting a fault.
+					 */
+					create:
+						staged?.create ??
+						((collection, id, values) =>
+							Effect.gen(function* () {
+								yield* create(effectId, subject, { collection, id, values }, depth);
+								const row = yield* readRowElevated(effectId, collection, id);
+								if (row === undefined) return yield* storedNothing('create', collection, id);
+								return row;
+							})),
+					update:
+						staged?.update ??
+						((collection, id, values) =>
+							Effect.gen(function* () {
+								yield* update(effectId, subject, { collection, id, values }, depth);
+								const row = yield* readRowElevated(effectId, collection, id);
+								if (row === undefined) return yield* storedNothing('update', collection, id);
+								return row;
+							})),
+					delete:
+						staged?.delete ??
+						((collection, id) => deleteRecord(effectId, subject, collection, id, depth)),
+					mutate:
+						staged?.mutate ??
+						((collection, payloads, options) =>
+							mutate(effectId, subject, collection, payloads, elevated, depth, options)),
+					approvalFindMany: (input) =>
+						findMany(effectId, subject, { collection: 'approval_request', ...input }).pipe(
+							Effect.map((rows) => rows as ReadonlyArray<Readonly<Record<string, unknown>>>)
+						),
+					approvalFindFirst: (input) =>
+						findMany(effectId, subject, {
+							collection: 'approval_request',
+							...input,
+							limit: 1
+						}).pipe(Effect.map((rows) => rows[0] as Readonly<Record<string, unknown>> | undefined)),
+					infer: inferOp(effectId, ai, (file) => readAsset(effectId, file)),
+					readFileAsset: (file) => readAsset(effectId, file)
+				};
+			};
 			const buildApi = (
 				effectId: EffectId,
 				subject: Identity.Subject,
 				elevated = false,
 				depth = 0,
 				staged?: HookWriteOps
-			): unknown =>
+			): RuntimeAuthoringApi =>
 				makeAuthoringApi(
 					buildOps(effectId, subject, elevated, depth, staged),
 					{ elevated },
@@ -1433,7 +1673,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 */
 			const emitChangeEvents = Effect.fn('Collections.emitChangeEvents')(function* (
 				effectId: EffectId,
-				subject: Identity.Subject,
 				collection: string,
 				id: string,
 				event: 'created' | 'updated' | 'deleted'
@@ -1449,6 +1688,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					event === 'deleted' ? undefined : yield* readRowElevated(effectId, collection, id);
 				for (const automation of triggers) {
 					const taskId = `${effectId}:event:${automation.name}`;
+					const runAs = automationSubject(automation, tenant.tenantId);
 					// Ignored rather than propagated, as it always was: a change trigger must not fail the
 					// write that caused it. What changes is what an ignored failure now costs — the enqueue is
 					// a row, so an automation that throws when it runs backs off and retries instead of
@@ -1463,7 +1703,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 										event === 'deleted' || row === undefined
 											? {}
 											: { incoming_record: row as Schema.Json },
-									bolt_run_as: subject
+									bolt_run_as: runAs
 								},
 								effectId: taskId
 							}
@@ -1488,7 +1728,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 */
 			const emitChangeEventsMany = Effect.fn('Collections.emitChangeEventsMany')(function* (
 				effectId: EffectId,
-				subject: Identity.Subject,
 				collection: string,
 				/**
 				 * One entry per record that exists. A row that was never written is not passed in at all —
@@ -1512,11 +1751,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const enqueues = triggers.flatMap((automation) =>
 					records.map((record) => {
 						const taskId = `${record.taskScope}:event:${automation.name}`;
+						const runAs = automationSubject(automation, tenant.tenantId);
 						const scope: Schema.Json =
 							event === 'deleted' ? {} : { incoming_record: record.row as Schema.Json };
 						return {
 							command: `automations.${automation.name}`,
-							input: { args: {}, scope, bolt_run_as: subject },
+							input: { args: {}, scope, bolt_run_as: runAs },
 							effectId: taskId
 						};
 					})
@@ -1618,29 +1858,33 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				yield* access.authorize(subject, 'read', input.collection);
 				const context = makeWhereContext(input.collection, definition.fields, workspace.definition);
 				const compiled = yield* compiledFilter(input, context);
-				const searched = searchClause(definition.fields, input.search, compiled.parameters.length);
+				const searched = searchClause(definition.fields, input.search);
 				const visibility = access.predicate(subject, 'read', input.collection);
 				const limit = Math.max(1, input.limit ?? 100);
 				const ordering = compileOrderTerms(input.orderBy, context);
-				// Seek parameters bind last, after the visibility predicate, so the offsets the filter,
-				// search and visibility clauses already computed among themselves stay as they were. The
-				// seek is one more conjunct, so a cursor pages the set the filter and search left.
-				const seek = yield* seekFilter(
-					input.after,
-					ordering,
-					input.collection,
-					compiled.parameters.length + searched.parameters.length + visibility.parameters.length
+				const seek = yield* seekFilter(input.after, ordering, input.collection);
+				const table = queryTableFor(input.collection, definition.fields);
+				const columns = columnsOf(table);
+				const orderedColumns = ordering.map((term) =>
+					term.direction === 'asc' ? asc(columns[term.column]!) : desc(columns[term.column]!)
 				);
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select * from ${quoteIdentifier(input.collection)} where (${compiled.sql}) and (${searched.sql}) and (${offsetParameters(visibility.sql, compiled.parameters.length + searched.parameters.length)}) and (${seek.sql})${renderOrderBy(ordering)} limit ${limit}`,
-					parameters: [
-						...compiled.parameters,
-						...searched.parameters,
-						...visibility.parameters,
-						...seek.parameters
-					]
-				});
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select(columns)
+						.from(table)
+						.where(
+							and(
+								compiled,
+								queryFragment(searched),
+								AccessControl.predicateExpression(visibility),
+								queryFragment(seek)
+							)
+						)
+						.orderBy(...orderedColumns)
+						.limit(limit)
+				);
 				const rows = result.rows.map((row) =>
 					isJsonObject(row)
 						? access.mask(
@@ -1729,27 +1973,36 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						? Math.trunc(input.limit)
 						: 100
 				);
-				const parameters: Array<Schema.Json> = [];
 				// A driver binds a JavaScript array to a Postgres *array*, and `vector` is not one. The
 				// literal text form cast to `::vector` is what pgvector parses.
-				const probeIndex = parameters.push(JSON.stringify(probe));
-				const distanceSql = `(${quoteIdentifier(column)} ${NEAREST_OPERATORS[metric as keyof typeof NEAREST_OPERATORS]} $${probeIndex}::vector)`;
+				const table = queryTableFor(input.collection, definition.fields);
+				const columns = columnsOf(table);
+				const vectorColumn = columns[column]!;
+				const distance = vectorDistance(
+					vectorColumn,
+					NEAREST_OPERATORS[metric as keyof typeof NEAREST_OPERATORS],
+					probe
+				);
 				const visibility = access.predicate(subject, 'read', input.collection);
-				const visibilitySql = offsetParameters(visibility.sql, parameters.length);
-				parameters.push(...visibility.parameters);
-				const exclusionSql =
-					excludeIds.length === 0
-						? 'true'
-						: `${quoteIdentifier('id')} not in (${excludeIds.map((identifier) => `$${parameters.push(identifier)}::uuid`).join(', ')})`;
-				const boundSql =
-					input.maxDistance === undefined
-						? 'true'
-						: `${distanceSql} <= $${parameters.push(input.maxDistance)}`;
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select *, ${distanceSql} as distance from ${quoteIdentifier(input.collection)} where ${quoteIdentifier(column)} is not null and (${visibilitySql}) and (${exclusionSql}) and (${boundSql}) order by ${quoteIdentifier(column)} ${NEAREST_OPERATORS[metric as keyof typeof NEAREST_OPERATORS]} $${probeIndex}::vector limit ${limit}`,
-					parameters
-				});
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({ ...columns, distance: aliased(distance, 'distance') })
+						.from(table)
+						.where(
+							and(
+								isNotNull(vectorColumn),
+								AccessControl.predicateExpression(visibility),
+								excludeIds.length === 0 ? undefined : notInArray(columns['id']!, excludeIds),
+								input.maxDistance === undefined
+									? undefined
+									: lessThanOrEqual(distance, input.maxDistance)
+							)
+						)
+						.orderBy(distance)
+						.limit(limit)
+				);
 				return result.rows.map((row) => {
 					if (!isJsonObject(row)) return row;
 					const record = Object.fromEntries(
@@ -1813,7 +2066,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 * Every statement a batch of creates is, without executing any of them.
 			 *
 			 * Separated from running them so a batch is one round trip rather than N. The rows, their
-			 * history entries, their sync outbox rows and their integration deliveries have to land
+			 * history entries and their integration deliveries have to land
 			 * together — a record visible to the sync engine but absent from history is a worse state
 			 * than no record — and the only way to say "together" through this facility is to hand it one
 			 * `Transaction`.
@@ -1846,7 +2099,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const bookkeepingLayer =
 					nodes.reduce((highest, node) => Math.max(highest, node.layer), 0) + 1;
 				for (const { input, definition, visibility, layer } of nodes) {
-					const writable = writableValues(input.values, definition);
+					const values = encodeMutationValues(input.values, definition.fields);
+					const writable = writableValues(values, definition);
 					const entries = Object.entries(writable).sort(([left], [right]) =>
 						left.localeCompare(right)
 					);
@@ -1879,7 +2133,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					 * What the row's bookkeeping is written under, when the row itself is conditional.
 					 *
 					 * The row insert is a `select … where <predicate>`, so a row the predicate refuses
-					 * writes nothing — and the history entry, the sync outbox entry and the integration
+					 * writes nothing — and the history entry and integration
 					 * deliveries that follow it were plain inserts that ran regardless. That left the
 					 * database holding an outbox row and a history row for a record that is not there:
 					 * sync replicates a `create` for a phantom, and an outbound binding delivers it.
@@ -1899,10 +2153,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					 */
 					const wrote = unconditional
 						? undefined
-						: {
-								sql: `exists (select 1 from ${quoteIdentifier(input.collection)} where id = $1)`,
-								parameters: [input.id]
-							};
+						: transactionSql(
+								`exists (select 1 from ${quoteIdentifier(input.collection)} where id = $1)`,
+								[input.id]
+							);
 					// A guarded row is a group of one, like the record it follows, so a predicated batch
 					// writes its bookkeeping per row instead of merged. That is the price of the guard and
 					// it is paid only where a predicate exists: an elevated or unrestricted write carries
@@ -1915,23 +2169,15 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								table: 'bolt_collection_history',
 								layer: bookkeepingLayer,
 								columns: ['collection_name', 'record_id', 'operation', 'subject_id', 'snapshot'],
-								parameters: [input.collection, input.id, 'create', subject.userId, input.values]
+								parameters: [input.collection, input.id, 'create', subject.userId, values]
 							})
 						);
-					bookkeeping.push(
-						follows({
-							table: 'bolt_sync_outbox',
-							layer: bookkeepingLayer,
-							columns: ['collection_name', 'record_id', 'operation', 'record'],
-							parameters: [input.collection, input.id, 'create', input.values]
-						})
-					);
 					for (const delivery of outboxDeliveries(
 						subject,
 						input.collection,
 						input.id,
 						'create',
-						input.values,
+						values,
 						undefined
 					)) {
 						bookkeeping.push(
@@ -1939,7 +2185,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								table: 'bolt_integration_outbox',
 								layer: bookkeepingLayer,
 								columns: outboxDeliveryColumns,
-								parameters: delivery.parameters
+								parameters: outboxDeliveryParameters(delivery.values)
 							})
 						);
 						// The drain itself stays unconditional. It is one job per integration per batch that
@@ -1979,9 +2225,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 *
 			 * The collection definition and the visibility predicate are resolved per node rather than
 			 * per call, because the nodes are not all the same collection any more. Elevation is honoured
-			 * the same way it always was: it relaxes the row predicate for a hook's own follow-ups, never
-			 * the question of whether this subject may write here at all, which `mutate` has already
-			 * asked.
+			 * the same way it always was: it relaxes the row predicate for a hook's own follow-ups. The
+			 * public batch path authorizes the subject before it reaches this planner; the elevated path is
+			 * only exposed after an already-authorized root mutation, so its engine-owned follow-ups carry
+			 * that root authority rather than requiring a second grant on every derived collection.
 			 */
 			const applyGraph = Effect.fn('Collections.applyGraph')(function* (
 				effectId: EffectId,
@@ -2018,6 +2265,36 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				yield* wake.announce(effectId, [...touched]);
 			});
 			/**
+			 * Locks the exact row a JavaScript decision observed before the mutation or any side effect.
+			 *
+			 * A live authorization runs before the transaction so it can use Effect reads. `row_version`
+			 * closes that prepare/commit gap: if another writer changed the record, this assertion aborts
+			 * the whole transaction with a serialization failure instead of applying a decision made about
+			 * stale data. Even a write with no live function gets an existence/predicate assertion so a
+			 * rejected update cannot leave history, sync, or integration rows behind.
+			 */
+			const mutationGuardStatement = (
+				collection: string,
+				id: string,
+				action: 'update' | 'delete',
+				visibility: AccessControl.RowPredicate,
+				previous: Readonly<Record<string, unknown>> | undefined
+			): Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
+				const expectedVersion = previous?.['row_version'];
+				const parameters: Array<Schema.Json> = [id, ...visibility.parameters];
+				const versionClause =
+					typeof expectedVersion === 'number'
+						? ` and row_version = $${parameters.push(expectedVersion)}`
+						: '';
+				const messageIndex = parameters.push(
+					`${collection} ${id} changed after ${action} authorization or is outside the mutation predicate`
+				);
+				return transactionSql(
+					`select bolt_assert((select count(*) = 1 from (select id from ${quoteIdentifier(collection)} where id = $1 and (${offsetParameters(visibility.sql, 1)})${versionClause} for update) as bolt_mutation_row), $${messageIndex})`,
+					parameters
+				);
+			};
+			/**
 			 * Plans one update including the bookkeeping and outbound work that make it a canonical
 			 * collection mutation. Keeping this separate from execution lets a declarative graph put the
 			 * same operation inside its one transaction instead of recreating a shorter SQL-only path.
@@ -2034,7 +2311,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				readonly sql: string;
 				readonly parameters: ReadonlyArray<Schema.Json>;
 			}> => {
-				const writable = writableValues(input.values, definition);
+				const values = encodeMutationValues(input.values, definition.fields);
+				const writable = writableValues(values, definition);
 				const entries = Object.entries(writable).sort(([left], [right]) =>
 					left.localeCompare(right)
 				);
@@ -2050,33 +2328,38 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				];
 				const history = definition.history
 					? [
-							{
-								sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id, snapshot) values ($1, $2, $3, $4, $5)',
-								parameters: [input.collection, input.id, 'update', subject.userId, input.values]
-							}
+							toStatement(
+								composer
+									.insert(collectionHistoryTable)
+									.values({
+										collection_name: input.collection,
+										record_id: input.id,
+										operation: 'update',
+										subject_id: subject.userId,
+										snapshot: encodedJsonb(values)
+									})
+									.toSQL()
+							)
 						]
 					: [];
 				return [
-					{
-						sql: `update ${quoteIdentifier(input.collection)} set ${assignments.join(', ')} where id = $${entries.length + 1} and (${offsetParameters(visibility.sql, entries.length + 1)})`,
-						parameters: [
+					mutationGuardStatement(input.collection, input.id, 'update', visibility, previous),
+					transactionSql(
+						`update ${quoteIdentifier(input.collection)} set ${assignments.join(', ')} where id = $${entries.length + 1} and (${offsetParameters(visibility.sql, entries.length + 1)})`,
+						[
 							...entries.map(([name, value]) => boundParameter(definition, name, value)),
 							input.id,
 							...visibility.parameters
 						]
-					},
+					),
 					...history,
-					{
-						sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation, record) values ($1, $2, $3, $4)',
-						parameters: [input.collection, input.id, 'update', input.values]
-					},
 					...outboxStatements(
 						effectId,
 						subject,
 						input.collection,
 						input.id,
 						'update',
-						input.values,
+						values,
 						previous
 					)
 				];
@@ -2132,22 +2415,26 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			}> => {
 				const history = definition.history
 					? [
-							{
-								sql: 'insert into bolt_collection_history (collection_name, record_id, operation, subject_id) values ($1, $2, $3, $4)',
-								parameters: [collection, id, 'delete', subject.userId]
-							}
+							toStatement(
+								composer
+									.insert(collectionHistoryTable)
+									.values({
+										collection_name: collection,
+										record_id: id,
+										operation: 'delete',
+										subject_id: subject.userId
+									})
+									.toSQL()
+							)
 						]
 					: [];
 				return [
-					{
-						sql: `delete from ${quoteIdentifier(collection)} where id = $1 and (${offsetParameters(visibility.sql, 1)})`,
-						parameters: [id, ...visibility.parameters]
-					},
+					mutationGuardStatement(collection, id, 'delete', visibility, previous),
+					transactionSql(
+						`delete from ${quoteIdentifier(collection)} where id = $1 and (${offsetParameters(visibility.sql, 1)})`,
+						[id, ...visibility.parameters]
+					),
 					...history,
-					{
-						sql: 'insert into bolt_sync_outbox (collection_name, record_id, operation) values ($1, $2, $3)',
-						parameters: [collection, id, 'delete']
-					},
 					...outboxStatements(effectId, subject, collection, id, 'delete', {}, previous)
 				];
 			};
@@ -2182,11 +2469,18 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				collection: string,
 				id: string
 			) {
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select approval_id from ${quoteIdentifier(collection)} where id = $1`,
-					parameters: [id]
-				});
+				const definition = yield* workspace.collection(collection);
+				const table = queryTableFor(collection, definition.fields);
+				const columns = columnsOf(table);
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({ approval_id: columns['approval_id']! })
+						.from(table)
+						.where(eq(columns['id']!, id))
+						.limit(1)
+				);
 				const row = result.rows[0];
 				const value =
 					typeof row === 'object' && row !== null ? Reflect.get(row, 'approval_id') : undefined;
@@ -2205,24 +2499,22 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				id: string,
 				requestId?: string
 			) {
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql:
-						requestId === undefined
-							? `with released as (
-								update ${quoteIdentifier(collection)} as target set approval_id = null where id = $1::uuid
-								returning target.id::text as id, to_jsonb(target) as record
-							)
-							insert into bolt_sync_outbox (collection_name, record_id, operation, record)
-							select $2, id, 'update', record from released returning record_id`
-							: `with released as (
-								update ${quoteIdentifier(collection)} as target set approval_id = null where approval_id = $1::uuid and id = $2::uuid
-								returning target.id::text as id, to_jsonb(target) as record
-							)
-							insert into bolt_sync_outbox (collection_name, record_id, operation, record)
-							select $3, id, 'update', record from released returning record_id`,
-					parameters: requestId === undefined ? [id, collection] : [requestId, id, collection]
-				});
+				const definition = yield* workspace.collection(collection);
+				const table = queryTableFor(collection, definition.fields);
+				const columns = columnsOf(table);
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.update(table)
+						.set({ approval_id: null })
+						.where(
+							requestId === undefined
+								? eq(columns['id']!, id)
+								: and(eq(columns['approval_id']!, requestId), eq(columns['id']!, id))
+						)
+						.returning({ record_id: columns['id']! })
+				);
 				if (result.affectedRows > 0)
 					yield* wake
 						.announce(EffectId.make(`${effectId}:approval-release-wake`), [collection])
@@ -2319,10 +2611,171 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					action
 				});
 			});
-			const requiresApproval = (
-				definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
-				visibility: AccessControl.RowPredicate
-			): boolean => definition.approvalLock === true || visibility.approval !== undefined;
+			/** Whether a write has a live approval router. */
+			const hasApprovalGate = (visibility: AccessControl.RowPredicate): boolean =>
+				isPolicyApprovalMarker(visibility.approval);
+
+			const policyDecisionFailure = (
+				action: string,
+				collection: string,
+				reason: string
+			): AccessControl.AccessDenied =>
+				new AccessControl.AccessDenied({ action, resource: collection, reason });
+
+			/** Runs one prepared JS-object authorization. Anything except explicit `true` fails closed. */
+			const authorizePolicyWrite = Effect.fn('Collections.authorizePolicyWrite')(function* (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				visibility: AccessControl.RowPredicate,
+				action: 'create' | 'update' | 'delete',
+				collection: string,
+				context: Readonly<Record<string, unknown>>
+			) {
+				if (!visibility.allowed)
+					return yield* policyDecisionFailure(action, collection, visibility.reason);
+				const marker = visibility.authorization;
+				if (marker === undefined) return;
+				if (!isPolicyAuthorizationMarker(marker))
+					return yield* policyDecisionFailure(
+						action,
+						collection,
+						'write authorization metadata is malformed'
+					);
+				const authorize = authored.policyAuthorizations[marker.id];
+				if (authorize === undefined)
+					return yield* policyDecisionFailure(
+						action,
+						collection,
+						`write authorization ${marker.id} has no live implementation`
+					);
+				const api = policyDecisionApi(buildApi(effectId, subject), subject);
+				const answer = yield* runAuthoredHandler(() => authorize(context, api)).pipe(
+					Effect.catchCause((cause) =>
+						Cause.hasInterruptsOnly(cause)
+							? Effect.failCause(cause as Cause.Cause<never>)
+							: Effect.fail(
+									policyDecisionFailure(
+										action,
+										collection,
+										`write authorization ${marker.id} failed`
+									)
+								)
+					)
+				);
+				if (answer !== true)
+					return yield* policyDecisionFailure(
+						action,
+						collection,
+						answer === false
+							? `write authorization ${marker.id} refused the prepared record`
+							: `write authorization ${marker.id} returned a non-boolean result`
+					);
+			});
+
+			/** Resolves one branded flow into the concrete, durable sequence reviewed later. */
+			const resolveApproval = Effect.fn('Collections.resolveApproval')(function* (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				visibility: AccessControl.RowPredicate,
+				action: 'create' | 'update' | 'delete',
+				collection: string,
+				context: Readonly<Record<string, unknown>>,
+				evaluate = true
+			) {
+				const marker = visibility.approval;
+				if (marker === undefined) return undefined;
+				if (!isPolicyApprovalMarker(marker))
+					return yield* policyDecisionFailure(action, collection, 'approval metadata is malformed');
+				if (!evaluate) return undefined;
+				const route = authored.approvalFlows[marker.id];
+				if (route === undefined)
+					return yield* policyDecisionFailure(
+						action,
+						collection,
+						`approval flow ${marker.id} has no live implementation`
+					);
+				const api = policyDecisionApi(buildApi(effectId, subject), subject);
+				const value = yield* runAuthoredHandler(() => route(context, api)).pipe(
+					Effect.catchCause((cause) =>
+						Cause.hasInterruptsOnly(cause)
+							? Effect.failCause(cause as Cause.Cause<never>)
+							: Effect.fail(
+									policyDecisionFailure(action, collection, `approval flow ${marker.id} failed`)
+								)
+					)
+				);
+				const flow = approvalFlowDescriptor(value);
+				if (flow === undefined)
+					return yield* policyDecisionFailure(
+						action,
+						collection,
+						`approval flow ${marker.id} did not return an ApprovalFlow`
+					);
+				if (flow._tag === 'NoApproval') return undefined;
+				return {
+					id: marker.id,
+					steps: flow.stages.map((stage, index) => ({
+						id: approvalStepId(marker.id, index),
+						approvers: [...stage.approvers]
+					})),
+					superceded_by: [...marker.superceded_by]
+				};
+			});
+			/**
+			 * Applies a create field mask to the submitted graph before authored code sees it.
+			 *
+			 * Hooks are trusted workspace code and may derive fields the caller cannot set. Checking only
+			 * their returned value would either reject those server-computed fields or let a hook that
+			 * normalizes/drops unknown input erase evidence that the caller tried to forge one. Walking the
+			 * submitted graph here preserves that trust boundary for roots and nested creates alike.
+			 */
+			const validateSubmittedCreateFields: (
+				subject: Identity.Subject,
+				collection: string,
+				payload: Readonly<Record<string, unknown>>,
+				action: 'create' | 'update'
+			) => Effect.Effect<void, Workspace.WorkspaceLookupError | AccessControl.AccessDenied> =
+				Effect.fn('Collections.validateSubmittedCreateFields')(function* (
+					subject: Identity.Subject,
+					collection: string,
+					payload: Readonly<Record<string, unknown>>,
+					action: 'create' | 'update'
+				) {
+					const definition = yield* workspace.collection(collection);
+					if (action === 'create') {
+						const visibility = access.predicate(subject, 'create', collection);
+						if (
+							visibility.allowed &&
+							visibility.fields !== undefined &&
+							Object.keys(payload).some(
+								(field) =>
+									Object.hasOwn(definition.fields, field) && !visibility.fields?.includes(field)
+							)
+						) {
+							return yield* new AccessControl.AccessDenied({
+								action: 'create',
+								resource: collection,
+								reason: 'create includes fields outside the matching policy grant'
+							});
+						}
+					}
+					for (const [key, value] of Object.entries(payload)) {
+						if (key === 'id' || key in definition.fields || SYSTEM_COLUMN_NAMES.includes(key))
+							continue;
+						const relation = resolveWritableManyRelation(workspace.definition, collection, key);
+						if (relation === undefined || !Array.isArray(value)) continue;
+						for (const child of value) {
+							if (typeof child !== 'object' || child === null || Array.isArray(child)) continue;
+							const childPayload = child as Readonly<Record<string, unknown>>;
+							yield* validateSubmittedCreateFields(
+								subject,
+								relation.childCollection,
+								childPayload,
+								typeof childPayload['id'] === 'string' ? 'update' : 'create'
+							);
+						}
+					}
+				});
 			const create = Effect.fn('Collections.create')(function* (
 				effectId: EffectId,
 				subject: Identity.Subject,
@@ -2334,6 +2787,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				yield* access.authorize(subject, 'create', input.collection);
 				const visibility = access.predicate(subject, 'create', input.collection);
 				const module = authored.hooks[input.collection];
+				yield* validateSubmittedCreateFields(subject, input.collection, input.values, 'create');
 				/**
 				 * A gated create writes the row and then locks it, rather than holding the operation and
 				 * writing nothing.
@@ -2372,6 +2826,24 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					depth,
 					prepared
 				);
+				const preparedValues = encodeMutationValues(values, definition.fields);
+				const context = { record: { id: input.id, ...preparedValues } };
+				yield* authorizePolicyWrite(
+					EffectId.make(`${effectId}:policy-authorization`),
+					subject,
+					visibility,
+					'create',
+					input.collection,
+					context
+				);
+				const approval = yield* resolveApproval(
+					EffectId.make(`${effectId}:approval-flow`),
+					subject,
+					visibility,
+					'create',
+					input.collection,
+					context
+				);
 				// The same path a batch takes, because a create *is* a batch of one — and because a
 				// `create.before` that returns the records belonging to this one has to commit them with
 				// it. `payroll_runs` is created one at a time through this function, and its run row was
@@ -2382,8 +2854,14 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					yield* flattenGraph(input.collection, values, input.id, 0),
 					false
 				);
-				if (requiresApproval(definition, visibility)) {
-					return yield* holdForApproval(effectId, subject, { ...input, values }, 'create');
+				if (approval !== undefined) {
+					return yield* holdForApproval(
+						effectId,
+						subject,
+						{ ...input, values: preparedValues },
+						'create',
+						approval
+					);
 				}
 				if (module?.create?.perRecord?.after !== undefined) {
 					const api = buildApi(effectId, subject, true, depth + 1);
@@ -2393,7 +2871,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						action: 'create.after'
 					});
 				}
-				yield* emitChangeEvents(effectId, subject, input.collection, input.id, 'created');
+				yield* emitChangeEvents(effectId, input.collection, input.id, 'created');
 			});
 			const createMany = Effect.fn('Collections.createMany')(function* (
 				effectId: EffectId,
@@ -2540,14 +3018,15 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							rows: value as ReadonlyArray<Readonly<Record<string, unknown>>>
 						});
 					}
-					const referenceProblem = referenceValueProblem(own, definition.fields);
+					const encodedOwn = encodeMutationValues(own, definition.fields);
+					const referenceProblem = referenceValueProblem(encodedOwn, definition.fields);
 					if (referenceProblem !== undefined)
 						return yield* Effect.fail(
 							new AuthoredRefusal({ message: referenceProblem, collection, action: 'create' })
 						);
 					// Parent first, and the order is load-bearing rather than tidy: the statements are applied
 					// in the order they are collected, so a child's foreign key must already name a row.
-					const rows: Array<FlatRow> = [{ collection, id, values: own }];
+					const rows: Array<FlatRow> = [{ collection, id, values: encodedOwn }];
 					for (const child of nested)
 						for (const row of child.rows)
 							rows.push(
@@ -2573,6 +3052,22 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				readonly parentId: string;
 				readonly json: string;
 			}>;
+			/**
+			 * One captured edge, flattened into the shape both the review and the lock plan read.
+			 *
+			 * The two used to carry their own copy of this projection, which is how a field added to one
+			 * of them stops being reviewed by the other while both still typecheck.
+			 */
+			const reviewedRelationshipOf = (snapshot: RelationshipSnapshot) => ({
+				name: snapshot.edge.name,
+				parentCollection: snapshot.edge.parentCollection,
+				parentColumn: snapshot.edge.parentColumn,
+				childCollection: snapshot.edge.childCollection,
+				childColumn: snapshot.edge.childColumn,
+				cascade: snapshot.edge.cascade,
+				parentId: snapshot.parentId,
+				snapshot: snapshot.json
+			});
 			type PreparedGraphOperation = Readonly<{
 				readonly action: 'create' | 'update' | 'delete';
 				readonly collection: string;
@@ -2665,11 +3160,20 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				parentId: string
 			) {
 				const definition = yield* workspace.collection(edge.childCollection);
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select child.*, to_jsonb(child) as "__bolt_snapshot" from ${quoteIdentifier(edge.childCollection)} as child where ${quoteIdentifier(edge.childColumn)} = $1 order by id`,
-					parameters: [parentId]
-				});
+				const child = tableAlias(queryTableFor(edge.childCollection, definition.fields), 'child');
+				const columns = getColumns(child) as Readonly<Record<string, AnyPgColumn>>;
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({
+							...columns,
+							__bolt_snapshot: aliased(rowJson('child'), '__bolt_snapshot')
+						})
+						.from(child)
+						.where(eq(columns[edge.childColumn]!, parentId))
+						.orderBy(asc(columns['id']!))
+				);
 				const raw = result.rows.filter(isJsonObject);
 				const snapshots = raw.flatMap((row) =>
 					isJsonObject(row['__bolt_snapshot']) ? [row['__bolt_snapshot']] : []
@@ -2723,17 +3227,16 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const registerExecutionInvariant = (
 					collection: string,
 					action: 'create' | 'update' | 'delete',
-					definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
 					visibility: AccessControl.RowPredicate
 				): void => {
 					executionInvariants.push({
 						collection,
 						action,
-						approvalLock: definition.approvalLock === true,
 						allowed: visibility.allowed,
 						sql: visibility.sql,
 						parameters: [...visibility.parameters],
 						fields: visibility.fields === undefined ? null : [...visibility.fields].toSorted(),
+						authorization: visibility.authorization ?? null,
 						approval: visibility.approval ?? null
 					});
 				};
@@ -2753,13 +3256,17 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					collection: string,
 					id: string
 				) {
-					const result = yield* database.execute(
+					const definition = yield* workspace.collection(collection);
+					const record = tableAlias(queryTableFor(collection, definition.fields), 'record');
+					const columns = getColumns(record) as Readonly<Record<string, AnyPgColumn>>;
+					const result = yield* executeBuilt(
 						EffectId.make(`${effectId}:graph:snapshot:${collection}:${id}`),
-						{
-							_tag: 'Query',
-							sql: `select to_jsonb(record) as snapshot from ${quoteIdentifier(collection)} as record where id = $1`,
-							parameters: [id]
-						}
+						database,
+						composer
+							.select({ snapshot: aliased(rowJson('record'), 'snapshot') })
+							.from(record)
+							.where(eq(columns['id']!, id))
+							.limit(1)
 					);
 					const row = result.rows[0];
 					const snapshot = isJsonObject(row) ? row['snapshot'] : undefined;
@@ -2832,13 +3339,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					yield* ensureGraphRowUnlocked(collection, id);
 					yield* access.authorize(subject, 'delete', collection);
 					const visibility = access.predicate(subject, 'delete', collection);
-					registerExecutionInvariant(collection, 'delete', definition, visibility);
-					if (requiresApproval(definition, visibility))
-						approvalRequirements.push({
-							collection,
-							action: 'delete',
-							...(visibility.approval === undefined ? {} : { approval: visibility.approval })
-						});
+					registerExecutionInvariant(collection, 'delete', visibility);
 					const module = authored.hooks[collection];
 					if (options.runHooks && module?.delete?.perRecord?.before !== undefined) {
 						const api = buildApi(effectId, subject, false, hookDepth + depth + 1, stageHookWrites);
@@ -2847,6 +3348,30 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							action: 'delete.before'
 						});
 					}
+					const context = { record: row };
+					yield* authorizePolicyWrite(
+						EffectId.make(`${effectId}:graph:policy-authorization:${collection}:${id}`),
+						subject,
+						visibility,
+						'delete',
+						collection,
+						context
+					);
+					const approval = yield* resolveApproval(
+						EffectId.make(`${effectId}:graph:approval-flow:${collection}:${id}`),
+						subject,
+						visibility,
+						'delete',
+						collection,
+						context,
+						options.runHooks
+					);
+					if (approval !== undefined)
+						approvalRequirements.push({
+							collection,
+							action: 'delete',
+							approval
+						});
 					// Deleting an owned row necessarily deletes the rows it owns. Plan every descendant through
 					// the same authorization, approval, hooks, history, sync and event pipeline before the
 					// database's foreign-key cascade can make them disappear invisibly.
@@ -2929,13 +3454,21 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						let snapshot: string | undefined;
 						yield* access.authorize(subject, action, collection);
 						const visibility = access.predicate(subject, action, collection);
-						registerExecutionInvariant(collection, action, definition, visibility);
+						registerExecutionInvariant(collection, action, visibility);
 						if (action === 'update') yield* ensureGraphRowUnlocked(collection, id);
-						if (requiresApproval(definition, visibility))
-							approvalRequirements.push({
-								collection,
-								action,
-								...(visibility.approval === undefined ? {} : { approval: visibility.approval })
+						// A field mask constrains the submitted patch, not fields trusted workspace code
+						// derives in update.before. Keep the declarative/approval graph on the same
+						// ordering as the flat update path: inspect the caller-owned shape before input
+						// decoding and hooks, then authorize the complete prepared record below.
+						if (
+							action === 'update' &&
+							visibility.fields !== undefined &&
+							Object.keys(own).some((field) => !visibility.fields?.includes(field))
+						)
+							return yield* new AccessControl.AccessDenied({
+								action: 'update',
+								resource: collection,
+								reason: 'update includes fields outside the matching policy grant'
 							});
 
 						if (action === 'create') {
@@ -3007,15 +3540,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									included = [...byName.values()];
 								}
 							}
-							if (
-								visibility.fields !== undefined &&
-								Object.keys(own).some((field) => !visibility.fields?.includes(field))
-							)
-								return yield* new AccessControl.AccessDenied({
-									action: 'update',
-									resource: collection,
-									reason: 'update includes fields outside the matching policy grant'
-								});
 						}
 
 						// Relationship ownership comes from the graph position, never from a writable payload.
@@ -3028,9 +3552,42 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							own =
 								action === 'create' ? { ...owned, [ownership.column]: ownership.parentId } : owned;
 						}
+						own = encodeMutationValues(own, definition.fields);
 						const referenceProblem = referenceValueProblem(own, definition.fields);
 						if (referenceProblem !== undefined)
 							return yield* graphRefusal(collection, action, referenceProblem);
+						const context =
+							action === 'update'
+								? {
+										previous: previous ?? { id },
+										changes: own,
+										record: { ...(previous ?? {}), id, ...own }
+									}
+								: { record: { id, ...own } };
+						if (options.runHooks)
+							yield* authorizePolicyWrite(
+								EffectId.make(`${effectId}:graph:policy-authorization:${collection}:${id}`),
+								subject,
+								visibility,
+								action,
+								collection,
+								context
+							);
+						const approval = yield* resolveApproval(
+							EffectId.make(`${effectId}:graph:approval-flow:${collection}:${id}`),
+							subject,
+							visibility,
+							action,
+							collection,
+							context,
+							options.runHooks
+						);
+						if (approval !== undefined)
+							approvalRequirements.push({
+								collection,
+								action,
+								approval
+							});
 						operations.splice(operationPosition, 0, {
 							action,
 							collection,
@@ -3174,16 +3731,17 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					)
 				);
 				const firstApproval = approvalRequirements[0];
+				let approvalReview: DeclarativeReview | undefined;
 				if (firstApproval !== undefined) {
-					const fingerprint = approvalFingerprint(firstApproval.approval);
+					const fingerprint = approvalRouteFingerprint(firstApproval.approval);
 					const mixed = approvalRequirements.find(
-						(requirement) => approvalFingerprint(requirement.approval) !== fingerprint
+						(requirement) => approvalRouteFingerprint(requirement.approval) !== fingerprint
 					);
 					if (mixed !== undefined)
 						return yield* graphRefusal(
 							rootCollection,
 							options.rootAction,
-							`The mutation graph crosses different approval policies (${firstApproval.collection}.${firstApproval.action} and ${mixed.collection}.${mixed.action}); one atomic graph must have one approval policy.`
+							`The mutation graph resolves to different approval routes (${firstApproval.collection}.${firstApproval.action} and ${mixed.collection}.${mixed.action}); one atomic graph must have one concrete flow.`
 						);
 					const review: DeclarativeReview = {
 						version: 1,
@@ -3205,16 +3763,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								)
 							),
 						relationships: [...relationshipSnapshots.values()]
-							.map((snapshot) => ({
-								name: snapshot.edge.name,
-								parentCollection: snapshot.edge.parentCollection,
-								parentColumn: snapshot.edge.parentColumn,
-								childCollection: snapshot.edge.childCollection,
-								childColumn: snapshot.edge.childColumn,
-								cascade: snapshot.edge.cascade,
-								parentId: snapshot.parentId,
-								snapshot: snapshot.json
-							}))
+							.map(reviewedRelationshipOf)
 							.toSorted((left, right) =>
 								`${left.childCollection}\u0000${left.childColumn}\u0000${left.parentId}`.localeCompare(
 									`${right.childCollection}\u0000${right.childColumn}\u0000${right.parentId}`
@@ -3222,6 +3771,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							),
 						policyFingerprint
 					};
+					approvalReview = review;
 					if (options.approved) {
 						if (options.expectedPolicyFingerprint !== policyFingerprint)
 							return yield* graphRefusal(
@@ -3244,7 +3794,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						'The approval requirement was removed after this mutation graph was reviewed.'
 					);
 				}
-				return { rootId, operations, relationshipSnapshots: [...relationshipSnapshots.values()] };
+				return {
+					rootId,
+					operations,
+					relationshipSnapshots: [...relationshipSnapshots.values()],
+					...(approvalReview === undefined ? {} : { review: approvalReview })
+				};
 			});
 
 			const applyDeclarativeGraph = Effect.fn('Collections.applyDeclarativeGraph')(function* (
@@ -3289,22 +3844,24 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const guards = existingOperations.map((operation) => {
 					const visibility = elevated ? AccessControl.unrestricted : operation.visibility;
 					const messageIndex = visibility.parameters.length + 2;
-					return {
-						sql: `select bolt_assert((select count(*) = 1 from (select id from ${quoteIdentifier(operation.collection)} where id = $1 and (${offsetParameters(visibility.sql, 1)}) for update) as bolt_authorized_row), $${messageIndex})`,
-						parameters: [
+					return transactionSql(
+						`select bolt_assert((select count(*) = 1 from (select id from ${quoteIdentifier(operation.collection)} where id = $1 and (${offsetParameters(visibility.sql, 1)}) for update) as bolt_authorized_row), $${messageIndex})`,
+						[
 							operation.id,
 							...visibility.parameters,
 							`${operation.collection} ${operation.id} is absent or outside the mutation predicate`
 						]
-					};
+					);
 				});
-				const createGuards = creates.map((operation) => ({
-					sql: `select bolt_assert(exists(select 1 from ${quoteIdentifier(operation.collection)} where id = $1), $2)`,
-					parameters: [
-						operation.id,
-						`${operation.collection} ${operation.id} was rejected by the create predicate`
-					]
-				}));
+				const createGuards = creates.map((operation) =>
+					transactionSql(
+						`select bolt_assert(exists(select 1 from ${quoteIdentifier(operation.collection)} where id = $1), $2)`,
+						[
+							operation.id,
+							`${operation.collection} ${operation.id} was rejected by the create predicate`
+						]
+					)
+				);
 				const reviewedRows =
 					review?.rows ??
 					existingOperations.flatMap((operation) =>
@@ -3319,17 +3876,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								]
 					);
 				const reviewedRelationships =
-					review?.relationships ??
-					relationshipSnapshots.map((snapshot) => ({
-						name: snapshot.edge.name,
-						parentCollection: snapshot.edge.parentCollection,
-						parentColumn: snapshot.edge.parentColumn,
-						childCollection: snapshot.edge.childCollection,
-						childColumn: snapshot.edge.childColumn,
-						cascade: snapshot.edge.cascade,
-						parentId: snapshot.parentId,
-						snapshot: snapshot.json
-					}));
+					review?.relationships ?? relationshipSnapshots.map(reviewedRelationshipOf);
 				const tableLocks = [
 					...new Set([
 						...operations.map((operation) => operation.collection),
@@ -3338,26 +3885,29 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					])
 				]
 					.toSorted()
-					.map((table) => ({
-						sql: `lock table ${quoteIdentifier(table)} in share row exclusive mode`,
-						parameters: []
-					}));
-				const recordAssertions = reviewedRows.map((row) => ({
-					sql: `select bolt_assert((select to_jsonb(record) from ${quoteIdentifier(row.collection)} as record where id = $1) = $2::jsonb, $3)`,
-					parameters: [
-						row.id,
-						row.snapshot,
-						`${row.collection} ${row.id} changed while its mutation graph was prepared`
-					]
-				}));
-				const relationshipAssertions = reviewedRelationships.map((snapshot) => ({
-					sql: `select bolt_assert((select coalesce(jsonb_agg(to_jsonb(child) order by child.id), '[]'::jsonb) from ${quoteIdentifier(snapshot.childCollection)} as child where ${quoteIdentifier(snapshot.childColumn)} = $1) = $2::jsonb, $3)`,
-					parameters: [
-						snapshot.parentId,
-						snapshot.snapshot,
-						`${snapshot.childCollection} membership changed while ${snapshot.parentCollection} ${snapshot.parentId} was prepared`
-					]
-				}));
+					.map((table) =>
+						transactionSql(`lock table ${quoteIdentifier(table)} in share row exclusive mode`)
+					);
+				const recordAssertions = reviewedRows.map((row) =>
+					transactionSql(
+						`select bolt_assert((select to_jsonb(record) from ${quoteIdentifier(row.collection)} as record where id = $1) = $2::jsonb, $3)`,
+						[
+							row.id,
+							row.snapshot,
+							`${row.collection} ${row.id} changed while its mutation graph was prepared`
+						]
+					)
+				);
+				const relationshipAssertions = reviewedRelationships.map((snapshot) =>
+					transactionSql(
+						`select bolt_assert((select coalesce(jsonb_agg(to_jsonb(child) order by child.id), '[]'::jsonb) from ${quoteIdentifier(snapshot.childCollection)} as child where ${quoteIdentifier(snapshot.childColumn)} = $1) = $2::jsonb, $3)`,
+						[
+							snapshot.parentId,
+							snapshot.snapshot,
+							`${snapshot.childCollection} membership changed while ${snapshot.parentCollection} ${snapshot.parentId} was prepared`
+						]
+					)
+				);
 				const appliedOperations = [...deletes, ...updates, ...creates];
 				const capturedOperations = appliedOperations.filter(
 					(operation) => operation.action === 'create' || operation.action === 'update'
@@ -3368,16 +3918,17 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						const ordinalParameter = captureParameters.push(index);
 						const collectionParameter = captureParameters.push(operation.collection);
 						const idParameter = captureParameters.push(operation.id);
-						return `select $${ordinalParameter}::integer as "__bolt_graph_ordinal", $${collectionParameter}::text as "__bolt_graph_collection", $${idParameter}::text as "__bolt_graph_id", to_jsonb(stored) as "__bolt_graph_record" from ${quoteIdentifier(operation.collection)} as stored where stored.id = $${idParameter}::uuid`;
+						return transactionSql(
+							`select $${ordinalParameter}::integer as "__bolt_graph_ordinal", $${collectionParameter}::text as "__bolt_graph_collection", $${idParameter}::text as "__bolt_graph_id", to_jsonb(stored) as "__bolt_graph_record" from ${quoteIdentifier(operation.collection)} as stored where stored.id = $${idParameter}::uuid`
+						).sql;
 					})
 					.join(' union all ');
-				const captureStatement = {
-					sql:
-						captureSql.length > 0
-							? `${captureSql} order by "__bolt_graph_ordinal"`
-							: 'select null::integer as "__bolt_graph_ordinal", null::text as "__bolt_graph_collection", null::text as "__bolt_graph_id", null::jsonb as "__bolt_graph_record" where false',
-					parameters: captureParameters
-				};
+				const captureStatement = transactionSql(
+					captureSql.length > 0
+						? `${captureSql} order by "__bolt_graph_ordinal"`
+						: 'select null::integer as "__bolt_graph_ordinal", null::text as "__bolt_graph_collection", null::text as "__bolt_graph_id", null::jsonb as "__bolt_graph_record" where false',
+					captureParameters
+				);
 				const statements = [
 					...tableLocks,
 					...guards,
@@ -3439,35 +3990,69 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				hookDepth: number
 			) {
 				const { operations, records } = applied;
+				const committed = operations.map((operation) => operation.id);
+				const settleStep = <A, E>(
+					step: NonNullable<MutationPhaseFailure['step']>,
+					collection: string,
+					effect: Effect.Effect<A, E>
+				) =>
+					effect.pipe(
+						Effect.catchCause((cause) =>
+							Effect.fail(
+								mutationPhaseFailure('settle', collection, committed, Cause.squash(cause), step)
+							)
+						)
+					);
 				const touched = [...new Set(operations.map((operation) => operation.collection))];
 				if (touched.length > 0)
-					yield* wake.announce(effectId, touched).pipe(Effect.timeout(250), Effect.ignore);
+					yield* settleStep('wake', touched.join(','), wake.announce(effectId, touched));
 				for (const operation of operations) {
 					const api = buildApi(operation.taskScope, subject, true, hookDepth + operation.depth + 1);
-					if (operation.action === 'create') {
-						const record = records.get(`${operation.collection}\u0000${operation.id}`);
-						if (record !== undefined && operation.module?.create?.perRecord?.after !== undefined)
-							yield* runHook(operation.module.create.perRecord.after, { record, api }, api, {
+					// Deletes are their own shape: the record a delete hook receives is the row as it stood,
+					// not one read back out of `records`.
+					if (operation.action === 'delete') {
+						const removed = operation.module?.delete?.perRecord?.after;
+						if (removed === undefined) continue;
+						yield* settleStep(
+							'after-hook',
+							operation.collection,
+							runHook(removed, { record: operation.previous, api }, api, {
 								collection: operation.collection,
-								action: 'create.after'
-							});
-					} else if (operation.action === 'update') {
-						if (Object.keys(operation.values).length === 0 && operation.clearLock !== true)
-							continue;
-						const record = records.get(`${operation.collection}\u0000${operation.id}`);
-						if (record !== undefined && operation.module?.update?.perRecord?.after !== undefined)
-							yield* runHook(operation.module.update.perRecord.after, { record, api }, api, {
-								collection: operation.collection,
-								action: 'update.after'
-							});
-					} else if (operation.module?.delete?.perRecord?.after !== undefined) {
-						yield* runHook(
-							operation.module.delete.perRecord.after,
-							{ record: operation.previous, api },
-							api,
-							{ collection: operation.collection, action: 'delete.after' }
+								action: 'delete.after'
+							})
 						);
+						continue;
 					}
+					// An update that changed no column and released no lock ran no statement, so it is not a
+					// change and owes no hook.
+					if (
+						operation.action === 'update' &&
+						Object.keys(operation.values).length === 0 &&
+						operation.clearLock !== true
+					)
+						continue;
+					const hook =
+						operation.action === 'create'
+							? operation.module?.create?.perRecord?.after
+							: operation.module?.update?.perRecord?.after;
+					if (hook === undefined) continue;
+					const record = records.get(`${operation.collection}\u0000${operation.id}`);
+					if (record === undefined) continue;
+					yield* settleStep(
+						'after-hook',
+						operation.collection,
+						runHook(
+							hook,
+							operation.action === 'update'
+								? { previous: operation.previous, changes: operation.values, record, api }
+								: { record, api },
+							api,
+							{
+								collection: operation.collection,
+								action: `${operation.action}.after`
+							}
+						)
+					);
 				}
 				for (const [key, grouped] of Map.groupBy(
 					operations.filter(
@@ -3482,18 +4067,23 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						string,
 						'create' | 'update' | 'delete'
 					];
-					yield* emitChangeEventsMany(
-						effectId,
-						subject,
+					yield* settleStep(
+						'change-events',
 						collection,
-						grouped.flatMap((operation) => {
-							const record =
-								action === 'delete'
-									? operation.previous
-									: records.get(`${operation.collection}\u0000${operation.id}`);
-							return record === undefined ? [] : [{ taskScope: operation.taskScope, row: record }];
-						}),
-						action === 'create' ? 'created' : action === 'update' ? 'updated' : 'deleted'
+						emitChangeEventsMany(
+							effectId,
+							collection,
+							grouped.flatMap((operation) => {
+								const record =
+									action === 'delete'
+										? operation.previous
+										: records.get(`${operation.collection}\u0000${operation.id}`);
+								return record === undefined
+									? []
+									: [{ taskScope: operation.taskScope, row: record }];
+							}),
+							action === 'create' ? 'created' : action === 'update' ? 'updated' : 'deleted'
+						)
 					);
 				}
 				return records;
@@ -3552,13 +4142,14 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					});
 				const phasePrepare = <A, E>(effect: Effect.Effect<A, E>) =>
 					effect.pipe(
-						Effect.catch((cause) =>
-							Effect.fail(
-								cause instanceof GraphApprovalRequired
-									? cause
-									: mutationPhaseFailure('prepare', collection, [], cause)
-							)
-						)
+						Effect.catchCause((cause) => {
+							const failure = Cause.squash(cause);
+							return Effect.fail(
+								failure instanceof GraphApprovalRequired
+									? failure
+									: mutationPhaseFailure('prepare', collection, [], failure)
+							);
+						})
 					);
 				const hold = (cause: GraphApprovalRequired) =>
 					Effect.gen(function* () {
@@ -3589,31 +4180,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							requestId: approval.approvalRequestId ?? rootId,
 							reason: 'stored declarative approval review is missing'
 						});
-					const currentReview = yield* phasePrepare(prepare(false, false)).pipe(
-						Effect.flatMap(() =>
-							Effect.fail(
-								new ApprovalConflict({
-									requestId: approval.approvalRequestId ?? rootId,
-									reason: 'the mutation graph no longer requires the approval that reviewed it'
-								})
-							)
-						),
-						Effect.catchTag('Bolt.Collections.GraphApprovalRequired', (cause) =>
-							Effect.succeed(cause.review)
-						)
-					);
-					if (!Schema.toEquivalence(DeclarativeReview)(currentReview, approval.review)) {
-						if (approval.approvalRequestId !== undefined)
-							yield* approvals.conflict(
-								EffectId.make(`${effectId}:stale-review-conflict`),
-								approval.approvalRequestId,
-								'the reviewed mutation graph changed while approval was pending'
-							);
-						return yield* new ApprovalConflict({
-							requestId: approval.approvalRequestId ?? rootId,
-							reason: 'the reviewed mutation graph changed while approval was pending'
-						});
-					}
 					prepared = yield* phasePrepare(
 						prepare(true, true, approval.review.policyFingerprint)
 					).pipe(
@@ -3625,22 +4191,29 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							)
 						)
 					);
+					if (
+						prepared.review === undefined ||
+						!Schema.toEquivalence(DeclarativeReview)(prepared.review, approval.review)
+					) {
+						if (approval.approvalRequestId !== undefined)
+							yield* approvals.conflict(
+								EffectId.make(`${effectId}:stale-review-conflict`),
+								approval.approvalRequestId,
+								'the reviewed mutation graph changed while approval was pending'
+							);
+						return yield* new ApprovalConflict({
+							requestId: approval.approvalRequestId ?? rootId,
+							reason: 'the reviewed mutation graph changed while approval was pending'
+						});
+					}
 				} else {
-					const probed = yield* phasePrepare(prepare(false, false)).pipe(
+					// Hooks prepare the candidate before authorization and routing, for unconditional and
+					// conditional approvals alike. Their writes are staged into this graph, so running them here
+					// cannot leak a partial mutation. Approval resume runs the hooks again and compares the rebuilt
+					// review byte-for-byte before committing it.
+					prepared = yield* phasePrepare(prepare(false, true)).pipe(
 						Effect.catchTag('Bolt.Collections.GraphApprovalRequired', hold)
 					);
-					// A hook-free probe proves whether the graph must be held. Only an ungated graph reaches
-					// authored preparation and before hooks, so a pending request never runs them twice.
-					prepared = yield* phasePrepare(prepare(false, true)).pipe(
-						Effect.catchTag('Bolt.Collections.GraphApprovalRequired', () =>
-							graphRefusal(
-								collection,
-								rootAction,
-								'A before hook introduced a newly approval-gated graph branch. Declare that branch in the submitted graph so it can be reviewed before hooks run.'
-							)
-						)
-					);
-					void probed;
 				}
 				const applied = yield* applyDeclarativeGraph(
 					effectId,
@@ -3650,14 +4223,30 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					elevated,
 					approval.review
 				).pipe(
-					Effect.catch((cause) =>
-						Effect.fail(mutationPhaseFailure('commit', collection, [], cause))
+					Effect.catchCause((cause) =>
+						Effect.gen(function* () {
+							const failure = Cause.squash(cause);
+							if (
+								approval.approved &&
+								approval.approvalRequestId !== undefined &&
+								!Cause.hasInterruptsOnly(cause)
+							) {
+								yield* approvals
+									.conflict(
+										EffectId.make(`${effectId}:commit-review-conflict`),
+										approval.approvalRequestId,
+										'the reviewed mutation graph changed while approval was pending'
+									)
+									.pipe(Effect.ignore);
+							}
+							return yield* Effect.fail(mutationPhaseFailure('commit', collection, [], failure));
+						})
 					)
 				);
 				const committed = applied.operations.map((operation) => operation.id);
 				const records = yield* settleDeclarativeGraph(effectId, subject, applied, depth).pipe(
-					Effect.catch((cause) =>
-						Effect.fail(mutationPhaseFailure('settle', collection, committed, cause))
+					Effect.catchCause((cause) =>
+						Effect.fail(mutationPhaseFailure('settle', collection, committed, Cause.squash(cause)))
 					)
 				);
 				const root = records.get(`${collection}\u0000${prepared.rootId}`);
@@ -3777,9 +4366,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						const after = module.create.perRecord.after;
 						yield* Effect.all(
 							settled.map(({ index, record }) =>
-								Effect.gen(function* () {
+								Effect.suspend(() => {
 									const api = buildApi(rowId(index), subject, true, depth + 1);
-									yield* runHook(after, { record, api }, api, {
+									return runHook(after, { record, api }, api, {
 										collection,
 										action: 'create.after'
 									});
@@ -3790,7 +4379,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					}
 					yield* emitChangeEventsMany(
 						effectId,
-						subject,
 						collection,
 						settled.map(({ index, record }) => ({ taskScope: rowId(index), row: record })),
 						'created'
@@ -3820,10 +4408,25 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
 				elevated: boolean,
 				depth: number,
-				options?: { readonly batchSize?: number; readonly declarative?: boolean }
+				options?: {
+					readonly batchSize?: number;
+					readonly declarative?: boolean;
+					readonly root?: Readonly<{ readonly id: string; readonly action: 'create' | 'update' }>;
+				}
 			) {
 				yield* refuseRunawayHooks('mutate', collection, depth);
 				const definition = yield* workspace.collection(collection);
+				const explicitRoot =
+					options?.declarative === true && payloads.length === 1 ? options.root : undefined;
+				if (!elevated) {
+					for (const payload of payloads)
+						yield* validateSubmittedCreateFields(
+							subject,
+							collection,
+							payload,
+							explicitRoot?.action ?? (typeof payload['id'] === 'string' ? 'update' : 'create')
+						);
+				}
 				/**
 				 * A submitted relationship changes the operation from a flat batch into state
 				 * synchronization. The browser sends one root, while the authored bulk surface may still send
@@ -3840,7 +4443,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							'A declarative mutation must contain exactly one root record.'
 						);
 					return yield* synchronizeGraph(effectId, subject, collection, root, elevated, depth, {
-						approved: false
+						approved: false,
+						...(explicitRoot === undefined
+							? {}
+							: { rootId: explicitRoot.id, rootAction: explicitRoot.action })
 					});
 				}
 				const declaresRelationship =
@@ -3859,7 +4465,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					(payload) => typeof payload['id'] === 'string'
 				) as ReadonlyArray<Readonly<Record<string, Schema.Json>>>;
 				const inserts = payloads.filter((payload) => typeof payload['id'] !== 'string');
-				if (inserts.length > 0) yield* access.authorize(subject, 'create', collection);
+				// A public batch is the subject's create and must hold the collection grant. An elevated batch
+				// can only come from the trusted post-write API after the root mutation was authorized; requiring
+				// the same subject to create engine-owned output rows (for example payslips) defeats that
+				// capability and turns every non-admin after hook into an access denial.
+				if (inserts.length > 0 && !elevated) yield* access.authorize(subject, 'create', collection);
 				const updated: Array<Readonly<Record<string, unknown>>> = [];
 				for (let index = 0; index < updates.length; index += 1) {
 					const payload = updates[index];
@@ -3893,7 +4503,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				// a gate does to a create is not "write it" — it writes the row and then holds it under an
 				// approval, and each held row is its own request. Batching that would either lose the holds
 				// or invent one request covering rows a reviewer has to decide on separately.
-				if (requiresApproval(definition, access.predicate(subject, 'create', collection))) {
+				if (hasApprovalGate(access.predicate(subject, 'create', collection))) {
 					for (let index = 0; index < identified.length; index += 1) {
 						const row = identified[index];
 						if (row !== undefined)
@@ -3970,11 +4580,21 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			) {
 				if (rows.length === 0) return [];
 				const definition = yield* workspace.collection(collection);
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select * from ${quoteIdentifier(collection)} where id = any($1)`,
-					parameters: [rows.map((row) => row.id)]
-				});
+				const table = queryTableFor(collection, definition.fields);
+				const columns = columnsOf(table);
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select(columns)
+						.from(table)
+						.where(
+							inArray(
+								columns['id']!,
+								rows.map((row) => row.id)
+							)
+						)
+				);
 				const stored = new Map<string, Readonly<Record<string, unknown>>>();
 				for (const row of result.rows) {
 					if (typeof row !== 'object' || row === null) continue;
@@ -3994,16 +4614,22 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const compiled = yield* compiledFilter(input, context);
 				// The same search the rows are read through. A count that ignored it reported the whole
 				// collection under a filtered page — "1 of 335" beside three rows.
-				const searched = searchClause(definition.fields, input.search, compiled.parameters.length);
+				const searched = searchClause(definition.fields, input.search);
 				const visibility = access.predicate(subject, 'read', input.collection);
 				// `after` is deliberately absent here. A count answers how large the filtered set is, which
 				// is what a "1 of 335" reads from; counting only the rows past the cursor would shrink that
 				// total on every page turn.
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select count(*) as count from ${quoteIdentifier(input.collection)} where (${compiled.sql}) and (${searched.sql}) and (${offsetParameters(visibility.sql, compiled.parameters.length + searched.parameters.length)})`,
-					parameters: [...compiled.parameters, ...searched.parameters, ...visibility.parameters]
-				});
+				const table = queryTableFor(input.collection, definition.fields);
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({ count: countRows() })
+						.from(table)
+						.where(
+							and(compiled, queryFragment(searched), AccessControl.predicateExpression(visibility))
+						)
+				);
 				const row = result.rows[0];
 				const value =
 					typeof row === 'object' && row !== null ? Reflect.get(row, 'count') : undefined;
@@ -4019,11 +4645,21 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const definition = yield* workspace.collection(input.collection);
 				yield* access.authorize(subject, 'update', input.collection);
 				const visibility = access.predicate(subject, 'update', input.collection);
-				if (requiresApproval(definition, visibility)) {
-					return yield* holdForApproval(effectId, subject, input, 'update');
-				}
 				const module = authored.hooks[input.collection];
 				const api = buildApi(effectId, subject, false, depth + 1);
+				// A field mask constrains the caller, not trusted workspace code. Check the submitted patch
+				// before decoding or `update.before`, so a hook may derive a server-owned field and cannot
+				// erase evidence that the caller attempted to set one.
+				if (
+					visibility.fields !== undefined &&
+					Object.keys(input.values).some((field) => !visibility.fields?.includes(field))
+				) {
+					return yield* new AccessControl.AccessDenied({
+						action: 'update',
+						resource: input.collection,
+						reason: 'update includes fields outside the matching policy grant'
+					});
+				}
 				let values = input.values;
 				if (module?.update?.input !== undefined) {
 					values = yield* Schema.decodeUnknownEffect(module.update.input)(values).pipe(
@@ -4043,7 +4679,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				// so a collection with no `update` hook and no outbound binding costs nothing for it.
 				const wantsPrevious =
 					module?.update?.perRecord?.before !== undefined ||
-					needsPreviousRow(input.collection, 'update');
+					module?.update?.perRecord?.after !== undefined ||
+					needsPreviousRow(input.collection, 'update') ||
+					visibility.authorization !== undefined ||
+					visibility.approval !== undefined;
 				const existing = wantsPrevious
 					? yield* readRowElevated(effectId, input.collection, input.id)
 					: undefined;
@@ -4058,15 +4697,36 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						values = before as Readonly<Record<string, Schema.Json>>;
 					}
 				}
-				if (
-					visibility.fields !== undefined &&
-					Object.keys(values).some((field) => !visibility.fields?.includes(field))
-				) {
-					return yield* new AccessControl.AccessDenied({
-						action: 'update',
-						resource: input.collection,
-						reason: 'update includes fields outside the matching policy grant'
-					});
+				values = encodeMutationValues(values, definition.fields);
+				const context = {
+					previous: existing ?? { id: input.id },
+					changes: values,
+					record: { ...(existing ?? {}), id: input.id, ...values }
+				};
+				yield* authorizePolicyWrite(
+					EffectId.make(`${effectId}:policy-authorization`),
+					subject,
+					visibility,
+					'update',
+					input.collection,
+					context
+				);
+				const approval = yield* resolveApproval(
+					EffectId.make(`${effectId}:approval-flow`),
+					subject,
+					visibility,
+					'update',
+					input.collection,
+					context
+				);
+				if (approval !== undefined) {
+					return yield* holdForApproval(
+						effectId,
+						subject,
+						{ ...input, values },
+						'update',
+						approval
+					);
 				}
 				yield* applyUpdate(
 					effectId,
@@ -4080,12 +4740,17 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				if (module?.update?.perRecord?.after !== undefined) {
 					const afterApi = buildApi(effectId, subject, true, depth + 1);
 					const record = yield* readRowElevated(effectId, input.collection, input.id);
-					yield* runHook(module.update.perRecord.after, { record, api: afterApi }, afterApi, {
-						collection: input.collection,
-						action: 'update.after'
-					});
+					yield* runHook(
+						module.update.perRecord.after,
+						{ previous: existing, changes: values, record, api: afterApi },
+						afterApi,
+						{
+							collection: input.collection,
+							action: 'update.after'
+						}
+					);
 				}
-				yield* emitChangeEvents(effectId, subject, input.collection, input.id, 'updated');
+				yield* emitChangeEvents(effectId, input.collection, input.id, 'updated');
 			});
 			const deleteRecord = Effect.fn('Collections.delete')(function* (
 				effectId,
@@ -4098,20 +4763,14 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const definition = yield* workspace.collection(collection);
 				yield* access.authorize(subject, 'delete', collection);
 				const visibility = access.predicate(subject, 'delete', collection);
-				if (requiresApproval(definition, visibility)) {
-					return yield* holdForApproval(
-						effectId,
-						subject,
-						{ collection, id, values: {} },
-						'delete'
-					);
-				}
 				const module = authored.hooks[collection];
 				const api = buildApi(effectId, subject, false, depth + 1);
 				let existing: Readonly<Record<string, unknown>> | undefined;
 				if (
 					module?.delete?.perRecord?.before !== undefined ||
-					needsPreviousRow(collection, 'delete')
+					needsPreviousRow(collection, 'delete') ||
+					visibility.authorization !== undefined ||
+					visibility.approval !== undefined
 				) {
 					// An outbound delete binding needs this read for a reason no hook has: after the statement
 					// runs there is no row left to describe, so a delivery that did not capture it first can
@@ -4123,6 +4782,32 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						collection,
 						action: 'delete.before'
 					});
+				}
+				const context = { record: existing ?? { id } };
+				yield* authorizePolicyWrite(
+					EffectId.make(`${effectId}:policy-authorization`),
+					subject,
+					visibility,
+					'delete',
+					collection,
+					context
+				);
+				const approval = yield* resolveApproval(
+					EffectId.make(`${effectId}:approval-flow`),
+					subject,
+					visibility,
+					'delete',
+					collection,
+					context
+				);
+				if (approval !== undefined) {
+					return yield* holdForApproval(
+						effectId,
+						subject,
+						{ collection, id, values: {} },
+						'delete',
+						approval
+					);
 				}
 				const record =
 					module?.delete?.perRecord?.after !== undefined
@@ -4136,7 +4821,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						action: 'delete.after'
 					});
 				}
-				yield* emitChangeEvents(effectId, subject, collection, id, 'deleted');
+				yield* emitChangeEvents(effectId, collection, id, 'deleted');
 			});
 			/**
 			 * The record an approval request was opened over, from whichever state the request reached.
@@ -4252,6 +4937,20 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									reason: 'approved mutation graph unexpectedly requested a new approval'
 								})
 							)
+						),
+						Effect.catchCause((cause) =>
+							Effect.gen(function* () {
+								if (!Cause.hasInterruptsOnly(cause)) {
+									yield* approvals
+										.conflict(
+											EffectId.make(`${effectId}:approval-settlement-conflict`),
+											requestId,
+											'the reviewed mutation graph could not be settled'
+										)
+										.pipe(Effect.ignore);
+								}
+								return yield* Effect.failCause(cause);
+							})
 						)
 					);
 					return;
@@ -4274,20 +4973,59 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								action: 'create.after'
 							});
 						}
+						yield* emitChangeEvents(effectId, operation.collection, operation.id, 'created');
 						return;
 					}
-					case 'update':
-						yield* applyUpdate(effectId, operation.subject, operation, definition, true);
+					case 'update': {
+						const previous = yield* readRowElevated(effectId, operation.collection, operation.id);
+						yield* applyUpdate(
+							effectId,
+							operation.subject,
+							operation,
+							definition,
+							true,
+							false,
+							previous
+						);
+						const updatedModule = authored.hooks[operation.collection];
+						if (updatedModule?.update?.perRecord?.after !== undefined) {
+							const api = buildApi(effectId, operation.subject, true);
+							const record = yield* readRowElevated(effectId, operation.collection, operation.id);
+							yield* runHook(
+								updatedModule.update.perRecord.after,
+								{ previous, changes: operation.values, record, api },
+								api,
+								{
+									collection: operation.collection,
+									action: 'update.after'
+								}
+							);
+						}
+						yield* emitChangeEvents(effectId, operation.collection, operation.id, 'updated');
 						return;
-					case 'delete':
+					}
+					case 'delete': {
+						const record = yield* readRowElevated(effectId, operation.collection, operation.id);
 						yield* applyDelete(
 							effectId,
 							operation.subject,
 							operation.collection,
 							operation.id,
-							definition
+							definition,
+							false,
+							record
 						);
+						const deletedModule = authored.hooks[operation.collection];
+						if (deletedModule?.delete?.perRecord?.after !== undefined) {
+							const api = buildApi(effectId, operation.subject, true);
+							yield* runHook(deletedModule.delete.perRecord.after, { record, api }, api, {
+								collection: operation.collection,
+								action: 'delete.after'
+							});
+						}
+						yield* emitChangeEvents(effectId, operation.collection, operation.id, 'deleted');
 						return;
+					}
 					default: {
 						const _exhaustive: never = operation.action;
 						return yield* new ApprovalConflict({
@@ -4387,11 +5125,39 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				history: Effect.fn('Collections.history')(function* (effectId, subject, collection, id) {
 					yield* workspace.collection(collection);
 					yield* access.authorize(subject, 'history', collection);
-					return (yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: 'select * from bolt_collection_history where collection_name = $1 and record_id = $2 order by sequence desc',
-						parameters: [collection, id]
-					})).rows;
+					const result = yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.select({
+								sequence: collectionHistoryTable.sequence,
+								created_at: collectionHistoryTable.created_at,
+								snapshot: collectionHistoryTable.snapshot
+							})
+							.from(collectionHistoryTable)
+							.where(
+								and(
+									eq(collectionHistoryTable.collection_name, collection),
+									eq(collectionHistoryTable.record_id, id)
+								)
+							)
+							.orderBy(asc(collectionHistoryTable.sequence))
+					);
+					const rows = yield* Schema.decodeUnknownEffect(
+						Schema.Array(PersistedCollectionHistoryRow)
+					)(result.rows).pipe(
+						Effect.mapError(
+							() =>
+								new Database.FacilityError({
+									operation: 'collections.history',
+									code: 'malformed_persistence',
+									message: 'Stored collection history rows do not satisfy the history schema',
+									retryable: false,
+									outcome: 'known'
+								})
+						)
+					);
+					return collectionHistorySnapshots(rows);
 				})
 			});
 		})

@@ -57,6 +57,16 @@ export const cacheKeyFor = (command: string, input: Schema.Json): string =>
  */
 export const ANY_COLLECTION = '*';
 
+/**
+ * A change token that matches only arbitrary (`*`) dependencies.
+ *
+ * A mutation may announce immediately so sibling `invoke.*` queries can re-read the authoritative
+ * server, but named collection queries may still be backed by PGlite until the ordered replica drain
+ * lands. This value cannot be a collection name and therefore refreshes only answers whose own
+ * dependency is `ANY_COLLECTION`; the later replica announcement carries the real collection names.
+ */
+export const ARBITRARY_QUERY_INVALIDATION = '\u0000bolt:arbitrary-query';
+
 export const collectionsFor = (command: string, input: Schema.Json): ReadonlyArray<string> => {
 	if (!command.startsWith('collections.')) return [ANY_COLLECTION];
 	if (input === null || typeof input !== 'object' || Array.isArray(input)) return [ANY_COLLECTION];

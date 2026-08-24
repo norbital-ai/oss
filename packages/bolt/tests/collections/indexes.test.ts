@@ -77,6 +77,8 @@ describe('declared collection indexes', () => {
 	 */
 	it('indexes the system collections that declare it', () => {
 		expect(declaredIndexSql('approval_request')).toEqual([
+			'create index if not exists "approval_request_approver_teams_idx" on "approval_request" using gin ("approver_teams")',
+			'create index if not exists "approval_request_superseder_teams_idx" on "approval_request" using gin ("superseder_teams")',
 			'create index if not exists "approval_request_collection_name_idx" on "approval_request" ("collection_name")',
 			'create index if not exists "approval_request_record_id_idx" on "approval_request" ("record_id")',
 			'create index if not exists "approval_request_status_idx" on "approval_request" ("status")'

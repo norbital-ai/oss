@@ -168,14 +168,7 @@ it.effect('executes memory transport Open, Send, Pull, and Close', () =>
 	Effect.gen(function* () {
 		const transport = makeMemoryTransport();
 		const opened = yield* Effect.tryPromise(() =>
-			transport.binding.call(
-				metadata,
-				TransportRequest.cases.Open.make({
-					protocol: 'websocket',
-					direction: 'two-way'
-				}),
-				signal
-			)
+			transport.binding.call(metadata, TransportRequest.cases.Open.make({}), signal)
 		);
 		assert.strictEqual(opened._tag, 'Success');
 		if (opened._tag !== 'Success') return;
@@ -239,11 +232,7 @@ it.effect('fans a memory transport Publish out to the topic, and only that topic
 		const transport = makeMemoryTransport();
 		const open = (topic: string) =>
 			Effect.tryPromise(() =>
-				transport.binding.call(
-					metadata,
-					TransportRequest.cases.Open.make({ protocol: 'sse', direction: 'one-way', topic }),
-					signal
-				)
+				transport.binding.call(metadata, TransportRequest.cases.Open.make({ topic }), signal)
 			);
 		const idOf = (result: {
 			readonly _tag: string;

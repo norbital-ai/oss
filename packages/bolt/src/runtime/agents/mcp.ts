@@ -126,7 +126,7 @@ export const callMcpTool = Effect.fn('Agents.callMcpTool')(function* (
 			method: 'POST',
 			url: route.url,
 			headers: {
-				accept: 'application/json, text/event-stream',
+				accept: 'application/json',
 				'content-type': 'application/json',
 				'mcp-protocol-version': MCP_PROTOCOL_VERSION
 			},

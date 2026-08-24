@@ -139,11 +139,14 @@ export function createSlidingIndicatorScheduler(
 			raf = 0;
 			const shouldAnimate = animateNext;
 			animateNext = false;
-			void Effect.runPromise(
-				Effect.gen(function* () {
-					yield* Effect.promise(() => tick());
-					runMeasure(shouldAnimate);
-				})
+			Effect.runFork(
+				Effect.promise(() => tick()).pipe(
+					Effect.map(() => runMeasure(shouldAnimate)),
+					Effect.ignoreCause({
+						log: true,
+						message: '[SlidingIndicator] Failed to measure the indicator after rendering'
+					})
+				)
 			);
 		};
 

@@ -15,6 +15,9 @@
 	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 	import { OrganizationHostSnapshotSchema } from './organization-state.js';
 
+	/** Built once per module rather than per read: constructing a decoder compiles it. */
+	const decodeHostSnapshot = Schema.decodeUnknownEffect(OrganizationHostSnapshotSchema);
+
 	/**
 	 * The Organization surface: the organization's own attributes and what it has been billed for.
 	 * Nothing about the people in it — members, invitations, teams and access events are rendered by
@@ -58,19 +61,21 @@
 	 * state — the runtime meters nothing and holds no organization attributes.
 	 */
 	const loadHost = (): Effect.Effect<void> =>
-		Effect.gen(function* () {
+		Effect.suspend(() => {
 			hostLoading = true;
 			hostFailure = null;
 			// Billing only when the Billing tab is the one being shown. General renders a name, a slug
 			// and a logo, and used to wait on two sequential Stripe calls to do it.
-			const snapshot = yield* Effect.tryPromise(() =>
+			return Effect.tryPromise(() =>
 				session.operations.read({ billing: activeTab === 'billing' })
-			).pipe(Effect.flatMap(Schema.decodeUnknownEffect(OrganizationHostSnapshotSchema)));
-			profile = snapshot.organization;
-			usage = snapshot.usage;
-			usageEstimate = snapshot.usageEstimate ?? EMPTY_PERIOD_ESTIMATE;
-			stripeDashboardUrl = snapshot.stripeDashboardUrl;
+			).pipe(Effect.flatMap(decodeHostSnapshot));
 		}).pipe(
+			Effect.map((snapshot) => {
+				profile = snapshot.organization;
+				usage = snapshot.usage;
+				usageEstimate = snapshot.usageEstimate ?? EMPTY_PERIOD_ESTIMATE;
+				stripeDashboardUrl = snapshot.stripeDashboardUrl;
+			}),
 			Effect.catch(() => {
 				hostFailure = 'Unable to read host state.';
 				return Effect.void;
@@ -78,7 +83,7 @@
 			Effect.ensuring(Effect.sync(() => (hostLoading = false)))
 		);
 
-	void Effect.runPromise(loadHost());
+	Effect.runFork(loadHost());
 </script>
 
 {#snippet generalContent()}

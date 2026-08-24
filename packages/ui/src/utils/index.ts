@@ -24,8 +24,8 @@ export const DEFAULT_CSS = {
 	}
 };
 
-export type WithoutChild<T> = T extends { child?: any } ? Omit<T, 'child'> : T;
-export type WithoutChildren<T> = T extends { children?: any } ? Omit<T, 'children'> : T;
+export type WithoutChild<T> = T extends { child?: unknown } ? Omit<T, 'child'> : T;
+export type WithoutChildren<T> = T extends { children?: unknown } ? Omit<T, 'children'> : T;
 export type WithoutChildrenOrChild<T> = WithoutChildren<WithoutChild<T>>;
 export type WithElementRef<T, U extends HTMLElement = HTMLElement> = T & {
 	ref?: U | null;
@@ -48,7 +48,7 @@ export type WithElementRef<T, U extends HTMLElement = HTMLElement> = T & {
  * {/if}
  * ```
  */
-export class RenderComponentConfig<TComponent extends Component> {
+export class RenderComponentConfig<TComponent extends Component<Record<string, never>>> {
 	component: TComponent;
 	props: ComponentProps<TComponent> | Record<string, never>;
 	constructor(
@@ -108,8 +108,7 @@ export class RenderSnippetConfig<TProps> {
  * @see {@link https://tanstack.com/table/latest/docs/guide/column-defs}
  */
 export function renderComponent<
-	// oxlint-disable-next-line no-explicit-any
-	T extends Component<any>,
+	T extends Component<Record<string, never>>,
 	Props extends ComponentProps<T>
 >(component: T, props: Props) {
 	return new RenderComponentConfig(component, props);
@@ -155,3 +154,18 @@ export function parseUtcInstantZoned(value: string) {
 }
 
 export { formatDateRangeLocal, formatUtcInstantLocal } from '@norbital-ai/std/date';
+
+/**
+ * The virtualizer's own vocabulary, re-stated on the `utils` entry.
+ *
+ * `createVirtualizer` is consumed from outside this package, so the shapes its signature is
+ * written in have to be nameable there too; the implementation stays where it is.
+ */
+export type {
+	ScrollAlignment,
+	ScrollToIndexOptions,
+	ScrollToOffsetOptions,
+	VirtualItem,
+	Virtualizer,
+	VirtualizerOptions
+} from './virtualizer.svelte.js';

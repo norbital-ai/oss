@@ -5,7 +5,7 @@
 	import * as CardPrimitive from '#lib/card';
 	import { Checkbox } from '#lib/checkbox';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
+	import { Cover, Inline, SCROLL_AXIS_CLASSES, Scroll, Stack } from '#lib/layout';
 	import { Sortable } from '#lib/sortable';
 	import { badgeColorClass } from '#lib/collection-table/collection-card-colors';
 	import { cn } from '#lib/utils';
@@ -263,7 +263,7 @@
 								onkeydown={(event) => handleCardKeydown(event, recordId)}
 							>
 								<CardPrimitive.Content
-									class="h-full min-w-0 overflow-x-hidden overflow-y-auto p-3 text-sm"
+									class={cn('h-full min-w-0 p-3 text-sm', SCROLL_AXIS_CLASSES.y)}
 								>
 									<Stack gap="sm">
 										{@render renderCard(recordId)}

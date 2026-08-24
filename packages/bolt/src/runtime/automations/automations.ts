@@ -6,6 +6,39 @@ import * as TenantScope from '#lib/runtime/tenant.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
+import type { AutomationProgression } from '#lib/authoring/automations-schema.js';
+
+/** Durable states in which an old guest must not cross another authored facility boundary. */
+const StoppedTaskStatus = Schema.Struct({
+	status: Schema.Literals(['paused', 'resuming'])
+});
+
+/**
+ * Refuses an authored operation after its durable automation run has been stopped.
+ *
+ * Stopping cannot interrupt a remote guest fiber. This error is therefore raised at the next
+ * authored facility boundary, before that fiber can write another row, call a model, read an asset,
+ * or enqueue more work.
+ */
+export class AutomationStopped extends Schema.TaggedError<AutomationStopped>()(
+	'Bolt.Automations.Stopped',
+	{
+		taskId: Schema.NonEmptyString,
+		operation: Schema.NonEmptyString,
+		message: Schema.NonEmptyString
+	}
+) {
+	readonly category = 'automation-stopped' as const;
+	readonly retryable = false;
+
+	static before(taskId: string, operation: string): AutomationStopped {
+		return new AutomationStopped({
+			taskId,
+			operation,
+			message: `Automation ${taskId} was stopped before ${operation}.`
+		});
+	}
+}
 
 /**
  * Starting an automation, and asking what became of one.
@@ -23,8 +56,8 @@ export type Interface = Readonly<{
 	 * Queue one run of a named automation.
 	 *
 	 * It takes no `Subject`, and that absence is the change. It used to take the caller's — so the
-	 * same automation ran with whatever authority whoever tripped it happened to hold, and when an
-	 * administrator tripped it, it ran as an administrator over every row in the workspace. An
+	 * same automation ran with whatever authority whoever tripped it happened to hold, so a highly
+	 * privileged caller could accidentally lend all of its grants to the run. An
 	 * automation's authority is a property of the automation: the policies its declaration names,
 	 * minted here, at the runtime's own enqueue point.
 	 */
@@ -43,19 +76,47 @@ export type Interface = Readonly<{
 		effectId: EffectIdType,
 		taskId: string
 	) => Effect.Effect<Schema.Json | undefined, Database.FacilityError>;
-	/** The recent runs of one automation, newest first — including runs nobody here started. */
-	readonly history: (
+	/** Replaces the current snapshot of the automation task that is presently running. */
+	readonly progress: (
+		effectId: EffectIdType,
+		taskId: string,
+		value: AutomationProgression
+	) => Effect.Effect<void, Database.FacilityError>;
+	readonly stop: (
 		effectId: EffectIdType,
 		name: string,
-		limit: number
-	) => Effect.Effect<ReadonlyArray<Schema.Json>, Database.FacilityError>;
-	readonly cancel: (
-		effectId: EffectIdType,
 		taskId: string
-	) => Effect.Effect<void, Database.FacilityError>;
+	) => Effect.Effect<void, Database.FacilityError | Workspace.WorkspaceLookupError>;
+	readonly resume: Interface['stop'];
 }>;
 /** Identifies the automations service in Effect's context so dependency wiring remains explicit and type checked. */
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Automations');
+
+/**
+ * Builds the guard for one running automation turn.
+ *
+ * Every observation carries a fresh effect id. Facility idempotency is keyed by effect id, so
+ * reusing the turn's id would let the first `pending` answer be replayed forever and make a later
+ * cancellation invisible to exactly the guard that is supposed to observe it.
+ */
+export const stoppageGuard = (
+	automations: Interface,
+	turnEffectId: EffectIdType,
+	taskId: string
+): ((operation: string) => Effect.Effect<void, AutomationStopped | Database.FacilityError>) => {
+	let sequence = 0;
+	return Effect.fn('Automations.stoppageGuard')(function* (operation: string) {
+		sequence += 1;
+		const status = yield* automations.status(
+			EffectId.make(`${turnEffectId}:stoppage:${sequence}`),
+			taskId
+		);
+		if (Schema.is(StoppedTaskStatus)(status)) {
+			return yield* AutomationStopped.before(taskId, operation);
+		}
+	});
+};
+
 export const layer = Layer.effect(
 	Service,
 	Effect.gen(function* () {
@@ -86,9 +147,14 @@ export const layer = Layer.effect(
 			// authority rather than whoever's finger was on the trigger. `bolt_depth` rides the same payload, which is why the queue needs no depth
 			// column: the bound travels with the work rather than with the row.
 			const enqueued: Schema.Json = InvocationBudget.stampDepth(
-				typeof input === 'object' && input !== null && !Array.isArray(input)
-					? { ...(input as Readonly<Record<string, Schema.Json>>), bolt_run_as: subject }
-					: { args: {}, bolt_run_as: subject },
+				{
+					// The task boundary has one envelope for every trigger: generated client input is the
+					// handler's `context.args`, while collection events and schedules additionally carry
+					// `scope`. Spreading a struct input here put `project_id` beside `bolt_run_as`; the
+					// queued turn then decoded `args` and failed before the automation could emit progress.
+					args: input,
+					bolt_run_as: subject
+				},
 				depth
 			);
 			// The id the caller gets back is the task's effect id, which is also its idempotency key. A
@@ -119,16 +185,17 @@ export const layer = Layer.effect(
 			start,
 			runStep: start,
 			status: queue.status,
-			/**
-			 * What this automation has been doing, by the command name its runs are enqueued under.
-			 *
-			 * A caller names the automation; the queue is keyed by `automations.<name>`, which is an
-			 * encoding detail and stays here rather than in a surface that would then have to know it.
-			 */
-			history: Effect.fn('Automations.history')(function* (effectId, name, limit) {
-				return yield* queue.history(effectId, `automations.${name}`, limit);
+			progress: queue.progress,
+			stop: Effect.fn('Automations.stop')(function* (effectId, name, taskId) {
+				// The declaration check rejects invented names before a caller-controlled string reaches
+				// the queue predicate. The exact command then scopes the id to this automation only.
+				yield* workspace.automation(name);
+				yield* queue.stop(effectId, taskId, `automations.${name}`);
 			}),
-			cancel: queue.cancel
+			resume: Effect.fn('Automations.resume')(function* (effectId, name, taskId) {
+				yield* workspace.automation(name);
+				yield* queue.resume(effectId, taskId, `automations.${name}`);
+			})
 		});
 	})
 );

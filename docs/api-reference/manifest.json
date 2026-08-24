@@ -1,5 +1,5 @@
 {
-	"generatedAt": "2026-08-21T15:09:42.509Z",
+	"generatedAt": "2026-08-24T16:45:50.377Z",
 	"packages": [
 		{
 			"id": "@norbital-ai/std",
@@ -18,11 +18,6 @@
 					"href": "/docs/api-reference/std/build/billing"
 				},
 				{
-					"title": "std/build/billing/metering",
-					"slug": "std/build/billing/metering",
-					"href": "/docs/api-reference/std/build/billing/metering"
-				},
-				{
 					"title": "std/build/billing/rate-card",
 					"slug": "std/build/billing/rate-card",
 					"href": "/docs/api-reference/std/build/billing/rate-card"
@@ -38,19 +33,14 @@
 					"href": "/docs/api-reference/std/build/collection/record-label"
 				},
 				{
+					"title": "std/build/collection/system-fields",
+					"slug": "std/build/collection/system-fields",
+					"href": "/docs/api-reference/std/build/collection/system-fields"
+				},
+				{
 					"title": "std/build/date",
 					"slug": "std/build/date",
 					"href": "/docs/api-reference/std/build/date"
-				},
-				{
-					"title": "std/build/date/display",
-					"slug": "std/build/date/display",
-					"href": "/docs/api-reference/std/build/date/display"
-				},
-				{
-					"title": "std/build/date/wire",
-					"slug": "std/build/date/wire",
-					"href": "/docs/api-reference/std/build/date/wire"
 				},
 				{
 					"title": "std/build/error",
@@ -66,11 +56,6 @@
 					"title": "std/build/finance/currency",
 					"slug": "std/build/finance/currency",
 					"href": "/docs/api-reference/std/build/finance/currency"
-				},
-				{
-					"title": "std/build/finance/money",
-					"slug": "std/build/finance/money",
-					"href": "/docs/api-reference/std/build/finance/money"
 				},
 				{
 					"title": "std/build/i18n",
@@ -404,11 +389,6 @@
 					"title": "ui/build/ai-elements/shimmer/Shimmer.svelte",
 					"slug": "ui/build/ai-elements/shimmer/Shimmer.svelte",
 					"href": "/docs/api-reference/ui/build/ai-elements/shimmer/Shimmer.svelte"
-				},
-				{
-					"title": "ui/build/ai-elements/shimmer/types",
-					"slug": "ui/build/ai-elements/shimmer/types",
-					"href": "/docs/api-reference/ui/build/ai-elements/shimmer/types"
 				},
 				{
 					"title": "ui/build/ai-elements/task",
@@ -836,11 +816,6 @@
 					"href": "/docs/api-reference/ui/build/chart/chart-utils"
 				},
 				{
-					"title": "ui/build/chart/chart.svelte",
-					"slug": "ui/build/chart/chart.svelte",
-					"href": "/docs/api-reference/ui/build/chart/chart.svelte"
-				},
-				{
 					"title": "ui/build/checkbox",
 					"slug": "ui/build/checkbox",
 					"href": "/docs/api-reference/ui/build/checkbox"
@@ -859,11 +834,6 @@
 					"title": "ui/build/code-editor/code-editor.svelte",
 					"slug": "ui/build/code-editor/code-editor.svelte",
 					"href": "/docs/api-reference/ui/build/code-editor/code-editor.svelte"
-				},
-				{
-					"title": "ui/build/code-editor/code-editor.types",
-					"slug": "ui/build/code-editor/code-editor.types",
-					"href": "/docs/api-reference/ui/build/code-editor/code-editor.types"
 				},
 				{
 					"title": "ui/build/code-editor/languages",
@@ -916,14 +886,14 @@
 					"href": "/docs/api-reference/ui/build/collection-form/collection-form-field.svelte"
 				},
 				{
-					"title": "ui/build/collection-form/collection-form-history",
-					"slug": "ui/build/collection-form/collection-form-history",
-					"href": "/docs/api-reference/ui/build/collection-form/collection-form-history"
-				},
-				{
 					"title": "ui/build/collection-form/collection-form-skeleton.svelte",
 					"slug": "ui/build/collection-form/collection-form-skeleton.svelte",
 					"href": "/docs/api-reference/ui/build/collection-form/collection-form-skeleton.svelte"
+				},
+				{
+					"title": "ui/build/collection-form/collection-form-values",
+					"slug": "ui/build/collection-form/collection-form-values",
+					"href": "/docs/api-reference/ui/build/collection-form/collection-form-values"
 				},
 				{
 					"title": "ui/build/collection-form/collection-form.svelte",
@@ -936,6 +906,11 @@
 					"href": "/docs/api-reference/ui/build/collection-form/collection-form.types"
 				},
 				{
+					"title": "ui/build/collection-form/collection-mutation-outcome",
+					"slug": "ui/build/collection-form/collection-mutation-outcome",
+					"href": "/docs/api-reference/ui/build/collection-form/collection-mutation-outcome"
+				},
+				{
 					"title": "ui/build/collection-kanban",
 					"slug": "ui/build/collection-kanban",
 					"href": "/docs/api-reference/ui/build/collection-kanban"
@@ -944,11 +919,6 @@
 					"title": "ui/build/collection-kanban/collection-kanban-lane.svelte",
 					"slug": "ui/build/collection-kanban/collection-kanban-lane.svelte",
 					"href": "/docs/api-reference/ui/build/collection-kanban/collection-kanban-lane.svelte"
-				},
-				{
-					"title": "ui/build/collection-kanban/collection-kanban-move",
-					"slug": "ui/build/collection-kanban/collection-kanban-move",
-					"href": "/docs/api-reference/ui/build/collection-kanban/collection-kanban-move"
 				},
 				{
 					"title": "ui/build/collection-kanban/collection-kanban-skeleton.svelte",
@@ -999,6 +969,16 @@
 					"title": "ui/build/collection-table",
 					"slug": "ui/build/collection-table",
 					"href": "/docs/api-reference/ui/build/collection-table"
+				},
+				{
+					"title": "ui/build/collection-table/approval-actions",
+					"slug": "ui/build/collection-table/approval-actions",
+					"href": "/docs/api-reference/ui/build/collection-table/approval-actions"
+				},
+				{
+					"title": "ui/build/collection-table/approval-anchor",
+					"slug": "ui/build/collection-table/approval-anchor",
+					"href": "/docs/api-reference/ui/build/collection-table/approval-anchor"
 				},
 				{
 					"title": "ui/build/collection-table/collection-card-colors",
@@ -1064,11 +1044,6 @@
 					"title": "ui/build/collection-table/collection-table-filter.svelte",
 					"slug": "ui/build/collection-table/collection-table-filter.svelte",
 					"href": "/docs/api-reference/ui/build/collection-table/collection-table-filter.svelte"
-				},
-				{
-					"title": "ui/build/collection-table/collection-table-fit",
-					"slug": "ui/build/collection-table/collection-table-fit",
-					"href": "/docs/api-reference/ui/build/collection-table/collection-table-fit"
 				},
 				{
 					"title": "ui/build/collection-table/collection-table-integrations-panel.svelte",
@@ -1421,14 +1396,14 @@
 					"href": "/docs/api-reference/ui/build/data-renderer/file/file.renderer.svelte"
 				},
 				{
+					"title": "ui/build/data-renderer/file/file.types",
+					"slug": "ui/build/data-renderer/file/file.types",
+					"href": "/docs/api-reference/ui/build/data-renderer/file/file.types"
+				},
+				{
 					"title": "ui/build/data-renderer/geolocation/geolocation.input.svelte",
 					"slug": "ui/build/data-renderer/geolocation/geolocation.input.svelte",
 					"href": "/docs/api-reference/ui/build/data-renderer/geolocation/geolocation.input.svelte"
-				},
-				{
-					"title": "ui/build/data-renderer/geolocation/geolocation.internal",
-					"slug": "ui/build/data-renderer/geolocation/geolocation.internal",
-					"href": "/docs/api-reference/ui/build/data-renderer/geolocation/geolocation.internal"
 				},
 				{
 					"title": "ui/build/data-renderer/geolocation/geolocation.renderer.svelte",
@@ -1504,6 +1479,11 @@
 					"title": "ui/build/data-renderer/phone\\_number/phone\\_number.utils",
 					"slug": "ui/build/data-renderer/phone_number/phone_number.utils",
 					"href": "/docs/api-reference/ui/build/data-renderer/phone_number/phone_number.utils"
+				},
+				{
+					"title": "ui/build/data-renderer/platform-renderers",
+					"slug": "ui/build/data-renderer/platform-renderers",
+					"href": "/docs/api-reference/ui/build/data-renderer/platform-renderers"
 				},
 				{
 					"title": "ui/build/data-renderer/relationship",
@@ -2301,11 +2281,6 @@
 					"href": "/docs/api-reference/ui/build/keybindings/keybindings.svelte"
 				},
 				{
-					"title": "ui/build/keybindings/shortcut-label",
-					"slug": "ui/build/keybindings/shortcut-label",
-					"href": "/docs/api-reference/ui/build/keybindings/shortcut-label"
-				},
-				{
 					"title": "ui/build/label",
 					"slug": "ui/build/label",
 					"href": "/docs/api-reference/ui/build/label"
@@ -2911,11 +2886,6 @@
 					"href": "/docs/api-reference/ui/build/sheet/sheet-overlay.svelte"
 				},
 				{
-					"title": "ui/build/sheet/sheet-portal-target",
-					"slug": "ui/build/sheet/sheet-portal-target",
-					"href": "/docs/api-reference/ui/build/sheet/sheet-portal-target"
-				},
-				{
 					"title": "ui/build/sheet/sheet-title.svelte",
 					"slug": "ui/build/sheet/sheet-title.svelte",
 					"href": "/docs/api-reference/ui/build/sheet/sheet-title.svelte"
@@ -2939,11 +2909,6 @@
 					"title": "ui/build/sidebar/context.svelte",
 					"slug": "ui/build/sidebar/context.svelte",
 					"href": "/docs/api-reference/ui/build/sidebar/context.svelte"
-				},
-				{
-					"title": "ui/build/sidebar/is-mobile.svelte",
-					"slug": "ui/build/sidebar/is-mobile.svelte",
-					"href": "/docs/api-reference/ui/build/sidebar/is-mobile.svelte"
 				},
 				{
 					"title": "ui/build/sidebar/sidebar-content.svelte",
@@ -3336,11 +3301,6 @@
 					"href": "/docs/api-reference/ui/build/thinking-orb/thinking-orb.svelte"
 				},
 				{
-					"title": "ui/build/thinking-orb/types",
-					"slug": "ui/build/thinking-orb/types",
-					"href": "/docs/api-reference/ui/build/thinking-orb/types"
-				},
-				{
 					"title": "ui/build/time-field",
 					"slug": "ui/build/time-field",
 					"href": "/docs/api-reference/ui/build/time-field"
@@ -3456,14 +3416,14 @@
 					"href": "/docs/api-reference/ui/build/utils"
 				},
 				{
-					"title": "ui/build/utils/infinite\\_loader.svelte",
-					"slug": "ui/build/utils/infinite_loader.svelte",
-					"href": "/docs/api-reference/ui/build/utils/infinite_loader.svelte"
-				},
-				{
 					"title": "ui/build/utils/pixel-drag",
 					"slug": "ui/build/utils/pixel-drag",
 					"href": "/docs/api-reference/ui/build/utils/pixel-drag"
+				},
+				{
+					"title": "ui/build/utils/scalar-picker",
+					"slug": "ui/build/utils/scalar-picker",
+					"href": "/docs/api-reference/ui/build/utils/scalar-picker"
 				},
 				{
 					"title": "ui/build/utils/virtualizer.svelte",
@@ -3535,11 +3495,6 @@
 			"href": "/docs/api-reference/std/build/billing"
 		},
 		{
-			"title": "std/build/billing/metering",
-			"slug": "std/build/billing/metering",
-			"href": "/docs/api-reference/std/build/billing/metering"
-		},
-		{
 			"title": "std/build/billing/rate-card",
 			"slug": "std/build/billing/rate-card",
 			"href": "/docs/api-reference/std/build/billing/rate-card"
@@ -3555,19 +3510,14 @@
 			"href": "/docs/api-reference/std/build/collection/record-label"
 		},
 		{
+			"title": "std/build/collection/system-fields",
+			"slug": "std/build/collection/system-fields",
+			"href": "/docs/api-reference/std/build/collection/system-fields"
+		},
+		{
 			"title": "std/build/date",
 			"slug": "std/build/date",
 			"href": "/docs/api-reference/std/build/date"
-		},
-		{
-			"title": "std/build/date/display",
-			"slug": "std/build/date/display",
-			"href": "/docs/api-reference/std/build/date/display"
-		},
-		{
-			"title": "std/build/date/wire",
-			"slug": "std/build/date/wire",
-			"href": "/docs/api-reference/std/build/date/wire"
 		},
 		{
 			"title": "std/build/error",
@@ -3583,11 +3533,6 @@
 			"title": "std/build/finance/currency",
 			"slug": "std/build/finance/currency",
 			"href": "/docs/api-reference/std/build/finance/currency"
-		},
-		{
-			"title": "std/build/finance/money",
-			"slug": "std/build/finance/money",
-			"href": "/docs/api-reference/std/build/finance/money"
 		},
 		{
 			"title": "std/build/i18n",
@@ -3913,11 +3858,6 @@
 			"title": "ui/build/ai-elements/shimmer/Shimmer.svelte",
 			"slug": "ui/build/ai-elements/shimmer/Shimmer.svelte",
 			"href": "/docs/api-reference/ui/build/ai-elements/shimmer/Shimmer.svelte"
-		},
-		{
-			"title": "ui/build/ai-elements/shimmer/types",
-			"slug": "ui/build/ai-elements/shimmer/types",
-			"href": "/docs/api-reference/ui/build/ai-elements/shimmer/types"
 		},
 		{
 			"title": "ui/build/ai-elements/task",
@@ -4345,11 +4285,6 @@
 			"href": "/docs/api-reference/ui/build/chart/chart-utils"
 		},
 		{
-			"title": "ui/build/chart/chart.svelte",
-			"slug": "ui/build/chart/chart.svelte",
-			"href": "/docs/api-reference/ui/build/chart/chart.svelte"
-		},
-		{
 			"title": "ui/build/checkbox",
 			"slug": "ui/build/checkbox",
 			"href": "/docs/api-reference/ui/build/checkbox"
@@ -4368,11 +4303,6 @@
 			"title": "ui/build/code-editor/code-editor.svelte",
 			"slug": "ui/build/code-editor/code-editor.svelte",
 			"href": "/docs/api-reference/ui/build/code-editor/code-editor.svelte"
-		},
-		{
-			"title": "ui/build/code-editor/code-editor.types",
-			"slug": "ui/build/code-editor/code-editor.types",
-			"href": "/docs/api-reference/ui/build/code-editor/code-editor.types"
 		},
 		{
 			"title": "ui/build/code-editor/languages",
@@ -4425,14 +4355,14 @@
 			"href": "/docs/api-reference/ui/build/collection-form/collection-form-field.svelte"
 		},
 		{
-			"title": "ui/build/collection-form/collection-form-history",
-			"slug": "ui/build/collection-form/collection-form-history",
-			"href": "/docs/api-reference/ui/build/collection-form/collection-form-history"
-		},
-		{
 			"title": "ui/build/collection-form/collection-form-skeleton.svelte",
 			"slug": "ui/build/collection-form/collection-form-skeleton.svelte",
 			"href": "/docs/api-reference/ui/build/collection-form/collection-form-skeleton.svelte"
+		},
+		{
+			"title": "ui/build/collection-form/collection-form-values",
+			"slug": "ui/build/collection-form/collection-form-values",
+			"href": "/docs/api-reference/ui/build/collection-form/collection-form-values"
 		},
 		{
 			"title": "ui/build/collection-form/collection-form.svelte",
@@ -4445,6 +4375,11 @@
 			"href": "/docs/api-reference/ui/build/collection-form/collection-form.types"
 		},
 		{
+			"title": "ui/build/collection-form/collection-mutation-outcome",
+			"slug": "ui/build/collection-form/collection-mutation-outcome",
+			"href": "/docs/api-reference/ui/build/collection-form/collection-mutation-outcome"
+		},
+		{
 			"title": "ui/build/collection-kanban",
 			"slug": "ui/build/collection-kanban",
 			"href": "/docs/api-reference/ui/build/collection-kanban"
@@ -4453,11 +4388,6 @@
 			"title": "ui/build/collection-kanban/collection-kanban-lane.svelte",
 			"slug": "ui/build/collection-kanban/collection-kanban-lane.svelte",
 			"href": "/docs/api-reference/ui/build/collection-kanban/collection-kanban-lane.svelte"
-		},
-		{
-			"title": "ui/build/collection-kanban/collection-kanban-move",
-			"slug": "ui/build/collection-kanban/collection-kanban-move",
-			"href": "/docs/api-reference/ui/build/collection-kanban/collection-kanban-move"
 		},
 		{
 			"title": "ui/build/collection-kanban/collection-kanban-skeleton.svelte",
@@ -4508,6 +4438,16 @@
 			"title": "ui/build/collection-table",
 			"slug": "ui/build/collection-table",
 			"href": "/docs/api-reference/ui/build/collection-table"
+		},
+		{
+			"title": "ui/build/collection-table/approval-actions",
+			"slug": "ui/build/collection-table/approval-actions",
+			"href": "/docs/api-reference/ui/build/collection-table/approval-actions"
+		},
+		{
+			"title": "ui/build/collection-table/approval-anchor",
+			"slug": "ui/build/collection-table/approval-anchor",
+			"href": "/docs/api-reference/ui/build/collection-table/approval-anchor"
 		},
 		{
 			"title": "ui/build/collection-table/collection-card-colors",
@@ -4573,11 +4513,6 @@
 			"title": "ui/build/collection-table/collection-table-filter.svelte",
 			"slug": "ui/build/collection-table/collection-table-filter.svelte",
 			"href": "/docs/api-reference/ui/build/collection-table/collection-table-filter.svelte"
-		},
-		{
-			"title": "ui/build/collection-table/collection-table-fit",
-			"slug": "ui/build/collection-table/collection-table-fit",
-			"href": "/docs/api-reference/ui/build/collection-table/collection-table-fit"
 		},
 		{
 			"title": "ui/build/collection-table/collection-table-integrations-panel.svelte",
@@ -4930,14 +4865,14 @@
 			"href": "/docs/api-reference/ui/build/data-renderer/file/file.renderer.svelte"
 		},
 		{
+			"title": "ui/build/data-renderer/file/file.types",
+			"slug": "ui/build/data-renderer/file/file.types",
+			"href": "/docs/api-reference/ui/build/data-renderer/file/file.types"
+		},
+		{
 			"title": "ui/build/data-renderer/geolocation/geolocation.input.svelte",
 			"slug": "ui/build/data-renderer/geolocation/geolocation.input.svelte",
 			"href": "/docs/api-reference/ui/build/data-renderer/geolocation/geolocation.input.svelte"
-		},
-		{
-			"title": "ui/build/data-renderer/geolocation/geolocation.internal",
-			"slug": "ui/build/data-renderer/geolocation/geolocation.internal",
-			"href": "/docs/api-reference/ui/build/data-renderer/geolocation/geolocation.internal"
 		},
 		{
 			"title": "ui/build/data-renderer/geolocation/geolocation.renderer.svelte",
@@ -5013,6 +4948,11 @@
 			"title": "ui/build/data-renderer/phone\\_number/phone\\_number.utils",
 			"slug": "ui/build/data-renderer/phone_number/phone_number.utils",
 			"href": "/docs/api-reference/ui/build/data-renderer/phone_number/phone_number.utils"
+		},
+		{
+			"title": "ui/build/data-renderer/platform-renderers",
+			"slug": "ui/build/data-renderer/platform-renderers",
+			"href": "/docs/api-reference/ui/build/data-renderer/platform-renderers"
 		},
 		{
 			"title": "ui/build/data-renderer/relationship",
@@ -5810,11 +5750,6 @@
 			"href": "/docs/api-reference/ui/build/keybindings/keybindings.svelte"
 		},
 		{
-			"title": "ui/build/keybindings/shortcut-label",
-			"slug": "ui/build/keybindings/shortcut-label",
-			"href": "/docs/api-reference/ui/build/keybindings/shortcut-label"
-		},
-		{
 			"title": "ui/build/label",
 			"slug": "ui/build/label",
 			"href": "/docs/api-reference/ui/build/label"
@@ -6420,11 +6355,6 @@
 			"href": "/docs/api-reference/ui/build/sheet/sheet-overlay.svelte"
 		},
 		{
-			"title": "ui/build/sheet/sheet-portal-target",
-			"slug": "ui/build/sheet/sheet-portal-target",
-			"href": "/docs/api-reference/ui/build/sheet/sheet-portal-target"
-		},
-		{
 			"title": "ui/build/sheet/sheet-title.svelte",
 			"slug": "ui/build/sheet/sheet-title.svelte",
 			"href": "/docs/api-reference/ui/build/sheet/sheet-title.svelte"
@@ -6448,11 +6378,6 @@
 			"title": "ui/build/sidebar/context.svelte",
 			"slug": "ui/build/sidebar/context.svelte",
 			"href": "/docs/api-reference/ui/build/sidebar/context.svelte"
-		},
-		{
-			"title": "ui/build/sidebar/is-mobile.svelte",
-			"slug": "ui/build/sidebar/is-mobile.svelte",
-			"href": "/docs/api-reference/ui/build/sidebar/is-mobile.svelte"
 		},
 		{
 			"title": "ui/build/sidebar/sidebar-content.svelte",
@@ -6845,11 +6770,6 @@
 			"href": "/docs/api-reference/ui/build/thinking-orb/thinking-orb.svelte"
 		},
 		{
-			"title": "ui/build/thinking-orb/types",
-			"slug": "ui/build/thinking-orb/types",
-			"href": "/docs/api-reference/ui/build/thinking-orb/types"
-		},
-		{
 			"title": "ui/build/time-field",
 			"slug": "ui/build/time-field",
 			"href": "/docs/api-reference/ui/build/time-field"
@@ -6965,14 +6885,14 @@
 			"href": "/docs/api-reference/ui/build/utils"
 		},
 		{
-			"title": "ui/build/utils/infinite\\_loader.svelte",
-			"slug": "ui/build/utils/infinite_loader.svelte",
-			"href": "/docs/api-reference/ui/build/utils/infinite_loader.svelte"
-		},
-		{
 			"title": "ui/build/utils/pixel-drag",
 			"slug": "ui/build/utils/pixel-drag",
 			"href": "/docs/api-reference/ui/build/utils/pixel-drag"
+		},
+		{
+			"title": "ui/build/utils/scalar-picker",
+			"slug": "ui/build/utils/scalar-picker",
+			"href": "/docs/api-reference/ui/build/utils/scalar-picker"
 		},
 		{
 			"title": "ui/build/utils/virtualizer.svelte",

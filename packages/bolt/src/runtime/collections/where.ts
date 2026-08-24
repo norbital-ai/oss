@@ -1,6 +1,5 @@
-import { Option, Result, Schema } from 'effect';
-import { is, sql, SQL } from 'drizzle-orm';
-import { PgDialect } from 'drizzle-orm/pg-core';
+import { Result, Schema } from 'effect';
+import { sql, type SQL, type SQLChunk } from 'drizzle-orm';
 import type {
 	FieldDefinition,
 	RelationDefinition,
@@ -8,11 +7,16 @@ import type {
 } from '#lib/authoring/workspace-schema.js';
 import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 
-/** Parameterized SQL produced by collection predicate or JSON where compilation. */
-type CompiledQuery = Readonly<{
+/** Parameterized SQL rendered inside this compiler before it crosses the opaque public boundary. */
+type RenderedQuery = Readonly<{
 	readonly sql: string;
 	readonly parameters: ReadonlyArray<Schema.Json>;
 }>;
+
+const COMPILED_WHERE = Symbol('@norbital-ai/bolt/CompiledWhere');
+
+/** Nominal where output: only this compiler can create a value accepted by `whereExpression`. */
+type CompiledWhere = RenderedQuery & Readonly<{ readonly [COMPILED_WHERE]: true }>;
 
 /** Collection metadata the where compiler needs to distinguish columns from relations. */
 export type WhereContext = Readonly<{
@@ -37,8 +41,11 @@ export class WhereCompileError extends Schema.TaggedError<WhereCompileError>()(
 	}
 ) {}
 
-/** A where clause compiles to SQL or names the condition it could not express. */
-type WhereResult = Result.Result<CompiledQuery, WhereCompileError>;
+/** An internal where clause renders SQL or names the condition it could not express. */
+type InternalWhereResult = Result.Result<RenderedQuery, WhereCompileError>;
+
+/** The only public result of where compilation. */
+type WhereResult = Result.Result<CompiledWhere, WhereCompileError>;
 
 /**
  * Binary column comparisons. The key is the authored operator; the value is its SQL symbol. These
@@ -69,7 +76,7 @@ const ARRAY_SQL = {
 	arrayOverlaps: '&&'
 } as const;
 
-/** Operators over a `dateRange()` json column, which stores `{ start, end }` instants. */
+/** Operators over a `custom('instant_range')` JSON column, which stores `{ start, end }` instants. */
 const DATE_RANGE_OPERATORS = ['contains_date', 'overlaps'] as const;
 
 /** Membership operators, expanded to placeholder lists so no parameter is an array literal. */
@@ -157,10 +164,10 @@ const WhereSql = {
 	}),
 	/** Renumbers each clause's 1-based placeholders into one flat parameter list. */
 	join: (
-		clauses: ReadonlyArray<CompiledQuery>,
+		clauses: ReadonlyArray<RenderedQuery>,
 		separator: 'AND' | 'OR',
 		empty: 'true' | 'false'
-	): CompiledQuery => {
+	): RenderedQuery => {
 		if (clauses.length === 0) return { sql: empty, parameters: [] };
 		const parameters: Array<Schema.Json> = [];
 		const sql = clauses
@@ -192,20 +199,21 @@ export const makeWhereContext = (
 	)
 });
 
-const failure = (context: WhereContext, field: string, message: string): WhereResult =>
+const failure = (context: WhereContext, field: string, message: string): InternalWhereResult =>
 	Result.fail(new WhereCompileError({ collection: context.collection, field, message }));
 
-const failed = (error: WhereCompileError): WhereResult => Result.fail(error);
+const failed = (error: WhereCompileError): InternalWhereResult => Result.fail(error);
 
-const operandFailure = (context: WhereContext, field: string, operator: string): WhereResult =>
+const operandFailure = (
+	context: WhereContext,
+	field: string,
+	operator: string
+): InternalWhereResult =>
 	failure(
 		context,
 		field,
 		`Operator '${operator}' received an operand that cannot be bound as a query parameter.`
 	);
-
-/** RAW's bound parameters, validated as JSON values in one decode. */
-const decodeJsonParameters = Schema.decodeUnknownOption(Schema.Array(Schema.Json));
 
 /** Compiles one `{ operator: operand }` pair against an already-qualified column. */
 const compileOperator = (
@@ -214,7 +222,7 @@ const compileOperator = (
 	fieldSql: string,
 	operator: string,
 	operand: unknown
-): WhereResult => {
+): InternalWhereResult => {
 	if (Object.hasOwn(COMPARISON_SQL, operator)) {
 		const value = WhereSql.parameter(operand);
 		if (value === undefined) return operandFailure(context, field, operator);
@@ -334,7 +342,7 @@ const compileReferenceOperator = (
 	operand: unknown,
 	reference: NonNullable<FieldDefinition['reference']>,
 	arms: ReadonlyArray<string>
-): WhereResult => {
+): InternalWhereResult => {
 	switch (operator) {
 		case 'eq':
 		case 'ne': {
@@ -411,13 +419,13 @@ const compileReferenceCondition = (
 	context: WhereContext,
 	field: string,
 	condition: Readonly<Record<string, unknown>>
-): WhereResult => {
+): InternalWhereResult => {
 	const reference = context.fields[field]?.reference;
 	if (reference === undefined) return failure(context, field, `'${field}' is not a reference.`);
 	const arms = reference.targets.map((target) =>
 		WhereSql.qualify(context.collection, target.storageColumn)
 	);
-	const clauses: Array<CompiledQuery> = [];
+	const clauses: Array<RenderedQuery> = [];
 	for (const [operator, operand] of Object.entries(condition)) {
 		const compiled = compileReferenceOperator(context, field, operator, operand, reference, arms);
 		if (Result.isFailure(compiled)) return failed(compiled.failure);
@@ -431,7 +439,7 @@ const compileFieldCondition = (
 	context: WhereContext,
 	field: string,
 	condition: unknown
-): WhereResult => {
+): InternalWhereResult => {
 	if (condition === null || typeof condition !== 'object' || Array.isArray(condition)) {
 		return failure(context, field, 'A column condition must be an object of operators.');
 	}
@@ -442,7 +450,7 @@ const compileFieldCondition = (
 			condition as Readonly<Record<string, unknown>>
 		);
 	const fieldSql = WhereSql.qualify(context.collection, field);
-	const clauses: Array<CompiledQuery> = [];
+	const clauses: Array<RenderedQuery> = [];
 	for (const [operator, operand] of Object.entries(condition)) {
 		const compiled = compileOperator(context, field, fieldSql, operator, operand);
 		if (Result.isFailure(compiled)) return compiled;
@@ -456,12 +464,12 @@ const compileBranches = (
 	context: WhereContext,
 	key: 'AND' | 'OR',
 	branches: unknown
-): WhereResult => {
+): InternalWhereResult => {
 	if (!Array.isArray(branches))
 		return failure(context, key, `'${key}' requires an array of where objects.`);
-	const clauses: Array<CompiledQuery> = [];
+	const clauses: Array<RenderedQuery> = [];
 	for (const branch of branches) {
-		const compiled = compileWhere(branch, context);
+		const compiled = compileWhereInternal(branch, context);
 		if (Result.isFailure(compiled)) return compiled;
 		clauses.push(compiled.success);
 	}
@@ -469,82 +477,11 @@ const compileBranches = (
 };
 
 /** Compiles a JSON where object as the AND of its top-level entries, including relation EXISTS. */
-
-/**
- * Renders a `RAW` where entry: an authored callback that builds a SQL fragment.
- *
- * `RAW` is a declared part of the authoring contract, not an escape hatch someone reached for — it
- * is how a workspace expresses a predicate the operator vocabulary cannot, such as a JSONB path
- * (`origin->>'kind' = 'CLAIM'`). The previous compiler dropped unrecognised keys silently, so `RAW`
- * was ignored and the query ran unfiltered, quietly returning the wrong count. Rejecting it was no
- * better. It is compiled here so the predicate the author wrote is the predicate that runs.
- *
- * The callback is given a table whose columns render as qualified identifiers, and Drizzle's own
- * `sql` tag; the fragment is then rendered through `PgDialect`, which is how generated-column
- * expressions are already rendered elsewhere in the compiler. Operands the author interpolated
- * become bound parameters — they are never pasted into the statement.
- */
-const compileRaw = (
-	context: WhereContext,
-	build: (table: Readonly<Record<string, unknown>>, operators: { readonly sql: unknown }) => unknown
-): Result.Result<CompiledQuery, WhereCompileError> => {
-	// `sql.identifier` quotes what it is given as one name, so a dotted string becomes
-	// `"component_entries.origin"` — a column that does not exist. `qualify` already renders the
-	// two-part form the rest of the compiler emits, so the reference is built from that.
-	const reference = (name: string): unknown => sql.raw(WhereSql.qualify(context.collection, name));
-	const columns = Object.fromEntries(
-		Object.keys(context.fields).map((name) => [name, reference(name)])
-	);
-	const table = new Proxy(columns, {
-		get: (target, property) =>
-			typeof property === 'string' && !(property in target)
-				? reference(property)
-				: Reflect.get(target, property)
-	});
-
-	const rawError = (cause: unknown): WhereCompileError =>
-		new WhereCompileError({
-			collection: context.collection,
-			field: 'RAW',
-			message: `RAW failed to build: ${cause instanceof Error ? cause.message : String(cause)}`
-		});
-
-	const outcome = Result.try({
-		try: () => {
-			const fragment = build(table, { sql });
-			return is(fragment, SQL) ? new PgDialect().sqlToQuery(fragment) : undefined;
-		},
-		catch: rawError
-	});
-	if (Result.isFailure(outcome)) return failed(outcome.failure);
-	if (outcome.success === undefined) {
-		return Result.fail(
-			new WhereCompileError({
-				collection: context.collection,
-				field: 'RAW',
-				message: 'RAW must return a sql`` fragment.'
-			})
-		);
-	}
-	const query = outcome.success;
-	return Option.match(decodeJsonParameters(query.params), {
-		onSome: (parameters) => Result.succeed({ sql: query.sql, parameters }),
-		onNone: () =>
-			Result.fail(
-				new WhereCompileError({
-					collection: context.collection,
-					field: 'RAW',
-					message: 'RAW bound a value that cannot cross the facility boundary.'
-				})
-			)
-	});
-};
-
-export const compileWhere = (where: unknown, context: WhereContext, offset = 0): WhereResult => {
+const compileWhereInternal = (where: unknown, context: WhereContext): InternalWhereResult => {
 	if (where === undefined || where === null || typeof where !== 'object' || Array.isArray(where)) {
 		return Result.succeed({ sql: 'true', parameters: [] });
 	}
-	const clauses: Array<CompiledQuery> = [];
+	const clauses: Array<RenderedQuery> = [];
 	for (const [key, condition] of Object.entries(where)) {
 		if (key === 'AND' || key === 'OR') {
 			const branches = compileBranches(context, key, condition);
@@ -553,24 +490,9 @@ export const compileWhere = (where: unknown, context: WhereContext, offset = 0):
 			continue;
 		}
 		if (key === 'NOT') {
-			const inner = compileWhere(condition, context);
+			const inner = compileWhereInternal(condition, context);
 			if (Result.isFailure(inner)) return inner;
 			clauses.push({ sql: `not (${inner.success.sql})`, parameters: inner.success.parameters });
-			continue;
-		}
-		if (key === 'RAW') {
-			if (typeof condition !== 'function') {
-				return failure(context, key, 'RAW must be a function that builds a sql`` fragment.');
-			}
-			const raw = compileRaw(
-				context,
-				condition as (
-					table: Readonly<Record<string, unknown>>,
-					operators: { readonly sql: unknown }
-				) => unknown
-			);
-			if (Result.isFailure(raw)) return raw;
-			clauses.push(raw.success);
 			continue;
 		}
 		if (WhereSql.isColumn(context, key)) {
@@ -594,22 +516,50 @@ export const compileWhere = (where: unknown, context: WhereContext, offset = 0):
 				`'${key}' is neither a column of '${context.collection}' nor a known relation.`
 			);
 		}
-		const inner = compileWhere(condition, WhereSql.relatedContext(context, resolved.target));
+		const inner = compileWhereInternal(
+			condition,
+			WhereSql.relatedContext(context, resolved.target)
+		);
 		if (Result.isFailure(inner)) return inner;
 		clauses.push({
+			// repository-health:allow SQL1 -- central where compiler renders one branded relation predicate.
 			sql: `exists (select 1 from ${WhereSql.quoteIdentifier(resolved.target)} where ${resolved.join} AND (${inner.success.sql}))`,
 			parameters: inner.success.parameters
 		});
 	}
-	const combined = WhereSql.join(clauses, 'AND', 'true');
-	if (offset === 0) return Result.succeed(combined);
-	return Result.succeed({
-		sql: combined.sql.replaceAll(
-			/\$(\d+)/g,
-			(_token, index: string) => `$${Number(index) + offset}`
-		),
-		parameters: combined.parameters
-	});
+	return Result.succeed(WhereSql.join(clauses, 'AND', 'true'));
+};
+
+/** Compiles and brands a predicate so arbitrary strings cannot enter the runtime query adapter. */
+export const compileWhere = (where: unknown, context: WhereContext, offset = 0): WhereResult => {
+	const rendered = compileWhereInternal(where, context);
+	if (Result.isFailure(rendered)) return Result.fail(rendered.failure);
+	const query = rendered.success;
+	const compiled = {
+		sql:
+			offset === 0
+				? query.sql
+				: query.sql.replaceAll(/\$(\d+)/g, (_token, index: string) => `$${Number(index) + offset}`),
+		parameters: query.parameters
+	} as CompiledWhere;
+	Object.defineProperty(compiled, COMPILED_WHERE, { value: true });
+	return Result.succeed(Object.freeze(compiled));
+};
+
+/** Converts only nominal compiler output into a bound Drizzle predicate. */
+export const whereExpression = (query: CompiledWhere): SQL => {
+	if (query[COMPILED_WHERE] !== true)
+		throw new TypeError('whereExpression accepts only output from compileWhere');
+	const chunks: Array<SQLChunk> = [];
+	let offset = 0;
+	const placeholders = [...query.sql.matchAll(/\$(\d+)/g)];
+	for (const match of placeholders) {
+		chunks.push(sql.raw(query.sql.slice(offset, match.index)));
+		chunks.push(sql.param(query.parameters[Number(match[1]) - 1] ?? null));
+		offset = match.index + match[0].length;
+	}
+	chunks.push(sql.raw(query.sql.slice(offset)));
+	return sql.join(chunks, sql.empty());
 };
 
 /** One term of a compiled `order by`: the persisted column, and the direction it sorts in. */

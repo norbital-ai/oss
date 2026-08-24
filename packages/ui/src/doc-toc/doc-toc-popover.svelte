@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Collapsible from '#lib/collapsible';
 	import { cn } from '#lib/utils';
-	import { Inline } from '#lib/layout';
+	import { GAP_CLASSES, Inline } from '#lib/layout';
 	import Icon from '@iconify/svelte';
 	import { onMount } from 'svelte';
 	import { findLastActiveIndex, getActiveDocTocItem } from '#lib/doc-toc/anchor-observer';
@@ -52,9 +52,14 @@
 		<div
 			class="sticky top-0 flex h-dvh items-end justify-end p-4 pb-[max(1rem,env(safe-area-inset-bottom))] pe-[max(1rem,env(safe-area-inset-right))]"
 		>
+			<!-- Column-reverse: the trigger stays pinned to the bottom edge while the panel grows
+			     upward, which no stacking primitive expresses. The gap is still the shared token. -->
 			<Collapsible.Root
 				bind:open
-				class="pointer-events-auto flex w-[min(20rem,calc(100%-0.5rem))] flex-col-reverse items-end gap-2"
+				class={cn(
+					'pointer-events-auto flex w-[min(20rem,calc(100%-0.5rem))] flex-col-reverse items-end',
+					GAP_CLASSES.sm
+				)}
 			>
 				<Collapsible.Trigger
 					class={cn(

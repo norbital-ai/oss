@@ -80,14 +80,16 @@
 
 	/** Stores the whole record, including cleared fields, and reports the failure if it does not land. */
 	const saveProfile = (next: OrganizationDraft): Effect.Effect<boolean> =>
-		Effect.gen(function* () {
+		Effect.suspend(() => {
 			writeFailure = null;
-			yield* Effect.tryPromise(() =>
+			return Effect.tryPromise(() =>
 				workspaceSession().operations.run({ action: 'organization', profile: next })
 			);
-			profile = next;
-			return true;
 		}).pipe(
+			Effect.map(() => {
+				profile = next;
+				return true;
+			}),
 			Effect.catch((cause) => {
 				writeFailure = cause instanceof Error ? cause.message : 'Unable to save the organization.';
 				return Effect.succeed(false);
@@ -228,10 +230,12 @@
 									class={buttonVariants({ variant: 'secondary' })}
 									aria-disabled={busy !== null}
 								>
-									{#if busy === 'logo'}
-										<Icon icon="lucide:loader-2" class="mr-2 size-4 animate-spin" />
-									{/if}
-									Upload logo
+									<Inline as="span" gap="sm" justify="center">
+										{#if busy === 'logo'}
+											<Icon icon="lucide:loader-2" class="size-4 animate-spin" />
+										{/if}
+										Upload logo
+									</Inline>
 									<input
 										type="file"
 										class="sr-only"
@@ -291,10 +295,12 @@
 
 					<Inline justify="end" class="border-t pt-4">
 						<Button type="submit" disabled={busy !== null || organizationName.trim() === ''}>
-							{#if busy === 'profile'}
-								<Icon icon="lucide:loader-2" class="mr-2 size-4 animate-spin" />
-							{/if}
-							Save changes
+							<Inline as="span" gap="sm" justify="center">
+								{#if busy === 'profile'}
+									<Icon icon="lucide:loader-2" class="size-4 animate-spin" />
+								{/if}
+								Save changes
+							</Inline>
 						</Button>
 					</Inline>
 				</Stack>

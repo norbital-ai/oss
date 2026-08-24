@@ -14,15 +14,8 @@
 /** The supported application locales, in toggle order. English is the source-of-truth catalog. */
 export const SUPPORTED_LOCALES: readonly string[] = ['en', 'zh'];
 
-/**
- * The application locale identifier. Open by design: any catalog record may
- * carry any key, so `Locale` is the string it resolves to rather than a closed
- * union that would have to change in every package when a locale is added.
- */
-export type Locale = string;
-
 /** The fallback locale when no stored or detected choice exists. */
-export const DEFAULT_LOCALE: Locale = 'en';
+export const DEFAULT_LOCALE = 'en';
 
 /** The Intl locale each application locale maps to for `Intl.*` formatting. */
 export const INTL_LOCALES: Readonly<Record<string, string>> = {
@@ -34,7 +27,7 @@ export const INTL_LOCALES: Readonly<Record<string, string>> = {
  * The Intl locale string for an application locale, falling back to the raw
  * code so an unmapped locale still formats sensibly.
  */
-export function intlLocale(locale: Locale): string {
+export function intlLocale(locale: string): string {
 	return INTL_LOCALES[locale] ?? locale;
 }
 
@@ -48,7 +41,7 @@ export const STORED_LOCALE_KEY = 'norbital.locale';
  * subtag is not a supported locale resolves to null. Malformed values resolve
  * to null — never to a guessed locale, so callers keep their fallback chain.
  */
-export function parseLocale(value: string | null | undefined): Locale | null {
+export function parseLocale(value: string | null | undefined): string | null {
 	if (value == null) return null;
 	const primary = value.trim().split(/[-_]/)[0]?.toLowerCase();
 	return primary === undefined || primary.length === 0 ? null : primary;
@@ -60,8 +53,8 @@ export function parseLocale(value: string | null | undefined): Locale | null {
  */
 export function pickLocale(
 	candidates: readonly string[] | null | undefined,
-	fallback: Locale = DEFAULT_LOCALE
-): Locale {
+	fallback: string = DEFAULT_LOCALE
+): string {
 	if (candidates != null) {
 		for (const candidate of candidates) {
 			const parsed = parseLocale(candidate);
@@ -72,20 +65,20 @@ export function pickLocale(
 }
 
 /** Read the persisted locale, if any. Safe in non-browser environments. */
-export function storedLocale(storage: Pick<Storage, 'getItem'> | null = null): Locale | null {
+export function storedLocale(storage: Pick<Storage, 'getItem'> | null = null): string | null {
 	const store = storage ?? (globalThis as { localStorage?: Pick<Storage, 'getItem'> }).localStorage;
 	const candidate = store?.getItem(STORED_LOCALE_KEY);
 	return parseLocale(candidate);
 }
 
 /** Persist the locale choice. Safe in non-browser environments. */
-export function storeLocale(locale: Locale, storage: Pick<Storage, 'setItem'> | null = null): void {
+export function storeLocale(locale: string, storage: Pick<Storage, 'setItem'> | null = null): void {
 	const store = storage ?? (globalThis as { localStorage?: Pick<Storage, 'setItem'> }).localStorage;
 	store?.setItem(STORED_LOCALE_KEY, locale);
 }
 
 /** Set the document language attribute. Safe in non-browser environments. */
-export function setHtmlLang(locale: Locale): void {
+export function setHtmlLang(locale: string): void {
 	const doc = (globalThis as { document?: { documentElement: { lang: string } } }).document;
 	if (doc) doc.documentElement.lang = intlLocale(locale);
 }

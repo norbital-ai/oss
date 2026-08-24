@@ -12,6 +12,7 @@ import * as Workspace from '../../src/runtime/workspace.js';
 import { openLocalDatabase, type BootstrapTransport } from '../../src/client/replica/bootstrap.js';
 import { createSyncClient } from '../../src/client/replica/sync-client.js';
 import { adaptPGlite } from '../../src/client/replica/pglite-loader.js';
+import { createLocalReader } from '../../src/client/replica/local-reads.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -23,8 +24,8 @@ import {
  *
  * A real server runtime over a real PostgreSQL, and a real client replica over a second real
  * PostgreSQL provisioned from the first one's own DDL. What this is actually checking is the property
- * the design rests on: that a replica built this way converges on the server's state, including the
- * rows the outbox never saw.
+ * the design rests on: that a snapshot plus the trigger-owned outbox converges on the server's state
+ * regardless of which database writer produced a row.
  */
 
 const rid = (name: string): string => {
@@ -135,26 +136,40 @@ const openReplica = async (runtime: BoltTestRuntime) =>
 		)
 	);
 
+const localRows = async (
+	replica: Awaited<ReturnType<typeof openReplica>>,
+	input: Readonly<Record<string, unknown>>
+): Promise<ReadonlyArray<Schema.Json>> => {
+	const reader = createLocalReader(replica.store, replica.shape, replica.readable);
+	const answer = await Effect.runPromise(reader.answer('collections.findMany', input as never));
+	if (answer === undefined || answer === null || typeof answer !== 'object') return [];
+	const rows = Reflect.get(answer, 'rows');
+	return Array.isArray(rows) ? rows : [];
+};
+
 describe('a browser replica against a real server', () => {
-	it('holds the seeded rows the outbox never saw, and streams the writes that follow', async () => {
+	it('snapshots seeded rows and continues from their trigger-captured outbox position', async () => {
 		harness = await makeBoltTestRuntime();
 		const { runtime, effectId, database } = harness;
 
-		// Written straight to the table, as a seed or an import does. The outbox knows nothing about it.
+		// Written straight to the table, as a seed or an import does. Database-owned capture means the
+		// outbox sees it without that writer knowing anything about sync.
 		await database.query("insert into people (id, name, team) values ($1, 'Seeded', 'core')", [
 			rid('seeded-1')
 		]);
 		expect(await database.query('select count(*)::int as count from bolt_sync_outbox', [])).toEqual(
-			[{ count: 0 }]
+			[{ count: 1 }]
 		);
 
 		const replica = await openReplica(harness);
 		// The snapshot is what makes this row present; a log-only replica would call the workspace empty.
-		expect(await Effect.runPromise(replica.sql.query('select name from people', []))).toEqual([
-			{ name: 'Seeded' }
-		]);
+		expect(
+			(await localRows(replica, { collection: 'people' })).map((row) => ({
+				name: row !== null && typeof row === 'object' ? Reflect.get(row, 'name') : row
+			}))
+		).toEqual([{ name: 'Seeded' }]);
 
-		// Now a write through the real write path, which does reach the outbox.
+		// Now a write through the ordinary collection path, captured by the same trigger.
 		await runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
@@ -182,8 +197,8 @@ describe('a browser replica against a real server', () => {
 							.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Sync.SyncChange))))
 				},
 				sink: {
-					apply: (changes) => Effect.forEach(changes, replica.sql.applyChange, { discard: true }),
-					reset: replica.sql.reset
+					apply: (changes) => Effect.forEach(changes, replica.store.applyChange, { discard: true }),
+					reset: replica.store.reset
 				},
 				initialCursor: replica.cursor
 			})
@@ -192,7 +207,14 @@ describe('a browser replica against a real server', () => {
 
 		// Converged: the seeded row and the streamed one, with the update merged onto it.
 		expect(
-			await Effect.runPromise(replica.sql.query('select name from people order by name', []))
+			(
+				await localRows(replica, {
+					collection: 'people',
+					orderBy: { name: 'asc' }
+				})
+			).map((row) => ({
+				name: row !== null && typeof row === 'object' ? Reflect.get(row, 'name') : row
+			}))
 		).toEqual([{ name: 'Ada Lovelace' }, { name: 'Seeded' }]);
 
 		// And a delete propagates too.
@@ -208,7 +230,14 @@ describe('a browser replica against a real server', () => {
 		);
 		await Effect.runPromise(client.drain());
 		expect(
-			await Effect.runPromise(replica.sql.query('select name from people order by name', []))
+			(
+				await localRows(replica, {
+					collection: 'people',
+					orderBy: { name: 'asc' }
+				})
+			).map((row) => ({
+				name: row !== null && typeof row === 'object' ? Reflect.get(row, 'name') : row
+			}))
 		).toEqual([{ name: 'Seeded' }]);
 	});
 
@@ -237,9 +266,11 @@ describe('a browser replica against a real server', () => {
 		);
 		const replica = await openReplica(harness);
 
-		const local = await Effect.runPromise(
-			replica.sql.query('select name from people where team = $1 order by name', ['flight'])
-		);
+		const local = await localRows(replica, {
+			collection: 'people',
+			where: { team: { eq: 'flight' } },
+			orderBy: { name: 'asc' }
+		});
 		const server = await runtime.runPromise(
 			Effect.gen(function* () {
 				return yield* (yield* Collections.Service).findMany(effectId('server-read'), adminSubject, {
@@ -256,5 +287,42 @@ describe('a browser replica against a real server', () => {
 			rows.map((row) => (row !== null && typeof row === 'object' ? Reflect.get(row, 'name') : row));
 		expect(names(local)).toEqual(names(server));
 		expect(names(local)).toEqual(['Grace', 'Katherine']);
+	});
+
+	it('replaces a divergent projection with a current server snapshot', async () => {
+		harness = await makeBoltTestRuntime();
+		const { runtime, effectId } = harness;
+		const replica = await openReplica(harness);
+
+		await Effect.runPromise(
+			replica.store.applyChange({
+				cursor: { xid: 1, sequence: 1 },
+				collection: 'people',
+				recordId: rid('local-only'),
+				operation: 'create',
+				record: { name: 'Local only', team: 'stale' }
+			})
+		);
+		await runtime.runPromise(
+			Effect.gen(function* () {
+				yield* (yield* Collections.Service).create(effectId('server-only'), adminSubject, {
+					collection: 'people',
+					id: rid('server-only'),
+					values: { name: 'Server only', team: 'current' }
+				});
+			})
+		);
+
+		await Effect.runPromise(replica.resnapshot());
+		expect(
+			(
+				await localRows(replica, {
+					collection: 'people',
+					orderBy: { name: 'asc' }
+				})
+			).map((row) => ({
+				name: row !== null && typeof row === 'object' ? Reflect.get(row, 'name') : row
+			}))
+		).toEqual([{ name: 'Server only' }]);
 	});
 });

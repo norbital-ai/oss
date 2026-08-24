@@ -31,53 +31,59 @@ function pathJoin(base: string, key: string): string {
 	return `${base}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`;
 }
 
+/** Keyed records, as JSON Patch addresses them by name — arrays are addressed by index instead. */
+function isKeyedObject(value: unknown): value is object {
+	return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** One index of two arrays: dropped past the new end, appended past the old end, or diffed. */
+function indexDiff(
+	a: readonly unknown[],
+	b: readonly unknown[],
+	index: number,
+	path: string
+): JsonPatchOperation[] {
+	if (index >= b.length) return [{ op: 'remove', path }];
+	if (index >= a.length) return [{ op: 'add', path, value: b[index] }];
+	return deepDiff(a[index], b[index], path);
+}
+
+function arrayDiff(a: readonly unknown[], b: readonly unknown[], basePath: string) {
+	const ops: JsonPatchOperation[] = [];
+	const maxLen = Math.max(a.length, b.length);
+	for (let i = 0; i < maxLen; i++) {
+		ops.push(...indexDiff(a, b, i, `${basePath}/${i}`));
+	}
+	return ops;
+}
+
+/** One key present in the old record: removed when the new record lacks it, otherwise diffed. */
+function keyDiff(a: object, b: object, key: string, path: string): JsonPatchOperation[] {
+	if (!(key in b)) return [{ op: 'remove', path }];
+	return deepDiff(Reflect.get(a, key), Reflect.get(b, key), path);
+}
+
+function objectDiff(a: object, b: object, basePath: string) {
+	const ops: JsonPatchOperation[] = [];
+	const seen = new Set<string>();
+
+	for (const key of Object.keys(a)) {
+		seen.add(key);
+		ops.push(...keyDiff(a, b, key, pathJoin(basePath, key)));
+	}
+
+	for (const key of Object.keys(b)) {
+		if (!seen.has(key)) {
+			ops.push({ op: 'add', path: pathJoin(basePath, key), value: Reflect.get(b, key) });
+		}
+	}
+
+	return ops;
+}
+
 export function deepDiff(a: unknown, b: unknown, basePath = ''): JsonPatchOperation[] {
 	if (a === b) return [];
-
-	if (Array.isArray(a) && Array.isArray(b)) {
-		const ops: JsonPatchOperation[] = [];
-		const maxLen = Math.max(a.length, b.length);
-		for (let i = 0; i < maxLen; i++) {
-			const p = `${basePath}/${i}`;
-			if (i >= b.length) {
-				ops.push({ op: 'remove', path: p });
-			} else if (i >= a.length) {
-				ops.push({ op: 'add', path: p, value: b[i] });
-			} else {
-				ops.push(...deepDiff(a[i], b[i], p));
-			}
-		}
-		return ops;
-	}
-
-	if (
-		a !== null &&
-		typeof a === 'object' &&
-		!Array.isArray(a) &&
-		b !== null &&
-		typeof b === 'object' &&
-		!Array.isArray(b)
-	) {
-		const ops: JsonPatchOperation[] = [];
-		const seen = new Set<string>();
-
-		for (const key of Object.keys(a)) {
-			seen.add(key);
-			if (!(key in b)) {
-				ops.push({ op: 'remove', path: pathJoin(basePath, key) });
-			} else {
-				ops.push(...deepDiff(Reflect.get(a, key), Reflect.get(b, key), pathJoin(basePath, key)));
-			}
-		}
-
-		for (const key of Object.keys(b)) {
-			if (!seen.has(key)) {
-				ops.push({ op: 'add', path: pathJoin(basePath, key), value: Reflect.get(b, key) });
-			}
-		}
-
-		return ops;
-	}
-
+	if (Array.isArray(a) && Array.isArray(b)) return arrayDiff(a, b, basePath);
+	if (isKeyedObject(a) && isKeyedObject(b)) return objectDiff(a, b, basePath);
 	return [{ op: 'replace', path: basePath, value: b }];
 }

@@ -147,7 +147,7 @@ describe('retired public surfaces', () => {
 			readFile(new URL('../../src/client/replica/pglite-sql.ts', import.meta.url), 'utf8')
 		]);
 		expect(authoring).toContain('defineEnvironment');
-		expect(localSql).toContain('export type LocalSql');
+		expect(localSql).toContain('export type LocalReplicaStore');
 		expect([authoring, root, client].join('\n')).not.toMatch(/defineEnvVars|\bReplica\b/);
 		expect(localSql).not.toMatch(
 			/settleOptimistic|ReplicaError|Context\.Service|export \* as Replica/

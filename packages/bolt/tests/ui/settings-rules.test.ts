@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { layoutTeamHierarchy, type TeamNode } from '../../src/client/ui/settings/team-hierarchy.js';
 import {
@@ -35,6 +36,20 @@ const invitation = (overrides: Partial<InvitationRow> = {}): InvitationRow => ({
 const NOW = new Date('2026-08-16T10:00:00.000Z');
 
 describe('workspace member rules', () => {
+	it('registers only the three host projections for URL-restored record details', () => {
+		const source = readFileSync(
+			new URL('../../src/client/ui/settings/workspace.svelte', import.meta.url),
+			'utf8'
+		);
+		expect(source).toMatch(
+			/\[MEMBERS_COLLECTION, INVITATIONS_COLLECTION, EVENTS_COLLECTION\]\.map\(/
+		);
+		expect(source).toMatch(
+			/detailNavigation\?\.registerCollectionClient\(collectionName, \(\) => peopleClient\)/
+		);
+		expect(source).not.toContain('Object.keys(DEFINITIONS).map');
+	});
+
 	it('orders admins before managers before basic members, then by display name', () => {
 		const ordered = sortMembers([
 			member('u3', 'basic', 'Zoe'),

@@ -1,4 +1,4 @@
-<!-- fallow-ignore-file complexity -- recursive tree navigation intentionally centralizes keyboard, selection, and accessibility states -->
+<!-- recursive tree navigation intentionally centralizes keyboard, selection, and accessibility states -->
 <script lang="ts" generics="TMetadata">
 	import Icon from '@iconify/svelte';
 	import { Button } from '#lib/button';
@@ -103,14 +103,13 @@
 	function navigateToIndex(index: number, shouldScroll: boolean = true) {
 		const node = visibleNodesArray[index];
 		if (node) {
+			const nodeId = node.id;
 			const shouldMoveTreeFocus = Boolean(treeContainerElement?.contains(document.activeElement));
-			treeState.setActiveNode(node.id);
+			treeState.setActiveNode(nodeId);
 			if (shouldScroll) scrollActiveNodeIntoView();
 			if (shouldMoveTreeFocus) {
 				queueMicrotask(() => {
-					treeContainerElement
-						?.querySelector<HTMLElement>(`[data-node-path="${node.id}"]`)
-						?.focus();
+					treeContainerElement?.querySelector<HTMLElement>(`[data-node-path="${nodeId}"]`)?.focus();
 				});
 			}
 		}
@@ -192,6 +191,20 @@
 		return match?.id ?? null;
 	}
 
+	/**
+	 * What Enter and Space do to the node under the cursor: open a parent, otherwise select. Space
+	 * belongs to the search box while there is something typed in it, and does nothing here.
+	 */
+	function activateNode(node: TreeNode | null, isSpaceForTyping: boolean): void {
+		const activeNodeId = treeState.activeNodeId;
+		if (!activeNodeId || !node || isSpaceForTyping) return;
+		if (isParentNode(node) && !node.disabled) {
+			treeState.toggleExpand(node.id);
+			return;
+		}
+		if (!readonly) handleSelection(activeNodeId);
+	}
+
 	function handleWindowKeydown(event: KeyboardEvent) {
 		if (disabled) return;
 
@@ -221,7 +234,7 @@
 		if (!isNavigationKey && !isLetterKey) return;
 
 		if (isNavigationKey || isLetterKey) inputMode = 'keyboard';
-		const isSpaceForTyping = event.key === ' ' && inputElement && inputElement.value.length > 0;
+		const isSpaceForTyping = event.key === ' ' && (inputElement?.value.length ?? 0) > 0;
 
 		if (isNavigationKey && !isSpaceForTyping) event.preventDefault();
 
@@ -242,14 +255,7 @@
 				break;
 			case 'Enter':
 			case ' ':
-				if (treeState.activeNodeId && currentNode) {
-					if (event.key === ' ' && isSpaceForTyping) break;
-					if (isParentNode(currentNode) && !currentNode.disabled) {
-						treeState.toggleExpand(currentNode.id);
-					} else if (!readonly) {
-						handleSelection(treeState.activeNodeId);
-					}
-				}
+				activateNode(currentNode, isSpaceForTyping);
 				break;
 			case 'Home':
 				navigateToIndex(0);
@@ -391,8 +397,9 @@
 {/snippet}
 
 {#snippet renderTreeNode(node: TreeNode)}
+	{@const { id: nodeId } = node}
 	{@const isDirectChild = node.parentNode?.depth === 0}
-	{@const isActive = treeState.activeNodeId === node.id}
+	{@const isActive = treeState.activeNodeId === nodeId}
 	<li class="relative">
 		<div
 			role="none"
@@ -407,10 +414,10 @@
 					aria-level={node.displayDepth}
 					aria-expanded={isParentNode(node) ? node.isExpanded : undefined}
 					aria-selected={!isParentNode(node) ? node.isSelected : undefined}
-					id={`treeitem-${node.id}`}
+					id={`treeitem-${nodeId}`}
 					tabindex={isActive ? 0 : -1}
 					disabled={node.disabled}
-					data-node-path={node.id}
+					data-node-path={nodeId}
 					data-active={isActive ? 'true' : undefined}
 					data-selected={node.isSelected ? 'true' : undefined}
 					onclick={() => {
@@ -475,8 +482,9 @@
 {/snippet}
 
 {#snippet renderRootTabContent(rootNode: (typeof treeState.rootNodes)[0])}
+	{@const { id: rootNodeId } = rootNode}
 	<TabsContent
-		value={rootNode.id}
+		value={rootNodeId}
 		class="relative mt-0"
 		bind:ref={treeContainerElement}
 		tabindex={-1}
@@ -504,7 +512,7 @@
 					</Inline>
 				{/snippet}
 			</TabsList>
-			<Inline gap="sm" class="mt-2">
+			<Inline gap="sm">
 				{#if showSearch}
 					<div class="relative flex-1 p-1">
 						<Input

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
+import { approveBy } from '../../src/authoring/approval-flow.js';
+import { describePolicy } from '../../src/authoring/policy-introspection.js';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
@@ -19,18 +21,67 @@ import {
  * than relying on endpoints being repeated on the `many` declaration.
  */
 const relationshipWorkspace = (
-	approvalLock = false,
-	childApprovalLock = false,
+	reviewBudgets = false,
+	reviewCostEstimates = false,
 	inverseCascade = false
-) =>
-	workspace({
+) => {
+	const review = { flow: () => approveBy('reviewers'), superceded_by: [] };
+	const write = (reviewed: boolean) => (reviewed ? { approval: review } : {});
+	const adminData = describePolicy('admin-data', {
+		description: 'Full graph data access, with review attached to the selected write coordinates.',
+		grants: {
+			budgets: {
+				create: write(reviewBudgets),
+				read: {},
+				update: write(reviewBudgets),
+				delete: write(reviewBudgets)
+			},
+			cost_estimates: {
+				create: write(reviewCostEstimates),
+				read: {},
+				update: write(reviewCostEstimates),
+				delete: write(reviewCostEstimates)
+			},
+			cost_estimate_lines: { create: {}, read: {}, update: {}, delete: {} },
+			mutation_audit: { create: {}, read: {} }
+		}
+	});
+	const restrictedWriter = describePolicy('restricted-writer', {
+		description: 'A writer may only update its named budget and cannot create estimates directly.',
+		grants: {
+			budgets: {
+				create: {},
+				read: {},
+				update: {
+					authorize: (context: unknown) => {
+						const previous =
+							typeof context === 'object' && context !== null
+								? Reflect.get(context, 'previous')
+								: undefined;
+						return (
+							typeof previous === 'object' &&
+							previous !== null &&
+							Reflect.get(previous, 'name') === 'Writer-owned'
+						);
+					}
+				}
+			},
+			cost_estimates: {
+				create: { authorize: () => false },
+				read: {},
+				update: {},
+				delete: {}
+			},
+			cost_estimate_lines: { create: {}, read: {}, update: {}, delete: {} }
+		}
+	});
+	return workspace({
 		name: 'relationship-reconciliation',
 		version: '1.0.0',
 		collections: [
 			collection({
 				name: 'budgets',
-				fields: { name: field.string({ required: true }) },
-				...(approvalLock ? { approvalLock: true } : {})
+				fields: { name: field.string({ required: true }) }
 			}),
 			collection({
 				name: 'cost_estimates',
@@ -38,8 +89,7 @@ const relationshipWorkspace = (
 					budget_id: field.uuid({ required: true }),
 					label: field.string({ required: true }),
 					amount: field.number({ required: true })
-				},
-				...(childApprovalLock ? { approvalLock: true } : {})
+				}
 			}),
 			collection({
 				name: 'cost_estimate_lines',
@@ -103,55 +153,17 @@ const relationshipWorkspace = (
 		envoys: [],
 		requiredFacilities: [],
 		policies: [
-			policy({
-				name: 'admin-data',
-				effect: 'allow',
-				grants: [
-					{ collection: 'budgets', action: 'create' },
-					{ collection: 'budgets', action: 'read' },
-					{ collection: 'budgets', action: 'update' },
-					{ collection: 'budgets', action: 'delete' },
-					{ collection: 'cost_estimates', action: 'create' },
-					{ collection: 'cost_estimates', action: 'read' },
-					{ collection: 'cost_estimates', action: 'update' },
-					{ collection: 'cost_estimates', action: 'delete' },
-					{ collection: 'cost_estimate_lines', action: 'create' },
-					{ collection: 'cost_estimate_lines', action: 'read' },
-					{ collection: 'cost_estimate_lines', action: 'update' },
-					{ collection: 'cost_estimate_lines', action: 'delete' },
-					{ collection: 'mutation_audit', action: 'create' },
-					{ collection: 'mutation_audit', action: 'read' }
-				]
-			}),
+			adminData,
 			policy({
 				name: 'admin-approval',
 				effect: 'allow',
 				actions: ['approve'],
 				capabilities: { apps: ['approvals'] }
 			}),
-			policy({
-				name: 'restricted-writer',
-				effect: 'allow',
-				grants: [
-					{ collection: 'budgets', action: 'create' },
-					{ collection: 'budgets', action: 'read' },
-					{
-						collection: 'budgets',
-						action: 'update',
-						where: { $sql: `"name" = 'Writer-owned'` }
-					},
-					{ collection: 'cost_estimates', action: 'create', where: { $sql: 'false' } },
-					{ collection: 'cost_estimates', action: 'read' },
-					{ collection: 'cost_estimates', action: 'update' },
-					{ collection: 'cost_estimates', action: 'delete' },
-					{ collection: 'cost_estimate_lines', action: 'create' },
-					{ collection: 'cost_estimate_lines', action: 'read' },
-					{ collection: 'cost_estimate_lines', action: 'update' },
-					{ collection: 'cost_estimate_lines', action: 'delete' }
-				]
-			})
+			restrictedWriter
 		]
 	});
+};
 
 const definition = relationshipWorkspace();
 const approvalDefinition = relationshipWorkspace(true);
@@ -215,7 +227,7 @@ const approveRequest = (runtime: BoltTestRuntime, effectId: string, requestId: s
 			if (requested === undefined) throw new Error(`approval request ${requestId} is missing`);
 			const decided = yield* approvals.decide(
 				EffectId.make(`${effectId}:decide`),
-				adminSubject,
+				reviewerSubject,
 				requested,
 				'approve'
 			);
@@ -366,8 +378,9 @@ describe('declarative relationship reconciliation', () => {
 		expect(outcome._tag).toBe('Failure');
 		if (outcome._tag === 'Failure')
 			expect(Collections.unwrapMutationPhase(outcome.failure)).toMatchObject({
-				retryable: true,
-				outcome: 'known'
+				action: 'create',
+				resource: 'cost_estimates',
+				reason: expect.stringContaining('refused the prepared record')
 			});
 		expect(await harness.database.query('select id from budgets')).toEqual([]);
 		expect(await harness.database.query('select id from cost_estimates')).toEqual([]);
@@ -455,7 +468,7 @@ describe('declarative relationship reconciliation', () => {
 		).toEqual(outboxBefore);
 	}, 60_000);
 
-	it('keeps the approval probe hook-free and runs authored preparation exactly once on resume', async () => {
+	it('routes the hook-prepared graph and revalidates the same preparation on resume', async () => {
 		const calls: Array<string> = [];
 		harness = await makeBoltTestRuntime(approvalDefinition, {
 			authored: {
@@ -500,14 +513,14 @@ describe('declarative relationship reconciliation', () => {
 			)
 		);
 		expect(pending).toBeInstanceOf(Collections.PendingApproval);
-		expect(calls).toEqual([]);
+		expect(calls).toEqual(['prepare', 'before']);
 		if (!(pending instanceof Collections.PendingApproval)) return;
 
 		await approveRequest(harness, 'approval-hook-probe', pending.requestId);
-		expect(calls).toEqual([]);
+		expect(calls).toEqual(['prepare', 'before']);
 		await resumeRequest(harness, 'approval-hook-resume', pending.requestId);
 
-		expect(calls).toEqual(['prepare', 'before']);
+		expect(calls).toEqual(['prepare', 'before', 'prepare', 'before']);
 		expect(await harness.database.query('select name from budgets')).toEqual([
 			{ name: 'Hook once' }
 		]);
@@ -614,7 +627,7 @@ describe('declarative relationship reconciliation', () => {
 				const collections = yield* Collections.Service;
 				const decided = yield* approvals.decide(
 					EffectId.make('approval-graph-decide'),
-					adminSubject,
+					reviewerSubject,
 					state,
 					'approve'
 				);
@@ -670,7 +683,7 @@ describe('declarative relationship reconciliation', () => {
 				if (requested === undefined) throw new Error('update approval request is missing');
 				const decided = yield* approvals.decide(
 					EffectId.make('approval-graph-update-decide'),
-					adminSubject,
+					reviewerSubject,
 					requested,
 					'approve'
 				);
@@ -780,7 +793,7 @@ describe('declarative relationship reconciliation', () => {
 			)
 		);
 		expect(pending).toBeInstanceOf(Collections.PendingApproval);
-		expect(calls).toEqual([]);
+		expect(calls).toEqual(['budget.before']);
 		if (!(pending instanceof Collections.PendingApproval)) return;
 		expect(
 			await harness.database.query('select approval_id from budgets where id = $1', [budgetId])
@@ -803,7 +816,7 @@ describe('declarative relationship reconciliation', () => {
 		);
 
 		expect(outcome._tag).toBe('Failure');
-		expect(calls).toEqual([]);
+		expect(calls).toEqual(['budget.before', 'budget.before']);
 		const conflicted = await harness.runtime.runPromise(
 			Effect.gen(function* () {
 				return yield* (yield* Approvals.Service).status(
@@ -855,7 +868,7 @@ describe('declarative relationship reconciliation', () => {
 			)
 		);
 		expect(pending).toBeInstanceOf(Collections.PendingApproval);
-		expect(calls).toEqual([]);
+		expect(calls).toEqual(['budget.before']);
 		if (!(pending instanceof Collections.PendingApproval)) return;
 
 		await harness.runtime.runPromise(
@@ -884,7 +897,7 @@ describe('declarative relationship reconciliation', () => {
 		);
 
 		expect(outcome._tag).toBe('Failure');
-		expect(calls).toEqual([]);
+		expect(calls).toEqual(['budget.before', 'budget.before']);
 		expect(await harness.database.query('select name, approval_id from budgets')).toEqual([
 			{ name: 'Reviewed root', approval_id: null }
 		]);
@@ -927,7 +940,7 @@ describe('declarative relationship reconciliation', () => {
 				if (requested === undefined) throw new Error('seed approval missing');
 				yield* approvals.decide(
 					EffectId.make('locked-child-seed-decide'),
-					adminSubject,
+					reviewerSubject,
 					requested,
 					'approve'
 				);
@@ -969,7 +982,7 @@ describe('declarative relationship reconciliation', () => {
 				if (requested === undefined) throw new Error('child approval missing');
 				yield* approvals.decide(
 					EffectId.make('locked-child-update-decide'),
-					adminSubject,
+					reviewerSubject,
 					requested,
 					'approve'
 				);

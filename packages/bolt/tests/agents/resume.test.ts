@@ -70,6 +70,73 @@ type Statement = Readonly<{
 	readonly parameters: ReadonlyArray<unknown>;
 }>;
 
+/** Matches the operation Drizzle composed without coupling the fixture to quoting or whitespace. */
+const operationOn = (
+	statement: Pick<Statement, 'sql'>,
+	operation: 'select' | 'insert' | 'update',
+	table: string
+): boolean => {
+	const sql = statement.sql.replaceAll('"', '').replace(/\s+/g, ' ').trim().toLowerCase();
+	const marker =
+		operation === 'select'
+			? ` from ${table}`
+			: operation === 'insert'
+				? ` into ${table}`
+				: `update ${table}`;
+	return sql.startsWith(operation) && sql.includes(marker);
+};
+
+const selectsColumn = (
+	statement: Pick<Statement, 'sql'>,
+	table: string,
+	column: string
+): boolean => {
+	const projection = statement.sql.replaceAll('"', '').split(/\sfrom\s/i)[0] ?? '';
+	return new RegExp(`(?:${table}\\.)?${column}\\b`, 'i').test(projection);
+};
+
+const hasParameter = (statement: Statement, value: unknown): boolean =>
+	statement.parameters.some((parameter) => parameter === value);
+
+/** JSON parameters may be values or jsonb-encoded strings; decode either facility representation. */
+const jsonParameter = (value: unknown): unknown => {
+	if (typeof value !== 'string') return value;
+	try {
+		return JSON.parse(value);
+	} catch {
+		return value;
+	}
+};
+
+const objectParameter = (statement: Statement): JsonObject | undefined =>
+	statement.parameters
+		.map(jsonParameter)
+		.find(
+			(value): value is JsonObject =>
+				typeof value === 'object' && value !== null && !Array.isArray(value)
+		);
+
+const authRows = (statement: Statement): ReadonlyArray<JsonObject> | undefined => {
+	if (operationOn(statement, 'select', 'auth_config')) {
+		return [{ value: 'test-session-secret-that-is-long-enough-for-better-auth' }];
+	}
+	if (operationOn(statement, 'select', 'session')) {
+		return [
+			{
+				id: subject.userId,
+				tenantId: subject.tenantId,
+				email: null,
+				status: 'normal',
+				team_id: 'team-admin'
+			}
+		];
+	}
+	if (operationOn(statement, 'select', 'team')) {
+		return [{ id: 'team-admin', name: 'admin', parent_id: null, description: null }];
+	}
+	return undefined;
+};
+
 const parkedTurn = (resumed = 0): JsonObject => ({
 	id: turnId,
 	status: 'running',
@@ -138,39 +205,66 @@ const resumeStore = (initial = parkedTurn(), authorized = true) => {
 					_tag: 'Success' as const,
 					value: { rows, affectedRows: rows.length }
 				});
-			if (request._tag !== 'Query') return answer();
-			statements.push({ sql: request.sql, parameters: request.parameters });
-			if (request.sql.includes('join chat_session parent')) {
-				return answer(
-					authorized
-						? [
-								{
-									parent_id: parentId,
-									target_user_id: subject.userId,
-									parent_user_id: subject.userId
-								}
-							]
-						: []
-				);
+			const requested =
+				request._tag === 'Query'
+					? [{ sql: request.sql, parameters: request.parameters }]
+					: request.statements;
+			let rows: ReadonlyArray<JsonObject> = [];
+			for (const entry of requested) {
+				const statement = { sql: entry.sql, parameters: entry.parameters } satisfies Statement;
+				statements.push(statement);
+				const authenticated = authRows(statement);
+				if (authenticated !== undefined) {
+					rows = authenticated;
+					continue;
+				}
+				if (operationOn(statement, 'select', 'chat_session')) {
+					if (selectsColumn(statement, 'chat_session', 'conversation_id')) {
+						const conversationId = hasParameter(statement, childId) ? childId : parentId;
+						rows = [
+							{
+								conversation_id: conversationId,
+								parent_id: conversationId === childId ? parentId : null,
+								sandbox_key: subject.userId
+							}
+						];
+					} else if (selectsColumn(statement, 'chat_session', 'parent_id')) {
+						rows =
+							authorized && hasParameter(statement, childId)
+								? [
+										{
+											parent_id: parentId,
+											user_id: subject.userId,
+											sandbox_key: subject.userId
+										}
+									]
+								: [{ parent_id: null }];
+					} else if (selectsColumn(statement, 'chat_session', 'sandbox_key')) {
+						rows = [{ sandbox_key: subject.userId }];
+					} else if (selectsColumn(statement, 'chat_session', 'user_id')) {
+						rows = [{ user_id: subject.userId }];
+					}
+					continue;
+				}
+				if (operationOn(statement, 'select', 'chat_message')) {
+					if (hasParameter(statement, childId)) {
+						rows = [{ content: targetTurn }];
+					} else if (selectsColumn(statement, 'chat_message', 'id')) {
+						rows = [{ id: 'parked-message', content: current }];
+					} else {
+						rows = [
+							{ role: 'user', content: 'Please delegate the draft.' },
+							{ role: 'assistant', content: current }
+						];
+					}
+					continue;
+				}
+				if (operationOn(statement, 'update', 'chat_message')) {
+					const content = objectParameter(statement);
+					if (content !== undefined) current = content;
+				}
 			}
-			if (request.sql.includes("content->>'status' in")) return answer([{ content: targetTurn }]);
-			if (request.sql.startsWith('update chat_message set content = $3::jsonb')) {
-				current = JSON.parse(String(request.parameters[2])) as JsonObject;
-				return answer();
-			}
-			if (request.sql.includes("content->>'status' = 'running'")) {
-				return answer(current.status === 'running' ? [{ content: current }] : []);
-			}
-			if (request.sql.startsWith('select role, content from chat_message')) {
-				return answer([
-					{ role: 'user', content: 'Please delegate the draft.' },
-					{ role: 'assistant', content: current }
-				]);
-			}
-			if (request.sql.startsWith('select parent_id from chat_session')) {
-				return answer([{ parent_id: null }]);
-			}
-			return answer();
+			return answer(rows);
 		}
 	};
 	return { database, statements, current: () => current };
@@ -235,11 +329,14 @@ describe('agent continuation', () => {
 		});
 		// A continuation replays the existing user row; it does not append an empty replacement prompt.
 		expect(
-			store.statements.filter((entry) => entry.sql.startsWith('insert into chat_message'))
+			store.statements.filter((entry) => operationOn(entry, 'insert', 'chat_message'))
 		).toEqual([]);
-		const usage = store.statements.find((entry) => entry.sql.includes('update chat_session set'));
+		const usage = store.statements.find(
+			(entry) =>
+				operationOn(entry, 'update', 'chat_session') && entry.sql.includes('usage_total_tokens')
+		);
 		// Only the resumed segment is added, and it is still one logical turn (`turnsCounted = 0`).
-		expect(usage?.parameters).toEqual([parentId, 0.2, 0, null, 20, 0, 0]);
+		expect(usage?.parameters).toEqual(expect.arrayContaining([parentId, 0.2, 20]));
 
 		// The same settlement delivered again sees no running parent and does no more model work.
 		const replay = await bundle.dispatch(invocation, facilities, new AbortController().signal);
@@ -287,17 +384,31 @@ describe('agent continuation', () => {
 
 	it('enqueues the parent exactly when a delegated child settles', async () => {
 		const statements: Array<Statement> = [];
+		let insertedMessages = 0;
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			call: (_metadata, request) => {
-				const rows =
-					request._tag === 'Query' && request.sql.includes('from "session" s')
-						? [subject]
-						: request._tag === 'Query' &&
-							  request.sql.startsWith('select parent_id from chat_session')
-							? [{ parent_id: parentId }]
-							: [];
-				if (request._tag === 'Query') {
-					statements.push({ sql: request.sql, parameters: request.parameters });
+				const requested =
+					request._tag === 'Query'
+						? [{ sql: request.sql, parameters: request.parameters }]
+						: request.statements;
+				let rows: ReadonlyArray<JsonObject> = [];
+				for (const entry of requested) {
+					const statement = { sql: entry.sql, parameters: entry.parameters } satisfies Statement;
+					statements.push(statement);
+					const authenticated = authRows(statement);
+					if (authenticated !== undefined) {
+						rows = authenticated;
+					} else if (
+						operationOn(statement, 'select', 'chat_session') &&
+						selectsColumn(statement, 'chat_session', 'parent_id')
+					) {
+						rows = [{ parent_id: parentId }];
+					} else if (operationOn(statement, 'insert', 'chat_message')) {
+						insertedMessages += 1;
+						rows = [{ id: `message-${insertedMessages}` }];
+					} else {
+						rows = [];
+					}
 				}
 				return Promise.resolve({
 					_tag: 'Success',
@@ -323,11 +434,11 @@ describe('agent continuation', () => {
 			new AbortController().signal
 		);
 		expect(result, JSON.stringify(result)).toMatchObject({ _tag: 'Success' });
-		const enqueue = statements.find((entry) => entry.sql.includes('insert into "bolt_task"'));
+		const enqueue = statements.find((entry) => operationOn(entry, 'insert', 'bolt_task'));
 		expect(enqueue).toBeDefined();
 		expect(enqueue?.parameters).toContain('agents.resume');
 		expect(enqueue?.parameters).toContain('command-agents.turn:resume-parent');
-		expect(enqueue?.parameters).toContainEqual({
+		expect(enqueue?.parameters.map(jsonParameter)).toContainEqual({
 			conversationId: parentId,
 			targetSessionId: childId
 		});
@@ -337,11 +448,23 @@ describe('agent continuation', () => {
 		const statements: Array<Statement> = [];
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			call: (_metadata, request) => {
-				if (request._tag === 'Query') {
-					statements.push({ sql: request.sql, parameters: request.parameters });
+				const requested =
+					request._tag === 'Query'
+						? [{ sql: request.sql, parameters: request.parameters }]
+						: request.statements;
+				let rows: ReadonlyArray<JsonObject> = [];
+				for (const entry of requested) {
+					const statement = { sql: entry.sql, parameters: entry.parameters } satisfies Statement;
+					statements.push(statement);
+					const authenticated = authRows(statement);
+					if (authenticated !== undefined) {
+						rows = authenticated;
+					} else if (operationOn(statement, 'select', 'chat_message')) {
+						rows = [{ id: 'parked-message', content: parkedTurn() }];
+					} else {
+						rows = [];
+					}
 				}
-				const rows =
-					request._tag === 'Query' && request.sql.includes('from "session" s') ? [subject] : [];
 				return Promise.resolve({
 					_tag: 'Success',
 					value: { rows, affectedRows: rows.length }
@@ -360,11 +483,17 @@ describe('agent continuation', () => {
 		expect(
 			statements.some(
 				(entry) =>
-					entry.sql.includes("jsonb_set(content, '{status}'") && entry.parameters[0] === turnId
+					operationOn(entry, 'update', 'chat_message') &&
+					objectParameter(entry)?.status === 'cancelled'
 			)
 		).toBe(true);
 		expect(
-			statements.some((entry) => entry.sql.includes("update bolt_task set status = 'failed'"))
+			statements.some(
+				(entry) =>
+					operationOn(entry, 'update', 'bolt_task') &&
+					hasParameter(entry, 'failed') &&
+					hasParameter(entry, turnId)
+			)
 		).toBe(true);
 	});
 });

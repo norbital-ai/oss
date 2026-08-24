@@ -138,50 +138,6 @@ it.effect('bridges bounded realtime events through WebSocket', () =>
 	)
 );
 
-it.effect('bridges bounded realtime pull and cancellation through SSE', () =>
-	Effect.acquireUseRelease(
-		Effect.tryPromise(() => startApplication({ configuration, facilities })),
-		(application) =>
-			Effect.gen(function* () {
-				const base = `http://${application.address.host}:${application.address.port}`;
-				const open = yield* Effect.tryPromise(() => fetch(`${base}/__bolt/realtime/sse`));
-				assert.strictEqual(open.headers.get('content-type'), 'text/event-stream; charset=utf-8');
-				const connectionId = open.headers.get('x-bolt-connection-id');
-				assert.notStrictEqual(connectionId, null);
-				const decodeFrame = (source: string) => {
-					const data = source
-						.split('\n')
-						.find((line) => line.startsWith('data: '))
-						?.slice('data: '.length);
-					if (data === undefined) throw new Error('SSE response has no data frame');
-					return Schema.decodeUnknownSync(
-						Schema.Struct({ cursor: Schema.String, kind: Schema.String, bytes: Schema.String })
-					)(JSON.parse(data));
-				};
-				const opened = decodeFrame(yield* Effect.tryPromise(() => open.text()));
-				assert.strictEqual(Buffer.from(opened.bytes, 'base64').toString(), 'open');
-
-				const pull = yield* Effect.tryPromise(() =>
-					fetch(
-						`${base}/__bolt/realtime/sse?connectionId=${encodeURIComponent(connectionId ?? '')}&afterCursor=${encodeURIComponent(opened.cursor)}`
-					)
-				);
-				const pulled = decodeFrame(yield* Effect.tryPromise(() => pull.text()));
-				assert.strictEqual(Buffer.from(pulled.bytes, 'base64').toString(), 'pulled');
-
-				const cancel = yield* Effect.tryPromise(() =>
-					fetch(
-						`${base}/__bolt/realtime/sse?connectionId=${encodeURIComponent(connectionId ?? '')}`,
-						{ method: 'DELETE' }
-					)
-				);
-				const cancelled = decodeFrame(yield* Effect.tryPromise(() => cancel.text()));
-				assert.strictEqual(Buffer.from(cancelled.bytes, 'base64').toString(), 'cancelled');
-			}),
-		(application) => Effect.promise(() => application.stop())
-	)
-);
-
 it.effect('dispatches realtime cancellation before transport shutdown', () =>
 	Effect.acquireUseRelease(
 		Effect.tryPromise(() => startApplication({ configuration, facilities })),

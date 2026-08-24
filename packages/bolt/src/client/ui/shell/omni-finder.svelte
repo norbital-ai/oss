@@ -160,48 +160,63 @@
 		return `${kind}:${key}`;
 	}
 
+	/** One entry of the flattened navigation tree. */
+	type FlattenedApp = ReturnType<typeof flattenedApps>[number];
+
+	/**
+	 * How well one app answers the needle — lower is better — or `null` when it does not answer it.
+	 *
+	 * The bands are deliberate and ordered: a label prefix beats a label substring, that beats a
+	 * description hit, and a fragment of the route key is the last resort.
+	 */
+	function appScore(app: FlattenedApp, needle: string): number | null {
+		if (!needle) return 0;
+		const term = needle.toLowerCase();
+		const target = app.label.toLowerCase();
+		if (target.startsWith(term)) return 0;
+		if (target.includes(term)) return 1;
+		if (app.description?.toLowerCase().includes(term) === true) return 2;
+		const keywords = [app.key, ...app.key.split('/')];
+		if (keywords.some((keyword) => keyword.toLowerCase().includes(term))) return 3;
+		return null;
+	}
+
+	/** One app as the finder row that launches it. */
+	function appFinderRow(app: FlattenedApp): FinderRow {
+		return {
+			value: rowValue('app', app.key),
+			kind: 'app',
+			label: app.label,
+			description: app.description ?? undefined,
+			icon: app.icon,
+			thumbnail: app.thumbnail,
+			depth: app.depth,
+			entity: {
+				kind: 'app',
+				key: app.key,
+				label: app.label,
+				href: app.href,
+				description: app.description
+			}
+		};
+	}
+
+	const APP_ROW_CAP = 6;
+
 	const appRows = $derived.by((): FinderRow[] => {
 		const scope = parsed.scope;
 		if (scope !== null && scope !== 'app') return [];
 		const needle = parsed.text.trim();
-		return flattenedApps()
-			.map((app): { row: FinderRow; score: number | null } => {
-				let score: number | null = 0;
-				if (needle) {
-					const term = needle.toLowerCase();
-					const target = app.label.toLowerCase();
-					const keywords = [app.key, ...app.key.split('/')];
-					if (target.startsWith(term)) score = 0;
-					else if (target.includes(term)) score = 1;
-					else if (app.description?.toLowerCase().includes(term)) score = 2;
-					else if (keywords.some((keyword) => keyword.toLowerCase().includes(needle.toLowerCase())))
-						score = 3;
-					else score = null;
-				}
-				return {
-					score,
-					row: {
-						value: rowValue('app', app.key),
-						kind: 'app',
-						label: app.label,
-						description: app.description ?? undefined,
-						icon: app.icon,
-						thumbnail: app.thumbnail,
-						depth: app.depth,
-						entity: {
-							kind: 'app',
-							key: app.key,
-							label: app.label,
-							href: app.href,
-							description: app.description
-						}
-					}
-				};
-			})
-			.filter((entry) => entry.score !== null)
-			.sort((left, right) => left.score! - right.score!)
-			.slice(0, 6)
-			.map((entry) => entry.row);
+		// Scored and kept in one pass, then ordered and cut. The chain this replaces walked the whole
+		// app tree five times to answer with at most six rows.
+		const scored: { row: FinderRow; score: number }[] = [];
+		for (const app of flattenedApps()) {
+			const score = appScore(app, needle);
+			if (score === null) continue;
+			scored.push({ score, row: appFinderRow(app) });
+		}
+		scored.sort((left, right) => left.score - right.score);
+		return scored.slice(0, APP_ROW_CAP).map((entry) => entry.row);
 	});
 
 	const RECORD_ROW_CAP = 12;
@@ -323,77 +338,75 @@
 		);
 	});
 
+	/** Disabled section header row for the finder palette. */
+	function group(kind: 'apps' | 'records' | 'commands'): FinderRow {
+		return {
+			value: rowValue('group', kind),
+			kind: 'group',
+			disabled: true,
+			label:
+				kind === 'apps'
+					? t('bolt.shell.omniApps')
+					: kind === 'records'
+						? t('bolt.shell.omniRecords')
+						: t('bolt.shell.omniCommands')
+		};
+	}
+
+	/** A section's header and its rows, or nothing at all when the section has none. */
+	function section(kind: 'apps' | 'commands', rows: readonly FinderRow[]): FinderRow[] {
+		return rows.length === 0 ? [] : [group(kind), ...rows];
+	}
+
+	/**
+	 * The rows the record scope contributes, header included.
+	 *
+	 * Three mutually exclusive tails behind one header: the search that has not answered yet, the
+	 * chosen collection that has nothing to search for yet, and the hits themselves.
+	 */
+	function recordSection(searchText: string): FinderRow[] {
+		const scopes = collectionScopeRows;
+		const shown =
+			Boolean(parsed.collection) || scopes.length > 0 || recordRows.length > 0 || recordsLoading;
+		if (!shown) return [];
+		const header = [group('records'), ...scopes];
+		if (recordsLoading && recordRows.length === 0 && searchText)
+			return [
+				...header,
+				{ value: rowValue('loading', 'records'), kind: 'loading', disabled: true }
+			];
+		if (parsed.collection && !searchText)
+			return [
+				...header,
+				{
+					value: rowValue('empty', 'type'),
+					kind: 'empty',
+					disabled: true,
+					label: t('bolt.agent.typeToSearchScope', { scope: parsed.collection })
+				}
+			];
+		return [...header, ...recordRows];
+	}
+
 	const items = $derived.by((): FinderRow[] => {
 		const out: FinderRow[] = [];
 		const scope = parsed.scope;
 		const searchText = parsed.text.trim();
-		/** Disabled section header row for the finder palette. */
-		function group(kind: 'apps' | 'records' | 'commands'): FinderRow {
-			return {
-				value: rowValue('group', kind),
-				kind: 'group',
-				disabled: true,
-				label:
-					kind === 'apps'
-						? t('bolt.shell.omniApps')
-						: kind === 'records'
-							? t('bolt.shell.omniRecords')
-							: t('bolt.shell.omniCommands')
-			};
-		}
 
 		switch (scope) {
-			case 'record': {
-				const scopes = collectionScopeRows;
-				const showRecordsGroup =
-					Boolean(parsed.collection) ||
-					scopes.length > 0 ||
-					recordRows.length > 0 ||
-					recordsLoading;
-				if (showRecordsGroup) {
-					out.push(group('records'));
-					out.push(...scopes);
-					if (recordsLoading && recordRows.length === 0 && searchText) {
-						out.push({ value: rowValue('loading', 'records'), kind: 'loading', disabled: true });
-					} else if (parsed.collection && !searchText) {
-						out.push({
-							value: rowValue('empty', 'type'),
-							kind: 'empty',
-							disabled: true,
-							label: t('bolt.agent.typeToSearchScope', { scope: parsed.collection })
-						});
-					} else {
-						out.push(...recordRows);
-					}
-				}
+			case 'record':
+				out.push(...recordSection(searchText));
 				break;
-			}
-			case 'app': {
-				if (appRows.length > 0) {
-					out.push(group('apps'));
-					out.push(...appRows);
-				}
+			case 'app':
+				out.push(...section('apps', appRows));
 				break;
-			}
 			case 'command':
-			case 'plan': {
-				if (commandRows.length > 0) {
-					out.push(group('commands'));
-					out.push(...commandRows);
-				}
+			case 'plan':
+				out.push(...section('commands', commandRows));
 				break;
-			}
-			case null: {
-				if (appRows.length > 0) {
-					out.push(group('apps'));
-					out.push(...appRows);
-				}
-				if (commandRows.length > 0) {
-					out.push(group('commands'));
-					out.push(...commandRows);
-				}
+			case null:
+				out.push(...section('apps', appRows), ...section('commands', commandRows));
 				break;
-			}
 			default: {
 				const _exhaustive: never = scope;
 				return _exhaustive;

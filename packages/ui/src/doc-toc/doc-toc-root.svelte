@@ -1,4 +1,4 @@
-<!-- fallow-ignore-file unrendered-component -- exported package TOC root rendered by website docs layouts -->
+<!-- exported package TOC root rendered by website docs layouts -->
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import { Effect } from 'effect';

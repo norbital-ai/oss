@@ -1,10 +1,10 @@
 /**
- * The pure rules behind the Studio's three tabs and its authoring tree.
+ * The pure rules behind Studio's Workbench, Review, and administrator Operations surfaces.
  *
  * These decide what the environment selector offers, whether the tenant database is ready, which
  * release operations are legal right now, which entities the tree lists, and what the Command
  * panel can honestly claim to have measured. Keeping them out of the components is what lets the
- * chrome be asserted without mounting anything — the Studio's authoring controls are exactly where
+ * chrome be asserted without mounting anything — Studio's workbench controls are exactly where
  * a wrong answer is expensive.
  */
 
@@ -33,11 +33,51 @@ export type UsageObservation = Readonly<{
 
 export type SourceSnapshot = Readonly<{
 	readonly tenantId: string;
-	readonly revision: number;
+	readonly workspaceKey: string;
+	readonly baseCommit: string;
+	readonly commit: string;
 	readonly files: Readonly<Record<string, string>>;
 }>;
 
-export type StudioEnvironment = Readonly<{
+type SourceFileChange = Readonly<{
+	readonly path: string;
+	readonly before: string | null;
+	readonly after: string;
+}>;
+
+export type SourceCommit = Readonly<{
+	readonly commit: string;
+	readonly parent: string;
+	readonly changes: ReadonlyArray<SourceFileChange>;
+}>;
+
+type ReleaseSchemaPlan = Readonly<{
+	readonly fingerprint: string;
+	readonly steps: ReadonlyArray<Readonly<{ readonly id: string; readonly sql: string }>>;
+}>;
+
+type ReleaseRequestStatus = 'open' | 'approving' | 'approved' | 'changes_requested' | 'rejected';
+
+export type ReleaseRequest = Readonly<{
+	readonly id: string;
+	readonly tenantId: string;
+	readonly environmentId: string;
+	readonly workspaceKey: string;
+	readonly authorId: string;
+	readonly commit: string;
+	readonly baseCommit: string;
+	readonly previewEnvironmentId: string;
+	readonly baseReleaseId: string | null;
+	readonly releaseId: string;
+	readonly artifactId: string;
+	readonly checksum: string;
+	readonly schemaPlan: ReleaseSchemaPlan;
+	readonly status: ReleaseRequestStatus;
+	readonly reason: string | null;
+	readonly changedFiles: ReadonlyArray<SourceFileChange>;
+}>;
+
+type StudioEnvironment = Readonly<{
 	readonly id: string;
 	readonly label: string;
 	readonly releaseId: string;
@@ -48,14 +88,14 @@ export type StudioEnvironment = Readonly<{
 }>;
 
 /**
- * Root Studio chrome, and the nested views Authoring and Review open on.
+ * Root Studio chrome, and the nested views Workbench and Review open on.
  *
- * The names are the product's own: Authoring is read as Manifest (the structured overview) or
+ * Workbench is read as Manifest (the structured overview) or
  * Editor (the authored source); Review as the open release requests or the history behind them.
  * Both nested rails live in the shell's chrome rather than inside their panes, because they sit on
  * the same row of the page and a pane that draws its own tab strip drifts out of that row.
  */
-export type StudioRootTab = 'authoring' | 'review' | 'command';
+export type StudioRootTab = 'workbench' | 'review' | 'operations';
 export type AuthoringView = 'manifest' | 'editor';
 export type StudioReviewTab = 'requests' | 'history' | 'schema';
 
@@ -116,15 +156,14 @@ export const sourceTreeMatches = (
 ): ReadonlyArray<SourceTreeEntry> => {
 	const needle = query.trim().toLowerCase();
 	if (needle === '') return [];
-	return files
-		.filter((path) => path.toLowerCase().includes(needle))
-		.map((path) => ({
-			name: path,
-			type: 'file' as const,
-			path,
-			sizeBytes: sizes[path] ?? 0
-		}))
-		.sort((left, right) => left.path.localeCompare(right.path));
+	// One pass: the filter runs on every keystroke over the whole source tree, so matching and
+	// projecting together avoids walking it twice before the sort walks it again.
+	const matches: Array<SourceTreeEntry> = [];
+	for (const path of files) {
+		if (!path.toLowerCase().includes(needle)) continue;
+		matches.push({ name: path, type: 'file' as const, path, sizeBytes: sizes[path] ?? 0 });
+	}
+	return matches.sort((left, right) => left.path.localeCompare(right.path));
 };
 
 /**
@@ -157,6 +196,21 @@ export const editorLanguage = (path: string): CodeEditorLanguage => {
 };
 
 const LIVE = 'live';
+
+/**
+ * The routed release Operations summarizes above the full tenant matrix.
+ *
+ * `live` is a conventional environment name, not a protocol value. Colony's configured environment
+ * is `development` by default, so requiring the literal name made a successfully built tenant read as
+ * "No live release" while the matrix immediately below showed its release and artifact. Prefer Live
+ * when a host exposes it, then fall back to the first release the host actually routed.
+ */
+export const currentRoutedRelease = (
+	entries: ReadonlyArray<MatrixEntry>
+): MatrixEntry | undefined => {
+	const routed = entries.filter((entry) => entry.releaseId !== '');
+	return routed.find((entry) => entry.environmentId === LIVE) ?? routed[0];
+};
 
 /**
  * One option per routed environment, Live first.
@@ -214,25 +268,11 @@ export const unavailableFacilities = (
  * not actionable here, and the banner says what is true rather than pointing at a door that is
  * not there.
  */
-export const LIVE_READ_ONLY_NOTICE =
-	'Live is read-only. This host routes one environment per tenant, so there is no workbench to open — editing a workspace means committing to Live’s own source and building it.';
-
-/**
- * Why the Studio never offers to open a release request.
- *
- * There is no release-request, merge-request or proposed-change entity anywhere in Colony's
- * hosting layer or Bolt's runtime. The control keeps the product's shape so the surface is not
- * quietly different from the one people know, but it can never be enabled, and this is what it
- * says when asked.
- */
-export const RELEASE_REQUEST_UNAVAILABLE =
-	'This host has no release-request service. Commit writes the source revision, and Build compiles and routes it.';
-
 export type ReleaseControls = Readonly<{
-	/** Writing a source revision — the host's `source` operation, guarded by the snapshot revision. */
-	readonly canCommit: boolean;
-	/** Compiling the committed source into an artifact and routing it — `build`. */
-	readonly canBuild: boolean;
+	/** Generating DDL, checking, bundling, and provisioning this personal workbench commit. */
+	readonly canPreview: boolean;
+	/** Sending the exact built Preview into Review. */
+	readonly canRequestReview: boolean;
 	/** Stepping the environment's deployment history back one release — `rollback`. */
 	readonly canRollback: boolean;
 	/** Why the controls are disabled, when they are. */
@@ -240,7 +280,6 @@ export type ReleaseControls = Readonly<{
 }>;
 
 type ReleaseControlInput = Readonly<{
-	readonly environment: StudioEnvironment | undefined;
 	readonly busy: boolean;
 	readonly accepting: boolean;
 	readonly hasRelease: boolean;
@@ -257,29 +296,21 @@ type ReleaseControlInput = Readonly<{
 export const releaseControls = (input: ReleaseControlInput): ReleaseControls => {
 	if (input.busy) {
 		return {
-			canCommit: false,
-			canBuild: false,
+			canPreview: false,
+			canRequestReview: false,
 			canRollback: false,
 			reason: 'A command is already running.'
 		};
 	}
 	if (!input.accepting) {
 		return {
-			canCommit: false,
-			canBuild: false,
+			canPreview: false,
+			canRequestReview: false,
 			canRollback: false,
 			reason: 'The host is draining and is not accepting work.'
 		};
 	}
-	if (input.environment?.readOnly === true) {
-		return {
-			canCommit: false,
-			canBuild: false,
-			canRollback: input.hasRelease,
-			reason: LIVE_READ_ONLY_NOTICE
-		};
-	}
-	return { canCommit: true, canBuild: true, canRollback: input.hasRelease };
+	return { canPreview: true, canRequestReview: true, canRollback: input.hasRelease };
 };
 
 /**
@@ -604,7 +635,7 @@ const meteredQuantity = new Intl.NumberFormat('en', {
 });
 
 /**
- * The Command panel's four resource tiles, each backed by something the host actually reported.
+ * Operations' four resource tiles, each backed by something the host actually reported.
  *
  * Host disk is the authored source the tenant is holding, which the snapshot carries in full, so
  * it is measured here rather than asked for. The database and object-storage tiles read the
@@ -639,7 +670,7 @@ export const studioMetrics = (input: {
 			label: 'Tenant host disk',
 			icon: 'lucide:hard-drive',
 			value: input.source === undefined ? undefined : formatBytes(sourceBytes),
-			detail: `Authored source at revision ${input.source?.revision ?? 0}, ${plural(files.length, 'file')}.`
+			detail: `Personal workbench at commit ${input.source?.commit.slice(0, 12) ?? 'none'}, ${plural(files.length, 'file')}.`
 		},
 		{
 			id: 'database',

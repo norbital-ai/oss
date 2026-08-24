@@ -1,8 +1,24 @@
 import { Context, Effect, Layer, Schema } from 'effect';
-import type { EffectId } from '@norbital-ai/bolt-protocol';
+import { and, asc, eq, notExists } from 'drizzle-orm';
+import { EffectId } from '@norbital-ai/bolt-protocol';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import { Communication } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
+import {
+	aliased,
+	bound,
+	composer,
+	dbNow,
+	executeBuilt,
+	jsonb,
+	jsonTextEquals,
+	one,
+	transactionBuilt
+} from '#lib/runtime/persistence.js';
+import * as SyncWake from '#lib/runtime/sync/wake.js';
 import * as Workspace from '#lib/runtime/workspace.js';
+
+const { bolt_audit: audit, bolt_notifications: notifications } = SYSTEM_MODEL_TABLES;
 
 export const Notification = Schema.Struct({
 	id: Schema.NonEmptyString,
@@ -38,31 +54,47 @@ export const layer = Layer.effect(
 	Effect.gen(function* () {
 		const database = yield* Database.Service;
 		const communication = yield* Communication.Service;
+		const wake = yield* SyncWake.Service;
 		const workspace = yield* Workspace.Service;
 		return Service.of({
 			enqueue: Effect.fn('Notifications.enqueue')(function* (effectId, notification) {
-				yield* database.execute(effectId, {
-					_tag: 'Transaction',
-					statements: [
-						{
-							sql: 'insert into bolt_notifications (id, recipient, payload, read) values ($1, $2, $3, $4) on conflict do nothing',
-							parameters: [
-								notification.id,
-								notification.recipient,
-								notification.payload,
-								notification.read
-							]
-						},
-						{
-							sql: 'insert into bolt_audit (kind, subject_id, payload) values ($1, $2, $3)',
-							parameters: [
-								'notification_enqueued',
-								notification.recipient,
-								{ workspace: workspace.definition.name, notificationId: notification.id }
-							]
-						}
-					]
-				});
+				const auditPayload = {
+					workspace: workspace.definition.name,
+					notificationId: notification.id
+				};
+				const alreadyAudited = composer
+					.select({ one: one() })
+					.from(audit)
+					.where(
+						and(
+							eq(audit.kind, 'notification_enqueued'),
+							eq(audit.subject_id, notification.recipient),
+							jsonTextEquals(audit.payload, 'notificationId', notification.id)
+						)
+					);
+				const inserted = yield* transactionBuilt(effectId, database, [
+					composer
+						.insert(notifications)
+						.values({ ...notification, payload: JSON.stringify(notification.payload) })
+						.onConflictDoNothing({ target: notifications.id }),
+					composer
+						.insert(audit)
+						.select(
+							composer
+								.select({
+									kind: aliased(bound('notification_enqueued'), 'kind'),
+									subject_id: aliased(bound(notification.recipient), 'subject_id'),
+									payload: aliased(jsonb(auditPayload), 'payload')
+								})
+								.from(notifications)
+								.where(and(eq(notifications.id, notification.id), notExists(alreadyAudited)))
+						)
+						.returning({ sequence: audit.sequence })
+				]);
+				if (inserted.rows.length > 0)
+					yield* wake.announce(EffectId.make(`${effectId}:notification-enqueued-wake`), [
+						'bolt_notifications'
+					]);
 			}),
 			drain: Effect.fn('Notifications.drain')(function* (effectId, notification) {
 				yield* communication.execute(effectId, {
@@ -70,27 +102,55 @@ export const layer = Layer.effect(
 					recipient: notification.recipient,
 					payload: notification.payload
 				});
-				yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'update bolt_notifications set delivered_at = now() where id = $1',
-					parameters: [notification.id]
-				});
+				yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.update(notifications)
+						.set({ delivered_at: dbNow() })
+						.where(eq(notifications.id, notification.id))
+				);
+				yield* wake.announce(EffectId.make(`${effectId}:notification-delivered-wake`), [
+					'bolt_notifications'
+				]);
 			}),
 			markRead: Effect.fn('Notifications.markRead')(
 				function* (effectId, recipient, notificationId) {
-					yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: 'update bolt_notifications set read = true where id = $1 and recipient = $2',
-						parameters: [notificationId, recipient]
-					});
+					yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.update(notifications)
+							.set({ read: true })
+							.where(
+								and(eq(notifications.id, notificationId), eq(notifications.recipient, recipient))
+							)
+					);
+					yield* wake.announce(EffectId.make(`${effectId}:notification-read-wake`), [
+						'bolt_notifications'
+					]);
 				}
 			),
 			list: Effect.fn('Notifications.list')(function* (effectId, recipient, unreadOnly = false) {
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select id, recipient, payload, read from bolt_notifications where recipient = $1${unreadOnly ? ' and read = false' : ''} order by id`,
-					parameters: [recipient]
-				});
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({
+							id: notifications.id,
+							recipient: notifications.recipient,
+							payload: notifications.payload,
+							read: notifications.read
+						})
+						.from(notifications)
+						.where(
+							and(
+								eq(notifications.recipient, recipient),
+								unreadOnly ? eq(notifications.read, false) : undefined
+							)
+						)
+						.orderBy(asc(notifications.id))
+				);
 				return yield* Schema.decodeUnknownEffect(Schema.Array(Notification))(result.rows).pipe(
 					Effect.mapError(
 						() =>

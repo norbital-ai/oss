@@ -35,6 +35,11 @@ class MemoryState<T> {
 	}
 }
 
+/** The ids a boolean-keyed table state currently holds true — the selection, the disclosure. */
+function enabledIds(state: Record<string, boolean>): string[] {
+	return Object.keys(state).filter((id) => state[id]);
+}
+
 function createTableState<T>(key: string, initialValue: T, persistState: boolean): TableState<T> {
 	if (persistState) return new PersistedState<T>(key, initialValue);
 	return new MemoryState(initialValue);
@@ -541,19 +546,11 @@ export class TableAPI<T extends Record<string, unknown>, TCondition = unknown> {
 	}
 
 	private notifySelectionChange(): void {
-		if (!this.callbacks?.onSelectionChange) return;
-		const selectedIds = Object.keys(this.rowSelection.current).filter(
-			(id) => this.rowSelection.current[id]
-		);
-		this.callbacks.onSelectionChange(selectedIds);
+		this.callbacks?.onSelectionChange?.(enabledIds(this.rowSelection.current));
 	}
 
 	private notifyExpandedChange(): void {
-		if (!this.callbacks?.onExpandedChange) return;
-		const expandedIds = Object.keys(this.expanded.current).filter(
-			(id) => this.expanded.current[id]
-		);
-		this.callbacks.onExpandedChange(expandedIds);
+		this.callbacks?.onExpandedChange?.(enabledIds(this.expanded.current));
 	}
 
 	toggleSort(columnId: string) {

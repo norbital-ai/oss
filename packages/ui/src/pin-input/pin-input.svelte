@@ -1,4 +1,4 @@
-<!-- fallow-ignore-file unrendered-component -- exported package component rendered by the core OTP challenge -->
+<!-- exported package component rendered by the core OTP challenge -->
 <script lang="ts">
 	import { cn } from '#lib/utils';
 	import {

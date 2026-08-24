@@ -30,17 +30,19 @@ const decodeHtmlEntities = (value: string | null): string | null => {
 	});
 };
 
-const taggedMeta = (source: string, name: string): string | null => {
-	const tag = source.match(new RegExp(`<meta\\b[^>]*\\bname=["']bolt:${name}["'][^>]*>`, 'i'))?.[0];
+/** The `content` of the first `<meta name="…">` carrying this exact name. */
+const metaContent = (source: string, metaName: string): string | null => {
+	const tag = source.match(new RegExp(`<meta\\b[^>]*\\bname=["']${metaName}["'][^>]*>`, 'i'))?.[0];
 	if (tag === undefined) return null;
 	return tag.match(/\bcontent=["']([^"']+)["']/)?.[1]?.trim() ?? null;
 };
 
-const namedMeta = (source: string, name: string): string | null => {
-	const tag = source.match(new RegExp(`<meta\\b[^>]*\\bname=["']${name}["'][^>]*>`, 'i'))?.[0];
-	if (tag === undefined) return null;
-	return tag.match(/\bcontent=["']([^"']+)["']/)?.[1]?.trim() ?? null;
-};
+/** A `bolt:`-namespaced meta tag — the ones this compiler declares. */
+const taggedMeta = (source: string, name: string): string | null =>
+	metaContent(source, `bolt:${name}`);
+
+/** A plain HTML meta tag, such as `description`. */
+const namedMeta = (source: string, name: string): string | null => metaContent(source, name);
 
 /** Reads static app identity from `<svelte:head>`. */
 export const extractAppMetadata = (source: string): AppMetadata => ({

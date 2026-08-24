@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const sourceRoot = fileURLToPath(new URL('../../src/', import.meta.url));
+const studioRoot = join(sourceRoot, 'client/ui/studio');
 const protocolFacilities = fileURLToPath(
 	new URL('../../../bolt-protocol/src/facilities.ts', import.meta.url)
 );
@@ -57,7 +58,10 @@ describe('clean-cut vocabulary', () => {
 		);
 		const protocol = readFileSync(protocolFacilities, 'utf8');
 		const replica = readFileSync(join(sourceRoot, 'client/replica/pglite-sql.ts'), 'utf8');
-		const clientRuntime = readFileSync(join(sourceRoot, 'client/runtime.ts'), 'utf8');
+		const crossTabInvalidation = readFileSync(
+			join(sourceRoot, 'client/replica/cross-tab-invalidation.ts'),
+			'utf8'
+		);
 
 		// Person address book.
 		expect(systemModels).toContain('channels: jsonb()');
@@ -66,9 +70,40 @@ describe('clean-cut vocabulary', () => {
 		// Deliberately deferred protocol wire field.
 		expect(protocol).toContain('VerifyInbound: { channel: Schema.NonEmptyString');
 		expect(protocol).toContain('Send: { channel: Schema.NonEmptyString');
-		// Browser/PostgreSQL channel vocabulary is unrelated to envoy identity.
-		expect(replica).toContain('BroadcastChannel');
+		// Browser cross-tab and PostgreSQL channel vocabulary is unrelated to envoy identity.
 		expect(replica).toContain('listen(\n\t\tchannel: string,');
-		expect(clientRuntime).toContain("replicaStatement('select pg_notify($1, $2)'");
+		expect(crossTabInvalidation).toContain('new BroadcastChannel(name)');
+		expect(crossTabInvalidation).toContain('bolt-replica-changed:${scope}');
+	});
+
+	it('keeps Studio on Workbench, Preview, Review, and Live only', () => {
+		const studio = sourceFiles(studioRoot)
+			.map((path) => readFileSync(path, 'utf8'))
+			.join('\n');
+		expect(studio).not.toMatch(
+			/candidate[-_ ]preview|preview checkpoint|request release|environment picker|command panel/i
+		);
+		const shell = readFileSync(join(studioRoot, 'studio-shell.svelte'), 'utf8');
+		expect(shell).not.toContain('setInterval(');
+		expect(shell).toContain("label: 'Workbench'");
+		expect(shell).toContain("label: 'Review'");
+		expect(shell).toContain("name: 'operations'");
+		expect(shell).not.toContain("name: 'command'");
+		expect(existsSync(join(studioRoot, 'command-pane.svelte'))).toBe(false);
+		expect(existsSync(join(studioRoot, 'operations-pane.svelte'))).toBe(true);
+	});
+
+	it('keeps one clear Workbench action and removes redundant Review chrome', () => {
+		const toolbar = readFileSync(join(studioRoot, 'authoring-toolbar.svelte'), 'utf8');
+		const sidebar = readFileSync(join(studioRoot, 'review-sidebar.svelte'), 'utf8');
+		const review = readFileSync(join(studioRoot, 'review-pane.svelte'), 'utf8');
+		const operations = readFileSync(join(studioRoot, 'operations-pane.svelte'), 'utf8');
+
+		expect(toolbar).not.toMatch(/My workbench|Not previewed|Update workbench/);
+		expect(toolbar).toMatch(/Rebase/);
+		expect(toolbar).toMatch(/Request review/);
+		expect(sidebar).not.toMatch(/Changed files/);
+		expect(review).not.toMatch(/>\s*Reject\s*</);
+		expect(operations).not.toMatch(/Template updates/);
 	});
 });

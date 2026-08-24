@@ -64,9 +64,7 @@ describe('artifact statelessness', () => {
 				Effect.gen(function* () {
 					const transport = yield* Transport.Service;
 					return yield* transport.execute(EffectId.make(`${invocationId}:open`), {
-						_tag: 'Open',
-						protocol: 'sse',
-						direction: 'one-way'
+						_tag: 'Open'
 					});
 				}).pipe(Effect.provide(Transport.layer(binding, callContext(invocationId))))
 			);
@@ -101,9 +99,7 @@ describe('artifact statelessness', () => {
 				Effect.gen(function* () {
 					const transport = yield* Transport.Service;
 					yield* transport.execute(EffectId.make(`${invocationId}:open`), {
-						_tag: 'Open',
-						protocol: 'websocket',
-						direction: 'two-way'
+						_tag: 'Open'
 					});
 					yield* transport.execute(EffectId.make(`${invocationId}:send`), {
 						_tag: 'Send',
@@ -123,9 +119,7 @@ describe('artifact statelessness', () => {
 				Effect.gen(function* () {
 					const transport = yield* Transport.Service;
 					return yield* transport.execute(EffectId.make('transport-missing'), {
-						_tag: 'Open',
-						protocol: 'sse',
-						direction: 'one-way'
+						_tag: 'Open'
 					});
 				}).pipe(Effect.provide(Transport.layer(undefined, callContext('transport-missing'))))
 			)

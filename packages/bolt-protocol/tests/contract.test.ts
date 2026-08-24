@@ -8,6 +8,8 @@ import {
 	type FacilityBindings
 } from '../src/index.js';
 
+const schemaPlan = { fingerprint: 'fnv1a32:test', steps: [] } as const;
+
 describe('facility contract', () => {
 	it('reports required facility bindings deterministically', () => {
 		const manifest: BundleManifest = {
@@ -15,6 +17,7 @@ describe('facility contract', () => {
 			artifactId: 'fixture',
 			artifactVersion: '1',
 			schemaFingerprint: 'sha256:test',
+			schemaPlan,
 			requiredFacilities: ['database', 'ai', 'transport'],
 			staticAssets: [],
 			integrations: []
@@ -31,6 +34,7 @@ describe('facility contract', () => {
 			artifactId: 'fixture',
 			artifactVersion: '1',
 			schemaFingerprint: 'sha256:test',
+			schemaPlan,
 			requiredFacilities: ['communication', 'transport'],
 			staticAssets: [],
 			integrations: []
@@ -50,6 +54,7 @@ describe('facility contract', () => {
 			artifactId: 'fixture',
 			artifactVersion: '1',
 			schemaFingerprint: 'sha256:test',
+			schemaPlan,
 			requiredFacilities: [],
 			staticAssets: [],
 			integrations: []

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
 import {
+	AIRequest,
 	FacilityName,
 	Invocation,
 	PROTOCOL_VERSION,
@@ -10,6 +11,50 @@ import {
 } from '../src/index.js';
 
 describe('Bolt protocol schemas', () => {
+	it('carries bounded provider-neutral web search and a response schema on AI turns', () => {
+		const decoded = Schema.decodeUnknownSync(AIRequest)({
+			_tag: 'Turn',
+			model: 'provider/model',
+			messages: [{ role: 'user', content: 'Check the current filing.' }],
+			tools: [],
+			maxOutputTokens: 1_024,
+			webSearch: { maxResults: 5, allowedDomains: ['acra.gov.sg'] },
+			responseSchema: {
+				type: 'object',
+				properties: { changed: { type: 'boolean' } },
+				required: ['changed'],
+				additionalProperties: false
+			}
+		});
+		expect(decoded).toMatchObject({
+			_tag: 'Turn',
+			webSearch: { maxResults: 5, allowedDomains: ['acra.gov.sg'] },
+			responseSchema: { type: 'object' }
+		});
+		for (const maxResults of [0, 26, 1.5]) {
+			expect(
+				Schema.decodeUnknownResult(AIRequest)({
+					_tag: 'Turn',
+					model: 'provider/model',
+					messages: [],
+					tools: [],
+					maxOutputTokens: 1,
+					webSearch: { maxResults }
+				})._tag
+			).toBe('Failure');
+		}
+		expect(
+			Schema.decodeUnknownResult(AIRequest)({
+				_tag: 'Turn',
+				model: 'provider/model',
+				messages: [],
+				tools: [],
+				maxOutputTokens: 1,
+				webSearch: { maxResults: 5, allowedDomains: [''] }
+			})._tag
+		).toBe('Failure');
+	});
+
 	it('rejects an unsupported protocol version', () => {
 		const decoded = Schema.decodeUnknownResult(Invocation)({
 			_tag: 'Command',
@@ -49,11 +94,9 @@ describe('Bolt protocol schemas', () => {
 		expect(PROTOCOL_VERSION).toBe(2);
 	});
 
-	it('decodes one-way SSE and two-way WebSocket transport requests', () => {
+	it('decodes transport requests without selecting a wire protocol', () => {
 		const open = Schema.decodeUnknownSync(TransportRequest)({
 			_tag: 'Open',
-			protocol: 'sse',
-			direction: 'one-way',
 			topic: 'sync'
 		});
 		const send = Schema.decodeUnknownSync(TransportRequest)({
@@ -72,17 +115,10 @@ describe('Bolt protocol schemas', () => {
 			connectionId: 'conn-1',
 			reason: 'done'
 		});
-		expect(open).toMatchObject({ _tag: 'Open', protocol: 'sse', direction: 'one-way' });
+		expect(open).toMatchObject({ _tag: 'Open', topic: 'sync' });
 		expect(send._tag).toBe('Send');
 		expect(pull._tag).toBe('Pull');
 		expect(close._tag).toBe('Close');
-		expect(
-			Schema.decodeUnknownResult(TransportRequest)({
-				_tag: 'Open',
-				protocol: 'http',
-				direction: 'one-way'
-			})._tag
-		).toBe('Failure');
 	});
 
 	it('keeps transport responses JSON-safe and connection-scoped', () => {

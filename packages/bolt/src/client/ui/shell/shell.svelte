@@ -248,12 +248,7 @@
 	 * opening any row threw "CollectionTable requires a record navigation provider": nothing in Bolt
 	 * had ever provided one.
 	 */
-	const detailUrl = $derived(
-		new URL(
-			`${currentPath}${search}`,
-			typeof window === 'undefined' ? 'http://workspace.invalid' : window.location.origin
-		)
-	);
+	const detailUrl = $derived(new URL(`${currentPath}${search}`, 'http://workspace.invalid'));
 
 	const resolvedHeaderTitle = $derived(
 		currentPath.startsWith('/app/')
@@ -395,6 +390,8 @@
 		shortcutModifier = detectShortcutModifier();
 	});
 
+	// repository-health:allow V1 -- a one-way latch, not a derivation: `$derived` would force the
+	// sheet back open every time the operator closed it while still on an agent path.
 	$effect(() => {
 		if (onAgentPath) {
 			agentSheetOpen = true;
@@ -634,7 +631,14 @@
 		{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`) || activeHostPlugin}
 			{#key activeHostPlugin?.key ?? WORKSPACE_SETTINGS_PATH}
 				<Bound size="full" clip data-testid="host-plugin-surface" class="bg-background">
-					{@render children?.()}
+					<!--
+						Workspace settings and host plugins may render CollectionTable just like authored apps do.
+						Keep their rows inside the same URL-owned detail surface so selecting a member, invitation,
+						or plugin record opens a sheet instead of throwing for a missing navigation provider.
+					-->
+					<CollectionTableNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
+						{@render children?.()}
+					</CollectionTableNavigationSurface>
 				</Bound>
 			{/key}
 		{:else}

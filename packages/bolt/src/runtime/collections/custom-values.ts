@@ -1,4 +1,4 @@
-import type { Schema } from 'effect';
+import { Result, type Schema } from 'effect';
 import type { FieldDefinition } from '#lib/authoring/workspace-schema.js';
 
 /**
@@ -24,20 +24,31 @@ type StandardIssue = Readonly<{
 type StandardResult = Readonly<{ readonly issues?: ReadonlyArray<StandardIssue> }>;
 
 const validatorOf = (
-	definition: unknown
+	definition: unknown,
+	options: Readonly<Record<string, Schema.Json>> | undefined
 	// repository-health:allow EFF2 -- Standard Schema validators may return a Promise by specification; this boundary detects that result and never composes it as native concurrency.
 ): ((value: unknown) => StandardResult | Promise<StandardResult>) | undefined => {
 	if (definition === null || typeof definition !== 'object') return undefined;
-	const schema = Reflect.get(definition, 'schema');
-	// A definition whose `schema` is a factory takes options this layer does not have, so it is left
-	// unchecked rather than called with invented ones. A factory is told apart by the *absence of
-	// `~standard`*, not by being callable: an Effect `Schema` is itself callable, so testing
+	let schema = Reflect.get(definition, 'schema');
+	// A factory is told apart by the *absence of `~standard`*, not by being callable: an Effect
+	// `Schema` is itself callable, so testing
 	// `typeof schema === 'object'` read every Effect-declared custom type as a factory and skipped its
 	// validation in silence — a value of the wrong shape was stored and nothing reported anything,
 	// which is the exact failure this module exists to stop.
 	if (schema === null || (typeof schema !== 'object' && typeof schema !== 'function'))
 		return undefined;
-	const standard = Reflect.get(schema, '~standard');
+	let standard = Reflect.get(schema, '~standard');
+	if ((standard === null || typeof standard !== 'object') && typeof schema === 'function') {
+		const factoryOptions = Object.fromEntries(
+			Object.entries(options ?? {}).filter(([key]) => key !== 'multiple')
+		);
+		const created = Result.try(() => Reflect.apply(schema, undefined, [factoryOptions]));
+		if (Result.isFailure(created)) return undefined;
+		schema = created.success;
+		if (schema === null || (typeof schema !== 'object' && typeof schema !== 'function'))
+			return undefined;
+		standard = Reflect.get(schema, '~standard');
+	}
 	if (standard === null || typeof standard !== 'object') return undefined;
 	const validate = Reflect.get(standard, 'validate');
 	return typeof validate === 'function'
@@ -78,14 +89,21 @@ export const describeInvalidCustomValue = (
 		const customType = definition.customType;
 		if (customType === undefined || !Object.hasOwn(values, field)) continue;
 
-		const validate = validatorOf(customTypes[customType]);
+		const validate = validatorOf(customTypes[customType], definition.customTypeOptions);
 		if (validate === undefined) continue;
 
-		const result = validate(values[field] ?? null);
-		// A promise means an asynchronous schema; it is left unchecked rather than stalling a write.
-		if (result instanceof Promise) continue;
-		if (result.issues !== undefined && result.issues.length > 0)
-			return describe(field, customType, result.issues);
+		const value = values[field] ?? null;
+		const multiple = definition.customTypeOptions?.['multiple'] === true;
+		if (multiple && !Array.isArray(value))
+			return `${field} is not a valid ${customType}: expected an array because multiple is enabled`;
+		const entries = multiple ? (value as ReadonlyArray<Schema.Json>) : [value];
+		for (const [index, entry] of entries.entries()) {
+			const result = validate(entry);
+			// A promise means an asynchronous schema; it is left unchecked rather than stalling a write.
+			if (result instanceof Promise) continue;
+			if (result.issues !== undefined && result.issues.length > 0)
+				return describe(multiple ? `${field}[${index}]` : field, customType, result.issues);
+		}
 	}
 
 	return undefined;

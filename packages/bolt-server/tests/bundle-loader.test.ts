@@ -10,6 +10,7 @@ const validModule = {
 		artifactId: 'loader-fixture',
 		artifactVersion: 'one',
 		schemaFingerprint: 'schema-one',
+		schemaPlan: { fingerprint: 'schema-one', steps: [] },
 		requiredFacilities: [],
 		staticAssets: [
 			{

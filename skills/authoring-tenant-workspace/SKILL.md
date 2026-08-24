@@ -3,8 +3,8 @@ name: authoring-tenant-workspace
 description: >-
   Author filesystem-first Bolt tenant workspaces and move changes through OSS packages, template
   repositories, Colony, and the website. Load for collections, datatypes, apps, automations,
-  functions, seeds, generated $types, $bolt/client, template metadata, or local/staging/production
-  refresh behavior.
+  functions, generated $types, $bolt/client, template metadata, fixture seeding, or
+  local/staging/production refresh behavior.
 ---
 
 # Authoring Bolt Tenant Workspaces
@@ -41,9 +41,14 @@ committed Norbital builds. Staging follows Norbital `master`; production follows
 receive the same verified tree. An existing tenant does not change until a new artifact is built and
 routed. Never use `env:reset` as a refresh command: it discards the source snapshot and database.
 
-`+seed.ts` initializes new tenants; it does not evolve deployed data. For an existing tenant, diff the
-authored models against the migration lineage and write the next entry with `pnpm exec bolt migrate`,
-then edit its SQL before deploying through Colony.
+Sample rows come from the separate `seed_bank` repository, never from the template tree: Colony's
+`scripts/seed-from-bank.mjs` maps each organization handle to a bank tree (`SEED_BANK_TREES` — the
+bank names and the handles are deliberately two axes, e.g. handle `norbital_bca` → tree
+`field-operations`) and loads one `<collection>.json` per collection, plus fixture media for `file()`
+columns. A handle absent from that table is not seedable; add the mapping in the script, not in the
+template. Seeding does not evolve deployed data. For an existing tenant, diff the authored models
+against the migration lineage and write the next entry with `pnpm exec bolt migrate`, then edit its
+SQL before deploying through Colony.
 
 ## Reference routing
 
@@ -52,7 +57,7 @@ then edit its SQL before deploying through Colony.
 | **Built-in column types — read before using `custom()`**, collections, relationships, hooks, values | [collections-and-modeling.md](references/collections-and-modeling.md) |
 | Dates, clock times, timestamps, filters                                                             | [dates-and-time.md](references/dates-and-time.md)                     |
 | Queries: `$derived`, no N+1, batching                                                               | [data-access.md](references/data-access.md)                           |
-| Apps, client, automations, functions, seed                                                          | [apps-and-server-roles.md](references/apps-and-server-roles.md)       |
+| Apps, client, automations, functions, fixtures                                                      | [apps-and-server-roles.md](references/apps-and-server-roles.md)       |
 | Why the layout system is shaped this way                                                            | [interface-ideology.md](references/interface-ideology.md)             |
 | Composition, scrolling, scroll traps                                                                | [layout-and-scrolling.md](references/layout-and-scrolling.md)         |
 | Controller UI: inline, `$derived`, no UUIDs                                                         | [controller-surfaces.md](references/controller-surfaces.md)           |
@@ -106,10 +111,9 @@ src/
 ├── envoys/+<envoy>.ts
 ├── functions/+<function>.ts
 ├── i18n/
-│   ├── messages.en.json           # required — English copy
-│   └── messages.zh.json           # required — Chinese copy, exact same keys
-├── lib/**                         # optional, free-form helper code — no role, no `+` prefix
-└── +seed.ts                       # optional
+│   ├── messages.en.json           # English copy — its keys are the TenantI18nKeys type
+│   └── messages.zh.json           # Chinese copy — mirror the English keys exactly
+└── lib/**                         # optional, free-form helper code — no role, no `+` prefix
 ```
 
 Directory and filename own all identities. Every role default-exports one declaration. Collection server
@@ -130,14 +134,16 @@ as `project-representation.svelte` are all legal — `lib` is listed as free-for
 a workspace can keep engine and helper code somewhere.
 
 `src/i18n/` is special-cased, not ordinary source: it holds the tenant's translation catalogs, and
-**both `messages.en.json` and `messages.zh.json` are required** in every workspace — bilingual wiring
+**both `messages.en.json` and `messages.zh.json` are expected** in every workspace — bilingual wiring
 is mandatory even when the tenant only ships English today (the zh file mirrors the English copy
-until real translations land). The compiler enforces that the two files carry exactly the same keys,
-and the bolt runtime merges them over the platform chrome catalogs (bolt + `@norbital-ai/ui`) at build
-time. Use `useI18n<TenantKeys>()` from `@norbital-ai/ui/i18n` in your app files, keyed by your own
-catalog keys (import your `messages.en.json` for the key type). Every user-facing string in an app
-file must come from `t(...)`; the compiler rejects raw text in Svelte markup (see
-[internationalization.md](references/internationalization.md#the-raw-text-rule-statically-enforced)).
+until real translations land; a missing locale falls back to an empty catalog, so keep the keys
+aligned). `bolt sync` compiles them into the artifact: the English keys become the
+`TenantI18nKeys` type, and the runtime merges both catalogs over the platform chrome catalogs
+(bolt + `@norbital-ai/ui`) at build time under `$bolt/i18n-messages`. Use `useI18n<TenantKeys>()`
+from `@norbital-ai/ui/i18n` in your app files, keyed by your own catalog keys (import your
+`messages.en.json` for the key type). Every user-facing string in an app file must come from
+`t(...)`; the raw-text rule is a review gate (see
+[internationalization.md](references/internationalization.md#the-raw-text-rule)).
 App metadata stays static English in `<svelte:head>`; override the sidebar label per locale with an
 `app.<id>.title` key in your catalog.
 
@@ -170,20 +176,32 @@ export default defineModel(
 );
 ```
 
-Models describe data and storage only. `recordLabel` is one field or an ordered field tuple; it is not a
-view expression. Declaration order and field kinds supply schema-derived defaults. App files own presentation.
-Classify temporal fields before choosing `date()`, `clockTime()`, `timestamp()`, or `dateRange()`; read
-[dates-and-time.md](references/dates-and-time.md) whenever a model, filter, seed, import/export, or UI
-touches dates or time.
+Models describe data and storage only. `recordLabel` is one field or an ordered tuple of
+text-shaped fields: the runtime compiles it to a CEL concatenation, and CEL has no `+` for anything
+but strings — an `instant()` column reaches the client as a `Date`, so a tuple naming one compiles
+and resolves to nothing. For a composed title, write a `generatedAlwaysAs` SQL expression instead
+(hr-payroll's leave events do exactly this). Declaration order and field kinds supply schema-derived
+defaults. App files own presentation. Classify temporal fields before choosing `instant()`,
+`custom('instant_range')`, or a date-shaped text column; read
+[dates-and-time.md](references/dates-and-time.md) whenever a model, filter, fixture, import/export, or
+UI touches dates or time.
 
 Inline custom schemas do not exist. Structured domain values live in `datatypes/<name>/` with exactly a
 `+definition.ts` default-exporting `defineCustomType({ name, description, schema })` and a mandatory
-`+renderer.svelte`. Models use `custom('<name>')`; a schema factory infers its optional second argument,
-such as `custom('money', { allowedCurrencies: ['MYR'] })`. The definition is the only schema and inferred
-value-type source, and named values use JSONB storage. Scalar references stay ordinary `uuid()`/`text()`
-columns plus relationships. The compiler discovers renderers statically; manual imports, registration, and
-runtime registries do not exist. `money` remains a workspace datatype until Bolt ships both a matching
-field builder and renderer; keep its definition and renderer together. Do not cast the inferred value type.
+`+renderer.svelte`. Models use `custom('<name>')`; a schema factory infers its optional second argument.
+The definition is the only schema and inferred value-type source, and named values use JSONB storage.
+Scalar references stay ordinary `uuid()`/`text()` columns plus relationships. The compiler discovers
+renderers statically; manual imports, registration, and runtime registries do not exist.
+
+**The platform owns two custom datatypes, injected rather than filesystem-discovered, and a tenant
+datatype may never shadow them.** They use the same `defineCustomType` declaration contract, runtime
+registry, validation, renderer contract, and `custom('<name>', options?)` access pattern as tenant
+datatypes. Use `custom('money', { allowedCurrencies: […] })` (validated against
+`@norbital-ai/std/finance`'s `MoneyValueSchema`) and
+`custom('instant_range', { precision: 'day', multiple: true })`. The only distinction is discovery:
+there is no `src/datatypes/money/` or `src/datatypes/instant_range/`. The compiler injects those
+definitions and refuses a tenant directory that redeclares either name. Do not cast the inferred
+value type.
 
 ## One client and one database vocabulary
 
@@ -226,10 +244,13 @@ filter never creates server work against a resident collection. For the wire pro
 
 ## Apps, layout, and collection surfaces
 
-Apps are `src/apps/**/+<app>.svelte`. Their `<svelte:head>` metadata is static (`title`, a required
-`description`, literal `bolt:icon`, optional static `bolt:thumbnail` / `bolt:banner` URLs). There is no host layout metadata.
+Apps are `src/apps/**/+<app>.svelte`. Their `<svelte:head>` metadata is static (`title`, a
+`description` — expected, since the studio and the overview card have nothing else to say what the
+app is for, though nothing enforces it — literal `bolt:icon`, optional static `bolt:thumbnail` /
+`bolt:banner` URLs). There is no host layout metadata.
 App thumbnails and banners are optional — missing ones get a same-size icon fallback in the shell (overview
-cards keep their 16:9 media slot, omni finder keeps its 6×6 tile). Ship product images under `assets/`
+cards keep their 2:1 `Frame ratio="banner"` media slot; the omni finder shows a 16px thumb, else the
+app's icon). Ship product images under `assets/`
 and reference `/__bolt/request/api/template-seed-assets/<key>/<path>` URLs. The collection-owned `+representation.svelte`
 can also declare a static `bolt:banner` meta, rendered above the record detail sheet header. See
 [apps-and-server-roles.md](references/apps-and-server-roles.md#app-media--icons-thumbnails-banners) for the
@@ -335,12 +356,12 @@ duplication, and data-renderer rules are in [interface-ideology.md](references/i
 
 ## Who is looking at this page
 
-`getPlatformStateContext()` from `@norbital-ai/bolt/ui` is the only way an authored page learns who is
-using it. It returns a **getter**, not a value — call it, then call the result, so the page reads the
-current session rather than a snapshot taken at mount.
+`getPlatformStateContext()` from `@norbital-ai/bolt/client` is the only way an authored page learns
+who is using it. It returns a **getter**, not a value — call it, then call the result, so the page
+reads the current session rather than a snapshot taken at mount.
 
 ```svelte
-import {getPlatformStateContext} from '@norbital-ai/bolt/ui'; const platform = getPlatformStateContext();
+import {getPlatformStateContext} from '@norbital-ai/bolt/client'; const platform = getPlatformStateContext();
 const me = $derived(platform().user);
 ```
 
@@ -380,11 +401,13 @@ is merely still loading; give the unsettled case its own branch.
 
 ## Server roles
 
-**Every declaration carries a mandatory `description`.** Hooks and pipelines are `{ description, handler }`;
-automations, functions, policies, envoys, tools, datatypes, apps, and groups each take one as a
-field. They are not comments — they are compiled into the manifest, and the Workspace Studio has nothing
-else to show somebody who will never open the source. Write what the code does to this data in one
-sentence; "runs before create" restates the key and is worse than nothing.
+**Every declaration carries a `description` where the shape allows one.** Hooks and pipelines are
+`{ description, handler }`; automations, functions, policies, datatypes, and groups take it as a
+field; an app wears it as the `description` meta. They are not comments — they are compiled into the
+manifest, and the Workspace Studio has nothing else to show somebody who will never open the source.
+Write what the code does to this data in one sentence; "runs before create" restates the key and is
+worse than nothing. (Envoys deliberately take no `description`: their `task` says what the surface is
+for, and a second copy would drift.)
 
 - `src/+agents.md` is the shared workspace prompt. A web turn runs as the signed-in person; an envoy
   adds its own `task` and runs under the policies declared in `src/envoys/+<name>.ts`. Tools, MCP
@@ -423,8 +446,9 @@ sentence; "runs before create" restates the key and is worse than nothing.
   existing, its failures are reported rather than swallowed, and a caller must not retry them.
 - Automations run after commit, are durable and idempotent, and receive stable event IDs. They are
   always deterministic handlers; when one needs model judgement, call `api.infer` with an Effect
-  `Schema.Schema` for `schema` (never zod), optional `images`, and optional named workspace tools.
-  It never offers authoring, sandbox, `write_collection`, or `spawn_subagent`, and it does not own a
+  `Schema.Schema` for `schema` (never zod), optional `images` (≤ 8, ≤ 20 MiB, values taken straight
+  from a `file()` column), and optional provider-neutral `webSearch`. It offers no tools of any
+  kind, no authoring, no sandbox, and no `write_collection`/`spawn_subagent`, and it does not own a
   chat transcript. Each run is one admitted function. If the work is not finished, the host calls
   the same function again.
 - Functions are imperative request/response methods declared with `defineQueryHandler` /
@@ -439,7 +463,9 @@ sentence; "runs before create" restates the key and is worse than nothing.
   is this compiled file. Team names are matched case-insensitively. Behaviour is in the
   `norbital-platform` skill's `approvals-and-policies.md`.
 - Integrations use portable runtime delivery facilities; missing facilities fail at boot.
-- Put tenant-specific fixture behavior in `src/+seed.ts`. Sensitive statutory or system seed remains Colony-owned.
+- Fixtures come from the seed-bank repository, one `<collection>.json` per collection per tree,
+  keyed by handle in `SEED_BANK_TREES` — see the seeding paragraph above. Statutory and identity
+  fixture tables are Colony's own `scripts/seed-from-bank.mjs` machinery, not template source.
 
 ## Prohibitions
 

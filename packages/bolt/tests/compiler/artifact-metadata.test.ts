@@ -7,10 +7,8 @@ import { renderArtifact } from '../../src/compiler/sync.js';
  * What `defineModel` metadata survives the crossing into the artifact.
  *
  * `renderArtifact` rebuilds each collection descriptor key by key, so anything it does not name is
- * dropped without an error anywhere — which is how `approvalLock`, `description` and `icon` came to
- * be declared by templates and read by nothing. `approvalLock` was the worst of the three:
- * `Collections` already intercepts a write on `definition.approvalLock`, so the gate worked while
- * the only way to ask for it did nothing at all.
+ * dropped without an error anywhere — which is how `description` and `icon` came to be declared by
+ * templates and read by nothing.
  *
  * The emitted mapping is executed rather than pattern-matched. A test that greps the generated text
  * passes on the spelling of a line; this one passes only if the descriptor actually comes out
@@ -81,7 +79,6 @@ describe('artifact collection metadata', () => {
 				orders: defineModel(
 					{ title: text() },
 					{
-						approvalLock: true,
 						description: 'Purchase orders awaiting fulfilment',
 						icon: 'lucide:package'
 					}
@@ -90,7 +87,6 @@ describe('artifact collection metadata', () => {
 			{ collections: [{ name: 'orders', history: true }] }
 		);
 
-		expect(orders?.['approvalLock']).toBe(true);
 		expect(orders?.['description']).toBe('Purchase orders awaiting fulfilment');
 		expect(orders?.['icon']).toBe('lucide:package');
 	});
@@ -106,7 +102,6 @@ describe('artifact collection metadata', () => {
 			{ collections: [{ name: 'notes', history: true }] }
 		);
 
-		expect(notes).not.toHaveProperty('approvalLock');
 		expect(notes).not.toHaveProperty('description');
 		expect(notes).not.toHaveProperty('icon');
 	});

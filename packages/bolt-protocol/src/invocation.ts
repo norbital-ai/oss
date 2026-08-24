@@ -63,7 +63,7 @@ export const Invocation = Schema.TaggedUnion({
 		...InvocationFields,
 		connectionId: Schema.NonEmptyString,
 		event: Schema.TaggedUnion({
-			Open: { protocol: Schema.optionalKey(Schema.String) },
+			Open: {},
 			Input: {
 				frame: Schema.Struct({
 					sequence: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),

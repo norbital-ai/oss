@@ -2,30 +2,34 @@
 
 Every tenant workspace is internationalized by contract — English is the source of truth and
 Simplified Chinese ships beside it. This is not optional and does not depend on whether the tenant
-"supports" Chinese today: the catalogs are bilingual from the first commit, and the compiler enforces
-the wiring statically.
+"supports" Chinese today: the catalogs are bilingual from the first commit, and the wiring is
+compiled — `bolt sync` emits `TenantI18nKeys` from the English catalog and merges both catalogs over
+the platform chrome catalogs.
 
-The platform catalogs (`@norbital-ai/ui/i18n` for the component library, `@norbital-ai/bolt/i18n` for
-bolt chrome) ship with the runtime; the workspace supplies its own copy for both locales and may
-override any platform key.
+The platform catalogs (`@norbital-ai/ui/i18n` for the component library; bolt chrome messages
+built with `defineMessages` from `@norbital-ai/std/i18n`) ship with the runtime; the workspace
+supplies its own copy for both locales and may override any platform key.
 
 ## Authored files
 
 ```text
 src/
 └── i18n/
-    ├── messages.en.json   # required — your English copy
-    └── messages.zh.json   # required — your Chinese copy — exact same keys
+    ├── messages.en.json   # your English copy — its keys are the TenantI18nKeys type
+    └── messages.zh.json   # your Chinese copy — mirror the English keys exactly
 ```
 
 - Flat key → string maps, dot-namespaced. No nesting, no arrays.
-- Both files are **required**. A workspace without `src/i18n/` is a structural error. When the
-  tenant's market is English-only today, `messages.zh.json` mirrors the English strings — the key set
-  stays identical, so the wiring is ready the day a translation arrives.
-- The compiler enforces: both files present together, exactly the same key set, JSON values all
-  strings, and nothing else in `src/i18n/`. A mismatch is a structural error — fix it before `bolt
-sync` will pass.
-- The build-time merge is `platform catalogs ← your JSON`: same keys win.
+- Both files are **expected; keep their key sets identical**, from the first commit of the workspace.
+  When the tenant's market is English-only today, `messages.zh.json` mirrors the English strings —
+  the keys stay aligned, so the wiring is ready the day a translation arrives. A locale whose file is
+  absent decodes as an empty catalog, so a missing zh file silently ships untranslated copy instead
+  of failing; do not rely on that.
+- `bolt sync` reads both catalogs (`src/i18n/messages.en.json`, `messages.zh.json`) and compiles them
+  into the artifact — `TenantI18nKeys` from the English keys and the merged messages under
+  `$bolt/i18n-messages`. Nothing else may live in `src/i18n/`. Values must be strings.
+- The build-time merge is `platform catalogs ← your JSON`: same keys win. You can see unresolved keys
+  by rendering the workspace with a locale whose catalog is empty.
 
 ## Using it in app files
 
@@ -54,20 +58,20 @@ sync` will pass.
 - The workspace shell mounts a language toggle in the sidebar (next to the theme toggle). A viewer
   switches `en` ↔ `zh` in place; the choice persists and the whole subtree re-renders.
 
-## The raw-text rule (statically enforced)
+## The raw-text rule
 
-The compiler scans every authored `.svelte` app file and flags user-facing text that is not routed
-through `t(...)`:
+Every authored `.svelte` app file's user-facing text must be routed through `t(...)` — this is a
+hard review rule, so read it as an error even though no tool currently scans for it:
 
 - A text node in markup that contains a word character (e.g. `<p>Track and resolve RFIs.</p>`,
-  `<Button>Save</Button>`) is a structural error — the string must come from the catalog.
+  `<Button>Save</Button>`) must come from the catalog.
 - A quoted string literal passed to a component prop or snippet on a line that contains a rendered
-  child (e.g. `title="Requests"`, `description="..."`) is a structural error when the value is
-  not a `t(...)` call or an expression (`{...}`).
+  child (e.g. `title="Requests"`, `description="..."`) must be a `t(...)` call or an expression
+  (`{...}`).
 
-These are errors, not warnings: a raw string is a missing catalog entry by definition, so the
-diagnostic names the string and points at the file and line. Fix it by adding the key to both
-catalogs and referencing it with `t(...)`.
+Fix it by adding the key to both catalogs and referencing it with `t(...)`. A raw string is a
+missing catalog entry by definition, so whenever you review one, name the string and point at the
+file and line.
 
 ### What the rule does not flag
 

@@ -2,17 +2,24 @@ import { Effect, Exit, Layer, Option } from 'effect';
 import { describe, expect, it } from 'vitest';
 import { EffectId, type TaskRequest } from '@norbital-ai/bolt-protocol';
 import * as Automations from '../../src/runtime/automations/automations.js';
-import { Tasks } from '../../src/runtime/facilities/services.js';
+import { Tasks, Transport } from '../../src/runtime/facilities/services.js';
 import * as Database from '../../src/runtime/facilities/database.js';
 import * as TaskQueue from '../../src/runtime/tasks/tasks.js';
+import * as SyncWake from '../../src/runtime/sync/wake.js';
 import * as Workspace from '../../src/runtime/workspace.js';
 import * as InvocationBudget from '../../src/runtime/budget.js';
 import * as TenantScope from '../../src/runtime/tenant.js';
 import { workspace } from '../../src/authoring/workspace-schema.js';
 import { automation } from '../../src/authoring/automations-schema.js';
-import { testCallContext } from '../support/bolt-test-layer.js';
+import { makeBoltTestRuntime, testCallContext } from '../support/bolt-test-layer.js';
+import { afterMillisOf } from '../../src/runtime/collections/authored.js';
 
 describe('Automations owner', () => {
+	it('treats an omitted authored delay as immediately due', () => {
+		expect(afterMillisOf(undefined)).toBe(0);
+		expect(afterMillisOf('not a duration')).toBeUndefined();
+	});
+
 	it('enqueues a stable authored command', async () => {
 		const wakes: Array<TaskRequest> = [];
 		const statements: Array<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }> =
@@ -63,8 +70,11 @@ describe('Automations owner', () => {
 		// Provided explicitly rather than defaulted, because the depth is the thing that decides
 		// whether an enqueue is admitted at all — a service that silently read a stand-in would let
 		// the case below pass against a limiter that was never consulted.
+		const wake = SyncWake.layer.pipe(
+			Layer.provide(Transport.layer(undefined, testCallContext('i1')))
+		);
 		const taskQueue = TaskQueue.layer(testCallContext('i1')).pipe(
-			Layer.provide(Layer.merge(database, tasks))
+			Layer.provide(Layer.mergeAll(database, tasks, wake))
 		);
 		const layer = Automations.layer.pipe(
 			Layer.provide(
@@ -78,7 +88,16 @@ describe('Automations owner', () => {
 		);
 		const taskId = await Effect.runPromise(
 			Effect.gen(function* () {
-				return yield* (yield* Automations.Service).start(EffectId.make('e1'), 'daily', {});
+				const automations = yield* Automations.Service;
+				const taskId = yield* automations.start(EffectId.make('e1'), 'daily', {
+					project_id: 'project-1',
+					force: false
+				});
+				yield* automations.progress(EffectId.make('e1:progress'), taskId, {
+					progress: 0.5,
+					text: 'Halfway'
+				});
+				return taskId;
 			}).pipe(Effect.provide(layer))
 		);
 		// The id a caller gets back is the task's effect id, which is also its idempotency key — a
@@ -99,7 +118,8 @@ describe('Automations owner', () => {
 		// the caller's, and there is no longer a caller's to be: `start` takes no subject at all. The
 		// same automation used to run as an administrator whenever an administrator happened to trip
 		// it, over every row in the workspace, on a schedule.
-		expect(insert?.parameters[1]).toMatchObject({
+		expect(JSON.parse(String(insert?.parameters[1]))).toMatchObject({
+			args: { project_id: 'project-1', force: false },
 			bolt_run_as: {
 				userId: 'automation:daily',
 				tenantId: 'test-tenant',
@@ -109,6 +129,18 @@ describe('Automations owner', () => {
 			},
 			bolt_depth: 1
 		});
+		const progress = statements.find(
+			(statement) =>
+				statement.sql.startsWith('update "bolt_task" set') &&
+				statement.sql.includes('"progress_sequence"')
+		);
+		expect(progress?.parameters).toEqual([
+			JSON.stringify({ progress: 0.5, text: 'Halfway' }),
+			1,
+			'e1:start',
+			'pending',
+			'automations.%'
+		]);
 	});
 
 	it('refuses to enqueue past the nesting limit, before it writes a run row', async () => {
@@ -156,8 +188,11 @@ describe('Automations owner', () => {
 			})
 		);
 		// Already at the limit, which is the state a chain of automations reaches by writing.
+		const wake = SyncWake.layer.pipe(
+			Layer.provide(Transport.layer(undefined, testCallContext('i1')))
+		);
 		const taskQueue = TaskQueue.layer(testCallContext('i1')).pipe(
-			Layer.provide(Layer.merge(database, tasks))
+			Layer.provide(Layer.mergeAll(database, tasks, wake))
 		);
 		const layer = Automations.layer.pipe(
 			Layer.provide(
@@ -183,4 +218,98 @@ describe('Automations owner', () => {
 		// whole pass exists to stop producing.
 		expect(statements.filter((sql) => sql.includes('bolt_task'))).toHaveLength(0);
 	});
+
+	it('stops and resumes only the same task owned by the named automation', async () => {
+		const definition = workspace({
+			name: 'cancellation-scope',
+			version: '1',
+			collections: [],
+			apps: [],
+			policies: [],
+			automations: ['daily', 'weekly'].map((name) =>
+				automation({
+					name,
+					trigger: { _tag: 'Schedule', cron: '* * * * *' },
+					command: name,
+					policies: []
+				})
+			),
+			integrations: [],
+			prompt: 'You are the test workspace agent.',
+			tools: [],
+			skills: [],
+			envoys: [],
+			requiredFacilities: []
+		});
+		const harness = await makeBoltTestRuntime(definition);
+		try {
+			await harness.database.query(
+				`insert into bolt_task (command, input, effect_id) values
+					('automations.daily', '{}', 'daily-run'),
+					('automations.weekly', '{}', 'weekly-run'),
+					('integrations.flush', '{}', 'integration-run')`
+			);
+			expect(
+				await harness.database.query(
+					'select task_id, name, status from automation_run order by task_id'
+				)
+			).toEqual([
+				{ task_id: 'daily-run', name: 'daily', status: 'pending' },
+				{ task_id: 'weekly-run', name: 'weekly', status: 'pending' }
+			]);
+
+			const outcome = await harness.runtime.runPromise(
+				Effect.gen(function* () {
+					const automations = yield* Automations.Service;
+					// A valid but different automation name cannot stop this id.
+					yield* automations.stop(EffectId.make('cross-stop'), 'daily', 'weekly-run');
+					// Nor can an automation lifecycle action reach a task outside its exact command.
+					yield* automations.stop(EffectId.make('foreign-stop'), 'daily', 'integration-run');
+					const unknown = yield* Effect.result(
+						automations.stop(EffectId.make('unknown-stop'), 'unknown', 'daily-run')
+					);
+					yield* automations.stop(EffectId.make('daily-stop'), 'daily', 'daily-run');
+					return unknown;
+				})
+			);
+
+			expect(outcome._tag).toBe('Failure');
+			expect(
+				await harness.database.query(
+					'select effect_id, status, error from bolt_task order by effect_id'
+				)
+			).toEqual([
+				{ effect_id: 'daily-run', status: 'paused', error: null },
+				{ effect_id: 'integration-run', status: 'pending', error: null },
+				{ effect_id: 'weekly-run', status: 'pending', error: null }
+			]);
+			expect(
+				await harness.database.query(
+					"select task_id, status from automation_run where task_id = 'daily-run'"
+				)
+			).toEqual([{ task_id: 'daily-run', status: 'paused' }]);
+
+			await harness.runtime.runPromise(
+				Effect.gen(function* () {
+					yield* (yield* Automations.Service).resume(
+						EffectId.make('daily-resume'),
+						'daily',
+						'daily-run'
+					);
+				})
+			);
+			expect(
+				await harness.database.query(
+					"select effect_id, status from bolt_task where effect_id = 'daily-run'"
+				)
+			).toEqual([{ effect_id: 'daily-run', status: 'resuming' }]);
+			expect(
+				await harness.database.query(
+					"select task_id, status from automation_run where task_id = 'daily-run'"
+				)
+			).toEqual([{ task_id: 'daily-run', status: 'resuming' }]);
+		} finally {
+			await harness.dispose();
+		}
+	}, 60_000);
 });

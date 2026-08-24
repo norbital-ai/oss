@@ -27,7 +27,6 @@
 	import { cn, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
 	import { Dialog as BitsDialog } from 'bits-ui';
 	import { PersistedState } from 'runed';
-	import { Effect, Result } from 'effect';
 	import { onMount } from 'svelte';
 	import { MediaQuery } from 'svelte/reactivity';
 	import SheetContentResize from './sheet-content-resize.svelte';
@@ -97,10 +96,17 @@
 
 	type WidthState = PersistedState<number | null> | { current: number | null };
 
+	/**
+	 * Reading `window.sessionStorage` throws outright when storage is blocked, so the probe is a
+	 * guarded property read — no runtime, nothing to run, and it answers during render.
+	 */
 	function canUseSessionStorage(): boolean {
-		return Result.isSuccess(
-			Effect.runSync(Effect.result(Effect.sync(() => window.sessionStorage)))
-		);
+		try {
+			return window.sessionStorage !== null;
+		} catch {
+			// Storage blocked by the browser: the sheet keeps its width in memory instead.
+			return false;
+		}
 	}
 
 	function createSheetWidthState(key: string): WidthState {

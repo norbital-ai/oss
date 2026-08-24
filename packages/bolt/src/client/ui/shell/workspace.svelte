@@ -128,6 +128,10 @@
 
 	setDataRendererRuntimeContext({
 		customTypeRenderers,
+		// File records persist storage keys, never routes. The host owns the route and declares it on
+		// the session, so generic renderers and authored representations resolve the same key through
+		// the same capability.
+		fileUrl: session.files.urlFor,
 		// These two need a provider credential the host does not hold yet — they belong to the Secrets
 		// vault. Refusing names what is missing; returning an empty result would render an address
 		// picker that silently finds nothing and a map that is silently blank.
@@ -228,15 +232,17 @@
 	 * a preview would append one row per request and bury the entry that says it began.
 	 */
 	const impersonateTeam = (teamId: string): Effect.Effect<void> =>
-		Effect.gen(function* () {
-			yield* workspace.client.system.access.impersonateTeam({ teamId });
-			// The host callback writes the cookie synchronously. Switch the browser caches immediately
-			// so no reader can observe rows held under the previous policy scope.
-			actions.impersonate(teamId);
-			const nextScope = `team:${teamId}`;
-			workspace.changeAccessScope(nextScope);
-			replicaAccessScope = nextScope;
-		}).pipe(Effect.catch((cause) => Effect.logError('Impersonation was refused', cause)));
+		workspace.client.system.access.impersonateTeam({ teamId }).pipe(
+			Effect.map(() => {
+				// The host callback writes the cookie synchronously. Switch the browser caches immediately
+				// so no reader can observe rows held under the previous policy scope.
+				actions.impersonate(teamId);
+				const nextScope = `team:${teamId}`;
+				workspace.changeAccessScope(nextScope);
+				replicaAccessScope = nextScope;
+			}),
+			Effect.catch((cause) => Effect.logError('Impersonation was refused', cause))
+		);
 
 	const stopImpersonating = (): void => {
 		actions.stopImpersonating();
@@ -247,12 +253,11 @@
 	/**
 	 * Colony's own admin-only surfaces, hidden for as long as a preview is running.
 	 *
-	 * Narrowly scoped on purpose. Outside a preview this stays `true`. But leaving "Workspace Studio"
-	 * in the sidebar while the workspace is being shown as an employee contradicts the one thing the
-	 * preview claims, and the studio is a host surface rather than a workspace app, so
-	 * `accessibleApps` never reached it.
+	 * Narrowly scoped on purpose. A tenant administrator owns these pages, except while a policy
+	 * preview is active. The studio is a host surface rather than a workspace app, so
+	 * `accessibleApps` never reaches it and this gate must carry the real administrator status.
 	 */
-	const hostPluginsVisible = $derived(!(impersonation?.isActive ?? false));
+	const hostPluginsVisible = $derived(view.user.admin && !(impersonation?.isActive ?? false));
 
 	const resolveAppName = (href: string): string | undefined => {
 		if (!href.startsWith('/app/')) return undefined;
@@ -307,15 +312,16 @@
 	/**
 	 * Which app component is mounted, and whether its module is still arriving.
 	 *
-	 * `component` and `loading` are the render state. The request counter is deliberately plain local
-	 * state: reading and incrementing a reactive counter from the navigation effect would make that
-	 * effect subscribe to the value it writes and schedule itself forever.
+	 * `component` and `loading` are the render state. The request counter is deliberately *not*
+	 * reactive — it is a plain object rather than `$state` — because reading and incrementing a
+	 * reactive counter from the navigation effect would make that effect subscribe to the value it
+	 * writes and schedule itself forever.
 	 */
 	const appMount = $state({
 		component: null as Component | null,
 		loading: false
 	});
-	let appRequest = 0;
+	const appRequest = { latest: 0 };
 	const App = $derived(appMount.component);
 
 	/**
@@ -331,7 +337,7 @@
 	 * the newest request is allowed to assign.
 	 */
 	const loadAppName = (name: string | undefined): Effect.Effect<void> => {
-		const request = ++appRequest;
+		const request = ++appRequest.latest;
 		appMount.component = null;
 		appMount.loading = false;
 		const loader = name === undefined ? undefined : workspace.appLoaders[name];
@@ -340,18 +346,18 @@
 		return Effect.tryPromise(loader).pipe(
 			Effect.tap((loaded) =>
 				Effect.sync(() => {
-					if (request === appRequest) appMount.component = loaded;
+					if (request === appRequest.latest) appMount.component = loaded;
 				})
 			),
 			// A module that fails to evaluate is a missing app, never the previous one.
 			Effect.catch(() =>
 				Effect.sync(() => {
-					if (request === appRequest) appMount.component = null;
+					if (request === appRequest.latest) appMount.component = null;
 				})
 			),
 			Effect.ensuring(
 				Effect.sync(() => {
-					if (request === appRequest) appMount.loading = false;
+					if (request === appRequest.latest) appMount.loading = false;
 				})
 			),
 			Effect.asVoid
@@ -422,6 +428,22 @@
 		const current = landingName;
 		if (visible === undefined || current === undefined || visible.apps.includes(current)) return;
 		actions.navigate('/', { replace: true });
+	});
+
+	/**
+	 * Removing privileged navigation is not sufficient when the page is already mounted.
+	 *
+	 * An administrator can begin a team preview from People, and a person's role can also change
+	 * while their shell is open. In both cases the privileged component must unmount immediately;
+	 * approvals deliberately remain outside this gate because approver teams are allowed there.
+	 */
+	$effect(() => {
+		if (hostPluginsVisible) return;
+		if (path === WORKSPACE_SETTINGS_PATH || path.startsWith(`${WORKSPACE_SETTINGS_PATH}/`)) {
+			actions.navigate('/', { replace: true });
+			return;
+		}
+		if (hostPlugin !== null) actions.navigate('/', { replace: true });
 	});
 
 	const memberAccessQuery = $derived(

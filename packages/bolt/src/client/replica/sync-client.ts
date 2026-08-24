@@ -61,11 +61,33 @@ type SyncClient = Readonly<{
 	readonly stop: () => void;
 }>;
 
-export const createSyncClient = (options: SyncClientOptions): Effect.Effect<SyncClient> =>
+export const createSyncClient = (options: SyncClientOptions): Effect.Effect<SyncClient, unknown> =>
 	Effect.gen(function* () {
 		const batchSize = Math.max(1, options.batchSize ?? 200);
 		let cursor: SyncCursor = options.initialCursor ?? ORIGIN_CURSOR;
 		let stopped = false;
+
+		if (compareCursors(cursor, ORIGIN_CURSOR) > 0) {
+			const head = yield* options.transport.head().pipe(
+				Effect.match({
+					onFailure: (cause) => {
+						options.onError?.(cause);
+						return cursor;
+					},
+					onSuccess: (current) => current
+				})
+			);
+			if (compareCursors(cursor, head) > 0) {
+				// A persisted cursor cannot be ahead of the database it mirrors. This happens when a
+				// schema-compatible workspace is bootstrapped onto a replacement database: asking that
+				// database for changes after the old cursor returns an empty batch forever, retaining rows
+				// that exist only in the browser. Resetting here lets the replica sink resnapshot the
+				// current rows before ordinary incremental draining resumes from a safe lower bound.
+				yield* options.sink.reset();
+				cursor = head;
+				if (options.onAdvance !== undefined) yield* options.onAdvance(cursor);
+			}
+		}
 
 		const pull = (): Effect.Effect<number> => {
 			let applied = 0;

@@ -40,13 +40,22 @@ export const FileResponse = Schema.Struct({
 });
 export interface FileResponse extends Schema.Schema.Type<typeof FileResponse> {}
 
+/** Provider-neutral controls for a model-operated web search. */
+export const AIWebSearch = Schema.Struct({
+	maxResults: Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 25 })),
+	allowedDomains: Schema.optionalKey(Schema.Array(Schema.NonEmptyString))
+});
+export interface AIWebSearch extends Schema.Schema.Type<typeof AIWebSearch> {}
+
 export const AIRequest = Schema.TaggedUnion({
 	Models: {},
 	Turn: {
 		model: Schema.NonEmptyString,
 		messages: Schema.Array(Schema.Json),
 		tools: Schema.Array(Schema.Json),
-		maxOutputTokens: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))
+		maxOutputTokens: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+		webSearch: Schema.optionalKey(AIWebSearch),
+		responseSchema: Schema.optionalKey(Schema.Json)
 	}
 });
 export type AIRequest = typeof AIRequest.Type;
@@ -341,12 +350,6 @@ export type IdentityHookRequest = typeof IdentityHookRequest.Type;
 export const IdentityHookResponse = Schema.Struct({ acknowledged: Schema.Boolean });
 export interface IdentityHookResponse extends Schema.Schema.Type<typeof IdentityHookResponse> {}
 
-export const TransportProtocol = Schema.Literals(['sse', 'websocket']);
-export type TransportProtocol = typeof TransportProtocol.Type;
-
-export const TransportDirection = Schema.Literals(['one-way', 'two-way']);
-export type TransportDirection = typeof TransportDirection.Type;
-
 export const TransportFrameKind = Schema.Literals(['text', 'binary']);
 export type TransportFrameKind = typeof TransportFrameKind.Type;
 
@@ -360,8 +363,6 @@ export interface TransportFrame extends Schema.Schema.Type<typeof TransportFrame
 
 export const TransportRequest = Schema.TaggedUnion({
 	Open: {
-		protocol: TransportProtocol,
-		direction: TransportDirection,
 		topic: Schema.optionalKey(Schema.NonEmptyString)
 	},
 	Send: {

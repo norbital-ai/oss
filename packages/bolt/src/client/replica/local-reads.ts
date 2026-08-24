@@ -2,14 +2,9 @@ import { Effect, Result, Schema } from 'effect';
 import {
 	compileOrderTerms,
 	compileWhere,
-	renderOrderBy,
 	type WhereContext
 } from '#lib/runtime/collections/where.js';
-import {
-	executeReplicaStatement,
-	type PGliteLike,
-	replicaStatement
-} from '#lib/client/replica/pglite-sql.js';
+import type { LocalReplicaStore } from '#lib/client/replica/pglite-sql.js';
 import { decodeReferenceRow } from '#lib/runtime/collections/references.js';
 
 /**
@@ -38,10 +33,9 @@ import { decodeReferenceRow } from '#lib/runtime/collections/references.js';
  * they are not attempted — a local answer that is merely close is worse than a remote answer that is
  * correct, and the replica exists to make reads fast, never to change them.
  *
- * Both statements use the replica's parameterized execution port. Their dynamic clauses are
- * produced by the *server's* `compileWhere`/`compileOrderTerms` — imported, never reimplemented —
- * and the collection name is quoted as an identifier. The only fixed projections are `count(*)`
- * and `to_jsonb`, which is how a page row stays the same object the server would have sent.
+ * The reader sends a structured operation to the replica store. Dynamic predicates still come from
+ * the *server's* `compileWhere`/`compileOrderTerms` — imported, never reimplemented — but there is no
+ * raw query capability here for UI or template code to call.
  */
 
 const ReferenceTarget = Schema.Struct({
@@ -54,7 +48,7 @@ const ReferenceDefinition = Schema.Struct({
 	onDelete: Schema.Literals(['restrict', 'cascade', 'set null'])
 });
 const ReplicaField = Schema.Struct({
-	type: Schema.Literals(['string', 'uuid', 'number', 'boolean', 'datetime', 'json', 'reference']),
+	type: Schema.Literals(['string', 'uuid', 'number', 'boolean', 'instant', 'json', 'reference']),
 	required: Schema.Boolean,
 	indexed: Schema.Boolean,
 	primaryKey: Schema.optionalKey(Schema.Boolean),
@@ -64,6 +58,7 @@ const ReplicaField = Schema.Struct({
 	sqlDefault: Schema.optionalKey(Schema.String),
 	values: Schema.optionalKey(Schema.Array(Schema.String)),
 	customType: Schema.optionalKey(Schema.String),
+	precision: Schema.optionalKey(Schema.Literals(['day', 'minute'])),
 	search: Schema.optionalKey(Schema.Boolean),
 	mimeTypes: Schema.optionalKey(Schema.Array(Schema.String)),
 	file: Schema.optionalKey(Schema.Boolean),
@@ -120,7 +115,7 @@ const decodeLocalReadInput = Schema.decodeUnknownResult(LocalReadInput);
 const SERVED_KEYS = new Set(['collection', 'where', 'orderBy', 'limit']);
 
 export const createLocalReader = (
-	database: PGliteLike,
+	store: LocalReplicaStore,
 	shape: ReplicaShape,
 	/** Collections the subject may read; anything outside it is never answered locally. */
 	readable: ReadonlySet<string>
@@ -167,41 +162,21 @@ export const createLocalReader = (
 				filter = compiled.success;
 			}
 
-			const table = `"${collection.replaceAll('"', '""')}"`;
 			if (command === 'collections.count') {
-				const counted = yield* executeReplicaStatement<{ readonly count: number }>(
-					database,
-					replicaStatement(
-						`select count(*)::int as count from ${table} where ${filter.sql}`,
-						filter.parameters
-					)
-				);
-				return counted.rows[0]?.count ?? 0;
+				return yield* store.count(collection, filter);
 			}
 
 			const terms = orderBy === undefined ? [] : compileOrderTerms(orderBy, context);
 			// An ordering the compiler dropped would silently reorder the page, so an `orderBy` that
 			// yields no terms is declined rather than served unordered.
 			if (orderBy !== undefined && terms.length === 0) return undefined;
-			const ordering = terms.length === 0 ? '' : ` ${renderOrderBy(terms)}`;
-
-			const parameters = [...filter.parameters];
-			let bounds = '';
-			if (limit !== undefined) {
+			const rows = yield* store.findMany({
+				collection,
+				filter,
+				orderBy: terms,
 				// One more than asked for, which is how the server decides whether a successor exists.
-				parameters.push(limit + 1);
-				bounds = ` limit $${parameters.length}`;
-			}
-
-			// No alias: `compileWhere` qualifies columns with the collection's real table name, so
-			// renaming the relation here puts its predicate out of scope.
-			const result = yield* executeReplicaStatement<{ readonly record: Schema.Json }>(
-				database,
-				replicaStatement(
-					`select to_jsonb(${table}) as record from ${table} where ${filter.sql}${ordering}${bounds}`,
-					parameters
-				)
-			);
+				...(limit === undefined ? {} : { limit: limit + 1 })
+			});
 			/**
 			 * A page with a successor is handed back to the server.
 			 *
@@ -211,13 +186,13 @@ export const createLocalReader = (
 			 * only cursor a caller ever receives is one the server minted, and a locally served answer is
 			 * always a complete result whose honest `nextCursor` is `null`.
 			 */
-			if (limit !== undefined && result.rows.length > limit) return undefined;
+			if (limit !== undefined && rows.length > limit) return undefined;
 			return {
-				rows: result.rows.map((row) => {
-					const stored = decodeJsonObject(row.record);
+				rows: rows.map((record) => {
+					const stored = decodeJsonObject(record);
 					return Result.isSuccess(stored)
 						? decodeReferenceRow(stored.success, context.fields)
-						: row.record;
+						: record;
 				}),
 				nextCursor: null
 			};

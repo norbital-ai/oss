@@ -107,19 +107,15 @@ const tasks = Tasks.layer(
 const testLayer = (seen: Array<DatabaseRequest>) => {
 	const database = recordingDatabase(seen);
 	const workspaceLayer = Workspace.layer(definition);
-	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(database, tasks)));
+	const wake = SyncWake.layer.pipe(Layer.provide(Transport.layer(undefined, context)));
+	const taskQueue = TaskQueue.layer(context).pipe(
+		Layer.provide(Layer.mergeAll(database, tasks, wake))
+	);
+	const tenantScope = TenantScope.layer('tenant-json');
 	const automations = Automations.layer.pipe(
-		Layer.provide(
-			Layer.mergeAll(
-				workspaceLayer,
-				taskQueue,
-				InvocationBudget.layer(0),
-				TenantScope.layer('tenant-json')
-			)
-		)
+		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, InvocationBudget.layer(0), tenantScope))
 	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
-	const wake = SyncWake.layer.pipe(Layer.provide(Transport.layer(undefined, context)));
 	const approvals = Approvals.layer.pipe(
 		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, wake))
 	);
@@ -127,6 +123,7 @@ const testLayer = (seen: Array<DatabaseRequest>) => {
 		Layer.provide(
 			Layer.mergeAll(
 				workspaceLayer,
+				tenantScope,
 				access,
 				approvals,
 				database,

@@ -154,7 +154,12 @@ export const runWebhookDelivery = (
 		// declaration carries, through the same vault read that resolves a pull's bearer token — so a
 		// route whose secret is not provisioned refuses every delivery rather than accepting them.
 		const secret = yield* dependencies.secret(effectId, binding.signature.secret.env);
-		const outcome = verifyDelivery(binding.signature, secret, delivery, yield* dependencies.now);
+		const outcome = yield* verifyDelivery(
+			binding.signature,
+			secret,
+			delivery,
+			yield* dependencies.now
+		);
 		if (!outcome.verified) {
 			return yield* Effect.fail({
 				message: `${integration.name}.${binding.name} refused a delivery: ${outcome.refusal.reason}`

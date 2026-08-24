@@ -85,14 +85,52 @@ const bundle = makeBundle(definition, manifest, {
 	echo: (input) => Promise.resolve({ input, source: 'authored-remote' })
 });
 
+let chatMessageId = 0;
 const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 	call: (_metadata, request) => {
-		// Authentication reads Better Auth's session joined to its user table. Matching on
-		// `session` keeps this stub answering the query identity actually makes; matching
-		// the old `bolt_sessions` would have it answer nothing and every command would read as
-		// unauthenticated.
-		if (request._tag === 'Query' && request.sql.includes('from "session" s')) {
-			return Promise.resolve({ _tag: 'Success', value: { rows: [subject], affectedRows: 0 } });
+		// Authentication reads Better Auth's session joined to its user table. The Drizzle query
+		// returns the physical user projection; identity then resolves that row's team separately.
+		if (request._tag === 'Query' && request.sql.includes('from "session"')) {
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [
+						{
+							id: subject.userId,
+							tenantId: subject.tenantId,
+							email: null,
+							status: 'admin',
+							team_id: 'team-admin'
+						}
+					],
+					affectedRows: 0
+				}
+			});
+		}
+		if (
+			request._tag === 'Query' &&
+			request.sql.startsWith('select "id", "name", "parent_id", "description" from "team"')
+		) {
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [
+						{
+							id: 'team-admin',
+							name: 'admin',
+							parent_id: null,
+							description: null
+						},
+						{
+							id: 'team-employee-app',
+							name: 'employee-app',
+							parent_id: null,
+							description: null
+						}
+					],
+					affectedRows: 0
+				}
+			});
 		}
 		// `startSession` admits the subject before minting, and refuses when no row comes back.
 		if (request._tag === 'Query' && request.sql.includes('update "user"')) {
@@ -101,18 +139,79 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 				value: { rows: [{ id: subject.userId }], affectedRows: 1 }
 			});
 		}
+		if (request._tag === 'Query' && request.sql.includes('insert into "bolt_approvals"')) {
+			const state: Schema.Json | undefined = request.parameters.find(
+				(parameter) =>
+					typeof parameter === 'object' &&
+					parameter !== null &&
+					!Array.isArray(parameter) &&
+					Reflect.get(parameter, '_tag') === 'Pending'
+			);
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: state === undefined ? [] : [{ state }],
+					affectedRows: 1
+				}
+			});
+		}
+		if (
+			request._tag === 'Query' &&
+			request.sql.startsWith('select "state" from "bolt_approvals"')
+		) {
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [
+						{
+							state: {
+								_tag: 'Pending',
+								requestId: 'approval-1',
+								step: 0,
+								operation: {}
+							}
+						}
+					],
+					affectedRows: 0
+				}
+			});
+		}
+		if (request._tag === 'Query' && request.sql.includes('update "bolt_approvals"')) {
+			const state: Schema.Json | undefined = request.parameters.find(
+				(parameter) =>
+					typeof parameter === 'object' &&
+					parameter !== null &&
+					!Array.isArray(parameter) &&
+					Reflect.has(parameter, '_tag')
+			);
+			return Promise.resolve({
+				_tag: 'Success',
+				value: { rows: state === undefined ? [] : [{ state }], affectedRows: 1 }
+			});
+		}
 		if (request._tag === 'Query' && request.sql.includes('bolt_external_subjects')) {
 			const externalId = request.parameters[1];
-			const resolved = externalId === 'employee-external' ? employee : subject;
+			const resolved =
+				externalId === 'employee-external'
+					? {
+							user_id: employee.userId,
+							tenant_id: employee.tenantId,
+							email: null,
+							team_id: 'team-employee-app'
+						}
+					: {
+							user_id: subject.userId,
+							tenant_id: subject.tenantId,
+							email: null,
+							team_id: 'team-admin'
+						};
 			return Promise.resolve({ _tag: 'Success', value: { rows: [resolved], affectedRows: 0 } });
 		}
 		if (
 			request._tag === 'Query' &&
-			request.sql.includes('select * from "employees"') &&
-			(request.sql.includes('"employees"."id" in ($1)') ||
-				request.parameters.some(
-					(parameter) => Array.isArray(parameter) && parameter.includes('employee-1')
-				))
+			request.sql.startsWith('select "id", "created_at"') &&
+			request.sql.includes('from "employees"') &&
+			request.parameters.includes('employee-1')
 		) {
 			return Promise.resolve({
 				_tag: 'Success',
@@ -122,7 +221,11 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 				}
 			});
 		}
-		if (request._tag === 'Query' && request.sql.includes('max(xid)')) {
+		if (
+			request._tag === 'Query' &&
+			request.sql.includes('from "bolt_sync_outbox"') &&
+			request.sql.includes('max(')
+		) {
 			return Promise.resolve({
 				_tag: 'Success',
 				value: { rows: [{ xid: 3, sequence: 4 }], affectedRows: 0 }
@@ -130,54 +233,41 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 		}
 		if (
 			request._tag === 'Query' &&
-			request.sql.includes('bolt_sync_outbox') &&
-			request.sql.includes('order by o.xid')
+			request.sql.includes('from "bolt_sync_outbox"') &&
+			request.sql.includes('order by')
 		) {
+			const rows = [
+				{
+					cursor: { xid: 3, sequence: 5 },
+					collection: 'employees',
+					recordId: 'employee-1',
+					operation: 'update',
+					record: { name: 'Ada' }
+				}
+			];
 			return Promise.resolve({
 				_tag: 'Success',
 				value: {
-					rows: [
-						{
-							cursor: { xid: 3, sequence: 5 },
-							collection: 'employees',
-							recordId: 'employee-1',
-							operation: 'update',
-							record: { name: 'Ada' }
-						}
-					],
+					rows,
 					affectedRows: 0
 				}
 			});
 		}
-		if (
-			request._tag === 'Query' &&
-			request.sql.includes('select state from bolt_approvals where request_id')
-		) {
-			return Promise.resolve({
-				_tag: 'Success',
-				value: {
-					rows: [{ state: { _tag: 'Pending', requestId: 'approval-1', step: 0, operation: {} } }],
-					affectedRows: 0
-				}
-			});
-		}
-		if (request._tag === 'Query' && request.sql.includes('update bolt_approvals set state')) {
-			return Promise.resolve({
-				_tag: 'Success',
-				value: { rows: [{ state: request.parameters[1] ?? null }], affectedRows: 1 }
-			});
-		}
-		if (
-			request._tag === 'Query' &&
-			request.sql.includes('select to_jsonb(record) as snapshot from "employees"')
-		) {
+		if (request._tag === 'Query' && request.sql.includes('to_jsonb("record")')) {
 			const record = { id: 'employee-1', name: 'Grace', row_version: 2 };
 			return Promise.resolve({
 				_tag: 'Success',
 				value: {
-					rows: request.sql.includes('to_jsonb(record)') ? [{ snapshot: record }] : [record],
+					rows: [{ snapshot: record }],
 					affectedRows: 0
 				}
+			});
+		}
+		if (request._tag === 'Query' && request.sql.includes('insert into "chat_message"')) {
+			chatMessageId += 1;
+			return Promise.resolve({
+				_tag: 'Success',
+				value: { rows: [{ id: `message-${chatMessageId}` }], affectedRows: 1 }
 			});
 		}
 		if (
@@ -219,11 +309,9 @@ const facilities: FacilityBindings = { scope, database, ai, tasks };
  * The `user` row the session query above hands back, so it has to be a row the real query
  * could produce.
  *
- * Administration is `user.status` and nothing else — `subjectFromRow` reads
- * `text(row, 'status') === ADMIN_STATUS` and consults no other column. This fixture used to carry
- * `admin: true` and `teamPath: ['admin', 'impersonator'], policies: []`, neither of which that projection looks at,
- * so every case below named for an administrator authenticated as an ordinary user with no matching
- * policy and was refused.
+ * Administration is identified by `user.status`, but that status is not a tenant-data grant.
+ * `subjectFromRow` derives the trusted subject from this row; request payload roles remain
+ * untrusted and cannot add authority.
  *
  * The role ladder is left empty on purpose. `admin` and `impersonator` were compiler-injected and
  * are gone, and an empty array keeps the authority under test the status alone: nothing here can be
@@ -300,15 +388,12 @@ describe('runnable Bolt vertical slice', () => {
 	});
 
 	it('derives command identity from credentials and ignores forged browser roles', async () => {
-		// The payload names `employee`, whose one app is `hr`; the credential names the administrator,
-		// and `visibleApps` short-circuits on the status to the whole registry. So the two answers are
-		// still different, which is the whole of what this case checks — the subject a command runs as
-		// comes from the credential, never from the body. (`dispatchInvocation` overwrites `subject`
-		// among the minted identity fields before `apps.visible` decodes it.)
+		// The payload tries to supply an employee subject. The trusted identity still comes from the
+		// credential, and administrator status does not widen its grants to every app.
 		const forged = await invoke('apps.visible', { subject: employee });
 		expect(forged).toMatchObject({
 			_tag: 'Success',
-			response: { value: { apps: ['hr', 'finance'] } }
+			response: { value: { apps: ['hr'] } }
 		});
 		const unauthenticated: Invocation = {
 			_tag: 'Command',
@@ -386,7 +471,14 @@ describe('runnable Bolt vertical slice', () => {
 		const requested = await invoke('approvals.request', {
 			subject,
 			requestId: 'approval-1',
-			operation: { collection: 'employees' }
+			operation: {
+				collection: 'employees',
+				approval: {
+					id: 'employees:create',
+					steps: [{ id: 'employees:create:stage:1', approvers: ['admin'] }],
+					superceded_by: []
+				}
+			}
 		});
 		expect(requested).toMatchObject({ _tag: 'Success', response: { value: { _tag: 'Pending' } } });
 		const decided = await invoke('approvals.decide', {

@@ -4,8 +4,9 @@
 	import * as Accordion from '#lib/accordion';
 	import { Button, buttonVariants } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Inline } from '#lib/layout';
+	import { Inline, SCROLL_AXIS_CLASSES } from '#lib/layout';
 	import * as Popover from '#lib/popover';
+	import { cn } from '#lib/utils';
 	import { toast } from 'svelte-sonner';
 	import type {
 		CollectionTableIntegrationStatus,
@@ -50,7 +51,8 @@
 	);
 
 	function runPipeline(kind: OperationKind, pipeline: CollectionTablePipeline<TRow>): void {
-		const operationKey = `${kind}:${pipeline.id}`;
+		const { id: pipelineId } = pipeline;
+		const operationKey = `${kind}:${pipelineId}`;
 		if (
 			pendingOperation ||
 			disabled ||
@@ -162,7 +164,10 @@
 			</Popover.Trigger>
 			<Popover.Content
 				align="start"
-				class="max-h-[min(75dvh,42rem)] w-[min(34rem,calc(100vw-1rem))] overflow-y-auto p-0"
+				class={cn(
+					'max-h-[min(75dvh,42rem)] w-[min(34rem,calc(100vw-1rem))] p-0',
+					SCROLL_AXIS_CLASSES.y
+				)}
 			>
 				{@render actionsMenu()}
 			</Popover.Content>

@@ -7,23 +7,55 @@ sign-off first?" are answered in the same place, from the same declaration.
 ## Policies
 
 A policy is a named set of **grants** in `src/access/policies/+<name>.ts`. The filename supplies the
-name; the module default-exports `{ description, grants, capabilities?, limits? }`. A grant is an
-action on a collection, optionally narrowed to matching rows:
+name; the module default-exports `{ description, grants, capabilities?, limits? }`. `grants` is an
+object keyed by collection, one key per collection/action coordinate — presence is the rule, absence
+is denial, and there is no merge order to misunderstand:
 
 ```ts
-{ collection: 'quotes', action: 'read', where: { owner_id: '${requestor.id}' } }
+import type { Policy } from './$types.js';
+
+export default {
+	description: 'A sales representative, scoped to their own quotes.',
+	grants: {
+		quotes: {
+			read: { where: { owner_id: { eq: '${requestor.id}' } } },
+			create: {}
+		}
+	},
+	capabilities: { apps: ['crm'], tools: ['quote_followup'], skills: ['quote_basics'] },
+	limits: {
+		'collections.*': { window: '1 min', limit: 60 },
+		'agents.turn': { window: '1 hour', limit: 100 }
+	}
+} satisfies Policy;
 ```
 
-- Actions are `create`, `read`, `update`, `delete`.
-- `where` narrows a grant to rows that match, so "read only your own quotes" is a grant rather than
-  something the application has to remember to enforce.
+- Read-shaped actions are `read` and `history`; write actions are `create`, `update`, `delete`.
+  `read`/`history` take `{ where?, fields? }` (a read grant has no approval to carry — nobody signs
+  off on somebody having looked). Write grants take `{ fields?, authorize?, approval? }`; `delete`
+  takes `{ authorize?, approval? }`.
+- `where` narrows a read/history grant to rows that match, so "read only your own quotes" is a grant
+  rather than something the application has to remember to enforce. `fields` masks which columns the
+  grant exposes.
+- `authorize` is a server-only decision function — `(context, api) => boolean` running in the write
+  path, with reads and nothing else (`api.db.query` without the mutation half), over the prepared
+  candidate. The action key itself is the opt-in: an empty object means every prepared candidate,
+  and an absent key means no authority for it.
 - `capabilities` grants apps, authored tools, MCP servers, and workspace skills. `limits` holds the
-  rate rules for this policy's holders.
-- **The filename is the only policy name.** `+sales_rep.ts` is `sales_rep`; do not restate `name`,
-  `effect`, or `actions` in the object. The compiler derives those fields and generates the
-  `PolicyName` union used by teams, envoys, and automations. The human-facing label is `description`.
-- Combining a narrowed and an unconditional grant for the same collection/action would erase the
-  narrowing, so the compiler refuses that unsafe composition.
+  rate rules for this policy's holders, keyed by command pattern (exact command or `prefix.*`
+  wildcard; the most specific match wins). Each rule is `{ window, limit }` — the `key` defaults to
+  `subject` on a policy — where `window` is `'1 min'`-style and `key` is `subject`/`sender`/`tenant`
+  (the anonymous half, `address`, lives in `src/access/+anonymous_limits.ts` and is the only
+  separate rate-limit file).
+- **The filename is the only policy name.** `+sales_rep.ts` is `sales_rep`; do not restate `name`
+  (or an `effect`/`actions` list) in the object. The compiler reads the name off the file and
+  generates the `PolicyName` union used by teams, envoys, and automations. The human-facing label is
+  `description`. A restated `name:` is precisely what let five workspaces ship a display-cased
+  string that compiled and matched nothing.
+
+Enforcement is at the data layer. Every read runs as the requestor, so it returns exactly the rows
+that person could already see. If a query comes back empty, that is the requestor's access, not a
+missing feature.
 
 ## Teams hold policies; people belong to one team
 
@@ -31,13 +63,14 @@ There are **no roles**. A policy has a filename-derived name and nothing else se
 
 Three facts, and they are the whole model:
 
-1. **A person belongs to exactly one team.** `user.team_id` points at one `team` row.
-   Not a set. A combination of authority that used to come from holding two roles at once has to be
-   a _named team_ now — more verbose, and more honest, because every combination anybody actually
-   holds appears in a diff.
-2. **Which policies a team holds is declared in `src/access/+teams.ts`**, keyed by team name and valued by
-   policy names, `satisfies Teams`. Team names are matched **case-insensitively** against
-   `team.name` — one rule, everywhere.
+1. **A person belongs to exactly one team.** `user.team_id` points at one `team` row. Not a set.
+   A combination of authority that used to come from holding two roles at once has to be a _named
+   team_ now — more verbose, and more honest, because every combination anybody actually holds
+   appears in a diff. (Administration is `user.status = 'admin'`, a status on the person, not a
+   role and not a team.)
+2. **Which policies a team holds is declared in `src/access/+teams.ts`**, keyed by team name and
+   valued by policy names, `satisfies Teams`. Team names are matched **case-insensitively** against
+   `team.name` — one rule, everywhere, and the unique index enforces it.
 3. **Membership is a row; authority is source.** An operator creates teams and moves people between
    them from a dashboard, without a deploy, because that changes constantly. What a team may _do_ is
    compiled into the release, because a row that granted a policy would be a privilege escalation
@@ -50,73 +83,89 @@ The two halves are bound by name and they move independently at runtime:
 - Source cannot name a missing policy because the generated `PolicyName` union makes that a build
   error. A stale database team row remains inert until source declares authority for its name.
 
-`teamPath` is the team and its descendants by `parent_id`, depth-ordered, and a subject holds the union
-of the policies every team on that path declares. Note that **approval eligibility does not walk the
-path** — see below.
-
-Enforcement is at the data layer. Every read runs as the requestor, so it returns exactly the rows
-that person could already see. If a query comes back empty, that is the requestor's access, not a
-missing feature.
+`teamPath` is the subject's own team first, then its descendants by `parent_id`, depth-ordered. The
+path is for **row scope**: a subject's _authority_ is what their own team (`teamPath[0]`) declares —
+descendants stay in the path for row predicates but confer no policies, otherwise a database
+hierarchy edit could compose policies that no reviewed `+teams.ts` entry names. Approval eligibility
+uses the same one team, never the path — see below. Static envoys and automations name policy
+arrays directly in their declarations and are never rows.
 
 ## Declaring an approval flow
 
 Attach `approval` to a write grant. Only `create`, `update` and `delete` can be gated — gating a
-`read` is refused at build time, because a silently dropped gate would leave an unconditional read
-grant behind.
+`read` is a compile error, because a silently dropped gate would leave an unconditional read grant
+behind. An `approval` is **one function that chooses one concrete flow**, plus the teams allowed to
+supersede every remaining step:
 
 ```ts
-{
-  collection: 'variation_requests',
-  action: 'create',
-  approval: {
-    steps: [
-      {
-        key: 'controller_review',
-        approvers: ['Field Operations Controllers'],
-        description: 'Controller verifies scope change and selected photo evidence.'
+grants: {
+  variation_requests: {
+    create: {
+      authorize: (context) => context.record.amount_total >= 1_000,
+      approval: {
+        flow: (context, api) =>
+          api.requestor.team === 'Construction Sales' || context.record.amount_total < 5_000
+            ? noApproval
+            : approveBy('Field Operations Controllers').thenBy('Construction Leadership'),
+        superceded_by: ['Construction Leadership']
       }
-    ]
+    }
   }
 }
 ```
 
 Details that matter:
 
+- **The flow is ordinary TypeScript or Effect control flow**, returning `approveBy('Team', …)` —
+  one or more stages, run in order — or `noApproval` explicitly. Each stage is `{ approvers }` and
+  its teams are alternatives within the stage; a later stage runs after the previous one's approval.
+  There is no nested `stages` array, no ids, no `description` on a stage.
+- **A stage must name at least one non-empty team, and never the same team twice.**
+  `superceded_by` additionally names teams that may finish every remaining step. It is distinct from
+  the flow's own approvers, and it is static — which is why only its names are serialized.
 - **`approvers` entries and `team` names are the same string.** There is no id resolution and no
   separate approver registry: an entry is matched against the deciding subject's own team name,
-  folded. `approvers` is generated `TeamName`, so misspellings fail the build. Declare review-only
-  teams in `src/access/+teams.ts` with an empty policy list.
-- **Activation creates the teams a step names.** On deploy, `reconcileApproverTeams` inserts an
-  _empty_ `team` row for every `approvers` entry that has no row yet, guarded by a folded
-  `not exists` so two spellings cannot mint two teams. It never refuses a release, and it logs each
-  creation — so a name here that nobody expected is a typo in `approvers` showing itself at the one
-  moment somebody is watching. An empty team is the correct thing to create: the name now resolves,
-  the team appears in the settings surface, and putting somebody in it is one assignment away.
-- **`steps` is flat.** An authored step carries `{ key, approvers, description? }` and runs in order.
-  There is no nested `steps` array, no `supercededBy`, and no `where` on the flow or on a step.
-- **`steps` and `approvers` must both be non-empty.** An empty step list resolves as
-  already-approved, so the gate would be declared and then not exist. A step with no approvers can
-  never be acted on and permanently wedges every write it gates.
-- **Identity is derived, not authored.** The configuration id derives from
-  `(policy, collection, action)` and each step id adds its stable `key`. Reordering steps is safe;
-  changing a key changes the identity an in-flight request is waiting on.
+  folded, and against nothing else. Flow approver names are TypeScript-checked against the
+  generated `TeamName` union at authoring time, so a misspelling fails the build; the concrete flow
+  itself lives server-side and is **not** serialized.
+- **The flow is snapshotted into the request.** When the request is opened, the whole
+  `ApprovalConfiguration` — every stage and every `superceded_by` name — is copied into the
+  request's durable state, so a later release changing the grant cannot restate an in-flight
+  request.
+- **Review-only teams.** Declare a team that only ever approves in `src/access/+teams.ts` with an
+  empty policy list — inert for data, valid for approval.
+- **What activation reconciles.** `reconcileApproverTeams` inserts an _empty_ `team` row for every
+  `superceded_by` name that has no row yet, guarded by a folded `not exists` so two spellings cannot
+  mint two teams. It never refuses a release, and it logs each creation — so a name here that nobody
+  expected is a typo showing itself at the one moment somebody is watching. An empty team is the
+  correct thing to create: the name resolves, the team appears in the settings surface, and putting
+  somebody in it is one assignment away.
 
 ## Write-then-lock
 
-Norbital does not hold a write and apply it after approval. It writes first and locks the row.
+Norbital does not hold a write and apply it after approval. It writes and locks — with one
+difference between the two write paths.
 
-When a mutation matches a gated grant:
+**Imperative writes** (a single `create`/`update`/`delete` — including an agent's
+`write_collection`): the hooks run and the row is written exactly as an ungated write would write
+it; then the row is stamped with `approval_id`, which is the lock. This order matters: an earlier
+design stored the _operation_ and wrote nothing, so the stored values were only what the form posted
+— a collection that derives six `not null` columns in `create.perRecord.before` produced an
+operation that could not satisfy its own schema when it was replayed, and its `after` hook never ran
+at all.
 
-1. **The hooks run and the row is written exactly as an ungated write would write it.** This order
-   matters: the earlier design stored the _operation_ and wrote nothing, so the stored values were
-   only what the form posted — a collection that derives six `not null` columns in
-   `create.perRecord.before` produced an operation that could not satisfy its own schema when it was
-   replayed, and its `after` hook never ran at all.
-2. The row is stamped with `approval_id`, which is the lock.
-3. An `approval_request` record is created with status `ONGOING`.
-4. Any further write to that row is refused as an approval conflict naming the request that holds
+**Declarative writes** (the browser's one write path, `collections.mutate` with a root and every
+relationship it explicitly owns): the graph is reconciled **before** any part of it is written — a
+declarative create is the one lockless case, because its domain row intentionally does not exist
+before approval. Rejecting it is already atomic cleanup.
+
+Both paths:
+
+1. An `approval_request` row is created with status `ONGOING` (the durable state lives in
+   `bolt_approvals`; the row is its synced projection).
+2. Any further write to that row is refused as an approval conflict naming the request that holds
    it, until the request closes.
-5. The caller is answered **202** with `{ pending: true, requestId, collection, id, action }` — not
+3. The caller is answered **202** with `{ pending: true, requestId, collection, id, action }` — not
    a refusal. A tool or a screen that reports this as an error is reporting success as a failure.
 
 So a pending row **is** in the table and will appear in queries. The convention across workspaces is
@@ -124,59 +173,73 @@ that `approval_id IS NULL` means the row is live and approved, and a non-null va
 it is held by an open approval. Reports and dashboards filter on that.
 
 There is no separate "submit for approval" action. A gated write creates the request by itself. An
-approval-gated collection is also never batched: `mutate` sends it down the one-row `create` path,
-because a gate does not "write the batch" — it writes each row and holds each one under its own
-request, which a reviewer has to decide on separately.
+approval-gated collection is also never batched: `mutate` sends it down the one-row path, because a
+gate does not "write the batch" — it writes each row and holds each one under its own request, which
+a reviewer has to decide on separately.
 
 ## Statuses and outcomes
 
-`approval_request.status` is one of `ONGOING`, `APPROVED`, `REJECTED`, `WITHDRAWN`.
+`approval_request.status` is one of `ONGOING`, `APPROVED`, `REJECTED`, `CHANGES_REQUESTED`,
+`CONFLICTED`, `WITHDRAWN`.
 
-| Outcome                | What happens                                                                                                                                                                                                                                         |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Approved               | The lock clears. For a create the row was already there, so approval releases it **and runs `create.perRecord.after` then** — that is what "approved" means for a created record. An update applies its stored values; a delete performs the delete. |
-| Rejected, or withdrawn | For a create the row is deleted, because it only ever existed under the request. For an update or delete the lock is simply released and the record stands as it was.                                                                                |
+| Outcome                | What happens                                                                                                                                                                                                                                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Approved               | `collections.resume` runs. A create's `perRecord.after` runs then — that is what "approved" means for a created record. An update applies its stored values; a delete performs the delete. (An admin or `superceded_by` decision is the same, flagged `superseded`.)                                                                       |
+| Rejected, or withdrawn | `collections.discard` runs. A refused create's provisional row goes — releasing its lock alone would publish exactly the write somebody just refused (declarative graphs have nothing written, so cleanup is already done). An update or delete was never applied, so the record is already what it should be and only the lock comes off. |
+| Changes requested      | Same as rejected: the request closes, the provisional write is discarded, and the requestor can resubmit.                                                                                                                                                                                                                                  |
+| Conflicted             | The reviewed graph could not be settled after approval (the mutation threw, or the artifact no longer matches) — a terminal refusal that failed the turnaround.                                                                                                                                                                            |
 
-There is no request-for-change flow. The client's `approvals.process` accepts only `APPROVED` and
-`REJECTED`; a surface must not invent a third action that the runtime cannot decide.
+The client's `approvals.process` accepts `APPROVED`, `REJECTED`, `REQUEST_FOR_CHANGE` and
+`SUPERSEDED`; `approvals.withdraw` is the requestor's own action (only the requestor may withdraw,
+and only before a decision). A surface must not invent a fifth action that the runtime cannot
+decide. Each decision is annotated with `decidedBy` and an optional `reason`; a `supersede` or
+`request_changes` decision requires a reason.
 
-**Who may decide.** A subject may act on a step only if **their own team's name** is in that step's
-`approvers`, matched case-insensitively. Eligibility does **not** walk `teamPath`: a parent team does
-not inherit a child's approval rights, which is why a real flow lists every team that may decide a
-step rather than only the nearest one. A step naming one team is decidable by that exact team and
-nobody else, including every rung above it.
+**Who may decide.** A subject may act on a step only if **their own team's name** — the subject's
+own team, `teamPath[0]` — is in that step's `approvers`, matched case-insensitively. Eligibility does
+**not** walk `teamPath`: a parent team does not inherit a child's approval rights, which is why a
+real flow lists every team that may decide a step rather than only the nearest one. A step naming one
+team is decidable by that exact team and nobody else, including every rung above it. On top of that,
+an administrator, or a team named in the snapshot's `superceded_by`, may finish every remaining step
+at once (an empty `superceded_by` means only the flow's own approvers).
 
 ## Where the state lives
 
-| Table / column                        | Holds                                                                            |
-| ------------------------------------- | -------------------------------------------------------------------------------- |
-| `approval_request`                    | Status, the steps, which record it holds, the operation to apply, when it closed |
-| `requestor`                           | Links a request to the user who raised it                                        |
-| `approval_id` on every collection row | The stamp identifying the open request holding it — **this is the lock**         |
-| `team`                                | The teams themselves; `approvers` entries are matched against `name`             |
-| `user.team_id`                        | Which single team a person belongs to                                            |
+| Table / column                         | Holds                                                                                                                                                                                                                                                          |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bolt_approvals` (internal)            | The durable state per request: `_tag` (`Pending`/`Approved`/`Rejected`/`ChangesRequested`/`Conflicted`/`Withdrawn`), current `step` cursor, and the **operation** under review — values, the chosen configuration (its stages and `superceded_by`), everything |
+| `approval_request` (system collection) | The synced projection: `collection_name`, `record_id`, `action`, `status`, `steps` (a cursor — `[{ step: n }]` while pending, `[]` once closed), `locked_record_refs`, `proposed_values`, `closed_at`, `closed_by`                                             |
+| `requestor` (system collection)        | The join table linking an `approval_request` to the user who raised it (`approval_request_id`, `user_id`)                                                                                                                                                      |
+| `approval_id` on every collection row  | The stamp identifying the open request holding it — **this is the lock**                                                                                                                                                                                       |
+| `team`                                 | The teams themselves; `approvers` entries are matched against `name`                                                                                                                                                                                           |
+| `user.team_id`                         | Which single team a person belongs to                                                                                                                                                                                                                          |
 
-The flow itself is not a separate table: it rides on the policy grant's own `approval` field, in the
-compiled release, carrying **team names** — there is no `approval_config` with ids resolved into it,
-and no `_approval_lock` table. Nothing is enforced by database triggers; the runtime checks the stamp
-before it writes.
+The flow itself is not a table: it is the policy grant's `approval` field — a live function choosing
+the flow — and the chosen configuration is snapshotted into the request's durable state, carrying
+**team names**. There is no `approval_config` with ids resolved into it, and no `_approval_lock`
+table. Nothing is enforced by database triggers; the runtime checks the stamp before it writes.
 
-`approval_request` and `requestor` are system collections. Whether a subject may read them depends
-on its policies, but they exist and this is where the answers are.
+`approval_request`, `requestor` and `bolt_notifications` are system collections. Whether a subject
+may read them depends on its policies, but they exist and this is where the answers are. Reading
+`bolt_approvals` never happens through a workspace query — its readable legs are projected into
+`approval_request` visibility (raised by the subject, decided by its team, or superseded by its
+team).
 
 ## Approver teams on a fresh tenant
 
-Activation reconciles them. `reconcileApproverTeams` walks every `approvers` entry in the release and
-inserts an **empty** `team` row for any name that has none, so on a brand-new tenant the teams
+Activation reconciles them. `reconcileApproverTeams` walks every declared `superceded_by` name and
+inserts an **empty** `team` row for any name that has none, so on a brand-new tenant those teams
 exist as soon as the workspace activates. It never refuses a release and never invents membership —
 who is on a team is an operator's decision.
 
-So the failure mode is no longer an unknown approver name; generated types reject that. It is a
-declared team that exists and is **empty**. If an approval cannot be decided, look for a
-`team` row with no members. The activation log names every team it created.
+So the flow-side failure mode is a declared team that exists and is **empty**. If an approval cannot
+be decided, look for a `team` row with no members — or check that the flow actually was `approveBy`
+for the team that must decide, because a flow is ordinary TypeScript and a misrouted branch creates
+a request nobody's team is an approver of. The activation log names every team it created.
 
 ## What does not exist
 
 There is no UI for building or editing an approval flow, and no admin screen that adds a step or
 changes who approves. Adding, removing or re-routing a flow is an edit to a policy source file
-followed by a deploy. When someone asks to add an approval step, that is the honest answer.
+followed by a deploy — and `superceded_by`, in the same file, is the one place to define a
+supersede path. When someone asks to add an approval step, that is the honest answer.

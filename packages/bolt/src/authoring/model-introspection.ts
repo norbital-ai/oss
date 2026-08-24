@@ -10,7 +10,7 @@ import {
 	type PgTableExtraConfigValue,
 	type PgTableWithColumns
 } from 'drizzle-orm/pg-core';
-import { Effect, Record as EffectRecord } from 'effect';
+import { Effect, Record as EffectRecord, Schema } from 'effect';
 import type { CollectionDefinition, FieldDefinition, ScalarType } from './workspace-schema.js';
 import {
 	isReferenceBuilder,
@@ -39,9 +39,9 @@ const SCALAR_BY_COLUMN_TYPE: Readonly<Record<string, ScalarType>> = {
 	PgChar: 'string',
 	PgUUID: 'uuid',
 	PgDateString: 'string',
-	PgDate: 'datetime',
-	PgTimestamp: 'datetime',
-	PgTimestampString: 'datetime',
+	PgDate: 'instant',
+	PgTimestamp: 'instant',
+	PgTimestampString: 'instant',
 	PgNumeric: 'number',
 	PgNumericNumber: 'number',
 	PgInteger: 'number',
@@ -66,6 +66,10 @@ type ColumnConfig = Readonly<{
 	readonly dimensions?: number;
 	/** Written by `custom()` so the declared type name survives into the field description. */
 	readonly boltCustomType?: string;
+	/** The same second argument authored on `custom(name, options)`. */
+	readonly boltCustomTypeOptions?: Readonly<Record<string, Schema.Json>>;
+	readonly boltInstantPrecision?: 'day' | 'minute';
+	readonly boltRangePrecision?: 'day' | 'minute';
 	/** Written by the column builders so `text({ search: true })` survives into the description. */
 	readonly boltSearch?: boolean;
 	/** Written by `file()` so the declared accept list survives into the description. */
@@ -121,7 +125,7 @@ const scalarOf = (config: ColumnConfig): ScalarType => {
 	if (dataType.startsWith('number')) return 'number';
 	if (dataType.startsWith('boolean')) return 'boolean';
 	if (dataType.startsWith('json') || dataType.startsWith('object')) return 'json';
-	if (dataType.includes('date') || dataType.includes('timestamp')) return 'datetime';
+	if (dataType.includes('date') || dataType.includes('timestamp')) return 'instant';
 	return 'string';
 };
 
@@ -162,8 +166,8 @@ const declaredDefault = (column: AnyPgColumn): string | undefined => {
  * as `double precision` and `numeric`. `getSQLType()` is the function drizzle-kit renders the
  * lineage's DDL through, so reading it here makes the two sides one answer rather than two that
  * agree until someone edits one of them. It also picks up what a map keyed on the builder name
- * cannot: `numeric({ precision, scale })` and `timestamp({ withTimezone })` are configuration, not
- * distinct builders.
+ * cannot: `numeric({ precision, scale })` and an instant builder's time-zone mode are
+ * configuration, not distinct builders.
  *
  * The DEFAULT rides along here rather than in its own pass because it is the same question about the
  * same built column, and it was missing for the same reason the type was wrong: the plan re-derived
@@ -187,6 +191,8 @@ const declaredColumnSql = (
 	// The module is deliberately synchronous API (its callers read it in plain passes), so the Effect
 	// pipeline is adapted once at this edge.
 	const built = Effect.runSync(
+		// repository-health:allow DDL1 -- this module IS the model compiler; `pgTable` is what a
+		// `defineModel` declaration compiles into, so "prefer defineModel" is circular here.
 		Effect.try(() => getColumns(pgTable('bolt_column_types', columns))).pipe(
 			Effect.catch(() => Effect.succeed<Readonly<Record<string, AnyPgColumn>>>({}))
 		)
@@ -236,6 +242,7 @@ export const describeModelColumns = (
 		if (config === undefined) continue;
 		const { sqlType, sqlDefault } = columnSql.get(name) ?? {};
 		const generated = generatedExpression(config);
+		const precision = config.boltInstantPrecision ?? config.boltRangePrecision;
 		fields[name] = {
 			type: scalarOf(config),
 			// A generated column is never written, so `not null` on it is a constraint the runtime
@@ -253,6 +260,10 @@ export const describeModelColumns = (
 				? {}
 				: { values: [...config.enumValues] }),
 			...(typeof config.boltCustomType === 'string' ? { customType: config.boltCustomType } : {}),
+			...(config.boltCustomTypeOptions === undefined
+				? {}
+				: { customTypeOptions: config.boltCustomTypeOptions }),
+			...(precision === undefined ? {} : { precision }),
 			...(config.boltSearch === true ? { search: true } : {}),
 			...(config.boltMimeTypes === undefined || config.boltMimeTypes.length === 0
 				? {}
@@ -360,7 +371,6 @@ export const compileModel = (
 		...(hooks.length === 0 ? {} : { hooks }),
 		...(exclusions.length === 0 ? {} : { exclusions }),
 		...(structuredIndexes.length === 0 ? {} : { indexes: structuredIndexes }),
-		...(metadata?.approvalLock === undefined ? {} : { approvalLock: metadata.approvalLock }),
 		...(metadata?.sync === undefined ? {} : { sync: metadata.sync }),
 		...(metadata?.history === undefined ? {} : { history: metadata.history }),
 		...(metadata?.description === undefined ? {} : { description: metadata.description }),
@@ -446,6 +456,8 @@ export const compileModelTable = <
 	// The runtime loop above performs the type-level `AuthoredPhysicalColumns` transform. Drizzle's
 	// overloaded factory cannot infer a key-remapped generic intersection from that loop, so the cast
 	// is kept at this one compiler boundary and callers still receive the exact physical table.
+	// repository-health:allow DDL1 -- this is `compileModelTable` itself emitting its output
+	// primitive; the rule describes callers of the compiler, not the compiler.
 	return pgTable(
 		name,
 		columns as Readonly<Record<string, AnyPgColumnBuilder>>,

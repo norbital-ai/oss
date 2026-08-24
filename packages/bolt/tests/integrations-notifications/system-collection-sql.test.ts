@@ -1,76 +1,62 @@
 import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { SYSTEM_COLLECTIONS } from '../../src/runtime/schema/system-collections.js';
 
 /**
- * Hand-written SQL against a system collection, checked against what that collection declares.
+ * Runtime data access must travel through the typed persistence composer.
  *
- * This exists because a column was dropped and a writer was left behind. The now-deleted
- * `channel-principal.ts` did `insert into "team" ("id", "name", "inherits")` after
- * `inherits` was removed, so the statement failed with `column "inherits" of relation "team"
- * does not exist` — and the `Effect.catch` around it turned that into a warning. Every channel in
- * every workspace refused inbound messages, and it reached a person as "the WhatsApp integration
- * does not work", one whole layer away from the cause.
- *
- * Nothing could have caught it. TypeScript does not read template literals, the only test on that
- * module was pure, and 759 tests plus six template typechecks were green when it shipped. It
- * appeared on the first real provision.
- *
- * So the check is textual, over the same source the runtime executes. It is deliberately narrow:
- * it reads the quoted identifiers in an `insert into <system collection> (...)` column list and
- * asserts each is a field that collection declares. It does not parse SQL and does not try to —
- * a column list is the one place this class of drift shows up, and it is the one place a regex can
- * read without guessing.
+ * This is the regression for the stale `insert into "team" (..., "inherits")` writer that survived
+ * the removal of the `inherits` column. Checking that the old SQL named current columns only made
+ * the handwritten statement look supported. The supported state is simpler: runtime CRUD against a
+ * declared system collection is not handwritten at all, so schema drift becomes a type error.
  */
 const SOURCES = [
 	'../../src/runtime/identity/approver-teams.ts',
 	'../../src/runtime/identity/identity.ts'
 ] as const;
 
-/** Every column a system collection accepts: its declared fields plus the framework's own. */
-const declaredColumns = (collectionName: string): ReadonlySet<string> | undefined => {
-	const collection = SYSTEM_COLLECTIONS.find((entry) => entry.name === collectionName);
-	if (collection === undefined) return undefined;
-	return new Set([...Object.keys(collection.fields), 'id', 'created_at', 'updated_at']);
-};
+const systemCollectionPattern = new RegExp(
+	`\\b(?:from|into|update|join)\\s+"?(?:${SYSTEM_COLLECTIONS.map(({ name }) => name).join('|')})"?\\b`,
+	'i'
+);
+const dataStatementPattern = /\b(?:select|insert|update|delete)\b/i;
 
-/** Each `insert into "?<table>"? ( "a", "b", … )` in one source, as a table and its column list. */
-const insertColumnLists = (
-	source: string
-): ReadonlyArray<{ readonly table: string; readonly columns: ReadonlyArray<string> }> =>
-	[...source.matchAll(/insert\s+into\s+"?([a-z_]+)"?\s*\(([^)]*)\)/gi)].flatMap((match) => {
-		const table = match[1];
-		const list = match[2];
-		if (table === undefined || list === undefined) return [];
-		const columns = [...list.matchAll(/"([^"]+)"/g)].flatMap((column) =>
-			column[1] === undefined ? [] : [column[1]]
-		);
-		return columns.length === 0 ? [] : [{ table, columns }];
-	});
-
-describe('hand-written SQL against system collections', () => {
-	it('names only columns those collections declare', () => {
-		const checked: Array<string> = [];
-		for (const relative of SOURCES) {
-			const source = readFileSync(new URL(relative, import.meta.url), 'utf8');
-			for (const { table, columns } of insertColumnLists(source)) {
-				const declared = declaredColumns(table);
-				// A table this suite does not own — an authored collection, a scratch table — is not
-				// this rule's business, and failing on one would make the rule unmaintainable.
-				if (declared === undefined) continue;
-				for (const column of columns) {
-					checked.push(`${table}.${column}`);
-					expect(
-						{ column: `${table}."${column}"`, declaredBy: table },
-						`${relative} inserts ${table}."${column}", which ${table} does not declare`
-					).toEqual({ column: `${table}."${column}"`, declaredBy: table });
-					expect(declared.has(column)).toBe(true);
-				}
+/** Finds authored statement literals in strings and tagged templates alike. */
+const rawSystemCollectionStatements = (source: string, fileName: string): ReadonlyArray<string> => {
+	const parsed = ts.createSourceFile(
+		fileName,
+		source,
+		ts.ScriptTarget.Latest,
+		true,
+		ts.ScriptKind.TS
+	);
+	const statements: Array<string> = [];
+	const visit = (node: ts.Node): void => {
+		if (
+			ts.isStringLiteralLike(node) ||
+			ts.isNoSubstitutionTemplateLiteral(node) ||
+			ts.isTemplateExpression(node)
+		) {
+			const literal = ts.isTemplateExpression(node) ? node.getText(parsed) : node.text;
+			if (dataStatementPattern.test(literal) && systemCollectionPattern.test(literal)) {
+				statements.push(literal);
 			}
 		}
-		// The rule is only worth anything if it actually looked at something. Without this a rename
-		// of any source file above would empty the loop and leave the suite green and blind.
-		expect(checked).toContain('team.name');
-		expect(checked.length).toBeGreaterThanOrEqual(4);
+		ts.forEachChild(node, visit);
+	};
+	visit(parsed);
+	return statements;
+};
+
+describe('runtime persistence against system collections', () => {
+	it('contains no handwritten data statements', () => {
+		for (const relative of SOURCES) {
+			const source = readFileSync(new URL(relative, import.meta.url), 'utf8');
+			expect(
+				rawSystemCollectionStatements(source, relative),
+				`${relative} must compose system-collection CRUD through runtime/persistence`
+			).toEqual([]);
+		}
 	});
 });

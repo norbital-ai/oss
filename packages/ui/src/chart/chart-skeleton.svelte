@@ -5,7 +5,7 @@
 	let { donut = false }: { donut?: boolean } = $props();
 </script>
 
-<Stack gap="none" class="h-[250px]" aria-hidden="true">
+<Stack gap="none" fill aria-hidden="true">
 	<Inline
 		align="end"
 		gap="md"

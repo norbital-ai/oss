@@ -1,12 +1,18 @@
 import { Effect, Schema } from 'effect';
+import { asc, eq } from 'drizzle-orm';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import type { ToolDeclaration } from '#lib/authoring/workspace-schema.js';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Database from '#lib/runtime/facilities/database.js';
+import { composer, executeBuilt } from '#lib/runtime/persistence.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import { ToolNotAllowed } from '#lib/runtime/agents/agent-errors.js';
 import { encodeAgentMessage } from '#lib/runtime/agents/agent-message.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
+
+const { chat_session: chatSession, chat_message: chatMessage } = SYSTEM_MODEL_TABLES;
+type BuiltQuery = Parameters<typeof executeBuilt>[2];
 
 const sandboxToolNames = [
 	'spawn_subagent',
@@ -71,6 +77,12 @@ type SandboxContext = Readonly<{
 	readonly agentName: string;
 	readonly conversationId: string;
 	readonly database: Database.Interface;
+	/** Commits a chat write and wakes the existing sync stream after the trigger captures it. */
+	readonly mutate: (
+		effectId: EffectId,
+		query: BuiltQuery,
+		collections: ReadonlyArray<'chat_session' | 'chat_message'>
+	) => ReturnType<typeof executeBuilt>;
 	readonly tasks: TaskQueue.Interface;
 	/**
 	 * How deep the chain that reached this turn already is, so a delegated turn can be refused before
@@ -92,9 +104,9 @@ const MessageInput = Schema.Struct({
 });
 const NullableString = Schema.Union([Schema.String, Schema.Null]);
 const ConversationRow = Schema.Struct({
-	id: Schema.String,
+	conversation_id: Schema.String,
 	agent_name: Schema.optionalKey(Schema.String),
-	title: Schema.optionalKey(Schema.String)
+	title: Schema.optionalKey(NullableString)
 });
 
 const decode = <S extends Schema.Top>(schema: S, input: unknown) =>
@@ -116,25 +128,34 @@ const sameSandbox = Effect.fn('Agents.sameSandbox')(function* (
 	context: SandboxContext,
 	sessionId: string
 ) {
-	const result = yield* context.database.execute(context.effectId, {
-		_tag: 'Query',
-		sql: 'select conversation_id as id, user_id, agent_name, title from chat_session where conversation_id = $1',
-		parameters: [sessionId]
-	});
+	const result = yield* executeBuilt(
+		context.effectId,
+		context.database,
+		composer
+			.select({
+				conversation_id: chatSession.conversation_id,
+				sandbox_key: chatSession.sandbox_key,
+				agent_name: chatSession.agent_name,
+				title: chatSession.title
+			})
+			.from(chatSession)
+			.where(eq(chatSession.conversation_id, sessionId))
+			.limit(1)
+	);
 	const row = result.rows[0];
 	const decoded = Schema.decodeUnknownOption(
 		Schema.Struct({
-			id: Schema.String,
-			user_id: Schema.String,
+			conversation_id: Schema.String,
+			sandbox_key: Schema.String,
 			agent_name: Schema.optionalKey(NullableString),
 			title: Schema.optionalKey(NullableString)
 		})
 	)(row);
-	if (decoded._tag === 'None' || decoded.value.user_id !== context.sandboxKey) {
+	if (decoded._tag === 'None' || decoded.value.sandbox_key !== context.sandboxKey) {
 		return yield* new ToolNotAllowed({ agent: context.agentName, tool: 'sandbox-scope' });
 	}
 	return {
-		id: decoded.value.id,
+		id: decoded.value.conversation_id,
 		agentName: decoded.value.agent_name ?? null,
 		title: decoded.value.title ?? null
 	};
@@ -142,11 +163,15 @@ const sameSandbox = Effect.fn('Agents.sameSandbox')(function* (
 
 /** This session's own title, which is how the reader on the other end tells two of its sessions apart. */
 const ownTitle = Effect.fn('Agents.ownTitle')(function* (context: SandboxContext) {
-	const result = yield* context.database.execute(EffectId.make(`${context.effectId}:sender`), {
-		_tag: 'Query',
-		sql: 'select title from chat_session where conversation_id = $1',
-		parameters: [context.conversationId]
-	});
+	const result = yield* executeBuilt(
+		EffectId.make(`${context.effectId}:sender`),
+		context.database,
+		composer
+			.select({ title: chatSession.title })
+			.from(chatSession)
+			.where(eq(chatSession.conversation_id, context.conversationId))
+			.limit(1)
+	);
 	const decoded = Schema.decodeUnknownOption(
 		Schema.Struct({ title: Schema.optionalKey(NullableString) })
 	)(result.rows[0]);
@@ -171,17 +196,21 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 			// the reader's transcript walks down it to nest this agent's work under the call, and the
 			// usage roll-up walks up it so what this agent spends lands on the conversation the person
 			// is actually looking at, however many levels of delegation lie between.
-			yield* context.database.execute(EffectId.make(`${context.effectId}:spawn`), {
-				_tag: 'Query',
-				sql: 'insert into chat_session (conversation_id, agent_name, user_id, title, parent_id) values ($1, $2, $3, $4, $5) on conflict do nothing',
-				parameters: [
-					conversationId,
-					context.agentName,
-					context.sandboxKey,
-					parsed.task,
-					context.conversationId
-				]
-			});
+			yield* context.mutate(
+				EffectId.make(`${context.effectId}:spawn`),
+				composer
+					.insert(chatSession)
+					.values({
+						conversation_id: conversationId,
+						agent_name: context.agentName,
+						user_id: context.subject.userId,
+						sandbox_key: context.sandboxKey,
+						title: parsed.task,
+						parent_id: context.conversationId
+					})
+					.onConflictDoNothing(),
+				['chat_session']
+			);
 			const spawnTaskId = `${context.effectId}:enqueue`;
 			yield* context.tasks.enqueue(EffectId.make(spawnTaskId), [
 				{
@@ -201,26 +230,39 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 			return { spawned: true, conversationId };
 		}
 		case 'list_sandbox_agents': {
-			const result = yield* context.database.execute(context.effectId, {
-				_tag: 'Query',
-				sql: 'select conversation_id as id, agent_name, title from chat_session where user_id = $1',
-				parameters: [context.sandboxKey]
-			});
+			const result = yield* executeBuilt(
+				context.effectId,
+				context.database,
+				composer
+					.select({
+						conversation_id: chatSession.conversation_id,
+						agent_name: chatSession.agent_name,
+						title: chatSession.title
+					})
+					.from(chatSession)
+					.where(eq(chatSession.sandbox_key, context.sandboxKey))
+			);
 			return {
 				sessions: result.rows.flatMap((row) => {
 					const decoded = decodeConversationRow(row);
-					return decoded._tag === 'Some' ? [decoded.value] : [];
+					if (decoded._tag === 'None') return [];
+					const { conversation_id: id, ...fields } = decoded.value;
+					return [{ id, ...fields }];
 				})
 			};
 		}
 		case 'read_sandbox_agent': {
 			const parsed = yield* decode(SessionInput, input);
 			yield* sameSandbox(context, parsed.sessionId);
-			const result = yield* context.database.execute(context.effectId, {
-				_tag: 'Query',
-				sql: 'select role, content from chat_message where conversation_id = $1 order by sequence',
-				parameters: [parsed.sessionId]
-			});
+			const result = yield* executeBuilt(
+				context.effectId,
+				context.database,
+				composer
+					.select({ role: chatMessage.role, content: chatMessage.content })
+					.from(chatMessage)
+					.where(eq(chatMessage.conversation_id, parsed.sessionId))
+					.orderBy(asc(chatMessage.sequence))
+			);
 			return { sessionId: parsed.sessionId, messages: result.rows };
 		}
 		case 'message_sandbox_agent': {
@@ -230,20 +272,20 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 			// `::jsonb` with an encoded value, like every other write to this log. The bare message text
 			// went into a `jsonb` column unquoted, which is not JSON — the delivery failed in the database
 			// rather than in the tool, so the sender was told it had landed.
-			yield* context.database.execute(context.effectId, {
-				_tag: 'Query',
-				sql: 'insert into chat_message (conversation_id, role, content) values ($1, $2, $3::jsonb)',
-				parameters: [
-					parsed.sessionId,
-					'user',
-					JSON.stringify(
+			yield* context.mutate(
+				context.effectId,
+				composer.insert(chatMessage).values({
+					conversation_id: parsed.sessionId,
+					role: 'user',
+					content: JSON.stringify(
 						encodeAgentMessage(
 							{ sessionId: context.conversationId, agentName: context.agentName, title },
 							parsed.message
 						)
 					)
-				]
-			});
+				}),
+				['chat_message']
+			);
 			// The recipient's name travels back so the sending transcript can say who it wrote to.
 			return {
 				sessionId: parsed.sessionId,

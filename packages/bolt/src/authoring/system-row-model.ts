@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { customType, integer, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { customType, integer, timestamp as pgInstant, uuid } from 'drizzle-orm/pg-core';
 import { SYSTEM_COLLECTION_FIELD_NAMES } from '@norbital-ai/std/collection';
 import { defineModel } from './models-schema.js';
 
@@ -11,8 +11,8 @@ const timestampRange = customType<{ data: string; driverData: string }>({
 export const defineSystemRowModel = () =>
 	defineModel({
 		id: uuid().primaryKey().defaultRandom(),
-		created_at: timestamp({ withTimezone: true, mode: 'string' }).defaultNow(),
-		updated_at: timestamp({ withTimezone: true, mode: 'string' }).defaultNow(),
+		created_at: pgInstant({ withTimezone: true, mode: 'string' }).defaultNow(),
+		updated_at: pgInstant({ withTimezone: true, mode: 'string' }).defaultNow(),
 		sys_period: timestampRange()
 			.notNull()
 			.default(sql`tstzrange(CURRENT_TIMESTAMP, NULL, '[)')`),

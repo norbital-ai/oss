@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
+	import { getCollectionTableNavigationContext } from '@norbital-ai/ui/collection-table/navigation';
 	import { Bound, Cluster, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import type { CollectionDefinition, CollectionRecord } from '@norbital-ai/std/collection';
@@ -12,6 +13,7 @@
 	} from '#lib/client/ui/settings/rows.js';
 	import TeamChart from './teams-flow.svelte';
 	import { inMemoryCollectionClient } from '#lib/client/ui/settings/table-client.js';
+	import { onDestroy } from 'svelte';
 
 	/**
 	 * The People surface: who is a member, how the teams nest, which invitations are outstanding,
@@ -138,6 +140,21 @@
 			[EVENTS_COLLECTION]: eventRows
 		})
 	);
+
+	/**
+	 * People rows are host projections, not tenant collections. Register exactly those three names
+	 * for the lifetime of this settings surface so a URL-restored detail stack still resolves when
+	 * its owning tab is not mounted. The getter keeps an already-open sheet on the latest async access
+	 * payload instead of pinning the empty client created before workspace access finishes loading.
+	 */
+	const detailNavigation = getCollectionTableNavigationContext();
+	const releaseDetailClients = [MEMBERS_COLLECTION, INVITATIONS_COLLECTION, EVENTS_COLLECTION].map(
+		(collectionName) =>
+			detailNavigation?.registerCollectionClient(collectionName, () => peopleClient)
+	);
+	onDestroy(() => {
+		for (const release of releaseDetailClients) release?.();
+	});
 
 	let activeTab = $state('people');
 </script>

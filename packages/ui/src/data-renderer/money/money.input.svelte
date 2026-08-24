@@ -70,14 +70,17 @@
 		{ lazy: false }
 	);
 
-	const completedValues = $derived(
-		drafts.flatMap((draft) => {
+	/** The drafts that have become a real amount: a finite number and a currency. */
+	function completedFrom(entries: readonly MoneyDraft[]): MoneyValue[] {
+		return entries.flatMap((draft) => {
 			const amount = Number(draft.amount);
 			return draft.amount.trim() && Number.isFinite(amount) && draft.currency
 				? [{ value: amount, currency: draft.currency }]
 				: [];
-		})
-	);
+		});
+	}
+
+	const completedValues = $derived(completedFrom(drafts));
 	const triggerText = $derived(
 		completedValues.length
 			? completedValues.map((entry) => formatMoney(entry)).join(', ')
@@ -110,12 +113,7 @@
 
 	function emit(next: MoneyDraft[]): void {
 		drafts = next;
-		const completed = next.flatMap((draft) => {
-			const amount = Number(draft.amount);
-			return draft.amount.trim() && Number.isFinite(amount) && draft.currency
-				? [{ value: amount, currency: draft.currency }]
-				: [];
-		});
+		const completed = completedFrom(next);
 		onValueChange?.(multiple ? completed : (completed[0] ?? null));
 	}
 

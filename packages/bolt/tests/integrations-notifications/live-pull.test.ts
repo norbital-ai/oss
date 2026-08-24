@@ -84,6 +84,7 @@ const Repository = Schema.Struct({
 
 const authoredModule = {
 	pokeapi: {
+		policies: ['admin'],
 		connection: pokeapi,
 		receive: {
 			species: definePull({
@@ -101,6 +102,7 @@ const authoredModule = {
 		}
 	},
 	placeholder: {
+		policies: ['admin'],
 		connection: placeholder,
 		receive: {
 			posts: definePull({
@@ -120,6 +122,7 @@ const authoredModule = {
 		}
 	},
 	crossref: {
+		policies: ['admin'],
 		connection: crossref,
 		receive: {
 			works: definePull({
@@ -157,6 +160,7 @@ const authoredModule = {
 		}
 	},
 	github: {
+		policies: ['admin'],
 		connection: github,
 		receive: {
 			repositories: definePull({
@@ -180,6 +184,7 @@ const authoredModule = {
 		}
 	},
 	github_authenticated: {
+		policies: ['admin'],
 		connection: githubAuthenticated,
 		receive: {
 			repositories: definePull({

@@ -158,7 +158,7 @@ export const startApplication = (options: ApplicationOptions) =>
 				tick: () => runTick,
 				onFailure: (cause) => {
 					// The scheduler backs off; this boundary keeps an unwatched failure visible.
-					void Effect.runPromise(
+					Effect.runFork(
 						Effect.logError(
 							`scheduler.tick: ${cause instanceof Error ? cause.message : String(cause)}`
 						)
@@ -288,10 +288,10 @@ export const startApplication = (options: ApplicationOptions) =>
 			/** Stops the application once, converging concurrent callers on the same run. */
 			const stop = () =>
 				Effect.runPromise(
-					Effect.gen(function* () {
-						if (stopped) return;
+					Effect.suspend(() => {
+						if (stopped) return Effect.void;
 						stopped = true;
-						yield* stopEffect;
+						return stopEffect;
 					})
 				);
 

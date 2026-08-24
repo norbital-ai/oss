@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Ref, Schema } from 'effect';
+import { and, asc, desc, eq, inArray, isNull, notLike, or } from 'drizzle-orm';
 import {
 	addAIUsage,
 	AIUsage,
@@ -6,6 +7,7 @@ import {
 	readAIUsage,
 	type EffectId as EffectIdType
 } from '@norbital-ai/bolt-protocol';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
@@ -13,6 +15,8 @@ import { PendingApproval } from '#lib/runtime/collections/collections.js';
 import { AI, Connector, HostTools } from '#lib/runtime/facilities/services.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Database from '#lib/runtime/facilities/database.js';
+import { composer, executeBuilt, increment, transactionBuilt } from '#lib/runtime/persistence.js';
+import * as SyncWake from '#lib/runtime/sync/wake.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import { TurnResult, type TurnResult as TurnResultValue } from './agent-schemas.js';
 export { TurnResult } from './agent-schemas.js';
@@ -22,6 +26,7 @@ import * as Workspace from '#lib/runtime/workspace.js';
 import { DispatchError, WorkspaceLookupError } from '#lib/runtime/workspace.js';
 import type { ToolDeclaration } from '#lib/authoring/workspace-schema.js';
 import { WEB_AGENT_NAME } from '#lib/authoring/workspace-schema.js';
+import { envoyPrincipalId } from '#lib/runtime/identity/static-identity.js';
 
 /**
  * The agent one turn runs as: the web agent, or one envoy.
@@ -41,25 +46,23 @@ type ResolvedAgent = Readonly<{
 	readonly task?: string;
 	/** `public` on an envoy anyone can message; absent for the web agent, which is never public. */
 	readonly audience?: 'public' | 'authenticated';
+	/** Disabled only by an envoy declaration; absent keeps web and existing envoys compatible. */
+	readonly delegation?: 'enabled' | 'disabled';
 }>;
 
 /**
  * Which sandbox this turn works in — the tenant plane's counterpart to §10's personal plane.
  *
- * A person gets one tree, keyed by who they are. An envoy gets its own, keyed by the principal its
- * declaration mints. A **public** envoy gets one per conversation, and that partition is the whole
- * of §10.2: an envoy is one principal, so without it every sender on a public surface would share a
- * tree and a document a stranger uploaded would sit where the next stranger could read it.
- *
- * On an `authenticated` envoy the subject's `userId` has already narrowed to the matched member, so
- * the key is that member's and their sandbox is the one they have on the web — which is correct: it
- * is the same person, reached down a different wire.
+ * A person gets one tree, keyed by who they are. An envoy gets exactly one tree, keyed by the
+ * principal its declaration mints. Documents are not stored in that tree: every document belongs to
+ * a chat session through `chat_document`, so sharing delegated-agent state across an envoy cannot
+ * share anything a sender uploaded.
  */
 const sandboxKeyFor = (
 	subject: Identity.Subject,
 	agent: ResolvedAgent,
-	conversationId: string
-): string => (agent.audience === 'public' ? `${subject.userId}#${conversationId}` : subject.userId);
+	_conversationId: string
+): string => (agent.audience === undefined ? subject.userId : envoyPrincipalId(agent.name));
 import { McpToolError, SkillError, ToolNotAllowed } from '#lib/runtime/agents/agent-errors.js';
 import {
 	executeHostTool,
@@ -77,6 +80,18 @@ import {
 } from '#lib/runtime/agents/sandbox-tools.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
 import { AuthoredRefusal } from '#lib/authoring/refusal.js';
+import * as ChatDocuments from '#lib/runtime/agents/documents.js';
+import {
+	chatInputForModel,
+	chatInputText,
+	isChatDocumentStorageKey,
+	parseStoredChatInput,
+	type ChatDocumentRef,
+	type StoredChatInput
+} from '#lib/runtime/agents/chat-messages.js';
+
+const { chat_session: chatSession, chat_message: chatMessage } = SYSTEM_MODEL_TABLES;
+type BuiltQuery = Parameters<typeof executeBuilt>[2];
 
 export { McpToolError, SkillError, ToolNotAllowed } from '#lib/runtime/agents/agent-errors.js';
 export {
@@ -118,6 +133,10 @@ const TurnOutput = Schema.Struct({
 	toolCalls: Schema.optionalKey(Schema.Array(ToolCall))
 });
 const maxToolRounds = 8;
+const recentPromptRows = 64;
+const protectedAssistantTurns = 3;
+const softToolOutputCharacters = 4_000;
+const hardToolOutputCharacters = 50_000;
 
 /**
  * One step of an agent turn. "Step" and "part" name the same thing: what the turn produced next.
@@ -164,13 +183,13 @@ const StoredTurn = Schema.Struct({
 	),
 	subject: Schema.optionalKey(Identity.Subject),
 	agent_name: Schema.optionalKey(Schema.NonEmptyString),
-	sender_context: Schema.optionalKey(Schema.String),
 	usage: Schema.optionalKey(AIUsage),
 	usage_unreported: Schema.optionalKey(Schema.Boolean)
 });
 type StoredTurn = Schema.Schema.Type<typeof StoredTurn>;
 
-const StoredTurnRow = Schema.Struct({ content: StoredTurn });
+const StoredTurnMessageRow = Schema.Struct({ id: Schema.String, content: StoredTurn });
+const decodeStoredTurnMessageRow = Schema.decodeUnknownOption(StoredTurnMessageRow);
 const AwaitInput = Schema.Struct({ sessionId: Schema.NonEmptyString });
 const WaitingAnswer = Schema.Struct({ waiting: Schema.Literal(true) });
 
@@ -233,6 +252,40 @@ const replayTurn = (parts: ReadonlyArray<TurnPart>): ReadonlyArray<Schema.Json> 
 };
 
 /**
+ * Old tool output is evidence, not an entitlement to consume the prompt forever. The recent three
+ * assistant turns remain byte-for-byte intact; older output is trimmed at the two age thresholds
+ * used by the runtime's fixed replay window.
+ */
+const pruneToolOutput = (
+	parts: ReadonlyArray<TurnPart>,
+	ageFraction: number,
+	protectedTurn: boolean
+): ReadonlyArray<TurnPart> => {
+	if (protectedTurn) return parts;
+	return parts.map((part): TurnPart => {
+		if (part.kind !== 'tool-result') return part;
+		const encoded = JSON.stringify(part.output);
+		if (ageFraction >= 0.5 && encoded.length > hardToolOutputCharacters) {
+			return {
+				...part,
+				output: {
+					cleared: true,
+					originalCharacters: encoded.length,
+					reason: 'outside recent prompt window'
+				}
+			};
+		}
+		if (ageFraction >= 0.3 && encoded.length > softToolOutputCharacters) {
+			return {
+				...part,
+				output: `${encoded.slice(0, 1_500)}\n… ${encoded.length - 3_000} characters trimmed …\n${encoded.slice(-1_500)}`
+			};
+		}
+		return part;
+	});
+};
+
+/**
  * What one conversation has cost, counting everything it delegated.
  *
  * Cumulative counters read off the session row rather than a sum taken over the transcript: the
@@ -242,7 +295,8 @@ const replayTurn = (parts: ReadonlyArray<TurnPart>): ReadonlyArray<Schema.Json> 
  * `turnsUnreported` is what stops a total reading as exact when it is a floor. A host that reports
  * no cost for a turn has not told us the turn was free.
  */
-const ConversationUsage = Schema.Struct({
+// repository-health:allow EXP1 -- Exported dependent Layer declarations require this cross-module schema name during declaration emit.
+export const ConversationUsage = Schema.Struct({
 	/** The provider's own charge, kept as the audit figure behind the one below. */
 	costUsd: Schema.Number,
 	/**
@@ -258,6 +312,7 @@ const ConversationUsage = Schema.Struct({
 	turnsCounted: Schema.Number,
 	turnsUnreported: Schema.Number
 });
+// repository-health:allow EXP1 -- Exported dependent Layer declarations require this cross-module row type during declaration emit.
 export interface ConversationUsage extends Schema.Schema.Type<typeof ConversationUsage> {}
 
 /**
@@ -280,6 +335,19 @@ const ConversationRow = Schema.Struct({
 	visibility: ConversationVisibility,
 	envoy_key: NullableString
 });
+const AuthorizedConversationRow = Schema.Struct({
+	...ConversationRow.fields,
+	sandbox_key: Schema.String
+});
+const StoredConversationRow = Schema.Struct({
+	conversation_id: Schema.String,
+	agent_name: Schema.String,
+	title: NullableString,
+	user_id: Schema.String,
+	sandbox_key: Schema.String,
+	visibility: ConversationVisibility,
+	envoy_key: NullableString
+});
 const MessageRow = Schema.Struct({
 	role: Schema.String,
 	content: Schema.Json,
@@ -295,11 +363,22 @@ const MessageRow = Schema.Struct({
 });
 
 /** The stored rows a replay reads; the decoder shapes are built beside the row schema, once. */
-const MessageContent = Schema.Struct({ parts: Schema.Array(TurnPart) });
+const MessageContent = Schema.Struct({
+	parts: Schema.Array(TurnPart),
+	subject: Schema.optionalKey(Identity.Subject)
+});
 
 const decodeMessageRow = Schema.decodeUnknownOption(MessageRow);
 const decodeMessageContent = Schema.decodeUnknownOption(MessageContent);
-const decodeConversationRow = Schema.decodeUnknownOption(ConversationRow);
+const decodeStoredConversationRow = Schema.decodeUnknownOption(StoredConversationRow);
+const conversationRow = (
+	row: unknown
+): Schema.Schema.Type<typeof AuthorizedConversationRow> | undefined => {
+	const decoded = decodeStoredConversationRow(row);
+	if (decoded._tag === 'None') return undefined;
+	const { conversation_id: id, ...fields } = decoded.value;
+	return { id, ...fields };
+};
 
 /** The single column a conversation title lookup reads back. */
 const TitleRow = Schema.Struct({ title: Schema.optionalKey(Schema.String) });
@@ -320,6 +399,13 @@ const UsageRow = Schema.Struct({
 		Schema.Union([Schema.Number, Schema.String, Schema.Null])
 	)
 });
+const ConversationLinkRow = Schema.Struct({
+	conversation_id: Schema.String,
+	parent_id: Schema.Union([Schema.String, Schema.Null])
+});
+const decodeConversationLinkRow = Schema.decodeUnknownOption(ConversationLinkRow);
+const IdRow = Schema.Struct({ id: Schema.String });
+const decodeIdRow = Schema.decodeUnknownOption(IdRow);
 
 /**
  * Reads one counter off a session row.
@@ -368,20 +454,7 @@ export type Interface = Readonly<{
 		subject: Identity.Subject,
 		agentName: string,
 		conversationId: string,
-		message: string,
-		/**
-		 * Who is speaking, when the caller knows something the transcript does not.
-		 *
-		 * A channel message arrives from a phone number, and the person behind it may or may not have
-		 * an account — so the agent has to be *told* who it is answering, and told separately from
-		 * what they said. It is a system message rather than a prefix on `message` precisely so the
-		 * model cannot confuse a fact the runtime asserted with a claim the sender typed; somebody
-		 * writing "I am the site controller" into WhatsApp must not read as this.
-		 *
-		 * It grants nothing and is not consulted by anything. Capability is `subject`'s, resolved
-		 * from a team through `+teams.ts`, whatever this string says.
-		 */
-		senderContext?: string
+		message: StoredChatInput
 	) => Effect.Effect<
 		TurnResultValue,
 		| Workspace.WorkspaceLookupError
@@ -397,7 +470,35 @@ export type Interface = Readonly<{
 		// reaching this boundary already; only the declaration did not say so, which is how a
 		// refusal here left as something a caller could not name.
 		| AuthoredRefusal
+		| ChatDocuments.ChatDocumentError
 		| InvocationBudget.NestingLimitExceeded
+	>;
+	readonly bindDocument: (
+		effectId: EffectIdType,
+		subject: Identity.Subject,
+		conversationId: string,
+		file: ChatDocumentRef
+	) => Effect.Effect<
+		void,
+		Database.FacilityError | AccessControl.AccessDenied | ChatDocuments.ChatDocumentError
+	>;
+	readonly resolveDocument: (
+		effectId: EffectIdType,
+		subject: Identity.Subject,
+		conversationId: string,
+		storageKey: string
+	) => Effect.Effect<
+		ChatDocumentRef,
+		Database.FacilityError | AccessControl.AccessDenied | ChatDocuments.ChatDocumentError
+	>;
+	readonly removeDocument: (
+		effectId: EffectIdType,
+		subject: Identity.Subject,
+		conversationId: string,
+		storageKey: string
+	) => Effect.Effect<
+		void,
+		Database.FacilityError | AccessControl.AccessDenied | ChatDocuments.ChatDocumentError
 	>;
 	readonly resume: (
 		effectId: EffectIdType,
@@ -478,44 +579,97 @@ export const layer = Layer.effect(
 		const access = yield* AccessControl.Service;
 		const ai = yield* AI.Service;
 		const database = yield* Database.Service;
+		const syncWake = yield* SyncWake.Service;
 		const queue = yield* TaskQueue.Service;
 		const collections = yield* Collections.Service;
 		const hostTools = yield* HostTools.Service;
 		const connector = yield* Connector.Service;
+		const documents = yield* ChatDocuments.Service;
 		const budget = yield* InvocationBudget.Service;
 		const remotes = yield* RemoteRegistry;
+
+		/**
+		 * Commits a chat mutation, then nudges the existing replica stream to drain its durable outbox.
+		 *
+		 * PostgreSQL triggers write the outbox row in the mutation's transaction. The announcement carries
+		 * collection names only and is deliberately post-commit, so this is not a second data channel and
+		 * cannot turn a delivered write into a reported failure.
+		 */
+		const syncMutation = Effect.fn('Agents.syncMutation')(function* (
+			effectId: EffectIdType,
+			query: BuiltQuery,
+			collections: ReadonlyArray<'chat_session' | 'chat_message'>
+		) {
+			const response = yield* executeBuilt(effectId, database, query);
+			yield* syncWake.announce(EffectId.make(`${effectId}:sync`), collections);
+			return response;
+		});
+		const syncTransaction = Effect.fn('Agents.syncTransaction')(function* (
+			effectId: EffectIdType,
+			queries: ReadonlyArray<BuiltQuery>,
+			collections: ReadonlyArray<'chat_session' | 'chat_message'>
+		) {
+			if (queries.length === 0) return;
+			yield* transactionBuilt(effectId, database, queries);
+			yield* syncWake.announce(EffectId.make(`${effectId}:sync`), collections);
+		});
 
 		/**
 		 * The rows one signed-in reader may inspect, expressed once for both listing and history.
 		 *
 		 * Ownership remains the ordinary rule. The only wider inbox is an administrator's view of a
 		 * currently declared public envoy. Its row must also carry every invariant `openConversation`
-		 * writes for that surface: an envoy visibility, matching agent/key, and the conversation-scoped
-		 * public sandbox key. Requiring the key shape prevents a formerly authenticated/private envoy
+		 * writes for that surface: an envoy visibility, matching agent/key, and that envoy's workbench
+		 * key. Requiring the key shape prevents a formerly authenticated/private envoy
 		 * row becoming readable merely because a later release changes that envoy's audience to public.
 		 */
-		const conversationReadScope = (subject: Identity.Subject, firstParameter: number) => {
-			const publicEnvoys =
-				subject.admin === true
-					? workspace.definition.envoys
-							.filter(({ audience }) => audience === 'public')
-							.map(({ name }) => name)
-					: [];
-			const owner = `conversation.user_id = $${firstParameter}`;
-			if (publicEnvoys.length === 0) {
-				return { sql: owner, parameters: [subject.userId] };
+		const publicEnvoys = workspace.definition.envoys
+			.filter(({ audience }) => audience === 'public')
+			.map(({ name }) => name);
+		const canReadConversation = (
+			subject: Identity.Subject,
+			conversation: Schema.Schema.Type<typeof AuthorizedConversationRow>
+		): boolean =>
+			conversation.user_id === subject.userId ||
+			(subject.admin === true &&
+				(conversation.visibility === 'envoy_dm' || conversation.visibility === 'envoy_group') &&
+				conversation.envoy_key !== null &&
+				publicEnvoys.includes(conversation.envoy_key) &&
+				conversation.agent_name === conversation.envoy_key &&
+				conversation.sandbox_key === envoyPrincipalId(conversation.envoy_key));
+
+		const requireReadableConversation = Effect.fn('Agents.requireReadableConversation')(function* (
+			effectId: EffectIdType,
+			subject: Identity.Subject,
+			conversationId: string
+		) {
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({
+						conversation_id: chatSession.conversation_id,
+						agent_name: chatSession.agent_name,
+						title: chatSession.title,
+						user_id: chatSession.user_id,
+						sandbox_key: chatSession.sandbox_key,
+						visibility: chatSession.visibility,
+						envoy_key: chatSession.envoy_key
+					})
+					.from(chatSession)
+					.where(eq(chatSession.conversation_id, conversationId))
+					.limit(1)
+			);
+			const conversation = conversationRow(result.rows[0]);
+			if (conversation === undefined || !canReadConversation(subject, conversation)) {
+				return yield* new AccessControl.AccessDenied({
+					action: 'read',
+					resource: conversationId,
+					reason: 'unknown conversation'
+				});
 			}
-			const names = publicEnvoys.map((_, index) => `$${firstParameter + index + 1}`).join(', ');
-			return {
-				sql: `(${owner} or (
-					conversation.visibility in ('envoy_dm', 'envoy_group')
-					and conversation.envoy_key in (${names})
-					and conversation.agent_name = conversation.envoy_key
-					and conversation.user_id = 'envoy:' || conversation.envoy_key || '#' || conversation.conversation_id
-				))`,
-				parameters: [subject.userId, ...publicEnvoys]
-			};
-		};
+			return conversation;
+		});
 
 		/**
 		 * The tools one turn is offered, decided by the subject's policies and nothing else.
@@ -536,24 +690,34 @@ export const layer = Layer.effect(
 		 * 'read' | 'write'` was a second, coarser way of saying the same thing, in a place a reviewer
 		 * comparing it against the grants would not look.
 		 *
-		 * Sandbox tools are offered unconditionally and deliberately. A sandbox is per-principal and
-		 * holds no workspace data (§10), so reaching one grants nothing; withholding it was what
-		 * `denyTools` claimed to do and could not, because an agent that could hide its own siblings
-		 * could hide what it did with them.
+		 * Sandbox tools are normally offered unconditionally. A sandbox is per-principal and holds no
+		 * workspace data (§10), so reaching one grants nothing. A narrow ingress envoy can nevertheless
+		 * disable delegation as a behavioral boundary: in that case none of the coordination tools are
+		 * offered, and the execution funnel below enforces the same boundary on direct calls.
 		 */
-		const allowedTools = (subject: Identity.Subject): ReadonlyArray<ToolDeclaration> => {
+		const allowedTools = (
+			subject: Identity.Subject,
+			agent: ResolvedAgent
+		): ReadonlyArray<ToolDeclaration> => {
 			const granted = access.capabilities(subject);
 			const mayWrite = writesForSubject(subject);
-			const authored = workspace.definition.tools.filter((tool) =>
-				tool.mcp === undefined ? granted.tools.has(tool.name) : granted.mcp.has(tool.mcp.server)
-			);
+			const authored = workspace.definition.tools
+				.filter((tool) =>
+					tool.mcp === undefined ? granted.tools.has(tool.name) : granted.mcp.has(tool.mcp.server)
+				)
+				.filter((tool) => agent.delegation !== 'disabled' || !isSandboxTool(tool.name));
 			const authoredNames = new Set(authored.map(({ name }) => name));
-			const platform = platformToolSpecs
-				.filter((tool) => !authoredNames.has(tool.name))
-				.filter((tool) => tool.name !== 'write_collection' || mayWrite);
+			const platform = platformToolSpecs.filter(
+				(tool) =>
+					!authoredNames.has(tool.name) &&
+					(tool.name !== 'write_collection' || mayWrite) &&
+					(tool.name !== 'search_envoy_history' || agent.name !== WEB_AGENT_NAME)
+			);
 			return [
 				...platform,
-				...sandboxToolSpecs.filter((tool) => !authoredNames.has(tool.name)),
+				...(agent.delegation === 'disabled'
+					? []
+					: sandboxToolSpecs.filter((tool) => !authoredNames.has(tool.name))),
 				...authored
 			];
 		};
@@ -575,6 +739,21 @@ export const layer = Layer.effect(
 					(action) => access.explain(subject, action, collection.name).allowed
 				)
 			);
+
+		/** Collection names this subject may use through the generic data tools. */
+		const reachableCollections = (
+			subject: Identity.Subject,
+			action: 'read' | 'write'
+		): ReadonlyArray<string> =>
+			workspace.definition.collections
+				.filter(({ name }) =>
+					action === 'read'
+						? access.explain(subject, 'read', name).allowed
+						: (['create', 'update', 'delete'] as const).some(
+								(write) => access.explain(subject, write, name).allowed
+							)
+				)
+				.map(({ name }) => name);
 
 		/**
 		 * The agent a turn is for: the web agent, or one declared envoy.
@@ -598,7 +777,8 @@ export const layer = Layer.effect(
 			return {
 				name: envoy.name,
 				task: envoy.task,
-				audience: envoy.audience
+				audience: envoy.audience,
+				...(envoy.delegation === undefined ? {} : { delegation: envoy.delegation })
 			} satisfies ResolvedAgent;
 		});
 
@@ -610,8 +790,9 @@ export const layer = Layer.effect(
 		 * permanently empty, and a public envoy's threads never reached the admin inbox they were
 		 * routed to. Both are populated here, at the one place a conversation is opened.
 		 *
-		 * `user_id` is the sandbox key rather than the raw subject id, so a public envoy's per-sender
-		 * partition is a property of the row rather than a rule every reader has to remember.
+		 * Ownership and workbench scope are separate fields. `user_id` owns the chat; `sandbox_key`
+		 * identifies the delegated-agent workbench. Every envoy session uses its envoy principal for the
+		 * latter, while its documents stay isolated by the session id.
 		 */
 		const openConversation = Effect.fn('Agents.openConversation')(function* (
 			effectId: EffectIdType,
@@ -620,17 +801,22 @@ export const layer = Layer.effect(
 			conversationId: string
 		) {
 			const group = conversationId.includes(':group:');
-			yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: 'insert into chat_session (conversation_id, agent_name, user_id, visibility, envoy_key) values ($1, $2, $3, $4, $5) on conflict do nothing',
-				parameters: [
-					conversationId,
-					agent.name,
-					sandboxKeyFor(subject, agent, conversationId),
-					agent.name === WEB_AGENT_NAME ? 'personal' : group ? 'envoy_group' : 'envoy_dm',
-					agent.name === WEB_AGENT_NAME ? null : agent.name
-				]
-			});
+			yield* syncMutation(
+				effectId,
+				composer
+					.insert(chatSession)
+					.values({
+						conversation_id: conversationId,
+						agent_name: agent.name,
+						user_id: subject.userId,
+						sandbox_key: sandboxKeyFor(subject, agent, conversationId),
+						visibility:
+							agent.name === WEB_AGENT_NAME ? 'personal' : group ? 'envoy_group' : 'envoy_dm',
+						envoy_key: agent.name === WEB_AGENT_NAME ? null : agent.name
+					})
+					.onConflictDoNothing(),
+				['chat_session']
+			);
 		});
 
 		const executeTool = Effect.fn('Agents.executeTool')(function* (
@@ -642,23 +828,32 @@ export const layer = Layer.effect(
 			conversationId: string
 		) {
 			const sandboxKey = sandboxKeyFor(subject, agent, conversationId);
-			const allowlist = allowedTools(subject);
+			const allowlist = allowedTools(subject, agent);
 			const declared = allowlist.find((tool) => tool.name === name);
 			// A platform or sandbox name was admitted on the strength of being one, which made `denyTools`
 			// and `access` advisory: an agent that was never offered `write_collection` could still call
 			// it by name. The allowlist is the answer for every kind now, and an MCP call is admitted only
 			// when a policy this subject holds named that server.
-			if (declared === undefined && !isSandboxTool(name)) {
+			if (declared === undefined) {
 				return yield* new ToolNotAllowed({ agent: agent.name, tool: name });
 			}
 			const context = {
 				effectId,
 				subject,
 				agentName: agent.name,
+				conversationId,
+				database,
+				envoyWideHistory: access.capabilities(subject).envoyHistory,
 				// The skills this subject's policies grant, not a list an agent declaration carried. A
 				// skill is capability, so it is granted where every other capability is.
 				skills: allowedSkills(subject),
 				toolNames: allowlist.map(({ name: tool }) => tool),
+				collectionNames: [
+					...new Set([
+						...reachableCollections(subject, 'read'),
+						...reachableCollections(subject, 'write')
+					])
+				],
 				workspace,
 				collections,
 				hostTools
@@ -672,6 +867,7 @@ export const layer = Layer.effect(
 					agentName: agent.name,
 					conversationId,
 					database,
+					mutate: syncMutation,
 					tasks: queue,
 					budget
 				});
@@ -706,24 +902,20 @@ export const layer = Layer.effect(
 		});
 
 		/** The exact tool offer a turn presents, including the collections its grants can reach. */
-		const toolsFor = (subject: Identity.Subject): ReadonlyArray<Schema.Json> => {
-			const reachable = (action: 'read' | 'write'): ReadonlyArray<string> =>
-				workspace.definition.collections
-					.filter(({ name }) =>
-						action === 'read'
-							? access.explain(subject, 'read', name).allowed
-							: (['create', 'update', 'delete'] as const).some(
-									(write) => access.explain(subject, write, name).allowed
-								)
-					)
-					.map(({ name }) => name);
-			return allowedTools(subject).map(({ name, description, command, inputSchema }) => {
+		const toolsFor = (
+			subject: Identity.Subject,
+			agent: ResolvedAgent
+		): ReadonlyArray<Schema.Json> => {
+			return allowedTools(subject, agent).map(({ name, description, command, inputSchema }) => {
 				if (name !== 'read_collection' && name !== 'write_collection') {
 					return inputSchema === undefined
 						? { name, description, command }
 						: { name, description, command, inputSchema };
 				}
-				const allowed = reachable(name === 'read_collection' ? 'read' : 'write');
+				const allowed = reachableCollections(
+					subject,
+					name === 'read_collection' ? 'read' : 'write'
+				);
 				return {
 					name,
 					description:
@@ -739,20 +931,40 @@ export const layer = Layer.effect(
 		const promptFor = (
 			agent: ResolvedAgent,
 			rows: ReadonlyArray<unknown>,
-			senderContext?: string
-		): Array<Schema.Json> => [
-			{ role: 'system', content: workspace.definition.prompt },
-			...(agent.task === undefined ? [] : [{ role: 'system', content: agent.task }]),
-			...(senderContext === undefined ? [] : [{ role: 'system', content: senderContext }]),
-			...rows.flatMap((row): ReadonlyArray<Schema.Json> => {
-				const decoded = decodeMessageRow(row);
-				if (decoded._tag === 'None') return [];
-				const relayed = parseAgentMessage(decoded.value.content);
-				if (relayed !== null) return [{ role: 'user', content: agentMessageForModel(relayed) }];
-				const whole = decodeMessageContent(decoded.value.content);
-				return whole._tag === 'Some' ? replayTurn(whole.value.parts) : [decoded.value];
-			})
-		];
+			subject: Identity.Subject,
+			conversationId: string
+		): Array<Schema.Json> => {
+			const decodedRows = rows.map((row) => decodeMessageRow(row));
+			const protectedRows = new Set<number>();
+			for (let index = decodedRows.length - 1; index >= 0; index -= 1) {
+				const row = decodedRows[index];
+				if (row?._tag !== 'Some' || row.value.role !== 'assistant') continue;
+				protectedRows.add(index);
+				if (protectedRows.size === protectedAssistantTurns) break;
+			}
+			return [
+				{ role: 'system', content: workspace.definition.prompt },
+				...(agent.task === undefined ? [] : [{ role: 'system', content: agent.task }]),
+				...decodedRows.flatMap((decoded, index): ReadonlyArray<Schema.Json> => {
+					if (decoded._tag === 'None') return [];
+					const input = parseStoredChatInput(decoded.value.content);
+					if (input !== null) return [{ role: 'user', content: chatInputForModel(input) }];
+					const relayed = parseAgentMessage(decoded.value.content);
+					if (relayed !== null) return [{ role: 'user', content: agentMessageForModel(relayed) }];
+					const whole = decodeMessageContent(decoded.value.content);
+					if (whole._tag === 'None') return [];
+					const isolated =
+						conversationId.includes(':group:') &&
+						whole.value.subject !== undefined &&
+						whole.value.subject.userId !== subject.userId
+							? whole.value.parts.filter((part) => part.kind !== 'tool-result')
+							: whole.value.parts;
+					const denominator = Math.max(decodedRows.length - 1, 1);
+					const ageFraction = (decodedRows.length - 1 - index) / denominator;
+					return replayTurn(pruneToolOutput(isolated, ageFraction, protectedRows.has(index)));
+				})
+			];
+		};
 
 		/** Adds one usage delta to this session and every parent session above it. */
 		const recordUsage = Effect.fn('Agents.recordUsage')(function* (
@@ -762,33 +974,48 @@ export const layer = Layer.effect(
 			turnsCounted: number,
 			turnsUnreported: number
 		) {
-			yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: `with recursive lineage as (
-					select conversation_id, parent_id, 0 as depth from chat_session where conversation_id = $1
-					union all
-					select above.conversation_id, above.parent_id, lineage.depth + 1 from chat_session above
-						join lineage on above.conversation_id = lineage.parent_id
-						where lineage.depth < ${maxDelegationDepth}
-				)
-				update chat_session set
-					usage_cost_usd = usage_cost_usd + $2,
-					usage_cost_micro_units = usage_cost_micro_units + $3,
-					usage_cost_currency = coalesce($4::text, usage_cost_currency),
-					usage_total_tokens = usage_total_tokens + $5,
-					usage_turns_counted = usage_turns_counted + $6,
-					usage_turns_unreported = usage_turns_unreported + $7
-				where conversation_id in (select conversation_id from lineage)`,
-				parameters: [
-					conversationId,
-					usage?.costUsd ?? 0,
-					Math.round(usage?.costMicroUnits ?? 0),
-					usage?.costCurrency ?? null,
-					Math.round(usage?.totalTokens ?? 0),
-					turnsCounted,
-					turnsUnreported
-				]
-			});
+			const lineage: Array<string> = [];
+			let current: string | null = conversationId;
+			for (let depth = 0; current !== null && depth <= maxDelegationDepth; depth += 1) {
+				const result = yield* executeBuilt(
+					EffectId.make(`${effectId}:lineage:${depth}`),
+					database,
+					composer
+						.select({
+							conversation_id: chatSession.conversation_id,
+							parent_id: chatSession.parent_id
+						})
+						.from(chatSession)
+						.where(eq(chatSession.conversation_id, current))
+						.limit(1)
+				);
+				const decoded = decodeConversationLinkRow(result.rows[0]);
+				if (decoded._tag === 'None') break;
+				lineage.push(decoded.value.conversation_id);
+				current = decoded.value.parent_id;
+			}
+			const costUsd = usage?.costUsd ?? 0;
+			const costMicroUnits = Math.round(usage?.costMicroUnits ?? 0);
+			const totalTokens = Math.round(usage?.totalTokens ?? 0);
+			yield* syncTransaction(
+				effectId,
+				lineage.map((id) =>
+					composer
+						.update(chatSession)
+						.set({
+							usage_cost_usd: increment(chatSession.usage_cost_usd, costUsd),
+							usage_cost_micro_units: increment(chatSession.usage_cost_micro_units, costMicroUnits),
+							...(usage?.costCurrency === undefined
+								? {}
+								: { usage_cost_currency: usage.costCurrency }),
+							usage_total_tokens: increment(chatSession.usage_total_tokens, totalTokens),
+							usage_turns_counted: increment(chatSession.usage_turns_counted, turnsCounted),
+							usage_turns_unreported: increment(chatSession.usage_turns_unreported, turnsUnreported)
+						})
+						.where(eq(chatSession.conversation_id, id))
+				),
+				['chat_session']
+			);
 		});
 
 		/**
@@ -802,11 +1029,15 @@ export const layer = Layer.effect(
 			effectId: EffectIdType,
 			conversationId: string
 		) {
-			const parent = yield* database.execute(EffectId.make(`${effectId}:read-parent`), {
-				_tag: 'Query',
-				sql: 'select parent_id from chat_session where conversation_id = $1',
-				parameters: [conversationId]
-			});
+			const parent = yield* executeBuilt(
+				EffectId.make(`${effectId}:read-parent`),
+				database,
+				composer
+					.select({ parent_id: chatSession.parent_id })
+					.from(chatSession)
+					.where(eq(chatSession.conversation_id, conversationId))
+					.limit(1)
+			);
 			const decoded = Schema.decodeUnknownOption(
 				Schema.Struct({ parent_id: Schema.Union([Schema.String, Schema.Null]) })
 			)(parent.rows[0]);
@@ -957,8 +1188,44 @@ export const layer = Layer.effect(
 				yield* access.authorize(subject, 'agent', agentName);
 				yield* openConversation(effectId, agent, subject, conversationId);
 			}),
+			bindDocument: Effect.fn('Agents.bindDocument')(
+				function* (effectId, subject, conversationId, file) {
+					yield* requireReadableConversation(
+						EffectId.make(`${effectId}:authorize`),
+						subject,
+						conversationId
+					);
+					if (!isChatDocumentStorageKey(conversationId, file.storage_key)) {
+						return yield* new ChatDocuments.ChatDocumentError({
+							conversationId,
+							message: 'The document key is outside this chat session namespace.'
+						});
+					}
+					yield* documents.bind(effectId, conversationId, file, { source: 'web' });
+				}
+			),
+			resolveDocument: Effect.fn('Agents.resolveDocument')(
+				function* (effectId, subject, conversationId, storageKey) {
+					yield* requireReadableConversation(
+						EffectId.make(`${effectId}:authorize`),
+						subject,
+						conversationId
+					);
+					return yield* documents.resolve(effectId, conversationId, storageKey);
+				}
+			),
+			removeDocument: Effect.fn('Agents.removeDocument')(
+				function* (effectId, subject, conversationId, storageKey) {
+					yield* requireReadableConversation(
+						EffectId.make(`${effectId}:authorize`),
+						subject,
+						conversationId
+					);
+					yield* documents.remove(effectId, conversationId, storageKey);
+				}
+			),
 			turn: Effect.fn('Agents.turn')(
-				function* (effectId, subject, agentName, conversationId, message, senderContext) {
+				function* (effectId, subject, agentName, conversationId, message) {
 					const agent = yield* resolveAgent(agentName);
 					yield* access.authorize(subject, 'agent', agentName);
 					yield* openConversation(
@@ -970,35 +1237,66 @@ export const layer = Layer.effect(
 					// The session row owns its label. Setting it once here keeps every reader — the live
 					// collection client, envoys, and server-side listings — on the same source of truth instead
 					// of making each client reconstruct a title from message history.
-					yield* database.execute(EffectId.make(`${effectId}:title`), {
-						_tag: 'Query',
-						sql: `update chat_session
-							set title = case
-									when title is null or btrim(title) = '' or title = 'New conversation' then $2
-									else title
-								end,
-								updated_at = now()
-							where conversation_id = $1`,
-						parameters: [conversationId, message.slice(0, 48)]
-					});
-					const transcript = yield* database.execute(EffectId.make(`${effectId}:read`), {
-						_tag: 'Query',
-						sql: 'select role, content from chat_message where conversation_id = $1 order by sequence',
-						parameters: [conversationId]
-					});
-					const tools = toolsFor(subject);
+					for (const file of message.kind === 'user_message' ? message.documents : []) {
+						yield* documents.resolve(
+							EffectId.make(`${effectId}:document:${file.storage_key}`),
+							conversationId,
+							file.storage_key
+						);
+					}
+					const messageText = chatInputText(message);
+					const currentTitle = yield* executeBuilt(
+						EffectId.make(`${effectId}:title:read`),
+						database,
+						composer
+							.select({ title: chatSession.title })
+							.from(chatSession)
+							.where(eq(chatSession.conversation_id, conversationId))
+							.limit(1)
+					);
+					const decodedTitle = decodeTitleRow(currentTitle.rows[0]);
+					const title = decodedTitle._tag === 'Some' ? decodedTitle.value.title?.trim() : undefined;
+					if (title === undefined || title === '' || title === 'New conversation') {
+						yield* syncMutation(
+							EffectId.make(`${effectId}:title`),
+							composer
+								.update(chatSession)
+								.set({ title: messageText.slice(0, 48) })
+								.where(eq(chatSession.conversation_id, conversationId)),
+							['chat_session']
+						);
+					}
+					const transcript = yield* executeBuilt(
+						EffectId.make(`${effectId}:read`),
+						database,
+						composer
+							.select({ role: chatMessage.role, content: chatMessage.content })
+							.from(chatMessage)
+							.where(eq(chatMessage.conversation_id, conversationId))
+							.orderBy(desc(chatMessage.sequence))
+							.limit(recentPromptRows)
+					);
+					const tools = toolsFor(subject, agent);
 					const messages: Array<Schema.Json> = [
-						...promptFor(agent, transcript.rows, senderContext),
-						{ role: 'user', content: message }
+						...promptFor(agent, transcript.rows.toReversed(), subject, conversationId),
+						{ role: 'user', content: chatInputForModel(message) }
 					];
 					let written = 0;
-					/** Appends one record to the conversation log; `::jsonb` parses the encoded value back out. */
+					/** Appends one record to the conversation log and returns its canonical collection id. */
 					const persist = (role: string, content: Schema.Json) =>
-						database.execute(EffectId.make(`${effectId}:persist:${(written += 1)}`), {
-							_tag: 'Query',
-							sql: 'insert into chat_message (conversation_id, role, content, turn_id) values ($1, $2, $3::jsonb, $4)',
-							parameters: [conversationId, role, JSON.stringify(content), effectId]
-						});
+						syncMutation(
+							EffectId.make(`${effectId}:persist:${(written += 1)}`),
+							composer
+								.insert(chatMessage)
+								.values({
+									conversation_id: conversationId,
+									role,
+									content: JSON.stringify(content),
+									turn_id: effectId
+								})
+								.returning({ id: chatMessage.id }),
+							['chat_message']
+						);
 					/**
 					 * The call this session was delegated by, or nothing when a person started it.
 					 *
@@ -1019,31 +1317,34 @@ export const layer = Layer.effect(
 					 */
 					const parts: Array<TurnPart> = [];
 					let committed = 0;
-					const commit: CommitTurn = (status, usage, usageUnreported) =>
-						database.execute(EffectId.make(`${effectId}:turn:${(committed += 1)}`), {
-							_tag: 'Query',
-							sql: "update chat_message set content = $3::jsonb where conversation_id = $1 and content->>'id' = $2",
-							parameters: [
-								conversationId,
-								effectId,
-								JSON.stringify({
-									id: effectId,
-									status,
-									subagent_id: delegatedBy,
-									parts,
-									resumed: 0,
-									subject,
-									agent_name: agent.name,
-									sender_context: senderContext,
-									usage,
-									usage_unreported: usageUnreported
+					let turnMessageId: string | undefined;
+					const commit: CommitTurn = (status, usage, usageUnreported) => {
+						if (turnMessageId === undefined) return Effect.void;
+						return syncMutation(
+							EffectId.make(`${effectId}:turn:${(committed += 1)}`),
+							composer
+								.update(chatMessage)
+								.set({
+									content: JSON.stringify({
+										id: effectId,
+										status,
+										subagent_id: delegatedBy,
+										parts,
+										resumed: 0,
+										subject,
+										agent_name: agent.name,
+										...(usage === undefined ? {} : { usage }),
+										usage_unreported: usageUnreported
+									})
 								})
-							]
-						});
+								.where(eq(chatMessage.id, turnMessageId)),
+							['chat_message']
+						);
+					};
 					// Written before the model runs, not after it answers: a turn that fails mid-flight is exactly
 					// the one the reader needs to see, and a prompt persisted only on success loses it.
 					yield* persist('user', message);
-					yield* persist('assistant', {
+					const assistantWrite = yield* persist('assistant', {
 						id: effectId,
 						status: 'running',
 						subagent_id: delegatedBy,
@@ -1051,9 +1352,14 @@ export const layer = Layer.effect(
 						resumed: 0,
 						subject,
 						agent_name: agent.name,
-						...(senderContext === undefined ? {} : { sender_context: senderContext }),
 						usage_unreported: false
 					});
+					const assistantId = decodeIdRow(assistantWrite.rows[0]);
+					if (assistantId._tag === 'None')
+						return yield* Effect.die(
+							new Error('The assistant turn row was not returned after it was inserted.')
+						);
+					turnMessageId = assistantId.value.id;
 					const settleUsage: SettleUsage = (usage, newlyUnreported) =>
 						recordUsage(
 							EffectId.make(`${effectId}:usage`),
@@ -1091,27 +1397,38 @@ export const layer = Layer.effect(
 				 * must belong to the same sandbox. A task carries no credential, so accepting either id by
 				 * itself would make the internal command a cross-conversation transcript reader.
 				 */
-				const relationship = yield* database.execute(EffectId.make(`${effectId}:authorize`), {
-					_tag: 'Query',
-					sql: `select target.parent_id, target.user_id as target_user_id,
-							parent.user_id as parent_user_id
-						from chat_session target
-						join chat_session parent on parent.conversation_id = $1
-						where target.conversation_id = $2 and target.parent_id = parent.conversation_id
-							and target.user_id = parent.user_id`,
-					parameters: [conversationId, targetSessionId]
-				});
-				const authorized = Schema.decodeUnknownOption(
+				const parentResult = yield* executeBuilt(
+					EffectId.make(`${effectId}:authorize:parent`),
+					database,
+					composer
+						.select({ sandbox_key: chatSession.sandbox_key })
+						.from(chatSession)
+						.where(eq(chatSession.conversation_id, conversationId))
+						.limit(1)
+				);
+				const targetSessionResult = yield* executeBuilt(
+					EffectId.make(`${effectId}:authorize:target`),
+					database,
+					composer
+						.select({ parent_id: chatSession.parent_id, sandbox_key: chatSession.sandbox_key })
+						.from(chatSession)
+						.where(eq(chatSession.conversation_id, targetSessionId))
+						.limit(1)
+				);
+				const parent = Schema.decodeUnknownOption(Schema.Struct({ sandbox_key: Schema.String }))(
+					parentResult.rows[0]
+				);
+				const targetSession = Schema.decodeUnknownOption(
 					Schema.Struct({
-						parent_id: Schema.String,
-						target_user_id: Schema.String,
-						parent_user_id: Schema.String
+						parent_id: Schema.Union([Schema.String, Schema.Null]),
+						sandbox_key: Schema.String
 					})
-				)(relationship.rows[0]);
+				)(targetSessionResult.rows[0]);
 				if (
-					authorized._tag === 'None' ||
-					authorized.value.parent_id !== conversationId ||
-					authorized.value.target_user_id !== authorized.value.parent_user_id
+					parent._tag === 'None' ||
+					targetSession._tag === 'None' ||
+					targetSession.value.parent_id !== conversationId ||
+					targetSession.value.sandbox_key !== parent.value.sandbox_key
 				) {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
@@ -1120,16 +1437,25 @@ export const layer = Layer.effect(
 					});
 				}
 
-				const targetResult = yield* database.execute(EffectId.make(`${effectId}:target`), {
-					_tag: 'Query',
-					sql: `select content from chat_message
-						where conversation_id = $1 and role = 'assistant'
-							and content->>'status' in ('completed', 'failed', 'cancelled')
-						order by sequence desc limit 1`,
-					parameters: [targetSessionId]
-				});
-				const target = Schema.decodeUnknownOption(SettledTargetRow)(targetResult.rows[0]);
-				if (target._tag === 'None') {
+				const targetResult = yield* executeBuilt(
+					EffectId.make(`${effectId}:target`),
+					database,
+					composer
+						.select({ content: chatMessage.content })
+						.from(chatMessage)
+						.where(
+							and(
+								eq(chatMessage.conversation_id, targetSessionId),
+								eq(chatMessage.role, 'assistant')
+							)
+						)
+						.orderBy(desc(chatMessage.sequence))
+				);
+				const target = targetResult.rows.flatMap((row) => {
+					const decoded = Schema.decodeUnknownOption(SettledTargetRow)(row);
+					return decoded._tag === 'Some' ? [decoded.value] : [];
+				})[0];
+				if (target === undefined) {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
 						resource: targetSessionId,
@@ -1137,18 +1463,30 @@ export const layer = Layer.effect(
 					});
 				}
 
-				const parkedResult = yield* database.execute(EffectId.make(`${effectId}:parked`), {
-					_tag: 'Query',
-					sql: `select content from chat_message
-						where conversation_id = $1 and role = 'assistant'
-							and content->>'status' = 'running'
-						order by sequence desc limit 1`,
-					parameters: [conversationId]
-				});
-				const parked = Schema.decodeUnknownOption(StoredTurnRow)(parkedResult.rows[0]);
+				const parkedResult = yield* executeBuilt(
+					EffectId.make(`${effectId}:parked`),
+					database,
+					composer
+						.select({ id: chatMessage.id, content: chatMessage.content })
+						.from(chatMessage)
+						.where(
+							and(
+								eq(chatMessage.conversation_id, conversationId),
+								eq(chatMessage.role, 'assistant')
+							)
+						)
+						.orderBy(desc(chatMessage.sequence))
+				);
+				const parked = parkedResult.rows.flatMap((row) => {
+					const decoded = decodeStoredTurnMessageRow(row);
+					return decoded._tag === 'Some' && decoded.value.content.status === 'running'
+						? [decoded.value]
+						: [];
+				})[0];
 				// A replay after the parent settled is an idempotent no-op.
-				if (parked._tag === 'None') return;
-				const stored = parked.value.content;
+				if (parked === undefined) return;
+				const stored = parked.content;
+				const parkedMessageId = parked.id;
 				if (stored.subject === undefined || stored.agent_name === undefined) {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
@@ -1182,22 +1520,23 @@ export const layer = Layer.effect(
 				const namespace = EffectId.make(`${stored.id}:resume:${resumed}`);
 				let committed = 0;
 				const commit: CommitTurn = (status, usage, usageUnreported) =>
-					database.execute(EffectId.make(`${effectId}:turn:${(committed += 1)}`), {
-						_tag: 'Query',
-						sql: "update chat_message set content = $3::jsonb where conversation_id = $1 and content->>'id' = $2 and content->>'status' = 'running'",
-						parameters: [
-							conversationId,
-							stored.id,
-							JSON.stringify({
-								...stored,
-								status,
-								parts,
-								resumed,
-								...(usage === undefined ? {} : { usage }),
-								usage_unreported: usageUnreported
+					syncMutation(
+						EffectId.make(`${effectId}:turn:${(committed += 1)}`),
+						composer
+							.update(chatMessage)
+							.set({
+								content: JSON.stringify({
+									...stored,
+									status,
+									parts,
+									resumed,
+									...(usage === undefined ? {} : { usage }),
+									usage_unreported: usageUnreported
+								})
 							})
-						]
-					});
+							.where(eq(chatMessage.id, parkedMessageId)),
+						['chat_message']
+					);
 
 				if (waiting && alreadyResumed >= maxResumes) {
 					yield* commit('failed', stored.usage, stored.usage_unreported ?? false);
@@ -1209,16 +1548,21 @@ export const layer = Layer.effect(
 					if (previous?.kind !== 'tool-result') return;
 					parts[answerIndex] = {
 						...previous,
-						output: { waiting: false, output: target.value.content }
+						output: { waiting: false, output: target.content }
 					};
 					yield* commit('running', stored.usage, stored.usage_unreported ?? false);
 				}
 
-				const transcript = yield* database.execute(EffectId.make(`${effectId}:read`), {
-					_tag: 'Query',
-					sql: 'select role, content from chat_message where conversation_id = $1 order by sequence',
-					parameters: [conversationId]
-				});
+				const transcript = yield* executeBuilt(
+					EffectId.make(`${effectId}:read`),
+					database,
+					composer
+						.select({ role: chatMessage.role, content: chatMessage.content })
+						.from(chatMessage)
+						.where(eq(chatMessage.conversation_id, conversationId))
+						.orderBy(desc(chatMessage.sequence))
+						.limit(recentPromptRows)
+				);
 				const settleUsage: SettleUsage = (usage, newlyUnreported) =>
 					recordUsage(
 						EffectId.make(`${namespace}:usage`),
@@ -1232,8 +1576,8 @@ export const layer = Layer.effect(
 					agent,
 					stored.subject,
 					conversationId,
-					promptFor(agent, transcript.rows, stored.sender_context),
-					toolsFor(stored.subject),
+					promptFor(agent, transcript.rows.toReversed(), stored.subject, conversationId),
+					toolsFor(stored.subject, agent),
 					parts,
 					stored.usage,
 					stored.usage_unreported ?? false,
@@ -1251,30 +1595,56 @@ export const layer = Layer.effect(
 				}
 			}),
 			cancel: Effect.fn('Agents.cancel')(function* (effectId, taskId) {
-				yield* queue.cancel(EffectId.make(`${effectId}:task`), taskId);
-				yield* database.execute(EffectId.make(`${effectId}:turn`), {
-					_tag: 'Query',
-					sql: `update chat_message
-						set content = jsonb_set(content, '{status}', '"cancelled"'::jsonb, true)
-						where content->>'id' = $1 and content->>'status' = 'running'`,
-					parameters: [taskId]
-				});
+				yield* queue.cancel(EffectId.make(`${effectId}:task`), taskId, 'agents.turn');
+				const candidates = yield* executeBuilt(
+					EffectId.make(`${effectId}:turn:read`),
+					database,
+					composer
+						.select({ id: chatMessage.id, content: chatMessage.content })
+						.from(chatMessage)
+						.where(eq(chatMessage.role, 'assistant'))
+						.orderBy(desc(chatMessage.sequence))
+				);
+				const running = candidates.rows.flatMap((row) => {
+					const decoded = decodeStoredTurnMessageRow(row);
+					return decoded._tag === 'Some' &&
+						decoded.value.content.id === taskId &&
+						decoded.value.content.status === 'running'
+						? [decoded.value]
+						: [];
+				})[0];
+				if (running === undefined) return;
+				yield* syncMutation(
+					EffectId.make(`${effectId}:turn`),
+					composer
+						.update(chatMessage)
+						.set({ content: JSON.stringify({ ...running.content, status: 'cancelled' }) })
+						.where(eq(chatMessage.id, running.id)),
+					['chat_message']
+				);
 			}),
 			updateVerifier: Effect.fn('Agents.updateVerifier')(
 				function* (effectId, conversationId, verifier) {
-					yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: 'update chat_session set verifier = $2 where conversation_id = $1',
-						parameters: [conversationId, verifier]
-					});
+					yield* syncMutation(
+						effectId,
+						composer
+							.update(chatSession)
+							.set({ verifier: JSON.stringify(verifier) })
+							.where(eq(chatSession.conversation_id, conversationId)),
+						['chat_session']
+					);
 				}
 			),
 			title: Effect.fn('Agents.title')(function* (effectId, conversationId) {
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'select title from chat_session where conversation_id = $1',
-					parameters: [conversationId]
-				});
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({ title: chatSession.title })
+						.from(chatSession)
+						.where(eq(chatSession.conversation_id, conversationId))
+						.limit(1)
+				);
 				const row = result.rows[0];
 				const decoded = decodeTitleRow(row);
 				if (decoded._tag === 'Some' && decoded.value.title) return decoded.value.title;
@@ -1284,65 +1654,118 @@ export const layer = Layer.effect(
 				// Delegated sessions are excluded: nobody started one and nobody can reply to it, and listing
 				// them put a subagent's task prompt in the conversation picker as though it were a chat the
 				// person had opened. They still reach the reader — inside the turn that spawned them.
-				const scope = conversationReadScope(subject, 1);
-				const result = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select conversation.conversation_id as id, conversation.agent_name, conversation.title,
-						conversation.user_id, conversation.visibility, conversation.envoy_key
-					from chat_session conversation
-					where ${scope.sql}
-						and conversation.parent_id is null
-						and conversation.conversation_id not like 'subagent:%'
-					order by conversation.conversation_id desc`,
-					parameters: scope.parameters
-				});
+				const publicScope =
+					subject.admin === true && publicEnvoys.length > 0
+						? and(
+								inArray(chatSession.visibility, ['envoy_dm', 'envoy_group']),
+								inArray(chatSession.envoy_key, publicEnvoys),
+								inArray(chatSession.agent_name, publicEnvoys)
+							)
+						: undefined;
+				const readScope =
+					publicScope === undefined
+						? eq(chatSession.user_id, subject.userId)
+						: or(eq(chatSession.user_id, subject.userId), publicScope);
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({
+							conversation_id: chatSession.conversation_id,
+							agent_name: chatSession.agent_name,
+							title: chatSession.title,
+							user_id: chatSession.user_id,
+							sandbox_key: chatSession.sandbox_key,
+							visibility: chatSession.visibility,
+							envoy_key: chatSession.envoy_key
+						})
+						.from(chatSession)
+						.where(
+							and(
+								readScope,
+								isNull(chatSession.parent_id),
+								notLike(chatSession.conversation_id, 'subagent:%')
+							)
+						)
+						.orderBy(desc(chatSession.conversation_id))
+				);
 				return result.rows.flatMap((row) => {
-					const decoded = decodeConversationRow(row);
-					return decoded._tag === 'Some' ? [decoded.value] : [];
+					const decoded = conversationRow(row);
+					if (decoded === undefined || !canReadConversation(subject, decoded)) return [];
+					const { sandbox_key: _sandboxKey, ...conversation } = decoded;
+					return [conversation];
 				});
 			}),
 			history: Effect.fn('Agents.history')(function* (effectId, subject, conversationId) {
-				const scope = conversationReadScope(subject, 2);
-				const owned = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select conversation.conversation_id as id, conversation.agent_name, conversation.title,
-						conversation.user_id, conversation.visibility, conversation.envoy_key,
-						conversation.usage_cost_usd, conversation.usage_cost_micro_units,
-						conversation.usage_cost_currency, conversation.usage_total_tokens,
-						conversation.usage_turns_counted, conversation.usage_turns_unreported
-					from chat_session conversation
-					where conversation.conversation_id = $1 and ${scope.sql}`,
-					parameters: [conversationId, ...scope.parameters]
-				});
-				const conversation = decodeConversationRow(owned.rows[0]);
-				if (conversation._tag === 'None') {
+				const owned = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({
+							conversation_id: chatSession.conversation_id,
+							agent_name: chatSession.agent_name,
+							title: chatSession.title,
+							user_id: chatSession.user_id,
+							sandbox_key: chatSession.sandbox_key,
+							visibility: chatSession.visibility,
+							envoy_key: chatSession.envoy_key,
+							usage_cost_usd: chatSession.usage_cost_usd,
+							usage_cost_micro_units: chatSession.usage_cost_micro_units,
+							usage_cost_currency: chatSession.usage_cost_currency,
+							usage_total_tokens: chatSession.usage_total_tokens,
+							usage_turns_counted: chatSession.usage_turns_counted,
+							usage_turns_unreported: chatSession.usage_turns_unreported
+						})
+						.from(chatSession)
+						.where(eq(chatSession.conversation_id, conversationId))
+						.limit(1)
+				);
+				const conversation = conversationRow(owned.rows[0]);
+				if (conversation === undefined || !canReadConversation(subject, conversation)) {
 					return yield* new AccessControl.AccessDenied({
 						action: 'read',
 						resource: conversationId,
 						reason: 'unknown conversation'
 					});
 				}
-				// Ordered by `sequence` across the whole tree rather than per session: the column is an
-				// identity over the table, so one ordering already puts every session's own rows in the
-				// order they were written, and the projection groups them by `turn_id` afterwards.
-				const transcript = yield* database.execute(EffectId.make(`${effectId}:transcript`), {
-					_tag: 'Query',
-					sql: `with recursive tree as (
-						select conversation_id, 0 as depth from chat_session where conversation_id = $1
-						union all
-						select below.conversation_id, tree.depth + 1 from chat_session below
-							join tree on below.parent_id = tree.conversation_id
-							where tree.depth < ${maxDelegationDepth}
-					)
-					select message.role, message.content, message.turn_id
-						from chat_message message
-						join tree on tree.conversation_id = message.conversation_id
-						order by message.sequence`,
-					parameters: [conversationId]
-				});
+				const tree = [conversationId];
+				let frontier = [conversationId];
+				for (let depth = 0; frontier.length > 0 && depth < maxDelegationDepth; depth += 1) {
+					const children = yield* executeBuilt(
+						EffectId.make(`${effectId}:tree:${depth}`),
+						database,
+						composer
+							.select({ conversation_id: chatSession.conversation_id })
+							.from(chatSession)
+							.where(inArray(chatSession.parent_id, frontier))
+					);
+					frontier = children.rows.flatMap((row) => {
+						const decoded = Schema.decodeUnknownOption(
+							Schema.Struct({ conversation_id: Schema.String })
+						)(row);
+						return decoded._tag === 'Some' && !tree.includes(decoded.value.conversation_id)
+							? [decoded.value.conversation_id]
+							: [];
+					});
+					tree.push(...frontier);
+				}
+				// `sequence` is table-wide, so one ordered read preserves each session's transcript order.
+				const transcript = yield* executeBuilt(
+					EffectId.make(`${effectId}:transcript`),
+					database,
+					composer
+						.select({
+							role: chatMessage.role,
+							content: chatMessage.content,
+							turn_id: chatMessage.turn_id
+						})
+						.from(chatMessage)
+						.where(inArray(chatMessage.conversation_id, tree))
+						.orderBy(asc(chatMessage.sequence))
+				);
 				return {
 					conversationId,
-					title: conversation.value.title ?? 'New conversation',
+					title: conversation.title ?? 'New conversation',
 					messages: transcript.rows.flatMap((row) => {
 						const decoded = decodeMessageRow(row);
 						return decoded._tag === 'Some' ? [decoded.value] : [];

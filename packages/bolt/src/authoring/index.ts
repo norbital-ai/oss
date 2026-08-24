@@ -1,9 +1,18 @@
 export interface WorkspaceAuthoringTypes {}
 export interface WorkspaceTeamAuthoringTypes {}
 
-export { defineAutomation } from './automations-schema.js';
+export { AutomationProgression, defineAutomation } from './automations-schema.js';
+export type {
+	AutomationApi,
+	AutomationContext,
+	AutomationDefinition,
+	AutomationTrigger
+} from './automations-schema.js';
 
 export { defineAgentTool } from './agent-tools.js';
+
+export { approveBy, noApproval } from './approval-flow.js';
+export type { ApprovalFlow, ApprovalReviewFlow, NoApprovalFlow } from './approval-flow.js';
 
 export type {
 	AfterHookApi,
@@ -15,10 +24,11 @@ export type {
 	CollectionPipelines,
 	EnvoyDefinition,
 	HookApi,
+	PolicyDecisionApi,
 	PolicyDefinition,
+	PolicyWriteContext,
 	SchemaQueryConfig,
 	SchemaQueryRow,
-	SchemaRawOperators,
 	TeamName,
 	Teams
 } from './contracts-schema.js';
@@ -30,11 +40,7 @@ export { defineEnvironment } from './environment-schema.js';
 
 export {
 	cascade,
-	clockTime,
 	custom,
-	date,
-	dateRange,
-	dateRangeSchema,
 	defineCustomType,
 	defineModel,
 	enums,
@@ -42,18 +48,27 @@ export {
 	geolocation,
 	group,
 	hexToBinaryEmbedding,
+	instant,
+	instantRangeSchema,
+	instantRangeValueSchema,
+	moneySchema,
+	moneyValueSchema,
 	numeric,
 	phone,
+	platformCustomTypes,
 	reference,
 	refuse,
 	text,
-	timestamp,
 	vector
 } from './models-schema.js';
 export type {
 	CustomTypeFactoryOptions,
 	CustomTypeOutput,
 	FileRef,
+	InstantPrecision,
+	InstantRangeNested,
+	InstantRangePrecision,
+	InstantRangeValue,
 	ReferenceHandle,
 	ReferenceTargets
 } from './models-schema.js';

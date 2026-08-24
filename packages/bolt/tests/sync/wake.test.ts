@@ -1,9 +1,25 @@
 import { createHash } from 'node:crypto';
-import { Effect } from 'effect';
+import { readFileSync } from 'node:fs';
+import { Effect, Layer } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
-import { failure, success, type TransportRequest } from '@norbital-ai/bolt-protocol';
+import {
+	EffectId,
+	failure,
+	success,
+	type AIRequest,
+	type AIResponse,
+	type FacilityBinding,
+	type TransportRequest
+} from '@norbital-ai/bolt-protocol';
+import * as Agents from '../../src/runtime/agents/agents.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
-import { decodeWake, SYNC_TOPIC } from '../../src/runtime/sync/wake.js';
+import { Transport } from '../../src/runtime/facilities/services.js';
+import {
+	decodeWake,
+	layer as syncWakeLayer,
+	Service as SyncWakeService,
+	SYNC_TOPIC
+} from '../../src/runtime/sync/wake.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -102,6 +118,50 @@ describe('announcing a change on the sync topic', () => {
 		expect(decodeWake(frames[0] ?? new Uint8Array())).toEqual({ collections: ['people'] });
 	});
 
+	it('publishes each committed agent chat step through the same sync stream', async () => {
+		const published: Array<Published> = [];
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: async () => success({ output: { text: 'The live transcript is ready.' } })
+		};
+		harness = await makeBoltTestRuntime(undefined, {
+			ai,
+			transport: recordingTransport(published) as never
+		});
+
+		await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Agents.Service).turn(
+					harness!.effectId('agent-live'),
+					adminSubject,
+					'web',
+					'conversation-live',
+					{
+						kind: 'user_message',
+						text: 'Show me the current state.',
+						documents: []
+					}
+				);
+			})
+		);
+
+		const announced = published.flatMap(({ collections }) => collections);
+		expect(announced).toContain('chat_session');
+		expect(announced.filter((name) => name === 'chat_message').length).toBeGreaterThanOrEqual(3);
+		expect(
+			await harness.database.query(
+				"select distinct collection_name from bolt_sync_outbox where collection_name like 'chat_%' order by collection_name"
+			)
+		).toEqual([{ collection_name: 'chat_message' }, { collection_name: 'chat_session' }]);
+
+		const panel = readFileSync(
+			new URL('../../src/client/ui/agent/agent-chat-panel.svelte', import.meta.url),
+			'utf8'
+		);
+		expect(panel).toContain('client.db.chat_session');
+		expect(panel).toContain('client.db.chat_message');
+		expect(panel).not.toMatch(/setInterval|agents\.history|EventSource|WebSocket/);
+	});
+
 	it('completes the write when the host has no transport bound at all', async () => {
 		// The harness binds none by default, which is the environment this has to survive: the row is
 		// already committed by the time anything is announced, so there is no outcome left to report.
@@ -144,5 +204,35 @@ describe('announcing a change on the sync topic', () => {
 		// A host that cannot deliver the hint is not a reason to tell someone their save failed. The
 		// replica converges on its next drain regardless.
 		expect(await database.query('select name from people', [])).toEqual([{ name: 'Grace' }]);
+	});
+
+	it('does not fail when publishing dies with a transport defect', async () => {
+		const defectiveTransport = Layer.succeed(
+			Transport.Service,
+			Transport.Service.of({
+				execute: () => Effect.die(new Error('transport response schema defect'))
+			})
+		);
+		const program = Effect.gen(function* () {
+			const wake = yield* SyncWakeService;
+			yield* wake.announce(EffectId.make('wake-defect'), ['people']);
+		}).pipe(Effect.provide(syncWakeLayer.pipe(Layer.provide(defectiveTransport))));
+
+		// `announce` happens after commit. Even a defect at the host boundary is only a missed hint;
+		// replicas still converge from the ordered change log on their next drain.
+		await expect(Effect.runPromise(program)).resolves.toBeUndefined();
+	});
+
+	it('does not wait forever for a transport that never answers', async () => {
+		const stalledTransport = Layer.succeed(
+			Transport.Service,
+			Transport.Service.of({ execute: () => Effect.never })
+		);
+		const program = Effect.gen(function* () {
+			const wake = yield* SyncWakeService;
+			yield* wake.announce(EffectId.make('wake-stalled'), ['people']);
+		}).pipe(Effect.provide(syncWakeLayer.pipe(Layer.provide(stalledTransport))));
+
+		await expect(Effect.runPromise(program)).resolves.toBeUndefined();
 	});
 });

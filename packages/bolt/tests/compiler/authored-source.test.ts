@@ -39,7 +39,7 @@ describe('Bolt authored source discovery', () => {
 			['src', 'automations'],
 			['src', 'envoys'],
 			['src', 'functions'],
-			['src', 'datatypes', 'money'],
+			['src', 'datatypes', 'risk_score'],
 			['src', 'capabilities', 'tools'],
 			['src', 'capabilities', 'mcp'],
 			['src', 'capabilities', 'skills', 'triage']
@@ -68,9 +68,12 @@ describe('Bolt authored source discovery', () => {
 		await writeFile(join(root, 'src', 'envoys', '+inbox.ts'), 'export default {}');
 		await writeFile(join(root, 'src', 'automations', '+ticket-opened.ts'), 'export default {}');
 		await writeFile(join(root, 'src', 'functions', '+desk_dashboard.ts'), 'export default {}');
-		await writeFile(join(root, 'src', 'datatypes', 'money', '+definition.ts'), 'export default {}');
 		await writeFile(
-			join(root, 'src', 'datatypes', 'money', '+renderer.svelte'),
+			join(root, 'src', 'datatypes', 'risk_score', '+definition.ts'),
+			'export default {}'
+		);
+		await writeFile(
+			join(root, 'src', 'datatypes', 'risk_score', '+renderer.svelte'),
 			'<script></script>'
 		);
 		await writeFile(
@@ -87,7 +90,7 @@ describe('Bolt authored source discovery', () => {
 		expect(discovered.envoyNames).toEqual(['inbox']);
 		expect(discovered.automationNames).toEqual(['ticket-opened']);
 		expect(discovered.functions).toEqual(['desk_dashboard']);
-		expect(discovered.datatypeNames).toEqual(['money']);
+		expect(discovered.datatypeNames).toEqual(['risk_score']);
 		expect(discovered.mcpServerNames).toEqual(['search']);
 		expect(discovered.skillNames).toEqual(['triage']);
 		expect(discovered.mcpFiles).toEqual([join(root, 'src', 'capabilities', 'mcp', '+search.ts')]);
@@ -132,6 +135,42 @@ describe('Bolt authored source discovery', () => {
 		await writeFile(join(root, 'src', 'envoys', 'helpers.ts'), 'export const y = 1;');
 		const discovered = await Effect.runPromise(discoverAuthoredSource(root));
 		expect(discovered.envoyNames).toEqual([]);
+	});
+
+	it('seals custom() names to platform and discovered tenant datatypes', async () => {
+		const root = await workspaceRoot();
+		const model = join(root, 'src', 'collections', 'tickets', '+model.ts');
+		await writeFile(
+			model,
+			"export default defineModel({\n  price: custom('money'),\n  risk: custom('risk_score')\n});"
+		);
+		await mkdir(join(root, 'src', 'datatypes', 'risk_score'), { recursive: true });
+		await writeFile(
+			join(root, 'src', 'datatypes', 'risk_score', '+definition.ts'),
+			'export default {}'
+		);
+		await expect(Effect.runPromise(discoverAuthoredSource(root))).resolves.toMatchObject({
+			datatypeNames: ['risk_score']
+		});
+
+		await writeFile(model, "export default defineModel({\n  risk: custom('missing_score')\n});");
+		await expect(Effect.runPromise(discoverAuthoredSource(root))).rejects.toThrow(
+			'custom() declarations that are not sealed'
+		);
+		await expect(Effect.runPromise(discoverAuthoredSource(root))).rejects.toThrow(
+			'undeclared datatype "missing_score"'
+		);
+	});
+
+	it('refuses a dynamic custom() name because no schema or renderer can be proven', async () => {
+		const root = await workspaceRoot();
+		await writeFile(
+			join(root, 'src', 'collections', 'tickets', '+model.ts'),
+			'const kind = "risk_score";\nexport default defineModel({\n  risk: custom(kind)\n});'
+		);
+		await expect(Effect.runPromise(discoverAuthoredSource(root))).rejects.toThrow(
+			'calls custom() with a non-literal name'
+		);
 	});
 
 	/**

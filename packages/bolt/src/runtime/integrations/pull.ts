@@ -188,8 +188,10 @@ const pageUrl = (
 		`${connection.baseUrl}${binding.path.startsWith('/') ? '' : '/'}${binding.path}`
 	);
 	for (const [key, value] of Object.entries(binding.query ?? {})) url.searchParams.set(key, value);
-	if (cursor !== null && binding.cursor !== undefined && 'query' in binding.cursor.send) {
-		url.searchParams.set(binding.cursor.send.query, cursor);
+	const cursorQuery =
+		binding.cursor === undefined ? undefined : Reflect.get(binding.cursor.send, 'query');
+	if (cursor !== null && typeof cursorQuery === 'string') {
+		url.searchParams.set(cursorQuery, cursor);
 	}
 	const pages = binding.pages;
 	if (pages !== undefined) {

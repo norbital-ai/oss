@@ -139,31 +139,25 @@ describe('the sync engine read cache', () => {
 describe('the live query registry', () => {
 	it('re-runs only the queries that read a changed collection', () => {
 		const registry = createLiveQueryRegistry();
-		const refreshed: Array<string> = [];
+		const reexecuted: Array<string> = [];
 		const leave = {
 			collections: ['leave_requests'],
-			refresh: async () => {
-				refreshed.push('leave');
-			}
+			reexecute: () => Effect.sync(() => reexecuted.push('leave'))
 		};
 		const companies = {
 			collections: ['companies'],
-			refresh: async () => {
-				refreshed.push('companies');
-			}
+			reexecute: () => Effect.sync(() => reexecuted.push('companies'))
 		};
 		const remote = {
 			collections: [ANY_COLLECTION],
-			refresh: async () => {
-				refreshed.push('remote');
-			}
+			reexecute: () => Effect.sync(() => reexecuted.push('remote'))
 		};
 		registry.register(leave);
 		registry.register(companies);
 		registry.register(remote);
 
 		// The remote answers too: it never claimed to know what it read.
-		expect(registry.refreshAffected(['leave_requests'])).toBe(2);
-		expect(refreshed.toSorted()).toEqual(['leave', 'remote']);
+		expect(registry.reexecuteAffected(['leave_requests'])).toBe(2);
+		expect(reexecuted.toSorted()).toEqual(['leave', 'remote']);
 	});
 });

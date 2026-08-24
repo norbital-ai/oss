@@ -9,8 +9,10 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { WEB_AGENT_NAME, type WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
+import { AutomationProgression } from '#lib/authoring/automations-schema.js';
 import * as SystemPrincipal from '#lib/runtime/access/system-principal.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
+import { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
 import {
 	AI,
 	Files,
@@ -33,7 +35,6 @@ import { compileOrderTerms, makeWhereContext } from '#lib/runtime/collections/wh
 import * as Integrations from '#lib/runtime/integrations/integrations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import { ADMIN_STATUS, Subject } from '#lib/runtime/identity/identity.js';
-import * as Database from '#lib/runtime/facilities/database.js';
 import * as Notifications from '#lib/runtime/notifications/notifications.js';
 import { Notification } from '#lib/runtime/notifications/notifications.js';
 import { RemoteRegistry, type RuntimeRemoteRegistry } from '#lib/runtime/remotes.js';
@@ -51,6 +52,8 @@ import * as Sync from '#lib/runtime/sync/sync.js';
 import { SyncCursor } from '#lib/runtime/sync/sync.js';
 import {
 	AuthoredRuntimeService,
+	guardAuthoredCollectionOps,
+	makeAutomationApi,
 	makeAuthoringApi,
 	makeBoundAuthoringOps,
 	runAuthoredHandler,
@@ -98,7 +101,7 @@ const ApprovalRequestInput = Schema.Struct({
 const ApprovalDecideInput = Schema.Struct({
 	subject: Subject,
 	state: ApprovalState,
-	decision: Schema.Literals(['approve', 'reject', 'request_changes']),
+	decision: Schema.Literals(['approve', 'reject', 'request_changes', 'supersede']),
 	reason: Schema.optionalKey(Schema.String)
 });
 const SyncDiffInput = Schema.Struct({ subject: Subject, cursor: SyncCursor, limit: Schema.Number });
@@ -106,7 +109,18 @@ const AgentTurnInput = Schema.Struct({
 	subject: Subject,
 	agent: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
-	message: Schema.String
+	message: Schema.String,
+	documents: Schema.optionalKey(Schema.Array(ChatDocumentRef))
+});
+const AgentDocumentBindInput = Schema.Struct({
+	subject: Subject,
+	conversationId: Schema.NonEmptyString,
+	file: ChatDocumentRef
+});
+const AgentDocumentInput = Schema.Struct({
+	subject: Subject,
+	conversationId: Schema.NonEmptyString,
+	storageKey: Schema.NonEmptyString
 });
 const AgentTitleInput = Schema.Struct({ conversationId: Schema.NonEmptyString });
 const CollectionFindInput = Schema.Struct({
@@ -148,7 +162,6 @@ const RateLimitAddressInput = Schema.Struct({
 	address: Schema.optionalKey(Schema.String),
 	email: Schema.optionalKey(Schema.String)
 });
-const FounderLedgerRow = Schema.Struct({ value: Schema.NonEmptyString });
 const decodeJsonObject = Schema.decodeUnknownResult(JsonObject);
 /**
  * What a host may still assert once it has proved who it is, which is only ever *less* authority.
@@ -177,18 +190,6 @@ const CollectionImportInput = Schema.Struct({
 	records: Schema.Array(CollectionMutation)
 });
 /**
- * Which automation's runs to read, and how many.
- *
- * No `subject`, deliberately. Every other automation input carries one because the boundary
- * overwrites it from the credential, and a read that needs no identity should not declare a field
- * whose only purpose is to be replaced — a schema that names one invites the belief it is honoured.
- */
-const AutomationHistoryInput = Schema.Struct({
-	name: Schema.NonEmptyString,
-	limit: Schema.optionalKey(Schema.Number)
-});
-
-/**
  * What a caller may say when starting an automation: which one, and what to hand it.
  *
  * No `subject`, and its absence is the point. It used to carry one — so the automation ran with
@@ -199,6 +200,11 @@ const AutomationHistoryInput = Schema.Struct({
 const AutomationStartInput = Schema.Struct({
 	name: Schema.NonEmptyString,
 	input: Schema.Json
+});
+/** A lifecycle action names both the declared automation and one of its durable task ids. */
+const AutomationLifecycleInput = Schema.Struct({
+	name: Schema.NonEmptyString,
+	taskId: Schema.NonEmptyString
 });
 /**
  * What a host may say about a message it took off a transport.
@@ -213,6 +219,10 @@ const AutomationStartInput = Schema.Struct({
 const EnvoyReceiveInput = Schema.Struct({
 	envoy: Schema.NonEmptyString,
 	delivery: EnvoyDelivery
+});
+const EnvoyDrainInput = Schema.Struct({
+	envoy: Schema.NonEmptyString,
+	conversationId: Schema.NonEmptyString
 });
 /**
  * `binding` is what a scheduled pull carries and an enqueued one does not.
@@ -233,9 +243,13 @@ const TaskInput = Schema.Struct({
 });
 /** The task payload an authored automation runs from: the runtime's trigger context and the subject the runtime stamped at enqueue time. */
 const AutomationTaskInput = Schema.Struct({
-	args: Schema.Record(Schema.String, Schema.Json),
+	// An authored input is any schema, not only a struct. The queue preserves the decoded JSON value
+	// whole and the automation's own schema narrows it immediately before the handler runs.
+	args: Schema.Json,
 	scope: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
-	bolt_run_as: Subject
+	bolt_run_as: Subject,
+	/** Injected by the trusted task runner, never accepted from the enqueue payload. */
+	bolt_task_id: Schema.NonEmptyString
 });
 const AgentStartInput = Schema.Struct({
 	subject: Subject,
@@ -689,17 +703,17 @@ const authorizeSchemaCommand = Effect.fn('Bolt.authorizeSchemaCommand')(function
  *
  * `identity.admitFounder` had no check at all. It upserts a row by email with `status = 'admin'`, so
  * any subject holding a session in the tenant could POST it their own address and become an
- * administrator of the workspace — and `isAdministrator` short-circuits `decide`, `rowPredicate` and
- * `visibleApps`, so that is the whole workspace. It was reachable from a browser: Colony proxies
+ * administrator of the workspace. That status permits membership administration and team preview;
+ * it still must never grant tenant collections or apps. The command was reachable from a browser: Colony proxies
  * `/api/bolt/command/<name>` and bolt-server serves `/_bolt/command/<name>`, and neither restricts
  * which name.
  *
  * Gated on `manage`/`identity` rather than on `isAdministrator` directly, so that provisioning has a
  * way in that is not "be an administrator": `colony system` enumerates exactly this grant, which is
- * how a host admits the first founder into a workspace that has none. An administrator passes by
- * short-circuit, and everybody else is refused unless the workspace deliberately authored a policy
- * over the `identity` resource — the same vocabulary, and the same author's choice, that `secrets`
- * and `schema` already have.
+ * how a host admits the first founder into a workspace that has none. Administrators match an
+ * explicit built-in policy selected by their status; everybody else is refused unless the workspace
+ * deliberately authored a policy over the `identity` resource — the same vocabulary, and the same
+ * author's choice, that `secrets` and `schema` already have.
  *
  * A map rather than a prefix test, because `identity.` is mostly sign-in and session traffic that
  * must stay reachable. It is checked in one place before the switch, so a second membership-writing
@@ -848,7 +862,7 @@ const teamAnswer = Effect.fn('Bolt.teamAnswer')(function* (
  * subject recorded when the original create was authenticated.
  *
  * `automations.<name>` is resolved against the declared automations rather than matched on the
- * prefix, because `automations.start`, `.register`, `.runStep`, `.resume`, `.status` and `.cancel`
+ * prefix, because `automations.start`, `.register`, `.runStep`, `.resume` and `.stop`
  * share it and are host commands rather than enqueued ones.
  */
 /** The one command a host's timer sends, named once so the gate and the router cannot disagree. */
@@ -857,6 +871,7 @@ const TICK_COMMAND = 'tasks.tick';
 const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set([
 	'integrations.pull',
 	'integrations.flush',
+	'envoys.drain',
 	// A delegated turn. `sandbox-tools.ts` has enqueued this since delegation was written, and it was
 	// never listed here — harmless only for as long as nothing executed the queue. The first tick
 	// would have refused every subagent, and the refusal would have named the provenance gate rather
@@ -910,7 +925,7 @@ const TASK_RUNNABLE_COMMANDS: ReadonlySet<string> = new Set(
  * Whether a command belongs to a set the runtime enqueues, resolving authored automations by name.
  *
  * `automations.<name>` is checked against the declared automations rather than matched on the
- * prefix, because `automations.start`, `.register`, `.runStep`, `.status` and `.cancel` share it and
+ * prefix, because `automations.start`, `.register`, `.runStep`, `.stop` and `.resume` share it and
  * are host commands rather than enqueued ones.
  */
 const isRunnable = Effect.fn('Bolt.isRunnable')(function* (
@@ -1075,7 +1090,6 @@ type DispatchServices =
 	| AuthoredRuntime
 	| Automations.Interface
 	| Collections.Interface
-	| Database.Interface
 	| Envoys.Interface
 	| FilesInterface
 	| Identity.Interface
@@ -1467,7 +1481,18 @@ const authorizeTaskCommand = Effect.fn('Bolt.authorizeTaskCommand')(function* (c
 const runTick = Effect.fn('Bolt.runTick')(function* (effectId: EffectId) {
 	const report = yield* (yield* TaskQueue.Service).tick(effectId, (task, attemptEffectId) =>
 		authorizeTaskCommand(task.command).pipe(
-			Effect.andThen(() => runCommand(task.command, EffectId.make(attemptEffectId), task.input)),
+			Effect.andThen(() =>
+				runCommand(
+					task.command,
+					EffectId.make(attemptEffectId),
+					task.command.startsWith('automations.') &&
+						typeof task.input === 'object' &&
+						task.input !== null &&
+						!Array.isArray(task.input)
+						? { ...task.input, bolt_task_id: task.effectId }
+						: task.input
+				)
+			),
 			Effect.match({
 				onSuccess: (response) =>
 					response.status >= 200 && response.status < 300
@@ -1478,9 +1503,42 @@ const runTick = Effect.fn('Bolt.runTick')(function* (effectId: EffectId) {
 								// A code and a short reason. Never the value: a command's body is where a
 								// partner's data and a person's record are, and `bolt_task.error` is readable by
 								// anyone who can see the operations panel.
-								error: `status ${response.status}`
+								error: `status ${response.status}`,
+								retryable:
+									response.status >= 500 ||
+									response.status === 408 ||
+									response.status === 409 ||
+									response.status === 425 ||
+									response.status === 429
 							} as const),
-				onFailure: (cause) => ({ _tag: 'Failed', task, error: describeCause(cause) }) as const
+				onFailure: (cause) => {
+					const error = Collections.unwrapMutationPhase(cause);
+					// An approval gate is a successful submission, not a broken automation attempt. The
+					// mutation graph is now durable in the approval inbox and its settlement is owned by
+					// `collections.resume`; retrying this task would only submit the same review again.
+					if (error instanceof Collections.PendingApproval)
+						return {
+							_tag: 'Done',
+							task,
+							result: {
+								status: 'awaiting_approval',
+								pending: true,
+								requestId: error.requestId,
+								collection: error.collection,
+								id: error.id,
+								action: error.action
+							}
+						} as const;
+					return {
+						_tag: 'Failed',
+						task,
+						error: describeCause(cause),
+						retryable:
+							error === null ||
+							typeof error !== 'object' ||
+							Reflect.get(error, 'retryable') !== false
+					} as const;
+				}
 			})
 		)
 	);
@@ -1718,7 +1776,6 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		}
 		case 'identity.admitFounder': {
 			const input = yield* decode(IdentityAdmitFounderInput, commandInput);
-			const definition = (yield* Workspace.Service).definition;
 			/**
 			 * The founder is an administrator, not a person holding every role at once.
 			 *
@@ -1727,8 +1784,8 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			 * supervisor, a manager and an HR controller — which is not a description of anybody, and
 			 * which made their authority a function of the ladder: adding a policy changed what an
 			 * administrator was, and anything that stopped supplying roles removed the workspace from
-			 * them entirely. Authority is now the `admin` status on their own row, and
-			 * `AccessControl.decide` short-circuits on it before it consults a policy at all.
+			 * them entirely. Administrative status is now explicit on their own row and selects only
+			 * the built-in administrative policy; it grants no authored app or collection access.
 			 *
 			 * `roles` is therefore empty. There is nothing for it to hold: `admin` is not a role, and
 			 * assigning the six real ones would be a lie about what this person does in the workspace.
@@ -1736,15 +1793,15 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			 * They are placed in no team, and that is the whole of the change here.
 			 *
 			 * This used to *derive* a teams array by walking every policy, every grant and every approval
-			 * step in the workspace and collecting each `approvers` name — because `admin` does not
-			 * bypass approvals, so a founder who administers everything could still raise an
-			 * approval-gated record that nobody was eligible to decide. With no team rows and no place
-			 * to manage them, guessing was the only defence available.
+			 * step in the workspace and collecting each `approvers` name. A founder with no explicit
+			 * tenant-data grant cannot raise an approval-gated record in the first place, and administrative
+			 * status does not confer eligibility to decide one.
+			 * With no team rows and no place to manage them, guessing was the only defence available.
 			 *
 			 * Teams are rows now and an operator puts people in them, so the guess goes. The consequence
 			 * is deliberate and visible rather than silently pre-empted: immediately after provisioning
-			 * the founder administers everything and can decide nothing that is gated, and the fix is to
-			 * put them in a team.
+			 * the founder can manage membership and preview teams, but has no tenant-data or approval
+			 * authority until an operator places them in a team.
 			 */
 			// `tenantId` is stamped onto every command input from the invocation scope, never read from
 			// the payload — so a caller cannot admit a founder into somebody else's workspace.
@@ -1800,16 +1857,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		case 'identity.bootstrapFounder': {
 			const input = yield* decode(IdentityBootstrapFounderInput, commandInput);
 			const identity = yield* Identity.Service;
-			const database = yield* Database.Service;
 			const ledgerIdentifier = `${FOUNDER_CLAIM_IDENTIFIER}${input.claimId}`;
-			const recorded = yield* database.execute(effectId, {
-				_tag: 'Query',
-				sql: 'select "value" from "verification" where "identifier" = $1 limit 1',
-				parameters: [ledgerIdentifier]
-			});
-			const ledgerRow = Schema.decodeUnknownResult(FounderLedgerRow)(recorded.rows[0]);
-			if (Result.isSuccess(ledgerRow)) {
-				const spentBy = ledgerRow.success.value;
+			const spentBy = yield* identity.readFounderClaim(effectId, ledgerIdentifier);
+			if (spentBy !== undefined) {
 				const [userId, ...rest] = spentBy.split(' ');
 				const boundEmail = rest.join(' ');
 				/**
@@ -1847,19 +1897,12 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			// Written before the session is minted, so a crash between the two leaves a claim that is
 			// spent rather than one that can be spent again. The founder is already an administrator
 			// at that point and signs in the ordinary way, which is the safe direction to fail.
-			yield* database.execute(effectId, {
-				_tag: 'Query',
-				// `"expiresAt"` is quoted camelCase because that is the column the collection declares and
-				// the migration creates — Better Auth's field naming is not the snake_case the rest of the
-				// schema uses. An unquoted or snake_cased name here is a
-				// statement that fails only in the tenant database, at signup, in production.
-				sql: 'insert into "verification" ("identifier", "value", "expiresAt") values ($1, $2, $3)',
-				parameters: [
-					ledgerIdentifier,
-					`${founderId} ${input.email}`,
-					new Date(claimExpiresEpochMs).toISOString()
-				]
-			});
+			yield* identity.recordFounderClaim(
+				effectId,
+				ledgerIdentifier,
+				`${founderId} ${input.email}`,
+				new Date(claimExpiresEpochMs).toISOString()
+			);
 			return json({
 				admitted: true,
 				userId: founderId,
@@ -2014,6 +2057,25 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const input = yield* decode(ApprovalWithdrawInput, commandInput);
 			return json(yield* (yield* Approvals.Service).withdraw(effectId, input.subject, input.state));
 		}
+		case 'approvals.capabilities': {
+			const input = yield* decode(ApprovalStatusInput, commandInput);
+			const visible = yield* (yield* Collections.Service).approvalFindFirst(
+				effectId,
+				input.subject,
+				{ where: { id: { eq: input.requestId } } }
+			);
+			// Visibility is the first capability. Returning no record keeps an unreadable request
+			// indistinguishable from one that does not exist, just like `approvals.status` below.
+			if (visible === undefined || typeof visible !== 'object' || visible === null) return json([]);
+			const status = Reflect.get(visible, 'status');
+			if (typeof status !== 'string') return json([]);
+			const capabilities = yield* (yield* Approvals.Service).capabilities(
+				effectId,
+				input.subject,
+				input.requestId
+			);
+			return json([{ id: input.requestId, status, ...capabilities }]);
+		}
 		case 'approvals.status': {
 			const input = yield* decode(ApprovalStatusInput, commandInput);
 			const visible = yield* (yield* Collections.Service).approvalFindFirst(
@@ -2082,14 +2144,43 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const input = yield* decode(AgentTurnInput, commandInput);
 			const agents = yield* Agents.Service;
 			return json(
-				yield* agents.turn(
+				yield* agents.turn(effectId, input.subject, input.agent, input.conversationId, {
+					kind: 'user_message',
+					text: input.message,
+					documents: input.documents ?? []
+				})
+			);
+		}
+		case 'agents.documents.bind': {
+			const input = yield* decode(AgentDocumentBindInput, commandInput);
+			yield* (yield* Agents.Service).bindDocument(
+				effectId,
+				input.subject,
+				input.conversationId,
+				input.file
+			);
+			return json({ bound: true });
+		}
+		case 'agents.documents.resolve': {
+			const input = yield* decode(AgentDocumentInput, commandInput);
+			return json({
+				file: yield* (yield* Agents.Service).resolveDocument(
 					effectId,
 					input.subject,
-					input.agent,
 					input.conversationId,
-					input.message
+					input.storageKey
 				)
+			});
+		}
+		case 'agents.documents.remove': {
+			const input = yield* decode(AgentDocumentInput, commandInput);
+			yield* (yield* Agents.Service).removeDocument(
+				effectId,
+				input.subject,
+				input.conversationId,
+				input.storageKey
 			);
+			return json({ removed: true });
 		}
 		case 'agents.title': {
 			const input = yield* decode(AgentTitleInput, commandInput);
@@ -2180,12 +2271,8 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					name: collection.name,
 					history: collection.history,
 					hooks: [...(collection.hooks ?? [])],
-					// The three `defineModel` options that used to stop one hop short of a reader. The
-					// compiler now lifts them onto the collection descriptor, and this is the projection
-					// that would otherwise drop them again: a studio needs `description` and `icon` to
-					// name a collection, and `approvalLock` to know a write on it will be held.
+					// Model presentation metadata projected for Studio and the data browser.
 					...DispatchValues.jsonObject({
-						approvalLock: collection.approvalLock,
 						description: collection.description,
 						icon: collection.icon,
 						sourcePath: collection.sourcePath
@@ -2445,25 +2532,26 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				taskId: yield* (yield* Automations.Service).runStep(effectId, input.name, input.input)
 			});
 		}
-		case 'automations.history': {
-			const input = yield* decode(AutomationHistoryInput, commandInput);
-			return json({
-				runs: yield* (yield* Automations.Service).history(effectId, input.name, input.limit ?? 20)
-			});
+		case 'automations.stop': {
+			const input = yield* decode(AutomationLifecycleInput, commandInput);
+			yield* (yield* Automations.Service).stop(effectId, input.name, input.taskId);
+			return json({ stopped: true });
 		}
-		case 'automations.status': {
-			const input = yield* decode(TaskInput, commandInput);
-			return json((yield* (yield* Automations.Service).status(effectId, input.taskId)) ?? null);
-		}
-		case 'automations.cancel': {
-			const input = yield* decode(TaskInput, commandInput);
-			yield* (yield* Automations.Service).cancel(effectId, input.taskId);
-			return json({ cancelled: true });
+		case 'automations.resume': {
+			const input = yield* decode(AutomationLifecycleInput, commandInput);
+			yield* (yield* Automations.Service).resume(effectId, input.name, input.taskId);
+			return json({ resumed: true });
 		}
 		case 'envoys.receive': {
 			const input = yield* decode(EnvoyReceiveInput, commandInput);
 			const envoys = yield* Envoys.Service;
 			return json(yield* envoys.receive(effectId, input.envoy, input.delivery));
+		}
+		case 'envoys.drain': {
+			const input = yield* decode(EnvoyDrainInput, commandInput);
+			return json(
+				yield* (yield* Envoys.Service).drain(effectId, input.envoy, input.conversationId)
+			);
 		}
 		case 'envoys.register': {
 			const input = yield* decode(EnvoyNameInput, commandInput);
@@ -2562,19 +2650,26 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					const collections = yield* Collections.Service;
 					const ai = yield* AI.Service;
 					const files = yield* Files.Service;
-					const ops = makeBoundAuthoringOps(
-						effectId,
-						input.bolt_run_as,
-						collections,
-						ai,
-						files,
-						yield* Automations.Service
+					const automations = yield* Automations.Service;
+					const guard = Automations.stoppageGuard(automations, effectId, input.bolt_task_id);
+					const ops = guardAuthoredCollectionOps(
+						makeBoundAuthoringOps(effectId, input.bolt_run_as, collections, ai, files, automations),
+						guard
 					);
-					const api = makeAuthoringApi(ops);
+					const api = makeAutomationApi(makeAuthoringApi(ops), (value) =>
+						guard('progress').pipe(
+							Effect.andThen(Schema.decodeUnknownEffect(AutomationProgression)(value)),
+							Effect.flatMap((progression) =>
+								automations.progress(effectId, input.bolt_task_id, progression)
+							)
+						)
+					);
+					const args = yield* decode(automation.input ?? Schema.Json, input.args);
 					const output = yield* runAuthoredHandler(() =>
-						automation.handler(api, { args: input.args, scope: input.scope ?? {} })
+						automation.handler(api, { args, scope: input.scope ?? {} })
 					);
-					return json(yield* decode(Schema.Json, output));
+					const declaredOutput = yield* decode(automation.output ?? Schema.Unknown, output);
+					return json(yield* decode(Schema.Json, declaredOutput));
 				}
 			}
 			return yield* new DispatchError({

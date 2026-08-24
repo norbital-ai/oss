@@ -1,10 +1,22 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
+import { and, asc, desc, eq, gt, isNotNull } from 'drizzle-orm';
 import { Communication, IdentityHooks } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
-import { AUTH_MODELS } from '#lib/authoring/system-models.js';
+import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import { makeAuth } from '#lib/runtime/identity/auth.js';
 import { identitiesOf, identityMatches } from '#lib/runtime/envoys/transport-identity.js';
+import { composer, dbNow, dbNowPlusSeconds, executeBuilt } from '#lib/runtime/persistence.js';
+
+const usersTable = SYSTEM_MODEL_TABLES.user;
+const sessionsTable = SYSTEM_MODEL_TABLES.session;
+const authConfigTable = SYSTEM_MODEL_TABLES.auth_config;
+const teamsTable = SYSTEM_MODEL_TABLES.team;
+const auditTable = SYSTEM_MODEL_TABLES.bolt_audit;
+const externalSubjectsTable = SYSTEM_MODEL_TABLES.bolt_external_subjects;
+const invitationsTable = SYSTEM_MODEL_TABLES.bolt_invitations;
+const workspaceIdentitySettingsTable = SYSTEM_MODEL_TABLES.bolt_workspace_identity_settings;
+const verificationTable = SYSTEM_MODEL_TABLES.verification;
 
 export const Subject = Schema.Struct({
 	userId: Schema.NonEmptyString,
@@ -66,15 +78,28 @@ const SubjectDatabaseRow = Schema.Struct({
 	status: Schema.optionalKey(NullableString),
 	teamPath: Schema.Array(Schema.NonEmptyString)
 });
+const UserSubjectSourceRow = Schema.Struct({
+	id: Schema.NonEmptyString,
+	tenantId: Schema.NonEmptyString,
+	email: Schema.optionalKey(NullableString),
+	status: Schema.optionalKey(NullableString),
+	team_id: NullableString
+});
+const ExternalSubjectSourceRow = Schema.Struct({
+	user_id: Schema.NonEmptyString,
+	tenant_id: Schema.NonEmptyString,
+	email: Schema.optionalKey(NullableString),
+	team_id: NullableString
+});
 const SecretRow = Schema.Struct({ value: Schema.NonEmptyString });
 const TeamDatabaseRow = Schema.Struct({
 	id: Schema.NonEmptyString,
 	name: Schema.NonEmptyString,
-	parentId: NullableString,
+	parent_id: NullableString,
 	description: NullableString
 });
 const TransportAccountRow = Schema.Struct({
-	userId: Schema.NonEmptyString,
+	id: Schema.NonEmptyString,
 	email: NullableString,
 	channels: Schema.Json
 });
@@ -89,23 +114,34 @@ const MemberRow = Schema.Struct({
 	team: NullableString,
 	status: Schema.String
 });
-const InvitationRow = Schema.Struct({
+const MemberSourceRow = Schema.Struct({
 	id: Schema.NonEmptyString,
+	email: NullableString,
+	team_id: NullableString,
+	status: Schema.String
+});
+const ExternalMemberSourceRow = Schema.Struct({
+	user_id: Schema.NonEmptyString,
+	email: NullableString,
+	team_id: NullableString
+});
+const InvitationRow = Schema.Struct({
+	invitation_id: Schema.NonEmptyString,
 	email: Schema.String,
 	status: Schema.String,
-	invitedBy: NullableString
+	invited_by: NullableString
 });
 const AuditSubject = Schema.Struct({
 	collection: Schema.optionalKey(Schema.String),
 	requestId: Schema.optionalKey(Schema.String),
 	team: Schema.optionalKey(Schema.String)
 });
-const AuditRow = Schema.Struct({
-	id: Schema.NonEmptyString,
-	action: Schema.NonEmptyString,
-	actor: Schema.NonEmptyString,
+const AuditSourceRow = Schema.Struct({
+	sequence: Schema.Union([Schema.Number, Schema.NumberFromString]),
+	kind: Schema.NonEmptyString,
+	subject_id: Schema.NonEmptyString,
 	payload: AuditSubject,
-	at: Schema.String
+	created_at: Schema.String
 });
 const AssignedMemberRow = Schema.Struct({ id: Schema.NonEmptyString, email: NullableString });
 const WorkspaceSettingsRow = Schema.Struct({ settings: Schema.Json });
@@ -129,25 +165,6 @@ const malformedDatabaseRow = (operation: string) =>
  */
 const RECORD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isRecordId = (value: string): boolean => RECORD_ID_PATTERN.test(value);
-
-/** Every column a team is read back as, spelled once so the four writes cannot project it differently. */
-const TEAM_COLUMNS = `"id"::text as "id", "name", "parent_id"::text as "parentId", "description"`;
-
-/**
- * The subtree under one team, bounded exactly as `TEAM_TREE_SQL` is and for the same reason.
- *
- * Used to refuse a re-parent that would put a team inside its own subtree. The bound is not
- * redundant with that refusal: these commands are what stops a *new* cycle being made, and a row
- * written before they existed can already be in one — so the walk that detects it must terminate on
- * a graph that is already cyclic.
- */
-const TEAM_SUBTREE_SQL = `with recursive tree as (
-	select "id" as id, 1 as depth from "team" where "id" = $1::uuid
-	union all
-	select c."id", p.depth + 1 from "team" c join tree p on c."parent_id" = p.id
-	 where p.depth < 8
-)
-select 1 from tree where id = $2::uuid limit 1`;
 
 /**
  * The two values `user.status` may hold, named once so no call site spells them.
@@ -190,68 +207,6 @@ const subjectFromRow = (row: Schema.Schema.Type<typeof SubjectDatabaseRow>): Sub
 	};
 };
 
-/**
- * The team hierarchy, walked in the same round trip that authenticates.
- *
- * A subject's authority is its team's declared policies plus the policies of every team beneath it.
- * Resolving that with a second query would put another round trip on the authentication path, and a
- * round trip out of a guest isolate is the most expensive thing this runtime does: writing 89 rows
- * through one that made one per row cost 18 seconds.
- *
- * **Descent is unconditional, and a `team.inherits` flag used to gate it.** The flag defaulted
- * to off, on the reasoning that `rowPredicate` unions grants so composition can only ever widen —
- * one unconditional grant anywhere beneath a team collapsed a narrowing declared above it, with no
- * diff to look at. That reasoning still describes what happens; what changed is that it is now the
- * intent rather than a hazard. Somebody above sees what somebody below can see — that is what being
- * above means, and a per-team opt-in made it a property each row remembered to have rather than a
- * property of the hierarchy.
- *
- * Note what this does *not* do, because it is the thing most likely to be misread: inheriting a
- * policy is not inheriting its rows. A grant scoped `${requestor.id}` re-evaluates against
- * whoever is asking, so a manager holding a report's self-scoped policy sees their *own* records.
- * Reaching a report's rows is a predicate written against the team subtree — see
- * `requestor.team_scope_users` in `access-control.ts` — not a consequence of descending here.
- *
- * The depth bound is not defensive dressing. `parent_id` is a graph an operator edits from a
- * dashboard, so it can be made cyclic, and a recursive CTE over a cycle does not fail — it runs
- * until something else stops it. Eight levels is far above any real hierarchy, the same bound and
- * the same reasoning as `HOOK_NESTING_LIMIT`.
- */
-const TEAM_TREE_SQL = `, tree as (
-	select t."id" as id, t."name" as name, 1 as depth
-	  from "team" t join subject on t."id" = subject."team_id"
-	union all
-	select c."id", c."name", p.depth + 1
-	  from "team" c join tree p on c."parent_id" = p.id
-	 where p.depth < 8
-)`;
-
-/**
- * The projection every subject read ends in: the row, its team's name, and the resolved path.
- *
- * `teamPath` is ordered by depth so the subject's own team is first — the order a diagnostic reads
- * best in, the order `AccessControl` reports when it explains why something was allowed, and the
- * reason there is no separate `team` column here. The subject's own team *is* `teamPath[0]`, and
- * projecting it twice is how two readers came to disagree about which one meant "the team".
- */
-const SUBJECT_TAIL_SQL = `select subject.*,
-	coalesce((select json_agg(tree.name order by tree.depth) from tree), '[]'::json) as "teamPath"
-	from subject`;
-
-const EXTERNAL_SUBJECT_SQL = `with recursive subject as (
-	select user_id as "userId", tenant_id as "tenantId", email, team_id as "team_id", null as "status"
-	  from bolt_external_subjects
-	 where provider = $1 and external_id = $2
-)${TEAM_TREE_SQL} ${SUBJECT_TAIL_SQL}`;
-
-const AUTHENTICATE_SQL = `with recursive subject as (
-	select u."id" as "userId", u."tenantId" as "tenantId",
-	       u."email" as "email", u."status" as "status", u."team_id" as "team_id"
-	  from "${AUTH_MODELS.session}" s
-	  join "${AUTH_MODELS.user}" u on u."id" = s."userId"
-	 where s."token" = $1 and s."expiresAt" > now()
-)${TEAM_TREE_SQL} ${SUBJECT_TAIL_SQL}`;
-
 /** Carries authentication error through the typed identity failure channel without losing diagnostic context. */
 export class AuthenticationError extends Schema.TaggedError<AuthenticationError>()(
 	'Bolt.Identity.AuthenticationError',
@@ -278,7 +233,7 @@ export type TeamRecord = Readonly<{
 }>;
 
 /** The fields a new team is created with. Everything but the name is optional and defaults to none. */
-export type TeamDraft = Readonly<{
+type TeamDraft = Readonly<{
 	readonly name: string;
 	readonly parentId?: string | null | undefined;
 	readonly description?: string | null | undefined;
@@ -291,7 +246,7 @@ export type TeamDraft = Readonly<{
  * team to the root must be expressible. An optional key that can also hold `null` is the only shape
  * that says both.
  */
-export type TeamChanges = Readonly<{
+type TeamChanges = Readonly<{
 	readonly name?: string | undefined;
 	readonly parentId?: string | null | undefined;
 	readonly description?: string | null | undefined;
@@ -385,6 +340,18 @@ export type Interface = Readonly<{
 	readonly endSession: (
 		effectId: EffectId,
 		credential: string
+	) => Effect.Effect<void, Database.FacilityError>;
+	/** Reads the replay ledger used by the host-only founder bootstrap command. */
+	readonly readFounderClaim: (
+		effectId: EffectId,
+		identifier: string
+	) => Effect.Effect<string | undefined, Database.FacilityError>;
+	/** Records a spent founder claim without exposing the verification collection to dispatch. */
+	readonly recordFounderClaim: (
+		effectId: EffectId,
+		identifier: string,
+		value: string,
+		expiresAt: string
 	) => Effect.Effect<void, Database.FacilityError>;
 	readonly workspaceSettings: (
 		effectId: EffectId,
@@ -512,18 +479,96 @@ export const layerWith = (
 			const database = yield* Database.Service;
 			const communication = yield* Communication.Service;
 			const identityHooks = yield* IdentityHooks.Service;
-			const readSubject = Effect.fn('Identity.readSubject')(function* (
+			const teamProjection = {
+				id: teamsTable.id,
+				name: teamsTable.name,
+				parent_id: teamsTable.parent_id,
+				description: teamsTable.description
+			} as const;
+			const readTeamRows = Effect.fn('Identity.readTeamRows')(function* (effectId: EffectId) {
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer.select(teamProjection).from(teamsTable).orderBy(asc(teamsTable.name))
+				);
+				return yield* Schema.decodeUnknownEffect(Schema.Array(TeamDatabaseRow))(result.rows).pipe(
+					Effect.mapError(() => malformedDatabaseRow('identity.teams.read'))
+				);
+			});
+			/** Resolves the bounded descendant path in memory from one typed collection read. */
+			const teamPathOf = (
+				teamId: string | null,
+				teams: ReadonlyArray<Schema.Schema.Type<typeof TeamDatabaseRow>>
+			): ReadonlyArray<string> => {
+				if (teamId === null) return [];
+				const byId = new Map(teams.map((team) => [team.id, team] as const));
+				const children = new Map<string, Array<string>>();
+				for (const team of teams) {
+					if (team.parent_id === null) continue;
+					const siblings = children.get(team.parent_id) ?? [];
+					siblings.push(team.id);
+					children.set(team.parent_id, siblings);
+				}
+				const path: Array<string> = [];
+				let frontier = [teamId];
+				for (let depth = 0; depth < 8 && frontier.length > 0; depth += 1) {
+					const next: Array<string> = [];
+					for (const id of frontier) {
+						const team = byId.get(id);
+						if (team === undefined) continue;
+						path.push(team.name);
+						next.push(...(children.get(id) ?? []));
+					}
+					frontier = next;
+				}
+				return path;
+			};
+			const subtreeContains = (
+				rootId: string,
+				candidateId: string,
+				teams: ReadonlyArray<Schema.Schema.Type<typeof TeamDatabaseRow>>
+			): boolean => {
+				const children = new Map<string, Array<string>>();
+				for (const team of teams) {
+					if (team.parent_id === null) continue;
+					const siblings = children.get(team.parent_id) ?? [];
+					siblings.push(team.id);
+					children.set(team.parent_id, siblings);
+				}
+				const visited = new Set<string>();
+				let frontier = [rootId];
+				for (let depth = 0; depth < 8 && frontier.length > 0; depth += 1) {
+					if (frontier.includes(candidateId)) return true;
+					const next: Array<string> = [];
+					for (const id of frontier) {
+						if (visited.has(id)) continue;
+						visited.add(id);
+						next.push(...(children.get(id) ?? []));
+					}
+					frontier = next;
+				}
+				return false;
+			};
+			const subjectFromSource = Effect.fn('Identity.subjectFromSource')(function* (
 				effectId: EffectId,
-				sql: string,
-				parameters: ReadonlyArray<Schema.Json>
+				source: Readonly<{
+					readonly userId: string;
+					readonly tenantId: string;
+					readonly email?: string | null;
+					readonly status?: string | null;
+					readonly teamId: string | null;
+				}>
 			) {
-				const result = yield* database.execute(effectId, { _tag: 'Query', sql, parameters });
-				const first = result.rows[0];
-				if (first === undefined) return yield* new AuthenticationError({ reason: 'invalid' });
-				const row = yield* Schema.decodeUnknownEffect(SubjectDatabaseRow)(first).pipe(
+				const teams = yield* readTeamRows(EffectId.make(`${effectId}:teams`)).pipe(
 					Effect.mapError(() => new AuthenticationError({ reason: 'malformed' }))
 				);
-				return subjectFromRow(row);
+				return subjectFromRow({
+					userId: source.userId,
+					tenantId: source.tenantId,
+					...(source.email === undefined ? {} : { email: source.email }),
+					...(source.status === undefined ? {} : { status: source.status }),
+					teamPath: teamPathOf(source.teamId, teams)
+				});
 			});
 			/**
 			 * Runs Better Auth for one invocation.
@@ -534,23 +579,32 @@ export const layerWith = (
 			 * whichever effect id happened to construct it.
 			 */
 			const authFor = Effect.fn('Identity.authFor')(function* (effectId: EffectId) {
-				yield* database.execute(effectId, {
-					_tag: 'Query',
-					// Two v4 UUIDs rather than `gen_random_bytes`, which lives in pgcrypto — an extension a
-					// host is under no obligation to have installed, and did not. `gen_random_uuid` is core
-					// Postgres, and two of them are 64 hex characters carrying ~244 bits of entropy.
-					// `where not exists` rather than `on conflict (key)`: this is an ordinary collection now, so
-					// it is keyed by `id` and `key` carries an index but no unique constraint for a
-					// conflict target to match. Concurrent callers race to insert and the loser's row is
-					// harmless — the select below takes whichever secret is there, and both are valid.
-					sql: `insert into "auth_config" ("key", "value") select 'session-secret', replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '') where not exists (select 1 from "auth_config" where "key" = 'session-secret')`,
-					parameters: []
-				});
-				const stored = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select "value" from "auth_config" where "key" = 'session-secret' limit 1`,
-					parameters: []
-				});
+				let stored = yield* executeBuilt(
+					EffectId.make(`${effectId}:auth-secret-read`),
+					database,
+					composer
+						.select({ value: authConfigTable.value })
+						.from(authConfigTable)
+						.where(eq(authConfigTable.key, 'session-secret'))
+						.limit(1)
+				);
+				if (stored.rows[0] === undefined) {
+					const generated = `${randomId().replaceAll('-', '')}${randomId().replaceAll('-', '')}`;
+					yield* executeBuilt(
+						EffectId.make(`${effectId}:auth-secret-create`),
+						database,
+						composer.insert(authConfigTable).values({ key: 'session-secret', value: generated })
+					);
+					stored = yield* executeBuilt(
+						EffectId.make(`${effectId}:auth-secret-reread`),
+						database,
+						composer
+							.select({ value: authConfigTable.value })
+							.from(authConfigTable)
+							.where(eq(authConfigTable.key, 'session-secret'))
+							.limit(1)
+					);
+				}
 				const secret = yield* Schema.decodeUnknownEffect(SecretRow)(stored.rows[0]).pipe(
 					Effect.mapError(() => new AuthenticationError({ reason: 'malformed' })),
 					Effect.map((row) => row.value)
@@ -560,7 +614,7 @@ export const layerWith = (
 						secret,
 						baseURL: 'https://bolt.invalid',
 						production: canDeliver,
-						execute: (sql, parameters) =>
+						execute: ({ sql, parameters }) =>
 							Effect.gen(function* () {
 								const decodedParameters = yield* Schema.decodeUnknownEffect(
 									Schema.Array(Schema.Json)
@@ -598,7 +652,7 @@ export const layerWith = (
 
 			/** The projection every team write answers with, read off the row the statement returned. */
 			const teamFromRow = (row: Schema.Schema.Type<typeof TeamDatabaseRow>): TeamRecord => {
-				const { description, id, name, parentId } = row;
+				const { description, id, name, parent_id: parentId } = row;
 				return {
 					id,
 					name,
@@ -616,11 +670,11 @@ export const layerWith = (
 				teamId: string
 			) {
 				if (!isRecordId(teamId)) return undefined;
-				const found = yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: `select ${TEAM_COLUMNS} from "team" where "id" = $1::uuid`,
-					parameters: [teamId]
-				});
+				const found = yield* executeBuilt(
+					effectId,
+					database,
+					composer.select(teamProjection).from(teamsTable).where(eq(teamsTable.id, teamId)).limit(1)
+				);
 				const row = found.rows[0];
 				return row === undefined ? undefined : yield* decodeTeamRow('identity.team.read', row);
 			});
@@ -638,11 +692,15 @@ export const layerWith = (
 				actorId: string,
 				payload: Readonly<Record<string, Schema.Json>>
 			) {
-				yield* database.execute(effectId, {
-					_tag: 'Query',
-					sql: 'insert into bolt_audit (kind, subject_id, payload) values ($1, $2, $3)',
-					parameters: [kind, actorId, payload]
-				});
+				yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.insert(auditTable)
+						// `.toSQL()` intentionally does not run Drizzle's driver encoders. PostgreSQL's jsonb
+						// input therefore receives JSON text here, not a JavaScript object on the facility wire.
+						.values({ kind, subject_id: actorId, payload: JSON.stringify(payload) as never })
+				);
 			});
 			return Service.of({
 				/**
@@ -655,12 +713,70 @@ export const layerWith = (
 				 * now a row only Better Auth's own flows create, and expiry is the row's own column rather
 				 * than a `revoked_at` the host had to remember to set.
 				 */
-				authenticate: Effect.fn('Identity.authenticate')((effectId, credential) =>
-					readSubject(effectId, AUTHENTICATE_SQL, [credential])
-				),
+				authenticate: Effect.fn('Identity.authenticate')(function* (effectId, credential) {
+					const result = yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.select({
+								userId: usersTable.id,
+								tenantId: usersTable.tenantId,
+								email: usersTable.email,
+								status: usersTable.status,
+								teamId: usersTable.team_id
+							})
+							.from(sessionsTable)
+							.innerJoin(usersTable, eq(usersTable.id, sessionsTable.userId))
+							.where(and(eq(sessionsTable.token, credential), gt(sessionsTable.expiresAt, dbNow())))
+							.limit(1)
+					);
+					const first = result.rows[0];
+					if (first === undefined) return yield* new AuthenticationError({ reason: 'invalid' });
+					const source = yield* Schema.decodeUnknownEffect(UserSubjectSourceRow)(first).pipe(
+						Effect.mapError(() => new AuthenticationError({ reason: 'malformed' }))
+					);
+					return yield* subjectFromSource(effectId, {
+						userId: source.id,
+						tenantId: source.tenantId,
+						...(source.email === undefined ? {} : { email: source.email }),
+						...(source.status === undefined ? {} : { status: source.status }),
+						teamId: source.team_id
+					});
+				}),
 				/** An external provider's subject, resolved through the same team join a session is. */
-				resolveSubject: Effect.fn('Identity.resolveSubject')((effectId, provider, externalId) =>
-					readSubject(effectId, EXTERNAL_SUBJECT_SQL, [provider, externalId])
+				resolveSubject: Effect.fn('Identity.resolveSubject')(
+					function* (effectId, provider, externalId) {
+						const result = yield* executeBuilt(
+							effectId,
+							database,
+							composer
+								.select({
+									userId: externalSubjectsTable.user_id,
+									tenantId: externalSubjectsTable.tenant_id,
+									email: externalSubjectsTable.email,
+									teamId: externalSubjectsTable.team_id
+								})
+								.from(externalSubjectsTable)
+								.where(
+									and(
+										eq(externalSubjectsTable.provider, provider),
+										eq(externalSubjectsTable.external_id, externalId)
+									)
+								)
+								.limit(1)
+						);
+						const first = result.rows[0];
+						if (first === undefined) return yield* new AuthenticationError({ reason: 'invalid' });
+						const source = yield* Schema.decodeUnknownEffect(ExternalSubjectSourceRow)(first).pipe(
+							Effect.mapError(() => new AuthenticationError({ reason: 'malformed' }))
+						);
+						return yield* subjectFromSource(effectId, {
+							userId: source.user_id,
+							tenantId: source.tenant_id,
+							...(source.email === undefined ? {} : { email: source.email }),
+							teamId: source.team_id
+						});
+					}
 				),
 				/**
 				 * The account holding a verified identity for this sender, matched in two stages.
@@ -680,13 +796,18 @@ export const layerWith = (
 				 */
 				accountByTransportIdentity: Effect.fn('Identity.accountByTransportIdentity')(
 					function* (effectId, transport, senderAddress) {
-						const result = yield* database.execute(effectId, {
-							_tag: 'Query',
-							sql: `select u."id" as "userId", u."email" as "email", u."channels" as "channels"
-						        from "${AUTH_MODELS.user}" u
-						       where u."channels" @> $1::jsonb`,
-							parameters: [JSON.stringify([{ type: transport, verified: true }])]
-						});
+						const result = yield* executeBuilt(
+							effectId,
+							database,
+							composer
+								.select({
+									userId: usersTable.id,
+									email: usersTable.email,
+									channels: usersTable.channels
+								})
+								.from(usersTable)
+								.where(isNotNull(usersTable.channels))
+						);
 						for (const row of result.rows) {
 							const decoded = yield* Schema.decodeUnknownEffect(TransportAccountRow)(row).pipe(
 								Effect.mapError(() => malformedDatabaseRow('identity.accountByTransportIdentity'))
@@ -695,19 +816,28 @@ export const layerWith = (
 							if (!held.some((identity) => identityMatches(identity, transport, senderAddress)))
 								continue;
 							return decoded.email === null
-								? { userId: decoded.userId }
-								: { userId: decoded.userId, email: decoded.email };
+								? { userId: decoded.id }
+								: { userId: decoded.id, email: decoded.email };
 						}
 						return undefined;
 					}
 				),
 				invite: Effect.fn('Identity.invite')(function* (effectId, tenantId, email, invitedBy) {
 					const invitationId = `${tenantId}:${effectId}`;
-					yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: 'insert into bolt_invitations (invitation_id, tenant_id, email, invited_by, status) values ($1, $2, $3, $4, $5) on conflict (invitation_id) do nothing',
-						parameters: [invitationId, tenantId, email, invitedBy, 'pending']
-					});
+					yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.insert(invitationsTable)
+							.values({
+								invitation_id: invitationId,
+								tenant_id: tenantId,
+								email,
+								invited_by: invitedBy,
+								status: 'pending'
+							})
+							.onConflictDoNothing({ target: invitationsTable.invitation_id })
+					);
 					yield* communication.execute(effectId, {
 						_tag: 'Notify',
 						recipient: email,
@@ -724,11 +854,23 @@ export const layerWith = (
 				}),
 				acceptInvitation: Effect.fn('Identity.acceptInvitation')(
 					function* (effectId, invitationId, userId) {
-						const result = yield* database.execute(effectId, {
-							_tag: 'Query',
-							sql: 'update bolt_invitations set status = $2, accepted_by = $3 where invitation_id = $1 and status = $4 returning invitation_id, tenant_id, email',
-							parameters: [invitationId, 'accepted', userId, 'pending']
-						});
+						const result = yield* executeBuilt(
+							effectId,
+							database,
+							composer
+								.update(invitationsTable)
+								.set({ status: 'accepted', accepted_by: userId })
+								.where(
+									and(
+										eq(invitationsTable.invitation_id, invitationId),
+										eq(invitationsTable.status, 'pending')
+									)
+								)
+								.returning({
+									tenant_id: invitationsTable.tenant_id,
+									email: invitationsTable.email
+								})
+						);
 						const row = result.rows[0];
 						if (row === undefined) return yield* new AuthenticationError({ reason: 'invalid' });
 						const invitation = yield* Schema.decodeUnknownEffect(InvitationAcceptedRow)(row).pipe(
@@ -794,18 +936,30 @@ export const layerWith = (
 				 * membership rather than the two racing.
 				 */
 				admit: Effect.fn('Identity.admit')(function* (effectId, tenantId, email, teamId, status) {
-					const admitted = yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: `insert into "${AUTH_MODELS.user}" ("id", "name", "email", "emailVerified", "status", "tenantId", "team_id")
-					      values (gen_random_uuid(), $1, $1, true, $4, $2, $3)
-					      on conflict ("email") do update set
-					        "tenantId" = excluded."tenantId",
-					        "team_id" = excluded."team_id",
-					        "status" = excluded."status",
-					        "updated_at" = now()
-					      returning "id" as "id"`,
-						parameters: [email, tenantId, teamId, status]
-					});
+					const admitted = yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.insert(usersTable)
+							.values({
+								name: email,
+								email,
+								emailVerified: true,
+								status,
+								tenantId,
+								team_id: teamId
+							})
+							.onConflictDoUpdate({
+								target: usersTable.email,
+								set: {
+									tenantId,
+									team_id: teamId,
+									status,
+									updated_at: dbNow()
+								}
+							})
+							.returning({ id: usersTable.id })
+					);
 					const admittedId = yield* Schema.decodeUnknownEffect(IdRow)(admitted.rows[0]).pipe(
 						Effect.map((row) => row.id),
 						Effect.mapError(() => malformedDatabaseRow('identity.admit'))
@@ -834,11 +988,29 @@ export const layerWith = (
 					}
 					// Matched on the session just minted rather than on the address: it is the row Better Auth
 					// actually signed in, so a second user sharing the address cannot be the one admitted.
-					const admitted = yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: `update "${AUTH_MODELS.user}" set "tenantId" = $2, "updated_at" = now() where "id" = (select "userId" from "${AUTH_MODELS.session}" where "token" = $1) returning "id" as "id"`,
-						parameters: [signedIn.token, tenantId]
-					});
+					const session = yield* executeBuilt(
+						EffectId.make(`${effectId}:session-read`),
+						database,
+						composer
+							.select({ userId: sessionsTable.userId })
+							.from(sessionsTable)
+							.where(eq(sessionsTable.token, signedIn.token))
+							.limit(1)
+					);
+					const sessionUser = yield* Schema.decodeUnknownEffect(
+						Schema.Struct({ userId: Schema.NonEmptyString })
+					)(session.rows[0]).pipe(
+						Effect.mapError(() => new AuthenticationError({ reason: 'invalid' }))
+					);
+					const admitted = yield* executeBuilt(
+						EffectId.make(`${effectId}:user-admit`),
+						database,
+						composer
+							.update(usersTable)
+							.set({ tenantId, updated_at: dbNow() })
+							.where(eq(usersTable.id, sessionUser.userId))
+							.returning({ id: usersTable.id })
+					);
 					const admittedId = yield* Schema.decodeUnknownEffect(IdRow)(admitted.rows[0]).pipe(
 						Effect.map((row) => row.id),
 						Effect.mapError(() => new AuthenticationError({ reason: 'invalid' }))
@@ -863,18 +1035,27 @@ export const layerWith = (
 				 */
 				startSession: Effect.fn('Identity.startSession')(function* (effectId, userId, tenantId) {
 					const credential = `bolt:${tenantId}:${randomId()}`;
-					const admitted = yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: `update "${AUTH_MODELS.user}" set "tenantId" = $2, "updated_at" = now() where "id" = $1 returning "id" as "id"`,
-						parameters: [userId, tenantId]
-					});
+					const admitted = yield* executeBuilt(
+						EffectId.make(`${effectId}:user-admit`),
+						database,
+						composer
+							.update(usersTable)
+							.set({ tenantId, updated_at: dbNow() })
+							.where(eq(usersTable.id, userId))
+							.returning({ id: usersTable.id })
+					);
 					if (admitted.rows[0] === undefined)
 						return yield* new AuthenticationError({ reason: 'invalid' });
-					yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: `insert into "${AUTH_MODELS.session}" ("id", "token", "userId", "expiresAt") values ($1, $2, $3, now() + interval '8 hours')`,
-						parameters: [randomId(), credential, userId]
-					});
+					yield* executeBuilt(
+						EffectId.make(`${effectId}:session-create`),
+						database,
+						composer.insert(sessionsTable).values({
+							id: randomId(),
+							token: credential,
+							userId,
+							expiresAt: dbNowPlusSeconds(8 * 60 * 60)
+						})
+					);
 					yield* identityHooks.emit(effectId, {
 						_tag: 'UserChanged',
 						userId,
@@ -885,12 +1066,36 @@ export const layerWith = (
 				endSession: Effect.fn('Identity.endSession')(function* (effectId, credential) {
 					// Deleted rather than flagged revoked. A revoked row that still authenticates if one
 					// query forgets the flag is the failure the old two-writer design actually had.
-					yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: `delete from "${AUTH_MODELS.session}" where "token" = $1`,
-						parameters: [credential]
-					});
+					yield* executeBuilt(
+						effectId,
+						database,
+						composer.delete(sessionsTable).where(eq(sessionsTable.token, credential))
+					);
 				}),
+				readFounderClaim: Effect.fn('Identity.readFounderClaim')(function* (effectId, identifier) {
+					const result = yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.select({ value: verificationTable.value })
+							.from(verificationTable)
+							.where(eq(verificationTable.identifier, identifier))
+							.limit(1)
+					);
+					return yield* Schema.decodeUnknownEffect(Schema.optional(SecretRow))(result.rows[0]).pipe(
+						Effect.map((row) => row?.value),
+						Effect.mapError(() => malformedDatabaseRow('identity.founderClaim.read'))
+					);
+				}),
+				recordFounderClaim: Effect.fn('Identity.recordFounderClaim')(
+					function* (effectId, identifier, value, expiresAt) {
+						yield* executeBuilt(
+							effectId,
+							database,
+							composer.insert(verificationTable).values({ identifier, value, expiresAt })
+						);
+					}
+				),
 				/**
 				 * Reads the workspace's people, outstanding invitations, teams and access history.
 				 *
@@ -905,82 +1110,121 @@ export const layerWith = (
 					effectId: EffectId,
 					tenantId: string
 				) {
-					const memberRows = yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: `select subjects.user_id as "id", max(subjects.email) as "email", max(t."name") as "team",
-						  -- Selected, because the projection below reports an administrator off this column and
-						  -- a column the query never asked for reads as absent — which is exactly \`normal\`, so
-						  -- omitting it listed every administrator in the workspace as an ordinary member and
-						  -- did it silently. Aggregated as \`bool_or\` rather than \`max\` because the union has
-						  -- two sources and \`'normal'\` sorts after \`'admin'\`: a plain \`max\` would let an
-						  -- external row demote the person's own status row.
-						  case when bool_or(subjects.status = '${ADMIN_STATUS}') then '${ADMIN_STATUS}' else '${NORMAL_STATUS}' end as "status"
-						  from (
-							-- Cast to text so the union matches: identity is keyed by \`id uuid\`, while an
-							-- external subject's id is whatever its provider calls it, and both are only ever
-							-- read back out of this projection as a string.
-							select "id"::text as user_id, "email", "team_id", "status" from "${AUTH_MODELS.user}" where "tenantId" = $1
-							union all
-							-- An external subject is authenticated somewhere else and \`bolt_external_subjects\`
-							-- carries no status column, so it can only ever be an ordinary member — the same
-							-- answer \`resolveSubject\` gives it.
-							select user_id, email, team_id, '${NORMAL_STATUS}' from bolt_external_subjects where tenant_id = $1
-						  ) subjects
-						  left join "team" t on t."id" = subjects."team_id"
-						  group by subjects.user_id
-						  order by subjects.user_id`,
-						parameters: [tenantId]
-					});
-					const invitationRows = yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: 'select invitation_id as "id", email, status, invited_by as "invitedBy" from bolt_invitations where tenant_id = $1 order by created_at desc limit 200',
-						parameters: [tenantId]
-					});
-					const auditRows = yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: 'select sequence::text as "id", kind as "action", subject_id as "actor", payload, created_at as "at" from bolt_audit order by sequence desc limit 200',
-						parameters: []
-					});
-					const decodedMembers = yield* Schema.decodeUnknownEffect(Schema.Array(MemberRow))(
-						memberRows.rows
-					).pipe(Effect.mapError(() => malformedDatabaseRow('identity.workspaceAccess.members')));
+					const memberRows = yield* executeBuilt(
+						EffectId.make(`${effectId}:members`),
+						database,
+						composer
+							.select({
+								id: usersTable.id,
+								email: usersTable.email,
+								teamId: usersTable.team_id,
+								status: usersTable.status
+							})
+							.from(usersTable)
+							.where(eq(usersTable.tenantId, tenantId))
+					);
+					const externalRows = yield* executeBuilt(
+						EffectId.make(`${effectId}:external-members`),
+						database,
+						composer
+							.select({
+								id: externalSubjectsTable.user_id,
+								email: externalSubjectsTable.email,
+								teamId: externalSubjectsTable.team_id
+							})
+							.from(externalSubjectsTable)
+							.where(eq(externalSubjectsTable.tenant_id, tenantId))
+					);
+					const invitationRows = yield* executeBuilt(
+						EffectId.make(`${effectId}:invitations`),
+						database,
+						composer
+							.select({
+								id: invitationsTable.invitation_id,
+								email: invitationsTable.email,
+								status: invitationsTable.status,
+								invitedBy: invitationsTable.invited_by
+							})
+							.from(invitationsTable)
+							.where(eq(invitationsTable.tenant_id, tenantId))
+							.orderBy(desc(invitationsTable.created_at))
+							.limit(200)
+					);
+					const auditRows = yield* executeBuilt(
+						EffectId.make(`${effectId}:audit`),
+						database,
+						composer
+							.select({
+								sequence: auditTable.sequence,
+								action: auditTable.kind,
+								actor: auditTable.subject_id,
+								payload: auditTable.payload,
+								at: auditTable.created_at
+							})
+							.from(auditTable)
+							.orderBy(desc(auditTable.sequence))
+							.limit(200)
+					);
+					const decodedMemberSources = yield* Schema.decodeUnknownEffect(
+						Schema.Array(MemberSourceRow)
+					)(memberRows.rows).pipe(
+						Effect.mapError(() => malformedDatabaseRow('identity.workspaceAccess.members'))
+					);
+					const decodedExternalSources = yield* Schema.decodeUnknownEffect(
+						Schema.Array(ExternalMemberSourceRow)
+					)(externalRows.rows).pipe(
+						Effect.mapError(() => malformedDatabaseRow('identity.workspaceAccess.externalMembers'))
+					);
 					const decodedInvitations = yield* Schema.decodeUnknownEffect(Schema.Array(InvitationRow))(
 						invitationRows.rows
 					).pipe(
 						Effect.mapError(() => malformedDatabaseRow('identity.workspaceAccess.invitations'))
 					);
-					const decodedAudits = yield* Schema.decodeUnknownEffect(Schema.Array(AuditRow))(
+					const decodedAudits = yield* Schema.decodeUnknownEffect(Schema.Array(AuditSourceRow))(
 						auditRows.rows
 					).pipe(Effect.mapError(() => malformedDatabaseRow('identity.workspaceAccess.audit')));
-					const members = decodedMembers.map((row) => {
-						const { email, id, status, team } = row;
-						return {
-							id,
-							email: email ?? '',
-							name: email?.split('@')[0] ?? id,
-							// The status column, and only it. `admin` was never a role a workspace declares and
-							// is now explicitly not one; what a person may do otherwise is their team's
-							// business, so this reports the team rather than guessing a tier from it.
-							role: status === ADMIN_STATUS ? 'admin' : 'basic',
-							status: 'active',
-							...(team === null ? {} : { team })
-						};
-					});
-					const teamRows = yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: 'select "id"::text as "id", "name", "parent_id"::text as "parentId", "description" from "team" order by "name"',
-						parameters: []
-					});
-					const teams = yield* Schema.decodeUnknownEffect(Schema.Array(TeamDatabaseRow))(
-						teamRows.rows
-					).pipe(
-						Effect.map((rows) => rows.map(teamFromRow)),
-						Effect.mapError(() => malformedDatabaseRow('identity.workspaceAccess.teams'))
-					);
+					const teamRows = yield* readTeamRows(EffectId.make(`${effectId}:teams`));
+					const teamNames = new Map(teamRows.map((team) => [team.id, team.name] as const));
+					const groupedMembers = new Map<string, Schema.Schema.Type<typeof MemberRow>>();
+					for (const row of decodedMemberSources) {
+						groupedMembers.set(row.id, {
+							id: row.id,
+							email: row.email,
+							team: row.team_id === null ? null : (teamNames.get(row.team_id) ?? null),
+							status: row.status
+						});
+					}
+					for (const row of decodedExternalSources) {
+						const current = groupedMembers.get(row.user_id);
+						if (current !== undefined) continue;
+						groupedMembers.set(row.user_id, {
+							id: row.user_id,
+							email: row.email,
+							team: row.team_id === null ? null : (teamNames.get(row.team_id) ?? null),
+							status: NORMAL_STATUS
+						});
+					}
+					const members = [...groupedMembers.values()]
+						.toSorted((left, right) => left.id.localeCompare(right.id))
+						.map((row) => {
+							const { email, id, status, team } = row;
+							return {
+								id,
+								email: email ?? '',
+								name: email?.split('@')[0] ?? id,
+								// The status column, and only it. `admin` was never a role a workspace declares and
+								// is now explicitly not one; what a person may do otherwise is their team's
+								// business, so this reports the team rather than guessing a tier from it.
+								role: status === ADMIN_STATUS ? 'admin' : 'basic',
+								status: 'active',
+								...(team === null ? {} : { team })
+							};
+						});
+					const teams = teamRows.map(teamFromRow);
 					return {
 						members,
 						invitations: decodedInvitations.map((row) => {
-							const { email, id, invitedBy, status } = row;
+							const { email, invitation_id: id, invited_by: invitedBy, status } = row;
 							return {
 								id,
 								email,
@@ -997,11 +1241,11 @@ export const layerWith = (
 							// action by somebody against nothing.
 							const subject = row.payload.collection ?? row.payload.requestId ?? row.payload.team;
 							return {
-								id: row.id,
-								action: row.action,
-								actor: row.actor,
+								id: String(row.sequence),
+								action: row.kind,
+								actor: row.subject_id,
 								...(subject === undefined ? {} : { subject }),
-								at: row.at
+								at: row.created_at
 							};
 						})
 					};
@@ -1028,19 +1272,18 @@ export const layerWith = (
 								reason: `there is no team ${parentId} to nest this one under`
 							} as const;
 						}
-						const created = yield* database.execute(EffectId.make(`${effectId}:team-create`), {
-							_tag: 'Query',
-							// Uniqueness is asserted folded, in the statement, rather than left to the index. Every
-							// comparison of a team name in this runtime is folded — `TEAM_LOOKUP_SQL` resolves a
-							// preview with `lower("name") = lower($1)` and `policiesHeldByTeam` folds both sides —
-							// but the unique index on the column is case-*sensitive*, so `on conflict` would admit
-							// `hr manager` beside `HR Manager` and make which one an approval matched an accident.
-							sql: `insert into "team" ("id", "name", "parent_id", "description")
-						      select gen_random_uuid(), $1::text, $2::uuid, $3::text
-						       where not exists (select 1 from "team" where lower("name") = lower($1::text))
-						   returning ${TEAM_COLUMNS}`,
-							parameters: [name, parentId, draft.description ?? null]
-						});
+						const existingTeams = yield* readTeamRows(EffectId.make(`${effectId}:team-name-check`));
+						if (existingTeams.some((team) => team.name.toLowerCase() === name.toLowerCase()))
+							return { _tag: 'Refused', reason: `a team called ${name} already exists` } as const;
+						const created = yield* executeBuilt(
+							EffectId.make(`${effectId}:team-create`),
+							database,
+							composer
+								.insert(teamsTable)
+								.values({ name, parent_id: parentId, description: draft.description ?? null })
+								.onConflictDoNothing({ target: teamsTable.name })
+								.returning(teamProjection)
+						);
 						const row = created.rows[0];
 						if (row === undefined)
 							return { _tag: 'Refused', reason: `a team called ${name} already exists` } as const;
@@ -1094,12 +1337,8 @@ export const layerWith = (
 							// The subtree walk starts *at* this team, so naming itself as its own parent is caught
 							// by the same query that catches naming one of its descendants — one refusal for one
 							// mistake, rather than two checks that can disagree.
-							const cycle = yield* database.execute(EffectId.make(`${effectId}:team-cycle`), {
-								_tag: 'Query',
-								sql: TEAM_SUBTREE_SQL,
-								parameters: [current.id, parentId]
-							});
-							if (cycle.rows[0] !== undefined) {
+							const hierarchy = yield* readTeamRows(EffectId.make(`${effectId}:team-cycle`));
+							if (subtreeContains(current.id, parentId, hierarchy)) {
 								return {
 									_tag: 'Refused',
 									reason: `${current.name} cannot be nested inside its own subtree`
@@ -1110,19 +1349,27 @@ export const layerWith = (
 							changes.description === undefined
 								? (current.description ?? null)
 								: changes.description;
-						const updated = yield* database.execute(EffectId.make(`${effectId}:team-update`), {
-							_tag: 'Query',
-							// The folded uniqueness test rides in the statement rather than in a read before it, so
-							// two operators renaming two teams to the same thing at once cannot both be told yes.
-							sql: `update "team" set "name" = $2::text, "parent_id" = $3::uuid, "description" = $4::text,
-						             "updated_at" = now()
-						       where "id" = $1::uuid
-						         and not exists (select 1 from "team" other
-						                          where lower(other."name") = lower($2::text)
-						                            and other."id" <> $1::uuid)
-						   returning ${TEAM_COLUMNS}`,
-							parameters: [current.id, name, parentId, description]
-						});
+						const siblings = yield* readTeamRows(EffectId.make(`${effectId}:team-name-check`));
+						if (
+							siblings.some(
+								(team) => team.id !== current.id && team.name.toLowerCase() === name.toLowerCase()
+							)
+						)
+							return { _tag: 'Refused', reason: `a team called ${name} already exists` } as const;
+						const updated = yield* executeBuilt(
+							EffectId.make(`${effectId}:team-update`),
+							database,
+							composer
+								.update(teamsTable)
+								.set({
+									name,
+									parent_id: parentId,
+									description,
+									updated_at: dbNow()
+								})
+								.where(eq(teamsTable.id, current.id))
+								.returning(teamProjection)
+						);
 						const row = updated.rows[0];
 						if (row === undefined)
 							return { _tag: 'Refused', reason: `a team called ${name} already exists` } as const;
@@ -1160,32 +1407,53 @@ export const layerWith = (
 						// An existence probe rather than a count: a count has to be parsed back out of a driver
 						// value, and a parse that failed would read as zero — which is exactly the answer that
 						// lets the delete through. One row or none cannot be misread that way.
-						const held = yield* database.execute(EffectId.make(`${effectId}:team-members`), {
-							_tag: 'Query',
-							sql: `select 1 from "${AUTH_MODELS.user}" where "team_id" = $1::uuid and "tenantId" = $2::text
-						      union all
-						      select 1 from bolt_external_subjects where team_id = $1::uuid and tenant_id = $2::text
-						      limit 1`,
-							parameters: [current.id, tenantId]
-						});
-						if (held.rows[0] !== undefined) {
+						const heldUsers = yield* executeBuilt(
+							EffectId.make(`${effectId}:team-members`),
+							database,
+							composer
+								.select({ id: usersTable.id })
+								.from(usersTable)
+								.where(and(eq(usersTable.team_id, current.id), eq(usersTable.tenantId, tenantId)))
+								.limit(1)
+						);
+						const heldExternal = yield* executeBuilt(
+							EffectId.make(`${effectId}:team-external-members`),
+							database,
+							composer
+								.select({ id: externalSubjectsTable.id })
+								.from(externalSubjectsTable)
+								.where(
+									and(
+										eq(externalSubjectsTable.team_id, current.id),
+										eq(externalSubjectsTable.tenant_id, tenantId)
+									)
+								)
+								.limit(1)
+						);
+						if (heldUsers.rows[0] !== undefined || heldExternal.rows[0] !== undefined) {
 							return {
 								_tag: 'Refused',
 								reason: `${current.name} still has members — move them to another team before deleting it`
 							} as const;
 						}
-						const deleted = yield* database.execute(EffectId.make(`${effectId}:team-delete`), {
-							_tag: 'Query',
-							sql: `delete from "team" where "id" = $1::uuid returning ${TEAM_COLUMNS}`,
-							parameters: [current.id]
-						});
+						const deleted = yield* executeBuilt(
+							EffectId.make(`${effectId}:team-delete`),
+							database,
+							composer
+								.delete(teamsTable)
+								.where(eq(teamsTable.id, current.id))
+								.returning(teamProjection)
+						);
 						if (deleted.rows[0] === undefined)
 							return { _tag: 'Refused', reason: `there is no team ${teamId}` } as const;
-						yield* database.execute(EffectId.make(`${effectId}:team-reparent`), {
-							_tag: 'Query',
-							sql: `update "team" set "parent_id" = null, "updated_at" = now() where "parent_id" = $1::uuid`,
-							parameters: [current.id]
-						});
+						yield* executeBuilt(
+							EffectId.make(`${effectId}:team-reparent`),
+							database,
+							composer
+								.update(teamsTable)
+								.set({ parent_id: null, updated_at: dbNow() })
+								.where(eq(teamsTable.parent_id, current.id))
+						);
 						yield* recordTeamEvent(
 							EffectId.make(`${effectId}:team-delete-audit`),
 							'team_deleted',
@@ -1219,13 +1487,15 @@ export const layerWith = (
 								_tag: 'Refused',
 								reason: `there is nobody with id ${memberId} in this workspace`
 							} as const;
-						const moved = yield* database.execute(EffectId.make(`${effectId}:team-assign`), {
-							_tag: 'Query',
-							sql: `update "${AUTH_MODELS.user}" set "team_id" = $2::uuid, "updated_at" = now()
-						       where "id" = $1::uuid and "tenantId" = $3::text
-						   returning "id"::text as "id", "email"`,
-							parameters: [memberId, team?.id ?? null, tenantId]
-						});
+						const moved = yield* executeBuilt(
+							EffectId.make(`${effectId}:team-assign`),
+							database,
+							composer
+								.update(usersTable)
+								.set({ team_id: team?.id ?? null, updated_at: dbNow() })
+								.where(and(eq(usersTable.id, memberId), eq(usersTable.tenantId, tenantId)))
+								.returning({ id: usersTable.id, email: usersTable.email })
+						);
 						const row = moved.rows[0];
 						if (row === undefined)
 							return {
@@ -1260,11 +1530,15 @@ export const layerWith = (
 					}
 				),
 				workspaceSettings: Effect.fn('Identity.workspaceSettings')(function* (effectId, tenantId) {
-					const result = yield* database.execute(effectId, {
-						_tag: 'Query',
-						sql: 'select settings from bolt_workspace_identity_settings where tenant_id = $1',
-						parameters: [tenantId]
-					});
+					const result = yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.select({ settings: workspaceIdentitySettingsTable.settings })
+							.from(workspaceIdentitySettingsTable)
+							.where(eq(workspaceIdentitySettingsTable.tenant_id, tenantId))
+							.limit(1)
+					);
 					const row = result.rows[0];
 					if (row === undefined) return {};
 					return yield* Schema.decodeUnknownEffect(WorkspaceSettingsRow)(row).pipe(

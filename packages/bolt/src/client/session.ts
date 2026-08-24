@@ -1,4 +1,5 @@
 import type { BoltTransport } from '#lib/client.js';
+import type { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
 import { Effect, MutableRef } from 'effect';
 
 /**
@@ -34,6 +35,19 @@ export type WorkspaceFilesHost = Readonly<{
 	readonly remove: (key: string) => ReturnType<typeof Effect.runPromise<void, never>>;
 	/** Where a stored key is served from, so a surface can render one without knowing the host. */
 	readonly urlFor: (key: string) => string;
+}>;
+
+/** Byte transport for documents whose authority is one chat session, never the generic file key. */
+type WorkspaceChatDocumentsHost = Readonly<{
+	readonly store: (
+		conversationId: string,
+		storageKey: string,
+		file: File,
+		onProgress?: (progress: { readonly loaded: number; readonly total: number }) => void,
+		signal?: AbortSignal
+	) => Promise<ChatDocumentRef>;
+	readonly remove: (conversationId: string, storageKey: string) => Promise<void>;
+	readonly urlFor: (conversationId: string, storageKey: string) => string;
 }>;
 
 /**
@@ -79,6 +93,7 @@ export type WorkspaceSession = Readonly<{
 	 */
 	readonly syncStreamUrl: string;
 	readonly files: WorkspaceFilesHost;
+	readonly chatDocuments: WorkspaceChatDocumentsHost;
 	readonly operations: WorkspaceOperationsHost;
 }>;
 

@@ -30,8 +30,13 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 	readonly #fetch: () => Effect.Effect<Value, unknown>;
 	readonly #caching: RemoteQueryCaching | undefined;
 	readonly #decodeCached: (value: unknown) => Effect.Effect<Value, unknown>;
-	/** Read by the live-query registry to decide whether a sync advance falsified this answer. */
-	readonly collections: ReadonlyArray<string>;
+	/** Keeps the registry's weak registration alive for exactly as long as this query is alive. */
+	readonly #liveRegistration:
+		| Readonly<{
+				readonly collections: ReadonlyArray<string>;
+				readonly reexecute: () => Effect.Effect<void, unknown>;
+		  }>
+		| undefined;
 
 	constructor(
 		fetchValue: () => Effect.Effect<Value, unknown>,
@@ -41,12 +46,19 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 		this.#fetch = fetchValue;
 		this.#caching = caching;
 		this.#decodeCached = decodeCached;
-		this.collections = caching?.collections ?? [];
-		caching?.registry.register(this);
+		if (caching === undefined) {
+			this.#liveRegistration = undefined;
+		} else {
+			this.#liveRegistration = {
+				collections: caching.collections,
+				reexecute: () => this.#reload()
+			};
+			caching.registry.register(this.#liveRegistration);
+		}
 		this.#pending = Effect.runFork(
 			this.#reload().pipe(
 				Effect.flatMap(() => {
-					// `refresh` catches so the reactive `error` cell can hold the cause; failing here is
+					// Re-execution records failures in the reactive `error` cell; failing here is
 					// what keeps the awaited half honest.
 					if (this.error !== undefined) return Effect.fail(asError(this.error));
 					if (this.current === undefined)
@@ -65,13 +77,10 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 	 * finished. Callers that want "have I got anything to show" already ask `current !== undefined` —
 	 * which is exactly the test `companiesUnknown` on the leave page makes.
 	 *
-	 * The whole flow is one Effect; `runPromise` is the single browser edge, at the signature the
-	 * Query API promises its callers. `loading` is reset in the effect's own continuation rather than
-	 * in a `finally`, because a cache read failing above the fetch is left to propagate with the flag
-	 * still true — the pre-Effect behaviour, which the pending fiber surfaces to its awaiter.
+	 * The whole flow is one Effect. `loading` is reset in the effect's own continuation rather than in
+	 * a `finally`, because a cache read failing above the fetch is left to propagate with the flag still
+	 * true — the pending fiber surfaces that failure to its awaiter.
 	 */
-	refresh: RemoteQuery<Value>['refresh'] = () => Effect.runPromise(this.#reload());
-
 	readonly #reload = (): Effect.Effect<void, unknown> => {
 		// Captured because `Effect.gen` bodies are plain generators, and `this` inside one is
 		// whatever it was called with — not the query instance.

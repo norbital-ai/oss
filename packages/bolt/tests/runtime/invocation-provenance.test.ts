@@ -10,12 +10,18 @@ import {
 	ReleaseId,
 	TenantId
 } from '@norbital-ai/bolt-protocol';
+import { approveBy } from '../../src/authoring/approval-flow.js';
 import { automation } from '../../src/authoring/automations-schema.js';
+import {
+	describePolicy,
+	policyRuntimeFunctionsFor
+} from '../../src/authoring/policy-introspection.js';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as AccessControl from '../../src/runtime/access/access-control.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { PendingApproval } from '../../src/runtime/collections/collections.js';
+import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	adminSubject,
@@ -90,6 +96,7 @@ const PREFIX_COMMANDS: ReadonlyArray<string> = ['invoke.anything', 'schema.migra
 const ENQUEUED_COMMANDS: ReadonlyArray<string> = [
 	'integrations.pull',
 	'integrations.flush',
+	'envoys.drain',
 	// A delegated turn. `sandbox-tools.ts` has enqueued `agents.turn` since delegation was written,
 	// and it was never listed here — harmless only for as long as nothing executed the queue. The
 	// first tick would have refused every subagent, and the refusal would have named the provenance
@@ -154,16 +161,26 @@ const gatedWorkspace = workspace({
 	collections: [
 		collection({
 			name: 'people',
-			fields: { name: field.string({ required: true }) },
-			approvalLock: true
+			fields: { name: field.string({ required: true }) }
 		})
 	],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+		describePolicy('admin', {
+			description: 'Requires review before creating a person.',
+			grants: {
+				people: {
+					read: {},
+					create: {
+						approval: { flow: () => approveBy('approvers'), superceded_by: [] }
+					}
+				}
+			}
+		})
 	],
 	teams: {
-		admin: ['admin']
+		admin: ['admin'],
+		approvers: []
 	},
 	automations: [
 		automation({
@@ -180,6 +197,13 @@ const gatedWorkspace = workspace({
 	envoys: [],
 	requiredFacilities: []
 });
+
+const gatedFunctions = policyRuntimeFunctionsFor(gatedWorkspace.policies);
+const gatedAuthored = {
+	...emptyAuthoredRuntime,
+	policyAuthorizations: gatedFunctions.authorizations,
+	approvalFlows: gatedFunctions.approvalFlows
+};
 
 describe('invocation provenance', () => {
 	// A regex that silently stops matching would make every loop below pass over an empty list, which
@@ -227,12 +251,12 @@ describe('invocation provenance', () => {
 	});
 
 	/**
-	 * `automations.<name>` is the one enqueued command that is not a fixed string, and the six host
+	 * `automations.<name>` is the one enqueued command that is not a fixed string, and the five host
 	 * commands under the same prefix are the reason it is resolved against the declared automations
 	 * rather than matched on `automations.`.
 	 */
 	it('admits a declared automation on a task and still refuses the host commands sharing its prefix', async () => {
-		harness = await makeBoltTestRuntime(gatedWorkspace);
+		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 
 		const declared = await outcomeOf(harness, task('automations.nightly', {}));
 		expect(declared._tag).toBe('Failure');
@@ -252,8 +276,7 @@ describe('invocation provenance', () => {
 			'automations.register',
 			'automations.runStep',
 			'automations.resume',
-			'automations.status',
-			'automations.cancel'
+			'automations.stop'
 		]) {
 			const failure = await failureOf(
 				harness,
@@ -316,7 +339,7 @@ describe('invocation provenance', () => {
 	 * on a `Plugin` is a post, not an enqueue, and lands no row.
 	 */
 	it('resumes an approved write on a task and refuses the same payload posted as a plugin', async () => {
-		harness = await makeBoltTestRuntime(gatedWorkspace);
+		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
 		const id = recordId('person-1');
 

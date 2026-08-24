@@ -28,7 +28,7 @@
 	} = $props();
 
 	/** The drawn mark's radius as a fraction of the box. See the note at its use. */
-	const ORB_OPTICAL_RADIUS = 0.33;
+	const ORB_OPTICAL_RADIUS = 0.36;
 
 	/**
 	 * How long, and how finely, a shape is sampled to find its own extent.
@@ -333,8 +333,8 @@
 			 *
 			 * A Lucide glyph draws roughly 20 of its 24 units, so at the identical 16px box every caller
 			 * passes, matching that arithmetic would leave the orb reading as the larger mark: a disc of
-			 * dots carries far more visual mass than an outline of the same diameter. At `0.33` the mark
-			 * draws to about 73% of the box, which is where it reads as the same size as the icons above
+			 * dots carries far more visual mass than an outline of the same diameter. At `0.36` the mark
+			 * draws to about 79% of the box, which is where it reads as the same size as the icons above
 			 * and below it.
 			 *
 			 * Applied here rather than by shrinking `size` at the call sites: the box is the layout

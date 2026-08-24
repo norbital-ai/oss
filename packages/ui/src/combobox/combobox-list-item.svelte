@@ -41,7 +41,7 @@
 	{@const selected = isValueSelected(item._option.value)}
 	<div
 		class={cn(
-			'relative z-10 flex w-full cursor-pointer items-center justify-between rounded-sm px-3 text-left',
+			'relative z-10 flex w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-3 text-left',
 			compactTextClass,
 			{
 				'bg-accent text-accent-foreground': selected
@@ -83,7 +83,7 @@
 		{#if multiple}
 			<Checkbox checked={selected} tabindex={-1} aria-hidden="true" class="scale-75" />
 		{:else if selected}
-			<Icon icon="lucide:check" class="ml-2 h-3 w-3 text-foreground" />
+			<Icon icon="lucide:check" class="h-3 w-3 text-foreground" />
 		{/if}
 	</div>
 {:else if item._type === 'select-all'}
@@ -118,13 +118,13 @@
 {:else}
 	<div
 		class={cn(
-			'relative z-10 flex w-full cursor-pointer items-center rounded-sm px-3 text-left',
+			'relative z-10 flex w-full cursor-pointer items-center gap-2 rounded-sm px-3 text-left',
 			'bg-accent text-accent-foreground',
 			compactTextClass
 		)}
 		style="height: {itemHeight}px;"
 	>
-		<Icon icon="lucide:plus" class="mr-2 h-3 w-3" />
+		<Icon icon="lucide:plus" class="h-3 w-3" />
 		{t('common.createOption', { query: searchQuery })}
 	</div>
 {/if}

@@ -50,7 +50,7 @@
 					</RangeCalendarPrimitive.GridHead>
 					<RangeCalendarPrimitive.GridBody>
 						{#each month.weeks as weekDates}
-							<GridRow class="mt-2 w-full">
+							<GridRow class="w-full">
 								{#each weekDates as date}
 									<Cell {date} month={month.value}>
 										<Day />

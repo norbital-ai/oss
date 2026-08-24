@@ -9,10 +9,16 @@ import {
 	TenantId,
 	type FacilityCall
 } from '@norbital-ai/bolt-protocol';
+import { approveBy } from '../../src/authoring/approval-flow.js';
+import {
+	describePolicy,
+	policyRuntimeFunctionsFor
+} from '../../src/authoring/policy-introspection.js';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { PendingApproval } from '../../src/runtime/collections/collections.js';
+import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import { ADMIN_STATUS } from '../../src/runtime/identity/identity.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
@@ -113,16 +119,26 @@ const gatedWorkspace = workspace({
 	collections: [
 		collection({
 			name: 'people',
-			fields: { name: field.string({ required: true }) },
-			approvalLock: true
+			fields: { name: field.string({ required: true }) }
 		})
 	],
 	apps: [],
 	policies: [
-		policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } })
+		describePolicy('admin', {
+			description: 'Requires review before creating a person.',
+			grants: {
+				people: {
+					read: {},
+					create: {
+						approval: { flow: () => approveBy('approvers'), superceded_by: [] }
+					}
+				}
+			}
+		})
 	],
 	teams: {
-		admin: ['admin']
+		admin: ['admin'],
+		approvers: []
 	},
 	integrations: [],
 	prompt: 'You are the test workspace agent.',
@@ -133,13 +149,20 @@ const gatedWorkspace = workspace({
 	requiredFacilities: []
 });
 
+const gatedFunctions = policyRuntimeFunctionsFor(gatedWorkspace.policies);
+const gatedAuthored = {
+	...emptyAuthoredRuntime,
+	policyAuthorizations: gatedFunctions.authorizations,
+	approvalFlows: gatedFunctions.approvalFlows
+};
+
 describe('the subject a facility call carries', () => {
 	/**
 	 * The read itself, not just some call in the invocation.
 	 *
-	 * The session lookup that authenticates the credential is asserted to carry *no* subject, because
-	 * it is the call that establishes one — if it carried a subject, the value would have come from
-	 * somewhere other than authentication, which is the whole thing being ruled out.
+	 * The session and team lookups that authenticate the credential are asserted to carry *no*
+	 * subject, because together they establish one — if either carried a subject, the value would
+	 * have come from somewhere other than authentication, which is the whole thing being ruled out.
 	 */
 	it('stamps the authenticated user on every facility call a command makes after authentication', async () => {
 		harness = await makeBoltTestRuntime(peopleWorkspace);
@@ -157,17 +180,21 @@ describe('the subject a facility call carries', () => {
 
 		const calls = [...harness.database.calls];
 		expect(calls.length).toBeGreaterThan(1);
+		const firstAuthenticatedCall = calls.findIndex(({ subject }) => subject !== undefined);
+		expect(firstAuthenticatedCall).toBeGreaterThan(1);
 		expect(
-			calls[0]?.subject,
-			'the credential lookup ran before there was a subject'
-		).toBeUndefined();
+			subjectsOf(calls.slice(0, firstAuthenticatedCall)),
+			'the credential and team lookups ran before there was a subject'
+		).toEqual(calls.slice(0, firstAuthenticatedCall).map(() => undefined));
 		expect(
-			subjectsOf(calls.slice(1)),
+			subjectsOf(calls.slice(firstAuthenticatedCall)),
 			'a facility call made under an authenticated command carried no subject'
 		).toEqual(
 			// A `CallSubject` is the user and their one team, and nothing else — a facility binding has no
 			// use for a list of policy names it cannot interpret.
-			calls.slice(1).map(() => ({ userId: fixtureUserId('user-admin-token'), team: 'admin' }))
+			calls
+				.slice(firstAuthenticatedCall)
+				.map(() => ({ userId: fixtureUserId('user-admin-token'), team: 'admin' }))
 		);
 	});
 
@@ -210,7 +237,7 @@ describe('the subject a facility call carries', () => {
 	 * that decision away from it and quietly file the task's writes under a user who never ran it.
 	 */
 	it('provides no subject at all for an enqueued task', async () => {
-		harness = await makeBoltTestRuntime(gatedWorkspace);
+		harness = await makeBoltTestRuntime(gatedWorkspace, { authored: gatedAuthored });
 		const { runtime, effectId } = harness;
 		const id = recordId('person-1');
 

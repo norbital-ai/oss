@@ -64,7 +64,7 @@ can check it. A rule that is missing here will be invented later and usually wro
 - A quote older than 30 days cannot be confirmed without the director.
 - …
 
-_Build notes: money datatypes, reckon graphs, CEL rules, hook invariants._
+_Build notes: custom('money') columns, reckon graphs, CEL rules, hook invariants._
 
 ## 7. What connects to it
 

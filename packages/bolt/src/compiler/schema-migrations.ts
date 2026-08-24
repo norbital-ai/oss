@@ -46,6 +46,9 @@ import { STATEMENT_BREAKPOINT, discoverAuthoredSource } from './sync.js';
  * two snapshots into DDL.
  * The diff runs in this process through `drizzle-kit/api-postgres`; generation is deterministic and
  * has no subprocess or interactive prompt.
+ *
+ * This module is a DDL compiler boundary. Its string transforms consume and repair migration DDL
+ * emitted by drizzle-kit; it neither executes application data CRUD nor exposes a query escape hatch.
  */
 
 /** drizzle-kit's own snapshot shape, taken from the function that produces it rather than restated. */
@@ -72,13 +75,22 @@ const CurrentWorkspaceSnapshot = Schema.Struct({
 	ddl: Schema.Array(Schema.Record(Schema.String, Schema.Json))
 });
 
+const GeneratedNotNullColumn = Schema.Struct({
+	entityType: Schema.Literal('columns'),
+	table: Schema.String,
+	name: Schema.String,
+	notNull: Schema.Literal(true),
+	generated: Schema.Struct({ as: Schema.String, type: Schema.String })
+});
+const isGeneratedNotNullColumn = Schema.is(GeneratedNotNullColumn);
+
 /**
  * A generated lineage entry: what the artifact carries, plus the snapshot only the generator uses.
  *
  * Built on `WorkspaceMigrationEntry` rather than restating `tag` and `statements`, so the shape the
  * host applies and the shape this writes to disk cannot drift apart.
  */
-export type WorkspaceMigration = WorkspaceMigrationEntry &
+type WorkspaceMigration = WorkspaceMigrationEntry &
 	Readonly<{ readonly snapshot: WorkspaceSnapshot }>;
 
 /** Renders one authored index declaration as the Drizzle index the snapshot compares against. */
@@ -361,7 +373,7 @@ const REFERENCE_ONLY_TABLES: Readonly<Record<string, PgTable>> = {
  * `CREATE TABLE user` into every workspace's lineage — for a table the schema plan already
  * owns and creates before any lineage runs.
  */
-export const workspaceMigrationTables = (
+const workspaceMigrationTables = (
 	models: Readonly<Record<string, ModelDeclaration>>,
 	relations: ReadonlyArray<RelationDefinition>
 ): Readonly<Record<string, PgTable>> => {
@@ -389,7 +401,7 @@ export const workspaceMigrationTables = (
 };
 
 /** drizzle-kit v1 names a lineage entry `<UTC timestamp>_<name>`; a synthesized one has to match. */
-export const migrationTag = (name: string, at = new Date()): string =>
+const migrationTag = (name: string, at = new Date()): string =>
 	`${at.toISOString().replace(/[-:T]/g, '').slice(0, 14)}_${name}`;
 
 /** The plan input: what the workspace authored, the lineage's previous snapshot, and what to name it. */
@@ -400,6 +412,75 @@ type WorkspaceMigrationPlanInput = Readonly<{
 	readonly name?: string;
 	readonly at?: Date;
 }>;
+
+/**
+ * Drizzle preserves declaration order when it emits `ALTER TABLE ... ADD COLUMN` statements. That
+ * order is not dependency-aware: a generated column declared before a new ordinary column it reads
+ * is emitted first, and PostgreSQL refuses the migration because the referenced column does not
+ * exist yet.
+ *
+ * PostgreSQL does not permit a generated column to depend on another generated column, so the
+ * complete dependency rule for additions to one existing table is ordinary columns first,
+ * generated columns second. Replace only that table's add-column slots; every other statement keeps
+ * its original position relative to table creation, drops, indexes, and constraints.
+ */
+export const orderGeneratedColumnDependencies = (
+	statements: ReadonlyArray<string>
+): ReadonlyArray<string> => {
+	const ordered = [...statements];
+	const additionsByTable = new Map<
+		string,
+		Array<{ readonly index: number; readonly sql: string }>
+	>();
+	for (const [index, statement] of statements.entries()) {
+		const matched = /^ALTER TABLE "([^"]+)" ADD COLUMN /.exec(statement);
+		if (matched?.[1] === undefined) continue;
+		const additions = additionsByTable.get(matched[1]) ?? [];
+		additions.push({ index, sql: statement });
+		additionsByTable.set(matched[1], additions);
+	}
+	for (const additions of additionsByTable.values()) {
+		const dependencyOrder = additions.toSorted(
+			(left, right) =>
+				Number(left.sql.includes(' GENERATED ALWAYS AS ')) -
+				Number(right.sql.includes(' GENERATED ALWAYS AS '))
+		);
+		additions.forEach(({ index }, position) => {
+			const replacement = dependencyOrder[position];
+			if (replacement !== undefined) ordered[index] = replacement.sql;
+		});
+	}
+	return ordered;
+};
+
+/**
+ * drizzle-kit records `notNull: true` for a generated column in the target snapshot but omits that
+ * constraint when the column is added to an existing table. A subsequent diff then reports the
+ * schema as converged even though the database accepts NULL, because it trusts the snapshot it
+ * wrote rather than the DDL it emitted. Add the missing constraint explicitly at the same boundary
+ * where the raw statements are reconciled with the target snapshot.
+ */
+const restoreGeneratedColumnNotNull = (
+	statements: ReadonlyArray<string>,
+	snapshot: WorkspaceSnapshot
+): ReadonlyArray<string> => {
+	const required = new Set(
+		snapshot.ddl.flatMap((entity) =>
+			isGeneratedNotNullColumn(entity) ? [`${entity.table}\u0000${entity.name}`] : []
+		)
+	);
+	return statements.flatMap((statement) => {
+		const matched = /^ALTER TABLE "([^"]+)" ADD COLUMN "([^"]+)" .* GENERATED ALWAYS AS /.exec(
+			statement
+		);
+		if (matched?.[1] === undefined || matched[2] === undefined) return [statement];
+		if (!required.has(`${matched[1]}\u0000${matched[2]}`)) return [statement];
+		// repository-health:allow SQL1 -- repairs a statement drizzle-kit already emitted, rather
+		// than authoring one: drizzle drops NOT NULL from a generated column, and only the raw
+		// statement list exists at this point in the pipeline.
+		return [statement, `ALTER TABLE "${matched[1]}" ALTER COLUMN "${matched[2]}" SET NOT NULL;`];
+	});
+};
 
 /**
  * Diffs the authored models against the previous snapshot and returns the migration, or `undefined`
@@ -424,7 +505,12 @@ export const planWorkspaceMigration = (
 		// differ exists to fix.
 		const previous = input.previous ?? (yield* Effect.promise(() => generateDrizzleJson({})));
 		const snapshot = yield* Effect.promise(() => generateDrizzleJson(tables, previous.id));
-		const statements = yield* Effect.promise(() => generateMigration(previous, snapshot));
+		const statements = restoreGeneratedColumnNotNull(
+			orderGeneratedColumnDependencies(
+				yield* Effect.promise(() => generateMigration(previous, snapshot))
+			),
+			snapshot
+		);
 		if (statements.length === 0) return undefined;
 		return { tag: migrationTag(input.name ?? 'auto', input.at), statements, snapshot };
 	});
@@ -528,12 +614,6 @@ export const latestSnapshot = (
 		}
 		return undefined;
 	});
-
-export type MigrationResult = Readonly<{
-	readonly migrationsRoot: string;
-	readonly tag?: string;
-	readonly statements: ReadonlyArray<string>;
-}>;
 
 /**
  * Generates the next lineage entry for a workspace on disk.

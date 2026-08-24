@@ -236,8 +236,10 @@
 							target="_blank"
 							rel="noreferrer"
 						>
-							<Icon icon="lucide:external-link" class="mr-2 size-4" />
-							Open Stripe dashboard
+							<Inline as="span" gap="sm" justify="center">
+								<Icon icon="lucide:external-link" class="size-4" />
+								Open Stripe dashboard
+							</Inline>
 						</a>
 					</Cluster>
 				</section>

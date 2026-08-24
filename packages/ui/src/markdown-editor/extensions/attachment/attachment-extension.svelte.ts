@@ -10,7 +10,7 @@ import type { Node as ProsemirrorNode } from 'prosemirror-model';
 import type { EditorView } from 'prosemirror-view';
 import { mount } from 'svelte';
 import { toast } from 'svelte-sonner';
-import { Effect, Result, Schema } from 'effect';
+import { Effect, Random, Result, Schema } from 'effect';
 import AttachmentView from './attachment-view.svelte';
 
 const decodeFileMetadata = Schema.decodeUnknownResult(FileMetadataSchema);
@@ -37,9 +37,12 @@ interface FileAttachmentCommandAttrs {
 	file: File;
 }
 
-const generateId = (): string => {
-	return Math.random().toString(36).substring(2, 15);
-};
+/**
+ * The node handle an upload is tracked by. Drawn from the runtime's `Random` service rather than
+ * the ambient generator, so a test can pin the ids a paste produces.
+ */
+const generateId = (): Effect.Effect<string> =>
+	Random.next.pipe(Effect.map((value) => value.toString(36).substring(2, 15)));
 
 type FileAttachmentStorage = {
 	uploadClient: IFileUploadClient;
@@ -308,7 +311,7 @@ export function createFileAttachmentExtension(options: {
 							return false;
 						}
 
-						const id = generateId();
+						const id = Effect.runSync(generateId());
 
 						const updateNode = (attrs: Record<string, unknown>) => {
 							const pos = findFileAttachmentPosition(editor.state.doc, this.name, id);
@@ -409,7 +412,7 @@ export function createFileAttachmentExtension(options: {
 									return;
 								}
 
-								const id = generateId();
+								const id = Effect.runSync(generateId());
 
 								const updateNode = (attrs: Record<string, unknown>) => {
 									const pos = findFileAttachmentPosition(view.state.doc, extension.name, id);

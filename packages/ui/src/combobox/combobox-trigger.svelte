@@ -5,6 +5,7 @@
 	import Icon from '@iconify/svelte';
 	import { buttonVariants } from '#lib/button';
 	import { useI18n, type UiKeys } from '#lib/i18n';
+	import { Inline } from '#lib/layout';
 	import * as Popover from '#lib/popover';
 	import { Spinner } from '#lib/spinner';
 	import { cn } from '#lib/utils';
@@ -242,8 +243,10 @@
 			</div>
 		</Popover.Trigger>
 		{#if !readonly}
-			<div
-				class="pointer-events-none absolute top-1/2 right-1 flex -translate-y-1/2 items-center justify-center gap-1"
+			<Inline
+				gap="xs"
+				justify="center"
+				class="pointer-events-none absolute top-1/2 right-1 -translate-y-1/2"
 			>
 				{#if showClearButton}
 					<button
@@ -261,7 +264,7 @@
 						<Icon icon="lucide:chevrons-up-down" class="h-3 w-3 shrink-0" />
 					</span>
 				{/if}
-			</div>
+			</Inline>
 		{/if}
 	</div>
 

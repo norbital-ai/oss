@@ -20,17 +20,17 @@
 	 */
 	let {
 		entries = [],
-		revision = 0
+		commit = ''
 	}: {
 		entries?: ReadonlyArray<MatrixEntry>;
-		revision?: number;
+		commit?: string;
 	} = $props();
 
 	const matrix = $derived(buildTenantMatrix(entries, []));
 	const flow = $derived(
 		matrix.environments.length === 0
 			? { nodes: [], edges: [] }
-			: buildMatrixFlow(matrix, { revision })
+			: buildMatrixFlow(matrix, { commit })
 	);
 </script>
 

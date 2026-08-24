@@ -10,6 +10,7 @@
 	import StarRating from './star-rating.svelte';
 	import Star from './star-rating-star.svelte';
 	import { Inline, Stack } from '#lib/layout';
+	import { removeScalarRow, scalarPickerPayload } from '#lib/utils/scalar-picker';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -100,18 +101,7 @@
 	// ============================================================================
 	const notifyParent = () => {
 		if (readonly || !onValueChange) return;
-
-		// Only send valid ratings to parent
-		const completeRatings = coercedRatings.filter(isValidRating);
-
-		if (!multiple) {
-			// Single mode: pass the first valid rating or null
-			const result = completeRatings[0] || null;
-			onValueChange(result);
-		} else {
-			// Multiple mode: pass array of valid ratings
-			onValueChange(completeRatings);
-		}
+		onValueChange(scalarPickerPayload(coercedRatings.filter(isValidRating), multiple));
 	};
 
 	const updateRating = (index: number, rating: number) => {
@@ -132,13 +122,7 @@
 
 	const removeRating = (index: number) => {
 		if (readonly || disabled) return;
-
-		// For single mode, reset to 0 instead of removing
-		if (!multiple && coercedRatings.length <= 1) {
-			coercedRatings = [0];
-		} else {
-			coercedRatings = coercedRatings.filter((_, i) => i !== index);
-		}
+		coercedRatings = removeScalarRow(coercedRatings, index, multiple);
 		notifyParent();
 	};
 
@@ -213,10 +197,10 @@
 						{/each}
 					</Stack>
 				{:else}
-					<div class="py-4 text-center">
-						<Icon icon="lucide:star" class="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+					<Stack gap="sm" align="center" class="py-4 text-center">
+						<Icon icon="lucide:star" class="h-8 w-8 text-muted-foreground" />
 						<p class="text-sm text-muted-foreground">{t('misc.noRatingsAssigned')}</p>
-					</div>
+					</Stack>
 				{/if}
 			</Stack>
 		</Popover.Content>
@@ -281,8 +265,8 @@
 						<Icon icon="lucide:star" class="mx-auto h-12 w-12 text-muted-foreground" />
 						<h4 class="font-medium text-foreground">{t('misc.noRatingsConfigured')}</h4>
 						<p class="text-sm text-muted-foreground">{t('misc.addFirstRatingHint')}</p>
-						<Button variant="outline" onclick={addRating} class="border-dashed" {disabled}>
-							<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
+						<Button variant="outline" onclick={addRating} class="gap-2 border-dashed" {disabled}>
+							<Icon icon="lucide:plus" class="h-4 w-4" />
 							{t('misc.addFirstRating')}
 						</Button>
 					</Stack>
@@ -348,10 +332,10 @@
 						<Button
 							variant="outline"
 							onclick={addRating}
-							class="w-full border-dashed text-muted-foreground hover:text-foreground"
+							class="w-full gap-2 border-dashed text-muted-foreground hover:text-foreground"
 							{disabled}
 						>
-							<Icon icon="lucide:plus" class="mr-2 h-4 w-4" />
+							<Icon icon="lucide:plus" class="h-4 w-4" />
 							{t('dataRenderer.addRating')}
 						</Button>
 					</Stack>

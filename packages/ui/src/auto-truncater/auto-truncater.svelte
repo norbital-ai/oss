@@ -148,8 +148,19 @@
 				yield* Effect.promise(() => tick());
 				measureAttempts = 0;
 				yield* updateLayout();
-				layoutQueued = false;
-			})
+			}).pipe(
+				// The queue flag is released whatever the pass does; a failure that left it raised
+				// would silently retire the component from every later resize.
+				Effect.ensuring(
+					Effect.sync(() => {
+						layoutQueued = false;
+					})
+				),
+				Effect.ignoreCause({
+					log: true,
+					message: '[AutoTruncater] Failed to lay out the truncated strip'
+				})
+			)
 		);
 	}
 

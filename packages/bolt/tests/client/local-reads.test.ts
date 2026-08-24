@@ -155,7 +155,7 @@ describe('reads answered by the replica', () => {
 		harness = await makeBoltTestRuntime();
 		await seed(harness);
 		const replica = await openReplica(harness);
-		const reader = createLocalReader(replica.engine, replica.shape, replica.readable);
+		const reader = createLocalReader(replica.store, replica.shape, replica.readable);
 
 		const query = {
 			collection: 'people',
@@ -180,7 +180,7 @@ describe('reads answered by the replica', () => {
 		harness = await makeBoltTestRuntime();
 		await seed(harness);
 		const replica = await openReplica(harness);
-		const reader = createLocalReader(replica.engine, replica.shape, replica.readable);
+		const reader = createLocalReader(replica.store, replica.shape, replica.readable);
 
 		const counted = await Effect.runPromise(
 			reader.answer('collections.count', {
@@ -195,7 +195,7 @@ describe('reads answered by the replica', () => {
 		harness = await makeBoltTestRuntime();
 		await seed(harness);
 		const replica = await openReplica(harness);
-		const reader = createLocalReader(replica.engine, replica.shape, replica.readable);
+		const reader = createLocalReader(replica.store, replica.shape, replica.readable);
 
 		// Four rows, asking for two: the caller needs a `nextCursor`, and only the server can mint one
 		// that seeks correctly.
@@ -216,7 +216,7 @@ describe('reads answered by the replica', () => {
 		harness = await makeBoltTestRuntime();
 		await seed(harness);
 		const replica = await openReplica(harness);
-		const reader = createLocalReader(replica.engine, replica.shape, replica.readable);
+		const reader = createLocalReader(replica.store, replica.shape, replica.readable);
 
 		// `with` expands relationships, which lives in the Collections service. Ignoring the key would
 		// answer a different question while looking successful.
@@ -239,7 +239,7 @@ describe('reads answered by the replica', () => {
 		harness = await makeBoltTestRuntime();
 		await seed(harness);
 		const replica = await openReplica(harness);
-		const reader = createLocalReader(replica.engine, replica.shape, new Set<string>());
+		const reader = createLocalReader(replica.store, replica.shape, new Set<string>());
 
 		// The replica holds only permitted rows, but a collection outside the reported shape must never
 		// be served from it regardless.
@@ -253,7 +253,7 @@ describe('reads answered by the replica', () => {
 	it('declines commands that are not reads at all', async () => {
 		harness = await makeBoltTestRuntime();
 		const replica = await openReplica(harness);
-		const reader = createLocalReader(replica.engine, replica.shape, replica.readable);
+		const reader = createLocalReader(replica.store, replica.shape, replica.readable);
 
 		expect(
 			await Effect.runPromise(

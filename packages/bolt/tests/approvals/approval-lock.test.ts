@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from '@effect/vitest';
 import { Effect, Layer, Ref, Schema } from 'effect';
 import { EffectId, type DatabaseRequest, type DatabaseResponse } from '@norbital-ai/bolt-protocol';
+import { approveBy } from '../../src/authoring/approval-flow.js';
+import {
+	describePolicy,
+	policyRuntimeFunctionsFor
+} from '../../src/authoring/policy-introspection.js';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as AccessControl from '../../src/runtime/access/access-control.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
@@ -29,19 +34,35 @@ const rid = (name: string): string => {
 	return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
 };
 
-const oneStep = {
-	id: rid('one-step'),
-	name: 'One step',
-	steps: [{ id: rid('review'), name: 'Review', approvers: ['approvers'] }]
-};
+const oneStep = { flow: () => approveBy('approvers'), superceded_by: [] };
 const twoStep = {
-	id: rid('two-step'),
-	name: 'Two step',
-	steps: [
-		{ id: rid('manager'), name: 'Manager', approvers: ['approvers'] },
-		{ id: rid('finance'), name: 'Finance', approvers: ['approvers'] }
-	]
+	flow: () => approveBy('approvers').thenBy('approvers'),
+	superceded_by: []
 };
+
+const dataPolicy = describePolicy('admin-data', {
+	description: 'Exercises one- and two-stage approval settlement.',
+	grants: {
+		orders: {
+			create: { approval: oneStep },
+			update: { approval: oneStep },
+			delete: { approval: oneStep },
+			read: {}
+		},
+		employees: {
+			create: { approval: twoStep },
+			update: { approval: twoStep },
+			delete: { approval: twoStep },
+			read: {}
+		},
+		notes: {
+			create: {},
+			update: { approval: oneStep },
+			delete: {},
+			read: {}
+		}
+	}
+});
 
 const definition = workspace({
 	name: 'hr',
@@ -49,32 +70,14 @@ const definition = workspace({
 	collections: [
 		collection({
 			name: 'orders',
-			fields: { title: field.string({ required: true }) },
-			approvalLock: true
+			fields: { title: field.string({ required: true }) }
 		}),
 		collection({ name: 'employees', fields: { name: field.string({ required: true }) } }),
 		collection({ name: 'notes', fields: { body: field.string({ required: true }) } })
 	],
 	apps: [app({ name: 'hr', label: 'HR' }), app({ name: 'approvals', label: 'Approvals' })],
 	policies: [
-		policy({
-			name: 'admin-data',
-			effect: 'allow',
-			grants: [
-				{ collection: 'orders', action: 'create' },
-				{ collection: 'orders', action: 'update' },
-				{ collection: 'orders', action: 'delete' },
-				{ collection: 'orders', action: 'read' },
-				{ collection: 'employees', action: 'create', approval: twoStep },
-				{ collection: 'employees', action: 'update', approval: twoStep },
-				{ collection: 'employees', action: 'delete', approval: twoStep },
-				{ collection: 'employees', action: 'read' },
-				{ collection: 'notes', action: 'create' },
-				{ collection: 'notes', action: 'update', approval: oneStep },
-				{ collection: 'notes', action: 'delete' },
-				{ collection: 'notes', action: 'read' }
-			]
-		}),
+		dataPolicy,
 		policy({
 			name: 'admin-approval',
 			effect: 'allow',
@@ -104,6 +107,8 @@ const subject = Subject.make({
 	policies: []
 });
 
+const dataFunctions = policyRuntimeFunctionsFor([dataPolicy]);
+
 type Row = Record<string, Schema.Json>;
 type ApprovalRow = {
 	readonly requestId: string;
@@ -114,6 +119,22 @@ type AuditRow = {
 	readonly kind: string;
 	readonly subjectId: string;
 	readonly payload: Schema.Json;
+};
+
+const storedApprovalState = (
+	value: Schema.Json
+): Readonly<Record<string, Schema.Json>> | undefined => {
+	const decoded =
+		typeof value === 'string'
+			? (() => {
+					try {
+						return JSON.parse(value) as unknown;
+					} catch {
+						return undefined;
+					}
+				})()
+			: value;
+	return Schema.is(Schema.Record(Schema.String, Schema.Json))(decoded) ? decoded : undefined;
 };
 
 const quotedName = (sql: string, keyword: 'into' | 'from' | 'update'): string | undefined => {
@@ -132,21 +153,37 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 				sql: string,
 				parameters: ReadonlyArray<Schema.Json>
 			) {
-				if (sql.includes('bolt_task') && !sql.includes('bolt_approvals')) {
+				// Drizzle quotes identifiers while the approval transition CTEs use the same
+				// identifiers unquoted. This fake models database meaning, not either SQL spelling.
+				const unquotedSql = sql.replaceAll('"', '');
+				if (unquotedSql.includes('bolt_task') && !unquotedSql.includes('bolt_approvals')) {
 					// The follow-up work a decision schedules is a row now, not a facility call, so the
 					// tests observe it the way a host would: as `bolt_task` inserts, with the command
 					// first among the parameters.
 					taskInserts.push(JSON.stringify(parameters));
 					return { rows: [], affectedRows: 1 } satisfies DatabaseResponse;
 				}
-				if (sql.includes('insert into bolt_approvals')) {
-					const requestId = String(parameters[0]);
+				if (unquotedSql.includes('insert into bolt_approvals')) {
+					const pendingState = parameters
+						.map(storedApprovalState)
+						.find(
+							(value) => value?.['_tag'] === 'Pending' && typeof value['requestId'] === 'string'
+						);
+					if (pendingState === undefined)
+						return { rows: [], affectedRows: 0 } satisfies DatabaseResponse;
+					const requestId = String(pendingState['requestId']);
+					const operation = pendingState['operation'];
+					const operationRecord = Schema.is(Schema.Record(Schema.String, Schema.Json))(operation)
+						? operation
+						: {};
+					const subjectIndex = parameters.findIndex((value) => value === 'approval_requested') + 1;
+					const requestorId = String(parameters[subjectIndex]);
 					const current = yield* Ref.get(approvals);
 					if (current.has(requestId))
 						return { rows: [], affectedRows: 0 } satisfies DatabaseResponse;
-					if (sql.includes('with locked as')) {
+					if (unquotedSql.includes('with locked as')) {
 						const table = quotedName(sql, 'update');
-						const id = String(parameters.at(-2));
+						const id = String(operationRecord['id']);
 						const currentTables = yield* Ref.get(tables);
 						const rows = new Map(currentTables.get(table ?? '') ?? new Map());
 						const row = rows.get(id);
@@ -158,13 +195,15 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 						rows.set(id, { ...row, approval_id: requestId });
 						yield* Ref.set(tables, new Map(currentTables).set(table ?? '', rows));
 					}
-					const state = parameters[2] ?? null;
+					// JSONB is a value boundary: mirror its normalisation instead of retaining any
+					// optional `undefined` properties from the in-process authoring object.
+					const state = JSON.parse(JSON.stringify(pendingState)) as Schema.Json;
 					yield* Ref.set(
 						approvals,
 						new Map(current).set(requestId, {
 							requestId,
 							state,
-							requestorId: String(parameters[3])
+							requestorId
 						})
 					);
 					if (sql.includes('bolt_audit')) {
@@ -173,14 +212,19 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 							...events,
 							{
 								kind: 'approval_requested',
-								subjectId: String(parameters[3]),
+								subjectId: requestorId,
 								payload: state
 							}
 						]);
 					}
 					return { rows: [{ state }], affectedRows: 1 } satisfies DatabaseResponse;
 				}
-				if (sql.includes('select 1 from requestor where approval_request_id')) {
+				if (
+					unquotedSql.trimStart().startsWith('select') &&
+					unquotedSql.includes('from requestor') &&
+					unquotedSql.includes('approval_request_id') &&
+					unquotedSql.includes('user_id')
+				) {
 					const current = yield* Ref.get(approvals);
 					const row = current.get(String(parameters[0]));
 					return {
@@ -189,8 +233,8 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 					} satisfies DatabaseResponse;
 				}
 				if (
-					sql.includes("state->>'_tag' = 'Pending'") &&
-					sql.includes("state->'operation'->>'collection'")
+					unquotedSql.includes("state->>'_tag' = 'Pending'") &&
+					unquotedSql.includes("state->'operation'->>'collection'")
 				) {
 					const collectionName = String(parameters[0]);
 					const recordId = String(parameters[1]);
@@ -210,7 +254,12 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 						affectedRows: 0
 					} satisfies DatabaseResponse;
 				}
-				if (sql.includes('select state from bolt_approvals where request_id')) {
+				if (
+					unquotedSql.trimStart().startsWith('select') &&
+					unquotedSql.includes('state') &&
+					unquotedSql.includes('from bolt_approvals') &&
+					unquotedSql.includes('request_id')
+				) {
 					const current = yield* Ref.get(approvals);
 					const row = current.get(String(parameters[0]));
 					return {
@@ -218,9 +267,45 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 						affectedRows: 0
 					} satisfies DatabaseResponse;
 				}
-				if (sql.includes('update bolt_approvals') || sql.includes('with updated as')) {
-					const requestId = String(parameters[0]);
-					const next = parameters[1] ?? null;
+				if (
+					unquotedSql.trimStart().startsWith('select') &&
+					unquotedSql.includes('from approval_request') &&
+					unquotedSql.includes('collection_name') &&
+					unquotedSql.includes('record_id') &&
+					unquotedSql.includes('status')
+				) {
+					const collectionName = String(parameters[0]);
+					const recordId = String(parameters[1]);
+					const current = yield* Ref.get(approvals);
+					const found = Array.from(current.values()).find((row) => {
+						const state = storedApprovalState(row.state);
+						const operation = state?.['operation'];
+						return (
+							state?.['_tag'] === 'Pending' &&
+							Schema.is(Schema.Record(Schema.String, Schema.Json))(operation) &&
+							operation['collection'] === collectionName &&
+							operation['id'] === recordId
+						);
+					});
+					return {
+						rows: found === undefined ? [] : [{ id: found.requestId }],
+						affectedRows: 0
+					} satisfies DatabaseResponse;
+				}
+				if (
+					unquotedSql.includes('update bolt_approvals') ||
+					unquotedSql.includes('with updated as')
+				) {
+					const nextState = parameters
+						.map(storedApprovalState)
+						.find(
+							(value) =>
+								typeof value?.['_tag'] === 'string' && typeof value['requestId'] === 'string'
+						);
+					if (nextState === undefined)
+						return { rows: [], affectedRows: 0 } satisfies DatabaseResponse;
+					const requestId = String(nextState['requestId']);
+					const next = JSON.parse(JSON.stringify(nextState)) as Schema.Json;
 					const current = yield* Ref.get(approvals);
 					const existing = current.get(requestId);
 					if (
@@ -240,14 +325,15 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 					);
 					if (sql.includes('bolt_task')) taskInserts.push(JSON.stringify(parameters));
 					if (sql.includes('bolt_audit')) {
+						const auditKindIndex = parameters.findIndex(
+							(value) => typeof value === 'string' && value.startsWith('approval_')
+						);
 						const events = yield* Ref.get(audit);
 						yield* Ref.set(audit, [
 							...events,
 							{
-								kind: sql.includes('approval_withdrawn')
-									? 'approval_withdrawn'
-									: 'approval_decided',
-								subjectId: String(parameters[2]),
+								kind: auditKindIndex < 0 ? 'approval_decided' : String(parameters[auditKindIndex]),
+								subjectId: String(parameters[auditKindIndex + 1]),
 								payload: next
 							}
 						]);
@@ -266,7 +352,7 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 					]);
 					return { rows: [], affectedRows: 1 } satisfies DatabaseResponse;
 				}
-				if (sql.includes('from bolt_audit')) {
+				if (unquotedSql.includes('from bolt_audit')) {
 					const requestId = String(parameters[0]);
 					const events = yield* Ref.get(audit);
 					return {
@@ -283,6 +369,41 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 							})),
 						affectedRows: 0
 					} satisfies DatabaseResponse;
+				}
+				const updatedTable = quotedName(sql, 'update');
+				const setClause = /\bset\b([\s\S]*?)(?:\bwhere\b|\breturning\b|$)/i.exec(unquotedSql)?.[1];
+				const approvalAssignment =
+					setClause === undefined ? null : /\bapproval_id\s*=\s*(null|\$(\d+))/i.exec(setClause);
+				if (updatedTable !== undefined && approvalAssignment !== null) {
+					const current = yield* Ref.get(tables);
+					const existing = new Map(current.get(updatedTable) ?? new Map());
+					const id = parameters.map(String).find((candidate) => existing.has(candidate));
+					if (id === undefined) return { rows: [], affectedRows: 0 } satisfies DatabaseResponse;
+					const row = existing.get(id);
+					if (row === undefined) return { rows: [], affectedRows: 0 } satisfies DatabaseResponse;
+					const parameterIndex = approvalAssignment[2];
+					const approvalId =
+						approvalAssignment[1]?.toLocaleLowerCase() === 'null'
+							? null
+							: (parameters[Number(parameterIndex) - 1] ?? null);
+					if (
+						approvalId !== null &&
+						typeof row['approval_id'] === 'string' &&
+						row['approval_id'].length > 0
+					) {
+						return { rows: [], affectedRows: 0 } satisfies DatabaseResponse;
+					}
+					const next = { ...row };
+					for (const assignment of setClause?.matchAll(/\b([a-z_][a-z0-9_]*)\s*=\s*\$(\d+)/gi) ??
+						[]) {
+						const column = assignment[1];
+						const index = Number(assignment[2]);
+						if (column !== undefined) next[column] = parameters[index - 1] ?? null;
+					}
+					next['approval_id'] = approvalId;
+					existing.set(id, next);
+					yield* Ref.set(tables, new Map(current).set(updatedTable, existing));
+					return { rows: [{ record_id: id }], affectedRows: 1 } satisfies DatabaseResponse;
 				}
 				if (sql.includes('with locked as') && sql.includes('approval_id = $2')) {
 					const table = quotedName(sql, 'update');
@@ -334,7 +455,7 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 					yield* Ref.set(tables, new Map(current).set(table, existing));
 					return { rows: [row], affectedRows: 1 } satisfies DatabaseResponse;
 				}
-				if (sql.startsWith('update "') && sql.includes('approval_id = $2')) {
+				if (sql.startsWith('update "') && unquotedSql.includes('set approval_id = $2')) {
 					const table = quotedName(sql, 'update');
 					const id = String(parameters[0]);
 					const requestId = String(parameters[1]);
@@ -368,12 +489,17 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 						const index = Number(assignment[2]);
 						if (column !== undefined) next[column] = parameters[index - 1] ?? null;
 					}
-					if (sql.includes('approval_id = null')) next['approval_id'] = null;
+					// Drizzle renders a null assignment as a literal rather than a bound parameter. Interpret
+					// the update's table/column intent after normalizing identifier quotes instead of depending
+					// on one exact generated statement.
+					if (/\bset\b[\s\S]*\bapproval_id\s*=\s*null\b/.test(unquotedSql)) {
+						next['approval_id'] = null;
+					}
 					existing.set(id, next);
 					yield* Ref.set(tables, new Map(current).set(table ?? '', existing));
 					return { rows: [next], affectedRows: 1 } satisfies DatabaseResponse;
 				}
-				if (sql.includes('select approval_id')) {
+				if (unquotedSql.includes('select approval_id')) {
 					const table = quotedName(sql, 'from');
 					const current = yield* Ref.get(tables);
 					const row = current.get(table ?? '')?.get(String(parameters[0]));
@@ -382,11 +508,16 @@ const memoryDatabaseLayer = (taskInserts: Array<string> = []) =>
 						affectedRows: 0
 					} satisfies DatabaseResponse;
 				}
-				if (sql.startsWith('select * from "') || sql.startsWith('select count(*)')) {
+				if (unquotedSql.trimStart().startsWith('select')) {
 					const table = quotedName(sql, 'from');
 					const current = yield* Ref.get(tables);
+					// Ordinary collection reads now project explicit Drizzle columns rather than
+					// spelling `select *`. Only intercept a table this fake actually owns so the
+					// system-table readers above retain their purpose-built behavior.
+					if (table === undefined || !current.has(table))
+						return { rows: [], affectedRows: 1 } satisfies DatabaseResponse;
 					const rows = Array.from(current.get(table ?? '')?.values() ?? []);
-					if (sql.startsWith('select count(*)'))
+					if (unquotedSql.includes('count('))
 						return { rows: [{ count: rows.length }], affectedRows: 0 } satisfies DatabaseResponse;
 					return { rows, affectedRows: 0 } satisfies DatabaseResponse;
 				}
@@ -437,27 +568,28 @@ const workspaceLayer = Workspace.layer(definition);
 const testLayer = (recorded: Array<string> = []) => {
 	const tasks = recordingTasks();
 	const database = memoryDatabaseLayer(recorded);
-	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(database, tasks)));
+	const wake = SyncWake.layer.pipe(Layer.provide(Transport.layer(undefined, context)));
+	const taskQueue = TaskQueue.layer(context).pipe(
+		Layer.provide(Layer.mergeAll(database, tasks, wake))
+	);
+	const tenantScope = TenantScope.layer(context.tenantId);
 	const automations = Automations.layer.pipe(
-		Layer.provide(
-			Layer.mergeAll(
-				workspaceLayer,
-				taskQueue,
-				InvocationBudget.layer(0),
-				TenantScope.layer(context.tenantId)
-			)
-		)
+		Layer.provide(Layer.mergeAll(workspaceLayer, taskQueue, InvocationBudget.layer(0), tenantScope))
 	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
-	const wake = SyncWake.layer.pipe(Layer.provide(Transport.layer(undefined, context)));
 	const approvalsLayer = Approvals.layer.pipe(
 		Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, wake))
 	);
-	const authoredLayer = Layer.succeed(AuthoredRuntimeService, emptyAuthoredRuntime);
+	const authoredLayer = Layer.succeed(AuthoredRuntimeService, {
+		...emptyAuthoredRuntime,
+		policyAuthorizations: dataFunctions.authorizations,
+		approvalFlows: dataFunctions.approvalFlows
+	});
 	const collectionsLayer = Collections.layer.pipe(
 		Layer.provide(
 			Layer.mergeAll(
 				workspaceLayer,
+				tenantScope,
 				access,
 				approvalsLayer,
 				database,

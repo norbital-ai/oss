@@ -1,11 +1,15 @@
-import type { CollectionClient, ErasedCollectionRegistry } from '@norbital-ai/std/collection';
+import type {
+	CollectionClient,
+	CollectionRegistry,
+	ErasedCollectionRegistry
+} from '@norbital-ai/std/collection';
 import { getContext, hasContext, setContext, type Component } from 'svelte';
 
 const COLLECTION_CLIENT_CONTEXT = Symbol.for('@norbital-ai/ui/collection-client');
 const COLLECTION_SURFACE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-surface');
 const COLLECTION_RECORD_SCOPE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-record-scope');
 
-type CollectionClientGetter = () => CollectionClient<ErasedCollectionRegistry>;
+export type CollectionClientGetter = () => CollectionClient<ErasedCollectionRegistry>;
 
 export interface CollectionSurface {
 	readonly representation?: Component;
@@ -29,19 +33,43 @@ export function getCollectionClientContext(): CollectionClient<ErasedCollectionR
 
 export function getOptionalCollectionClientContext():
 	CollectionClient<ErasedCollectionRegistry> | undefined {
+	return getOptionalCollectionClientGetter()?.();
+}
+
+/**
+ * Captures the context capability without freezing the client it currently resolves.
+ *
+ * Host projections can replace their in-memory client when asynchronously loaded rows arrive. A
+ * record detail therefore keeps this getter and reads it inside derived state, while ordinary
+ * callers retain `getOptionalCollectionClientContext()` as the one-shot convenience.
+ */
+export function getOptionalCollectionClientGetter(): CollectionClientGetter | undefined {
 	return hasContext(COLLECTION_CLIENT_CONTEXT)
-		? getContext<CollectionClientGetter>(COLLECTION_CLIENT_CONTEXT)()
+		? getContext<CollectionClientGetter>(COLLECTION_CLIENT_CONTEXT)
 		: undefined;
 }
 
-export function resolveCollectionClient(
+function isCollectionClient<TCollections extends CollectionRegistry>(
 	candidate: object
-): CollectionClient<ErasedCollectionRegistry> | undefined {
+): candidate is CollectionClient<TCollections> {
+	const db = Reflect.get(candidate, 'db');
 	const collections = Reflect.get(candidate, 'collections');
 	const records = Reflect.get(candidate, 'records');
-	if (collections == null || typeof collections !== 'object') return undefined;
-	if (records == null || typeof records !== 'object') return undefined;
-	return candidate as CollectionClient<ErasedCollectionRegistry>; // stupidity: boundary-cast — collection surfaces consume the platform client capability after its runtime shape is verified.
+	return (
+		db !== null &&
+		typeof db === 'object' &&
+		collections !== null &&
+		typeof collections === 'object' &&
+		records !== null &&
+		typeof records === 'object' &&
+		typeof Reflect.get(records, 'findMany') === 'function'
+	);
+}
+
+export function resolveCollectionClient<
+	TCollections extends CollectionRegistry = ErasedCollectionRegistry
+>(candidate: object): CollectionClient<TCollections> | undefined {
+	return isCollectionClient<TCollections>(candidate) ? candidate : undefined;
 }
 
 export function getCollectionClientForSurface(

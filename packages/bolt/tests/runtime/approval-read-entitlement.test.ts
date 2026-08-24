@@ -63,15 +63,13 @@ const JOB_ID = '019f6f10-0008-7000-8000-000000000001';
 /** The approval the raiser's grant carries. `approvers` and `team.name` are the same string. */
 const jobApproval = {
 	id: '019f6f10-0007-7000-8000-000000000009',
-	name: 'Job review',
 	steps: [
 		{
 			id: '019f6f10-0007-7000-8000-000000000109',
-			name: 'Reviewer check',
-			approvers: [REVIEWERS],
-			description: 'A reviewer looks at the job.'
+			approvers: [REVIEWERS]
 		}
-	]
+	],
+	superceded_by: []
 };
 
 /** Both parties read only their own rows — the narrowing an approver's ordinary grant would have. */
@@ -134,6 +132,16 @@ const titlesVisibleTo = async (runtime: BoltTestRuntime, credential: string) => 
 	return (rows as ReadonlyArray<Record<string, unknown>>).map((row) => row['title']).sort();
 };
 
+const approvalCapabilitiesFor = async (runtime: BoltTestRuntime, credential: string) => {
+	const outcome = await runtime.runtime.runPromise(
+		dispatchInvocation(
+			command('approvals.capabilities', credential, { requestId: REQUEST_ID })
+		).pipe(Effect.result)
+	);
+	if (outcome._tag !== 'Success') throw new Error(`refused: ${JSON.stringify(outcome)}`);
+	return outcome.success.value;
+};
+
 /** The job under review, owned by the raiser and therefore outside every reviewer's own scope. */
 const place = async (runtime: BoltTestRuntime) => {
 	await seedTeam(runtime, 'Raisers');
@@ -156,12 +164,45 @@ const raise = (runtime: BoltTestRuntime) =>
 				EffectId.make(`approval-${REQUEST_ID}`),
 				raiserSubject,
 				REQUEST_ID,
-				{ collection: 'jobs', id: JOB_ID, action: 'create', values: { title: 'Extra scaffolding' } }
+				{
+					collection: 'jobs',
+					id: JOB_ID,
+					action: 'create',
+					values: { title: 'Extra scaffolding' },
+					approval: jobApproval
+				}
 			);
 		})
 	);
 
 describe('an approver may read what they were asked to approve', () => {
+	it('projects only the actions each visible principal may actually take', async () => {
+		harness = await makeBoltTestRuntime(reviewWorkspace);
+		await place(harness);
+		await raise(harness);
+
+		expect(await approvalCapabilitiesFor(harness, 'raiser-token')).toEqual([
+			{
+				id: REQUEST_ID,
+				status: 'ONGOING',
+				canDecide: false,
+				canSupersede: false,
+				canWithdraw: true
+			}
+		]);
+		expect(await approvalCapabilitiesFor(harness, 'reviewer-token')).toEqual([
+			{
+				id: REQUEST_ID,
+				status: 'ONGOING',
+				canDecide: true,
+				canSupersede: false,
+				canWithdraw: false
+			}
+		]);
+		// A request outside the principal's approval visibility returns no capability record at all.
+		expect(await approvalCapabilitiesFor(harness, 'bystander-token')).toEqual([]);
+	});
+
 	it('reaches a record its own grant excludes, while the approval is open', async () => {
 		harness = await makeBoltTestRuntime(reviewWorkspace);
 		await place(harness);

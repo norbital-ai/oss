@@ -8,8 +8,7 @@ import type {
 import {
 	IntegrationHttpRequest,
 	isRetryableStatus,
-	retryDelayMs,
-	type IntegrationHttpMethod
+	retryDelayMs
 } from '#lib/runtime/integrations/http.js';
 import { authenticationHeaders } from '#lib/runtime/integrations/pull.js';
 
@@ -158,22 +157,6 @@ const REASON_LIMIT = 300;
 const shorten = (reason: string): string =>
 	reason.length <= REASON_LIMIT ? reason : `${reason.slice(0, REASON_LIMIT)}…`;
 
-/**
- * The delivery key a receiver deduplicates on.
- *
- * Derived from the outbox row's identity, so every attempt at one delivery presents the same value
- * and two genuinely different events never collide — including two updates to the same record,
- * which are two deliveries and must not be collapsed into one. It is derived and never taken from
- * the payload, for the same reason an inbound receipt is derived from a header or the verified
- * digest: a key the message supplies is a key the message gets to choose.
- */
-const deliveryKey = (integration: string, binding: string, sequence: number): string =>
-	`${integration}:${binding}:${sequence}`;
-
-/** Whether this method carries a body. `DELETE` does not: several APIs answer 400 to one that does. */
-const carriesBody = (method: IntegrationHttpMethod): boolean =>
-	method === 'POST' || method === 'PUT' || method === 'PATCH';
-
 const url = (connection: HttpConnection, path: string): string =>
 	`${connection.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
 
@@ -226,7 +209,11 @@ const attemptDelivery = (
 				method: declaration.method,
 				url: url(connection, claimed.path),
 				headers,
-				...(carriesBody(declaration.method) && claimed.payload !== null
+				// `DELETE` deliberately has no body: several APIs reject one with 400.
+				...((declaration.method === 'POST' ||
+					declaration.method === 'PUT' ||
+					declaration.method === 'PATCH') &&
+				claimed.payload !== null
 					? { body: claimed.payload }
 					: {})
 			})
@@ -355,11 +342,10 @@ export const runOutboxDrain = (
 			const headers = {
 				...(declaration.headers ?? {}),
 				...credential,
-				[declaration.idempotencyHeader ?? 'idempotency-key']: deliveryKey(
-					integration.name,
-					entry.binding,
-					entry.sequence
-				)
+				// Derived from the outbox row, not its payload, so retries keep one stable key while
+				// distinct events cannot collide.
+				[declaration.idempotencyHeader ?? 'idempotency-key']:
+					`${integration.name}:${entry.binding}:${entry.sequence}`
 			};
 			const attempted = yield* attemptDelivery(
 				dependencies,
