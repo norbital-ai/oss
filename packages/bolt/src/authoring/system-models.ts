@@ -588,7 +588,17 @@ const agentMessageModel = defineModel(
 		role: text().notNull(),
 		content: jsonb().notNull()
 	},
-	{ history: false, indexes: [systemIndex('conversation_id')] }
+	{
+		history: false,
+		indexes: [
+			systemIndex('conversation_id'),
+			{
+				name: 'chat_message_turn_role',
+				columns: ['conversation_id', 'turn_id', 'role'],
+				unique: true
+			}
+		]
+	}
 );
 
 const collectionHistoryModel = defineModel(

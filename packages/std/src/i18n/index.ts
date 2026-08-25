@@ -1,3 +1,5 @@
+// repository-health:allow SEM_SPREAD -- semantic spread with @norbital-ai/ui/i18n is the
+// intended provider/consumer edge: std owns the runtime, ui's reactive context imports it.
 import { type LocaleCatalogs, type KeysOf, type MessageVars, translate } from './catalog.js';
 import { DEFAULT_LOCALE, intlLocale as intlLocaleFor } from './locale.js';
 

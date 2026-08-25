@@ -191,7 +191,7 @@ const AuthoringAudit = {
 		})();
 		return keys.flatMap((key) => {
 			const value = node[key];
-			return value === null || value === undefined
+			return value == null
 				? []
 				: Array.isArray(value)
 					? value

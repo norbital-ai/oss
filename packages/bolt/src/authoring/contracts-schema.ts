@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- contracts-schema and workspace-schema are the authored
+// contract and its workspace declaration; they already link by type-only imports in both directions.
 import { Effect, Schema } from 'effect';
 import type { SystemRowColumns } from './system-row-model.js';
 import type { TExportManifest } from './handlers-schema.js';

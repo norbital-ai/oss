@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- the runtime limiter consumes the authored rate-limit
+// schema over the #lib alias, so the pair is linked, not parallel.
 import { Context, Duration, Effect, Layer, Schema } from 'effect';
 import { RateLimiter } from 'effect/unstable/persistence';
 import { bucketKey } from '@norbital-ai/std/rate-limit';

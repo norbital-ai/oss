@@ -98,7 +98,7 @@ const readBody = (
 		const cleanup = () => {
 			request.off('data', onData);
 			request.off('end', onEnd);
-			request.off('error', onError);
+			request.off('error', failure);
 			request.off('aborted', onAborted);
 			signal.removeEventListener('abort', onAbort);
 		};
@@ -143,9 +143,6 @@ const readBody = (
 			}
 			resume(Effect.succeed(body));
 		}
-		function onError(cause: Error): void {
-			failure(cause);
-		}
 		function onAborted(): void {
 			failure(new Error('request body stream was aborted'));
 		}
@@ -158,7 +155,7 @@ const readBody = (
 
 		request.on('data', onData);
 		request.once('end', onEnd);
-		request.once('error', onError);
+		request.once('error', failure);
 		request.once('aborted', onAborted);
 		signal.addEventListener('abort', onAbort, { once: true });
 		return Effect.sync(cleanup);

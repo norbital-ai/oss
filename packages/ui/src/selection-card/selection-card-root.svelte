@@ -8,9 +8,8 @@
 	};
 
 	// Moved types here if possible or just context
-	type SelectionCardContext = SelectionContextValue;
 	export const [getSelectionCardContext, setSelectionCardContext] =
-		createContext<() => SelectionCardContext>();
+		createContext<() => SelectionContextValue>();
 </script>
 
 <script lang="ts" generics="Multiple extends boolean">

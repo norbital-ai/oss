@@ -11,6 +11,7 @@ import {
 
 type InteractiveAgentStartInput = {
 	readonly message: string;
+	readonly turnId: string;
 	readonly runId?: string;
 	readonly planMode?: boolean;
 	readonly intent?: 'do' | 'plan';
@@ -108,6 +109,7 @@ function startInteractiveAgent(
 		active.client.system.agents.enqueue({
 			agent: active.agentName,
 			conversationId,
+			turnId: input.turnId,
 			message: input.message,
 			documents: input.documents ?? []
 		})
@@ -118,22 +120,6 @@ function startInteractiveAgent(
 			taskId: admitted.taskId
 		}))
 	);
-}
-
-function updateAgentVerifier(
-	active: AgentRuntimeConfig,
-	input: {
-		readonly runId: string;
-		readonly prompt: string;
-	}
-): Effect.Effect<{ readonly accepted: true }, AgentClientFailure> {
-	return agentRequest(
-		'updateVerifier',
-		active.client.system.agents.updateVerifier({
-			conversationId: input.runId,
-			verifier: { prompt: input.prompt }
-		})
-	).pipe(Effect.as({ accepted: true } as const));
 }
 
 /** Builds one mounted workspace's agent state and actions. */
@@ -160,7 +146,14 @@ export function createAgentClient(
 			surface.failed = next.failed;
 		},
 		start: (input) => startInteractiveAgent(runtime, input),
-		updateVerifier: (input) => updateAgentVerifier(runtime, input)
+		updateVerifier: (input) =>
+			agentRequest(
+				'updateVerifier',
+				runtime.client.system.agents.updateVerifier({
+					conversationId: input.runId,
+					verifier: { prompt: input.prompt }
+				})
+			).pipe(Effect.as({ accepted: true } as const)),
 	};
 }
 

@@ -173,7 +173,7 @@ export default definePack({
 `,
 		'doctor.config.ts': `import { defineConfig } from '${packageRoot}build/index.js';
 import noFetch from './dr/rules/no-fetch.ts';
-export default defineConfig({
+export default defineConfig({ semantic: { disabled: true },
 	base: 'none',
 	rules: [noFetch],
 	packs: ['./dr/packs/house.ts'],
@@ -184,7 +184,8 @@ export default defineConfig({
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
 	const config = await loadConfig(root);
-	assert.equal(config.base, 'none');
+	// The legacy `base`/`overlaps` keys resolve through the shim: `base: 'none'` is the neutral
+	// baseline spelled the old way, and the overlap binding lands as an ordinary rule.
 	assert.deepEqual(config.packs, ['house']);
 	assert.deepEqual(config.rules.map((rule) => rule.id).sort(), [
 		'ACME1',
@@ -202,7 +203,7 @@ const make = (id) => defineRule({
 	id, severity: 'error', summary: 's', principles: ['simplicity'],
 	when: ['CallExpression'], check() {}
 });
-export default defineConfig({ base: 'none', rules: [make('KEEP'), make('DROP')], disable: ['DROP'] });
+export default defineConfig({ semantic: { disabled: true }, rules: [make('KEEP'), make('DROP')], disable: ['DROP'] });
 `
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
@@ -211,7 +212,6 @@ export default defineConfig({ base: 'none', rules: [make('KEEP'), make('DROP')],
 		config.rules.map((rule) => rule.id),
 		['KEEP']
 	);
-	assert.equal(config.base, 'none');
 });
 
 test('a rule that throws becomes a finding rather than taking the audit down', (context) => {
@@ -309,10 +309,12 @@ test('source discovery needs neither git nor ripgrep outside a repository', (con
 	}
 });
 
-test('base none publishes durable authored evidence that consolidated assessment authenticates', async (context) => {
+test('authored-only evidence publishes a durable receipt that consolidated assessment authenticates', async (context) => {
 	const root = repository('authored-evidence', {
 		'package.json': '{"name":"authored-evidence","type":"module"}',
-		'src/a.ts': 'export const load = () => fetch("/api");\n',
+		// A script directory is a framework entrypoint, so the neutral baseline's reachability
+		// check stays quiet and this fixture measures exactly the authored rule.
+		'scripts/run.ts': 'export const load = () => fetch("/api");\n',
 		'dr/rules/no-fetch.ts': `import { defineRule } from '${packageRoot}build/index.js';
 export default defineRule({
 	id: 'ACME1', severity: 'error', summary: 'raw fetch',
@@ -322,7 +324,7 @@ export default defineRule({
 `,
 		'doctor.config.ts': `import { defineConfig } from '${packageRoot}build/index.js';
 import noFetch from './dr/rules/no-fetch.ts';
-export default defineConfig({ base: 'none', rules: [noFetch] });
+export default defineConfig({ semantic: { disabled: true }, rules: [noFetch] });
 `
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
@@ -330,7 +332,7 @@ export default defineConfig({ base: 'none', rules: [noFetch] });
 	const result = await audit({ root });
 	assert.equal(result.status, 1);
 	assert.equal(result.authoredFindings, 1);
-	assert.equal(result.receipt.tiers.graph, false);
+	assert.equal(result.receipt.tiers.graph, true);
 	assert.equal(result.receipt.counts.error, 1);
 	assert.match(readFileSync(result.cataloguePath, 'utf8'), /\tACME1\t/);
 
@@ -340,7 +342,7 @@ export default defineConfig({ base: 'none', rules: [noFetch] });
 		quality: { totals: { error: number }; coverage: { tiers: { graph: boolean } } };
 	};
 	assert.equal(report.quality.totals.error, 1);
-	assert.equal(report.quality.coverage.tiers.graph, false);
+	assert.equal(report.quality.coverage.tiers.graph, true);
 });
 
 test('authored findings merge into the built-in authenticated catalogue', async (context) => {
@@ -348,7 +350,7 @@ test('authored findings merge into the built-in authenticated catalogue', async 
 		'package.json': '{"name":"merged-evidence","type":"module"}',
 		'src/a.ts': 'export const value = 1;\n',
 		'doctor.config.ts': `import { defineConfig, defineRule } from '${packageRoot}build/index.js';
-export default defineConfig({
+export default defineConfig({ semantic: { disabled: true },
 	rules: [defineRule({
 		id: 'ACME_MERGE', severity: 'error', summary: 'authored merge fixture',
 		principles: ['testability'], when: ['VariableDeclaration'], files: ['src/a.ts'],
@@ -360,20 +362,22 @@ export default defineConfig({
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
 	const result = await audit({ root });
-	// The base pack runs beneath the authored rule, so this is a merge rather than a replacement:
-	// the authored finding is in the same catalogue as everything the base found.
+	// The neutral baseline runs beneath the authored rule, so this is a merge rather than a
+	// replacement: the authored finding is in the same catalogue as everything the baseline found.
 	assert.ok(result.findings.some((finding) => finding.rule === 'ACME_MERGE'));
 	assert.equal(result.receipt.tiers.graph, true);
 	assert.match(readFileSync(result.cataloguePath, 'utf8'), /\tACME_MERGE\t/);
 	assert.equal(result.receipt.counts.total, result.findings.length);
-	assert.ok(result.packs.includes('norbital/base'));
+	assert.deepEqual(result.packs, []);
 });
 
 test('the dev-loop audit reloads an imported authored rule instead of reusing the ESM cache', async (context) => {
 	const rulePath = 'dr/rules/no-fetch.ts';
 	const root = repository('fresh-rules', {
 		'package.json': '{"name":"fresh-rules","type":"module"}',
-		'src/a.ts': 'export const load = () => fetch("/api");\n',
+		// A script directory is a framework entrypoint, so the neutral baseline contributes
+		// nothing here and the counts measure exactly the authored rule.
+		'scripts/run.ts': 'export const load = () => fetch("/api");\n',
 		[rulePath]: `import { defineRule } from '${packageRoot}build/index.js';
 export default defineRule({
 	id: 'FRESH1', severity: 'error', summary: 'first rule', principles: ['testability'],
@@ -383,7 +387,7 @@ export default defineRule({
 `,
 		'doctor.config.ts': `import { defineConfig } from '${packageRoot}build/index.js';
 import rule from './${rulePath}';
-export default defineConfig({ base: 'none', rules: [rule] });
+export default defineConfig({ semantic: { disabled: true }, rules: [rule] });
 `
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
@@ -405,9 +409,11 @@ export default defineRule({
 test('the default CLI command accepts options before an explicit command', (context) => {
 	const root = repository('cli-default', {
 		'package.json': '{"name":"cli-default","type":"module"}',
-		'src/a.ts': 'export const value = 1;\n',
+		// A script directory is a framework entrypoint, so the neutral baseline reports nothing
+		// and a clean scan reads as clean.
+		'scripts/run.ts': 'export const value = 1;\n',
 		'doctor.config.ts': `import { defineConfig } from '${packageRoot}build/index.js';
-export default defineConfig({ base: 'none' });
+export default defineConfig({ semantic: { disabled: true },});
 `
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
@@ -425,13 +431,13 @@ export default defineConfig({ base: 'none' });
 test('a malformed receipt is an error, never a quietly empty result', async () => {
 	const { decodeReceipt } = await import('../build/index.js');
 	const valid = {
-		schemaVersion: 5,
+		schemaVersion: 6,
 		kind: 'repository-health-static-receipt',
 		scannerVersion: 26,
 		root: '/tmp/x',
 		scope: 'all',
 		includeTests: false,
-		tiers: { syntactic: true, graph: true, typeAware: false },
+		tiers: { syntactic: true, graph: true, typeAware: false, semantic: false },
 		files: 12,
 		findings: 'findings.tsv',
 		sourceInventoryDigest: 'sha256:0',

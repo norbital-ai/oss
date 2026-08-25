@@ -71,22 +71,35 @@
 	 * the sheet, in what order, through which renderer. `CollectionTable` looks for one here and falls
 	 * back to the auto-emitted form.
 	 *
-	 * Filled in as each module resolves rather than awaited as a batch: the registry is reactive, so
-	 * a sheet opened before its surface arrives renders the fallback and swaps when it lands, and one
-	 * slow module cannot hold up the other twenty.
+	 * Filled in as each exact key is first read rather than awaited as a batch. These modules improve
+	 * one record surface, but none decides which application the person may enter, so an unopened
+	 * collection must never put its representation into the initial dependency graph.
 	 */
-	const collectionSurfaces = $state<Record<string, CollectionSurface>>({});
-	// svelte-ignore state_referenced_locally -- loader identity is fixed for this compiled mount; rerunning on host view updates would duplicate module loads.
-	for (const [collection, load] of Object.entries(workspace.representationLoaders)) {
-		void Effect.runPromise(
-			Effect.tryPromise(load).pipe(
-				Effect.tap((representation) =>
-					Effect.sync(() => Object.assign(collectionSurfaces, { [collection]: { representation } }))
-				),
-				Effect.catch(() => Effect.void)
-			)
-		);
-	}
+	const loadedCollectionSurfaces = $state<Record<string, CollectionSurface>>({});
+	const requestedCollectionSurfaces = new Set<string>();
+	const collectionSurfaces = new Proxy(loadedCollectionSurfaces, {
+		get: (surfaces, property, receiver) => {
+			if (typeof property === 'string' && !requestedCollectionSurfaces.has(property)) {
+				const load = workspace.representationLoaders[property];
+				if (load !== undefined) {
+					requestedCollectionSurfaces.add(property);
+					void Effect.runPromise(
+						Effect.tryPromise(load).pipe(
+							Effect.tap((representation) =>
+								Effect.sync(() =>
+									Object.assign(loadedCollectionSurfaces, {
+										[property]: { representation }
+									})
+								)
+							),
+							Effect.catch(() => Effect.void)
+						)
+					);
+				}
+			}
+			return Reflect.get(surfaces, property, receiver);
+		}
+	});
 	setCollectionSurfaceRuntime({
 		appId: () => landingName ?? '',
 		surfaces: collectionSurfaces,
@@ -108,24 +121,35 @@
 	setCollectionClientContext(() => workspace.client);
 
 	/**
-	 * A custom type's own renderer, keyed by the type name its columns declare.
+	 * A custom type's own renderer, keyed by the type name its columns declare and loaded when a
+	 * `DataRenderer` first reads that exact kind.
 	 *
 	 * `custom('leave_event')` is a jsonb column whose shape only its author knows, so the type ships
 	 * the component that reads it. Without these every custom field falls through to the JSON dump.
 	 */
-	const customTypeRenderers = $state<Record<string, CustomTypeRendererMap[string]>>({});
-	// svelte-ignore state_referenced_locally -- custom renderer modules belong to this fixed compiled mount and load exactly once.
-	for (const [typeName, load] of Object.entries(workspace.customTypeRendererLoaders)) {
-		void Effect.runPromise(
-			Effect.tryPromise(load).pipe(
-				Effect.tap((renderer) =>
-					Effect.sync(() => Object.assign(customTypeRenderers, { [typeName]: renderer }))
-				),
-				Effect.catch(() => Effect.void)
-			)
-		);
-	}
-
+	const loadedCustomTypeRenderers = $state<Record<string, CustomTypeRendererMap[string]>>({});
+	const requestedCustomTypeRenderers = new Set<string>();
+	const customTypeRenderers = new Proxy(loadedCustomTypeRenderers, {
+		get: (renderers, property, receiver) => {
+			if (typeof property === 'string' && !requestedCustomTypeRenderers.has(property)) {
+				const load = workspace.customTypeRendererLoaders[property];
+				if (load !== undefined) {
+					requestedCustomTypeRenderers.add(property);
+					void Effect.runPromise(
+						Effect.tryPromise(load).pipe(
+							Effect.tap((renderer) =>
+								Effect.sync(() =>
+									Object.assign(loadedCustomTypeRenderers, { [property]: renderer })
+								)
+							),
+							Effect.catch(() => Effect.void)
+						)
+					);
+				}
+			}
+			return Reflect.get(renderers, property, receiver);
+		}
+	});
 	setDataRendererRuntimeContext({
 		customTypeRenderers,
 		// File records persist storage keys, never routes. The host owns the route and declares it on
@@ -196,16 +220,51 @@
 	 * it is "which of this workspace's apps do this subject's policies name", which needs the compiled
 	 * workspace definition *and* the credential, and only `AccessControl.visibleApps` holds both.
 	 *
-	 * It starts empty and stays empty if the read fails, rather than falling back to the shell's
-	 * `null` ("unrestricted"). Failing open would mean one dropped request restores exactly the
-	 * disclosure this closes. The runtime remains the authority either way — this gates what the
-	 * workspace offers, never what it will serve.
+	 * A non-administrator starts empty and stays empty if the read fails, rather than falling back to
+	 * the shell's `null` ("unrestricted"). An administrator in their own operator scope is different:
+	 * administration is already a host-proven status and the runtime's own `visibleApps` grants every
+	 * authored app, so hiding that known set until a redundant background read finishes only paints a
+	 * false empty workspace. A team preview never uses this initial set — its narrowed answer must come
+	 * from the runtime before anything is shown.
 	 */
 	const visibleAppsQuery = $derived.by(() => {
 		void replicaAccessScope;
 		return workspace.client.system.apps.visible({});
 	});
-	const accessibleApps = $derived(visibleAppsQuery.current?.apps ?? []);
+	const allAuthoredAppNames = untrack(() => [
+		...new Set([...Object.keys(workspace.appGroups), ...Object.keys(workspace.appLoaders)])
+	]);
+	const administratorInitialApps = $derived(
+		view.user.admin && replicaAccessScope === 'operator' ? allAuthoredAppNames : []
+	);
+	const accessibleApps = $derived(visibleAppsQuery.current?.apps ?? administratorInitialApps);
+	const applicationsReady = $derived(
+		visibleAppsQuery.current !== undefined || (view.user.admin && replicaAccessScope === 'operator')
+	);
+	let paintedAccessScope = $state<string | undefined>(undefined);
+
+	/**
+	 * Records the authority scope only after its navigation has reached a browser paint.
+	 *
+	 * Two animation frames are intentional: the first runs before the browser paints the reactive
+	 * application list, and the second runs after that paint. Replica boot and optional module imports
+	 * key off this marker, so the first useful navigation wins the network and main-thread race without
+	 * a timer, poll, or guessed delay.
+	 */
+	$effect(() => {
+		const accessScope = replicaAccessScope;
+		if (!applicationsReady || paintedAccessScope === accessScope) return;
+		let secondFrame: number | undefined;
+		const firstFrame = requestAnimationFrame(() => {
+			secondFrame = requestAnimationFrame(() => {
+				paintedAccessScope = accessScope;
+			});
+		});
+		return () => {
+			cancelAnimationFrame(firstFrame);
+			if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
+		};
+	});
 
 	/**
 	 * Whether this session may preview the workspace as one of its teams, and which team it is on now.
@@ -257,7 +316,11 @@
 	 * preview is active. The studio is a host surface rather than a workspace app, so
 	 * `accessibleApps` never reaches it and this gate must carry the real administrator status.
 	 */
-	const hostPluginsVisible = $derived(view.user.admin && !(impersonation?.isActive ?? false));
+	const hostPluginsVisible = $derived(
+		view.user.admin &&
+			!replicaAccessScope.startsWith('team:') &&
+			!(impersonation?.isActive ?? false)
+	);
 
 	const resolveAppName = (href: string): string | undefined => {
 		if (!href.startsWith('/app/')) return undefined;
@@ -323,6 +386,7 @@
 	});
 	const appRequest = { latest: 0 };
 	const App = $derived(appMount.component);
+	let replicaRequestedScope = $state<string | undefined>(undefined);
 
 	/**
 	 * Which navigation the mounted component belongs to.
@@ -365,6 +429,40 @@
 	};
 
 	/**
+	 * PGlite is a background acceleration path, not an initial-render dependency.
+	 *
+	 * One real interaction opts the current authority scope into it. Waiting two paint frames lets the
+	 * interaction's own navigation update `appMount.loading`; the replica effect below then waits for
+	 * that selected application module to finish instead of racing it for bandwidth and main-thread
+	 * evaluation. No interaction means no PGlite request in the initial workspace graph.
+	 */
+	$effect(() => {
+		const accessScope = replicaAccessScope;
+		if (paintedAccessScope !== accessScope || replicaRequestedScope === accessScope) return;
+		let firstFrame: number | undefined;
+		let secondFrame: number | undefined;
+		const stopListening = (): void => {
+			window.removeEventListener('pointerdown', requestReplica, true);
+			window.removeEventListener('keydown', requestReplica, true);
+		};
+		const requestReplica = (): void => {
+			stopListening();
+			firstFrame = requestAnimationFrame(() => {
+				secondFrame = requestAnimationFrame(() => {
+					if (replicaAccessScope === accessScope) replicaRequestedScope = accessScope;
+				});
+			});
+		};
+		window.addEventListener('pointerdown', requestReplica, { capture: true, passive: true });
+		window.addEventListener('keydown', requestReplica, { capture: true });
+		return () => {
+			stopListening();
+			if (firstFrame !== undefined) cancelAnimationFrame(firstFrame);
+			if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
+		};
+	});
+
+	/**
 	 * Starts the local replica, which is what makes a second visit cheap.
 	 *
 	 * Deliberately late and deliberately optional. Failures are swallowed on purpose: a browser
@@ -378,6 +476,12 @@
 	 */
 	$effect(() => {
 		const accessScope = replicaAccessScope;
+		if (
+			paintedAccessScope !== accessScope ||
+			replicaRequestedScope !== accessScope ||
+			appMount.loading
+		)
+			return;
 		let stop: (() => void) | undefined;
 		let unmounted = false;
 		void Effect.runPromise(

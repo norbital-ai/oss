@@ -64,7 +64,7 @@ export const noApproval: NoApprovalFlow = Object.freeze({
 
 /** Removes fluent methods and the nominal brand at the live-code boundary. */
 export const approvalFlowDescriptor = (value: unknown): ApprovalFlowDescriptor | undefined => {
-	if (typeof value !== 'object' || value === null || !(ApprovalFlowBrand in value))
+	if (typeof value !== 'object' || value === null || !Reflect.has(value, ApprovalFlowBrand))
 		return undefined;
 	if (Reflect.get(value, '_tag') === 'NoApproval') return Object.freeze({ _tag: 'NoApproval' });
 	if (Reflect.get(value, '_tag') !== 'Review') return undefined;

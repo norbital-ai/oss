@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- the runtime workspace-schema consumes the compiler
+// schema-plan build/plan/identify names over the #lib alias, so the pair is linked, not parallel.
 import { Array, Context, Effect, Layer, Result, Schema } from 'effect';
 import { count, eq } from 'drizzle-orm';
 import { pgSchema, pgTable, text } from 'drizzle-orm/pg-core';

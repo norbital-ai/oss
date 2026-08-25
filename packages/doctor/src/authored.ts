@@ -1,23 +1,36 @@
 import { Worker } from 'node:worker_threads';
 import type { Finding } from './index.js';
+import type { SemanticQuery } from './patterns-yaml.js';
+import type { IndexRunStats } from './semantic/embedder.js';
 import type { TypeAwareRun } from './type-aware.js';
 
 type AuthoredRun = Readonly<{
-	base: 'norbital' | 'none';
 	packs: ReadonlyArray<string>;
 	findings: ReadonlyArray<Finding>;
 	ruleCount: number;
 	ruleSetDigest: string;
 	allFiles: ReadonlyArray<string>;
 	selectedFiles: ReadonlyArray<string>;
+	/** Pseudocode halves from YAML patterns; evaluated by the semantic pass. */
+	queries: ReadonlyArray<SemanticQuery>;
 	/** Coverage of the type-aware tier, which always runs. Findings are already merged above. */
 	typeAware: Omit<TypeAwareRun, 'findings'>;
+	/** Coverage and spend of the semantic pass; `ran: false` only when explicitly declined. */
+	semantic: Readonly<{
+		ran: boolean;
+		embedderId: string | undefined;
+		indexDigest: string | undefined;
+		stats: IndexRunStats | undefined;
+		clusterCount: number;
+		singletonCount: number;
+	}>;
 }>;
 
 type AuthoredRequest = Readonly<{
 	root: string;
 	includeTests: boolean;
 	paths: ReadonlyArray<string>;
+	semanticDisabled: boolean;
 	signal?: AbortSignal | undefined;
 }>;
 
@@ -34,7 +47,8 @@ export function runAuthored(request: AuthoredRequest): Promise<AuthoredRun> {
 			workerData: {
 				root: request.root,
 				includeTests: request.includeTests,
-				paths: request.paths
+				paths: request.paths,
+				semanticDisabled: request.semanticDisabled
 			}
 		});
 		const abort = () => {

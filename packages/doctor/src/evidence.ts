@@ -117,10 +117,26 @@ type PublishEvidenceOptions = Readonly<{
 	authoredRuleSetDigest: string;
 	allFiles?: ReadonlyArray<string> | undefined;
 	selectedFileCount?: number | undefined;
-	/** Whether the whole-repository pass ran; false when a repository selects `base: 'none'`. */
+	/** Whether the whole-repository pass ran; it is part of the neutral baseline, so effectively always. */
 	graph?: boolean | undefined;
 	/** Whether the type-aware tier had anything to build a program from. */
 	typeAware?: boolean | undefined;
+	/** Coverage and spend of the semantic pass, recorded verbatim when it ran. */
+	semantic?: Readonly<{
+		ran: boolean;
+		embedderId: string | undefined;
+		indexDigest: string | undefined;
+		stats: Readonly<{
+			filesTotal: number;
+			filesEmbedded: number;
+			filesUnchanged: number;
+			filesDeleted: number;
+			apiRequests: number;
+			promptTokens: number | undefined;
+			costUsd: number | undefined;
+			durationMs: number;
+		}> | undefined;
+	} | undefined>;
 	scope?: 'all' | 'path' | undefined;
 	includeTests?: boolean | undefined;
 	existing?: Receipt | undefined;
@@ -133,6 +149,7 @@ export function publishEvidence(options: PublishEvidenceOptions): Receipt {
 	atomicWrite(cataloguePath, catalogue);
 
 	const existing = options.existing;
+	const semantic = options.semantic;
 	const receipt: Receipt = existing
 		? {
 				...existing,
@@ -141,25 +158,30 @@ export function publishEvidence(options: PublishEvidenceOptions): Receipt {
 				counts: findingCounts(options.findings)
 			}
 		: {
-				schemaVersion: 5,
+				schemaVersion: 6,
 				kind: 'repository-health-static-receipt',
-				scannerVersion: 31,
+				scannerVersion: 32,
 				root: realpathSync(options.root),
 				scope: options.scope ?? 'all',
 				includeTests: options.includeTests ?? false,
-				// The graph tier is the cross-file pass, which runs whenever a base pack is selected.
-				// The type-aware tier is always on and reports what it did: `false` here means the
-				// selection held no file a `ts.Program` can contain, not that the tier was skipped.
+				// Every tier records what it did honestly: `graph` is part of the neutral baseline,
+				// `typeAware` false means the selection held no file a program can contain, and
+				// `semantic` false means the configuration explicitly declined the tier — never
+				// that a provider failed, because a failed provider is exit-2 evidence.
 				tiers: {
 					syntactic: true,
 					graph: options.graph ?? true,
-					typeAware: options.typeAware ?? false
+					typeAware: options.typeAware ?? false,
+					semantic: semantic?.ran ?? false
 				},
 				files: options.selectedFileCount ?? options.allFiles?.length ?? 0,
 				findings: 'findings.tsv',
 				sourceInventoryDigest: sourceInventoryDigest(options.root, options.allFiles ?? []),
 				ruleSetDigest: options.authoredRuleSetDigest,
 				catalogueDigest: digest(catalogue),
+				embedderId: semantic?.embedderId,
+				indexDigest: semantic?.indexDigest,
+				indexing: semantic?.stats,
 				counts: findingCounts(options.findings),
 				complete: true
 			};

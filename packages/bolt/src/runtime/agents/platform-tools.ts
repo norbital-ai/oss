@@ -136,26 +136,26 @@ const decode = <S extends Schema.Top>(schema: S, input: unknown) =>
 		Effect.mapError(() => new ToolNotAllowed({ agent: 'platform', tool: 'invalid-input' }))
 	);
 
+/** One text content part, extracted with its shape checked once at the read. */
+const textOfPart = (part: unknown): string | null => {
+	if (typeof part !== 'object' || part === null) return null;
+	const kind = Reflect.get(part, 'kind');
+	const text = Reflect.get(part, 'text');
+	return kind === 'text' && typeof text === 'string' ? text : null;
+};
+
 const historyText = (content: unknown): string | null => {
 	const chatInput = parseStoredChatInput(content);
 	if (chatInput !== null) return chatInputForModel(chatInput);
 	const relayed = parseAgentMessage(content);
 	if (relayed !== null) return agentMessageForModel(relayed);
-	if (typeof content !== 'object' || content === null || !('parts' in content)) return null;
-	const parts = (content as { readonly parts?: unknown }).parts;
+	if (typeof content !== 'object' || content === null) return null;
+	const parts = Reflect.get(content, 'parts');
 	if (!Array.isArray(parts)) return null;
-	const text = parts
-		.flatMap((part): ReadonlyArray<string> =>
-			typeof part === 'object' &&
-			part !== null &&
-			'kind' in part &&
-			part.kind === 'text' &&
-			'text' in part &&
-			typeof part.text === 'string'
-				? [part.text]
-				: []
-		)
-		.join('\n');
+	const text = parts.reduce((acc: ReadonlyArray<string>, part) => {
+		const extracted = textOfPart(part);
+		return extracted === null ? acc : [...acc, extracted];
+	}, []).join('\n');
 	return text.length === 0 ? null : text;
 };
 

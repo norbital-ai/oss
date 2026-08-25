@@ -63,7 +63,7 @@ const describe = (
 ): string => {
 	const detail = issues
 		.map((issue) => {
-			const path = (issue.path ?? []).map((segment) => String(segment)).join('.');
+			const path = (issue.path ?? []).map(String).join('.');
 			const message = issue.message ?? 'is invalid';
 			return path === '' ? message : `${path}: ${message}`;
 		})

@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- data-renderer/file imports the FileValue contract over
+// the #lib/file-value barrel, so the pair is linked, not parallel.
 import { Schema } from 'effect';
 import type { FileValue } from '#lib/file-value';
 

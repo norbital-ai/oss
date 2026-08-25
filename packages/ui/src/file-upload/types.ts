@@ -1,3 +1,5 @@
+// repository-health:allow SEM_SPREAD -- semantically adjacent to the bolt client upload
+// state adapter by contract: ui owns the client-agnostic upload types, bolt consumes them.
 /**
  * Client-agnostic upload contract. A concrete host adapter supplies the implementation.
  */

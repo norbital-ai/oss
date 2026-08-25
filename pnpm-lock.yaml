@@ -208,9 +208,15 @@ importers:
 
   packages/doctor:
     dependencies:
+      effect:
+        specifier: 4.0.0-rc.111
+        version: 4.0.0-rc.111
       typescript:
         specifier: 6.0.3
         version: 6.0.3
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
     devDependencies:
       '@norbital-ai/config':
         specifier: workspace:*

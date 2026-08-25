@@ -114,12 +114,11 @@
 		setCollectionRecordScope
 	} from '#lib/collection-runtime';
 
-	type Row = TRow;
-	type ColumnConfig = CollectionTableColumn<Row>;
+	type ColumnConfig = CollectionTableColumn<TRow>;
 
 	interface GridRow extends Record<string, unknown> {
 		__collectionTableRowId: string;
-		record: Row;
+		record: TRow;
 	}
 
 	let {
@@ -156,11 +155,11 @@
 
 	const definition = $derived(
 		workspaceClient.collections[String(collection)] as CollectionDefinition<
-			CollectionType<Row, object, object>
+			CollectionType<TRow, object, object>
 		> // stupidity: boundary-cast — the generated client and runtime manifest share collection keys.
 	);
 	const operations = $derived(
-		client.db[collection] as CollectionOperations<CollectionType<Row, object, object>> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row.
+		client.db[collection] as CollectionOperations<CollectionType<TRow, object, object>> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row.
 	);
 	const recordIdField = 'id';
 	const recordScope = getCollectionRecordScope();
@@ -208,7 +207,7 @@
 		parseCondition: (condition) => condition
 	});
 
-	function resolvedRecordMetadata(record: Row): readonly ResolvedCollectionRecordMetadata[] {
+	function resolvedRecordMetadata(record: TRow): readonly ResolvedCollectionRecordMetadata[] {
 		return resolvedRecordMetadataFor(record, recordMetadata, t);
 	}
 	/**
@@ -220,7 +219,7 @@
 	 * the table only keeps what is genuinely its own: the cursor for each page it has visited.
 	 */
 	// svelte-ignore state_referenced_locally
-	const queryState = new CollectionQueryState<Row>({
+	const queryState = new CollectionQueryState<TRow>({
 		// svelte-ignore state_referenced_locally
 		pageSize: query?.limit ?? 25,
 		// svelte-ignore state_referenced_locally
@@ -247,7 +246,7 @@
 			: ''
 	);
 
-	function metadataFor(column: ColumnConfig): CollectionField<Extract<keyof Row, string>> {
+	function metadataFor(column: ColumnConfig): CollectionField<Extract<keyof TRow, string>> {
 		return (
 			definition.fields.find((field) => field.name === column.key) ?? {
 				name: column.key,
@@ -265,7 +264,7 @@
 		return String(output);
 	}
 
-	function renderCell(column: ColumnConfig, row: Row) {
+	function renderCell(column: ColumnConfig, row: TRow) {
 		const value = Reflect.get(row, column.key);
 		if (column.render) {
 			return normalizeCellRender(column.render({ row, field: metadataFor(column), value }));
@@ -309,12 +308,12 @@
 		{ lazy: false }
 	);
 
-	const orderBy = $derived.by((): CollectionQuery<Row>['orderBy'] => {
+	const orderBy = $derived.by((): CollectionQuery<TRow>['orderBy'] => {
 		if (tableApi.sort.current.length === 0) return undefined;
 		// Index the registered columns once per derived computation instead of re-searching the
 		// list for every entry in the sort array.
 		const columnsByKey = new Map(registeredColumns.map((column) => [String(column.key), column]));
-		return tableApi.sort.current.reduce<NonNullable<CollectionQuery<Row>['orderBy']>>(
+		return tableApi.sort.current.reduce<NonNullable<CollectionQuery<TRow>['orderBy']>>(
 			(result, entry) => {
 				const fieldName = entry.field.startsWith('default.')
 					? entry.field.slice('default.'.length)
@@ -363,14 +362,14 @@
 	 * a single truncating row with nowhere to mount one — and a column with no `render` at all
 	 * resolves to the default cell snippet, which is exactly the case the schema formatter covers.
 	 */
-	function cardText(name: string, record: Row): string {
+	function cardText(name: string, record: TRow): string {
 		const column = registeredColumns.find((candidate) => String(candidate.key) === name);
 		const rendered = column ? renderCell(column, record) : undefined;
 		if (typeof rendered === 'string' && rendered !== '') return rendered;
 		return formatAutoCardField(definition.fields, name, record, t);
 	}
 
-	function autoCardTitle(record: Row): string {
+	function autoCardTitle(record: TRow): string {
 		if (autoCard.title.kind === 'field') {
 			const text = cardText(autoCard.title.name, record);
 			if (text && text !== '—') return text;
@@ -460,7 +459,7 @@
 		};
 	});
 
-	function recordId(row: Row): string {
+	function recordId(row: TRow): string {
 		const value = Reflect.get(row, recordIdField);
 		if (typeof value !== 'string' || value.length === 0) {
 			throw new Error('CollectionTable records require a id.');
@@ -603,7 +602,7 @@
 		return hovered || active ? 0 : -1;
 	}
 
-	function recordTitle(record: Row): string {
+	function recordTitle(record: TRow): string {
 		// Bolt declares `recordLabel` as a plain column name — `recordLabel: 'summary'`. The CEL
 		// resolver evaluates it as an expression and returns null for a bare identifier, so the title
 		// fell through to the first non-uuid column, which on a leave request is the raw event JSON.
@@ -624,7 +623,7 @@
 		return fallback && fallback !== '—' ? fallback : humanize(String(collection));
 	}
 
-	function autoListDescription(record: Row): string {
+	function autoListDescription(record: TRow): string {
 		const titleField = autoCard.title.kind === 'field' ? autoCard.title.name : null;
 		const fallback = definition.fields
 			.filter(
@@ -649,7 +648,7 @@
 	);
 </script>
 
-{#snippet defaultCell({ column, row, value }: { column: ColumnConfig; row: Row; value: unknown })}
+{#snippet defaultCell({ column, row, value }: { column: ColumnConfig; row: TRow; value: unknown })}
 	<!-- A relation is a uuid and renders as text. To show it as a labelled record, give the column a
 	     `render` that mounts RelationshipRenderer with the option set you want. -->
 	<DataRenderer
@@ -662,7 +661,7 @@
 
 {#snippet gridRowAction({ row, hovered }: { row: RowAPI<GridRow, unknown>; hovered: boolean })}
 	{#each rowActions ?? [] as action}
-		{@const context: CollectionTableRowActionContext<Row> = {
+		{@const context: CollectionTableRowActionContext<TRow> = {
 			row: row.raw.record,
 			hovered,
 			metadata: resolvedRecordMetadata(row.raw.record)
@@ -695,7 +694,7 @@
 	</button>
 {/snippet}
 
-{#snippet toolbarActions({ Action }: CollectionToolbarComposition<Row>)}
+{#snippet toolbarActions({ Action }: CollectionToolbarComposition<TRow>)}
 	{#if createEnabled}
 		<Action
 			label={createLabel}
@@ -753,7 +752,7 @@
 	/>
 {/snippet}
 
-{#snippet autoListCard(record: Row)}
+{#snippet autoListCard(record: TRow)}
 	{@const subtitle = formatAutoCardSubtitle(autoCard, (name) => cardText(name, record))}
 	{@const badge = formatAutoCardBadge(autoCard, record, (name) => cardText(name, record))}
 	<Inline align="start" justify="between" gap="md">

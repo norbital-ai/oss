@@ -235,7 +235,7 @@ function resolve<T>(v: MaybeGetter<T>): T {
 
 /** Run a possibly-synchronous callback and await its result through Effect. */
 export function maybeAsync<A>(evaluate: () => A): Effect.Effect<Awaited<A>, Cause.UnknownError> {
-	return Effect.try(() => evaluate()).pipe(
+	return Effect.try(evaluate).pipe(
 		Effect.flatMap((value) =>
 			Predicate.isPromise(value) ? Effect.tryPromise(() => value) : Effect.succeed(value)
 		)

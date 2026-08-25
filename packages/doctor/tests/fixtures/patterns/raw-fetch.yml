@@ -1,0 +1,6 @@
+# A pattern with metavariables: `$...ARGS` binds any argument run, `$NAME` binds one node.
+id: RAWFETCH
+summary: raw fetch bypasses the http client
+severity: error
+principles: [modularity, no-bloat]
+rule: fetch($...ARGS)

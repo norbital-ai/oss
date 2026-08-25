@@ -75,6 +75,11 @@
 		type ChatDocumentRef
 	} from '#lib/runtime/agents/chat-messages.js';
 	import { parseAgentMessage } from '#lib/runtime/agents/agent-message.js';
+	import {
+		retryableAdmission,
+		withoutAdmittedDocuments,
+		type UnsettledAgentAdmission
+	} from '#lib/client/ui/agent/admission-reconciliation.js';
 
 	const { t } = useI18n();
 	const agentClient = useAgentClient();
@@ -111,6 +116,7 @@
 	let planMode = $state(false);
 	let verifierOverride = $state<string | null>(null);
 	let queueActionPending = $state<string | null>(null);
+	let unsettledAdmission = $state<UnsettledAgentAdmission | null>(null);
 	/**
 	 * The shell's live platform state, or nothing when the panel is mounted bare.
 	 *
@@ -460,6 +466,25 @@
 		return options;
 	});
 	const showScopePicker = $derived(isAdmin && currentUserId != null);
+	const unsettledRunQuery = $derived(
+		unsettledAdmission
+			? runtime.client.db.agent_run.findMany({
+					where: { task_id: { eq: unsettledAdmission.turnId } },
+					limit: 1
+				})
+			: undefined
+	);
+	const replicatedAdmission = $derived.by(() => {
+		const admission = unsettledAdmission;
+		if (
+			admission === null ||
+			!sessions.some(({ conversation_id }) => conversation_id === admission.conversationId) ||
+			!unsettledRunQuery?.current?.some(({ task_id }) => task_id === admission.turnId)
+		) {
+			return null;
+		}
+		return admission;
+	});
 
 	/**
 	 * The live conversation: the user's explicit pick, or the newest session once any exist.
@@ -570,7 +595,7 @@
 	const failure = $derived(session.sendFailure ?? replicaFailure);
 	const activityState = $derived(
 		agentOrbState({
-			pending: composerLocked || agentWorking,
+			pending: agentWorking,
 			failed: failure != null,
 			messages: activeMessages,
 			turns: activeTurns
@@ -655,15 +680,33 @@
 		);
 	});
 
-	/** Pushes composer identity into the shared shell and FAB activity store. */
-	function syncAgentSurface(): void {
+	// A command response can be lost after the atomic admission committed. The sync replica is the
+	// authority for that unknown outcome: when its conversation and exact run arrive, adopt them and
+	// publish the shared FAB from the same durable projection. Until then the restored draft is plainly
+	// unsent and no durable run exists from which queue controls could render.
+	$effect(() => {
+		const admission = replicatedAdmission;
+		if (admission !== null) {
+			session.runId = admission.conversationId;
+			session.chatId = admission.conversationId;
+			session.composingNew = false;
+			session.pending = false;
+			session.echo = admission.message;
+			session.sendFailure = null;
+			if (draft === admission.draft) {
+				draft = '';
+				mention.lastDraft = '';
+			}
+			documents = withoutAdmittedDocuments(documents, admission);
+			unsettledAdmission = null;
+		}
 		agentClient.writeSurface({
-			chatId: session.chatId,
-			composingNew: session.composingNew,
-			pending: session.pending,
-			failed: session.sendFailure != null
+			chatId: admission?.conversationId ?? activeChatId,
+			composingNew: admission === null && session.composingNew,
+			pending: agentWorking,
+			failed: admission === null && failure != null
 		});
-	}
+	});
 
 	function queueLabel(turnId: string): string {
 		const row = messageQuery?.current?.find(
@@ -688,7 +731,6 @@
 			})
 			.finally(() => {
 				queueActionPending = null;
-				syncAgentSurface();
 			});
 	}
 
@@ -751,8 +793,7 @@
 
 	/** Starts an agent turn with the current draft, mentions, and model selection. */
 	function send(): Effect.Effect<void> {
-		let rejectedDraft: string | null = null;
-		let createdConversation = false;
+		let admission: UnsettledAgentAdmission | null = null;
 		return Effect.suspend(() => {
 			const originalDraft = draft;
 			const { message, references } = serializeMentions(draft, mention.mentions);
@@ -763,10 +804,22 @@
 				activeSessionIsReadOnly
 			)
 				return Effect.void;
-			rejectedDraft = originalDraft;
-			createdConversation = activeRunId === undefined;
+			const createdConversation = activeRunId === undefined;
 			const conversationId = activeRunId ?? globalThis.crypto.randomUUID();
 			const sentDocuments = [...documents];
+			const retried = retryableAdmission(unsettledAdmission, {
+				conversationId,
+				message,
+				documents: sentDocuments
+			});
+			admission = {
+				conversationId,
+				turnId: retried?.turnId ?? globalThis.crypto.randomUUID(),
+				message,
+				draft: originalDraft,
+				createdConversation,
+				documentKeys: sentDocuments.map(({ storage_key }) => storage_key)
+			};
 			const { verify, verifierPrompt: resolvedVerifierPrompt } = previewIntent;
 			if (!activeChatId) {
 				session.composingNew = true;
@@ -774,7 +827,8 @@
 			}
 			session.pending = true;
 			session.sendFailure = null;
-			session.echo = message;
+			// The transcript starts only after a commit receipt or the same rows arrive through sync.
+			session.echo = null;
 			draft = '';
 			mention.lastDraft = '';
 			mention.mentions = [];
@@ -784,14 +838,13 @@
 			mention.menuItems = [];
 			mention.menuLoading = false;
 			mentionSearch.invalidate();
-			syncAgentSurface();
 			const started = agentClient.start({
 				message,
+				turnId: admission.turnId,
 				runId: conversationId,
 				documents: sentDocuments,
 				// Only chips the picker created. An `@` that never matched is already in the text.
 				...(references.length > 0 ? { mentions: references } : {}),
-				...(activeRunId ? { runId: activeRunId } : {}),
 				intent: planMode ? 'plan' : 'do',
 				...(planMode ? { planMode: true } : {}),
 				...(verify ? { verifierPrompt: resolvedVerifierPrompt } : {}),
@@ -809,8 +862,9 @@
 				session.composingNew = false;
 				// Interactive start returns before inference; the replicated root turn owns in-flight after this.
 				session.pending = false;
-				documents = [];
-				syncAgentSurface();
+				session.echo = admission?.message ?? null;
+				if (admission !== null) documents = withoutAdmittedDocuments(documents, admission);
+				unsettledAdmission = null;
 			});
 		}).pipe(
 			Effect.catch((cause) => {
@@ -820,17 +874,17 @@
 						? t('bolt.agent.couldNotStart')
 						: reason;
 				session.pending = false;
-				session.composingNew = false;
+				session.composingNew = admission?.createdConversation ?? false;
 				session.echo = null;
-				if (createdConversation) {
+				if (admission?.createdConversation) {
 					session.chatId = undefined;
-					session.runId = undefined;
+					session.runId = admission.conversationId;
 				}
-				if (rejectedDraft !== null) {
-					draft = rejectedDraft;
-					mention.lastDraft = rejectedDraft;
+				if (admission !== null) {
+					draft = admission.draft;
+					mention.lastDraft = admission.draft;
 				}
-				syncAgentSurface();
+				unsettledAdmission = admission;
 				return Effect.void;
 			})
 		);
@@ -851,7 +905,6 @@
 				session.runId = conversationId;
 				session.chatId = conversationId;
 				session.composingNew = false;
-				syncAgentSurface();
 			}
 			const storageKey = chatDocumentStorageKey(
 				conversationId,
@@ -911,8 +964,8 @@
 		session.composingNew = false;
 		session.echo = null;
 		session.sendFailure = null;
+		unsettledAdmission = null;
 		selectedEnvoy = sessionEnvoyId(row, selectorLabels);
-		syncAgentSurface();
 	}
 
 	/** Filters the conversation list to one member and drops a thread outside that scope. */
@@ -936,7 +989,6 @@
 				selectedEnvoy = null;
 			}
 		}
-		syncAgentSurface();
 	}
 
 	/** Switches the header tab and clears a thread outside that envoy. */
@@ -953,7 +1005,6 @@
 				session.sendFailure = null;
 			}
 		}
-		syncAgentSurface();
 	}
 
 	/** Clears the active thread so the next send creates a new conversation. */
@@ -966,7 +1017,7 @@
 		session.composingNew = true;
 		session.echo = null;
 		session.sendFailure = null;
-		syncAgentSurface();
+		unsettledAdmission = null;
 	}
 
 	/** Routes keyboard input between the mention menu and the send action. */
@@ -1160,7 +1211,7 @@
 						}}
 					/>
 				{/each}
-				{#if (agentWorking || composerLocked) && !agentHasSpoken}
+				{#if agentWorking && !agentHasSpoken}
 					<Stack as="li" gap="sm" aria-label={t('bolt.agent.agentIsWorking')}>
 						<span class="px-1 text-tiny font-medium text-muted-foreground"
 							>{t('bolt.agent.agent')}</span
@@ -1530,10 +1581,10 @@
 								size="icon"
 								class="size-8 shrink-0 rounded-full"
 								data-testid="agent-send"
-								aria-label={composerLocked ? t('bolt.agent.agentIsWorking') : t('bolt.agent.send')}
+								aria-label={composerLocked ? t('common.loading') : t('bolt.agent.send')}
 							>
 								{#if composerLocked}
-									<Spinner class="size-4" label={t(agentOrbBusyStatusKey(activityState))} />
+									<Spinner class="size-4" label={t('common.loading')} />
 								{:else}
 									<Icon icon="lucide:arrow-up" class="size-4" />
 								{/if}

@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- schema-migrations imports collectionIndexName from
+// ./schema-plan.js, so the pair is linked, not parallel.
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { basename, dirname, join } from 'node:path';

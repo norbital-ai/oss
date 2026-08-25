@@ -1,0 +1,108 @@
+{
+  "root": "/Users/neowenshun/developer/norbital_realm/templates",
+  "findings": [
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "AL1",
+      "summary": "bare type alias",
+      "location": "hr-payroll/src/datatypes/eligibility_rules/+renderer.svelte:20: type Rule = EligibilityRule; [alias=Rule]",
+      "principles": [
+        "simplicity",
+        "no-bloat"
+      ]
+    },
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "AL1",
+      "summary": "bare type alias",
+      "location": "hr-payroll/src/datatypes/leave_accrual/+renderer.svelte:14: type Carry = LeaveCarry; [alias=Carry]",
+      "principles": [
+        "simplicity",
+        "no-bloat"
+      ]
+    },
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "AL1",
+      "summary": "bare type alias",
+      "location": "hr-payroll/src/datatypes/statutory_regime/+renderer.svelte:19: type BreakRule = StatutoryRestBreakRule; [alias=BreakRule]",
+      "principles": [
+        "simplicity",
+        "no-bloat"
+      ]
+    },
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "R5d",
+      "summary": "in-operator duck typing",
+      "location": "crm/src/collections/settlements/+hooks.ts:21: if (!regardingType || !(regardingType in COMMITTED_TARGETS)) { [chained=in]",
+      "principles": [
+        "simplicity",
+        "straightforwardness",
+        "type-safety"
+      ]
+    },
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "S3",
+      "summary": "verbose null and undefined check",
+      "location": "field-operations/src/collections/photo_evidence/photo-integrity.ts:288: if (photo === null || photo === undefined) return null; [$VALUE=photo]",
+      "principles": [
+        "simplicity",
+        "no-bloat"
+      ]
+    }
+  ],
+  "receipt": {
+    "schemaVersion": 5,
+    "kind": "repository-health-static-receipt",
+    "scannerVersion": 31,
+    "root": "/Users/neowenshun/developer/norbital_realm/templates",
+    "scope": "all",
+    "includeTests": false,
+    "tiers": {
+      "syntactic": true,
+      "graph": true,
+      "typeAware": true
+    },
+    "files": 453,
+    "findings": "findings.tsv",
+    "sourceInventoryDigest": "sha256:d6d0265aafde1bf3d02381f76a82147c891818a5859a022f5d02c747a529cfca",
+    "ruleSetDigest": "sha256:e11c3fcaf880c674286e73944e543d66d787f5209cc0db7cd5c811c6c9c3eb54",
+    "catalogueDigest": "sha256:e020c1eb0cf9503cc2c3e0deefae2babdca3866ffc719d831ebe0be08ec74185",
+    "counts": {
+      "error": 0,
+      "warning": 0,
+      "hint": 5,
+      "total": 5,
+      "principles": {
+        "simplicity": 5,
+        "straightforwardness": 1,
+        "modularity": 0,
+        "testability": 0,
+        "efficiency": 0,
+        "typeSafety": 1,
+        "colocation": 0,
+        "noBloat": 4
+      }
+    },
+    "complete": true
+  },
+  "status": 0,
+  "counts": {
+    "error": 0,
+    "hint": 5
+  },
+  "cataloguePath": "/Users/neowenshun/developer/norbital_realm/templates/.norbital/diagnosis/findings.tsv",
+  "packs": [
+    "norbital/base",
+    "norbital/reactive",
+    "norbital/stringly-typed"
+  ],
+  "authoredFindings": 5
+}

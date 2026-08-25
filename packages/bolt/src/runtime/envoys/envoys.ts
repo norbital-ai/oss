@@ -600,7 +600,14 @@ export const layer = Layer.effect(
 					invocation: row.invocation
 				}));
 				const batch: StoredInboundBatch = { kind: 'inbound_batch', messages };
-				yield* agents.enqueue(effectId, trigger.subject, envoyName, conversationId, batch);
+				yield* agents.enqueue(
+					effectId,
+					trigger.subject,
+					envoyName,
+					conversationId,
+					String(effectId),
+					batch
+				);
 				yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
 
 				const remaining = yield* executeBuilt(

@@ -505,6 +505,7 @@ export type Interface = Readonly<{
 		subject: Identity.Subject,
 		agentName: string,
 		conversationId: string,
+		turnId: string,
 		message: StoredChatInput
 	) => Effect.Effect<
 		AgentEnqueueResultValue,
@@ -925,6 +926,7 @@ export const layer = Layer.effect(
 			subject: Identity.Subject,
 			agentName: string,
 			conversationId: string,
+			turnId: string,
 			message: QueuedAgentInput,
 			options: Readonly<{ readonly parentId?: string; readonly depth?: number }> = {}
 		) {
@@ -979,7 +981,6 @@ export const layer = Layer.effect(
 					);
 				}
 			}
-			const turnId = String(effectId);
 			const taskInput = {
 				conversationId,
 				turnId,
@@ -1047,28 +1048,58 @@ export const layer = Layer.effect(
 									)
 								)
 						]),
-				composer.insert(chatMessage).values({
-					conversation_id: conversationId,
-					turn_id: turnId,
-					role: 'user',
-					content: JSON.stringify(message)
-				}),
-				composer.insert(chatMessage).values({
-					conversation_id: conversationId,
-					turn_id: turnId,
-					role: 'assistant',
-					content: JSON.stringify({
-						id: turnId,
-						status: 'queued',
-						parent_agent_id: parentId,
-						parts: [],
-						resumed: 0,
-						subject,
-						agent_name: agent.name,
-						usage_unreported: false
+				composer
+					.insert(chatMessage)
+					.values({
+						conversation_id: conversationId,
+						turn_id: turnId,
+						role: 'user',
+						content: JSON.stringify(message)
 					})
-				}),
-				...queue.statements([task]).map(({ sql, parameters }) => transactionSql(sql, parameters))
+					.onConflictDoNothing({
+						target: [chatMessage.conversation_id, chatMessage.turn_id, chatMessage.role]
+					}),
+				composer
+					.insert(chatMessage)
+					.values({
+						conversation_id: conversationId,
+						turn_id: turnId,
+						role: 'assistant',
+						content: JSON.stringify({
+							id: turnId,
+							status: 'queued',
+							parent_agent_id: parentId,
+							parts: [],
+							resumed: 0,
+							subject,
+							agent_name: agent.name,
+							usage_unreported: false
+						})
+					})
+					.onConflictDoNothing({
+						target: [chatMessage.conversation_id, chatMessage.turn_id, chatMessage.role]
+					}),
+				...queue.statements([task]).map(({ sql, parameters }) => transactionSql(sql, parameters)),
+				// A caller owns the turn id so an unknown transport outcome can be retried safely. The
+				// immutable user row and private task must both still describe this exact admission; reusing
+				// an id for different work rolls the entire transaction back instead of returning a false receipt.
+				transactionSql(
+					`select case when exists (
+						select 1 from "chat_message"
+						where "conversation_id" = $1 and "turn_id" = $2 and "role" = 'user'
+							and "content" = $3::jsonb
+					) and exists (
+						select 1 from "chat_message"
+						where "conversation_id" = $1 and "turn_id" = $2 and "role" = 'assistant'
+					) and exists (
+						select 1 from "bolt_task"
+						where "effect_id" = $2 and "command" = 'agents.execute'
+							and "input"->>'conversationId' = $1
+							and "input"->>'turnId' = $2
+							and "input"->>'agent' = $4
+					) then 1 else 1 / ((random() * 0)::integer) end`,
+					[conversationId, turnId, JSON.stringify(message), agent.name]
+				)
 			]);
 			// Durable work exists before the scheduler is announced. An immediate tick can therefore never
 			// observe an empty queue and disarm ahead of the commit that asked it to run.
@@ -1156,6 +1187,7 @@ export const layer = Layer.effect(
 									subject,
 									agent.name,
 									childId,
+									String(actionId),
 									{ kind: 'user_message', text: parsed.task, documents: [] },
 									{ parentId: conversationId, depth: parsed.depth }
 								);
@@ -1175,6 +1207,7 @@ export const layer = Layer.effect(
 									subject,
 									parsed.agentName,
 									parsed.agentId,
+									String(actionId),
 									parsed.message,
 									{ depth: parsed.depth }
 								);
@@ -1753,8 +1786,8 @@ export const layer = Layer.effect(
 				}
 			),
 			enqueue: Effect.fn('Agents.enqueue')(
-				function* (effectId, subject, agentName, conversationId, message) {
-					return yield* admitTurn(effectId, subject, agentName, conversationId, message);
+				function* (effectId, subject, agentName, conversationId, turnId, message) {
+					return yield* admitTurn(effectId, subject, agentName, conversationId, turnId, message);
 				}
 			),
 			execute: Effect.fn('Agents.execute')(function* (effectId, conversationId, turnId) {

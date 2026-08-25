@@ -110,6 +110,7 @@ const AgentEnqueueInput = Schema.Struct({
 	subject: Subject,
 	agent: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
+	turnId: Schema.NonEmptyString,
 	message: Schema.String,
 	documents: Schema.optionalKey(Schema.Array(ChatDocumentRef))
 });
@@ -2167,11 +2168,18 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const input = yield* decode(AgentEnqueueInput, commandInput);
 			const agents = yield* Agents.Service;
 			return json(
-				yield* agents.enqueue(effectId, input.subject, input.agent, input.conversationId, {
-					kind: 'user_message',
-					text: input.message,
-					documents: input.documents ?? []
-				})
+				yield* agents.enqueue(
+					effectId,
+					input.subject,
+					input.agent,
+					input.conversationId,
+					input.turnId,
+					{
+						kind: 'user_message',
+						text: input.message,
+						documents: input.documents ?? []
+					}
+				)
 			);
 		}
 		case 'agents.execute': {

@@ -64,7 +64,7 @@ describe('messages between adjacent agents', () => {
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await openAdjacentAgents(harness);
 		const admitted = await harness.runtime.runPromise(
-			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, {
+			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-retry', {
 				kind: 'user_message',
 				text: 'Keep trying if the model is temporarily unavailable.',
 				documents: []
@@ -111,7 +111,7 @@ describe('messages between adjacent agents', () => {
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await openAdjacentAgents(harness);
 		const admitted = await harness.runtime.runPromise(
-			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, {
+			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-send', {
 				kind: 'user_message',
 				text: 'Reply to the migration agent',
 				documents: []
@@ -171,7 +171,7 @@ describe('messages between adjacent agents', () => {
 			[sender, JSON.stringify(stored)]
 		);
 		const admitted = await harness.runtime.runPromise(
-			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, {
+			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-prompt', {
 				kind: 'user_message',
 				text: 'Anything outstanding?',
 				documents: []

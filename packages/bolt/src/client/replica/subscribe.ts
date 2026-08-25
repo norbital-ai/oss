@@ -1,84 +1,69 @@
-import { Result, Schema } from 'effect';
+// repository-health:allow SEM_PARALLEL -- subscribe consumes sync-client's change decoder over the
+// #lib alias, so the pair is linked, not parallel.
+import { Result } from 'effect';
 import { workspaceSession } from '#lib/client/session.js';
+import type { SyncChange, SyncCursor } from '#lib/runtime/sync/sync.js';
+import { decodeChanges } from '#lib/client/replica/sync-client.js';
+
 /**
- * Listening for changes instead of asking for them.
+ * The browser's one ordered change stream.
  *
- * The replica used to poll `sync.diff` on a backing-off timer. Polling is wrong here in both
- * directions at once: a workspace that is quiet for an afternoon still costs a request per open tab,
- * and a workspace that is busy still shows a change an interval late. Moving the interval trades one
- * against the other and removes neither, because they are not the same problem.
- *
- * So the host tells us. It holds the connection, the write path announces on a topic, and the host
- * fans that out. What arrives is only the names of the collections that changed — the changes
- * themselves still come through `sync.diff`, so the log stays the single ordered account of what
- * happened and this connection stays a hint rather than a second, weaker copy of it.
- *
- * `EventSource` rather than a socket, and that is a deliberate narrowing: the browser reconnects on
- * its own with backoff, resumes from `Last-Event-ID`, and survives a laptop sleeping. A WebSocket
- * would need all three written here, and the traffic is one-way anyway — every write already has a
- * command channel to travel on.
+ * The host reads the database outbox through the same authenticated `sync.diff` runtime command and
+ * puts those permission-filtered `SyncChange` batches on SSE. The browser never asks for a diff and
+ * never polls: it applies each frame directly. EventSource owns network backoff and Last-Event-ID;
+ * the cursor query is the persisted replica's starting point on the first connection.
  */
 
 type SubscribeOptions = Readonly<{
-	/** Called with the collections a change touched. May be empty, which means "something changed". */
-	readonly onChange: (collections: ReadonlyArray<string>) => void;
-	/** Called when the connection is established, and again after each reconnect. */
+	/** The cursor durably reflected by the replica right now. */
+	readonly cursor: () => SyncCursor;
+	readonly onChange: (changes: ReadonlyArray<SyncChange>) => void;
+	/** Called when initial/reconnect catch-up has reached the stream's live edge. */
 	readonly onOpen?: () => void;
 	readonly onError?: ((cause: unknown) => void) | undefined;
 	/** Overridable so a test can supply a stub; the browser's own `EventSource` otherwise. */
 	readonly source?: (url: string) => EventSourceLike;
 }>;
 
-/**
- * The slice of `EventSource` this uses, so a test needs no DOM.
- *
- * `onerror` is deliberately nullable the way the DOM type is: `EventSource` exposes it as a
- * property rather than a method. Adapting a real `EventSource` is a framework boundary — its
- * members are wider (real `MessageEvent`s, positional overloads) — so the narrowing happens in one
- * place below rather than at every call site.
- */
+/** The slice of `EventSource` this uses, so a test needs no DOM. */
 export type EventSourceLike = {
-	addEventListener: (type: string, listener: (event: { data?: string }) => void) => void;
+	addEventListener: (
+		type: string,
+		listener: (event: { data?: string; lastEventId?: string }) => void
+	) => void;
 	close: () => void;
 	onerror: ((event: unknown) => void) | null;
 };
 
 export type Subscription = Readonly<{ readonly stop: () => void }>;
 
-/** The one object the host's change fan-out releases: the names of the collections that changed. */
-const ChangeFrame = Schema.Struct({
-	collections: Schema.Array(Schema.String)
-});
-
-const parseCollections = (data: string | undefined): ReadonlyArray<string> => {
-	if (data === undefined || data.length === 0) return [];
-	return (
-		Result.getOrElse(
-			Schema.decodeUnknownResult(Schema.fromJsonString(ChangeFrame))(data),
-			() => null
-		)?.collections ?? []
-	);
+const withCursor = (url: string, cursor: SyncCursor): string => {
+	const hashAt = url.indexOf('#');
+	const base = hashAt < 0 ? url : url.slice(0, hashAt);
+	const hash = hashAt < 0 ? '' : url.slice(hashAt);
+	const separator = base.includes('?') ? '&' : '?';
+	return `${base}${separator}cursor=${encodeURIComponent(JSON.stringify(cursor))}${hash}`;
 };
 
-/**
- * Opens the stream and reports what changed.
- *
- * Errors are reported but never terminate the subscription — `EventSource` reconnects on its own,
- * and closing it here on the first network blip would turn a momentary disconnection into a tab that
- * silently stops updating until someone reloads it.
- */
+const parseChanges = (
+	data: string | undefined
+): Result.Result<ReadonlyArray<SyncChange>, unknown> =>
+	Result.try(() => decodeChanges(JSON.parse(data ?? '')));
+
+/** Opens the stream and reports its typed database deltas. */
 export const subscribeToChanges = (options: SubscribeOptions): Subscription => {
 	const create =
 		options.source ??
 		((url: string): EventSourceLike => {
-			// The browser's `EventSource` is wider than the slice this module uses — real
-			// `MessageEvent`s, positional overloads, non-nullable members — so the framework boundary
-			// is adapted here, once, instead of asserted at each call site.
 			const source = new EventSource(url, { withCredentials: true });
 			return {
 				addEventListener: (type, listener) =>
 					source.addEventListener(type, (event) => {
-						listener(event instanceof MessageEvent ? { data: String(event.data) } : {});
+						listener(
+							event instanceof MessageEvent
+								? { data: String(event.data), lastEventId: event.lastEventId }
+								: {}
+						);
 					}),
 				close: () => source.close(),
 				set onerror(listener: ((event: unknown) => void) | null) {
@@ -87,18 +72,45 @@ export const subscribeToChanges = (options: SubscribeOptions): Subscription => {
 			};
 		});
 
-	const opened = Result.try(() => create(workspaceSession().syncStreamUrl));
-	if (Result.isFailure(opened)) {
-		// No `EventSource` at all — a non-browser runtime, or a policy that blocks it. The replica
-		// still works; it just only learns about changes when something else asks it to drain.
-		options.onError?.(opened.failure);
-		return { stop: () => undefined };
-	}
-	const source = opened.success;
+	let stopped = false;
+	let current: EventSourceLike | undefined;
+	const open = (): void => {
+		if (stopped) return;
+		const opened = Result.try(() =>
+			create(withCursor(workspaceSession().syncStreamUrl, options.cursor()))
+		);
+		if (Result.isFailure(opened)) {
+			options.onError?.(opened.failure);
+			return;
+		}
+		const source = opened.success;
+		current = source;
+		source.addEventListener('sync', (event) => {
+			const decoded = parseChanges(event.data);
+			if (Result.isSuccess(decoded)) {
+				options.onChange(decoded.success);
+				return;
+			}
+			// An unreadable frame must not advance past data the replica never applied. Reopen from the
+			// durable cursor in the URL; the server replays the ordered batch from that exact point.
+			options.onError?.(decoded.failure);
+			source.close();
+			if (current === source) current = undefined;
+			open();
+		});
+		source.addEventListener('ready', () => options.onOpen?.());
+		// Native EventSource reconnects this same object with Last-Event-ID and browser backoff. Do not
+		// close it on an ordinary network error or the browser would never resume it.
+		source.onerror = (event) => options.onError?.(event);
+	};
+	open();
 
-	source.addEventListener('sync', (event) => options.onChange(parseCollections(event.data)));
-	source.addEventListener('ready', () => options.onOpen?.());
-	source.onerror = (event) => options.onError?.(event);
-
-	return { stop: () => void Result.try(() => source.close()) };
+	return {
+		stop: () => {
+			stopped = true;
+			const source = current;
+			current = undefined;
+			if (source !== undefined) void Result.try(() => source.close());
+		}
+	};
 };

@@ -22,6 +22,8 @@ export { makeHttpConnectorBinding } from './runtime/integrations/http-connector.
 export { AUTH_MODELS } from './authoring/system-models.js';
 export { DEVELOPMENT_SIGN_IN_CODE } from './runtime/identity/auth.js';
 export { identitySchemaSteps } from './compiler/schema-plan.js';
+// repository-health:allow SEM_PARALLEL -- host.ts re-exports SystemPrincipal's signature
+// definitions (./runtime/access/system-principal.js), so the pair is linked, not parallel.
 export { compileHostModelSchema } from './compiler/schema-migrations.js';
 /**
  * What a host needs to sign an invocation as `colony system`, exported rather than restated.

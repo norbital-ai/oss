@@ -187,33 +187,36 @@ but whose session does not` is the one case every predecessor of this gate would
 
 ---
 
-## 4. Before / after: `toHaveBeenCalled` gains a behavioural partner
+## 4. Before / after: a failed assertion gains a behavioural partner
 
 **Before:**
 
 ```ts
 it('surfaces a transport failure', async () => {
-	const onError = vi.fn();
-	const client = createSyncClient({ transport: failing, sink, onError });
-	await client.drain();
-	expect(onError).toHaveBeenCalled();
+	const client = await Effect.runPromise(createSyncClient({ sink }));
+	const result = await Effect.runPromiseExit(
+		client.apply([change(1, 'create', 'p1', { name: 'Ada' })])
+	);
+	expect(Exit.isFailure(result)).toBe(true);
 });
 ```
 
-Green against a client that reports the error _and_ corrupts its cursor, applies a partial batch, or
-advances past the failed diff. The thing anyone actually cares about is untested.
+Green against a client that fails the batch _and_ advances its cursor past rows it never applied, or
+applies a partial batch. The thing anyone actually cares about is untested.
 
-**After** (`oss/packages/bolt/tests/client/replica.test.ts:187`):
+**After** (`oss/packages/bolt/tests/client/replica.test.ts:159`):
 
 ```ts
-expect(await client.drain()).toBe(0); // nothing applied
-expect(onError).toHaveBeenCalled(); // the port fired
-expect(client.cursor()).toEqual(ORIGIN_CURSOR); // and the cursor did not advance
+await expect(
+	Effect.runPromise(client.apply([change(1, 'create', 'p1', { name: 'Ada' })]))
+).rejects.toThrow('PGlite unavailable');
+expect(client.cursor()).toEqual(ORIGIN_CURSOR); // the cursor did not advance
 ```
 
-The middle line is now the least important of the three, which is the correct ordering. Note also
-`:159`, `expect(onAdvance).toHaveBeenCalledWith({ xid: 1, sequence: 1 })` — when you do assert on a
-callback, assert the _value_, because the value is the contract and the call is not.
+The rejection is now the least important of the two assertions, which is the correct ordering: the
+cursor promise is what lets a reconnect replay the batch instead of silently skipping it. The same
+shape appears at `:141`, where an out-of-order batch must be refused _before_ the sink's `apply` is
+even called (`expect(apply).not.toHaveBeenCalled()`).
 
 The counting double in `norbital/apps/colony/tests/facilities/transport.test.ts:191` is the other
 legitimate form: `opens` is incremented inside the injected handler so the test can assert

@@ -1,0 +1,240 @@
+{
+  "root": "/Users/neowenshun/developer/norbital_realm/norbital",
+  "findings": [
+    {
+      "severity": "error",
+      "confidence": "high",
+      "rule": "A6",
+      "summary": "await inside a synchronous loop",
+      "location": "scripts/profile-http.mjs:88: await requestOnce(index); [position=loop-body]",
+      "principles": [
+        "straightforwardness",
+        "efficiency"
+      ]
+    },
+    {
+      "severity": "error",
+      "confidence": "high",
+      "rule": "COMPLEX1",
+      "summary": "function control flow nests four or more levels",
+      "location": "apps/colony/src/routes/api/bolt/sync/stream/+server.ts:185: const catchUp = Effect.fn('Colony.SyncStream.catchUp')(function* () { [depth=5 prefer=guard-clauses]",
+      "principles": [
+        "simplicity",
+        "testability",
+        "no-bloat"
+      ]
+    },
+    {
+      "severity": "error",
+      "confidence": "high",
+      "rule": "EFF3",
+      "summary": "async/await appears in an Effect-owned module",
+      "location": "apps/colony/vite.config.js:34: const { default: adapter } = await import('@sveltejs/adapter-node'); [syntax=await]",
+      "principles": [
+        "straightforwardness",
+        "testability"
+      ]
+    },
+    {
+      "severity": "error",
+      "confidence": "high",
+      "rule": "LOG1",
+      "summary": "runtime console call bypasses structured logging",
+      "location": "apps/website/src/lib/api-docs/load-manifest.server.ts:71: console.warn(`[api-docs] missing generated page: ${relativePath}`, String(cause)); [api=console.warn prefer=Effect.log]",
+      "principles": [
+        "straightforwardness",
+        "testability"
+      ]
+    },
+    {
+      "severity": "error",
+      "confidence": "high",
+      "rule": "STATE1",
+      "summary": "module-scoped mutable state hides shared lifetime",
+      "location": "scripts/profile-http.mjs:63: let cursor = 0; [name=cursor kind=let]",
+      "principles": [
+        "simplicity",
+        "modularity",
+        "testability"
+      ]
+    },
+    {
+      "severity": "error",
+      "confidence": "high",
+      "rule": "STATE1",
+      "summary": "module-scoped mutable state hides shared lifetime",
+      "location": "scripts/profile-http.mjs:64: let errors = 0; [name=errors kind=let]",
+      "principles": [
+        "simplicity",
+        "modularity",
+        "testability"
+      ]
+    },
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "R5d",
+      "summary": "in-operator duck typing",
+      "location": "apps/colony/src/routes/api/bolt/chat-documents/[conversationId]/[...key]/+server.ts:67: if (typeof value !== 'object' || value === null || !('file' in value)) [chained=in]",
+      "principles": [
+        "simplicity",
+        "straightforwardness",
+        "type-safety"
+      ]
+    },
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "R5d",
+      "summary": "in-operator duck typing",
+      "location": "apps/colony/src/routes/api/bolt/chat-documents/[conversationId]/[...key]/+server.ts:73: !('storage_key' in file) || [chained=in]",
+      "principles": [
+        "simplicity",
+        "straightforwardness",
+        "type-safety"
+      ]
+    },
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "R5d",
+      "summary": "in-operator duck typing",
+      "location": "apps/colony/src/routes/api/bolt/chat-documents/[conversationId]/[...key]/+server.ts:75: !('file_name' in file) || [chained=in]",
+      "principles": [
+        "simplicity",
+        "straightforwardness",
+        "type-safety"
+      ]
+    },
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "R5d",
+      "summary": "in-operator duck typing",
+      "location": "apps/colony/src/routes/api/bolt/chat-documents/[conversationId]/[...key]/+server.ts:77: !('file_size' in file) || [chained=in]",
+      "principles": [
+        "simplicity",
+        "straightforwardness",
+        "type-safety"
+      ]
+    },
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "R5d",
+      "summary": "in-operator duck typing",
+      "location": "apps/colony/src/routes/api/bolt/chat-documents/[conversationId]/[...key]/+server.ts:79: !('mime_type' in file) || [chained=in]",
+      "principles": [
+        "simplicity",
+        "straightforwardness",
+        "type-safety"
+      ]
+    },
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "S3",
+      "summary": "verbose null and undefined check",
+      "location": "apps/colony/src/lib/hosting/transports.ts:277: if (content === null || content === undefined) return undefined; [$VALUE=content]",
+      "principles": [
+        "simplicity",
+        "no-bloat"
+      ]
+    },
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "S3",
+      "summary": "verbose null and undefined check",
+      "location": "apps/colony/src/lib/hosting/transports.ts:357: if (context === null || context === undefined) return 'ambient' as const; [$VALUE=context]",
+      "principles": [
+        "simplicity",
+        "no-bloat"
+      ]
+    },
+    {
+      "severity": "hint",
+      "confidence": "high",
+      "rule": "S3",
+      "summary": "verbose null and undefined check",
+      "location": "apps/colony/src/lib/hosting/transports.ts:399: if (content === null || content === undefined) return Effect.succeed(undefined); [$VALUE=content]",
+      "principles": [
+        "simplicity",
+        "no-bloat"
+      ]
+    },
+    {
+      "severity": "error",
+      "confidence": "high",
+      "rule": "EXP1",
+      "summary": "exported declaration has no static consumer",
+      "location": "apps/website/src/lib/api-docs/load-manifest.server.ts:57: export type LocalApiDocsInterface = { [export=LocalApiDocsInterface]",
+      "principles": [
+        "simplicity",
+        "modularity",
+        "colocation",
+        "no-bloat"
+      ]
+    },
+    {
+      "severity": "error",
+      "confidence": "high",
+      "rule": "FILE1",
+      "summary": "production file is unreachable from a real entrypoint",
+      "location": "apps/website/src/lib/api-docs/remote.server.ts:1: import { Cache, Context, Effect, Layer, ManagedRuntime } from 'effect'; [no package/framework/compiler entrypoint reaches file]",
+      "principles": [
+        "simplicity",
+        "modularity",
+        "colocation",
+        "no-bloat"
+      ]
+    }
+  ],
+  "receipt": {
+    "schemaVersion": 5,
+    "kind": "repository-health-static-receipt",
+    "scannerVersion": 31,
+    "root": "/Users/neowenshun/developer/norbital_realm/norbital",
+    "scope": "all",
+    "includeTests": false,
+    "tiers": {
+      "syntactic": true,
+      "graph": true,
+      "typeAware": true
+    },
+    "files": 273,
+    "findings": "findings.tsv",
+    "sourceInventoryDigest": "sha256:204492dac335db754795324bc9d720a2fda2c01595dd6ae087f5683edf80cace",
+    "ruleSetDigest": "sha256:e11c3fcaf880c674286e73944e543d66d787f5209cc0db7cd5c811c6c9c3eb54",
+    "catalogueDigest": "sha256:0972097df2784bcaee6dda10e01f24465a930eeb887112301e0632b0b12d6e41",
+    "counts": {
+      "error": 8,
+      "warning": 0,
+      "hint": 8,
+      "total": 16,
+      "principles": {
+        "simplicity": 13,
+        "straightforwardness": 8,
+        "modularity": 4,
+        "testability": 5,
+        "efficiency": 1,
+        "typeSafety": 5,
+        "colocation": 2,
+        "noBloat": 6
+      }
+    },
+    "complete": true
+  },
+  "status": 1,
+  "counts": {
+    "error": 8,
+    "hint": 8
+  },
+  "cataloguePath": "/Users/neowenshun/developer/norbital_realm/norbital/.norbital/diagnosis/findings.tsv",
+  "packs": [
+    "norbital/base",
+    "norbital/reactive",
+    "norbital/stringly-typed"
+  ],
+  "authoredFindings": 16
+}

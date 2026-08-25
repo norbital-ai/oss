@@ -93,9 +93,8 @@
 		return [Math.max(0, first.start), Math.max(0, totalSize - last.end)];
 	});
 
-	type SEvent = SortablePrimitive.SortableEvent;
 
-	function emitCardMove(evt: SEvent): void {
+	function emitCardMove(evt: SortablePrimitive.SortableEvent): void {
 		const recordId = evt.item.getAttribute('data-sortable-id');
 		const fromColumnId = evt.from?.getAttribute('data-column-id');
 		const toColumnId = evt.to?.getAttribute('data-column-id');
@@ -108,7 +107,7 @@
 		});
 	}
 
-	function handleSortIds(_orderedIds: string[], evt: SEvent): void {
+	function handleSortIds(_orderedIds: string[], evt: SortablePrimitive.SortableEvent): void {
 		if (onCardMove) {
 			emitCardMove(evt);
 		}

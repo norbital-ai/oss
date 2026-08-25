@@ -11,45 +11,32 @@ const change = (
 	sequence: number,
 	operation: SyncChange['operation'],
 	recordId: string,
-	record?: Record<string, Schema.Json>
+	record?: Record<string, Schema.Json>,
+	xid = 1
 ): SyncChange => ({
-	cursor: { xid: 1, sequence },
+	cursor: { xid, sequence },
 	collection: 'people',
 	recordId,
 	operation,
 	...(record === undefined ? {} : { record })
 });
 
+const reset = (cursor: SyncCursor): SyncChange => ({
+	cursor,
+	collection: '*',
+	recordId: 'reset',
+	operation: 'reset'
+});
+
 const isJsonRecord = (value: Schema.Json | undefined): value is Record<string, Schema.Json> =>
 	value !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value);
 
-/** Serves prepared batches in order, then nothing — the shape `sync.diff` presents to a client. */
-const transportOf = (batches: ReadonlyArray<ReadonlyArray<SyncChange>>) => {
-	const pending = [...batches];
-	const requested: Array<SyncCursor> = [];
-	return {
-		requested,
-		transport: {
-			head: () => Effect.succeed(ORIGIN_CURSOR),
-			diff: (cursor: SyncCursor) =>
-				Effect.sync(() => {
-					requested.push(cursor);
-					return pending.shift() ?? [];
-				})
-		}
-	};
-};
-
 const createTestSink = () => {
 	const rows = new Map<string, Readonly<Record<string, unknown>>>();
-	const reset = () => Effect.sync(() => rows.clear());
+	const resetRows = () => Effect.sync(() => rows.clear());
 	const apply = (changes: ReadonlyArray<SyncChange>) =>
 		Effect.sync(() => {
 			for (const entry of changes) {
-				if (entry.operation === 'reset') {
-					rows.clear();
-					continue;
-				}
 				if (entry.operation === 'delete') {
 					rows.delete(entry.recordId);
 					continue;
@@ -62,84 +49,60 @@ const createTestSink = () => {
 				});
 			}
 		});
-	return { apply, reset, row: (id: string) => rows.get(id) };
+	return { apply, reset: resetRows, row: (id: string) => rows.get(id) };
 };
 
 describe('replica sync client', () => {
-	it('walks the cursor forward across batches until the server is empty', async () => {
-		const { transport, requested } = transportOf([
-			[change(1, 'create', 'p1', { name: 'Ada' }), change(2, 'create', 'p2', { name: 'Grace' })],
-			[change(3, 'update', 'p1', { name: 'Ada Lovelace' })]
-		]);
+	it('applies one ordered SSE batch and records only its durable last cursor', async () => {
 		const store = createTestSink();
-		const client = await Effect.runPromise(
-			createSyncClient({
-				transport,
-				sink: { apply: store.apply, reset: store.reset },
-				batchSize: 2
-			})
-		);
-
-		expect(await Effect.runPromise(client.drain())).toBe(3);
-		expect(requested).toEqual([
-			{ xid: 0, sequence: 0 },
-			{ xid: 1, sequence: 2 }
-		]);
-		expect(client.cursor()).toEqual({ xid: 1, sequence: 3 });
-		expect(store.row('p1')).toMatchObject({ name: 'Ada Lovelace' });
-	});
-
-	it('stops after a short batch rather than asking again', async () => {
-		const { transport, requested } = transportOf([[change(1, 'create', 'p1', { name: 'Ada' })]]);
-		const store = createTestSink();
-		const client = await Effect.runPromise(
-			createSyncClient({
-				transport,
-				sink: { apply: store.apply, reset: store.reset },
-				batchSize: 50
-			})
-		);
-		expect(await Effect.runPromise(client.drain())).toBe(1);
-		expect(requested).toHaveLength(1);
-	});
-
-	it('rebuilds from the reset point when the cursor fell off retained history', async () => {
-		const reset: SyncChange = {
-			cursor: { xid: 9, sequence: 4 },
-			collection: '*',
-			recordId: 'reset',
-			operation: 'reset'
-		};
-		const { transport } = transportOf([[reset], [change(5, 'create', 'p2', { name: 'Grace' })]]);
-		const store = createTestSink();
-		await Effect.runPromise(store.apply([change(1, 'create', 'p1', { name: 'stale' })]));
-		const client = await Effect.runPromise(
-			createSyncClient({
-				transport,
-				sink: { apply: store.apply, reset: store.reset },
-				batchSize: 10
-			})
-		);
-
-		await Effect.runPromise(client.drain());
-		expect(store.row('p1')).toBeUndefined();
-		expect(store.row('p2')).toMatchObject({ name: 'Grace' });
-	});
-
-	it('resets a persisted projection whose cursor is ahead of a replacement database', async () => {
-		const store = createTestSink();
-		await Effect.runPromise(store.apply([change(9, 'create', 'local-only', { name: 'Stale' })]));
-		let resets = 0;
-		const persisted = { xid: 9, sequence: 4 };
-		const currentHead = { xid: 2, sequence: 1 };
 		const advanced: Array<SyncCursor> = [];
-
 		const client = await Effect.runPromise(
 			createSyncClient({
-				transport: {
-					head: () => Effect.succeed(currentHead),
-					diff: () => Effect.succeed([])
-				},
+				sink: { apply: store.apply, reset: store.reset },
+				onAdvance: (cursor) => Effect.sync(() => advanced.push(cursor))
+			})
+		);
+
+		const batch = [
+			change(1, 'create', 'p1', { name: 'Ada' }),
+			change(2, 'update', 'p1', { name: 'Ada Lovelace' })
+		];
+		expect(await Effect.runPromise(client.apply(batch))).toBe(2);
+		expect(store.row('p1')).toMatchObject({ name: 'Ada Lovelace' });
+		expect(client.cursor()).toEqual({ xid: 1, sequence: 2 });
+		expect(advanced).toEqual([{ xid: 1, sequence: 2 }]);
+	});
+
+	it('ignores replayed entries while applying a fresh suffix after reconnect', async () => {
+		const store = createTestSink();
+		const applied = vi.fn(store.apply);
+		const client = await Effect.runPromise(
+			createSyncClient({
+				sink: { apply: applied, reset: store.reset },
+				initialCursor: { xid: 1, sequence: 2 }
+			})
+		);
+
+		expect(
+			await Effect.runPromise(
+				client.apply([
+					change(1, 'create', 'old', { name: 'Old' }),
+					change(2, 'update', 'old', { name: 'Still old' }),
+					change(3, 'create', 'fresh', { name: 'Fresh' })
+				])
+			)
+		).toBe(1);
+		expect(applied).toHaveBeenCalledWith([change(3, 'create', 'fresh', { name: 'Fresh' })]);
+		expect(store.row('old')).toBeUndefined();
+		expect(store.row('fresh')).toMatchObject({ name: 'Fresh' });
+	});
+
+	it('honours compaction resets and replacement-database resets that move backwards', async () => {
+		const store = createTestSink();
+		await Effect.runPromise(store.apply([change(1, 'create', 'stale', { name: 'Stale' })]));
+		let resets = 0;
+		const client = await Effect.runPromise(
+			createSyncClient({
 				sink: {
 					apply: store.apply,
 					reset: () =>
@@ -147,84 +110,109 @@ describe('replica sync client', () => {
 							resets += 1;
 						}).pipe(Effect.andThen(store.reset()))
 				},
-				initialCursor: persisted,
-				onAdvance: (cursor) => Effect.sync(() => advanced.push(cursor))
+				initialCursor: { xid: 9, sequence: 4 }
 			})
 		);
 
-		expect(resets).toBe(1);
-		expect(store.row('local-only')).toBeUndefined();
-		expect(client.cursor()).toEqual(currentHead);
-		expect(advanced).toEqual([currentHead]);
+		// A new environment can legitimately have an outbox head below the persisted old environment.
+		expect(await Effect.runPromise(client.apply([reset({ xid: 2, sequence: 1 })]))).toBe(1);
+		expect(client.cursor()).toEqual({ xid: 2, sequence: 1 });
+		expect(store.row('stale')).toBeUndefined();
+		// Exact EventSource replay of the reset is ignored.
+		expect(await Effect.runPromise(client.apply([reset({ xid: 2, sequence: 1 })]))).toBe(0);
+		// A compaction horizon moves the same reset mechanism forward.
+		expect(await Effect.runPromise(client.apply([reset({ xid: 12, sequence: 0 })]))).toBe(1);
+		expect(resets).toBe(2);
 	});
 
-	it('reports each advance so live queries can re-run', async () => {
-		const { transport } = transportOf([[change(1, 'create', 'p1', { name: 'Ada' })]]);
-		const store = createTestSink();
-		const onAdvance = vi.fn();
-		const client = await Effect.runPromise(
-			createSyncClient({
-				transport,
-				sink: { apply: store.apply, reset: store.reset },
-				batchSize: 10,
-				onAdvance: (cursor) => Effect.sync(() => onAdvance(cursor))
-			})
-		);
-		await Effect.runPromise(client.drain());
-		expect(onAdvance).toHaveBeenCalledWith({ xid: 1, sequence: 1 });
-	});
-
-	it('shares one pass between concurrent drains so no batch applies twice', async () => {
-		const { transport, requested } = transportOf([[change(1, 'create', 'p1', { name: 'Ada' })]]);
+	it('refuses mixed reset and data frames without advancing', async () => {
 		const store = createTestSink();
 		const client = await Effect.runPromise(
-			createSyncClient({
-				transport,
-				sink: { apply: store.apply, reset: store.reset },
-				batchSize: 10
-			})
+			createSyncClient({ sink: { apply: store.apply, reset: store.reset } })
 		);
-		const [first, second] = await Effect.runPromise(
-			Effect.all([client.drain(), client.drain()], { concurrency: 'unbounded' })
-		);
-		expect(first).toBe(second);
-		expect(requested).toHaveLength(1);
-	});
-
-	it('surfaces a transport failure without advancing the cursor', async () => {
-		const store = createTestSink();
-		const onError = vi.fn();
-		const client = await Effect.runPromise(
-			createSyncClient({
-				transport: {
-					head: () => Effect.succeed(ORIGIN_CURSOR),
-					diff: () => Effect.fail(new Error('offline'))
-				},
-				sink: { apply: store.apply, reset: store.reset },
-				onError
-			})
-		);
-		expect(await Effect.runPromise(client.drain())).toBe(0);
-		expect(onError).toHaveBeenCalled();
+		await expect(
+			Effect.runPromise(
+				client.apply([reset({ xid: 1, sequence: 1 }), change(2, 'create', 'p1', { name: 'Ada' })])
+			)
+		).rejects.toThrow('only change');
 		expect(client.cursor()).toEqual(ORIGIN_CURSOR);
 	});
 
-	it('stops pulling once stopped', async () => {
-		const { transport, requested } = transportOf([
-			[change(1, 'create', 'p1', { name: 'Ada' })],
-			[change(2, 'create', 'p2', { name: 'Grace' })]
-		]);
+	it('refuses an out-of-order data batch before writing or advancing', async () => {
 		const store = createTestSink();
+		const apply = vi.fn(store.apply);
+		const client = await Effect.runPromise(
+			createSyncClient({ sink: { apply, reset: store.reset } })
+		);
+		await expect(
+			Effect.runPromise(
+				client.apply([
+					change(2, 'create', 'p2', { name: 'Grace' }),
+					change(1, 'create', 'p1', { name: 'Ada' })
+				])
+			)
+		).rejects.toThrow('out of cursor order');
+		expect(apply).not.toHaveBeenCalled();
+		expect(client.cursor()).toEqual(ORIGIN_CURSOR);
+	});
+
+	it('does not advance when the local database write fails', async () => {
 		const client = await Effect.runPromise(
 			createSyncClient({
-				transport,
-				sink: { apply: store.apply, reset: store.reset },
-				batchSize: 1
+				sink: {
+					apply: () => Effect.fail(new Error('PGlite unavailable')),
+					reset: () => Effect.void
+				}
 			})
 		);
+		await expect(
+			Effect.runPromise(client.apply([change(1, 'create', 'p1', { name: 'Ada' })]))
+		).rejects.toThrow('PGlite unavailable');
+		expect(client.cursor()).toEqual(ORIGIN_CURSOR);
+	});
+
+	it('serializes overlapping DOM deliveries before the next batch observes the cursor', async () => {
+		const order: Array<number> = [];
+		const client = await Effect.runPromise(
+			createSyncClient({
+				sink: {
+					apply: (changes) =>
+						Effect.promise(
+							() =>
+								new Promise<void>((resolve) => {
+									setTimeout(
+										() => {
+											order.push(changes[0]?.cursor.sequence ?? 0);
+											resolve();
+										},
+										changes[0]?.cursor.sequence === 1 ? 20 : 0
+									);
+								})
+						),
+					reset: () => Effect.void
+				}
+			})
+		);
+
+		const [first, second] = await Promise.all([
+			Effect.runPromise(client.apply([change(1, 'create', 'p1', { name: 'Ada' })])),
+			Effect.runPromise(client.apply([change(2, 'create', 'p2', { name: 'Grace' })]))
+		]);
+		expect([first, second]).toEqual([1, 1]);
+		expect(order).toEqual([1, 2]);
+		expect(client.cursor()).toEqual({ xid: 1, sequence: 2 });
+	});
+
+	it('stops accepting batches once stopped', async () => {
+		const store = createTestSink();
+		const client = await Effect.runPromise(
+			createSyncClient({ sink: { apply: store.apply, reset: store.reset } })
+		);
 		client.stop();
-		expect(await Effect.runPromise(client.drain())).toBe(0);
-		expect(requested).toHaveLength(0);
+		expect(
+			await Effect.runPromise(client.apply([change(1, 'create', 'p1', { name: 'Ada' })]))
+		).toBe(0);
+		expect(store.row('p1')).toBeUndefined();
 	});
 });
 

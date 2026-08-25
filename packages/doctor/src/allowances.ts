@@ -14,6 +14,8 @@
  * What counts is deliberately narrow, per `docs/rules.md`: an exact rule id, token-matched so `UI1`
  * cannot suppress `UI10`, followed by `--` and a reason. A blanket marker suppresses nothing.
  */
+import { Effect } from 'effect';
+import * as Result from 'effect/Result';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Finding } from './index.js';
@@ -78,13 +80,15 @@ export function applyAllowances(
 	const sources = new Map<string, ReadonlyArray<string> | undefined>();
 	const linesOf = (file: string): ReadonlyArray<string> | undefined => {
 		if (!sources.has(file)) {
-			try {
-				sources.set(file, readFileSync(join(root, file), 'utf8').split('\n'));
-			} catch {
-				// A file that cannot be read carries no allowance. It is not evidence of one either,
-				// so the finding stands.
-				sources.set(file, undefined);
-			}
+			const read = Effect.runSync(
+				Effect.result(Effect.try(() => readFileSync(join(root, file), 'utf8')))
+			);
+			sources.set(
+				file,
+				Result.isSuccess(read)
+					? Result.match(read, { onSuccess: (v) => v.split('\n'), onFailure: () => undefined })
+					: undefined
+			);
 		}
 		return sources.get(file);
 	};

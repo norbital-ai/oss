@@ -1,0 +1,8 @@
+# Both halves: the structural check still runs, and the pseudocode also emits a query.
+id: HYBRIDSQL
+summary: sql assembled as text rather than a typed query
+severity: error
+principles: [type-safety]
+rule: query($SQL)
+pseudocode: sql built from string concatenation
+threshold: 0.7

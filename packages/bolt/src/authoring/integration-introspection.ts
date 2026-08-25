@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- integration-introspection imports the workspace-schema
+// declarations it splits, so the pair is linked, not parallel.
 import type { ManifestIntegration, ManifestIntegrationBinding } from '@norbital-ai/bolt-protocol';
 import type { Schema } from 'effect';
 import type {
@@ -152,6 +154,13 @@ const stringPath = (value: unknown): { readonly path: ReadonlyArray<string> } | 
 		? { path: [...value] }
 		: undefined;
 
+/** The `maxOf` resumption value of a next-location, when the binding declared one. */
+const maxOfOf = (next: unknown): string | undefined => {
+	if (typeof next !== 'object' || next === null) return undefined;
+	const value = Reflect.get(next, 'maxOf');
+	return typeof value === 'string' ? value : undefined;
+};
+
 /** Where a next-cursor is read from, in the four shapes the runtime knows how to read. */
 const nextLocation = (
 	next: Readonly<Record<string, unknown>>
@@ -214,9 +223,15 @@ const pagesSpec = (value: unknown): PullPagesSpec | undefined => {
 		// `maxOf` is excluded here rather than merely unsupported: it summarises the records just read,
 		// so it is a resumption point for the *next run* and can never advance a page within this one.
 		// A binding that declared it would page forever against the same token.
-		return following === undefined || 'maxOf' in following
-			? undefined
-			: { style: 'cursor', query: String(source['query'] ?? 'cursor'), next: following, ...max };
+		// The exclusion needs the union arm removed, so the read happens once through the
+		// extractor and the surviving value is typed by exclusion at the one place it is used.
+		if (following === undefined || maxOfOf(following) !== undefined) return undefined;
+		return {
+			style: 'cursor',
+			query: String(source['query'] ?? 'cursor'),
+			next: following as Exclude<typeof following, { readonly maxOf: string }>,
+			...max
+		};
 	}
 	return style === 'link-header' ? { style: 'link-header', ...max } : undefined;
 };

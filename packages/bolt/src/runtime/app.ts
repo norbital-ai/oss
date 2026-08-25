@@ -407,7 +407,7 @@ export const ActivationCommands = {
 			),
 			...workspace.integrations.flatMap((integration) =>
 				integration.receive.flatMap((binding) =>
-					binding.schedule === null || binding.schedule === undefined
+					binding.schedule == null
 						? []
 						: [
 								{

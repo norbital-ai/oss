@@ -44,7 +44,7 @@ describe.skipIf(server === undefined || server.length === 0)('live agent convers
 			{ agentModels: settledQuery({ defaultModel: '', options: [] }) }
 		);
 		const result = await Effect.runPromise(
-			agent.start({ message: 'Reply with a short greeting only.' })
+			agent.start({ message: 'Reply with a short greeting only.', turnId: 'turn-live' })
 		);
 		expect(result.chatId.length).toBeGreaterThan(0);
 	});

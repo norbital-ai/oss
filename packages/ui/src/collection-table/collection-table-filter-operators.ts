@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- sibling leaf helpers of the same filter surface: this
+// file owns operator options, filter-fields owns the field tree. No overlapping exports.
 import type { CollectionField, CollectionFilter } from '@norbital-ai/std/collection';
 
 export type CollectionFilterOperator = CollectionFilter['operator'] | 'contains';

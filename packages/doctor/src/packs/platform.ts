@@ -10,6 +10,7 @@
  * being ported as written.
  */
 import { defineRule } from '../pattern.js';
+import { nameOf } from '../nameof.js';
 import { definePack, type Pack, type Rule } from '../rules.js';
 
 /** Files that own physical schema/bootstrap rendering. */
@@ -424,10 +425,7 @@ const deprecatedDeclaration = defineRule({
 		// about the declaration *above* this one. Three of this rule's findings in the realm were
 		// documentation describing the tag rather than carrying it.
 		if (!ts.getJSDocTags(node).some((tag) => tag.tagName.text === 'deprecated')) return;
-		const name =
-			'name' in node && node.name !== undefined && ts.isIdentifier(node.name as never)
-				? (node.name as import('typescript').Identifier).text
-				: 'declaration';
+		const name = nameOf(node)?.text ?? 'declaration';
 		context.report(node, `kind=${ts.SyntaxKind[node.kind]} name=${name}`);
 	}
 });

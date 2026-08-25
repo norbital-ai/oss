@@ -33,8 +33,7 @@
 	import { approvalRequestIdForRecord } from './approval-anchor.js';
 	import { approvalActionsFor } from './approval-actions.js';
 
-	type Row = CollectionRecord;
-	type ErasedCollection = CollectionType<Row, object, object>;
+	type ErasedCollection = CollectionType<CollectionRecord, object, object>;
 
 	type ApprovalActionState =
 		| { status: 'idle' }
@@ -83,7 +82,7 @@
 			? {
 					operations,
 					query: {
-						where: { [recordIdField]: { eq: recordId } } as CollectionQuery<Row>['where'], // stupidity: boundary-cast — the record key is a runtime string on an erased row.
+						where: { [recordIdField]: { eq: recordId } } as CollectionQuery<CollectionRecord>['where'], // stupidity: boundary-cast — the record key is a runtime string on an erased row.
 						limit: 1
 					}
 				}
@@ -151,7 +150,7 @@
 					})
 	);
 
-	function recordTitle(row: Row): string {
+	function recordTitle(row: CollectionRecord): string {
 		if (!definition) return humanize(collectionName);
 		// Bolt declares `recordLabel` as a plain column name — `recordLabel: 'summary'`. The CEL
 		// resolver evaluates it as an expression and returns null for a bare identifier, so the title
@@ -438,7 +437,7 @@
 	fields,
 	className
 }: {
-	record: Row;
+	record: CollectionRecord;
 	fields: readonly CollectionField[];
 	className?: string;
 })}

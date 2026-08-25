@@ -17,7 +17,7 @@ export interface LocalFilesOptions {
 export const makeLocalFilesBinding = (
 	{ rootDirectory }: LocalFilesOptions,
 	/** Names the temporary companion of an atomic write; injected so the suffix's source is a parameter, never ambient. */
-	temporarySuffix: () => string = () => randomUUID()
+	temporarySuffix: () => string = randomUUID
 ): FacilityBinding<FileRequest, FileResponse> => {
 	const root = resolve(rootDirectory);
 	/** Resolves a wire key while refusing any path that escapes the configured root. */

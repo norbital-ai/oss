@@ -1,6 +1,8 @@
 import {
 	AIRequest,
 	AIResponse,
+	CommunicationRequest,
+	CommunicationResponse,
 	ConnectorRequest,
 	ConnectorResponse,
 	FacilityCall,
@@ -14,6 +16,16 @@ import {
 	selectConfiguredProvider,
 	type ConfiguredProviderFactory
 } from '../config.js';
+
+/** The SPI a communication provider implements, mirroring the wire contract's call shape. */
+export interface CommunicationProvider {
+	readonly call: (
+		metadata: FacilityCall,
+		input: CommunicationRequest,
+		signal: AbortSignal
+		// repository-health:allow EFF2 -- Provider SPI mirrors the protocol-owned Promise facility boundary for external adapters.
+	) => Promise<unknown>;
+}
 
 /** The SPI an AI provider implements, mirroring the wire contract's call shape. */
 export interface AiProvider {
@@ -44,6 +56,30 @@ export interface HostToolProvider {
 		// repository-health:allow EFF2 -- Provider SPI mirrors the protocol-owned Promise facility boundary for external adapters.
 	) => Promise<unknown>;
 }
+
+/** Validates communication envelopes without embedding any channel-provider semantics. */
+export const makeCommunicationBinding = (
+	provider: CommunicationProvider
+): FacilityBinding<CommunicationRequest, CommunicationResponse> =>
+	makeWireBinding({
+		request: CommunicationRequest,
+		response: CommunicationResponse,
+		cancelled: {
+			code: 'communication.cancelled',
+			message: 'Communication call was cancelled'
+		},
+		failed: {
+			code: 'communication.failed',
+			message: 'Communication provider operation failed'
+		},
+		invoke: provider.call.bind(provider)
+	});
+
+/** Selects and constructs the configured communication provider. */
+export const makeCommunicationBindingFromConfig = <Error>(
+	factories: Readonly<Record<string, ConfiguredProviderFactory<CommunicationProvider, Error>>>
+) =>
+	selectConfiguredProvider('COMMUNICATION', factories).pipe(Effect.map(makeCommunicationBinding));
 
 /** Validates both sides of an AI provider call at the neutral facility boundary. */
 export const makeAiBinding = (provider: AiProvider): FacilityBinding<AIRequest, AIResponse> =>

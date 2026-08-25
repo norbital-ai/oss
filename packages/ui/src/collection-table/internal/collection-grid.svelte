@@ -36,7 +36,6 @@
 
 	// Type aliases for snippet generics (formatter bug workaround)
 	type TColumnLayout = ColumnLayout<TData, TCondition>;
-	type TSortableProps = Record<string, unknown>;
 	const HEADER_SCROLL_LEFT_VAR = '--collection-table-header-scroll-left';
 	const BODY_SCROLL_LEFT_VAR = '--collection-table-body-scroll-left';
 	const BODY_VIEWPORT_WIDTH_VAR = '--collection-table-body-viewport-width';
@@ -514,7 +513,7 @@
 	</div>
 {/snippet}
 
-{#snippet renderHeaderCell(layout: TColumnLayout, sortableProps?: TSortableProps)}
+{#snippet renderHeaderCell(layout: TColumnLayout, sortableProps?: Record<string, unknown>)}
 	{@const inst = layout.instance}
 	{@const isCheckbox = layout.isCheckbox}
 	{@const dir = inst.sortDirection}

@@ -1,3 +1,6 @@
+// repository-health:allow SEM_PARALLEL -- compiler is the build-time discover/types phase;
+// runtime/workspace.ts is the runtime lookup layer. They share nothing but the WorkspaceDefinition
+// input, so the pair is two phases of one contract, not one responsibility twice.
 import { Schema } from 'effect';
 import type { WorkspaceDefinition } from '../authoring/workspace-schema.js';
 

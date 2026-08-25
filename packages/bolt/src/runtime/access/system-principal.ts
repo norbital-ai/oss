@@ -140,8 +140,8 @@ export const systemSignaturePayload = (parameters: SignaturePayload): string =>
  * renders as `null`, which can only ever fail a comparison rather than pass one.
  */
 const canonicalJson = (value: unknown): string => {
-	if (value === null || value === undefined) return 'null';
-	if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(',')}]`;
+	if (value == null) return 'null';
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
 	if (typeof value === 'object') {
 		const entries = Object.entries(value)
 			.filter(([, entry]) => entry !== undefined)
@@ -294,9 +294,7 @@ export const verifySystemSignature = Effect.fn('Bolt.verifySystemSignature')(fun
 	// invocation, which is the only way a sandboxed runtime with no `process` can hold one. A bundle
 	// running in a plain process gets the process-env implementation; a caller that provided neither
 	// falls back to the ambient environment for the same reason.
-	const hostConfig = Option.getOrElse(yield* Effect.serviceOption(HostConfig), () =>
-		hostConfigFromProcessEnv()
-	);
+	const hostConfig = Option.getOrElse(yield* Effect.serviceOption(HostConfig), hostConfigFromProcessEnv);
 	const secret = yield* hostConfig
 		.read(GATEWAY_SECRET_VARIABLE)
 		.pipe(Effect.catch(() => Effect.succeed(Option.none<Redacted.Redacted<string>>())));

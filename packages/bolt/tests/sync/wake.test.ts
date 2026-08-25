@@ -9,7 +9,8 @@ import {
 	type AIRequest,
 	type AIResponse,
 	type FacilityBinding,
-	type TransportRequest
+	type TransportRequest,
+	type TransportResponse
 } from '@norbital-ai/bolt-protocol';
 import * as Agents from '../../src/runtime/agents/agents.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
@@ -57,6 +58,24 @@ const recordingTransport = (published: Array<Published>) => ({
 });
 
 describe('announcing a change on the sync topic', () => {
+	it('gives repeated announcements distinct transport identities', async () => {
+		const effectIds: Array<string> = [];
+		const transport: FacilityBinding<TransportRequest, TransportResponse> = {
+			call: async (metadata) => {
+				effectIds.push(String(metadata.effectId));
+				return success({ delivered: 0 });
+			}
+		};
+		harness = await makeBoltTestRuntime(undefined, { transport });
+		const wake = await harness.runtime.runPromise(SyncWakeService);
+		const effectId = EffectId.make('repeated-wake');
+
+		await harness.runtime.runPromise(wake.announce(effectId, ['automation_run']));
+		await harness.runtime.runPromise(wake.announce(effectId, ['automation_run']));
+
+		expect(effectIds).toEqual(['repeated-wake', 'repeated-wake#1']);
+	});
+
 	it('names the collection that changed, on create, update and delete', async () => {
 		const published: Array<Published> = [];
 		harness = await makeBoltTestRuntime(undefined, {
@@ -135,6 +154,7 @@ describe('announcing a change on the sync topic', () => {
 				adminSubject,
 				'web',
 				'conversation-live',
+				'turn-live',
 				{
 					kind: 'user_message',
 					text: 'Show me the current state.',

@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- agent-model-state is imported by agent/client.svelte.ts
+// (./agent-model-state.svelte.js), so the pair is linked, not parallel.
 import { Schema } from 'effect';
 import type { RemoteQuery } from '#lib/client/runtime.js';
 
@@ -48,7 +50,7 @@ export function createAgentModelController(transport: WorkspaceRemoteTransport) 
 				return transport.agentModels.current ?? null;
 			},
 			get selectedModel(): string {
-				return selection.selectedModel;
+				return selection.selectedModel || transport.agentModels.current?.defaultModel || '';
 			},
 			set selectedModel(value: string) {
 				selection.selectedModel = value;

@@ -1,11 +1,17 @@
 # @norbital-ai/doctor
 
 Deterministic static code-quality analysis for TypeScript, JavaScript, and Svelte repositories,
-with a CLI, a programmatic API, and a type-safe rule authoring surface.
+with a CLI, a programmatic API, and YAML as the rule authoring surface.
 
-Rules are ordinary TypeScript files committed to your repository. A person or an agent adds one,
-opens a pull request, and the next audit enforces it — no build step, because Node strips the types
-on import.
+The core is agnostic by construction: it ships no opinionated rules and encodes no product's
+architecture. A repository that configures nothing gets the neutral baseline — module-graph
+reachability, dead exports, duplicate bodies, type-aware deprecation checks, a per-root metrics
+table, and the semantic pass. Curated rule sets are named explicitly or not loaded at all.
+
+Rules are ordinary YAML files committed to your repository. A person or an agent adds one, opens
+a pull request, and the next audit enforces it. A `rule` half uses ast-grep's pattern shape; a
+`pseudocode` half matches semantically against this repository's embedding index; either alone is
+a complete rule.
 
 ## Install
 
@@ -16,9 +22,9 @@ pnpm add -D @norbital-ai/doctor
 ## Audit from a terminal
 
 ```bash
-npx norbital-doctor audit                # this repository
-npx norbital-doctor audit --include-tests   # include test and e2e sources
-npx norbital-doctor assess --root . --root ../other --out report.json
+norbital-doctor audit                # this repository
+norbital-doctor audit --include-tests   # include test and e2e sources
+norbital-doctor assess --root . --root ../other --out report.json
 ```
 
 Exit codes are the contract, and they are three-valued on purpose:
@@ -29,134 +35,92 @@ Exit codes are the contract, and they are three-valued on purpose:
 | 1    | the analysis is valid and found actionable debt — not a crash              |
 | 2    | the evidence is incomplete, stale, or invalid — do not read scores from it |
 
-Collapsing 1 and 2 would let a scan that never produced evidence read as a clean pass, which is the
-failure this tool exists to prevent.
+Everything runs, or the run exits 2: a missing embedding credential, an unreachable provider,
+malformed YAML, or a corrupt index is exit-2 evidence with the fix named in the message — never a
+quiet all-clear. The one explicit escape is `semantic: { disabled: true }`, because declining
+embeddings is a legitimate choice while failing to notice they never ran is not.
 
 Where `@norbital-ai/bolt` is installed, the same audit is available as `bolt audit`.
 
-## No bundler plugin
-
-There is no Vite plugin. Distribution as one would have tied the audit to a bundler that many
-projects do not use, and a plugin cannot register a CLI command anyway — Vite's command set is
-fixed. A CLI runs the same in a pre-commit hook, a CI job, an editor task, a container, and a
-file-watcher of your choosing.
-
 ## Write a rule
 
-```ts
-// dr/rules/no-raw-fetch.ts
-import { defineRule } from '@norbital-ai/doctor';
-
-export default defineRule({
-	id: 'ACME1',
-	severity: 'error',
-	summary: 'raw fetch bypasses the http client',
-	principles: ['straightforwardness', 'testability'],
-	when: ['CallExpression'],
-	files: ['src/**'],
-	check(node, context) {
-		if (context.calleeName(node) !== 'fetch') return;
-		context.report(node, 'callee=fetch prefer=@acme/http#request');
-	}
-});
+```yaml
+# dr/no-raw-fetch.yml
+id: ACME1
+summary: raw fetch bypasses the http client
+severity: error
+principles: [straightforwardness, testability]
+rule:
+	pattern: fetch($$$ARGS)
 ```
 
-`when` is a list of TypeScript syntax-kind names, so a typo is a type error rather than a rule that
-silently never fires. The engine dispatches by kind: each node is visited once and only the rules
-that asked for that kind are consulted.
+```yaml
+# dr/retries.yml — the same rule may carry a semantic half instead of, or beside, a structural one
+id: RETRY_SEM
+summary: hand-rolled retry around async work
+severity: hint
+pseudocode: |
+	an async operation retried with increasing delay up to a limit
+threshold: 0.84
+```
 
-`context` carries the file, its source, the parsed `SourceFile`, the `ts` namespace, and helpers —
-`calleeName`, `text`, `ancestors`, `imports`, `importsFrom`. A rule that throws becomes a finding
-against itself rather than taking the audit down.
-
-Rules run in the syntactic tier: one file at a time, no cross-file state, no type checker. That
-restriction is what makes them cheap enough to run on every save.
-
-Every audit loads authored rules in a fresh worker, so editing a rule takes effect on the next scan
-instead of remaining trapped in Node's module cache.
+A misspelled field throws at load time naming the file: "zero findings" must mean "clean", never
+"misconfigured". See `docs/matcher.md` for the full rule algebra and `docs/semantic.md` for the
+semantic tier.
 
 ## Configure
 
 ```ts
-// doctor.config.ts
+// doctor.config.ts — the complete surface
 import { defineConfig } from '@norbital-ai/doctor';
-import noRawFetch from './dr/rules/no-raw-fetch.ts';
 
 export default defineConfig({
-	base: 'none',
-	rules: [noRawFetch],
-	packs: ['./dr/packs/house-style.ts'],
-	overlaps: [
-		{ shape: 'clamp', owner: 'es-toolkit', member: 'clamp' },
-		{ shape: 'deep-equal', owner: 'es-toolkit', member: 'isEqual' }
-	],
-	disable: ['OVERLAP_SUM']
+	packs: ['norbital'],       // registered curated packs; or './dr/packs/house.ts'
+	patterns: 'dr/*.yml',      // this glob is also the default
+	disable: ['SEM_TWIN'],
+	semantic: {
+		provider: 'openrouter',               // built-in today; or an inline function
+		model: 'qwen/qwen3-embedding-8b',
+		dimensions: 4096,
+		credential: 'NORBITAL_AI_CREDENTIAL' // env-var NAME — values never live in configs
+	}
 });
 ```
 
-### `base`
-
-Which built-in rule set runs beneath your own.
-
-- `norbital` (default) — the ~140-rule detector this engine grew out of: Effect ownership, a
-  generated collection client, a model compiler, Svelte runes, one design system's layout
-  primitives. It encodes one product's architecture. It is a **pack, not a baseline**.
-- `none` — your authored rules are the whole rule set.
-
-A project that is not Norbital should choose `none`. Note that `none` also declines the graph tier,
-so reachability, dead exports, and cycles go unevaluated; the receipt records that as
-`tiers.graph: false` rather than implying a complete scan.
-
-### `overlaps`
-
-"You reimplemented something a library already owns."
-
-The shape detectors are library-agnostic — `Math.min(Math.max(x, lo), hi)` is a clamp in any
-ecosystem — so the binding to an owner is configuration. Point them wherever you like; a file that
-already imports the owner is exempt, because importing `es-toolkit` and then writing a loop is a
-choice about that call site rather than unawareness of the library.
-
-Shapes: `clamp`, `chunk`, `partition`, `deep-equal`, `group-by`, `unique`, `sum`.
-
-## Scope with `.doctorignore`
-
-Some source is deliberately outside a rule set's architecture: a build-time tool that cannot take
-the runtime's dependencies, a vendored corpus that exists to be malformed. `.gitignore` syntax, at
-the repository root:
-
-```
-# norbital-doctor itself must run without an Effect runtime, so the Effect rules do not describe it
-packages/doctor/engine/
-packages/doctor/src/
-```
-
-Prefer this over a row of per-line allowances: thirty allowances is not thirty reviewed exceptions,
-it is one missing setting.
+Credentials are referenced by environment-variable name and resolved from the invoking
+environment, so a config file can be shared anywhere without sharing anyone's key. Any
+OpenAI-compatible `/v1/embeddings` host works through `endpoint`; anything else fits an inline
+`provider` function.
 
 ## Tiers
 
-| Tier        | Cost                                     | Runs   |
-| ----------- | ---------------------------------------- | ------ |
-| `syntactic` | per file, pure                           | always |
-| `graph`     | whole repository, module graph           | always |
-| `typeAware` | a TypeScript program per owning tsconfig | always |
+| Pass         | Cost                                        | Runs   |
+| ------------ | ------------------------------------------- | ------ |
+| `syntactic`  | per file, pure                              | always |
+| `graph`      | whole repository, module graph              | always |
+| `typeAware`  | a TypeScript program per owning tsconfig    | always |
+| `semantic`   | embeddings + clustering (network, metered)  | always unless declined |
 
-The type-aware tier roughly doubles scan time. It used to be optional, and off, which made it
-useless for the one thing it is for: `LEGACY2` reads `@deprecated` tags that live in somebody else's
-`.d.ts`, so with the tier off its silence and its all-clear were the same result. It now always
-runs, `assess` always requires it, and `typeAware: false` in a receipt means only that the selection
-held no file a program can contain.
+The semantic tier refreshes its vector index through a Merkle diff — only changed files embed —
+clusters the repository's responsibilities (`SEM_SPREAD`, `SEM_TWIN`), and evaluates every
+pseudocode half. Its findings are hints that nominate for review; deterministic evidence decides
+gates. Every run prints and records its bill: embedded/reused counts, requests, tokens, cost when
+the provider reports it.
 
-Its scope is TypeScript and JavaScript. The compiler cannot parse `.svelte`, so a component's
-script reaches the other two tiers but not this one.
+## Scope with `.doctorignore`
+
+Some source is deliberately outside a rule set's architecture. `.gitignore` syntax at the
+repository root scopes authored rules, YAML patterns, and built-in checks identically. Prefer it
+over rows of per-line allowances.
 
 ## Programmatic use
 
 ```ts
 import { audit, assess } from '@norbital-ai/doctor';
 
-const result = await audit({ root: process.cwd() });
-console.log(result.counts, result.packs, result.authoredFindings);
+const result = await audit({ root: process.cwd(), semantic: { disabled: true } });
+console.log(result.counts, result.packs, result.semantic);
 ```
 
-Findings, the authenticating receipt, and the reports are written to `.norbital/diagnosis/`.
+Findings, the authenticating receipt, the metrics table (`metrics.tsv`), and reports are written
+to `.norbital/diagnosis/`.

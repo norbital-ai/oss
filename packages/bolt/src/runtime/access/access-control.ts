@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- access-control consumes the system-collections registry
+// over the #lib alias (SYSTEM_COLLECTION_NAMES), so the pair is linked, not parallel.
 import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import {
@@ -836,7 +838,7 @@ export const layer = Layer.effect(
 					.limit(1)
 			);
 			const row = found.rows[0];
-			if (row === null || row === undefined || typeof row !== 'object') return undefined;
+			if (row == null || typeof row !== 'object') return undefined;
 			const teamId = Reflect.get(row, 'id');
 			const teamName = Reflect.get(row, 'name');
 			if (typeof teamId !== 'string' || typeof teamName !== 'string') return undefined;

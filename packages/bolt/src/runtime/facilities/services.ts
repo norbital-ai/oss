@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- services consumes database's binding/invocation port
+// (CallContext, invokeBinding) over the #lib alias, so the pair is linked, not parallel.
 import { Context, Effect, Layer, Ref } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import type {
@@ -47,14 +49,7 @@ const AILayers = {
 		Layer.effect(
 			AIService,
 			Effect.map(Ref.make<ReadonlyMap<string, number>>(new Map()), (issued) => {
-				const distinct = (id: EffectId) =>
-					Ref.modify(issued, (current) => {
-						const used = current.get(id) ?? 0;
-						return [
-							used === 0 ? id : EffectId.make(`${id}#${used}`),
-							new Map(current).set(id, used + 1)
-						] as const;
-					});
+				const distinct = distinctIdIn(issued);
 				return AIService.of({
 					execute: Effect.fn('AI.execute')((id, request) =>
 						distinct(id).pipe(
@@ -216,17 +211,43 @@ type TransportInterface = Readonly<{
 /** Identifies the facilities service in Effect's context so dependency wiring remains explicit and type checked. */
 const TransportService = Context.Service<TransportInterface>('@norbital-ai/bolt/Transport');
 /** Owns layer behavior at the facilities boundary so validation and typed semantics stay consistent for every caller. */
+/**
+ * Distinguish repeat invocations of one id inside a facility's issued-map.
+ *
+ * The first occurrence of an id is returned unscathed; each later one is suffixed `#1`, `#2`
+ * and so on, so a facility can tell "second request with this id" from "same request again".
+ * Both facility layer factories that need this behavior once carried their own copy; the arrow
+ * is threshold-relevant enough to keep one definition.
+ */
+const distinctIdIn =
+	(issued: Ref.Ref<ReadonlyMap<string, number>>) =>
+	(id: EffectId) =>
+		Ref.modify(issued, (current) => {
+			const used = current.get(id) ?? 0;
+			return [
+				used === 0 ? id : EffectId.make(`${id}#${used}`),
+				new Map(current).set(id, used + 1)
+			] as const;
+		});
+
 const TransportLayers = {
 	make: (
 		binding: FacilityBinding<TransportRequest, TransportResponse> | undefined,
 		context: CallContext
 	) =>
-		Layer.succeed(
+		Layer.effect(
 			TransportService,
-			TransportService.of({
-				execute: Effect.fn('Transport.execute')((id, request) =>
-					invokeBinding('transport', binding, context, id, request)
-				)
+			Effect.map(Ref.make<ReadonlyMap<string, number>>(new Map()), (issued) => {
+				const distinct = distinctIdIn(issued);
+				return TransportService.of({
+					execute: Effect.fn('Transport.execute')((id, request) =>
+						distinct(id).pipe(
+							Effect.flatMap((unique) =>
+								invokeBinding('transport', binding, context, unique, request)
+							)
+						)
+					)
+				});
 			})
 		)
 };

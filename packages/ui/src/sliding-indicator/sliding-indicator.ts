@@ -140,7 +140,7 @@ export function createSlidingIndicatorScheduler(
 			const shouldAnimate = animateNext;
 			animateNext = false;
 			Effect.runFork(
-				Effect.promise(() => tick()).pipe(
+				Effect.promise(tick).pipe(
 					Effect.map(() => runMeasure(shouldAnimate)),
 					Effect.ignoreCause({
 						log: true,

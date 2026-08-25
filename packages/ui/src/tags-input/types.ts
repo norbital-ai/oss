@@ -130,7 +130,7 @@ export interface ColoredTagsInputProps extends Omit<HTMLInputAttributes, 'value'
 export const INPUT_TYPE_CONFIGS: Record<string, InputTypeConfig> = {
 	text: {
 		parse: (val: string) => val.trim() || undefined,
-		display: (val) => String(val)
+		display: String
 	},
 
 	number: {
@@ -138,7 +138,7 @@ export const INPUT_TYPE_CONFIGS: Record<string, InputTypeConfig> = {
 			const num = Number(val.trim());
 			return isNaN(num) ? undefined : num;
 		},
-		display: (val) => String(val),
+		display: String,
 		validate: (val) => typeof val === 'number' && Number.isFinite(val)
 	},
 
@@ -148,7 +148,7 @@ export const INPUT_TYPE_CONFIGS: Record<string, InputTypeConfig> = {
 			const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 			return emailRegex.test(email) ? email : undefined;
 		},
-		display: (val) => String(val)
+		display: String
 	},
 
 	tel: {
@@ -156,7 +156,7 @@ export const INPUT_TYPE_CONFIGS: Record<string, InputTypeConfig> = {
 			const phone = val.trim().replace(/\D/g, '');
 			return phone.length >= 10 ? phone : undefined;
 		},
-		display: (val) => String(val)
+		display: String
 	},
 
 	url: {
@@ -164,7 +164,7 @@ export const INPUT_TYPE_CONFIGS: Record<string, InputTypeConfig> = {
 			const url = val.trim();
 			return URL.canParse(url.startsWith('http') ? url : `https://${url}`) ? url : undefined;
 		},
-		display: (val) => String(val)
+		display: String
 	},
 
 	date: {
@@ -172,7 +172,7 @@ export const INPUT_TYPE_CONFIGS: Record<string, InputTypeConfig> = {
 			const date = new Date(val.trim());
 			return isNaN(date.getTime()) ? undefined : date.toISOString().split('T')[0];
 		},
-		display: (val) => String(val)
+		display: String
 	},
 
 	time: {
@@ -181,6 +181,6 @@ export const INPUT_TYPE_CONFIGS: Record<string, InputTypeConfig> = {
 			const time = val.trim();
 			return timeRegex.test(time) ? time : undefined;
 		},
-		display: (val) => String(val)
+		display: String
 	}
 };

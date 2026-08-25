@@ -1,0 +1,7 @@
+# An overlap binding: same detector behaviour as overlapRules, described in YAML.
+id: CLAMPKIT
+summary: local clamp reimplements es-toolkit#clamp
+severity: error
+principles: [simplicity, efficiency]
+detect: clamp
+prefer: es-toolkit#clamp

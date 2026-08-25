@@ -13,6 +13,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { defineRule } from '../pattern.js';
 import { definePack, type Pack, type Rule } from '../rules.js';
 import { readJsonObject, recordField, stringField } from '../manifest.js';
+import { nameOf } from '../nameof.js';
 
 /**
  * Path aliases a repository declares, as `prefix -> repository-relative target directory`.
@@ -280,11 +281,10 @@ const ignoredPolicyIdentity = defineRule({
 		if (owner?.body === undefined) return;
 		const parent = context.ancestors(owner)[0];
 		const ownerName =
-			'name' in owner && owner.name !== undefined && ts.isIdentifier(owner.name)
-				? owner.name.text
-				: parent !== undefined && ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)
-					? parent.name.text
-					: '';
+			nameOf(owner)?.text ??
+			(parent !== undefined && ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)
+				? parent.name.text
+				: '');
 		const policyVocabulary =
 			/(?:capacity|admission|authori[sz]|access|permissions?|policy|quota|routing?|rbac|acl|gate)/i;
 		if (!policyVocabulary.test(context.file) && !policyVocabulary.test(ownerName)) return;
@@ -712,16 +712,12 @@ const fakeGlob = defineRule({
 					import('typescript').FunctionLikeDeclaration | undefined;
 				const parent = owner === undefined ? undefined : context.ancestors(owner)[0];
 				const ownerName =
-					owner !== undefined &&
-					'name' in owner &&
-					owner.name !== undefined &&
-					ts.isIdentifier(owner.name)
-						? owner.name.text
-						: parent !== undefined &&
-							  (ts.isVariableDeclaration(parent) || ts.isPropertyAssignment(parent)) &&
-							  ts.isIdentifier(parent.name)
-							? parent.name.text
-							: '';
+					(owner === undefined ? undefined : nameOf(owner)?.text) ??
+					(parent !== undefined &&
+						(ts.isVariableDeclaration(parent) || ts.isPropertyAssignment(parent)) &&
+						ts.isIdentifier(parent.name)
+						? parent.name.text
+						: '');
 				const ownerText = owner === undefined ? '' : context.text(owner);
 				const globEntrypoint =
 					/glob/i.test(ownerName) ||

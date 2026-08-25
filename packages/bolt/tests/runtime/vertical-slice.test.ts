@@ -555,19 +555,28 @@ describe('runnable Bolt vertical slice', () => {
 	});
 
 	it('atomically admits an agent message before executing the persisted turn', async () => {
+		expect(
+			await invoke('agents.enqueue', {
+				subject,
+				agent: 'web',
+				conversationId: 'conversation-without-turn-id',
+				message: 'This legacy shape is not accepted.'
+			})
+		).toMatchObject({ _tag: 'Failure' });
 		const admitted = await invoke('agents.enqueue', {
 			subject,
 			agent: 'web',
 			conversationId: 'conversation-1',
+			turnId: 'turn-1',
 			message: 'Hello'
 		});
 		expect(admitted, JSON.stringify(admitted)).toMatchObject({
 			_tag: 'Success',
-			response: { value: { status: 'queued', turnId: 'invoke-agents.enqueue' } }
+			response: { value: { status: 'queued', turnId: 'turn-1' } }
 		});
 		const result = await invoke('agents.execute', {
 			conversationId: 'conversation-1',
-			turnId: 'invoke-agents.enqueue'
+			turnId: 'turn-1'
 		});
 		expect(result).toMatchObject({
 			_tag: 'Success',
@@ -585,6 +594,7 @@ describe('runnable Bolt vertical slice', () => {
 				subject,
 				agent: 'workspace',
 				conversationId: 'conversation-missing',
+				turnId: 'turn-missing',
 				message: 'Hello'
 			})
 		).toMatchObject({

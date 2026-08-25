@@ -34,10 +34,12 @@
 		"build": "node ../../scripts/build-package.mjs tsc -p tsconfig.json --outDir {}",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/doctor",
 		"lint": "tsc -p tsconfig.json --noEmit",
-		"test": "pnpm build && node --test engine/scripts/*.test.mjs tests/*.test.ts"
+		"test": "pnpm build && node --test engine/scripts/*.test.mjs \"tests/**/*.test.ts\""
 	},
 	"dependencies": {
-		"typescript": "catalog:"
+		"effect": "4.0.0-rc.111",
+		"typescript": "catalog:",
+		"yaml": "^2.9.0"
 	},
 	"devDependencies": {
 		"@norbital-ai/config": "workspace:*",

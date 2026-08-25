@@ -1,0 +1,13 @@
+# A language-level try/catch is the same mistake in the error channel: a thrown failure is
+# evidence shaped like prose somewhere it was never decoded. Effect's result carries the failure
+# channel instead; nothing in this workspace catches. scoped to doctor src so the fixture corpus
+# and tenant-test code keep their own shape.
+id: NO_TRYCATCH
+summary: language-level try/catch instead of the Effect result channel
+severity: error
+principles: [straightforwardness, testability]
+rule:
+  any:
+    - pattern: try { $...BODY } catch ( $...E ) { $...HANDLE }
+    - pattern: try { $...BODY } catch { $...HANDLE }
+files: ['packages/doctor/src/**']

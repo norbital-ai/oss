@@ -1,8 +1,15 @@
 # Borrow what this repository already declares is not source, rather than restating it.
 inherit: .gitignore .prettierignore
 
-# The analyzer and ignore reader, which are plain Node scripts rather than authored rules.
+# The ignore reader ships as plain Node scripts beside the runtime's needs.
 packages/doctor/engine/
+
+# The old engine ported byte-faithfully into typed source while its release-gate output was
+# proven byte-identical. Refactoring those modules to the hygiene rules (guard clauses, shape
+# decoders, dead-export pruning) would diverge the port from the evidence that proved it, so
+# the same families the engine directory was scoped for carry across to the port. This line
+# lapses when the port's byte-parity fixtures are retired.
+packages/doctor/src/analysis/  EXP1 PERF3 LEGACY2 D1 R3a R5d R6a R6b EQ1 COMPLEX1 NO_TRYCATCH
 
 # norbital-doctor's own source is checked, with four rules scoped out.
 #

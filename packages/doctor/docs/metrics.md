@@ -1,8 +1,35 @@
 # Repository-health metrics
 
-The analyzer emits report schema 8 and analyzer version 9. It sorts roots, files, graph edges,
+The analyzer emits report schema 9 and analyzer version 10. It sorts roots, files, graph edges,
 concepts, services, and findings and emits no timestamp. A repeated scan of the same canonical roots
-and bytes is byte-stable apart from an explicitly chosen output path.
+and bytes is byte-stable apart from an explicitly chosen output path. Scanner receipts are schema 6
+with scanner version 32, which add the semantic tier's coverage, identity, and spend fields
+(described in `semantic.md`).
+
+## Per-root metrics table
+
+Every audit writes `metrics.tsv` beside the catalogue: one row per function-like, per class, and
+per file, with cyclomatic, nesting, cognitive complexity, Halstead volume, Maintainability Index,
+CRAP (empty where no coverage map was supplied — absence is not zero), and LCOM for classes.
+Column order is positional contract; output is byte-stable across identical trees.
+
+- **Cognitive Complexity** follows SonarSource-style weighting: +1 per branching construct and
+  logical-operator sequence, with nesting increments for structures inside control flow. It
+  measures human reading cost where cyclomatic measures path count.
+- **Maintainability Index** = clamp to [0,100] of `(171 − 5.2·ln HV − 0.23·V(G) − 16.2·ln LOC) ×
+  100 / 171`, from AST-derived Halstead volume; empty bodies score 100.
+- **CRAP** = `V(G)² (1 − cov)³ + cov` per declaration when an istanbul-format coverage map is
+  supplied (`--coverage <path>` or auto-detected `coverage-final.json`); without coverage the
+  cell stays empty rather than pretending cov = 0.
+- **LCOM (Henderson-Sellers)** per class from `this.`-referenced instance fields; null when a
+  class has at most one method or no measurable state.
+- **Suppression density** counts `repository-health:allow`, `eslint-disable*`, `@ts-ignore`,
+  `@ts-expect-error`, `noqa`, `nosonar` per KLOC in the summary.
+- **Assertion density** summarises test sources: assertions per test function, with
+  zero-assertion tests named.
+
+The table is additive evidence and feeds no composite weight by itself; changing a composite is a
+reviewed decision, not a side effect of adding a measurement.
 
 ## Inventory and LOC
 
@@ -120,7 +147,7 @@ starts from configured tests and follows resolved value imports. It is not cover
 ## Scanner provenance and principles
 
 Static findings require exactly one canonical `.norbital/diagnosis/receipt.json` per root
-using receipt version 5 and static scanner version 30. Health verifies full production scope,
+using receipt version 6 and static scanner version 32. Health verifies full production scope,
 excluded tests, completion,
 canonical root/location, exact receipt/count fields, TSV digest and severity/principle aggregates,
 and SHA-256 forms.

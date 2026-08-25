@@ -420,8 +420,6 @@ export type InstantRangeValue = Readonly<{
 export type InstantPrecision = 'day' | 'minute';
 
 /** What an instant-range renderer offers: calendar days, or date-times. */
-export type InstantRangePrecision = InstantPrecision;
-
 export const defineModel = ColumnAuthoring.defineModel;
 export const text = ColumnAuthoring.text;
 export const numeric = ColumnAuthoring.numeric;
@@ -661,7 +659,7 @@ const CustomTypeAuthoring = {
 export const defineCustomType = CustomTypeAuthoring.define;
 
 type MoneyOptions = Readonly<{ allowedCurrencies?: ReadonlyArray<string> }>;
-type InstantRangeOptions = Readonly<{ precision?: InstantRangePrecision }>;
+type InstantRangeOptions = Readonly<{ precision?: InstantPrecision }>;
 
 const moneySchemaFor = (options: MoneyOptions = {}) => {
 	const currencies = (options.allowedCurrencies ?? []).map((currency) => currency.trim());
@@ -692,7 +690,7 @@ export const platformCustomTypes = Object.freeze({
 		name: 'money',
 		description:
 			'A monetary amount carried with its ISO 4217 currency code, so totals never silently mix currencies.',
-		schema: (options: MoneyOptions = {}) => moneySchemaFor(options)
+		schema: moneySchemaFor
 	}),
 	instant_range: defineCustomType({
 		name: 'instant_range',

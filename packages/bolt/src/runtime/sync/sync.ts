@@ -329,7 +329,7 @@ export const layer = Layer.effect(
 				// whole row over — a field-restricted policy would be enforced on every server read and then
 				// quietly undone by the replica, which persists what it receives in the browser.
 				return changes.map((change) =>
-					change.record === null || change.record === undefined
+					change.record == null
 						? change
 						: { ...change, record: maskRecord(subject, change.collection, change.record) }
 				);

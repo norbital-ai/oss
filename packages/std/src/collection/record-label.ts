@@ -100,7 +100,7 @@ const JsonContainerDecoded = Schema.decodeOption(Schema.fromJsonString(JsonConta
  * simply be left out.
  */
 export function labelTermText(value: unknown): string | null {
-	if (value === null || value === undefined) return null;
+	if (value == null) return null;
 	if (value instanceof Date) {
 		if (Number.isNaN(value.getTime())) return null;
 		const iso = value.toISOString();

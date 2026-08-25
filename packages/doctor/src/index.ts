@@ -13,16 +13,18 @@
  * time and is worth that. `typeAware: false` in a receipt now means only that the selection held no
  * file a program can contain, and `assess` refuses to consolidate a root that reports it.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { runAuthored } from './authored.js';
 import { findConfig } from './config.js';
-import { runEngine } from './engine.js';
 import { publishEvidence } from './evidence.js';
+import { buildMetrics } from './metrics/emitter.js';
+import { Effect } from 'effect';
+import * as Result from 'effect/Result';
+import * as Schema from 'effect/Schema';
+import { assembleReport } from './analysis/index.js';
 import type { Confidence, Severity } from './rules.js';
 
-export { enginePath, runEngine } from './engine.js';
-export type { EngineRun } from './engine.js';
 export { definePack } from './rules.js';
 export type {
 	Confidence,
@@ -72,6 +74,14 @@ export type { RunOptions, SourceFileOptions } from './runner.js';
 /** Where every root writes its findings, receipt, and reports. */
 export const DIAGNOSIS_DIRECTORY = '.norbital/diagnosis';
 
+/** Same discipline as the evidence writer: a temporary file, then an atomic rename. */
+function atomicWriteText(path: string, contents: string): void {
+	mkdirSync(dirname(path), { recursive: true });
+	const temporary = `${path}.${process.pid}.tmp`;
+	writeFileSync(temporary, contents);
+	renameSync(temporary, path);
+}
+
 export type Finding = Readonly<{
 	readonly severity: Severity;
 	readonly confidence: Confidence;
@@ -87,6 +97,20 @@ export type TierCoverage = Readonly<{
 	readonly syntactic: boolean;
 	readonly graph: boolean;
 	readonly typeAware: boolean;
+	/** False only when the configuration explicitly declined the tier. */
+	readonly semantic: boolean;
+}>;
+
+/** The indexing bill, recorded verbatim from the run. Absent fields mean the provider said nothing. */
+export type IndexingSpend = Readonly<{
+	readonly filesTotal: number;
+	readonly filesEmbedded: number;
+	readonly filesUnchanged: number;
+	readonly filesDeleted: number;
+	readonly apiRequests: number;
+	readonly promptTokens: number | undefined;
+	readonly costUsd: number | undefined;
+	readonly durationMs: number;
 }>;
 
 export type Receipt = Readonly<{
@@ -102,6 +126,12 @@ export type Receipt = Readonly<{
 	readonly sourceInventoryDigest: string;
 	readonly ruleSetDigest: string;
 	readonly catalogueDigest: string;
+	/** Identity of what produced the vectors; absent when the tier was declined. */
+	readonly embedderId?: string | undefined;
+	/** The committed Merkle root of the vector index; absent when the tier was declined. */
+	readonly indexDigest?: string | undefined;
+	/** The indexing bill; absent when the tier was declined. */
+	readonly indexing?: IndexingSpend | undefined;
 	readonly counts: Readonly<{
 		error: number;
 		warning: number;
@@ -119,6 +149,12 @@ export type AuditOptions = Readonly<{
 	readonly includeTests?: boolean | undefined;
 	/** Restrict the scan to these repository-relative paths. */
 	readonly paths?: ReadonlyArray<string> | undefined;
+	/**
+	 * Tier overrides for this call, above any configuration. The one that matters: declining the
+	 * semantic tier explicitly, which otherwise runs on defaults and fails loudly without a
+	 * credential.
+	 */
+	readonly semantic?: Readonly<{ disabled?: boolean | undefined }> | undefined;
 	readonly signal?: AbortSignal | undefined;
 }>;
 
@@ -131,10 +167,21 @@ export type AuditResult = Readonly<{
 	readonly counts: Readonly<Record<Severity, number>>;
 	/** Absolute path to the canonical `findings.tsv`. */
 	readonly cataloguePath: string;
+	/** Absolute path to the derived metrics table. */
+	readonly metricsPath: string;
 	/** Packs loaded from the repository's `doctor.config.ts`, if it has one. */
 	readonly packs: ReadonlyArray<string>;
 	/** How many findings came from authored rules rather than the built-in detector. */
 	readonly authoredFindings: number;
+	/** Coverage and spend of the semantic pass; `ran: false` only when explicitly declined. */
+	readonly semantic: Readonly<{
+		ran: boolean;
+		embedderId: string | undefined;
+		indexDigest: string | undefined;
+		stats: IndexingSpend | undefined;
+		clusterCount: number;
+		singletonCount: number;
+	}>;
 }>;
 
 /**
@@ -146,50 +193,74 @@ export type AuditResult = Readonly<{
  * error, never a quietly empty result.
  */
 export function decodeReceipt(text: string, path: string): Receipt {
-	let value: unknown;
-	try {
-		// Probe cannot take a schema dependency: it must analyse repositories that have none.
-		// repository-health:allow R6b -- every field read below is checked before use
-		value = JSON.parse(text);
-	} catch (error) {
-		throw new Error(
-			`norbital-doctor: ${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`
-		);
-	}
-	if (typeof value !== 'object' || value === null)
-		throw new Error(`norbital-doctor: ${path} is not a receipt object`);
-
-	// `in` narrowing reads each field as `unknown` without casting the receipt to a loose record,
-	// so every field below is checked rather than asserted.
-	if (!('tiers' in value) || typeof value.tiers !== 'object' || value.tiers === null)
-		throw new Error(`norbital-doctor: ${path} records no tier coverage`);
-	const tiers = value.tiers;
-	// Written out rather than looped: `in` narrowing applies to a literal key, not to a loop
-	// variable, so a loop would force exactly the loose-record cast this decoder avoids.
-	if (!('syntactic' in tiers) || typeof tiers.syntactic !== 'boolean')
-		throw new Error(`norbital-doctor: ${path} has no boolean "syntactic" tier`);
-	if (!('graph' in tiers) || typeof tiers.graph !== 'boolean')
-		throw new Error(`norbital-doctor: ${path} has no boolean "graph" tier`);
-	if (!('typeAware' in tiers) || typeof tiers.typeAware !== 'boolean')
-		throw new Error(`norbital-doctor: ${path} has no boolean "typeAware" tier`);
-	if (!('findings' in value) || typeof value.findings !== 'string')
-		throw new Error(`norbital-doctor: ${path} does not name its catalogue`);
-	if (!('files' in value) || typeof value.files !== 'number' || !Number.isSafeInteger(value.files))
-		throw new Error(`norbital-doctor: ${path} has no valid source count`);
-	if (!('complete' in value) || value.complete !== true)
-		throw new Error(`norbital-doctor: ${path} describes an incomplete scan`);
-
-	return {
-		...value,
-		tiers: {
-			syntactic: tiers.syntactic,
-			graph: tiers.graph,
-			typeAware: tiers.typeAware
+	const parsed = Effect.runSync(Effect.result(
+			// repository-health:allow R6b -- the parse becomes a schema decode on the next step.
+			Effect.try(() => JSON.parse(text))
+		));
+	/*
+	 * One decode at the boundary. The receipt is a received shape and is understood here and
+	 * nowhere else: the parse becomes a schema decode, and a half-written file fails as the
+	 * thing it is — evidence that never was evidence — rather than as prose.
+	 */
+	return Result.match(parsed, {
+		onFailure: (failure) => {
+			throw new Error(
+				`norbital-doctor: ${path} is not valid JSON: ${String(failure)}`
+			);
 		},
-		findings: value.findings,
-		files: value.files,
-		complete: value.complete
-	} as Receipt;
+		onSuccess: (value) => decodeReceiptShape(value, path)
+	});
+}
+
+/** The receipt schema, decoded field by field at the boundary that received it. */
+function decodeReceiptShape(value: unknown, path: string): Receipt {
+	const decoded = Effect.runSync(Effect.result(Schema.decodeUnknownEffect(ReceiptHeadSchema)(value)));
+	return Result.match(decoded, {
+		onFailure: (failure) => {
+			throw new Error(`norbital-doctor: ${path} ${receiptFailureMessage(failure, path)}`);
+		},
+		onSuccess: (receipt) => {
+			// Schema's number check accepts 1.5; a source count must be a safe integer, and the
+			// boundary says so in the message a console reader expects.
+			if (!Number.isSafeInteger(receipt.files))
+				throw new Error(`norbital-doctor: ${path} has no valid source count`);
+			return receipt as Receipt;
+		}
+	});
+}
+
+const ReceiptTierSchema = Schema.Struct({
+	syntactic: Schema.Boolean,
+	graph: Schema.Boolean,
+	typeAware: Schema.Boolean,
+	semantic: Schema.Boolean
+});
+
+const ReceiptHeadSchema = Schema.Struct({
+	tiers: ReceiptTierSchema,
+	findings: Schema.String,
+	files: Schema.Number,
+	complete: Schema.Literal(true)
+});
+
+/** Map a Schema failure to the message a scanner receipt consumer expects to read. */
+function receiptFailureMessage(failure: unknown, path: string): string {
+	const text = String(failure);
+	const segments = [...text.matchAll(/\[([^\]]+)\]/g)].map((match) => match[1] ?? '');
+	const slot = segments[segments.length - 1] ?? '';
+	if (text.includes('Expected object') && segments.length === 0) return 'is not a receipt object';
+	const tierSlots = new Set(['syntactic', 'graph', 'typeAware', 'semantic']);
+	if (segments[0] === '"tiers"' && tierSlots.has(clean(slot)))
+		return `has no boolean "${clean(slot)}" tier`;
+	if (segments[0] === '"tiers"') return 'records no tier coverage';
+	if (slot === '"findings"') return 'does not name its catalogue';
+	if (slot === '"files"') return 'has no valid source count';
+	if (slot === '"complete"') return 'describes an incomplete scan';
+	return `cannot be read as evidence (${text.slice(0, 60)})`;
+}
+
+function clean(value: string): string {
+	return value.replace(/"/g, '');
 }
 
 /** Parse the canonical tab-separated catalogue the scanner publishes. */
@@ -234,6 +305,7 @@ export async function audit(options: AuditOptions = {}): Promise<AuditResult> {
 		root,
 		includeTests: options.includeTests ?? false,
 		paths: options.paths ?? [],
+		semanticDisabled: options.semantic?.disabled === true,
 		signal: options.signal
 	});
 
@@ -247,12 +319,23 @@ export async function audit(options: AuditOptions = {}): Promise<AuditResult> {
 		);
 	const counts: Record<Severity, number> = { error: 0, hint: 0 };
 	for (const finding of authored.findings) counts[finding.severity] += 1;
+
+	// The metrics table is derived evidence: pure computation over sources this audit already
+	// trusts, written beside the catalogue so consolidated reports can cite it without parsing.
+	const metrics = buildMetrics({
+		root,
+		files: authored.allFiles
+	});
+	atomicWriteText(join(root, DIAGNOSIS_DIRECTORY, 'metrics.tsv'), metrics.tsv);
+
 	const receipt = publishEvidence({
 		root,
 		findings: authored.findings,
 		authoredRuleSetDigest: authored.ruleSetDigest,
-		graph: authored.base !== 'none',
+		// The graph pass is part of the neutral baseline and always runs.
+		graph: true,
 		typeAware: authored.typeAware.ran,
+		semantic: authored.semantic,
 		allFiles: authored.allFiles,
 		selectedFileCount: authored.selectedFiles.length,
 		scope: options.paths?.length ? 'path' : 'all',
@@ -265,8 +348,17 @@ export async function audit(options: AuditOptions = {}): Promise<AuditResult> {
 		status: counts.error > 0 ? 1 : 0,
 		counts,
 		cataloguePath: join(root, DIAGNOSIS_DIRECTORY, 'findings.tsv'),
+		metricsPath: join(root, DIAGNOSIS_DIRECTORY, 'metrics.tsv'),
 		packs: authored.packs,
-		authoredFindings: authored.findings.length
+		authoredFindings: authored.findings.length,
+		semantic: {
+			ran: authored.semantic.ran,
+			embedderId: authored.semantic.embedderId,
+			indexDigest: authored.semantic.indexDigest,
+			stats: authored.semantic.stats,
+			clusterCount: authored.semantic.clusterCount,
+			singletonCount: authored.semantic.singletonCount
+		}
 	};
 }
 
@@ -292,16 +384,17 @@ export async function assess(
 	// repository-health:allow A6 -- roots are scanned one at a time on purpose
 	for (const root of roots) await audit({ ...options, root });
 
-	const argv: Array<string> = [];
-	for (const root of roots) {
-		argv.push('--root', root, '--receipt', join(root, DIAGNOSIS_DIRECTORY, 'receipt.json'));
-	}
-	// Always required, because the tier always runs: a root whose receipt reports otherwise is
-	// describing a scan this consolidation cannot speak for.
-	argv.push('--require-type-aware');
-	argv.push('--format', options.format ?? (options.out ? 'both' : 'json'));
-	if (options.out) argv.push('--out', options.out);
-
-	const run = await runEngine('analyze', argv, { signal: options.signal });
-	return { status: run.status, report: run.stdout, stderr: run.stderr };
+	// Consolidation runs in-process now: the analyzer is typed source, byte-proven against the
+	// `.mjs` it replaced, and a subprocess bought nothing but an exec boundary. The receipt of
+	// every root is handed over explicitly, exactly as the argv form did.
+	const run = assembleReport({
+		roots,
+		receipts: roots.map((root) => join(root, DIAGNOSIS_DIRECTORY, 'receipt.json')),
+		// Always required, because the tier always runs: a root whose receipt reports otherwise
+		// is describing a scan this consolidation cannot speak for.
+		requireTypeAware: true,
+		format: options.format ?? (options.out ? 'both' : 'json'),
+		out: options.out
+	});
+	return { status: run.exitCode, report: run.stdout, stderr: '' };
 }

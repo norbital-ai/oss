@@ -54,11 +54,18 @@ describe('agent prompt window', () => {
 			);
 		}
 		const admitted = await harness.runtime.runPromise(
-			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', 'prompt-window', {
-				kind: 'user_message',
-				text: 'continue',
-				documents: []
-			})
+			agents.enqueue(
+				harness.effectId('enqueue'),
+				adminSubject,
+				'web',
+				'prompt-window',
+				'turn-latest',
+				{
+					kind: 'user_message',
+					text: 'continue',
+					documents: []
+				}
+			)
 		);
 		await harness.runtime.runPromise(
 			agents.execute(harness.effectId('execute'), 'prompt-window', admitted.turnId)

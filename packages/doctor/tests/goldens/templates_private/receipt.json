@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 5,
+  "kind": "repository-health-static-receipt",
+  "scannerVersion": 31,
+  "root": "/Users/neowenshun/developer/norbital_realm/templates_private",
+  "scope": "all",
+  "includeTests": false,
+  "tiers": {
+    "syntactic": true,
+    "graph": true,
+    "typeAware": true
+  },
+  "files": 112,
+  "findings": "findings.tsv",
+  "sourceInventoryDigest": "sha256:bb64ed8914e9b71e7774fafaae724471f8982c9759975f7bc45a8739cd95ee9d",
+  "ruleSetDigest": "sha256:e11c3fcaf880c674286e73944e543d66d787f5209cc0db7cd5c811c6c9c3eb54",
+  "catalogueDigest": "sha256:b7c6591a5d7425b48beec9e67c317ef3e15aad33d80d904465891afbfc9d782b",
+  "counts": {
+    "error": 4,
+    "warning": 0,
+    "hint": 0,
+    "total": 4,
+    "principles": {
+      "simplicity": 4,
+      "straightforwardness": 3,
+      "modularity": 0,
+      "testability": 0,
+      "efficiency": 1,
+      "typeSafety": 0,
+      "colocation": 0,
+      "noBloat": 4
+    }
+  },
+  "complete": true
+}

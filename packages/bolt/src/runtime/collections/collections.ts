@@ -2760,7 +2760,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						}
 					}
 					for (const [key, value] of Object.entries(payload)) {
-						if (key === 'id' || key in definition.fields || SYSTEM_COLUMN_NAMES.includes(key))
+						if (key === 'id' || Object.hasOwn(definition.fields, key) || SYSTEM_COLUMN_NAMES.includes(key))
 							continue;
 						const relation = resolveWritableManyRelation(workspace.definition, collection, key);
 						if (relation === undefined || !Array.isArray(value)) continue;
@@ -2988,7 +2988,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						readonly rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
 					}> = [];
 					for (const [key, value] of Object.entries(values)) {
-						if (key in definition.fields || SYSTEM_COLUMN_NAMES.includes(key)) {
+						if (Object.hasOwn(definition.fields, key) || SYSTEM_COLUMN_NAMES.includes(key)) {
 							own[key] = value as Schema.Json;
 							continue;
 						}

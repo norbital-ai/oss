@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- mcp.ts consumes agent-errors' McpToolError over the
+// #lib alias, so the pair is linked, not parallel.
 import { Effect, Schema } from 'effect';
 import type { EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import type { McpToolRoute } from '#lib/authoring/workspace-schema.js';

@@ -70,16 +70,23 @@ const AuthoredEnvoy = Schema.Struct({
 	delegation: Schema.optionalKey(Schema.Literals(['enabled', 'disabled']))
 });
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-	typeof value === 'object' && value !== null && !Array.isArray(value);
+const jsonObject = Schema.Record(Schema.String, Schema.Unknown);
+
+/** The decoded-failure fallback, once, typed without a cast: an empty map is never reached. */
+const EMPTY_RECORD: Record<string, unknown> = Object.freeze({});
 
 function requireExactKeys(
 	value: unknown,
 	allowed: ReadonlySet<string>,
 	location: string
 ): asserts value is Record<string, unknown> {
-	if (!isRecord(value)) throw new TypeError(`${location} must be an object.`);
-	const unexpected = Object.keys(value).filter((key) => !allowed.has(key));
+	const decoded = Schema.decodeUnknownResult(jsonObject)(value);
+	if (Result.isFailure(decoded)) throw new TypeError(`${location} must be an object.`);
+	const record: Record<string, unknown> =
+		Result.isSuccess(decoded)
+			? Result.match(decoded, { onSuccess: (object) => object, onFailure: () => EMPTY_RECORD })
+			: EMPTY_RECORD;
+	const unexpected = Object.keys(record).filter((key) => !allowed.has(key));
 	if (unexpected.length > 0) {
 		throw new TypeError(`${location} has unsupported ${unexpected.join(', ')} key(s).`);
 	}
@@ -127,7 +134,8 @@ const validateGrantShape = (
 	const typedAction = action as PolicyAction;
 	const location = `Policy ${name}.grants.${collection}.${action}`;
 	requireExactKeys(grant, grantKeys(typedAction), location);
-	if ('authorize' in grant && typeof grant.authorize !== 'function') {
+	const authorize = Reflect.get(grant, 'authorize');
+	if (authorize !== undefined && typeof authorize !== 'function') {
 		throw new TypeError(`${location}.authorize must be a function.`);
 	}
 	validateGrantFields(grant, location);
@@ -137,12 +145,17 @@ const validateGrantShape = (
 const validatePolicyShape = (name: string, declaration: unknown): void => {
 	requireExactKeys(declaration, POLICY_KEYS, `Policy ${name}`);
 	const grants = declaration.grants;
-	if (!isRecord(grants)) {
+	const grantsDecoded = Schema.decodeUnknownResult(jsonObject)(grants);
+	if (Result.isFailure(grantsDecoded)) {
 		throw new TypeError(
 			`Policy ${name}.grants must be a collection/action object. Grant arrays are not supported.`
 		);
 	}
-	for (const [collection, collectionGrants] of Object.entries(grants)) {
+	const grantMap: Record<string, unknown> =
+		Result.isSuccess(grantsDecoded)
+			? Result.match(grantsDecoded, { onSuccess: (object) => object, onFailure: () => EMPTY_RECORD })
+			: EMPTY_RECORD;
+	for (const [collection, collectionGrants] of Object.entries(grantMap)) {
 		requireExactKeys(collectionGrants, ACTION_KEYS, `Policy ${name}.grants.${collection}`);
 		for (const [action, grant] of Object.entries(collectionGrants)) {
 			validateGrantShape(name, collection, action, grant);
@@ -184,14 +197,21 @@ const describeGrant = (
 		authorizations.set(id, grant.authorize as PolicyRuntimeFunction);
 		Object.assign(described, { authorization: { id, live: true } });
 	}
-	if (isRecord(grant.approval)) {
+	const approvalDecoded = Schema.decodeUnknownResult(jsonObject)(grant.approval);
+	if (Result.isSuccess(approvalDecoded)) {
+		const approval: Record<string, unknown> =
+			Result.isSuccess(approvalDecoded)
+				? Result.match(approvalDecoded, { onSuccess: (object) => object, onFailure: () => EMPTY_RECORD })
+				: EMPTY_RECORD;
 		const id = approvalConfigurationId(policyName, collection, action);
-		approvalFlows.set(id, grant.approval.flow as PolicyRuntimeFunction);
+		approvalFlows.set(id, approval.flow as PolicyRuntimeFunction);
 		Object.assign(described, {
 			approval: {
 				id,
 				flow: true,
-				superceded_by: Object.freeze([...(grant.approval.superceded_by as ReadonlyArray<string>)])
+				superceded_by: Object.freeze([
+					...(approval.superceded_by as ReadonlyArray<string>)
+				])
 			}
 		});
 	}

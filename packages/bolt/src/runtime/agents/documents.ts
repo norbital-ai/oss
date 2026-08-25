@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- documents consumes chat-messages' ChatDocumentRef
+// (./chat-messages.js), so the pair is linked, not parallel.
 import { Context, Effect, Layer, Schema } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import { and, eq } from 'drizzle-orm';

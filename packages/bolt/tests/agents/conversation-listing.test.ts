@@ -148,6 +148,7 @@ describe('agent conversation inbox authority', () => {
 					adminSubject,
 					'web',
 					'atomic-conversation',
+					'atomic-turn',
 					{ kind: 'user_message', text: 'Run payroll', documents: [] }
 				);
 			})
@@ -167,6 +168,89 @@ describe('agent conversation inbox authority', () => {
 			['atomic-conversation']
 		);
 		expect(counts[0]).toEqual({ sessions: 1, messages: 2, mailboxes: 1, tasks: 1, runs: 1 });
+		expect(
+			await runtime.database.query(
+				`select distinct collection_name
+				 from bolt_sync_outbox
+				 where collection_name in ('chat_session', 'chat_message', 'agent_mailbox', 'agent_run')
+				 order by collection_name`
+			)
+		).toEqual([
+			{ collection_name: 'agent_mailbox' },
+			{ collection_name: 'agent_run' },
+			{ collection_name: 'chat_message' },
+			{ collection_name: 'chat_session' }
+		]);
+
+		// A lost HTTP response is retried under the caller-owned turn id. Every insert is idempotent,
+		// including the two transcript rows, so the retry is the same admission rather than a second turn.
+		await runtime.runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Agents.Service).enqueue(
+					runtime.effectId('atomic-admission-retry'),
+					adminSubject,
+					'web',
+					'atomic-conversation',
+					'atomic-turn',
+					{ kind: 'user_message', text: 'Run payroll', documents: [] }
+				);
+			})
+		);
+		const afterRetry = await runtime.database.query(
+			`select
+				(select count(*)::int from chat_session where conversation_id = $1) as sessions,
+				(select count(*)::int from chat_message where conversation_id = $1) as messages,
+				(select count(*)::int from agent_mailbox where conversation_id = $1) as mailboxes,
+				(select count(*)::int from bolt_task where lane = $1) as tasks,
+				(select count(*)::int from agent_run where conversation_id = $1) as runs`,
+			['atomic-conversation']
+		);
+		expect(afterRetry[0]).toEqual({ sessions: 1, messages: 2, mailboxes: 1, tasks: 1, runs: 1 });
+		// A fresh query has no admission response or component state to lean on. It sees the same
+		// persisted transcript and queue projection a remounted sync client will reconstruct.
+		expect(
+			await runtime.database.query(
+				`select
+					(select title from chat_session where conversation_id = $1) as title,
+					(select content->>'text' from chat_message
+					 where conversation_id = $1 and turn_id = $2 and role = 'user') as message,
+					(select status from agent_mailbox where conversation_id = $1) as mailbox_status,
+					(select status from agent_run where conversation_id = $1 and turn_id = $2) as run_status`,
+				['atomic-conversation', 'atomic-turn']
+			)
+		).toEqual([
+			{
+				title: 'Run payroll',
+				message: 'Run payroll',
+				mailbox_status: 'active',
+				run_status: 'queued'
+			}
+		]);
+
+		await expect(
+			runtime.runtime.runPromise(
+				Effect.gen(function* () {
+					return yield* (yield* Agents.Service).enqueue(
+						runtime.effectId('atomic-admission-conflict'),
+						adminSubject,
+						'web',
+						'conflicting-conversation',
+						'atomic-turn',
+						{ kind: 'user_message', text: 'Different work', documents: [] }
+					);
+				})
+			)
+		).rejects.toBeDefined();
+		const conflicting = await runtime.database.query(
+			`select
+				(select count(*)::int from chat_session where conversation_id = $1) as sessions,
+				(select count(*)::int from chat_message where conversation_id = $1) as messages,
+				(select count(*)::int from agent_mailbox where conversation_id = $1) as mailboxes,
+				(select count(*)::int from bolt_task where lane = $1) as tasks,
+				(select count(*)::int from agent_run where conversation_id = $1) as runs`,
+			['conflicting-conversation']
+		);
+		expect(conflicting[0]).toEqual({ sessions: 0, messages: 0, mailboxes: 0, tasks: 0, runs: 0 });
 	});
 
 	it('keeps personal threads isolated and exposes only exact declared-public envoy rows to admins', async () => {

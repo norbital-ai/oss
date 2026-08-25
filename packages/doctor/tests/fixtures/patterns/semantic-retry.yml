@@ -1,0 +1,9 @@
+# Pseudocode only: no structural claim, so the rule never fires and the query travels to the
+# semantic pass at the default threshold.
+id: SEMRETRY
+summary: retry policy deserves the semantic pass
+severity: hint
+principles: [testability]
+pseudocode: >
+  a loop that retries an operation with exponential backoff
+  and gives up once a time budget is spent

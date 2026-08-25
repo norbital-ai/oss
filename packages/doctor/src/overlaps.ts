@@ -235,6 +235,11 @@ const DETECTORS: Readonly<Record<OverlapShape, Detector>> = {
 	}
 };
 
+/** The shapes a binding may name, for configuration surfaces that validate before building. */
+export const OVERLAP_SHAPES: ReadonlyArray<OverlapShape> = Object.keys(
+	DETECTORS
+) as OverlapShape[];
+
 /** Build one rule per configured binding. */
 export function overlapRules(bindings: ReadonlyArray<OverlapBinding>): ReadonlyArray<Rule> {
 	return bindings.map((binding) => {

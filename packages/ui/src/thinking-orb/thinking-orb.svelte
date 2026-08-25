@@ -454,7 +454,7 @@
 	.norbital-thinking-orb {
 		--orb-accent: var(--product-icon-accent, var(--color-brand));
 		position: relative;
-		display: inline-grid;
+		display: grid;
 		width: var(--orb-size);
 		height: var(--orb-size);
 		flex: none;

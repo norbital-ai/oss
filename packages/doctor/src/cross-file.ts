@@ -14,8 +14,9 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
+import { nameOf } from './nameof.js';
 import type { Finding, Severity } from './index.js';
-import { isRecord, readJsonObject, recordField } from './manifest.js';
+import { jsonRecord, readJsonObject, recordField } from './manifest.js';
 import type { Principle } from './rules.js';
 
 /** One parsed file, as the pass needs it. */
@@ -251,7 +252,7 @@ function declaredEntries(
 		if (fromSource !== undefined) roots.add(fromSource);
 		return;
 	}
-	const nested = Array.isArray(value) ? value : isRecord(value) ? Object.values(value) : [];
+	const nested = Array.isArray(value) ? value : jsonRecord(value) ? Object.values(jsonRecord(value) ?? {}) : [];
 	for (const entry of nested) declaredEntries(manifest, entry, files, roots);
 }
 
@@ -483,10 +484,7 @@ export function runCrossFile(options: CrossFileOptions): ReadonlyArray<Finding> 
 		const visit = (node: ts.Node): void => {
 			const hash = bodyHash(node, parsed.sourceFile);
 			if (hash !== undefined) {
-				const name =
-					'name' in node && node.name !== undefined && ts.isIdentifier(node.name as never)
-						? (node.name as ts.Identifier).text
-						: '(anonymous)';
+				const name = nameOf(node)?.text ?? '(anonymous)';
 				const list = bodies.get(hash) ?? [];
 				list.push({ parsed, node, name });
 				bodies.set(hash, list);

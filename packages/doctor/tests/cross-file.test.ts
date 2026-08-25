@@ -42,7 +42,7 @@ export const check = (): number => testOnly();
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
-	const result = await audit({ root });
+	const result = await audit({ root, semantic: { disabled: true } });
 	const dead = result.findings
 		.filter((finding) => finding.rule === 'EXP1')
 		.map((finding) => finding.location);
@@ -73,7 +73,7 @@ export const check = (): number => support();
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
-	const result = await audit({ root });
+	const result = await audit({ root, semantic: { disabled: true } });
 	assert.equal(
 		result.findings.some((finding) => finding.rule === 'FILE1'),
 		false
@@ -103,7 +103,7 @@ test('a duplicate body is debt only where the two copies could share an owner', 
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
-	const across = await audit({ root });
+	const across = await audit({ root, semantic: { disabled: true } });
 	assert.equal(
 		across.findings.some((finding) => finding.rule === 'D1'),
 		false
@@ -128,7 +128,7 @@ test('a duplicate body inside one package is still reported', async (context) =>
 	});
 	context.after(() => rmSync(root, { recursive: true, force: true }));
 
-	const within = await audit({ root });
+	const within = await audit({ root, semantic: { disabled: true } });
 	assert.equal(
 		within.findings.some((finding) => finding.rule === 'D1'),
 		true

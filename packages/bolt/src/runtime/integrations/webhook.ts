@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- webhook consumes absorb's absorbRecords over the #lib
+// alias, so the pair is linked, not parallel.
 import { Effect, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
 import type { AuthoredIntegrationBinding } from '#lib/authoring/integration-introspection.js';

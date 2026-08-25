@@ -41,13 +41,10 @@ const metaContent = (source: string, metaName: string): string | null => {
 const taggedMeta = (source: string, name: string): string | null =>
 	metaContent(source, `bolt:${name}`);
 
-/** A plain HTML meta tag, such as `description`. */
-const namedMeta = (source: string, name: string): string | null => metaContent(source, name);
-
 /** Reads static app identity from `<svelte:head>`. */
 export const extractAppMetadata = (source: string): AppMetadata => ({
 	title: decodeHtmlEntities(source.match(/<title>([^<]*)<\/title>/i)?.[1]?.trim() ?? null),
-	description: namedMeta(source, 'description'),
+	description: metaContent(source, 'description'),
 	icon: taggedMeta(source, 'icon'),
 	thumbnail: taggedMeta(source, 'thumbnail'),
 	banner: taggedMeta(source, 'banner')

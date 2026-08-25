@@ -35,4 +35,23 @@ describe('agent UI source audit', () => {
 		expect(panel).toContain('runtime.client.system.agents[action]');
 		expect(panel).not.toMatch(/setInterval|setTimeout|EventSource|WebSocket/);
 	});
+
+	it('reconciles an unknown admission only from its persisted sync projection', () => {
+		const panel = readFileSync(join(boltAgent, 'agent-chat-panel.svelte'), 'utf8');
+		const send = panel.slice(
+			panel.indexOf('function send()'),
+			panel.indexOf('function uploadDocument')
+		);
+		expect(panel).toContain('unsettledAdmission');
+		expect(panel).toContain('where: { task_id: { eq: unsettledAdmission.turnId } }');
+		expect(panel).toContain('unsettledRunQuery?.current?.some');
+		expect(panel).toContain('retryableAdmission(unsettledAdmission');
+		expect(panel).toContain('pending: agentWorking');
+		expect(panel).toContain('failed: failure != null');
+		expect(send.indexOf('session.echo = null')).toBeLessThan(send.indexOf('agentClient.start'));
+		expect(send.indexOf('session.echo = admission?.message')).toBeGreaterThan(
+			send.indexOf('agentClient.start')
+		);
+		expect(panel).not.toMatch(/setInterval|setTimeout|EventSource|WebSocket/);
+	});
 });

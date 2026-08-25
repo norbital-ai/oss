@@ -18,6 +18,7 @@ const AgentOpenInput = Schema.Struct({
 const AgentEnqueueInput = Schema.Struct({
 	agent: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
+	turnId: Schema.NonEmptyString,
 	message: Schema.String,
 	documents: Schema.optionalKey(Schema.Array(ChatDocumentRef))
 });

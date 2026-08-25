@@ -1,0 +1,13 @@
+# A relational combinator: the await must sit somewhere inside a counted `for` loop.
+# The matcher honours one key per object and reads `stopBy` beside the relational key,
+# so an atomic claim and a relational one compose through `all`.
+id: LOOPEDAWAIT
+summary: an await inside a counted loop serialises what could run concurrently
+severity: hint
+principles: [efficiency]
+rule:
+  all:
+    - pattern: await $PROMISE
+    - inside:
+        kind: ForStatement
+      stopBy: end

@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- pglite-loader adapts the engine to the replica store's
+// PGliteLike port over the #lib alias, so the pair is linked, not parallel.
 import type { PGliteLike, ProvisioningStep } from '#lib/client/replica/pglite-sql.js';
 import { Effect } from 'effect';
 import type { PGliteInterface } from '@electric-sql/pglite';
@@ -22,8 +24,6 @@ import type { PGliteInterface } from '@electric-sql/pglite';
  * rather than merely wasting the work. PGlite elects a leader across tabs through the Web Locks API;
  * only the leader holds the database and the rest proxy to it, so they all read the same rows.
  */
-
-import { PGliteWorker } from '@electric-sql/pglite/worker';
 
 type SharedPGlite = PGliteInterface & {
 	readonly isLeader?: boolean;
@@ -72,6 +72,11 @@ export const openPGlite = Effect.fn('Replica.openPGlite')(function* (
 	const engine = yield* Effect.sync(
 		() => new Worker(new URL('./pglite-worker.js', import.meta.url), { type: 'module' })
 	);
+	// The worker client is the large browser dependency this module exists to defer. A value import at
+	// module scope pulled it into the generated client's initial graph even though replica startup was
+	// called later; importing it here makes startup, not module evaluation, the first point that can
+	// fetch or evaluate PGlite.
+	const { PGliteWorker } = yield* Effect.tryPromise(() => import('@electric-sql/pglite/worker'));
 	// `id` is the leader-election key. Scoping it to the workspace keeps two open workspaces from
 	// electing one leader between them and proxying one's queries into the other's database.
 	const database = yield* Effect.tryPromise(() =>

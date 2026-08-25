@@ -189,13 +189,6 @@ describe('a browser replica against a real server', () => {
 		const transport = transportFor(harness);
 		const client = await Effect.runPromise(
 			createSyncClient({
-				transport: {
-					head: () => Effect.succeed({ xid: 0, sequence: 0 }),
-					diff: (cursor, limit) =>
-						transport
-							.command('sync.diff', { cursor, limit })
-							.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Sync.SyncChange))))
-				},
 				sink: {
 					apply: (changes) => Effect.forEach(changes, replica.store.applyChange, { discard: true }),
 					reset: replica.store.reset
@@ -203,7 +196,23 @@ describe('a browser replica against a real server', () => {
 				initialCursor: replica.cursor
 			})
 		);
-		expect(await Effect.runPromise(client.drain())).toBeGreaterThan(0);
+		// The host reads the outbox from this replica's cursor and puts each permission-filtered page on
+		// the stream; the client applies the batches it receives. Walking that same path here keeps the
+		// test on the production apply loop without standing up a network.
+		const drain = async (): Promise<number> => {
+			let applied = 0;
+			for (;;) {
+				const changes = await Effect.runPromise(
+					transport
+						.command('sync.diff', { cursor: client.cursor(), limit: 200 })
+						.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Sync.SyncChange))))
+				);
+				if (changes.length === 0) return applied;
+				applied += await Effect.runPromise(client.apply(changes));
+				if (changes.length < 200) return applied;
+			}
+		};
+		expect(await drain()).toBeGreaterThan(0);
 
 		// Converged: the seeded row and the streamed one, with the update merged onto it.
 		expect(
@@ -228,7 +237,7 @@ describe('a browser replica against a real server', () => {
 				);
 			})
 		);
-		await Effect.runPromise(client.drain());
+		await drain();
 		expect(
 			(
 				await localRows(replica, {

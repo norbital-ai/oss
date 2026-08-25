@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- finder-entity consumes CommandScope over the #lib alias
+// (#lib/client/ui/agent/mention-sources.js), so the pair is linked, not parallel.
 import type { CommandItemData } from '@norbital-ai/ui/command';
 import type { CommandScope } from '#lib/client/ui/agent/mention-sources.js';
 

@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- local-reads consumes the replica store over the #lib
+// alias (#lib/client/replica/pglite-sql.js), so the pair is linked, not parallel.
 import { Effect, Result, Schema } from 'effect';
 import {
 	compileOrderTerms,

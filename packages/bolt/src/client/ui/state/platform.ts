@@ -95,7 +95,7 @@ export class LatestQuery<T> {
 		// A newer run supersedes the one in flight: the old fiber is interrupted, so its result can
 		// never land after the new query's.
 		this.#fiber?.interruptUnsafe();
-		const fiber = Effect.runFork(Effect.tryPromise((signal) => query(signal)));
+		const fiber = Effect.runFork(Effect.tryPromise(query));
 		this.#fiber = fiber;
 		return Effect.runPromise(
 			Fiber.await(fiber).pipe(

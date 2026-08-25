@@ -379,7 +379,7 @@ export const testWorkspace = (input: TestWorkspaceInput = {}): WorkspaceDefiniti
 			input.collections ?? [
 				{ name: 'people', fields: { name: field.string({ required: true }), team: field.string() } }
 			]
-		).map((entry) => collection(entry)),
+		).map(collection),
 		apps: [],
 		policies: input.policies ?? [
 			policy({

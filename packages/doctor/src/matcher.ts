@@ -19,6 +19,8 @@
  *
  * A better matcher does not rescue a rule watching the wrong evidence. It only removes the excuse.
  */
+import { Effect } from 'effect';
+import * as Result from 'effect/Result';
 import ts from 'typescript';
 import type { NodeKind } from './rules.js';
 
@@ -141,12 +143,13 @@ export function withUtils<T>(utils: Utils, compileTree: () => T): T {
 			run: (node, source, bindings) => (resolved ??= compile(rule)).run(node, source, bindings)
 		});
 	}
-	try {
-		return compileTree();
-	} finally {
-		utilities.clear();
-		for (const [name, value] of previous) utilities.set(name, value);
-	}
+	const outcome = Effect.runSync(Effect.result(Effect.try(() => compileTree())));
+	utilities.clear();
+	for (const [name, value] of previous) utilities.set(name, value);
+	if (Result.isFailure(outcome))
+		throw Result.match(outcome, { onFailure: (error) => error, onSuccess: () => undefined });
+	const tree = Result.match(outcome, { onSuccess: (value) => value, onFailure: () => undefined });
+	return tree as T;
 }
 
 /** The first descendant of a given kind, which is how `selector` narrows a `context` pattern. */
@@ -225,11 +228,10 @@ function children(node: ts.Node): ReadonlyArray<ts.Node> {
 }
 
 function textOf(node: ts.Node, source: ts.SourceFile): string {
-	try {
-		return node.getText(source).replace(/\s+/g, ' ').trim();
-	} catch {
-		return '';
-	}
+	const text = Effect.runSync(
+		Effect.result(Effect.try(() => node.getText(source).replace(/\s+/g, ' ').trim()))
+	);
+	return Result.match(text, { onSuccess: (t) => t, onFailure: () => '' });
 }
 
 function variadicName(node: ts.Node): string | undefined {
@@ -426,6 +428,11 @@ type Compiled = Readonly<{
 }>;
 
 /** Compile a matcher once, so dispatch and matching do no parsing per node. */
+/** A matcher payload read out of an optional `nthChild` slot, reinterpreted once, named. */
+function ruleFrom(value: unknown): Matcher {
+	return value as Matcher;
+}
+
 export function compile(matcher: Matcher): Compiled {
 	if (typeof matcher === 'string') return compile({ pattern: matcher });
 
@@ -682,12 +689,11 @@ export function metavariablesOf(matcher: Matcher): ReadonlySet<string> {
 			if (Array.isArray(branch)) branch.forEach(walk);
 		}
 		if ('of' in current) current.of.forEach(walk);
-		if (
-			'nthChild' in current &&
-			typeof current.nthChild === 'object' &&
-			current.nthChild.ofRule !== undefined
-		)
-			walk(current.nthChild.ofRule);
+		const nth = Reflect.get(current, 'nthChild');
+		if (typeof nth === 'object' && nth !== null) {
+			const ofRule = Reflect.get(nth, 'ofRule');
+			if (ofRule !== undefined) walk(ruleFrom(ofRule));
+		}
 	};
 	walk(matcher);
 	return found;

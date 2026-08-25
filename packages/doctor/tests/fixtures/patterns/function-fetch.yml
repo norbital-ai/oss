@@ -1,0 +1,12 @@
+# The other direction: a function declaration containing a raw fetch anywhere in its body.
+# `kind` alone would dispatch without constraining the body; `all` binds the two halves.
+id: EXPORTEDFETCH
+summary: an exported function issues raw fetch calls
+severity: hint
+principles: [modularity]
+rule:
+  all:
+    - kind: FunctionDeclaration
+    - has:
+        pattern: fetch($URL)
+      stopBy: end

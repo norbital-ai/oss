@@ -1,30 +1,20 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { subscribeToChanges, type EventSourceLike } from '../../src/client/replica/subscribe.js';
 import { setWorkspaceSession } from '../../src/client/session.js';
+import type { SyncChange, SyncCursor } from '../../src/runtime/sync/sync.js';
 
-/**
- * The listener that replaced the poll.
- *
- * The behaviour worth pinning is what happens when things go wrong: a stream that errors must not
- * stop delivering, and a frame that cannot be read must not be silently ignored.
- */
+/** The browser receives typed outbox deltas, not wake hints followed by a browser diff request. */
 
-/** Where this test's host says its stream lives. Not a path the framework knows — see below. */
 const STREAM_URL = 'https://host.invalid/tenant/abc/_bolt/sync/stream';
+const cursor: SyncCursor = { xid: 7, sequence: 3 };
+const change: SyncChange = {
+	cursor: { xid: 7, sequence: 4 },
+	collection: 'leave_requests',
+	recordId: 'leave-1',
+	operation: 'update',
+	record: { status: 'approved' }
+};
 
-/**
- * The session the host declares before any workspace surface reads.
- *
- * Required now, and that is the substantive change these tests had to absorb. The stream address
- * used to be a `SYNC_STREAM_PATH` constant exported from the replica — one host's route compiled
- * into the framework, so the replica only ever heard about changes while it happened to be running
- * inside that host. It is now `WorkspaceSession.syncStreamUrl`, stated by whoever mounts the
- * workspace, and `workspaceSession()` refuses rather than defaulting when nobody has stated it.
- *
- * So a test that declares nothing no longer exercises the subscription at all: the refusal is
- * caught as "no EventSource here", every listener goes unregistered, and the assertions below fail
- * for a reason that has nothing to do with what they are about.
- */
 const declareSession = (): void => {
 	setWorkspaceSession({
 		tenantId: 'test-tenant',
@@ -54,7 +44,7 @@ const declareSession = (): void => {
 };
 
 const stubSource = () => {
-	const listeners = new Map<string, (event: { data?: string }) => void>();
+	const listeners = new Map<string, (event: { data?: string; lastEventId?: string }) => void>();
 	let closed = false;
 	const source: EventSourceLike = {
 		addEventListener: (type, listener) => listeners.set(type, listener),
@@ -65,110 +55,112 @@ const stubSource = () => {
 	};
 	return {
 		source,
-		urls: [] as Array<string>,
-		emit: (type: string, data?: string) =>
-			listeners.get(type)?.({ ...(data === undefined ? {} : { data }) }),
+		emit: (type: string, data?: string, lastEventId?: string) =>
+			listeners.get(type)?.({
+				...(data === undefined ? {} : { data }),
+				...(lastEventId === undefined ? {} : { lastEventId })
+			}),
 		fail: (cause: unknown) => source.onerror?.(cause),
 		isClosed: () => closed
 	};
 };
 
-describe('subscribing to change announcements', () => {
+describe('subscribing to database changes', () => {
 	beforeEach(declareSession);
 
-	it('reports the collections a frame names', () => {
-		const stub = stubSource();
-		const seen: Array<ReadonlyArray<string>> = [];
-		subscribeToChanges({
-			onChange: (collections) => seen.push(collections),
-			source: () => stub.source
-		});
-
-		stub.emit('sync', JSON.stringify({ collections: ['leave_requests', 'companies'] }));
-		expect(seen).toEqual([['leave_requests', 'companies']]);
-	});
-
-	it('connects to the stream the host serves', () => {
+	it('passes the persisted cursor and delivers typed SyncChange batches directly', () => {
 		const stub = stubSource();
 		const urls: Array<string> = [];
+		const seen: Array<ReadonlyArray<SyncChange>> = [];
 		subscribeToChanges({
-			onChange: () => undefined,
+			cursor: () => cursor,
+			onChange: (changes) => seen.push(changes),
 			source: (url) => {
 				urls.push(url);
 				return stub.source;
 			}
 		});
-		// The host's own address, verbatim. A framework constant here would pass this assertion just
-		// as well while opening the wrong stream everywhere except the one host it was written for.
-		expect(urls).toEqual([STREAM_URL]);
+
+		stub.emit('sync', JSON.stringify([change]), JSON.stringify(change.cursor));
+		expect(seen).toEqual([[change]]);
+		expect(new URL(urls[0] ?? '').origin + new URL(urls[0] ?? '').pathname).toBe(STREAM_URL);
+		expect(JSON.parse(new URL(urls[0] ?? '').searchParams.get('cursor') ?? '')).toEqual(cursor);
 	});
 
-	it('treats an unreadable frame as "something changed" rather than as nothing', () => {
+	it('keeps the native EventSource open after a network error so it can resume with Last-Event-ID', () => {
 		const stub = stubSource();
-		const seen: Array<ReadonlyArray<string>> = [];
-		subscribeToChanges({
-			onChange: (collections) => seen.push(collections),
-			source: () => stub.source
-		});
-
-		// Ignoring it would leave the replica stale until the next unrelated write; an empty list means
-		// the caller catches up on everything, which is the safe reading.
-		stub.emit('sync', 'not json');
-		expect(seen).toEqual([[]]);
-	});
-
-	it('keeps listening after an error, because the browser reconnects on its own', () => {
-		const stub = stubSource();
-		const seen: Array<ReadonlyArray<string>> = [];
+		const seen: Array<ReadonlyArray<SyncChange>> = [];
 		const causes: Array<unknown> = [];
 		subscribeToChanges({
-			onChange: (collections) => seen.push(collections),
+			cursor: () => cursor,
+			onChange: (changes) => seen.push(changes),
 			onError: (cause) => causes.push(cause),
 			source: () => stub.source
 		});
 
 		stub.fail(new Error('network blip'));
 		expect(causes).toHaveLength(1);
-		// Closing on the first blip would turn a momentary disconnection into a tab that stops updating
-		// until someone reloads it.
 		expect(stub.isClosed()).toBe(false);
-		stub.emit('sync', JSON.stringify({ collections: ['people'] }));
-		expect(seen).toEqual([['people']]);
+		stub.emit('sync', JSON.stringify([change]));
+		expect(seen).toEqual([[change]]);
 	});
 
-	it('reports the stream opening, so a caller can catch up across the gap', () => {
+	it('reopens an unreadable stream frame from the durable cursor instead of advancing past it', () => {
+		const first = stubSource();
+		const second = stubSource();
+		const sources = [first, second];
+		const urls: Array<string> = [];
+		const causes: Array<unknown> = [];
+		let durable = cursor;
+		subscribeToChanges({
+			cursor: () => durable,
+			onChange: (changes) => {
+				durable = changes[changes.length - 1]?.cursor ?? durable;
+			},
+			onError: (cause) => causes.push(cause),
+			source: (url) => {
+				urls.push(url);
+				const next = sources.shift();
+				if (next === undefined) throw new Error('unexpected third stream');
+				return next.source;
+			}
+		});
+
+		first.emit('sync', 'not json');
+		expect(first.isClosed()).toBe(true);
+		expect(causes).toHaveLength(1);
+		expect(urls).toHaveLength(2);
+		expect(JSON.parse(new URL(urls[1] ?? '').searchParams.get('cursor') ?? '')).toEqual(cursor);
+		second.emit('sync', JSON.stringify([change]));
+		expect(durable).toEqual(change.cursor);
+	});
+
+	it('reports readiness only after the host has caught up and closes when stopped', () => {
 		const stub = stubSource();
 		let opened = 0;
-		subscribeToChanges({
+		const subscription = subscribeToChanges({
+			cursor: () => cursor,
 			onChange: () => undefined,
 			onOpen: () => (opened += 1),
 			source: () => stub.source
 		});
 		stub.emit('ready', JSON.stringify({ connectionId: 'tenant:abc' }));
 		expect(opened).toBe(1);
+		subscription.stop();
+		expect(stub.isClosed()).toBe(true);
 	});
 
 	it('degrades to no subscription where EventSource does not exist', () => {
 		const causes: Array<unknown> = [];
 		const subscription = subscribeToChanges({
+			cursor: () => cursor,
 			onChange: () => undefined,
 			onError: (cause) => causes.push(cause),
 			source: () => {
 				throw new Error('EventSource is not defined');
 			}
 		});
-		// The replica still works; it just only catches up when something else asks it to.
 		expect(causes).toHaveLength(1);
 		expect(() => subscription.stop()).not.toThrow();
-	});
-
-	it('closes the stream when stopped', () => {
-		const stub = stubSource();
-		const subscription = subscribeToChanges({
-			onChange: () => undefined,
-			source: () => stub.source
-		});
-		subscription.stop();
-		expect(stub.isClosed()).toBe(true);
 	});
 });

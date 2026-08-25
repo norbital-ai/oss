@@ -37,8 +37,8 @@ export { makeAiBinding, makeAiBindingFromConfig, type AiProvider } from './facil
 export {
 	makeCommunicationBinding,
 	makeCommunicationBindingFromConfig,
-	type Provider as CommunicationProvider
-} from './facilities/communication.js';
+	type CommunicationProvider
+} from './facilities/providers.js';
 export {
 	makeConnectorBinding,
 	makeConnectorBindingFromConfig,

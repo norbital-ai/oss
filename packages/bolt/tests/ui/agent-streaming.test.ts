@@ -32,7 +32,11 @@ describe('agent actions', () => {
 		);
 
 		const result = await Effect.runPromise(
-			agent.start({ message: 'Export payroll', runId: 'conversation-streaming' })
+			agent.start({
+				message: 'Export payroll',
+				runId: 'conversation-streaming',
+				turnId: 'task-streaming'
+			})
 		);
 
 		expect(result).toEqual({
@@ -41,5 +45,11 @@ describe('agent actions', () => {
 			taskId: 'task-streaming'
 		});
 		expect(commands).toEqual(['agents.enqueue']);
+		expect(command.mock.calls[0]?.[1]).toEqual(
+			expect.objectContaining({
+				conversationId: 'conversation-streaming',
+				turnId: 'task-streaming'
+			})
+		);
 	});
 });

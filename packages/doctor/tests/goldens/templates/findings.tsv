@@ -1,0 +1,5 @@
+hint	high	AL1	bare type alias	hr-payroll/src/datatypes/eligibility_rules/+renderer.svelte:20: type Rule = EligibilityRule; [alias=Rule]	simplicity,no-bloat
+hint	high	AL1	bare type alias	hr-payroll/src/datatypes/leave_accrual/+renderer.svelte:14: type Carry = LeaveCarry; [alias=Carry]	simplicity,no-bloat
+hint	high	AL1	bare type alias	hr-payroll/src/datatypes/statutory_regime/+renderer.svelte:19: type BreakRule = StatutoryRestBreakRule; [alias=BreakRule]	simplicity,no-bloat
+hint	high	R5d	in-operator duck typing	crm/src/collections/settlements/+hooks.ts:21: if (!regardingType || !(regardingType in COMMITTED_TARGETS)) { [chained=in]	simplicity,straightforwardness,type-safety
+hint	high	S3	verbose null and undefined check	field-operations/src/collections/photo_evidence/photo-integrity.ts:288: if (photo === null || photo === undefined) return null; [$VALUE=photo]	simplicity,no-bloat

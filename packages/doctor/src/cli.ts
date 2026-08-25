@@ -94,7 +94,7 @@ async function main(): Promise<void> {
 	if (options.json === true) {
 		process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 	} else {
-		const tiers = (['syntactic', 'graph', 'typeAware'] as const)
+		const tiers = (['syntactic', 'graph', 'typeAware', 'semantic'] as const)
 			.filter((tier) => result.receipt.tiers[tier])
 			.map((tier) => (tier === 'typeAware' ? 'type-aware' : tier))
 			.join(' + ');
@@ -104,10 +104,22 @@ async function main(): Promise<void> {
 		if (result.packs.length > 0) process.stdout.write(`packs: ${result.packs.join(', ')}\n`);
 		if (result.authoredFindings > 0)
 			process.stdout.write(`authored rules contributed ${result.authoredFindings} finding(s)\n`);
-		if (!result.receipt.tiers.graph)
+		if (result.semantic.ran) {
+			const spend = result.semantic.stats;
+			const bill =
+				spend === undefined
+					? ''
+					: ` · ${spend.filesEmbedded} embedded, ${spend.filesUnchanged} reused, ${spend.apiRequests} request(s)` +
+						(spend.promptTokens === undefined ? '' : `, ${spend.promptTokens} tokens`) +
+						(spend.costUsd === undefined ? '' : `, $${spend.costUsd.toFixed(4)}`) +
+						` in ${Math.round(spend.durationMs)}ms`;
 			process.stdout.write(
-				'note: no built-in detector (base: none), so reachability, dead exports, and cycles are unevaluated\n'
+				`semantic: ${result.semantic.embedderId ?? 'unknown'} · ${result.semantic.clusterCount} clusters, ${result.semantic.singletonCount} singletons${bill}
+`
 			);
+		} else {
+			process.stdout.write('semantic: declined by configuration\n');
+		}
 
 		for (const finding of result.findings
 			.filter(({ severity }) => severity !== 'hint')

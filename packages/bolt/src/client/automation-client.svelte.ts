@@ -1,3 +1,7 @@
+// repository-health:allow SEM_PARALLEL -- automation-client consumes automation-schema over the
+// #lib alias, so the pair is linked, not parallel.
+// repository-health:allow SEM_PARALLEL -- client facade and runtime automations service are the
+// two sides of the automations.* command protocol; they meet in client/runtime.ts, never directly.
 import { Effect, Schema } from 'effect';
 import type { AutomationProgression } from '#lib/authoring/automations-schema.js';
 import type { RemoteQuery } from '@norbital-ai/std/collection';

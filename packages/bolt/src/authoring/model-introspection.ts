@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- model-introspection imports the model declarations it
+// describes (./models-schema.js), so the pair is linked, not parallel.
 import { SQL, getColumns, is, sql } from 'drizzle-orm';
 import {
 	PgDialect,
@@ -440,7 +442,8 @@ export const compileModelTable = <
 		}
 		for (const tag of Object.keys(builder.targets)) {
 			const storageColumn = referenceStorageColumn(fieldName, tag);
-			if (storageColumn in declaration.columns || storageColumn in authoredColumns)
+			if (Object.hasOwn(declaration.columns, storageColumn) ||
+				Object.hasOwn(authoredColumns, storageColumn))
 				throw new TypeError(
 					`Reference field ${fieldName} generates column ${storageColumn}, but that column is already declared.`
 				);

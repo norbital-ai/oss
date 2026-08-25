@@ -1,3 +1,5 @@
+// repository-health:allow SEM_PARALLEL -- tenant-matrix imports the studio-state MatrixEntry it
+// shapes (./studio-state.js), so the pair is linked, not parallel.
 /**
  * The Operations tenant-matrix model, and the deterministic layout that draws it.
  *

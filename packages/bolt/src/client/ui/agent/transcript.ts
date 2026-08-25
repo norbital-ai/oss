@@ -564,7 +564,21 @@ function toToolCall(
 		Array.isArray(decodedOutput.requests)
 			? decodedOutput.requests
 			: null;
-	const elicitation = requests ? parseElicitationRequests(requests) : null;
+	const elicitation = requests
+		? requests.flatMap((request) =>
+				Option.match(decodeElicitationRequest(request), {
+					onNone: () => [],
+					onSome: (decoded) => [
+						{
+							id: decoded.id ?? `elicitation-${decoded.message}`,
+							message: decoded.message,
+							...(decoded.mode === undefined ? {} : { mode: decoded.mode }),
+							...(decoded.url === undefined ? {} : { url: decoded.url })
+						}
+					]
+				})
+			)
+		: null;
 	const inputRequired = requests !== null;
 	const state: PanelToolCall['state'] = inputRequired
 		? 'needs_input'
@@ -652,25 +666,6 @@ function toOutboundAgentMessage(
 		state: call.state === 'needs_input' ? 'running' : call.state,
 		error: call.error
 	};
-}
-
-/** Narrows a tool's `input_required` payload to the fields the disclosure can render. */
-function parseElicitationRequests(
-	requests: readonly unknown[]
-): NonNullable<PanelToolCall['elicitation']> {
-	return requests.flatMap((request) => {
-		return Option.match(decodeElicitationRequest(request), {
-			onNone: () => [],
-			onSome: (decoded) => [
-				{
-					id: decoded.id ?? `elicitation-${decoded.message}`,
-					message: decoded.message,
-					...(decoded.mode === undefined ? {} : { mode: decoded.mode }),
-					...(decoded.url === undefined ? {} : { url: decoded.url })
-				}
-			]
-		});
-	});
 }
 
 /** Caps a tool payload so an expanded call stays readable in the panel scroller. */

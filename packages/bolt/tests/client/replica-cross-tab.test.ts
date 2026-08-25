@@ -169,8 +169,10 @@ describe('cross-tab replica invalidation', () => {
 		let version = 0;
 		let title = 'Original title';
 		let collectionReads = 0;
+		const commands: Array<string> = [];
 		const transport: BoltTransport = {
 			command: async (command, input): Promise<Schema.Json> => {
+				commands.push(command);
 				switch (command) {
 					case 'sync.provisioning':
 						return {
@@ -197,21 +199,6 @@ describe('cross-tab replica invalidation', () => {
 							cursor: { xid: 0, sequence: 0 },
 							nextAfter: null
 						};
-					case 'sync.head':
-						return version === 0 ? { xid: 0, sequence: 0 } : { xid: 1, sequence: version };
-					case 'sync.diff': {
-						const cursor = input as { readonly cursor?: { readonly sequence?: number } };
-						if ((cursor.cursor?.sequence ?? 0) >= version || version === 0) return [];
-						return [
-							{
-								cursor: { xid: 1, sequence: version },
-								collection: 'job_assignments',
-								recordId: '019f7a10-2000-7000-8000-000000000001',
-								operation: 'update',
-								record: { title }
-							}
-						];
-					}
 					case 'invoke.field_ops_dashboard':
 						return { title };
 					case 'collections.mutate': {
@@ -290,9 +277,22 @@ describe('cross-tab replica invalidation', () => {
 		// Only the elected leader owns the sync stream. Its frame makes the ordered log catch up, then
 		// the cross-tab invalidation makes the follower's mounted local query observe the applied row.
 		expect(streams).toHaveLength(1);
-		streams[0]?.emit('sync', JSON.stringify({ collections: ['job_assignments'] }));
+		streams[0]?.emit(
+			'sync',
+			JSON.stringify([
+				{
+					cursor: { xid: 1, sequence: version },
+					collection: 'job_assignments',
+					recordId: '019f7a10-2000-7000-8000-000000000001',
+					operation: 'update',
+					record: { title }
+				}
+			])
+		);
 		await expect
 			.poll(() => assignmentRows.current, { timeout: 2_000 })
 			.toMatchObject([{ title: 'Updated in the other tab' }]);
+		expect(commands).not.toContain('sync.diff');
+		expect(commands).not.toContain('sync.head');
 	});
 });

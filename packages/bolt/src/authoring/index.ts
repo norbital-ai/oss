@@ -67,7 +67,6 @@ export type {
 	FileRef,
 	InstantPrecision,
 	InstantRangeNested,
-	InstantRangePrecision,
 	InstantRangeValue,
 	ReferenceHandle,
 	ReferenceTargets

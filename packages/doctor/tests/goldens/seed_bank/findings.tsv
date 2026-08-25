@@ -1,0 +1,3 @@
+error	high	NODE2	unpruned recursive directory walk reimplements node:fs	field-operations/scripts/build-raw-clean.mjs:763: function treeEntries(base, path = "") { [walker=treeEntries prefer=readdir-recursive]	simplicity,efficiency,no-bloat
+error	high	NODE3	command entrypoint reimplements node:util parseArgs	field-operations/scripts/build-raw-clean.mjs:1: import { createHash } from "node:crypto"; [options=1 prefer=node:util.parseArgs]	simplicity,straightforwardness,no-bloat
+error	high	NODE3	command entrypoint reimplements node:util parseArgs	field-operations/scripts/generate-communication-logs.mjs:1: import { existsSync, readFileSync, writeFileSync } from "node:fs"; [options=1 prefer=node:util.parseArgs]	simplicity,straightforwardness,no-bloat

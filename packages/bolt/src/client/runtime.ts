@@ -2,7 +2,7 @@ import { Effect, Result, Schema } from 'effect';
 import type { RemoteQuery } from '@norbital-ai/std/collection';
 export type { RemoteQuery } from '@norbital-ai/std/collection';
 import { ApprovalState } from '#lib/runtime/approvals/approvals.js';
-import { createSyncClient, decodeChanges, decodeCursor } from '#lib/client/replica/sync-client.js';
+import { createSyncClient } from '#lib/client/replica/sync-client.js';
 import {
 	ARBITRARY_QUERY_INVALIDATION,
 	ANY_COLLECTION,
@@ -42,7 +42,6 @@ import { openLocalDatabase, type BootstrapTransport } from '#lib/client/replica/
 import { createLocalReader, type LocalReader } from '#lib/client/replica/local-reads.js';
 import { subscribeToChanges, type Subscription } from '#lib/client/replica/subscribe.js';
 import type { PGliteLike, ProvisioningStep } from '#lib/client/replica/pglite-sql.js';
-import { openPGlite } from '#lib/client/replica/pglite-loader.js';
 import { openReplicaInvalidationBus } from '#lib/client/replica/cross-tab-invalidation.js';
 import { createSystemClient } from '#lib/client/system-client.js';
 export type { SystemClientApi } from '#lib/client/system-client.js';
@@ -1050,7 +1049,11 @@ const startReplica = (
 		// has signed into and two built from the same template share a fingerprint.
 		const scope = `${runtime.bolt.scope.tenantId}::${runtime.bolt.scope.environment}::${options.accessScope}`;
 		const openEngine =
-			open ?? ((steps: ReadonlyArray<ProvisioningStep>) => openPGlite(steps, scope));
+			open ??
+			((steps: ReadonlyArray<ProvisioningStep>) =>
+				Effect.tryPromise(() => import('#lib/client/replica/pglite-loader.js')).pipe(
+					Effect.flatMap(({ openPGlite }) => openPGlite(steps, scope))
+				));
 		const transport: BootstrapTransport = {
 			command: (command, input) =>
 				accessScopeFor(runtime) === options.accessScope
@@ -1115,16 +1118,11 @@ const startReplica = (
 			});
 
 		const client = yield* createSyncClient({
-			transport: {
-				head: () => commandEffect(runtime, 'sync.head', null).pipe(Effect.map(decodeCursor)),
-				diff: (cursor, limit) =>
-					commandEffect(runtime, 'sync.diff', { cursor, limit }).pipe(Effect.map(decodeChanges))
-			},
 			sink: {
 				apply: (changes) =>
 					Effect.gen(function* () {
 						yield* Effect.forEach(changes, local.store.applyChange, { discard: true }).pipe(
-							Effect.catch(() => rebuildReplica())
+							Effect.catch(rebuildReplica)
 						);
 						const collections = collectionsIn(changes);
 						yield* Effect.sync(() => invalidateNamed(collections));
@@ -1135,27 +1133,24 @@ const startReplica = (
 			initialCursor: local.cursor,
 			// Recorded in the replica's own database, in the same place as the rows it explains, so a reload
 			// resumes exactly where this session stopped rather than re-reading the whole workspace.
-			onAdvance: (cursor) => local.record(cursor).pipe(Effect.catch(() => Effect.void)),
-			onError: options.onError
+			onAdvance: (cursor) => local.record(cursor).pipe(Effect.catch(() => Effect.void))
 		});
 		/**
-		 * One drain in flight at a time, and one more queued behind it.
+		 * Applies SSE batches in arrival order.
 		 *
-		 * A burst of writes produces a burst of frames, and starting a drain per frame would have several
-		 * reading the same cursor and applying the same batch. `drain()` already collapses concurrent
-		 * callers, so this only has to make sure a frame that arrives mid-drain is not lost: the trailing
-		 * pass picks up whatever the in-flight one did not see.
+		 * DOM events do not await an asynchronous listener. One PGlite batch can therefore still be
+		 * writing when the next event arrives even though EventSource delivered them sequentially. The
+		 * small in-memory queue preserves that order; the stream itself remains the only network queue.
 		 */
-		let draining = false;
-		let pending = false;
-		const catchUp = (): void => {
-			if (draining) {
-				pending = true;
-				return;
-			}
-			draining = true;
+		const pendingBatches: Array<ReadonlyArray<SyncChange>> = [];
+		let applying = false;
+		const applyPending = (): void => {
+			if (applying) return;
+			const changes = pendingBatches.shift();
+			if (changes === undefined) return;
+			applying = true;
 			Effect.runFork(
-				client.drain().pipe(
+				client.apply(changes).pipe(
 					Effect.tap((applied) =>
 						Effect.sync(() => {
 							if (applied > 0) options.onChange?.(applied);
@@ -1164,14 +1159,16 @@ const startReplica = (
 					Effect.catch((cause) => Effect.sync(() => options.onError?.(cause))),
 					Effect.ensuring(
 						Effect.sync(() => {
-							draining = false;
-							if (!pending) return;
-							pending = false;
-							catchUp();
+							applying = false;
+							applyPending();
 						})
 					)
 				)
 			);
+		};
+		const acceptChanges = (changes: ReadonlyArray<SyncChange>): void => {
+			pendingBatches.push(changes);
+			applyPending();
 		};
 
 		/**
@@ -1193,14 +1190,11 @@ const startReplica = (
 		let subscription: Subscription | undefined;
 		const streamIfLeading = (): void => {
 			if (!leads() || subscription !== undefined) return;
-			// The host tells us when to look; nothing here asks on a timer. A frame names the collections
-			// that changed, but the cursor decides what is actually fetched, so the names are not read
-			// here — acting on them would be a second, weaker version of the ordering `sync.diff` gives.
+			// The frame is the ordered, permission-filtered outbox batch. The host caught up from this
+			// replica's cursor before it marked the stream ready; no browser diff request exists here.
 			subscription = subscribeToChanges({
-				onChange: () => catchUp(),
-				// A reconnect can span a gap in which anything might have happened, so every open catches
-				// up rather than waiting for the next write to arrive.
-				onOpen: () => catchUp(),
+				cursor: client.cursor,
+				onChange: acceptChanges,
 				onError: options.onError
 			});
 		};
@@ -1228,7 +1222,6 @@ const startReplica = (
 		const stopWatchingLeader = local.engine.onLeaderChange(() => {
 			if (leads()) {
 				streamIfLeading();
-				catchUp();
 				return;
 			}
 			// Demotion is possible in principle; drop the stream rather than stream in duplicate.
@@ -1246,6 +1239,7 @@ const startReplica = (
 				if (runtime.local !== undefined) delete runtime.local.current;
 				stopWatchingLeader?.();
 				subscription?.stop();
+				pendingBatches.length = 0;
 				client.stop();
 				const state = runtimeStates.access(runtime);
 				state?.invalidation?.close();

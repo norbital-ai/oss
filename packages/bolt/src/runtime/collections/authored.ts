@@ -149,13 +149,9 @@ type AuthoredHandlerResult<A> = A | PromiseLike<A> | Effect.Effect<A>;
 /** Recognises promises without tying authored code to this realm's `Promise` constructor. */
 // repository-health:allow EFF2 -- The thenable predicate belongs to the same authored-JavaScript boundary and feeds only Effect.tryPromise below.
 const isPromiseLike = <A>(value: AuthoredHandlerResult<A>): value is PromiseLike<A> => {
-	if (
-		value === null ||
-		(typeof value !== 'object' && typeof value !== 'function') ||
-		!('then' in value)
-	)
-		return false;
-	return typeof value.then === 'function';
+	if (value === null) return false;
+	if (typeof value !== 'object' && typeof value !== 'function') return false;
+	return typeof Reflect.get(value, 'then') === 'function';
 };
 
 /**
@@ -186,12 +182,12 @@ export const runAuthoredHandler = <A>(
 		if (Result.isFailure(attempted)) return raise<A>(attempted.failure);
 		const produced = attempted.success;
 		if (Effect.isEffect(produced))
-			return produced.pipe(Effect.catchDefect((defect) => raise<A>(defect)));
+			return produced.pipe(Effect.catchDefect(raise<A>));
 		if (isPromiseLike(produced))
 			return Effect.tryPromise({
 				try: () => produced,
 				catch: (cause) => cause
-			}).pipe(Effect.catch((cause) => raise<A>(cause)));
+			}).pipe(Effect.catch(raise<A>));
 		return Effect.succeed(produced);
 	});
 
@@ -828,6 +824,6 @@ export const makeBoundAuthoringOps = (
 				.findFirst(effectId, subject, { collection: 'approval_request', ...input })
 				.pipe(Effect.map((row) => row as Readonly<Record<string, unknown>> | undefined)),
 		infer: inferOp(effectId, ai, readAsset),
-		readFileAsset: (file) => readAsset(file)
+		readFileAsset: readAsset
 	};
 };

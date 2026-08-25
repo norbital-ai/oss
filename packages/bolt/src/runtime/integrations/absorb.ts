@@ -212,7 +212,7 @@ export const absorbRecords = (
 		}> = [];
 		for (const { position, record } of decoded) {
 			const key = yield* Effect.result(
-				Effect.try({ try: () => authored.identityValue(record), catch: (cause) => describe(cause) })
+				Effect.try({ try: () => authored.identityValue(record), catch: describe })
 			);
 			if (Result.isFailure(key)) {
 				reject(indexOffset + position, key.failure);

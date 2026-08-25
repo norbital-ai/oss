@@ -21,7 +21,7 @@ import { makeAiBinding, makeAiBindingFromConfig } from '../src/facilities/provid
 import {
 	makeCommunicationBinding,
 	makeCommunicationBindingFromConfig
-} from '../src/facilities/communication.js';
+} from '../src/facilities/providers.js';
 import {
 	makeConnectorBinding,
 	makeConnectorBindingFromConfig
