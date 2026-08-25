@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import type { BoltTransport } from '#lib/client.js';
+import type { BoltTransport } from '#lib/client/contracts.js';
 
 export type HttpBoltTransportOptions = Readonly<{
 	/**

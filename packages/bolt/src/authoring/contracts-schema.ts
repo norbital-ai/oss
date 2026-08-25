@@ -15,7 +15,7 @@ import type { ApprovalFlow } from './approval-flow.js';
 // Type-only, and therefore erased: `workspace-schema.ts` already imports `EnvoyDefinition` from
 // here, so a value import in this direction would be a real cycle.
 import type { HttpConnection, PrivateEnvReference } from './workspace-schema.js';
-import type { WorkspaceAuthoringTypes, WorkspaceTeamAuthoringTypes } from './index.js';
+import type { WorkspaceAuthoringTypes, WorkspaceTeamAuthoringTypes } from './authoring-types.js';
 /**
  * The generated team union is kept on a separate augmentation graph.
  *

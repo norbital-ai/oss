@@ -1,5 +1,4 @@
-export interface WorkspaceAuthoringTypes {}
-export interface WorkspaceTeamAuthoringTypes {}
+export type { WorkspaceAuthoringTypes, WorkspaceTeamAuthoringTypes } from './authoring-types.js';
 
 export { AutomationProgression, defineAutomation } from './automations-schema.js';
 export type {

@@ -8,7 +8,7 @@ import {
 	EnvoyStatusSchema,
 	ManifestSchema
 } from '#lib/client/ui/studio/studio-state.js';
-import type { RemoteQuery, WorkspaceClientRuntime } from '#lib/client/runtime.js';
+import type { RemoteQuery, WorkspaceClientRuntime } from '#lib/client/contracts.js';
 
 const EmptyInput = Schema.Struct({});
 const AgentOpenInput = Schema.Struct({

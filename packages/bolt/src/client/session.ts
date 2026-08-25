@@ -1,4 +1,4 @@
-import type { BoltTransport } from '#lib/client.js';
+import type { BoltTransport } from '#lib/client/contracts.js';
 import type { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
 import { Effect, MutableRef } from 'effect';
 

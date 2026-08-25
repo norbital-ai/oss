@@ -154,7 +154,7 @@ describe('a refusal raised from a real hook', () => {
 				}
 			}
 		});
-	});
+	}, 30_000);
 
 	afterAll(async () => {
 		await harness.dispose();

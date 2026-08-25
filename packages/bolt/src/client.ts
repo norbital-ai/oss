@@ -1,20 +1,9 @@
 import { Effect, Schema } from 'effect';
 import type { InvocationScope } from '@norbital-ai/bolt-protocol';
 import { SyncChange, SyncCursor } from '#lib/runtime/sync/sync.js';
+import type { BoltClient, BoltTransport } from '#lib/client/contracts.js';
 
-export type BoltTransport = Readonly<{
-	readonly command: (command: string, input: Schema.Json, signal?: AbortSignal) => Promise<unknown>; // repository-health:allow EFF2 -- Fetch-compatible transports expose the browser Promise protocol and createBoltClient immediately adapts it with Effect.tryPromise.
-}>;
-
-export type BoltClient = Readonly<{
-	readonly scope: InvocationScope;
-	readonly command: <S extends Schema.ConstraintDecoder<unknown>>(
-		command: string,
-		input: Schema.Json,
-		output: S,
-		signal?: AbortSignal
-	) => Promise<S['Type']>; // repository-health:allow EFF2 -- BoltClient is the public browser command seam; every internal workflow immediately adapts its decoded Promise into Effect.
-}>;
+export type { BoltClient, BoltTransport } from '#lib/client/contracts.js';
 
 /** One page of a keyset read, built once rather than per call. */
 const CollectionPage = Schema.Struct({ rows: Schema.Array(Schema.Json) });

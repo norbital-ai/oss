@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Effect, Schema } from 'effect';
-import { afterEach, describe, expect, it } from 'vitest';
+import { vi, afterEach, describe, expect, it } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
@@ -146,6 +146,10 @@ const localRows = async (
 	const rows = Reflect.get(answer, 'rows');
 	return Array.isArray(rows) ? rows : [];
 };
+
+// Integration-grade: a real server plus an in-process pglite replica is CPU-heavy on CI
+// runners; the default 15s budget flakes there while meaning nothing locally.
+vi.setConfig({ testTimeout: 90_000, hookTimeout: 60_000 });
 
 describe('a browser replica against a real server', () => {
 	it('snapshots seeded rows and continues from their trigger-captured outbox position', async () => {

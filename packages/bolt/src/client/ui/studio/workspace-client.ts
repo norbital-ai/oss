@@ -1,7 +1,8 @@
 import type { CollectionField } from '@norbital-ai/ui/data-renderer';
 import type { CollectionClient } from '@norbital-ai/std/collection';
 import type { CollectionRegistryFor, PlatformSchema } from '#lib/authoring/internals.js';
-import type { CollectionMutationValues, SystemClientApi } from '#lib/client/runtime.js';
+import type { CollectionMutationValues } from '#lib/client/contracts.js';
+import type { SystemClientApi } from '#lib/client/system-client.js';
 import type { ErasedAutomationClientApi } from '#lib/client/automation-client.svelte.js';
 
 /** A record of an unknown collection: this surface renders whichever workspace it was compiled into. */

@@ -1,7 +1,7 @@
 // repository-health:allow SEM_PARALLEL -- agent-model-state is imported by agent/client.svelte.ts
 // (./agent-model-state.svelte.js), so the pair is linked, not parallel.
 import { Schema } from 'effect';
-import type { RemoteQuery } from '#lib/client/runtime.js';
+import type { RemoteQuery } from '#lib/client/contracts.js';
 
 /**
  * One model the host offers for a turn. The host catalog is the only answer to "what is about to

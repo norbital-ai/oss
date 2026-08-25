@@ -6,7 +6,7 @@ import { text as pgText } from 'drizzle-orm/pg-core/columns/text';
 import { timestamp as pgTimestamp } from 'drizzle-orm/pg-core/columns/timestamp';
 import { vector as pgVector } from 'drizzle-orm/pg-core/columns/vector_extension/vector';
 import { MoneyValueSchema } from '@norbital-ai/std/finance';
-import type { WorkspaceAuthoringTypes } from './index.js';
+import type { WorkspaceAuthoringTypes } from './authoring-types.js';
 
 /**
  * One authored index on a collection's table.
