@@ -22,7 +22,7 @@ permissions:
 
 env:
   PACKAGE_REGISTRY_URL: ${{ vars.NORBITAL_PACKAGE_REGISTRY || 'https://npm.pkg.github.com' }}
-  EXPECTED_PACKAGE_KEY: 890293f3a5dba641
+  EXPECTED_PACKAGE_KEY: afd68de1075d139b
 
 jobs:
   release:

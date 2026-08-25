@@ -14,7 +14,7 @@
 </script>
 
 <script lang="ts">
-	import { Number as Number_, Schema } from 'effect';
+	import { Number as Number_ } from 'effect';
 
 	type OrbPoint = {
 		x: number;
