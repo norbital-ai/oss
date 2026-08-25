@@ -168,7 +168,9 @@
 	/** Every source file changed against the host snapshot, committed together by Preview. */
 	let sourceDrafts = $state<SourceDrafts>({});
 	let browserReady = $state(false);
-	const manifestQuery = $derived(browserReady ? client.system.workspace.manifest({}) : undefined);
+	const manifestQuery = $derived(
+		browserReady ? client.system.workspace.authoringManifest({}) : undefined
+	);
 	const workspace = $derived({
 		manifest: manifestQuery?.current,
 		error:

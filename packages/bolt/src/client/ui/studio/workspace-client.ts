@@ -41,8 +41,8 @@ type WorkspaceCollections = ErasedCollections & PlatformCollections;
  *
  * It is the only place a browser can learn what a column *is* — kind, nullability, whether the
  * database computes it, whether free-text search may reach it, which enum members it accepts.
- * `workspace.manifest` publishes none of that, so Studio reads both: the manifest for what this
- * subject may see, the catalog for what each column declares.
+ * `workspace.authoringManifest` publishes the authored model without runtime-owned collections;
+ * this catalog supplies the richer generated field metadata for each of those authored models.
  *
  * It used to be declared against `virtual:colony-client`, a host-side Vite module that resolved a
  * workspace by tenant at the host's build time. There is no such module any more: this component

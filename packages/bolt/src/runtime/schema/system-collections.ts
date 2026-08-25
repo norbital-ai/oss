@@ -50,6 +50,11 @@ export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	collections.bolt_notifications
 ]);
 
+/** Runtime-owned names, used at boundaries that must expose only a workspace's authored model. */
+export const SYSTEM_COLLECTION_NAMES: ReadonlySet<string> = new Set(
+	SYSTEM_COLLECTIONS.map(({ name }) => name)
+);
+
 const SYSTEM_COLLECTIONS_BY_NAME = new Map(
 	SYSTEM_COLLECTIONS.map((definition) => [definition.name, definition] as const)
 );

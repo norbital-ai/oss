@@ -192,6 +192,10 @@ export type SystemClientApi = Readonly<{
 	}>;
 	workspace: Readonly<{
 		manifest: SystemQuery<CommandInput<typeof EmptyInput>, CommandOutput<typeof ManifestSchema>>;
+		authoringManifest: SystemQuery<
+			CommandInput<typeof EmptyInput>,
+			CommandOutput<typeof ManifestSchema>
+		>;
 	}>;
 }>;
 
@@ -293,5 +297,8 @@ export const createSystemClient = (
 		write: command(runtime, 'secrets.write', SecretWriteInput, SecretWriteResponse)
 	},
 	sync: { shape: query(makeQuery, 'sync.shape', EmptyInput, SyncShapeResponse) },
-	workspace: { manifest: query(makeQuery, 'workspace.manifest', EmptyInput, ManifestSchema) }
+	workspace: {
+		manifest: query(makeQuery, 'workspace.manifest', EmptyInput, ManifestSchema),
+		authoringManifest: query(makeQuery, 'workspace.authoringManifest', EmptyInput, ManifestSchema)
+	}
 });

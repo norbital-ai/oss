@@ -39,6 +39,7 @@ import * as Notifications from '#lib/runtime/notifications/notifications.js';
 import { Notification } from '#lib/runtime/notifications/notifications.js';
 import { RemoteRegistry, type RuntimeRemoteRegistry } from '#lib/runtime/remotes.js';
 import * as WorkspaceSchema from '#lib/runtime/schema/workspace-schema.js';
+import { SYSTEM_COLLECTION_NAMES } from '#lib/runtime/schema/system-collections.js';
 import { Secrets, type Interface as SecretsInterface } from '#lib/runtime/secrets/secrets.js';
 import {
 	PersonalSecrets,
@@ -2253,21 +2254,33 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const definition = (yield* Workspace.Service).definition;
 			return json([WEB_AGENT_NAME, ...definition.envoys.map(({ name }) => name)]);
 		}
-		// The Studio and Data Browser are host surfaces: they read workspace structure through this
-		// command and never touch tenant SQL. What a subject may see is still an access decision, so
-		// collections are filtered by the same read predicate every query uses.
-		case 'workspace.manifest': {
+		/**
+		 * Runtime consumers receive only collections they may read. Studio has a separate authoring
+		 * boundary: an administrator receives every authored collection and no runtime-owned one.
+		 */
+		case 'workspace.manifest':
+		case 'workspace.authoringManifest': {
 			const input = yield* decode(VisibleAppsInput, commandInput);
 			const workspace = yield* Workspace.Service;
 			const access = yield* AccessControl.Service;
 			const definition = workspace.definition;
-			const readable = definition.collections.filter(
-				({ name }) => access.predicate(input.subject, 'read', name).allowed
+			const authoring = command === 'workspace.authoringManifest';
+			if (authoring && input.subject.admin !== true) {
+				return yield* new AccessControl.AccessDenied({
+					action: 'read',
+					resource: 'workspace.authoringManifest',
+					reason: 'Workspace authoring is restricted to administrators'
+				});
+			}
+			const visible = definition.collections.filter(({ name }) =>
+				authoring
+					? !SYSTEM_COLLECTION_NAMES.has(name)
+					: access.predicate(input.subject, 'read', name).allowed
 			);
 			return json({
 				name: definition.name,
 				version: definition.version,
-				collections: readable.map((collection) => ({
+				collections: visible.map((collection) => ({
 					name: collection.name,
 					history: collection.history,
 					hooks: [...(collection.hooks ?? [])],
@@ -2310,9 +2323,8 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				// only members reach.
 				//
 				// `policies` and `task` are declared and deliberately not published. `task` is the envoy's
-				// standing instruction and `policies` names everything its runs may do; `workspace.manifest`
-				// answers any authenticated caller, and neither is something a caller needs in order to
-				// render an envoy.
+				// standing instruction and `policies` names everything its runs may do; neither manifest
+				// publishes those operational instructions.
 				//
 				// There is no `agent` key, because there is no agent to point at. An envoy *is* one, and
 				// the back-pointer this used to publish had the same value for every envoy in every

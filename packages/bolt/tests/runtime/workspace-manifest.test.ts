@@ -11,6 +11,8 @@ import {
 import { envoy, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import { automation } from '../../src/authoring/automations-schema.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
+import * as AccessControl from '../../src/runtime/access/access-control.js';
+import { ADMIN_STATUS } from '../../src/runtime/identity/identity.js';
 import {
 	makeBoltTestRuntime,
 	testWorkspace,
@@ -24,7 +26,7 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-const manifestInvocation = (credential: string) =>
+const manifestInvocation = (credential: string, command = 'workspace.manifest') =>
 	Invocation.cases.Command.make({
 		protocolVersion: PROTOCOL_VERSION,
 		id: InvocationId.make('manifest-1'),
@@ -34,7 +36,7 @@ const manifestInvocation = (credential: string) =>
 			releaseId: ReleaseId.make('local')
 		},
 		deadlineEpochMs: Date.now() + 30_000,
-		command: 'workspace.manifest',
+		command,
 		input: null,
 		headers: { authorization: [`Bearer ${credential}`] }
 	});
@@ -86,6 +88,42 @@ describe('workspace.manifest command', () => {
 		const people = collections.find(({ name }) => name === 'people');
 		expect(people?.fields.find(({ name }) => name === 'name')?.required).toBe(true);
 		expect(people?.fields.find(({ name }) => name === 'team')?.required).toBe(false);
+	});
+
+	it('gives an administrator the complete authored model without system collections', async () => {
+		harness = await makeBoltTestRuntime(
+			testWorkspace({
+				collections: [
+					{ name: 'people', fields: { name: field.string({ required: true }) } },
+					{ name: 'payroll_runs', fields: { period: field.string({ required: true }) } }
+				]
+			})
+		);
+		await seedSession(harness, {
+			token: 'author-token',
+			user: 'workspace-author',
+			status: ADMIN_STATUS
+		});
+
+		const response = await harness.runtime.runPromise(
+			dispatchInvocation(manifestInvocation('author-token', 'workspace.authoringManifest'))
+		);
+		const names = (value(response)['collections'] as ReadonlyArray<{ name: string }>).map(
+			({ name }) => name
+		);
+		expect(names).toEqual(['people', 'payroll_runs']);
+	});
+
+	it('refuses the authoring model to a non-administrator', async () => {
+		harness = await makeBoltTestRuntime(testWorkspace());
+		await seedSession(harness, { token: 'member-token', user: 'ordinary-member' });
+
+		const failure = await harness.runtime.runPromise(
+			Effect.flip(
+				dispatchInvocation(manifestInvocation('member-token', 'workspace.authoringManifest'))
+			)
+		);
+		expect(failure).toBeInstanceOf(AccessControl.AccessDenied);
 	});
 
 	/**

@@ -139,6 +139,7 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	'agents.listConversations',
 	'agents.history',
 	'workspace.manifest',
+	'workspace.authoringManifest',
 	'collections.findMany',
 	'collections.findFirst',
 	'collections.count',
