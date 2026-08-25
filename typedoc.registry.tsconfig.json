@@ -1,9 +1,0 @@
-{
-	"compilerOptions": {
-		"module": "NodeNext",
-		"moduleResolution": "NodeNext",
-		"skipLibCheck": true,
-		"target": "ES2024"
-	},
-	"include": ["packages/*/build/**/*.d.ts"]
-}
