@@ -3,7 +3,7 @@
 	import { Badge } from '#lib/badge';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import type { Editor, NodeViewRendererProps } from '@tiptap/core';
-	import type { MentionItem } from './mention-configured.svelte';
+	import type { MentionItem } from './mention-item.js';
 
 	let {
 		editor,

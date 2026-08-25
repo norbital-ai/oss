@@ -11,7 +11,7 @@
 import { safeParse } from '@norbital-ai/std';
 import { Cause, Clock, Effect, Schema } from 'effect';
 import { scopedStorageKey } from '#lib/storage-scope';
-import type { FormSchema } from '../form_state.svelte';
+import type { FormSchema } from '../schema.js';
 
 /**
  * The localStorage envelope a draft is persisted in. The inner `data` stays schemaless because it

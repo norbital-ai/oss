@@ -40,29 +40,12 @@ import {
 	DraftStorage,
 	type DraftStorage as DraftStorageType
 } from './utilities/draft_storage.svelte';
+import type { FormSchema, InferSchema } from './schema.js';
 
 /** Catalog-backed translation handle, threaded in so this state class never renders hardcoded copy. */
 export type TranslateFn = (key: string, vars?: MessageVars) => string;
 
-// ============================================================================
-// TYPES
-// ============================================================================
-
-/**
- * Structural constraint satisfied by any Standard Schema v1 schema, read through `~standard`.
- */
-export type FormSchema = {
-	readonly ['~standard']: {
-		readonly validate: (data: unknown) => unknown;
-	};
-};
-
-/** Extract the output type from a Standard Schema v1-compatible schema. */
-export type InferSchema<S extends FormSchema> = S extends {
-	readonly _output: infer T extends object;
-}
-	? T
-	: object;
+export type { FormSchema, InferSchema } from './schema.js';
 
 /**
  * The two shapes a `~standard.validate` answer takes: the issued failures, or the validated value.

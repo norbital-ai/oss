@@ -5,6 +5,7 @@ export {
 	extractFileMetadata
 } from './extensions/attachment/attachment-extension.svelte';
 export { ConfiguredMention } from './extensions/mention/mention-configured.svelte';
+export type { MentionItem } from './extensions/mention/mention-item.js';
 export { default as MentionTreeMenu } from './extensions/mention/mention-tree-menu.svelte';
 export { default as MarkdownEditor } from './markdown-editor.svelte';
 export { default as ReadonlyMarkdown } from './readonly-markdown.svelte';

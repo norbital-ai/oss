@@ -19,8 +19,8 @@ import type { Node as ProsemirrorNode } from 'prosemirror-model';
 import { mount } from 'svelte';
 import type { Instance } from 'tippy.js';
 import * as TippyModule from 'tippy.js';
-import { Schema } from 'effect';
 import MentionTagView from './mention-tag-view.svelte';
+import { MentionItemSchema, type MentionItem } from './mention-item.js';
 
 const tippy = TippyModule.default;
 
@@ -43,28 +43,6 @@ declare module '@tiptap/core' {
 		};
 	}
 }
-
-const MentionItemSchema = Schema.Struct({
-	id: Schema.mutableKey(Schema.String),
-	type: Schema.mutableKey(
-		Schema.Literals([
-			'collection',
-			'column',
-			'route',
-			'template',
-			'workspace',
-			'folder',
-			'file',
-			'user'
-		])
-	),
-	label: Schema.mutableKey(Schema.String),
-	description: Schema.mutableKey(Schema.String),
-	icon: Schema.mutableKey(Schema.String),
-	metadata: Schema.mutableKey(Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown))),
-	parentId: Schema.mutableKey(Schema.optionalKey(Schema.String))
-});
-export type MentionItem = typeof MentionItemSchema.Type;
 
 interface ConfiguredMentionOptions {
 	/** Callback when a mention is deleted */

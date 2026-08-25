@@ -5,7 +5,7 @@
 	import { fly } from 'svelte/transition';
 	import { Inline, Scroll } from '#lib/layout';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import type { KanbanProps } from '#lib/kanban';
+	import type { KanbanProps } from './types.js';
 	import KanbanColumn from './kanban-column.svelte';
 
 	let {

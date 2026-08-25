@@ -9,7 +9,7 @@
 	import { cn } from '#lib/utils';
 	import { watch } from 'runed';
 	import { onMount } from 'svelte';
-	import type { MentionItem } from './mention-configured.svelte';
+	import type { MentionItem } from './mention-item.js';
 
 	// =================================================================================
 	// PROPS

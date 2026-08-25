@@ -12,7 +12,7 @@
 	import { createVirtualizer } from '#lib/utils/virtualizer.svelte';
 	import type SortablePrimitive from 'sortablejs';
 	import { fade } from 'svelte/transition';
-	import type { KanbanColumnProps, TCardSnippet, TKanbanItem } from '#lib/kanban';
+	import type { KanbanColumnProps, TCardSnippet, TKanbanItem } from './types.js';
 	import { Effect } from 'effect';
 
 	let {

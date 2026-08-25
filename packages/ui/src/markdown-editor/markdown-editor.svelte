@@ -17,9 +17,9 @@
 	import { cn } from '#lib/utils';
 	import { createFileAttachmentExtension } from './extensions/attachment/attachment-extension.svelte';
 	import {
-		ConfiguredMention,
-		type MentionItem
+		ConfiguredMention
 	} from './extensions/mention/mention-configured.svelte';
+	import type { MentionItem } from './extensions/mention/mention-item.js';
 	import MentionTreeMenu from './extensions/mention/mention-tree-menu.svelte';
 	import { createSlashCommands, type CommandItem } from './extensions/slash-commands.svelte';
 	import Icon from '@iconify/svelte';

@@ -19,6 +19,7 @@
 </script>
 
 <script lang="ts" generics="TRow extends MatrixRow">
+	import type { Snippet } from 'svelte';
 	import Icon from '@iconify/svelte';
 	import MatrixCell from './matrix-cell.svelte';
 	import {
