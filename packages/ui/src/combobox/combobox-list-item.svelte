@@ -4,7 +4,7 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline } from '#lib/layout';
 	import { cn } from '#lib/utils';
-	import type { TComboboxCommandItem } from '#lib/combobox';
+	import type { TComboboxCommandItem } from '#lib/combobox/types';
 
 	const { t } = useI18n<UiKeys>();
 

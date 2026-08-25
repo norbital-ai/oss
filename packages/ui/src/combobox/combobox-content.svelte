@@ -6,7 +6,7 @@
 	import { cn } from '#lib/utils';
 	import type { Snippet } from 'svelte';
 	import ComboboxListItem from './combobox-list-item.svelte';
-	import type { TComboboxCommandItem, TInfiniteLoadingConfig, TOption } from '#lib/combobox';
+	import type { TComboboxCommandItem, TInfiniteLoadingConfig, TOption } from '#lib/combobox/types';
 
 	const { t } = useI18n<UiKeys>();
 

@@ -1,4 +1,4 @@
-import type { TOption } from '#lib/combobox';
+import type { TOption } from '#lib/combobox/types';
 
 // Custom filter function for enhanced search (for Command component)
 export function buildCustomFilterFn<T, AP extends Record<string, unknown>>(

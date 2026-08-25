@@ -1,12 +1,81 @@
 import { treeFind, treeFlatten } from '@norbital-ai/std/tree';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-import type {
-	BaseTreeItem,
-	NodeActionCallback,
-	SelectionState,
-	TreeNodes,
-	TreeSelectStateProps
-} from '#lib/tree-select';
+import { Schema } from 'effect';
+import type { RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
+import type { Component } from 'svelte';
+
+/**
+ * Selection state interface defining which nodes are selected or disabled
+ */
+export const SelectionStateSchema = Schema.Struct({
+	selected: Schema.Array(Schema.String),
+	disabled: Schema.Array(Schema.String)
+});
+export type SelectionState = typeof SelectionStateSchema.Type;
+
+export type TreeNodes<TMetadata> =
+	| TreeChildNode<TMetadata>
+	| TreeParentNode<TMetadata>
+	| RequiredTreeChildNode<TMetadata>;
+
+/**
+ * Callback type for node actions
+ */
+export type NodeActionCallback<TMetadata> = (
+	node: TreeNodes<TMetadata>
+) =>
+	RenderComponentConfig<Component<Record<string, unknown>>> | RenderSnippetConfig<unknown> | string;
+
+/**
+ * Base item structure used for initializing the tree
+ */
+export interface BaseTreeItem<TMetadata> {
+	/** Unique identifier for the node */
+	id: string;
+	/** Display text for the node */
+	title: string;
+	/** Additional aliases and metadata included when filtering the tree */
+	searchText?: string;
+	/** Icon identifier for the node */
+	icon: string;
+	/** Child items under this node */
+	children?: BaseTreeItem<TMetadata>[];
+	/** Whether this item is required (when in multiple selection mode) */
+	required?: boolean;
+	/** Custom metadata associated with this item */
+	metadata: TMetadata;
+	/** Optional action to render next to the node */
+	action?: NodeActionCallback<TMetadata>;
+}
+
+/**
+ * Props interface for the TreeSelect component
+ */
+export interface TreeSelectProps<TMetadata> {
+	/** Root items to display in the tree */
+	rootItems: readonly BaseTreeItem<TMetadata>[];
+	/** Selection state (bindable) */
+	value?: SelectionState;
+	/** Callback when selection changes */
+	onChange?: (state: SelectionState) => void;
+	/** Disable all interactions and focus */
+	disabled?: boolean;
+	/** Prevent selection changes but allow navigation/expand */
+	readonly?: boolean;
+	/** Whether to show the search input */
+	showSearch?: boolean;
+	/** Placeholder shown in the search input */
+	searchPlaceholder?: string;
+	/** Additional CSS class for the container */
+	containerClass?: string;
+	/** Whether to allow multiple selection */
+	multiple?: boolean;
+}
+
+/**
+ * Props interface for TreeState initialization
+ */
+export type TreeSelectStateProps<TMetadata> = TreeSelectProps<TMetadata>;
 
 // ============================================================================
 // Type Guards

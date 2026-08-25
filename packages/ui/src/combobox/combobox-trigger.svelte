@@ -13,7 +13,7 @@
 	import { Effect } from 'effect';
 	import { tick } from 'svelte';
 	import ComboboxContent from './combobox-content.svelte';
-	import type { TComboboxCommandItem, TInfiniteLoadingConfig, TOption } from '#lib/combobox';
+	import type { TComboboxCommandItem, TInfiniteLoadingConfig, TOption } from '#lib/combobox/types';
 
 	const { t } = useI18n<UiKeys>();
 

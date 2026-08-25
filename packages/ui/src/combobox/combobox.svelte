@@ -16,7 +16,7 @@
 	import { isEqual } from 'es-toolkit/predicate';
 	import ComboboxTrigger from './combobox-trigger.svelte';
 	import ComboboxSelection from './combobox-selection.svelte';
-	import type { TComboboxCommandItem, TComboboxProps, TOption } from '#lib/combobox';
+	import type { TComboboxCommandItem, TComboboxProps, TOption } from '#lib/combobox/types';
 
 	const { t } = useI18n<UiKeys>();
 

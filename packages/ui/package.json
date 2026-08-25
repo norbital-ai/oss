@@ -100,6 +100,7 @@
 		"#lib/collection-record-metadata/*": "./build/collection-record-metadata/*.js",
 		"#lib/collection-table/*": "./build/collection-table/*.js",
 		"#lib/collection-toolbar/*": "./build/collection-toolbar/*.js",
+		"#lib/combobox/*": "./build/combobox/*.js",
 		"#lib/command/*": "./build/command/*.js",
 		"#lib/country-picker/*": "./build/country-picker/*.js",
 		"#lib/data-renderer/*": "./build/data-renderer/*.js",

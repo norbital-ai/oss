@@ -12,7 +12,7 @@
 	import TabsContent from '../tabs/tabs-content.svelte';
 	import TabsList from '../tabs/tabs-list.svelte';
 	import { SvelteMap } from 'svelte/reactivity';
-	import type { NodeActionCallback, TreeNodes, TreeSelectProps } from '#lib/tree-select';
+	import type { NodeActionCallback, TreeNodes, TreeSelectProps } from './tree-select-state.svelte';
 	import { isParentNode, isRequiredChildNode, TreeState } from './tree-select-state.svelte';
 
 	const INDENTATION_WIDTH = 18;
