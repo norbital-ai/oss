@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import type { Side } from '#lib/sheet';
+	import type { Side } from '#lib/sheet/sheet-variants';
 	import { Number as Number_ } from 'effect';
 
 	const { t } = useI18n<UiKeys>();

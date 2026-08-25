@@ -4,17 +4,36 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { cn, formatFileSize } from '#lib/utils';
 	import { useId } from 'bits-ui';
+	import type { HTMLInputAttributes } from 'svelte/elements';
 	import { Inline, Scroll, Stack } from '#lib/layout';
 	import { isActiveUploadStage, UPLOAD_STAGE_MESSAGES } from '../file-upload/index.js';
+	import type { IFileUploadClient } from '../file-upload/index.js';
 	import type { FileValue as TFileValue } from '../file-value/index.js';
 	import { Spinner } from '../spinner/index.js';
 	import { FileMetadataTooltip } from '../file-value/index.js';
-	import type { FileDropZoneProps } from './index.js';
 
 	const { t } = useI18n<UiKeys>();
 
+	export type FileRejectedReason =
+		'Maximum file size exceeded' | 'File type not allowed' | 'Maximum files uploaded';
+
+	export interface FileDropZoneProps extends Omit<HTMLInputAttributes, 'multiple' | 'accept'> {
+		client: IFileUploadClient;
+		isCompact?: boolean;
+		maxFiles?: number;
+		fileCount?: number;
+		maxFileSize?: number;
+		onFileRejected?: (opts: { reason: FileRejectedReason; file: File }) => void;
+		onUploadStart?: (files: File[]) => void;
+		onUploadSuccess?: (files: TFileValue[]) => void;
+		onUploadError?: (error: string, file?: File) => void;
+		accept?: string[];
+		uploadedFiles?: TFileValue[];
+		onRemoveFile?: (index: number) => void;
+		readonly?: boolean;
+	}
+
 	type UploadStage = import('../file-upload/index.js').UploadStage;
-	type FileRejectedReason = import('./index.js').FileRejectedReason;
 	type UploadItem = {
 		id: string;
 		file: File;
