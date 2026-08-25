@@ -9,6 +9,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { buttonVariants } from '@norbital-ai/ui/button';
+	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Bound, Cluster, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import type { MeteredObservation, PeriodEstimate } from './organization-state.js';
 
@@ -45,9 +46,17 @@
 
 	const USAGE_LABELS: Readonly<Record<string, string>> = {
 		compute: 'Compute',
-		database: 'Disc',
+		database: 'Database',
 		files: 'Files',
 		ai: 'AI'
+	};
+
+	/** The same visual names used by the public pricing estimator. */
+	const USAGE_ICONS: Readonly<Record<string, string>> = {
+		compute: 'lucide:cpu',
+		database: 'lucide:database',
+		files: 'lucide:hard-drive',
+		ai: 'product:agent'
 	};
 
 	const dated = new Intl.DateTimeFormat(undefined, {
@@ -148,9 +157,17 @@
 							aria-label={`${meter.kind} meter`}
 						>
 							<Stack gap="sm">
-								<p class="text-overline">
-									{USAGE_LABELS[meter.kind] ?? meter.kind}
-								</p>
+								<Inline gap="sm" align="center">
+									<span
+										class="flex size-8 shrink-0 items-center justify-center rounded-md border border-input bg-background text-foreground shadow-xs"
+										aria-hidden="true"
+									>
+										<IconWrapper name={USAGE_ICONS[meter.kind] ?? 'lucide:gauge'} class="size-4" />
+									</span>
+									<p class="text-overline">
+										{USAGE_LABELS[meter.kind] ?? meter.kind}
+									</p>
+								</Inline>
 								<Stack gap="xs">
 									<p class="truncate text-2xl font-semibold tabular-nums text-foreground">
 										{formatQuantity.format(meter.monthToDateQuantity)}
@@ -174,10 +191,7 @@
 					{/each}
 				</Grid>
 
-				<section
-					class="rounded-lg border border-border bg-card p-4 sm:p-6"
-					aria-label="Estimated bill at month end"
-				>
+				<section class="rounded-lg bg-muted/40 p-5 sm:p-6" aria-label="Estimated bill at month end">
 					<Stack gap="md">
 						<Stack gap="xs">
 							<h3 class="text-sm font-semibold text-foreground">Estimated bill at month end</h3>

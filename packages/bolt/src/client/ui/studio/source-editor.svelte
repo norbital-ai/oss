@@ -18,13 +18,11 @@
 		path = '',
 		value = '',
 		fileCount = 0,
-		readOnly = false,
 		onValueChange
 	}: {
 		path?: string;
 		value?: string;
 		fileCount?: number;
-		readOnly?: boolean;
 		onValueChange?: (value: string) => void;
 	} = $props();
 
@@ -69,7 +67,6 @@
 			<CodeEditor
 				{value}
 				language={editorLanguage(path)}
-				readonly={readOnly}
 				ariaLabel={path}
 				minHeight="100%"
 				class="h-full w-full min-h-0 rounded-none border-0 shadow-none"

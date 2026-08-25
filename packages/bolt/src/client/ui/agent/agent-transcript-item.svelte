@@ -61,7 +61,7 @@
 	 */
 	function counterpart(message: Extract<PanelMessage, { kind: 'agent-message' }>): string {
 		const named = message.agentName ?? message.sessionTitle;
-		if (named === null) return message.sessionId ?? t('bolt.agent.unknownAgent');
+		if (named === null) return message.agentId ?? t('bolt.agent.unknownAgent');
 		return message.sessionTitle === null || message.sessionTitle === message.agentName
 			? named
 			: `${named} · ${message.sessionTitle}`;

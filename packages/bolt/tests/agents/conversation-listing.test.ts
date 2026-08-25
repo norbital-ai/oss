@@ -107,7 +107,7 @@ const fixtures: ReadonlyArray<ConversationFixture> = [
 		envoyKey: 'retired_desk'
 	},
 	{
-		id: 'subagent:admin-personal:tool:0',
+		id: 'delegated-review',
 		agent: 'web',
 		user: adminSubject.userId,
 		visibility: 'personal',
@@ -138,6 +138,37 @@ const historyFor = (runtime: BoltTestRuntime, subject: Identity.Subject, convers
 	);
 
 describe('agent conversation inbox authority', () => {
+	it('commits a new conversation, turn, mailbox, task and run before inference', async () => {
+		harness = await makeBoltTestRuntime(testWorkspace());
+		const runtime = harness;
+		const admitted = await runtime.runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Agents.Service).enqueue(
+					runtime.effectId('atomic-admission'),
+					adminSubject,
+					'web',
+					'atomic-conversation',
+					{ kind: 'user_message', text: 'Run payroll', documents: [] }
+				);
+			})
+		);
+		expect(admitted).toMatchObject({
+			conversationId: 'atomic-conversation',
+			status: 'queued'
+		});
+
+		const counts = await runtime.database.query(
+			`select
+				(select count(*)::int from chat_session where conversation_id = $1) as sessions,
+				(select count(*)::int from chat_message where conversation_id = $1) as messages,
+				(select count(*)::int from agent_mailbox where conversation_id = $1) as mailboxes,
+				(select count(*)::int from bolt_task where lane = $1) as tasks,
+				(select count(*)::int from agent_run where conversation_id = $1) as runs`,
+			['atomic-conversation']
+		);
+		expect(counts[0]).toEqual({ sessions: 1, messages: 2, mailboxes: 1, tasks: 1, runs: 1 });
+	});
+
 	it('keeps personal threads isolated and exposes only exact declared-public envoy rows to admins', async () => {
 		harness = await makeBoltTestRuntime(testWorkspace({ envoys: [publicDesk, memberDesk] }));
 		for (const row of fixtures) {

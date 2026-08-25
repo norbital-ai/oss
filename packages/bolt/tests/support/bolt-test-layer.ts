@@ -650,8 +650,8 @@ export const adminSubject: Identity.Subject = {
 	// A person holds policies through their team, never directly. The array is what a *static*
 	// identity carries, and this fixture is a person.
 	policies: [],
-	// Administrative status does not itself grant tenant data. Data access in test workspaces comes
-	// from the explicitly declared `admin` team and its policies above.
+	// Administrative status is the runtime's complete workspace bypass. The team and authored
+	// policies above are still used by ordinary subjects and explicit team previews.
 	admin: true
 };
 

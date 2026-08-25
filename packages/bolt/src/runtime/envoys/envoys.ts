@@ -107,7 +107,7 @@ const DrainReport = Schema.Struct({
 	envoy: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
 	drained: Schema.Number,
-	status: Schema.Literals(['answered', 'failed', 'skipped'])
+	status: Schema.Literals(['queued', 'answered', 'failed', 'skipped'])
 });
 interface DrainReport extends Schema.Schema.Type<typeof DrainReport> {}
 
@@ -178,6 +178,12 @@ export type Interface = Readonly<{
 		envoyName: string,
 		conversationId: string
 	) => Effect.Effect<DrainReport, EnvoyFailure>;
+	readonly complete: (
+		effectId: EffectId,
+		envoyName: string,
+		conversationId: string,
+		output: Schema.Json
+	) => Effect.Effect<DrainReport, EnvoyError | Database.FacilityError>;
 	readonly reply: (
 		effectId: EffectId,
 		envoyName: string,
@@ -367,7 +373,7 @@ export const layer = Layer.effect(
 				);
 
 				const conversationId = `${envoyName}:${delivery.conversationKind}:${delivery.conversationId}`;
-				yield* agents.start(
+				yield* agents.open(
 					EffectId.make(`${effectId}:conversation`),
 					subject,
 					envoyName,
@@ -536,7 +542,7 @@ export const layer = Layer.effect(
 					database,
 					composer
 						.update(boltEnvoyInbound)
-						.set({ status: 'draining' })
+						.set({ status: 'processing' })
 						.where(inArray(boltEnvoyInbound.id, pendingIds))
 						.returning({
 							id: boltEnvoyInbound.id,
@@ -594,38 +600,7 @@ export const layer = Layer.effect(
 					invocation: row.invocation
 				}));
 				const batch: StoredInboundBatch = { kind: 'inbound_batch', messages };
-				const attempted = yield* agents
-					.turn(effectId, trigger.subject, envoyName, conversationId, batch)
-					.pipe(
-						Effect.map((result) => ({ ok: result.status === 'completed', result })),
-						Effect.catch((error) => Effect.succeed({ ok: false as const, error }))
-					);
-				let answered = false;
-				if (attempted.ok) {
-					answered = yield* send(
-						EffectId.make(`${effectId}:reply`),
-						envoy,
-						trigger.transport_conversation_id,
-						attempted.result.output
-					).pipe(
-						Effect.as(true),
-						Effect.catch(() => Effect.succeed(false))
-					);
-				}
-				const status = answered ? 'answered' : 'failed';
-				yield* executeBuilt(
-					EffectId.make(`${effectId}:settle`),
-					database,
-					composer
-						.update(boltEnvoyInbound)
-						.set({ status, answered_at: dbNow() })
-						.where(
-							inArray(
-								boltEnvoyInbound.id,
-								rows.map(({ id }) => id)
-							)
-						)
-				);
+				yield* agents.enqueue(effectId, trigger.subject, envoyName, conversationId, batch);
 				yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
 
 				const remaining = yield* executeBuilt(
@@ -648,6 +623,60 @@ export const layer = Layer.effect(
 					const now = yield* Clock.currentTimeMillis;
 					yield* enqueueDrain(EffectId.make(`${effectId}:requeue`), envoyName, conversationId, now);
 				}
+				return { envoy: envoyName, conversationId, drained: rows.length, status: 'queued' as const };
+			}),
+
+			complete: Effect.fn('Envoys.complete')(function* (
+				effectId,
+				envoyName,
+				conversationId,
+				output
+			) {
+				const envoy = yield* requireEnvoy(envoyName);
+				const processing = yield* executeBuilt(
+					EffectId.make(`${effectId}:processing`),
+					database,
+					composer
+						.select({
+							id: boltEnvoyInbound.id,
+							transport_conversation_id: boltEnvoyInbound.transport_conversation_id
+						})
+						.from(boltEnvoyInbound)
+						.where(
+							and(
+								eq(boltEnvoyInbound.conversation_id, conversationId),
+								eq(boltEnvoyInbound.status, 'processing')
+							)
+						)
+						.orderBy(asc(boltEnvoyInbound.sent_at))
+				);
+				const rows = processing.rows.flatMap((row) => {
+					const decoded = Schema.decodeUnknownOption(
+						Schema.Struct({
+							id: Schema.NonEmptyString,
+							transport_conversation_id: Schema.NonEmptyString
+						})
+					)(row);
+					return decoded._tag === 'Some' ? [decoded.value] : [];
+				});
+				if (rows.length === 0)
+					return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
+				const recipient = rows.at(-1)?.transport_conversation_id;
+				const answered =
+					recipient !== undefined &&
+					(yield* send(EffectId.make(`${effectId}:reply`), envoy, recipient, output).pipe(
+						Effect.as(true),
+						Effect.catch(() => Effect.succeed(false))
+					));
+				const status = answered ? ('answered' as const) : ('failed' as const);
+				yield* executeBuilt(
+					EffectId.make(`${effectId}:settle`),
+					database,
+					composer
+						.update(boltEnvoyInbound)
+						.set({ status, answered_at: dbNow() })
+						.where(inArray(boltEnvoyInbound.id, rows.map(({ id }) => id)))
+				);
 				return { envoy: envoyName, conversationId, drained: rows.length, status };
 			}),
 

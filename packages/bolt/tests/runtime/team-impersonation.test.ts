@@ -78,10 +78,9 @@ const hrTeams = async (runtime: BoltTestRuntime) => {
 /**
  * The administrator these tests preview from, belonging to *no* team at all.
  *
- * Deliberately placeless rather than in `admin`. The fixture below declares a policy named `admin`
- * granting `*` and a team holding it, so placing them there would let every assertion here pass
- * through the policy ladder and conceal whether preview authority is separate from data authority.
- * With no team, `user.status` permits team preview but grants no authored app or collection access.
+ * Deliberately placeless rather than in `admin`. The status itself grants the complete workspace;
+ * keeping the person out of a team proves that this authority is not accidentally inherited from
+ * the authored policy ladder. A preview clears the status and substitutes one real team's policy.
  */
 const administrator = async (runtime: BoltTestRuntime, token = 'admin-token') => {
 	await hrTeams(runtime);
@@ -112,10 +111,8 @@ const visibleApps = async (runtime: BoltTestRuntime, credential: string, team?: 
  * `Employee` sees one app and its own notices; `HR` sees the controller group and payslips.
  *
  * The `admin` policy is kept, and kept unused. It is an ordinary authored policy — no workspace has
- * to declare one and nothing in the runtime looks for the name — so it stands here for exactly what
- * a real workspace's is: a team the picker offers alongside the others, held by nobody these tests
- * sign in as. Administration itself is `user.status`; it permits the narrow administrative
- * controls, but reaches none of the authored apps or collections without a policy grant.
+ * to declare one and nothing in the runtime looks for the name. Administration itself is the
+ * trusted `user.status`, which bypasses authored policy until an explicit team preview clears it.
  */
 const hrWorkspace = workspace({
 	name: 'test-workspace',
@@ -177,8 +174,8 @@ describe('team impersonation', () => {
 	/**
 	 * The acceptance example, both halves.
 	 *
-	 * An administrator with no tenant-data policy is asked to look as an `Employee`: the employee app
-	 * appears for the preview, while `payslips` — which Employee is not granted — remains unavailable.
+	 * An administrator sees every app by default, then asks to look as an `Employee`: only the
+	 * employee app remains, while `payslips` — which Employee is not granted — becomes unavailable.
 	 * The second assertion is the one that matters; the first alone would be
 	 * satisfied by a filtered list in front of a runtime that still served the rows.
 	 */
@@ -186,7 +183,11 @@ describe('team impersonation', () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
 		await administrator(harness);
 
-		expect(await visibleApps(harness, 'admin-token')).toEqual([]);
+		expect(await visibleApps(harness, 'admin-token')).toEqual([
+			'hr_employee',
+			'hr_controller',
+			'hr_controller/payroll'
+		]);
 
 		const previewed = await visibleApps(harness, 'admin-token', 'Employee');
 		expect(previewed).toEqual(['hr_employee']);
@@ -222,19 +223,22 @@ describe('team impersonation', () => {
 		expect(response.status).toBe(200);
 	});
 
-	/** Nothing lingers: with the header gone the next command has the actor's empty grant set again. */
+	/** Nothing lingers: with the header gone the next command restores the administrator bypass. */
 	it('restores the real subject when the preview stops', async () => {
 		harness = await makeBoltTestRuntime(hrWorkspace);
 		await administrator(harness);
 
 		expect(await visibleApps(harness, 'admin-token', 'Employee')).toEqual(['hr_employee']);
-		expect(await visibleApps(harness, 'admin-token')).toEqual([]);
+		expect(await visibleApps(harness, 'admin-token')).toEqual([
+			'hr_employee',
+			'hr_controller',
+			'hr_controller/payroll'
+		]);
 
-		const refused = await failureOf(
-			harness,
-			command('collections.findMany', 'admin-token', { collection: 'payslips' })
+		const restored = await harness.runtime.runPromise(
+			dispatchInvocation(command('collections.findMany', 'admin-token', { collection: 'payslips' }))
 		);
-		expect(refused).toBeInstanceOf(AccessControl.AccessDenied);
+		expect(restored.status).toBe(200);
 	});
 
 	/**
@@ -371,8 +375,8 @@ describe('team impersonation', () => {
 	 * ladder, and put a magic string in the role namespace that `mayImpersonate` had to agree on.
 	 *
 	 * Administrative status is explicit on their own row, so it is `admin` that has to come back
-	 * true — and the founder has to be placed in no team at all. That status grants only the built-in
-	 * administrative controls; tenant data remains inaccessible until a team grants it. The response carries no array to
+	 * true — and the founder has to be placed in no team at all. That status grants the complete
+	 * workspace directly; an explicit preview temporarily narrows it to one team's policy. The response carries no array to
 	 * assert on any more, so the placement is read off the row itself: `team_id` null is the same
 	 * claim the empty array used to make, and filling it again would restore exactly the conflation
 	 * this replaced with nothing else failing.

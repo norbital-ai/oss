@@ -26,15 +26,15 @@ const messages = projectStoredChatMessages([
 		content: {
 			id: 'turn-1',
 			status: 'completed',
-			subagent_id: null,
+			parent_agent_id: null,
 			usage: { inputTokens: 4_000, outputTokens: 200, totalTokens: 4_200, costUsd: 0.01 },
 			parts: [
-				{ kind: 'tool', id: spawnCallId, name: 'spawn_subagent', input: { task: 'Count staff' } },
+				{ kind: 'tool', id: spawnCallId, name: 'spawn_agent', input: { task: 'Count staff' } },
 				{
 					kind: 'tool-result',
 					id: spawnCallId,
-					name: 'spawn_subagent',
-					output: { waiting: true, conversationId: `subagent:${spawnCallId}` }
+					name: 'spawn_agent',
+					output: { agentId: `agent:${spawnCallId}`, taskId: childTurnId, status: 'queued' }
 				},
 				{ kind: 'text', text: 'Forty-two people.' }
 			]
@@ -42,20 +42,20 @@ const messages = projectStoredChatMessages([
 	},
 	{
 		id: 'message-3',
-		conversation_id: 'conversation-1',
+		conversation_id: `agent:${spawnCallId}`,
 		role: 'user',
 		turn_id: childTurnId,
 		content: 'Count staff'
 	},
 	{
 		id: 'message-4',
-		conversation_id: 'conversation-1',
+		conversation_id: `agent:${spawnCallId}`,
 		role: 'assistant',
 		turn_id: childTurnId,
 		content: {
 			id: childTurnId,
 			status: 'completed',
-			subagent_id: `subagent:${spawnCallId}`,
+			parent_agent_id: 'conversation-1',
 			usage: { inputTokens: 90_000, outputTokens: 900, totalTokens: 90_900, costUsd: 0.24 },
 			parts: [{ kind: 'text', text: 'Forty-two.' }]
 		}
@@ -90,7 +90,7 @@ describe('conversation usage', () => {
 	it('nests delegated messages beneath the spawning call', () => {
 		const panel = toPanelMessages(messages.messages, messages.turns);
 		const spawn = panel.find(
-			(message) => message.kind === 'tool' && message.name === 'spawn_subagent'
+			(message) => message.kind === 'tool' && message.name === 'spawn_agent'
 		);
 		if (spawn?.kind !== 'tool') throw new Error('spawn tool was not projected');
 		expect(

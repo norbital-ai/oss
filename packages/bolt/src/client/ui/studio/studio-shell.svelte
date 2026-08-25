@@ -57,7 +57,6 @@
 				environmentId: Schema.String,
 				releaseId: Schema.String,
 				artifactId: Schema.String,
-				health: Schema.String,
 				ownerEpoch: Schema.String
 			})
 		),
@@ -69,7 +68,13 @@
 				quantity: Schema.Number
 			})
 		),
-		readiness: Schema.Struct({ accepting: Schema.Boolean, outstanding: Schema.Number }),
+		capacity: Schema.Struct({
+			limit: Schema.Number,
+			active: Schema.Number,
+			queued: Schema.Number,
+			queueLimit: Schema.Number,
+			tenantQueueLimit: Schema.Number
+		}),
 		source: Schema.Struct({
 			tenantId: Schema.String,
 			workspaceKey: Schema.String,
@@ -135,7 +140,6 @@
 			})
 		),
 		deploymentHistory: Schema.Array(Schema.NonEmptyString),
-		workbenches: Schema.Array(Schema.Struct({ workspaceKey: Schema.String, open: Schema.Boolean })),
 		facilities: Schema.Array(Schema.Struct({ name: Schema.String, available: Schema.Boolean }))
 	});
 	type OperationsState = typeof OperationsStateSchema.Type;
@@ -191,7 +195,7 @@
 					: String(environmentQuery.error)
 	});
 	/** The last thing the host said, and whether a command it was told to run is still running. */
-	let host = $state({ status: 'Loading managed host state…', busy: false });
+	let host = $state({ status: 'Loading workspace state…', busy: false });
 	/** The release request selected in Review; absent means the newest request. */
 	let selectedRequestId = $state<string | undefined>();
 	/**
@@ -235,12 +239,10 @@
 	const missingFacilities = $derived(unavailableFacilities(snapshot?.facilities ?? []));
 	const controls = $derived(
 		releaseControls({
-			busy: host.busy,
-			accepting: snapshot?.readiness.accepting ?? false,
+			busy: host.busy || snapshot === undefined,
 			hasRelease: (activeEnvironment?.releaseId ?? '') !== ''
 		})
 	);
-	const readOnly = false;
 	const isWorkbench = $derived(view.rootTab === 'workbench');
 	const isReview = $derived(view.rootTab === 'review');
 	const isOperations = $derived(view.rootTab === 'operations');
@@ -298,7 +300,7 @@
 			Effect.gen(function* () {
 				const raw = yield* Effect.tryPromise(() => session.operations.read());
 				snapshot = yield* Schema.decodeUnknownEffect(OperationsStateSchema)(raw);
-				host.status = snapshot.readiness.accepting ? 'Ready' : 'Draining';
+				host.status = 'Ready';
 			}).pipe(
 				Effect.catch((cause) => {
 					const message = String(cause);
@@ -453,7 +455,6 @@
 			selected={view.selected}
 			expanded={view.expanded}
 			view={view.workbench}
-			{readOnly}
 			onselect={(key) => {
 				view.selected = key;
 				if (key.startsWith('source:')) {
@@ -528,11 +529,12 @@
 				{#if isWorkbench}
 					<WorkbenchToolbar
 						hostStatus={host.status}
+						busy={host.busy}
 						view={view.workbench}
 						previewReady={sourceDraftCount === 0 &&
 							snapshot?.preview?.commit === snapshot?.source.commit}
 						updateRequired={snapshot?.needsRebase === true}
-						updateDisabled={host.busy || snapshot?.readiness.accepting !== true}
+						updateDisabled={host.busy || snapshot === undefined}
 						updateReason={controls.reason ?? 'Rebase onto the latest Live commit.'}
 						previewDisabled={!controls.canPreview || snapshot?.needsRebase === true}
 						previewReason={controls.reason ??
@@ -673,7 +675,6 @@
 						path={editor.path}
 						value={editor.value}
 						fileCount={files.length}
-						{readOnly}
 						onValueChange={updateEditor}
 					/>
 				{/if}

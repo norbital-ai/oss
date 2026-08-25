@@ -34,7 +34,7 @@ import {
 } from '../src/facilities/database.js';
 import { makeFilesBindingFromConfig, makeLocalFilesBinding } from '../src/facilities/files.js';
 import { makeHostToolBinding, makeHostToolBindingFromConfig } from '../src/facilities/providers.js';
-import { makeScheduler, makeTaskBinding } from '../src/scheduler.js';
+import { makeScheduler, makeTaskBinding, makeTaskInvocationControl } from '../src/scheduler.js';
 import { makeMemoryTransport } from '../src/facilities/transport.js';
 
 const metadata = {
@@ -87,9 +87,7 @@ it.effect(
 						database.binding.call(
 							metadata,
 							DatabaseRequest.cases.Transaction.make({
-								statements: [
-									{ sql: "select bolt_assert(false, 'graph changed')", parameters: [] }
-								]
+								statements: [{ sql: "select bolt_assert(false, 'graph changed')", parameters: [] }]
 							}),
 							signal
 						)
@@ -460,6 +458,55 @@ it.effect('adapts AI, communication, connector, task and host-tool providers', (
 			['Success', 'Success', 'Success', 'Success', 'Success', 'Success']
 		);
 		assert.deepStrictEqual(registered, ['tasks.tick']);
+	})
+);
+
+it.effect('interrupts only the exact active task dispatch and forgets settled pointers', () =>
+	Effect.gen(function* () {
+		const invocations = makeTaskInvocationControl();
+		const tasks = makeTaskBinding(
+			makeScheduler({
+				tick: () => Effect.succeed(null),
+				onFailure: () => {}
+			}),
+			() => {},
+			invocations
+		);
+		const activeInvocation = InvocationId.make('active-invocation');
+		const controlInvocation = InvocationId.make('control-invocation');
+		const activeMetadata = { ...metadata, invocationId: activeInvocation };
+		const controlMetadata = { ...metadata, invocationId: controlInvocation };
+		const activeController = invocations.open(activeInvocation);
+
+		yield* Effect.tryPromise(() =>
+			tasks.call(activeMetadata, TaskRequest.cases.Active.make({ taskId: 'agent-turn-1' }), signal)
+		);
+		yield* Effect.tryPromise(() =>
+			tasks.call(
+				controlMetadata,
+				TaskRequest.cases.Interrupt.make({ taskId: 'agent-turn-1' }),
+				signal
+			)
+		);
+		assert.strictEqual(activeController.signal.aborted, true);
+		invocations.close(activeInvocation, activeController);
+
+		const settledController = invocations.open(activeInvocation);
+		yield* Effect.tryPromise(() =>
+			tasks.call(activeMetadata, TaskRequest.cases.Active.make({ taskId: 'agent-turn-2' }), signal)
+		);
+		yield* Effect.tryPromise(() =>
+			tasks.call(activeMetadata, TaskRequest.cases.Settled.make({ taskId: 'agent-turn-2' }), signal)
+		);
+		yield* Effect.tryPromise(() =>
+			tasks.call(
+				controlMetadata,
+				TaskRequest.cases.Interrupt.make({ taskId: 'agent-turn-2' }),
+				signal
+			)
+		);
+		assert.strictEqual(settledController.signal.aborted, false);
+		invocations.close(activeInvocation, settledController);
 	})
 );
 

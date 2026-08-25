@@ -41,12 +41,14 @@
 			| Readonly<{
 					readonly entries: ReadonlyArray<MatrixEntry>;
 					readonly usage: ReadonlyArray<UsageObservation>;
-					readonly readiness: { readonly accepting: boolean; readonly outstanding: number };
+					readonly capacity: {
+						readonly limit: number;
+						readonly active: number;
+						readonly queued: number;
+						readonly queueLimit: number;
+						readonly tenantQueueLimit: number;
+					};
 					readonly source: SourceSnapshot;
-					readonly workbenches: ReadonlyArray<{
-						readonly workspaceKey: string;
-						readonly open: boolean;
-					}>;
 					readonly facilities: ReadonlyArray<FacilityState>;
 			  }>
 			| undefined;
@@ -58,8 +60,7 @@
 	const metrics = $derived(
 		studioMetrics({
 			usage: snapshot?.usage ?? [],
-			source: snapshot?.source,
-			workbenches: snapshot?.workbenches ?? []
+			source: snapshot?.source
 		})
 	);
 </script>
@@ -86,40 +87,6 @@
 		</Grid>
 
 		<TenantMatrix entries={snapshot?.entries ?? []} commit={snapshot?.source.commit ?? ''} />
-
-		<Stack
-			as="section"
-			gap="sm"
-			class="border-t border-border/70 pt-4"
-			data-testid="studio-operations-workbenches"
-		>
-			<Stack gap="xs">
-				<h3 class="text-xs font-semibold text-foreground">Workbenches</h3>
-				<p class="max-w-2xl text-xs leading-relaxed text-muted-foreground">
-					One private workbench per principal. Its files persist outside Bolt; active sessions do
-					not. Administrators cannot open another principal's workbench.
-				</p>
-			</Stack>
-			{#if (snapshot?.workbenches ?? []).length === 0}
-				<p class="text-meta">No workbenches yet.</p>
-			{:else}
-				<ul class="divide-y divide-border/50">
-					{#each snapshot?.workbenches ?? [] as workbench (workbench.workspaceKey)}
-						<Inline as="li" align="center" justify="between" gap="sm" class="py-1.5">
-							<span class="font-mono text-xs text-foreground">{workbench.workspaceKey}</span>
-							<span
-								class={workbench.open
-									? 'rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-micro text-emerald-500'
-									: 'rounded-full border border-border/70 bg-muted px-2 py-0.5 text-micro text-muted-foreground'}
-								role="status"
-							>
-								{workbench.open ? 'active' : 'stored'}
-							</span>
-						</Inline>
-					{/each}
-				</ul>
-			{/if}
-		</Stack>
 	</Stack>
 {/snippet}
 
@@ -157,12 +124,14 @@
 											{currentRelease.environmentId === 'live' ? 'live' : 'routed'}
 										</Badge>
 									{/if}
-									<Badge variant={snapshot?.readiness.accepting === false ? 'warning' : 'outline'}>
+									<Badge
+										variant={snapshot !== undefined && snapshot.capacity.queued > 0
+											? 'warning'
+											: 'outline'}
+									>
 										{snapshot === undefined
 											? 'reading'
-											: snapshot.readiness.accepting
-												? 'accepting work'
-												: 'draining'}
+											: `${snapshot.capacity.active}/${snapshot.capacity.limit} active${snapshot.capacity.queued === 0 ? '' : ` · ${snapshot.capacity.queued} queued`}`}
 									</Badge>
 								</Cluster>
 								{#if snapshot === undefined}
@@ -181,14 +150,12 @@
 										<span class="text-muted-foreground"
 											>commit {snapshot.source.commit.slice(0, 12)}</span
 										>
-										<span class="text-muted-foreground">{currentRelease.health}</span>
 									</Cluster>
 								{/if}
 								<p class="text-micro text-muted-foreground">
-									{snapshot?.readiness.outstanding ?? 0} request{(snapshot?.readiness.outstanding ??
-										0) === 1
-										? ''
-										: 's'} in flight.
+									{snapshot === undefined
+										? 'Capacity is being read.'
+										: `${snapshot.capacity.active}/${snapshot.capacity.limit} active; ${snapshot.capacity.queued}/${snapshot.capacity.queueLimit} queued globally (max ${snapshot.capacity.tenantQueueLimit} per tenant).`}
 								</p>
 							</Stack>
 						{/snippet}

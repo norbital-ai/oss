@@ -48,56 +48,91 @@ to more than one principle total.
 
 ## Structure
 
-| Rule     | Level | Confidence | Detects                                                                                          | Preferred action                                                                      |
-| -------- | ----- | ---------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| AL1      | hint  | high       | Bare named type alias                                                                            | Use the original type.                                                                |
-| AL2      | hint  | high       | Primitive type alias                                                                             | Remove it unless it is a real brand.                                                  |
-| AL3      | hint  | high       | Alias for `Record<string, unknown>`                                                              | Model the real shape.                                                                 |
-| AL4      | error | high       | Object/union type whose name matches a same-file Effect Schema                                   | Derive with `typeof SchemaOwner.Type` or `Schema.Schema.Type`.                        |
-| AL5      | error | high       | Exported object (≥3 fields) or string union duplicated                                           | One Effect Schema owner; derive or re-export it.                                      |
-| AL6      | error | high       | Collection-shaped object type restates/re-keys a row                                             | Compose from the schema-owned row with `Pick`/`Omit`/indexed access.                  |
-| AL7      | error | high       | Exported durable/wire/receipt object (≥3 fields) has no matching Effect Schema                   | Define the boundary schema and derive the type.                                       |
-| AL8      | error | high       | Function parameter contains an inline `{ role, content/parts }` message shape                    | Accept the canonical schema-inferred message type or compose from it.                 |
-| AL9      | error | medium     | Function parameter contains an inline data object with four or more fields                       | Accept a schema-inferred type or compose the parameter from its owner.                |
-| AL11     | error | high       | Local schema repeats an exported domain schema's fields and primitive families                   | Import and compose the canonical schema owner.                                        |
-| AR1      | error | high       | Function only copies source properties into a new object                                         | Use the row directly or spread it where an actual override is needed.                 |
-| AR2      | error | high       | Whole-row select aliases columns, usually for a later remap                                      | Select the table/row shape and keep its canonical keys.                               |
-| AR5      | error | high       | Returned object re-lists at least six of six/eight fields from one or two inputs                 | Preserve the typed object/projection, spread it, or fix the upstream schema/client.   |
-| SQL1     | error | high       | Raw SQL outside transaction requests/control or narrowly identifiable schema-bootstrap DDL       | Use the typed collection/query builder; keep only transaction/bootstrap SQL.           |
-| DDL1     | error | high       | Authored table/index or table-column/constraint definition bypasses the model compiler           | Declare the model once and let the compiler emit its physical schema.                 |
-| S1       | error | high       | Empty catch without an ignore rationale                                                          | Handle or log the failure.                                                            |
-| S3       | hint  | high       | Same expression checked against null and undefined                                               | Use `value != null`.                                                                  |
-| S5       | hint  | high       | `Array.from(new Set(...))`                                                                       | Use `[...new Set(...)]`.                                                              |
-| D1       | error | high       | Exact non-trivial named function, method, constructor/accessor, or class body duplicated         | Keep one entity owner and import, call, or extend it.                                 |
-| COMPAT1  | error | high       | Explicit deprecated/legacy/backward-compat forwarding declaration or re-export surface           | Migrate consumers and delete the compatibility surface.                               |
-| LEGACY1  | error | high       | Authored declaration carries `@deprecated`                                                       | Remove the legacy owner after migrating its consumers.                                |
-| LEGACY2  | error | high       | TypeScript resolves an actual use to a deprecated API                                            | Use the supported API; import-site diagnostics alone are deduplicated.                |
-| TRANS1   | error | high       | Executable code is attached to an explicit remove-after-migration/temporary-until marker         | Complete the transition and delete the scaffold.                                      |
-| TRANS2   | error | high       | Canonical field read falls back to an explicitly `legacy`/`compat`/`deprecated` field            | Migrate stored data and keep one canonical field.                                     |
-| D2       | error | high       | Identical `if`/`else` or ternary branches                                                        | Remove the meaningless condition or consolidate the shared logic.                     |
-| Q1       | error | high       | Callback-named function forwards every parameter unchanged to one callback                       | Call the callback directly.                                                           |
-| Q3       | error | high       | Private function has one same-file direct call and forwards its parameters unchanged             | Call the forwarded owner directly.                                                    |
-| Q4       | hint  | medium     | Private function has one same-file direct call and a small mutation-free single expression       | Review whether its name earns the indirection; inline when it does not.               |
-| QRY1     | error | high       | A generated query is mirrored or adapted by a handwritten query state machine                    | Render `.current`/`.loading`/`.error`; the sync engine owns freshness.                |
-| QRY2     | error | high       | A live query is manually refreshed or refetched                                                  | Delete the refresh path; mutations and the sync engine update the query.              |
-| QRY3     | error | high       | A derived query receives a plain binding that froze a reactive parameter at initialization       | Derive the parameter binding or construct the parameters inside the query owner.      |
-| QRY4     | error | high       | A query interface/class exposes a public `refresh`/`refetch` member                               | Remove the member; keep sync re-execution private to the engine.                      |
-| LIVE1    | error | high       | A named/timer/loop polling mechanism repeatedly waits and reads                                  | Read the live collection once and let sync update it.                                 |
-| LIVE2    | error | high       | `EventSource`, `text/event-stream`, or `sse` is used outside the sync stream                      | Remove the stream or route live collection data through the sync engine.              |
-| MUT1     | error | high       | A generated mutation is wrapped by local Effect/Promise, refresh, or lifecycle orchestration     | Invoke the generated mutation directly and render its owned lifecycle state.          |
-| ORM1     | error | high       | A Drizzle column supplies a second physical-name string, whether repeated or remapped            | Keep one vocabulary: use the canonical property and omit the optional name.           |
-| PERF1    | error | high       | Potentially unbounded invariant collection is linearly searched inside another traversal         | Build one `Map`/`Set` index before traversing.                                        |
-| PERF2    | error | high       | Effect Schema predicate/decoder factory rebuilt inside a traversal                               | Hoist the decoder once outside the callback.                                          |
-| PERF3    | error | high       | Three or more consecutive eager `filter`/`map`/`flatMap` traversals                              | Fuse the work into one pass or a canonical `filterMap`/indexed owner.                 |
-| PERF4    | error | high       | Pure `filter` materializes all matches only to read index zero/`at(0)`/`shift()`                 | Use `find`; effectful predicates are deliberately excluded.                           |
-| EQ1      | error | high       | `JSON.stringify` used on both sides of equality                                                  | Use domain `Equivalence` or a canonical comparison.                                   |
-| STATE1   | error | high       | Top-level mutable binding/collection is mutated from a non-IIFE function                         | Move lifetime into a factory, scoped service, or instance owner.                      |
-| COMPLEX1 | error | high       | Function control flow reaches four nested decision/loop levels                                   | Use guard clauses or move a coherent policy into its owner.                           |
-| FILE1    | error | high       | Production source unreachable from package, framework, compiler, script, config, or worker roots | Delete it or connect it to a real entrypoint.                                         |
-| EXP1     | error | high       | A closed package export map proves an exported declaration has no production or test consumer    | Remove `export`/the declaration or consume it from a real entrypoint.                 |
-| IMP1     | error | high       | Relative import climbs at least two parent directories and resolves to a declared alias target   | Use the declared alias for the deep traversal.                                        |
-| SUP1     | error | high       | A health allowance is blanket, legacy, unknown, unexplained, or no longer suppresses a finding   | Remove stale markers or use one exact, reasoned `repository-health:allow <rule>`.     |
-| P9       | hint  | high       | Export-star declaration                                                                          | Export concrete symbols from owners.                                                  |
+| Rule     | Level | Confidence | Detects                                                                                                         | Preferred action                                                                    |
+| -------- | ----- | ---------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| AL1      | hint  | high       | Bare named type alias                                                                                           | Use the original type.                                                              |
+| AL2      | hint  | high       | Primitive type alias                                                                                            | Remove it unless it is a real brand.                                                |
+| AL3      | hint  | high       | Alias for `Record<string, unknown>`                                                                             | Model the real shape.                                                               |
+| AL4      | error | high       | Object/union type whose name matches a same-file Effect Schema                                                  | Derive with `typeof SchemaOwner.Type` or `Schema.Schema.Type`.                      |
+| AL5      | error | high       | Exported object (≥3 fields) or string union duplicated                                                          | One Effect Schema owner; derive or re-export it.                                    |
+| AL6      | error | high       | Collection-shaped object type restates/re-keys a row                                                            | Compose from the schema-owned row with `Pick`/`Omit`/indexed access.                |
+| AL7      | error | high       | Exported durable/wire/receipt object (≥3 fields) has no matching Effect Schema                                  | Define the boundary schema and derive the type.                                     |
+| AL8      | error | high       | Function parameter contains an inline `{ role, content/parts }` message shape                                   | Accept the canonical schema-inferred message type or compose from it.               |
+| AL9      | error | medium     | Function parameter contains an inline data object with four or more fields                                      | Accept a schema-inferred type or compose the parameter from its owner.              |
+| AL11     | error | high       | Local schema repeats an exported domain schema's fields and primitive families                                  | Import and compose the canonical schema owner.                                      |
+| AR1      | error | high       | Function only copies source properties into a new object                                                        | Use the row directly or spread it where an actual override is needed.               |
+| AR2      | error | high       | Whole-row select aliases columns, usually for a later remap                                                     | Select the table/row shape and keep its canonical keys.                             |
+| AR5      | error | high       | Returned object re-lists at least six of six/eight fields from one or two inputs                                | Preserve the typed object/projection, spread it, or fix the upstream schema/client. |
+| SQL1     | error | high       | Raw SQL outside transaction requests/control or narrowly identifiable schema-bootstrap DDL                      | Use the typed collection/query builder; keep only transaction/bootstrap SQL.        |
+| DDL1     | error | high       | Authored table/index or table-column/constraint definition bypasses the model compiler                          | Declare the model once and let the compiler emit its physical schema.               |
+| S1       | error | high       | Empty catch without an ignore rationale                                                                         | Handle or log the failure.                                                          |
+| S3       | hint  | high       | Same expression checked against null and undefined                                                              | Use `value != null`.                                                                |
+| S5       | hint  | high       | `Array.from(new Set(...))`                                                                                      | Use `[...new Set(...)]`.                                                            |
+| D1       | error | high       | Exact non-trivial named function, method, constructor/accessor, or class body duplicated                        | Keep one entity owner and import, call, or extend it.                               |
+| COMPAT1  | error | high       | Explicit deprecated/legacy/backward-compat forwarding declaration or re-export surface                          | Migrate consumers and delete the compatibility surface.                             |
+| LEGACY1  | error | high       | Authored declaration carries `@deprecated`                                                                      | Remove the legacy owner after migrating its consumers.                              |
+| LEGACY2  | error | high       | TypeScript resolves an actual use to a deprecated API                                                           | Use the supported API; import-site diagnostics alone are deduplicated.              |
+| TRANS1   | error | high       | Executable code is attached to an explicit remove-after-migration/temporary-until marker                        | Complete the transition and delete the scaffold.                                    |
+| TRANS2   | error | high       | Canonical field read falls back to an explicitly `legacy`/`compat`/`deprecated` field                           | Migrate stored data and keep one canonical field.                                   |
+| D2       | error | high       | Identical `if`/`else` or ternary branches                                                                       | Remove the meaningless condition or consolidate the shared logic.                   |
+| Q1       | error | high       | Callback-named function forwards every parameter unchanged to one callback                                      | Call the callback directly.                                                         |
+| Q3       | error | high       | Private function has one same-file direct call and forwards its parameters unchanged                            | Call the forwarded owner directly.                                                  |
+| Q4       | hint  | medium     | Private function has one same-file direct call and a small mutation-free single expression                      | Review whether its name earns the indirection; inline when it does not.             |
+| QRY1     | error | high       | A generated query is mirrored or adapted by a handwritten query state machine                                   | Render `.current`/`.loading`/`.error`; the sync engine owns freshness.              |
+| QRY2     | error | high       | A live query is manually refreshed or refetched                                                                 | Delete the refresh path; mutations and the sync engine update the query.            |
+| QRY3     | error | high       | A derived query receives a plain binding that froze a reactive parameter at initialization                      | Derive the parameter binding or construct the parameters inside the query owner.    |
+| QRY4     | error | high       | A query interface/class exposes a public `refresh`/`refetch` member                                             | Remove the member; keep sync re-execution private to the engine.                    |
+| LIVE1    | error | high       | A named/timer/loop polling mechanism repeatedly waits and reads                                                 | Read the live collection once and let sync update it.                               |
+| LIVE2    | error | high       | `EventSource`, `text/event-stream`, or `sse` is used outside the sync stream                                    | Remove the stream or route live collection data through the sync engine.            |
+| MUT1     | error | high       | A generated mutation is wrapped by local Effect/Promise, refresh, or lifecycle orchestration                    | Invoke the generated mutation directly and render its owned lifecycle state.        |
+| ORM1     | error | high       | A Drizzle column supplies a second physical-name string, whether repeated or remapped                           | Keep one vocabulary: use the canonical property and omit the optional name.         |
+| PERF1    | error | high       | Potentially unbounded invariant collection is linearly searched inside another traversal                        | Build one `Map`/`Set` index before traversing.                                      |
+| PERF2    | error | high       | Effect Schema predicate/decoder factory rebuilt inside a traversal                                              | Hoist the decoder once outside the callback.                                        |
+| PERF3    | error | high       | Three or more consecutive eager `filter`/`map`/`flatMap` traversals                                             | Fuse the work into one pass or a canonical `filterMap`/indexed owner.               |
+| PERF4    | error | high       | Pure `filter` materializes all matches only to read index zero/`at(0)`/`shift()`                                | Use `find`; effectful predicates are deliberately excluded.                         |
+| EQ1      | error | high       | `JSON.stringify` used on both sides of equality                                                                 | Use domain `Equivalence` or a canonical comparison.                                 |
+| STATE1   | error | high       | Top-level mutable binding/collection is mutated from a non-IIFE function                                        | Move lifetime into a factory, scoped service, or instance owner.                    |
+| MOD1     | error | high       | Relative static import/export, dynamic import, import-equals, or `require` resolves to its own module           | Import the namespace at the consumer or use the module's named exports directly.    |
+| POLICY1  | error | high       | Policy/admission identity parameter has no decision/call use, directly or through a local alias                 | Use the identity in the policy or remove it from the contract.                      |
+| OPS1     | error | high       | Operational owner hard-codes `health/status: 'ready'` or `accepting: true, outstanding: 0`                      | Derive readiness and admission from observed dependency or capacity state.          |
+| NODE1    | error | high       | Named callable combines line splitting, assignment parsing, and output construction for `.env` text             | Import `parseEnv` from `node:util`.                                                 |
+| NODE2    | error | high       | Direct or mutual recursion reaches non-recursive `readdir`/`readdirSync` without a control-flow prune           | Use Node's recursive directory read; retain walkers that actually prevent descent.  |
+| NODE3    | error | high       | CLI entrypoint manually searches `process.argv` for a long or short option, including beside `parseArgs`        | Declare the command grammar once with `node:util.parseArgs`.                        |
+| NODE4    | error | high       | A glob-labelled entrypoint applies `includes`/`indexOf`/`search` to a pattern, even beside native glob          | Use `node:fs`/`node:fs/promises` `glob` and preserve real glob semantics.           |
+| BOOT1    | error | high       | Executed module initialization captures `process.env` before a direct or local-wrapper `loadEnvFile` call fires | Load the environment before capturing configuration.                                |
+| COMPLEX1 | error | high       | Function control flow reaches four nested decision/loop levels                                                  | Use guard clauses or move a coherent policy into its owner.                         |
+| FILE1    | error | high       | Production source unreachable from package, framework, compiler, script, config, or worker roots                | Delete it or connect it to a real entrypoint.                                       |
+| EXP1     | error | high       | A closed package export map proves an exported declaration has no production or test consumer                   | Remove `export`/the declaration or consume it from a real entrypoint.               |
+| IMP1     | error | high       | Relative import climbs at least two parent directories and resolves to a declared alias target                  | Use the declared alias for the deep traversal.                                      |
+| SUP1     | error | high       | A health allowance is blanket, legacy, unknown, unexplained, or no longer suppresses a finding                  | Remove stale markers or use one exact, reasoned `repository-health:allow <rule>`.   |
+| P9       | hint  | high       | Export-star declaration                                                                                         | Export concrete symbols from owners.                                                |
+
+## Pillar targeting for simplification rules
+
+These rules name the intended region and target flow so a finding says which mental model it is
+protecting, not merely which syntax matched.
+
+`MOD1` deliberately permits a Svelte component's default self-import because that name is an
+executable recursive render edge; namespace and named self-imports still report. `POLICY1` does not
+accept `void`, logging (including wrapped values), metrics, or a standalone property read as policy
+use; it follows simple local aliases. `OPS1` excludes test
+and fixture files; production readiness can remain simple, but the `ready` value must be derived
+from an observed condition. `NODE2` recognises an exclusion only when its branch returns, throws,
+continues, or guards the recursive call. Merely mentioning “ignore” does not exempt the walker.
+`NODE3` and `NODE4` inspect the handwritten path even when the same file also imports the Node
+owner. `BOOT1` follows calls to local bootstrap wrappers in module execution order and treats both
+`process.env.KEY` and capturing `process.env` itself as configuration reads.
+
+| Rule    | Intended region                                                                | Target flow                                                                 |
+| ------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| MOD1    | Service modules and package entrypoints                                        | Consumer import → canonical module owner                                    |
+| POLICY1 | Capacity, routing, authorization, permission, quota, and billing-gate services | Tenant/principal identity → policy decision → isolated admission            |
+| OPS1    | Health/readiness routes, operations snapshots, tenant matrices, and status UI  | Runtime/dependency observation → truthful operator or orchestrator response |
+| NODE1   | Node configuration/bootstrap scripts                                           | `.env` text → Node's standards-complete parser → validated configuration    |
+| NODE2   | Node filesystem discovery, compiler asset collection, and sandbox file tools   | Root directory → platform recursive enumeration → domain filtering          |
+| NODE3   | Node CLI and repository automation entrypoints                                 | Process arguments → declared option grammar → command                       |
+| NODE4   | Sandbox and compiler file-search tools                                         | Confined root + glob pattern → Node glob expansion → matched files          |
+| BOOT1   | Node server/bootstrap entrypoints                                              | Environment file load → configuration capture → service startup             |
 
 ## Async and configuration
 

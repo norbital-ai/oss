@@ -55,19 +55,10 @@ function normalizeMarkdown(filePath) {
 
 /** @returns {string[]} */
 function listMarkdownFiles(directory) {
-	/** @type {string[]} */
-	const files = [];
-	for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-		const absolutePath = path.join(directory, entry.name);
-		if (entry.isDirectory()) {
-			files.push(...listMarkdownFiles(absolutePath));
-			continue;
-		}
-		if (entry.isFile() && entry.name.endsWith('.md')) {
-			files.push(absolutePath);
-		}
-	}
-	return files;
+	return fs
+		.readdirSync(directory, { withFileTypes: true, recursive: true })
+		.filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+		.map((entry) => path.join(entry.parentPath, entry.name));
 }
 
 /** @returns {ApiDocNavItem[]} */

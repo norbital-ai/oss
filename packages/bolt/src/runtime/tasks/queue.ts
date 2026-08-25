@@ -1,4 +1,18 @@
-import { and, asc, eq, inArray, like, lte, min, notInArray, or } from 'drizzle-orm';
+import {
+	and,
+	asc,
+	eq,
+	inArray,
+	isNull,
+	like,
+	lt,
+	lte,
+	min,
+	notExists,
+	notInArray,
+	or
+} from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { Effect, Result, Schema } from 'effect';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import {
@@ -20,7 +34,11 @@ import {
 } from '#lib/runtime/persistence.js';
 import * as Cron from '#lib/runtime/tasks/cron.js';
 
-const { bolt_schedule: boltSchedule, bolt_task: boltTask } = SYSTEM_MODEL_TABLES;
+const {
+	agent_mailbox: agentMailbox,
+	bolt_schedule: boltSchedule,
+	bolt_task: boltTask
+} = SYSTEM_MODEL_TABLES;
 
 /**
  * The four operations scheduled and background work is made of, over two tables.
@@ -110,6 +128,8 @@ export type Enqueue = Readonly<{
 	 * exactly-once delivery across hosts with no leader election.
 	 */
 	readonly effectId: string;
+	/** Serial agent lane. Work in one lane runs in position order; absent work remains independent. */
+	readonly lane?: string;
 	/** When it becomes due. Absent means now. */
 	readonly runAtEpochMs?: number;
 }>;
@@ -218,22 +238,59 @@ const storedJson = (value: Schema.Json): string => JSON.stringify(value);
  * use for an `execute`, and requiring one would be asking it to hold a queue it will never run.
  */
 export const enqueueStatements = (enqueues: ReadonlyArray<Enqueue>): ReadonlyArray<Statement> =>
-	enqueues.map((enqueue) =>
-		toStatement(
+	enqueues.flatMap((enqueue) => {
+		const insert = toStatement(
 			composer
 				.insert(boltTask)
 				.values({
 					command: enqueue.command,
 					input: storedJson(enqueue.input),
 					effect_id: enqueue.effectId,
+					lane: enqueue.lane ?? null,
 					...(enqueue.runAtEpochMs === undefined
 						? {}
 						: { run_at: storedInstant(enqueue.runAtEpochMs) })
 				})
 				.onConflictDoNothing({ target: boltTask.effect_id })
 				.toSQL()
-		)
-	);
+		);
+		if (enqueue.lane === undefined) return [insert];
+		// The lane row is locked by this upsert until the transaction commits. A concurrent stop either
+		// pauses this task afterwards or commits first and makes the conditional update below pause it.
+		return [
+			toStatement(
+				composer
+					.insert(agentMailbox)
+					.values({ conversation_id: enqueue.lane, status: 'active' })
+					.onConflictDoNothing({ target: agentMailbox.conversation_id })
+					.toSQL()
+			),
+			insert,
+			toStatement(
+				composer
+					.update(boltTask)
+					.set({ status: 'paused', updated_at: dbNow() })
+					.where(
+						and(
+							eq(boltTask.effect_id, enqueue.effectId),
+							inArray(
+								boltTask.lane,
+								composer
+									.select({ lane: agentMailbox.conversation_id })
+									.from(agentMailbox)
+									.where(
+										and(
+											eq(agentMailbox.conversation_id, enqueue.lane),
+											eq(agentMailbox.status, 'paused')
+										)
+									)
+							)
+						)
+					)
+					.toSQL()
+			)
+		];
+	});
 
 /** Reads the lifecycle snapshot exposed to a running automation. */
 export const statusStatement = (taskId: string): Statement =>
@@ -269,7 +326,7 @@ export const progressStatement = (taskId: string, value: Schema.Json): Statement
 			.where(
 				and(
 					eq(boltTask.effect_id, taskId),
-					eq(boltTask.status, 'pending'),
+					eq(boltTask.status, 'running'),
 					like(boltTask.command, 'automations.%')
 				)
 			)
@@ -286,7 +343,7 @@ export const cancelStatement = (taskId: string, command: string): Statement =>
 				and(
 					eq(boltTask.effect_id, taskId),
 					eq(boltTask.command, command),
-					eq(boltTask.status, 'pending')
+					inArray(boltTask.status, ['pending', 'resuming', 'running'])
 				)
 			)
 			.toSQL()
@@ -302,7 +359,7 @@ export const stopStatement = (taskId: string, command: string): Statement =>
 				and(
 					eq(boltTask.effect_id, taskId),
 					eq(boltTask.command, command),
-					inArray(boltTask.status, ['pending', 'resuming'])
+					inArray(boltTask.status, ['pending', 'resuming', 'running'])
 				)
 			)
 			.toSQL()
@@ -326,6 +383,134 @@ export const resumeStatement = (taskId: string, command: string): Statement =>
 					eq(boltTask.status, 'paused')
 				)
 			)
+			.toSQL()
+		);
+
+/** Removes one queued lane item without touching a running attempt. */
+export const dequeueStatement = (taskId: string, lane: string, command: string): Statement =>
+	toStatement(
+		composer
+			.update(boltTask)
+			.set({ status: 'dequeued', error: 'dequeued', updated_at: dbNow() })
+			.where(
+				and(
+					eq(boltTask.effect_id, taskId),
+					eq(boltTask.lane, lane),
+					eq(boltTask.command, command),
+					inArray(boltTask.status, ['pending', 'paused', 'resuming'])
+				)
+			)
+			.returning({ taskId: boltTask.effect_id })
+			.toSQL()
+	);
+
+/** Reorders queued work by rewriting only its order key; no task or payload is copied. */
+export const reorderStatements = (
+	lane: string,
+	command: string,
+	orderedTaskIds: ReadonlyArray<string>
+): ReadonlyArray<Statement> =>
+	[
+		// Updating the lane row takes the same row lock enqueue uses. An enqueue racing this reorder
+		// therefore lands entirely before or after it instead of receiving a position inside a partial
+		// rewrite.
+		toStatement(
+			composer
+				.insert(agentMailbox)
+				.values({ conversation_id: lane, status: 'active' })
+				.onConflictDoUpdate({
+					target: agentMailbox.conversation_id,
+					set: { updated_at: dbNow() }
+				})
+				.toSQL()
+		),
+		...orderedTaskIds.map((taskId, position) =>
+			toStatement(
+				composer
+					.update(boltTask)
+					.set({ position, updated_at: dbNow() })
+					.where(
+						and(
+							eq(boltTask.effect_id, taskId),
+							eq(boltTask.lane, lane),
+							eq(boltTask.command, command),
+							inArray(boltTask.status, ['pending', 'paused', 'resuming'])
+						)
+					)
+					.toSQL()
+			)
+		)
+	];
+
+/** Pauses a whole lane, including the exact running row, and returns every fenced task id. */
+export const stopLaneStatements = (lane: string, command: string): ReadonlyArray<Statement> => [
+	toStatement(
+		composer
+			.insert(agentMailbox)
+			.values({ conversation_id: lane, status: 'paused' })
+			.onConflictDoUpdate({
+				target: agentMailbox.conversation_id,
+				set: { status: 'paused', updated_at: dbNow() }
+			})
+			.toSQL()
+	),
+	toStatement(
+		composer
+			.update(boltTask)
+			.set({ status: 'paused', updated_at: dbNow() })
+			.where(
+				and(
+					eq(boltTask.lane, lane),
+					eq(boltTask.command, command),
+					inArray(boltTask.status, ['pending', 'resuming', 'running'])
+				)
+			)
+			.returning({ taskId: boltTask.effect_id })
+			.toSQL()
+	)
+];
+
+/** Resumes the same lane rows. A stopped task is never replaced or re-enqueued. */
+export const resumeLaneStatements = (lane: string, command: string): ReadonlyArray<Statement> => [
+	toStatement(
+		composer
+			.insert(agentMailbox)
+			.values({ conversation_id: lane, status: 'active' })
+			.onConflictDoUpdate({
+				target: agentMailbox.conversation_id,
+				set: { status: 'active', updated_at: dbNow() }
+			})
+			.toSQL()
+	),
+	toStatement(
+		composer
+			.update(boltTask)
+			.set({ status: 'resuming', error: null, run_at: dbNow(), updated_at: dbNow() })
+			.where(
+				and(
+					eq(boltTask.lane, lane),
+					eq(boltTask.command, command),
+					eq(boltTask.status, 'paused')
+				)
+			)
+			.toSQL()
+	)
+];
+
+/** Terminates only the currently running row in a lane and returns its exact task id. */
+export const interruptLaneStatement = (lane: string, command: string): Statement =>
+	toStatement(
+		composer
+			.update(boltTask)
+			.set({ status: 'interrupted', error: 'interrupted', updated_at: dbNow() })
+			.where(
+				and(
+					eq(boltTask.lane, lane),
+					eq(boltTask.command, command),
+					eq(boltTask.status, 'running')
+				)
+			)
+			.returning({ taskId: boltTask.effect_id })
 			.toSQL()
 	);
 
@@ -500,7 +685,7 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 			})
 		);
 
-	/**
+		/**
 	 * Hands out due tasks, hiding them while they run — one statement, and it has to be one.
 	 *
 	 * A `select … for update skip locked` sent as its own facility call commits and drops its locks
@@ -536,16 +721,37 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 				if (before.length > 0) yield* execute(before);
 				return [];
 			}
+			const earlier = alias(boltTask, 'earlier_task');
 			const claimed = composer
 				.select({ id: boltTask.id })
 				.from(boltTask)
-				// `resuming` is a fence, not a second kind of work. A stopped in-flight attempt may
-				// still own its old lease; resume keeps the row behind that fence until the lease
-				// expires, at which point this claim turns it back into ordinary pending work.
+				// A crashed `running` row becomes claimable when its lease expires. For an agent lane,
+				// only its first non-terminal row may be claimed; other lanes and ordinary tasks stay
+				// independent. The predecessor check deliberately ignores that predecessor's `run_at`:
+				// a running row carries a future lease while it is actively executing, and treating that as
+				// "not due" would let the next message run concurrently in the same serial conversation.
 				.where(
-					and(inArray(boltTask.status, ['pending', 'resuming']), lte(boltTask.run_at, dbNow()))
+					and(
+						inArray(boltTask.status, ['pending', 'resuming', 'running']),
+						lte(boltTask.run_at, dbNow()),
+						or(
+							isNull(boltTask.lane),
+							notExists(
+								composer
+									.select({ id: earlier.id })
+									.from(earlier)
+									.where(
+										and(
+											eq(earlier.lane, boltTask.lane),
+											inArray(earlier.status, ['pending', 'resuming', 'running']),
+											lt(earlier.position, boltTask.position)
+										)
+							)
+						)
+						)
+					)
 				)
-				.orderBy(asc(boltTask.run_at))
+				.orderBy(asc(boltTask.run_at), asc(boltTask.position))
 				.limit(options.batchSize)
 				.for('update', { skipLocked: true });
 			const rows = yield* execute([
@@ -554,7 +760,7 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 					composer
 						.update(boltTask)
 						.set({
-							status: 'pending',
+							status: 'running',
 							attempts: increment(boltTask.attempts),
 							// A non-null error means the row is between attempts. Clearing it at claim-time
 							// makes active work distinguishable from durable retry backoff to every reader.
@@ -622,7 +828,7 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 							})
 							// A lifecycle fence wins the race with a worker that was already holding this row.
 							// A terminal task is evidence, not a mutable last-writer-wins status flag.
-							.where(and(eq(boltTask.id, outcome.task.id), eq(boltTask.status, 'pending')))
+							.where(and(eq(boltTask.id, outcome.task.id), eq(boltTask.status, 'running')))
 							.toSQL()
 					);
 				}
@@ -631,18 +837,19 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 				return toStatement(
 					composer
 						.update(boltTask)
-						.set({
-							error: outcome.error,
-							updated_at: dbNow(),
-							...(exhausted
-								? { status: 'failed' as const }
-								: {
-										run_at: dbNowPlusSeconds(
+					.set({
+						error: outcome.error,
+						updated_at: dbNow(),
+						...(exhausted
+							? { status: 'failed' as const }
+							: {
+									status: 'pending' as const,
+									run_at: dbNowPlusSeconds(
 											RetrySchedule.secondsAfter(outcome.task.attempts, random)
 										)
 									})
 						})
-						.where(and(eq(boltTask.id, outcome.task.id), eq(boltTask.status, 'pending')))
+					.where(and(eq(boltTask.id, outcome.task.id), eq(boltTask.status, 'running')))
 						.toSQL()
 				);
 			});
@@ -667,7 +874,7 @@ const whenStatement = (): Statement =>
 						composer
 							.select({ value: min(boltTask.run_at) })
 							.from(boltTask)
-							.where(inArray(boltTask.status, ['pending', 'resuming'])),
+							.where(inArray(boltTask.status, ['pending', 'resuming', 'running'])),
 						composer.select({ value: min(boltSchedule.next_run_at) }).from(boltSchedule)
 					),
 					'next_due_at'

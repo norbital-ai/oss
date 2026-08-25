@@ -95,12 +95,10 @@ const turn = (id: string, agent: string): Invocation => ({
 	id: InvocationId.make(id),
 	scope,
 	deadlineEpochMs: Date.now() + 10_000,
-	command: 'agents.turn',
+	command: 'agents.execute',
 	input: {
-		subject,
-		agent,
 		conversationId: `${agent}-conversation`,
-		message: 'Handle this update.'
+		turnId: `${id}:turn`
 	},
 	headers: { authorization: ['Bearer test-session'] }
 });
@@ -116,7 +114,7 @@ describe('envoy delegation boundary', () => {
 						? {
 								toolCalls: [
 									{
-										name: 'spawn_subagent',
+										name: 'spawn_agent',
 										input: { task: 'Do work outside this ingress boundary.' }
 									}
 								]
@@ -127,9 +125,9 @@ describe('envoy delegation boundary', () => {
 		};
 		let queued = 0;
 		const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
-			call: () => {
-				queued += 1;
-				return Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } });
+			call: (_metadata, request) => {
+				if (request._tag === 'Register') queued += 1;
+				return Promise.resolve({ _tag: 'Success', value: {} });
 			}
 		};
 		let returnedMessage = 0;
@@ -180,6 +178,31 @@ describe('envoy delegation boundary', () => {
 						}
 					});
 				}
+				if (statementIntent(request, 'select', 'chat_message') && request.sql.includes('turn_id')) {
+					const conversationId = String(request.parameters[0] ?? '');
+					const turnId = String(request.parameters[1] ?? '');
+					const agent = conversationId.replace(/-conversation$/, '');
+					return Promise.resolve({
+						_tag: 'Success',
+						value: {
+							rows: [
+								{
+									id: `${turnId}:message`,
+									content: {
+										id: turnId,
+										status: 'queued',
+										parent_agent_id: null,
+										parts: [],
+										subject,
+										agent_name: agent,
+										usage_unreported: false
+									}
+								}
+							],
+							affectedRows: 0
+						}
+					});
+				}
 				if (statementIntent(request, 'insert', 'chat_message')) {
 					returnedMessage += 1;
 					return Promise.resolve({
@@ -225,7 +248,7 @@ describe('envoy delegation boundary', () => {
 				message !== null &&
 				(message as { role?: string }).role === 'tool'
 		) as { readonly content?: string } | undefined;
-		expect(toolAnswer?.content).toContain('spawn_subagent');
+		expect(toolAnswer?.content).toContain('spawn_agent');
 		expect(toolAnswer?.content).toContain('not allowed');
 		expect(queued).toBe(0);
 

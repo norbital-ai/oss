@@ -432,7 +432,7 @@ readonly products: readonly [{
   }];
   prices: readonly [{
      checkout: true;
-     description: "SGD 0.0005 per isolate compute second. RAM is included because the isolate hard-walls memory with that second. Stripe records milliseconds.";
+     description: "SGD 0.0005 per worker-thread ELU active second. Memory infrastructure cost is included in the price; memory is not separately metered or hard-walled per worker. Stripe records milliseconds.";
      id: "compute-second-monthly";
      interval: "month";
      meterId: "bolt_compute_seconds_v1";
@@ -528,7 +528,7 @@ const LATEST_CATALOGUE_PRODUCTS: readonly [{
   }];
   prices: readonly [{
      checkout: true;
-     description: "SGD 0.0005 per isolate compute second. RAM is included because the isolate hard-walls memory with that second. Stripe records milliseconds.";
+     description: "SGD 0.0005 per worker-thread ELU active second. Memory infrastructure cost is included in the price; memory is not separately metered or hard-walled per worker. Stripe records milliseconds.";
      id: "compute-second-monthly";
      interval: "month";
      meterId: "bolt_compute_seconds_v1";

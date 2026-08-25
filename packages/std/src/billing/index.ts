@@ -186,7 +186,7 @@ export const LATEST_CATALOGUE_PRODUCTS = [
 				id: 'compute-second-monthly',
 				name: 'Compute usage',
 				description:
-					'SGD 0.0005 per isolate compute second. RAM is included because the isolate hard-walls memory with that second. Stripe records milliseconds.',
+					'SGD 0.0005 per worker-thread ELU active second. Memory infrastructure cost is included in the price; memory is not separately metered or hard-walled per worker. Stripe records milliseconds.',
 				model: 'metered',
 				meterId: USAGE_METER_IDS.compute,
 				interval: 'month',

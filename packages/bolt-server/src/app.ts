@@ -11,7 +11,7 @@ import { Clock, Effect, Layer, ManagedRuntime, Result, Schema } from 'effect';
 import { BundleLoader, makeLayer as makeBundleLoaderLayer } from './bundle-loader.js';
 import type { ServerConfiguration } from './config.js';
 import { ServerHealth, layer as serverHealthLayer } from './health.js';
-import { makeScheduler, makeTaskBinding } from './scheduler.js';
+import { makeScheduler, makeTaskBinding, makeTaskInvocationControl } from './scheduler.js';
 import { startServer, type RunningServer, UuidGeneration, uuidGenerationLayer } from './server.js';
 
 /** Reports a lifecycle phase that prevented the self-host application from becoming usable. */
@@ -62,6 +62,7 @@ export const startApplication = (options: ApplicationOptions) =>
 	Effect.runPromise(
 		Effect.gen(function* () {
 			const { configuration, facilities } = options;
+			const taskInvocations = makeTaskInvocationControl();
 			const finalizeFacilities =
 				options.finalizeFacilities === undefined
 					? Effect.void
@@ -95,20 +96,26 @@ export const startApplication = (options: ApplicationOptions) =>
 					const bundle = yield* loader.load();
 					const now = yield* Clock.currentTimeMillis;
 					const unsafeResult = yield* Effect.tryPromise({
-						try: (signal) =>
-							bundle.dispatch(
-								Invocation.cases.Task.make({
-									protocolVersion: PROTOCOL_VERSION,
-									id: InvocationId.make(`tasks.tick:${now}`),
-									scope: configuration.scope,
-									deadlineEpochMs: now + configuration.invocationTimeoutMillis,
-									command: 'tasks.tick',
-									input: {},
-									attempt: 1
-								}),
-								bound,
-								signal
-							),
+						try: (signal) => {
+							const controller = taskInvocations.open(InvocationId.make(`tasks.tick:${now}`));
+							return bundle
+								.dispatch(
+									Invocation.cases.Task.make({
+										protocolVersion: PROTOCOL_VERSION,
+										id: InvocationId.make(`tasks.tick:${now}`),
+										scope: configuration.scope,
+										deadlineEpochMs: now + configuration.invocationTimeoutMillis,
+										command: 'tasks.tick',
+										input: {},
+										attempt: 1
+									}),
+									bound,
+									AbortSignal.any([signal, controller.signal])
+								)
+								.finally(() =>
+									taskInvocations.close(InvocationId.make(`tasks.tick:${now}`), controller)
+								);
+						},
 						catch: (cause) =>
 							new ApplicationStartError({
 								operation: 'BoltServer.Application.tick',
@@ -143,8 +150,8 @@ export const startApplication = (options: ApplicationOptions) =>
 			 * The host's timer, and the task facility that feeds it.
 			 *
 			 * The binding is built here rather than accepted from the embedder because there is nothing left
-			 * to configure: `TaskRequest` carries `Register` and `Wake`, and both are answered by this
-			 * process's own routing table and its own `setTimeout`. Whatever `tasks` binding the caller
+			 * to configure: routing and timer requests are answered by this process, while lifecycle
+			 * signals point at the exact in-process dispatch and never form a second queue. Whatever `tasks` binding the caller
 			 * supplied is replaced, deliberately — a host that let one be injected would be letting somebody
 			 * else own its clock.
 			 */
@@ -165,7 +172,10 @@ export const startApplication = (options: ApplicationOptions) =>
 					);
 				}
 			});
-			const bound: FacilityBindings = { ...facilities, tasks: makeTaskBinding(scheduler) };
+			const bound: FacilityBindings = {
+				...facilities,
+				tasks: makeTaskBinding(scheduler, () => {}, taskInvocations)
+			};
 
 			const applicationLayer = Layer.mergeAll(
 				uuidGenerationLayer,
@@ -189,7 +199,7 @@ export const startApplication = (options: ApplicationOptions) =>
 						reason: 'restart'
 					});
 					const unsafeResult = yield* Effect.tryPromise({
-						try: (signal) => bundle.activate(activation, facilities, signal),
+						try: (signal) => bundle.activate(activation, bound, signal),
 						catch: (cause) =>
 							new ApplicationStartError({
 								operation: 'BoltServer.Application.activate',
@@ -218,7 +228,9 @@ export const startApplication = (options: ApplicationOptions) =>
 				});
 				const server = yield* Effect.gen(function* () {
 					yield* activated;
-					return yield* Effect.tryPromise(() => startServer(configuration, facilities, runtime));
+					return yield* Effect.tryPromise(() =>
+						startServer(configuration, bound, runtime, taskInvocations)
+					);
 				});
 				yield* Effect.gen(function* () {
 					const health = yield* ServerHealth;

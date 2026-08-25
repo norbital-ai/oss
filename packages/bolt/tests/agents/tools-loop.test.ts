@@ -188,6 +188,30 @@ const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 				value: { rows: [{ value: 'test-session-secret-that-is-long-enough' }], affectedRows: 0 }
 			});
 		}
+		if (statementIntent(request, 'select', 'chat_message') && request.sql.includes('turn_id')) {
+			const conversationId = String(request.parameters[0] ?? '');
+			const turnId = String(request.parameters[1] ?? '');
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [
+						{
+							id: `${turnId}:message`,
+							content: {
+								id: turnId,
+								status: 'queued',
+								parent_agent_id: null,
+								parts: [],
+								subject,
+								agent_name: 'web',
+								usage_unreported: false
+							}
+						}
+					],
+					affectedRows: 0
+				}
+			});
+		}
 		if (statementIntent(request, 'insert', 'chat_message')) {
 			returnedMessage += 1;
 			return Promise.resolve({
@@ -216,16 +240,8 @@ describe('Bolt agent tool loop', () => {
 		// fixture of what they are believed to hold would prove nothing about what is written.
 		const written: Array<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }> =
 			[];
-		let titleWrite: QueryStatement | undefined;
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			call: (metadata, request, signal) => {
-				if (
-					request._tag === 'Query' &&
-					statementIntent(request, 'update', 'chat_session') &&
-					request.parameters.includes('What collections exist?')
-				) {
-					titleWrite = request;
-				}
 				if (request._tag === 'Query' && request.sql.includes('chat_message')) {
 					written.push({ sql: request.sql, parameters: request.parameters });
 				}
@@ -233,7 +249,7 @@ describe('Bolt agent tool loop', () => {
 			}
 		};
 		const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
-			call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } })
+			call: () => Promise.resolve({ _tag: 'Success', value: {} })
 		};
 		const hostCalls: Array<string> = [];
 		const facilities: FacilityBindings = {
@@ -254,12 +270,10 @@ describe('Bolt agent tool loop', () => {
 			id: InvocationId.make('agent-tools'),
 			scope,
 			deadlineEpochMs: Date.now() + 10_000,
-			command: 'agents.turn',
+			command: 'agents.execute',
 			input: {
-				subject,
-				agent: 'web',
 				conversationId: 'conversation-tools',
-				message: 'What collections exist?'
+				turnId: 'agent-tools:turn'
 			},
 			headers: { authorization: ['Bearer test-session'] }
 		};
@@ -271,36 +285,16 @@ describe('Bolt agent tool loop', () => {
 		expect(turns).toBe(2);
 		expect(Schema.decodeUnknownSync(BundleResult)(result)).toEqual(result);
 		expect(hostCalls).toEqual([]);
-		expect(titleWrite).toBeDefined();
-		expect(titleWrite?.parameters).toEqual(
-			expect.arrayContaining(['conversation-tools', 'What collections exist?'])
-		);
-		// The conversation log is what replicates to the panel, so the turn and the call it made have to
-		// be in it: one assistant message per turn, and a call and its answer sharing an id so the two can
-		// be paired.
-		const appended = written
-			.filter((entry) => statementIntent(entry, 'insert', 'chat_message'))
-			.map((entry) => ({
-				role: entry.parameters.find(
-					(parameter) => parameter === 'user' || parameter === 'assistant'
-				),
-				content: jsonObjectParameter(entry.parameters)
-			}));
-		// One row per turn. It used to be one per round, which rendered this turn as two agent blocks.
-		expect(appended.map((entry) => entry.role)).toEqual(['user', 'assistant']);
-		expect(appended[1]?.content).toMatchObject({ status: 'running', subagent_id: null, parts: [] });
+		// Admission owns the one user row and one assistant row. Execution only rewrites that assistant
+		// row as each tool step lands.
 		const rewrites = written
 			.filter((entry) => statementIntent(entry, 'update', 'chat_message'))
 			.flatMap((entry) => {
 				const turn = jsonObjectParameter(entry.parameters);
 				return turn === undefined ? [] : [turn];
 			});
-		const assistantAppend = appended[1];
-		if (assistantAppend?.content === undefined) {
-			throw new Error('expected the assistant append to contain a persisted turn');
-		}
 		// Every rewrite addresses the one turn it belongs to.
-		expect(new Set(rewrites.map((turn) => turn.id))).toEqual(new Set([assistantAppend.content.id]));
+		expect(new Set(rewrites.map((turn) => turn.id))).toEqual(new Set(['agent-tools:turn']));
 		const finalTurn = rewrites.at(-1);
 		expect(finalTurn).toMatchObject({ status: 'completed' });
 		if (finalTurn === undefined) throw new Error('expected a completed persisted turn');
@@ -323,7 +317,7 @@ describe('Bolt agent tool loop', () => {
 			{ kind: 'text', text: 'Workspace has employees' }
 		]);
 		// The turn grows a part at a time rather than arriving whole, which is what lets a reader watch it.
-		expect(rewrites.map((turn) => turn.parts.length)).toEqual([1, 2, 3, 3]);
+		expect(rewrites.map((turn) => turn.parts.length)).toEqual([0, 1, 2, 3, 3]);
 	});
 
 	/**
@@ -381,7 +375,7 @@ describe('Bolt agent tool loop', () => {
 			scope,
 			database,
 			ai,
-			tasks: { call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } }) }
+			tasks: { call: () => Promise.resolve({ _tag: 'Success', value: {} }) }
 		};
 		const result = await observedBundle.dispatch(
 			{
@@ -390,12 +384,10 @@ describe('Bolt agent tool loop', () => {
 				id: InvocationId.make('agent-streaming'),
 				scope,
 				deadlineEpochMs: Date.now() + 10_000,
-				command: 'agents.turn',
+				command: 'agents.execute',
 				input: {
-					subject,
-					agent: 'web',
 					conversationId: 'conversation-streaming',
-					message: 'List the source directory'
+					turnId: 'agent-streaming:turn'
 				},
 				headers: { authorization: ['Bearer test-session'] }
 			},
@@ -454,12 +446,10 @@ describe('Bolt agent tool loop', () => {
 				id: InvocationId.make('agent-two-rounds'),
 				scope,
 				deadlineEpochMs: Date.now() + 10_000,
-				command: 'agents.turn',
+				command: 'agents.execute',
 				input: {
-					subject,
-					agent: 'web',
 					conversationId: 'conversation-two-rounds',
-					message: 'Describe the workspace and list skills'
+					turnId: 'agent-two-rounds:turn'
 				},
 				headers: { authorization: ['Bearer test-session'] }
 			},
@@ -467,7 +457,7 @@ describe('Bolt agent tool loop', () => {
 				scope,
 				database,
 				ai,
-				tasks: { call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } }) },
+				tasks: { call: () => Promise.resolve({ _tag: 'Success', value: {} }) },
 				hostTools: {
 					call: () => Promise.resolve({ _tag: 'Success', value: { output: {} } })
 				}
@@ -476,15 +466,8 @@ describe('Bolt agent tool loop', () => {
 		);
 		expect(result).toMatchObject({ _tag: 'Success' });
 		expect(turns).toBe(3);
-		const appended = written
-			.filter((entry) => statementIntent(entry, 'insert', 'chat_message'))
-			.map((entry) =>
-				String(
-					entry.parameters.find((parameter) => parameter === 'user' || parameter === 'assistant')
-				)
-			);
-		// One assistant row for two rounds. Two rows here is the defect this test exists for.
-		expect(appended).toEqual(['user', 'assistant']);
+		// Execution appends no replacement rows; both rounds rewrite the one admitted assistant row.
+		expect(written.filter((entry) => statementIntent(entry, 'insert', 'chat_message'))).toEqual([]);
 		const rewrites = written
 			.filter((entry) => statementIntent(entry, 'update', 'chat_message'))
 			.flatMap((entry) => {
@@ -521,7 +504,7 @@ describe('Bolt agent tool loop', () => {
 		expect(firstResult.id).toBe(firstCall.id);
 		expect(secondResult.id).toBe(secondCall.id);
 		// Grew a part at a time rather than arriving whole — the reader can watch each one land.
-		expect(rewrites.map((turn) => turn.parts.length)).toEqual([1, 2, 3, 4, 5, 6, 6]);
+		expect(rewrites.map((turn) => turn.parts.length)).toEqual([0, 1, 2, 3, 4, 5, 6, 6]);
 	});
 
 	it('executes MCP tools through the connector facility', async () => {
@@ -538,7 +521,7 @@ describe('Bolt agent tool loop', () => {
 		};
 		const database = sessionDatabase;
 		const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
-			call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-mcp' } })
+			call: () => Promise.resolve({ _tag: 'Success', value: {} })
 		};
 		const connectorCalls: Array<{
 			connector: string;
@@ -586,12 +569,10 @@ describe('Bolt agent tool loop', () => {
 			id: InvocationId.make('agent-mcp'),
 			scope,
 			deadlineEpochMs: Date.now() + 10_000,
-			command: 'agents.turn',
+			command: 'agents.execute',
 			input: {
-				subject,
-				agent: 'web',
 				conversationId: 'conversation-mcp',
-				message: 'Search payroll'
+				turnId: 'agent-mcp:turn'
 			},
 			headers: { authorization: ['Bearer test-session'] }
 		};
@@ -640,12 +621,10 @@ describe('Bolt agent tool loop', () => {
 				id: InvocationId.make('agent-mcp-undeclared'),
 				scope,
 				deadlineEpochMs: Date.now() + 10_000,
-				command: 'agents.turn',
+				command: 'agents.execute',
 				input: {
-					subject,
-					agent: 'web',
 					conversationId: 'conversation-mcp-undeclared',
-					message: 'Delete the remote index'
+					turnId: 'agent-mcp-undeclared:turn'
 				},
 				headers: { authorization: ['Bearer test-session'] }
 			},
@@ -667,7 +646,7 @@ describe('Bolt agent tool loop', () => {
 					}
 				},
 				tasks: {
-					call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-mcp-denied' } })
+					call: () => Promise.resolve({ _tag: 'Success', value: {} })
 				},
 				connector: {
 					call: () => {
@@ -684,7 +663,8 @@ describe('Bolt agent tool loop', () => {
 
 	it('spawns an in-session subagent and parks only at the explicit await', async () => {
 		let turns = 0;
-		const targetSessionId = 'subagent:agent-spawn:tool:0:0';
+		const targetAgentId = 'agent:agent-spawn:tool:0:0';
+		const targetTaskId = 'agent-spawn:tool:0:0';
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: () => {
 				turns += 1;
@@ -694,13 +674,13 @@ describe('Bolt agent tool loop', () => {
 						output:
 							turns === 1
 								? {
-										toolCalls: [{ name: 'spawn_subagent', input: { task: 'Draft the offer' } }]
+										toolCalls: [{ name: 'spawn_agent', input: { task: 'Draft the offer' } }]
 									}
 								: {
 										toolCalls: [
 											{
-												name: 'await_sandbox_agent',
-												input: { sessionId: targetSessionId }
+												name: 'await_agent',
+												input: { agentId: targetAgentId, taskId: targetTaskId }
 											}
 										]
 									}
@@ -715,7 +695,7 @@ describe('Bolt agent tool loop', () => {
 		const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
 			call: (_metadata, request) => {
 				if (request._tag === 'Wake') enqueued.push('wake');
-				return Promise.resolve({ _tag: 'Success', value: { taskId: 'task-spawn' } });
+				return Promise.resolve({ _tag: 'Success', value: {} });
 			}
 		};
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
@@ -723,14 +703,23 @@ describe('Bolt agent tool loop', () => {
 				if (
 					request._tag === 'Query' &&
 					statementIntent(request, 'select', 'chat_session') &&
-					request.parameters[0] === targetSessionId
+					request.parameters.includes(targetAgentId)
 				) {
 					return Promise.resolve({
 						_tag: 'Success',
 						value: {
 							rows: [
 								{
-									conversation_id: targetSessionId,
+									conversation_id: 'conversation-spawn',
+									parent_id: null,
+									user_id: subject.userId,
+									sandbox_key: subject.userId,
+									agent_name: 'web',
+									title: 'Delegate the offer'
+								},
+								{
+									conversation_id: targetAgentId,
+									parent_id: 'conversation-spawn',
 									user_id: subject.userId,
 									sandbox_key: subject.userId,
 									agent_name: 'web',
@@ -741,10 +730,13 @@ describe('Bolt agent tool loop', () => {
 						}
 					});
 				}
-				if (request._tag === 'Query' && statementIntent(request, 'insert', 'bolt_task')) {
-					enqueued.push(
-						String(request.parameters.find((parameter) => parameter === 'agents.turn'))
-					);
+				const statements = request._tag === 'Query' ? [request] : request.statements;
+				for (const statement of statements) {
+					if (statementIntent(statement, 'insert', 'bolt_task')) {
+						enqueued.push(
+							String(statement.parameters.find((parameter) => parameter === 'agents.execute'))
+						);
+					}
 				}
 				return sessionDatabase.call(metadata, request, signal);
 			}
@@ -756,12 +748,10 @@ describe('Bolt agent tool loop', () => {
 			id: InvocationId.make('agent-spawn'),
 			scope,
 			deadlineEpochMs: Date.now() + 10_000,
-			command: 'agents.turn',
+			command: 'agents.execute',
 			input: {
-				subject,
-				agent: 'web',
 				conversationId: 'conversation-spawn',
-				message: 'Delegate the offer'
+				turnId: 'agent-spawn:turn'
 			},
 			headers: { authorization: ['Bearer test-session'] }
 		};
@@ -770,7 +760,7 @@ describe('Bolt agent tool loop', () => {
 			_tag: 'Success',
 			response: { value: { status: 'waiting', output: { waiting: true } } }
 		});
-		expect(enqueued).toContain('agents.turn');
+		expect(enqueued).toContain('agents.execute');
 		expect(turns).toBe(2);
 		// And the host is told to come back — the row is durable, and something has to pick it up.
 		expect(enqueued).toContain('wake');
@@ -798,7 +788,7 @@ describe('Bolt agent tool loop', () => {
 		};
 		const database = sessionDatabase;
 		const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
-			call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-tool' } })
+			call: () => Promise.resolve({ _tag: 'Success', value: {} })
 		};
 		const result = await toolsBundle.dispatch(
 			{
@@ -807,12 +797,10 @@ describe('Bolt agent tool loop', () => {
 				id: InvocationId.make('agent-workspace-tool'),
 				scope,
 				deadlineEpochMs: Date.now() + 10_000,
-				command: 'agents.turn',
+				command: 'agents.execute',
 				input: {
-					subject,
-					agent: 'web',
 					conversationId: 'conversation-workspace-tool',
-					message: 'Summarize tickets'
+					turnId: 'agent-workspace-tool:turn'
 				},
 				headers: { authorization: ['Bearer test-session'] }
 			},

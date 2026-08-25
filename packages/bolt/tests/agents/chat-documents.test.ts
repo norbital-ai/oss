@@ -20,8 +20,8 @@ describe('chat session document ownership', () => {
 		const service = await harness.runtime.runPromise(Agents.Service);
 		await harness.runtime.runPromise(
 			Effect.all([
-				service.start(harness.effectId('start:a'), adminSubject, 'web', 'conversation-a'),
-				service.start(harness.effectId('start:b'), adminSubject, 'web', 'conversation-b')
+				service.open(harness.effectId('open:a'), adminSubject, 'web', 'conversation-a'),
+				service.open(harness.effectId('open:b'), adminSubject, 'web', 'conversation-b')
 			])
 		);
 		const storageKey = chatDocumentStorageKey('conversation-a', 'document-a', 'site-plan.pdf');

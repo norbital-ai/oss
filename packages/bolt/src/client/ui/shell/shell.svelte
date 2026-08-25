@@ -608,25 +608,54 @@
 			</Scroll>
 		{:else if currentPath === APPROVALS_PATH || currentPath.startsWith(`${APPROVALS_PATH}/`)}
 			<CollectionTableNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
-				<CollectionTable
-					client={runtime.client}
-					collection="approval_request"
-					view="bolt:approval-inbox"
-					title="Approvals"
-					description="Pending changes awaiting your review, including creates that do not have a provisional record."
-					features={{ create: false }}
-					query={{ where: { status: { eq: 'ONGOING' } }, orderBy: { created_at: 'desc' } }}
-					class="min-h-0"
-				>
-					{#snippet columns({ Column })}
-						<Column name="collection_name" label="Collection" card="title" />
-						<Column name="action" label="Action" card="badge" />
-						<Column name="record_id" label="Record" card="subtitle" />
-						<Column name="status" label="Status" />
-						<Column name="proposed_values" label="Proposed change" />
-						<Column name="created_at" label="Requested" />
+				<!--
+					Approvals is a system surface, but it follows the same page contract as the host plugins:
+					one fixed heading, one responsive page gutter, then one bounded content region whose table
+					owns its vertical and horizontal scrolling. Rendering the table directly under the shell used
+					to put its toolbar against the viewport edge and its pagination against the shell footer.
+				-->
+				<Cover class="relative bg-background" gap="none">
+					{#snippet top()}
+						<Stack
+							as="header"
+							gap="xs"
+							shrink={false}
+							class="bg-background px-4 pt-4 sm:px-6 sm:pt-6"
+						>
+							<h1 class="text-heading">Approvals</h1>
+							<p class="max-w-2xl text-meta">
+								Review pending changes before they are applied to workspace records.
+							</p>
+						</Stack>
 					{/snippet}
-				</CollectionTable>
+
+					<Inline align="stretch" gap="none" fill class="px-4 pt-4 pb-4 sm:px-6 sm:pt-6 sm:pb-6">
+						<Bound size="full" grow clip class="relative min-w-0 w-full">
+							<CollectionTable
+								client={runtime.client}
+								collection="approval_request"
+								view="bolt:approval-inbox"
+								title="Pending requests"
+								description="Changes awaiting your review, including creates that do not have a provisional record."
+								features={{ create: false }}
+								query={{
+									where: { status: { eq: 'ONGOING' } },
+									orderBy: { created_at: 'desc' }
+								}}
+								class="min-h-0"
+							>
+								{#snippet columns({ Column })}
+									<Column name="collection_name" label="Collection" card="title" />
+									<Column name="action" label="Action" card="badge" />
+									<Column name="record_id" label="Record" card="subtitle" />
+									<Column name="status" label="Status" />
+									<Column name="proposed_values" label="Proposed change" />
+									<Column name="created_at" label="Requested" />
+								{/snippet}
+							</CollectionTable>
+						</Bound>
+					</Inline>
+				</Cover>
 			</CollectionTableNavigationSurface>
 		{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`) || activeHostPlugin}
 			{#key activeHostPlugin?.key ?? WORKSPACE_SETTINGS_PATH}

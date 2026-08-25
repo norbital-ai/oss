@@ -26,7 +26,7 @@ describe('agent prompt window', () => {
 		harness = await makeBoltTestRuntime(undefined, { ai });
 		const agents = await harness.runtime.runPromise(Agents.Service);
 		await harness.runtime.runPromise(
-			agents.start(harness.effectId('start'), adminSubject, 'web', 'prompt-window')
+			agents.open(harness.effectId('open'), adminSubject, 'web', 'prompt-window')
 		);
 		const hugeOld = `OLD:${'a'.repeat(50_100)}`;
 		const hugeRecent = `RECENT:${'z'.repeat(50_100)}`;
@@ -53,18 +53,21 @@ describe('agent prompt window', () => {
 				]
 			);
 		}
-		await harness.runtime.runPromise(
-			agents.turn(harness.effectId('turn'), adminSubject, 'web', 'prompt-window', {
+		const admitted = await harness.runtime.runPromise(
+			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', 'prompt-window', {
 				kind: 'user_message',
 				text: 'continue',
 				documents: []
 			})
 		);
+		await harness.runtime.runPromise(
+			agents.execute(harness.effectId('execute'), 'prompt-window', admitted.turnId)
+		);
 		const request = requests[0];
 		if (request?._tag !== 'Turn') throw new Error('expected a turn');
 		const encoded = JSON.stringify(request.messages);
 		expect(request.messages.length).toBeLessThanOrEqual(66);
-		expect(encoded).toContain('outside recent prompt window');
+		// The oldest rows are outside the bounded read entirely; no second placeholder row is needed.
 		expect(encoded).not.toContain(hugeOld);
 		// The latest assistant turn is one of the protected three and remains exact.
 		expect(encoded).toContain(hugeRecent);

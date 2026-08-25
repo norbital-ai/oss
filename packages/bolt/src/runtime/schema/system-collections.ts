@@ -46,6 +46,8 @@ export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	collections.chat_session,
 	collections.chat_message,
 	collections.chat_document,
+	collections.agent_mailbox,
+	collections.agent_run,
 	collections.automation_run,
 	collections.bolt_notifications
 ]);
@@ -196,6 +198,12 @@ const OWN_CONVERSATION_DOCUMENT = Object.freeze({
 		'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
 		'where owned."user_id" = ${requestor.id})'
 });
+const OWN_AGENT_MAILBOX = Object.freeze({
+	$sql:
+		'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
+		'where owned."user_id" = ${requestor.id})'
+});
+const OWN_AGENT_RUN = OWN_AGENT_MAILBOX;
 const OWN_NOTIFICATION = Object.freeze({ $sql: '"recipient" = ${requestor.id}' });
 
 /**
@@ -307,6 +315,16 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 			where: OWN_CONVERSATION_DOCUMENT
 		},
 		{
+			collection: collections.agent_mailbox.name,
+			action: 'read' as const,
+			where: OWN_AGENT_MAILBOX
+		},
+		{
+			collection: collections.agent_run.name,
+			action: 'read' as const,
+			where: OWN_AGENT_RUN
+		},
+		{
 			collection: collections.automation_run.name,
 			action: 'read' as const
 		},
@@ -324,19 +342,10 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 	]
 });
 
-/**
- * Workspace administration is deliberately narrow authority, not blanket tenant-data access.
- *
- * `user.status = admin` opts a subject into this one runtime-owned policy. The policy then grants
- * only membership administration and workspace environment management. It names no tenant
- * collection or tenant app, so an administrator sees workspace data only by holding or previewing
- * an explicitly declared team policy. Adding another administrative capability requires adding
- * another coordinate here.
- */
+/** Runtime controls available to a workspace administrator outside authored data policy. */
 const WORKSPACE_ADMINISTRATION_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclaration>({
 	name: 'bolt.workspace-administration',
-	description:
-		'Explicit membership and environment administration for subjects designated as administrators.',
+	description: 'Workspace identity, environment and team-preview administration.',
 	effect: 'allow',
 	administrator: true,
 	actions: ['manage', 'impersonate'],
@@ -353,10 +362,9 @@ const WORKSPACE_ADMINISTRATION_POLICY: PolicyDeclaration = Object.freeze<PolicyD
  * removing a bad one meant rebuilding every workspace to be rid of it. Merged at definition load,
  * a change to this list takes effect the moment the runtime does.
  *
- * None is a bypass. All are ordinary declarations evaluated by `decide` with the authored ones,
- * and an authored `deny` still wins. What is unusual is only how a subject reaches one: no team can
- * declare these names, so each carries a selector — `authenticated` for scoped system reads,
- * `administrator` for membership controls, or `system` for the host principal.
+ * The administration declaration covers runtime controls only. Administrator access to authored
+ * collections, apps and agents is a trusted status short-circuit at the access boundary, and team
+ * preview drops that status before it reaches the boundary.
  */
 const BUILT_IN_POLICIES: ReadonlyArray<PolicyDeclaration> = Object.freeze([
 	SYSTEM_READ_POLICY,

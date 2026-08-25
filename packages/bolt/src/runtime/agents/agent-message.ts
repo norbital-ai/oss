@@ -1,7 +1,7 @@
 /**
  * What one agent says to another, as the receiving conversation stores it.
  *
- * `message_sandbox_agent` writes into a sibling session's log, and the only role that log accepts for
+ * `message_agent` writes into an adjacent agent's log, and the only role that log accepts for
  * something the agent did not itself produce is `user`. Stored as bare text that is exactly what it
  * became: a message the reader sees attributed to themselves, in their own bubble, in a conversation
  * they were not part of. The sender travels with the message so the panel can say who spoke, and so
@@ -18,21 +18,21 @@ import { Option, Schema } from 'effect';
 
 const AGENT_MESSAGE_KIND = 'agent_message';
 
-/** The session a message came from, as much of it as the sender could name. */
+/** The agent conversation a message came from, as much of it as the sender could name. */
 const AgentMessageSender = Schema.Struct({
-	sessionId: Schema.String,
+	agentId: Schema.String,
 	agentName: Schema.String,
 	/** The conversation's own title, which is what tells two sessions of one agent apart. */
 	title: Schema.NullOr(Schema.String)
 });
 type AgentMessageSender = Schema.Schema.Type<typeof AgentMessageSender>;
 
-const StoredAgentMessage = Schema.Struct({
+export const StoredAgentMessage = Schema.Struct({
 	kind: Schema.Literal(AGENT_MESSAGE_KIND),
 	from: AgentMessageSender,
 	text: Schema.String
 });
-type StoredAgentMessage = Schema.Schema.Type<typeof StoredAgentMessage>;
+export type StoredAgentMessage = Schema.Schema.Type<typeof StoredAgentMessage>;
 
 const decodeStoredText = Schema.decodeUnknownOption(Schema.fromJsonString(StoredAgentMessage));
 const decodeStoredValue = Schema.decodeUnknownOption(StoredAgentMessage);
@@ -67,7 +67,7 @@ export function parseAgentMessage(content: unknown): StoredAgentMessage | null {
  * able to say.
  */
 export function agentMessageForModel(message: StoredAgentMessage): string {
-	const { agentName, title, sessionId } = message.from;
+	const { agentName, title, agentId } = message.from;
 	const label = title === null || title.trim().length === 0 ? agentName : `${agentName} · ${title}`;
-	return `[message from agent ${label} (session ${sessionId})]\n${message.text}`;
+	return `[message from agent ${label} (${agentId})]\n${message.text}`;
 }

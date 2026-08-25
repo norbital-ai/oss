@@ -28,7 +28,7 @@ describe('Automations owner', () => {
 			{
 				call: (_metadata, input) => {
 					wakes.push(input);
-					return Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } });
+					return Promise.resolve({ _tag: 'Success', value: {} });
 				}
 			},
 			testCallContext('i1')
@@ -138,7 +138,7 @@ describe('Automations owner', () => {
 			JSON.stringify({ progress: 0.5, text: 'Halfway' }),
 			1,
 			'e1:start',
-			'pending',
+			'running',
 			'automations.%'
 		]);
 	});
@@ -150,7 +150,7 @@ describe('Automations owner', () => {
 			{
 				call: (_metadata, input) => {
 					wakes.push(input);
-					return Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } });
+					return Promise.resolve({ _tag: 'Success', value: {} });
 				}
 			},
 			testCallContext('i1')

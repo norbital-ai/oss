@@ -100,7 +100,7 @@ const recordingDatabase = (seen: Array<DatabaseRequest>) =>
 
 const context = testCallContext('json-arrays');
 const tasks = Tasks.layer(
-	{ call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } }) },
+	{ call: () => Promise.resolve({ _tag: 'Success', value: {} }) },
 	context
 );
 

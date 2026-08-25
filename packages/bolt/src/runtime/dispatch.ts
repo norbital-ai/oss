@@ -106,12 +106,16 @@ const ApprovalDecideInput = Schema.Struct({
 	reason: Schema.optionalKey(Schema.String)
 });
 const SyncDiffInput = Schema.Struct({ subject: Subject, cursor: SyncCursor, limit: Schema.Number });
-const AgentTurnInput = Schema.Struct({
+const AgentEnqueueInput = Schema.Struct({
 	subject: Subject,
 	agent: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
 	message: Schema.String,
 	documents: Schema.optionalKey(Schema.Array(ChatDocumentRef))
+});
+const AgentExecuteInput = Schema.Struct({
+	conversationId: Schema.NonEmptyString,
+	turnId: Schema.NonEmptyString
 });
 const AgentDocumentBindInput = Schema.Struct({
 	subject: Subject,
@@ -225,6 +229,11 @@ const EnvoyDrainInput = Schema.Struct({
 	envoy: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString
 });
+const EnvoyCompleteInput = Schema.Struct({
+	envoy: Schema.NonEmptyString,
+	conversationId: Schema.NonEmptyString,
+	output: Schema.Json
+});
 /**
  * `binding` is what a scheduled pull carries and an enqueued one does not.
  *
@@ -252,14 +261,26 @@ const AutomationTaskInput = Schema.Struct({
 	/** Injected by the trusted task runner, never accepted from the enqueue payload. */
 	bolt_task_id: Schema.NonEmptyString
 });
-const AgentStartInput = Schema.Struct({
+const AgentOpenInput = Schema.Struct({
 	subject: Subject,
 	agent: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString
 });
-const AgentResumeInput = Schema.Struct({
+const AgentContinueInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
-	targetSessionId: Schema.NonEmptyString
+	agentId: Schema.NonEmptyString,
+	taskId: Schema.NonEmptyString
+});
+const AgentLaneInput = Schema.Struct({ subject: Subject, conversationId: Schema.NonEmptyString });
+const AgentDequeueInput = Schema.Struct({
+	subject: Subject,
+	conversationId: Schema.NonEmptyString,
+	taskId: Schema.NonEmptyString
+});
+const AgentReorderInput = Schema.Struct({
+	subject: Subject,
+	conversationId: Schema.NonEmptyString,
+	taskIds: Schema.Array(Schema.NonEmptyString)
 });
 const AgentVerifierInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
@@ -857,7 +878,8 @@ const teamAnswer = Effect.fn('Bolt.teamAnswer')(function* (
  * is the other end: whether this command is one the runtime ever enqueues. Everything here is
  * addressed by a name the workspace declared or by a record the runtime already wrote, and none of
  * it takes an identity — `integrations.pull`/`flush` and `automations.<name>` are the runtime's own
- * machinery, `agents.resume` continues a conversation `Agents.turn` started, and
+ * machinery, `agents.continue` resumes a parent parked on a child, and `agents.execute` runs one
+ * already-persisted mailbox item, while
  * `collections.resume` takes `{ requestId }` and derives its authority from the stored approval:
  * `Collections.resume` refuses a request that is not `Approved` and replays the write under the
  * subject recorded when the original create was authenticated.
@@ -873,12 +895,13 @@ const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set([
 	'integrations.pull',
 	'integrations.flush',
 	'envoys.drain',
+	'envoys.complete',
 	// A delegated turn. `sandbox-tools.ts` has enqueued this since delegation was written, and it was
 	// never listed here — harmless only for as long as nothing executed the queue. The first tick
 	// would have refused every subagent, and the refusal would have named the provenance gate rather
 	// than the missing entry.
-	'agents.turn',
-	'agents.resume',
+	'agents.execute',
+	'agents.continue',
 	'collections.resume',
 	'collections.discard',
 	// The tick itself, which is the only command a host's timer ever sends. It takes no input and
@@ -1785,13 +1808,13 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			 * supervisor, a manager and an HR controller — which is not a description of anybody, and
 			 * which made their authority a function of the ladder: adding a policy changed what an
 			 * administrator was, and anything that stopped supplying roles removed the workspace from
-			 * them entirely. Administrative status is now explicit on their own row and selects only
-			 * the built-in administrative policy; it grants no authored app or collection access.
+			 * them entirely. Administrative status is now explicit on their own row and bypasses
+			 * authored access policy until an explicit team preview clears it.
 			 *
 			 * `roles` is therefore empty. There is nothing for it to hold: `admin` is not a role, and
 			 * assigning the six real ones would be a lie about what this person does in the workspace.
 			 *
-			 * They are placed in no team, and that is the whole of the change here.
+			 * They are placed in no team, because administrator authority is not team membership.
 			 *
 			 * This used to *derive* a teams array by walking every policy, every grant and every approval
 			 * step in the workspace and collecting each `approvers` name. A founder with no explicit
@@ -1799,10 +1822,9 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			 * status does not confer eligibility to decide one.
 			 * With no team rows and no place to manage them, guessing was the only defence available.
 			 *
-			 * Teams are rows now and an operator puts people in them, so the guess goes. The consequence
-			 * is deliberate and visible rather than silently pre-empted: immediately after provisioning
-			 * the founder can manage membership and preview teams, but has no tenant-data or approval
-			 * authority until an operator places them in a team.
+			 * Teams are rows now and an operator puts people in them, so the guess goes. Immediately after
+			 * provisioning the founder has the complete workspace; previewing a team intentionally replaces
+			 * that bypass with the selected team's data and approval authority.
 			 */
 			// `tenantId` is stamped onto every command input from the invocation scope, never read from
 			// the payload — so a caller cannot admit a founder into somebody else's workspace.
@@ -2141,15 +2163,21 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			yield* (yield* Sync.Service).mutate(effectId, input.subject, input.changes);
 			return json({ mutated: input.changes.length });
 		}
-		case 'agents.turn': {
-			const input = yield* decode(AgentTurnInput, commandInput);
+		case 'agents.enqueue': {
+			const input = yield* decode(AgentEnqueueInput, commandInput);
 			const agents = yield* Agents.Service;
 			return json(
-				yield* agents.turn(effectId, input.subject, input.agent, input.conversationId, {
+				yield* agents.enqueue(effectId, input.subject, input.agent, input.conversationId, {
 					kind: 'user_message',
 					text: input.message,
 					documents: input.documents ?? []
 				})
+			);
+		}
+		case 'agents.execute': {
+			const input = yield* decode(AgentExecuteInput, commandInput);
+			return json(
+				yield* (yield* Agents.Service).execute(effectId, input.conversationId, input.turnId)
 			);
 		}
 		case 'agents.documents.bind': {
@@ -2188,25 +2216,60 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const agents = yield* Agents.Service;
 			return json({ title: yield* agents.title(effectId, input.conversationId) });
 		}
-		case 'agents.start': {
-			const input = yield* decode(AgentStartInput, commandInput);
-			yield* (yield* Agents.Service).start(
+		case 'agents.open': {
+			const input = yield* decode(AgentOpenInput, commandInput);
+			yield* (yield* Agents.Service).open(
 				effectId,
 				input.subject,
 				input.agent,
 				input.conversationId
 			);
-			return json({ started: true, conversationId: input.conversationId });
+			return json({ opened: true, conversationId: input.conversationId });
+		}
+		case 'agents.continue': {
+			const input = yield* decode(AgentContinueInput, commandInput);
+			yield* (yield* Agents.Service).continue(
+				effectId,
+				input.conversationId,
+				input.agentId,
+				input.taskId
+			);
+			return json({ continued: true });
+		}
+		case 'agents.dequeue': {
+			const input = yield* decode(AgentDequeueInput, commandInput);
+			yield* (yield* Agents.Service).dequeue(
+				effectId,
+				input.subject,
+				input.conversationId,
+				input.taskId
+			);
+			return json({ dequeued: true });
+		}
+		case 'agents.reorder': {
+			const input = yield* decode(AgentReorderInput, commandInput);
+			yield* (yield* Agents.Service).reorder(
+				effectId,
+				input.subject,
+				input.conversationId,
+				input.taskIds
+			);
+			return json({ reordered: true });
+		}
+		case 'agents.interrupt': {
+			const input = yield* decode(AgentLaneInput, commandInput);
+			yield* (yield* Agents.Service).interrupt(effectId, input.subject, input.conversationId);
+			return json({ interrupted: true });
+		}
+		case 'agents.stop': {
+			const input = yield* decode(AgentLaneInput, commandInput);
+			yield* (yield* Agents.Service).stop(effectId, input.subject, input.conversationId);
+			return json({ stopped: true });
 		}
 		case 'agents.resume': {
-			const input = yield* decode(AgentResumeInput, commandInput);
-			yield* (yield* Agents.Service).resume(effectId, input.conversationId, input.targetSessionId);
+			const input = yield* decode(AgentLaneInput, commandInput);
+			yield* (yield* Agents.Service).resume(effectId, input.subject, input.conversationId);
 			return json({ resumed: true });
-		}
-		case 'agents.cancel': {
-			const input = yield* decode(TaskInput, commandInput);
-			yield* (yield* Agents.Service).cancel(effectId, input.taskId);
-			return json({ cancelled: true });
 		}
 		case 'agents.updateVerifier': {
 			const input = yield* decode(AgentVerifierInput, commandInput);
@@ -2563,6 +2626,17 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const input = yield* decode(EnvoyDrainInput, commandInput);
 			return json(
 				yield* (yield* Envoys.Service).drain(effectId, input.envoy, input.conversationId)
+			);
+		}
+		case 'envoys.complete': {
+			const input = yield* decode(EnvoyCompleteInput, commandInput);
+			return json(
+				yield* (yield* Envoys.Service).complete(
+					effectId,
+					input.envoy,
+					input.conversationId,
+					input.output
+				)
 			);
 		}
 		case 'envoys.register': {

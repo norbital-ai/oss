@@ -559,7 +559,7 @@ const context = testCallContext('approval-lock');
 const recordingTasks = () =>
 	Tasks.layer(
 		{
-			call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } })
+			call: () => Promise.resolve({ _tag: 'Success', value: {} })
 		},
 		context
 	);

@@ -16,24 +16,13 @@
 
 import { humanize } from '@norbital-ai/std/string';
 import type { Edge, Node } from '@xyflow/svelte';
-
-export type MatrixEntry = Readonly<{
-	readonly tenantId: string;
-	readonly environmentId: string;
-	readonly releaseId: string;
-	readonly artifactId: string;
-	readonly health: string;
-	readonly ownerEpoch: string;
-}>;
-
-type FacilityState = Readonly<{ readonly name: string; readonly available: boolean }>;
+import type { MatrixEntry } from './studio-state.js';
 
 type TenantMatrixEnvironment = Readonly<{
 	readonly id: string;
 	readonly label: string;
 	readonly releaseId: string;
 	readonly artifactId: string;
-	readonly health: string;
 	readonly ownerEpoch: string;
 	readonly live: boolean;
 }>;
@@ -46,10 +35,7 @@ type TenantMatrixGraph = Readonly<{
 const LIVE = 'live';
 
 /** Shapes the routed environments into one readable tenant picture. */
-export const buildTenantMatrix = (
-	entries: ReadonlyArray<MatrixEntry>,
-	_facilities: ReadonlyArray<FacilityState>
-): TenantMatrixGraph => {
+export const buildTenantMatrix = (entries: ReadonlyArray<MatrixEntry>): TenantMatrixGraph => {
 	const environments = [...entries]
 		.map((entry) => ({
 			id: entry.environmentId,
@@ -58,7 +44,6 @@ export const buildTenantMatrix = (
 			label: entry.environmentId === LIVE ? 'Live environment' : humanize(entry.environmentId),
 			releaseId: entry.releaseId,
 			artifactId: entry.artifactId,
-			health: entry.health,
 			ownerEpoch: entry.ownerEpoch,
 			live: entry.environmentId === LIVE
 		}))
@@ -85,7 +70,6 @@ type MatrixNode = Readonly<{
 	readonly title: string;
 	/** Drives the node's chip: what this box is currently doing, in one word. */
 	readonly status: string;
-	readonly healthy: boolean;
 	readonly rows: ReadonlyArray<MatrixRow>;
 	readonly x: number;
 	readonly y: number;
@@ -136,7 +120,6 @@ const layoutTenantMatrix = (
 			id: `environment:${environment.id}`,
 			title: environment.label,
 			status: environment.live ? 'live' : 'routed',
-			healthy: environment.health === 'ready',
 			rows: [
 				{ label: 'Commit', value: detail.commit === '' ? 'none' : detail.commit.slice(0, 12) },
 				{
@@ -177,7 +160,6 @@ export type MatrixNodeData = Readonly<{
 	readonly kind: MatrixNodeKind;
 	readonly title: string;
 	readonly status: string;
-	readonly healthy: boolean;
 	readonly rows: ReadonlyArray<MatrixRow>;
 }>;
 
@@ -203,7 +185,7 @@ export const buildMatrixFlow = (
 		draggable: false,
 		selectable: false,
 		connectable: false,
-		data: { kind: 'lane', title: 'Tenant environments', status: '', healthy: true, rows: [] },
+		data: { kind: 'lane', title: 'Tenant environments', status: '', rows: [] },
 		style: `width: ${layout.width}px; height: ${layout.height}px`
 	};
 	const nodes: MatrixFlowNode[] = [
@@ -222,7 +204,6 @@ export const buildMatrixFlow = (
 				kind: 'environment',
 				title: node.title,
 				status: node.status,
-				healthy: node.healthy,
 				rows: node.rows
 			}
 		}))

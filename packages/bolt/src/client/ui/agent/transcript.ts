@@ -81,9 +81,9 @@ type PanelToolCall = {
 	/**
 	 * The delegated agent's own transcript, projected the same way this one was.
 	 *
-	 * Empty for every tool but `spawn_subagent`. A subagent writes into its parent's session with a
-	 * turn of its own, so without this its messages interleave into the parent by `seq` and its task
-	 * prompt reads as something the person typed.
+	 * Empty for every tool but `spawn_agent`. A child has its own conversation, but its transcript is
+	 * rendered beneath the spawn call so the hierarchy remains visible without exposing it as a root
+	 * conversation in the selector.
 	 */
 	readonly children: readonly PanelMessage[];
 };
@@ -105,7 +105,7 @@ type PanelAgentMessage = {
 	/** The other session: its agent, its title, its id — as much as was recorded. */
 	readonly agentName: string | null;
 	readonly sessionTitle: string | null;
-	readonly sessionId: string | null;
+	readonly agentId: string | null;
 	readonly content: string;
 	/** Delivery, for a message being sent. One that arrived is `complete` by definition. */
 	readonly state: 'running' | 'complete' | 'failed';
@@ -177,7 +177,7 @@ const ElicitationRequest = Schema.Struct({
 const StoredTurn = Schema.Struct({
 	id: Schema.String,
 	status: Schema.String,
-	subagent_id: Schema.NullOr(Schema.String),
+	parent_agent_id: Schema.NullOr(Schema.String),
 	parts: Schema.Array(JsonObject),
 	usage: Schema.optionalKey(JsonObject),
 	error: Schema.optionalKey(Schema.String)
@@ -202,6 +202,7 @@ export function projectStoredChatMessages(rows: readonly StoredChatMessageRow[])
 		if (chatInput !== null) {
 			return {
 				id: row.id,
+				conversation_id: row.conversation_id,
 				role: row.role,
 				parts: [{ kind: 'text', text: chatInputForModel(chatInput) }],
 				turn_id: row.turn_id
@@ -211,6 +212,7 @@ export function projectStoredChatMessages(rows: readonly StoredChatMessageRow[])
 		if (relayed !== null) {
 			return {
 				id: row.id,
+				conversation_id: row.conversation_id,
 				kind: relayed.kind,
 				role: row.role,
 				from: relayed.from,
@@ -223,24 +225,36 @@ export function projectStoredChatMessages(rows: readonly StoredChatMessageRow[])
 				const content = Option.getOrElse(decodeStoredText(row.content), () => '');
 				return {
 					id: row.id,
+					conversation_id: row.conversation_id,
 					role: row.role,
 					parts: [{ kind: 'text', text: typeof content === 'string' ? content : content.text }],
 					turn_id: row.turn_id
 				};
 			},
-			onSome: (turn) => ({ ...turn, role: row.role, turn_id: row.turn_id })
+			onSome: (turn) => ({
+				...turn,
+				conversation_id: row.conversation_id,
+				role: row.role,
+				turn_id: row.turn_id
+			})
 		});
 	});
 	const turns = rows.flatMap((row) =>
 		Option.match(decodeStoredTurn(row.content), {
 			onNone: () => [],
-			onSome: ({ id, status, subagent_id, error }) => [
-				{ id, status, subagent_id, ...(error === undefined ? {} : { error }) }
+			onSome: ({ id, status, parent_agent_id, error }) => [
+				{
+					id,
+					conversation_id: row.conversation_id,
+					status,
+					parent_agent_id,
+					...(error === undefined ? {} : { error })
+				}
 			]
 		})
 	);
 	const delegatedTurnIds = new Set(
-		turns.filter((turn) => turn.subagent_id !== null).map((turn) => turn.id)
+		turns.filter((turn) => turn.parent_agent_id !== null).map((turn) => turn.id)
 	);
 	return {
 		messages: projected.map((record) => ({
@@ -269,13 +283,24 @@ const TOOL_METADATA: Readonly<Record<string, ToolMetadata>> = {
 	describe_workspace: { labelKey: 'bolt.agent.tool.describeWorkspace', icon: 'lucide:book-open' },
 	read_collection: { labelKey: 'bolt.agent.tool.readCollection', icon: 'lucide:table' },
 	write_collection: { labelKey: 'bolt.agent.tool.writeCollection', icon: 'lucide:database' },
-	spawn_subagent: { labelKey: 'bolt.agent.tool.delegateTask', icon: 'lucide:network' },
+	spawn_agent: { labelKey: 'bolt.agent.tool.spawnAgent', icon: 'lucide:network' },
 	list_skills: { labelKey: 'bolt.agent.tool.listSkills', icon: 'lucide:library' },
 	read_skill: { labelKey: 'bolt.agent.tool.readSkill', icon: 'lucide:book-marked' },
-	list_sandbox_agents: { labelKey: 'bolt.agent.tool.listSandboxAgents', icon: 'lucide:users' },
-	read_sandbox_agent: { labelKey: 'bolt.agent.tool.readSandboxAgent', icon: 'lucide:scan-search' },
-	message_sandbox_agent: { labelKey: 'bolt.agent.tool.messageSandboxAgent', icon: 'lucide:send' },
-	await_sandbox_agent: { labelKey: 'bolt.agent.tool.awaitSandboxAgent', icon: 'lucide:hourglass' }
+	list_agents: { labelKey: 'bolt.agent.tool.listAgents', icon: 'lucide:users' },
+	read_agent: { labelKey: 'bolt.agent.tool.readAgent', icon: 'lucide:scan-search' },
+	message_agent: { labelKey: 'bolt.agent.tool.messageAgent', icon: 'lucide:send' },
+	await_agent: { labelKey: 'bolt.agent.tool.awaitAgent', icon: 'lucide:hourglass' },
+	dequeue_agent_message: {
+		labelKey: 'bolt.agent.tool.dequeueAgentMessage',
+		icon: 'lucide:list-x'
+	},
+	reorder_agent_queue: {
+		labelKey: 'bolt.agent.tool.reorderAgentQueue',
+		icon: 'lucide:list-ordered'
+	},
+	interrupt_agent: { labelKey: 'bolt.agent.tool.interruptAgent', icon: 'lucide:octagon-x' },
+	stop_agent: { labelKey: 'bolt.agent.tool.stopAgent', icon: 'lucide:pause' },
+	resume_agent: { labelKey: 'bolt.agent.tool.resumeAgent', icon: 'lucide:play' }
 };
 
 /**
@@ -285,7 +310,7 @@ const TOOL_METADATA: Readonly<Record<string, ToolMetadata>> = {
  * the one field that tells two reads apart.
  */
 const DETAIL_KEYS = [
-	'sessionId',
+	'agentId',
 	'collection',
 	'task',
 	'action',
@@ -296,10 +321,16 @@ const DETAIL_KEYS = [
 ] as const;
 
 const SANDBOX_AGENT_TOOLS = new Set([
-	'list_sandbox_agents',
-	'read_sandbox_agent',
-	'message_sandbox_agent',
-	'await_sandbox_agent'
+	'spawn_agent',
+	'list_agents',
+	'read_agent',
+	'message_agent',
+	'await_agent',
+	'dequeue_agent_message',
+	'reorder_agent_queue',
+	'interrupt_agent',
+	'stop_agent',
+	'resume_agent'
 ]);
 
 /**
@@ -323,9 +354,6 @@ export function toPanelMessages(
 		}
 	}
 
-	// `runDurableSubagent` tags the child's turn `subagent:<spawn call id>`, so the call that started a
-	// delegated agent names the turn that carries its transcript. That is the whole join.
-	const turnByCallId = new Map<string, string>();
 	const turnStatus = new Map<string, string>();
 	const subagentTurnIds = new Set<string>();
 	for (const turn of turns) {
@@ -333,24 +361,23 @@ export function toPanelMessages(
 		if (typeof turnId === 'string' && typeof turn.status === 'string') {
 			turnStatus.set(turnId, turn.status);
 		}
-		const subagentId = turn.subagent_id;
+		const subagentId = turn.parent_agent_id;
 		if (typeof turnId !== 'string' || typeof subagentId !== 'string') continue;
 		subagentTurnIds.add(turnId);
-		if (subagentId.startsWith('subagent:')) {
-			turnByCallId.set(subagentId.slice('subagent:'.length), turnId);
-		}
 	}
-	const byTurn = new Map<string, Readonly<Record<string, unknown>>[]>();
+	const byAgent = new Map<string, Readonly<Record<string, unknown>>[]>();
 	for (const record of records) {
 		const turnId = record.turn_id;
 		if (typeof turnId !== 'string' || !subagentTurnIds.has(turnId)) continue;
-		const bucket = byTurn.get(turnId) ?? [];
+		const agentId = record.conversation_id;
+		if (typeof agentId !== 'string') continue;
+		const bucket = byAgent.get(agentId) ?? [];
 		bucket.push(record);
-		byTurn.set(turnId, bucket);
+		byAgent.set(agentId, bucket);
 	}
 
-	const context: ProjectionContext = { results, turnByCallId, byTurn, turnStatus };
-	// A subagent's rows belong to its call, not to the conversation they share a session with.
+	const context: ProjectionContext = { results, byAgent, turnStatus };
+	// A child agent's rows belong beneath its spawn call, not in the root conversation flow.
 	const roots = records.filter((record) => {
 		const turnId = record.turn_id;
 		return typeof turnId !== 'string' || !subagentTurnIds.has(turnId);
@@ -435,17 +462,15 @@ function goalVerdict(record: Readonly<Record<string, unknown>>): PanelGoal | Pan
 
 type ProjectionContext = {
 	readonly results: ReadonlyMap<string, unknown>;
-	readonly turnByCallId: ReadonlyMap<string, string>;
-	readonly byTurn: ReadonlyMap<string, readonly Readonly<Record<string, unknown>>[]>;
+	readonly byAgent: ReadonlyMap<string, readonly Readonly<Record<string, unknown>>[]>;
 	readonly turnStatus: ReadonlyMap<string, string>;
 };
 
 /**
  * How far a delegated transcript may nest before the panel stops descending.
  *
- * The loop already refuses a subagent that spawns another, so two is the real ceiling. The guard is
- * against a cycle in the data — a turn that somehow names itself would otherwise recurse forever in
- * the reader's browser rather than failing where it was written.
+ * Recursive children are supported. The guard bounds presentation work and protects the browser
+ * from malformed cyclic lineage; the runtime owns the independent delegation budget.
  */
 const MAX_SUBAGENT_DEPTH = 3;
 
@@ -508,14 +533,18 @@ function toToolCall(
 	const id = typeof record.id === 'string' ? record.id : null;
 	const answered = id !== null && context.results.has(id);
 	const output = answered ? context.results.get(id) : undefined;
-	const childTurn = id === null ? undefined : context.turnByCallId.get(id);
+	const decodedOutput = Option.getOrElse(decodeJsonObject(output), emptyJsonObject);
+	const childAgentId = name === 'spawn_agent' && typeof decodedOutput.agentId === 'string'
+		? decodedOutput.agentId
+		: undefined;
 	const children =
-		childTurn !== undefined && depth < MAX_SUBAGENT_DEPTH
-			? (context.byTurn.get(childTurn) ?? []).flatMap((row) => toPanelRow(row, context, depth + 1))
+		childAgentId !== undefined && depth < MAX_SUBAGENT_DEPTH
+			? (context.byAgent.get(childAgentId) ?? []).flatMap((row) =>
+					toPanelRow(row, context, depth + 1)
+				)
 			: [];
 	// The loop turns a thrown tool into `{ error }` and feeds it back to the model rather than failing
 	// the turn, so a failed call is visible only here — the run around it still reports success.
-	const decodedOutput = Option.getOrElse(decodeJsonObject(output), emptyJsonObject);
 	const error = typeof decodedOutput.error === 'string' ? decodedOutput.error : null;
 	const labelKey = mcpParsed ? null : (metadata?.labelKey ?? null);
 	const label = mcpParsed
@@ -586,7 +615,7 @@ function toInboundAgentMessage(
 		direction: 'in',
 		agentName: typeof from.agentName === 'string' ? from.agentName : null,
 		sessionTitle: typeof from.title === 'string' ? from.title : null,
-		sessionId: typeof from.sessionId === 'string' ? from.sessionId : null,
+		agentId: typeof from.agentId === 'string' ? from.agentId : null,
 		content: text,
 		state: 'complete',
 		error: null
@@ -594,7 +623,7 @@ function toInboundAgentMessage(
 }
 
 /**
- * The message a `message_sandbox_agent` call carried, or nothing when the call is some other tool.
+ * The message a `message_agent` call carried, or nothing when the call is some other tool.
  *
  * Takes the delivery state and the failure text from the projected call, so a message reports what it
  * did exactly as every other call does, and the message body and the recipient from the stored part,
@@ -606,7 +635,7 @@ function toOutboundAgentMessage(
 	call: PanelToolCall,
 	context: ProjectionContext
 ): PanelAgentMessage | null {
-	if (call.name !== 'message_sandbox_agent') return null;
+	if (call.name !== 'message_agent') return null;
 	const input = Option.getOrElse(decodeJsonObject(part.input), emptyJsonObject);
 	if (typeof input.message !== 'string') return null;
 	const id = typeof part.id === 'string' ? part.id : null;
@@ -618,7 +647,7 @@ function toOutboundAgentMessage(
 		direction: 'out',
 		agentName: typeof output.agentName === 'string' ? output.agentName : null,
 		sessionTitle: typeof output.title === 'string' ? output.title : null,
-		sessionId: typeof input.sessionId === 'string' ? input.sessionId : null,
+		agentId: typeof input.agentId === 'string' ? input.agentId : null,
 		content: input.message,
 		state: call.state === 'needs_input' ? 'running' : call.state,
 		error: call.error
@@ -807,9 +836,9 @@ function containsPrompt(messages: readonly PanelMessage[], pending: string): boo
 /**
  * The conversation as the panel shows it, including a prompt that has not landed yet.
  *
- * A round trip runs the whole agent loop, and the loop writes the user's message before it starts
- * thinking — so the echo exists only to cover the gap before the replica has it, and disappears the
- * moment the real row arrives rather than being cleared on a timer or by the response returning.
+ * Admission atomically writes the user's message and queued turn, then returns before inference.
+ * The echo covers only the transport-to-replica gap and disappears the moment the real row arrives,
+ * without a timer or a second response channel.
  * Sending the same text twice suppresses the echo one message early, which is invisible.
  */
 export function withPendingEcho(

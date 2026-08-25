@@ -28,7 +28,7 @@ Defined in: packages/std/build/billing/rate-card.d.ts:3
 const AI_SGD_PER_PROVIDER_USD: 2.6 = 2.6;
 ```
 
-Defined in: packages/std/build/billing/rate-card.d.ts:32
+Defined in: packages/std/build/billing/rate-card.d.ts:33
 
 SGD charged per US dollar of provider spend.
 
@@ -82,10 +82,11 @@ Defined in: packages/std/build/billing/rate-card.d.ts:1
 const COMPUTE_SGD_PER_SECOND: 0.0005 = 0.0005;
 ```
 
-Defined in: packages/std/build/billing/rate-card.d.ts:9
+Defined in: packages/std/build/billing/rate-card.d.ts:10
 
-Tenant-visible usage prices. Compute is one isolate-second: the isolate already
-hard-walls CPU time and RAM together, so memory is not a separate meter.
+Tenant-visible usage prices. Compute is worker-thread event-loop utilization (ELU) active time,
+billed in seconds. Memory has no separate usage meter or per-worker hard wall; its infrastructure
+cost is included in the compute price.
 Disc and files are GB-months converted to GB-hours over a 730-hour month.
 
 ***
@@ -98,7 +99,7 @@ Disc and files are GB-months converted to GB-hours over a 730-hour month.
 const DISC_SGD_PER_GB_MONTH: 3 = 3;
 ```
 
-Defined in: packages/std/build/billing/rate-card.d.ts:10
+Defined in: packages/std/build/billing/rate-card.d.ts:11
 
 ***
 
@@ -110,7 +111,7 @@ Defined in: packages/std/build/billing/rate-card.d.ts:10
 const EXTERNAL_CLOUD_RATE_CARD_USD: object;
 ```
 
-Defined in: packages/std/build/billing/rate-card.d.ts:49
+Defined in: packages/std/build/billing/rate-card.d.ts:51
 
 #### Type Declaration
 
@@ -180,7 +181,7 @@ readonly r2StoragePerGbMonth: 0.015;
 const FILES_SGD_PER_GB_MONTH: 0.25 = 0.25;
 ```
 
-Defined in: packages/std/build/billing/rate-card.d.ts:11
+Defined in: packages/std/build/billing/rate-card.d.ts:12
 
 ***
 
@@ -192,7 +193,7 @@ Defined in: packages/std/build/billing/rate-card.d.ts:11
 const HOURS_PER_BILLING_MONTH: 730 = 730;
 ```
 
-Defined in: packages/std/build/billing/rate-card.d.ts:12
+Defined in: packages/std/build/billing/rate-card.d.ts:13
 
 ***
 
@@ -204,10 +205,11 @@ Defined in: packages/std/build/billing/rate-card.d.ts:12
 const LOCAL_CLOUD_RATE_CARD: object;
 ```
 
-Defined in: packages/std/build/billing/rate-card.d.ts:37
+Defined in: packages/std/build/billing/rate-card.d.ts:39
 
-Local bare-metal cost allocation, kept for capacity planning. It is not a
-customer-facing meter split: RAM is bundled into compute seconds.
+Local bare-metal cost allocation, kept for capacity planning. It is not a customer-facing meter
+split: the compute price includes RAM cost, while measured usage remains worker-thread ELU active
+time.
 
 #### Type Declaration
 

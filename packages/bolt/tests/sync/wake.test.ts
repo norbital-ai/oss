@@ -128,20 +128,26 @@ describe('announcing a change on the sync topic', () => {
 			transport: recordingTransport(published) as never
 		});
 
+		const agents = await harness.runtime.runPromise(Agents.Service);
+		const admitted = await harness.runtime.runPromise(
+			agents.enqueue(
+				harness.effectId('agent-live:enqueue'),
+				adminSubject,
+				'web',
+				'conversation-live',
+				{
+					kind: 'user_message',
+					text: 'Show me the current state.',
+					documents: []
+				}
+			)
+		);
 		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Agents.Service).turn(
-					harness!.effectId('agent-live'),
-					adminSubject,
-					'web',
-					'conversation-live',
-					{
-						kind: 'user_message',
-						text: 'Show me the current state.',
-						documents: []
-					}
-				);
-			})
+			agents.execute(
+				harness.effectId('agent-live:execute'),
+				'conversation-live',
+				admitted.turnId
+			)
 		);
 
 		const announced = published.flatMap(({ collections }) => collections);

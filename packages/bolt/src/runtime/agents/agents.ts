@@ -1,5 +1,5 @@
-import { Context, Effect, Layer, Ref, Schema } from 'effect';
-import { and, asc, desc, eq, inArray, isNull, notLike, or } from 'drizzle-orm';
+import { Clock, Context, Effect, Layer, Ref, Schema } from 'effect';
+import { and, asc, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import {
 	addAIUsage,
 	AIUsage,
@@ -15,11 +15,22 @@ import { PendingApproval } from '#lib/runtime/collections/collections.js';
 import { AI, Connector, HostTools } from '#lib/runtime/facilities/services.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Database from '#lib/runtime/facilities/database.js';
-import { composer, executeBuilt, increment, transactionBuilt } from '#lib/runtime/persistence.js';
+import {
+	composer,
+	executeBuilt,
+	increment,
+	transactionBuilt,
+	transactionSql
+} from '#lib/runtime/persistence.js';
 import * as SyncWake from '#lib/runtime/sync/wake.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
-import { TurnResult, type TurnResult as TurnResultValue } from './agent-schemas.js';
-export { TurnResult } from './agent-schemas.js';
+import {
+	AgentEnqueueResult,
+	type AgentEnqueueResult as AgentEnqueueResultValue,
+	TurnResult,
+	type TurnResult as TurnResultValue
+} from './agent-schemas.js';
+export { AgentEnqueueResult, TurnResult } from './agent-schemas.js';
 import { RemoteRegistry } from '#lib/runtime/remotes.js';
 import type { WhereCompileError } from '#lib/runtime/collections/where.js';
 import * as Workspace from '#lib/runtime/workspace.js';
@@ -46,7 +57,7 @@ type ResolvedAgent = Readonly<{
 	readonly task?: string;
 	/** `public` on an envoy anyone can message; absent for the web agent, which is never public. */
 	readonly audience?: 'public' | 'authenticated';
-	/** Disabled only by an envoy declaration; absent keeps web and existing envoys compatible. */
+	/** Disabled only by an envoy declaration; absence means delegation is enabled. */
 	readonly delegation?: 'enabled' | 'disabled';
 }>;
 
@@ -72,7 +83,12 @@ import {
 	readSkillBody
 } from '#lib/runtime/agents/platform-tools.js';
 import { callMcpTool } from '#lib/runtime/agents/mcp.js';
-import { agentMessageForModel, parseAgentMessage } from '#lib/runtime/agents/agent-message.js';
+import {
+	agentMessageForModel,
+	parseAgentMessage,
+	StoredAgentMessage,
+	type StoredAgentMessage as StoredAgentMessageValue
+} from '#lib/runtime/agents/agent-message.js';
 import {
 	executeSandboxTool,
 	isSandboxTool,
@@ -90,7 +106,11 @@ import {
 	type StoredChatInput
 } from '#lib/runtime/agents/chat-messages.js';
 
-const { chat_session: chatSession, chat_message: chatMessage } = SYSTEM_MODEL_TABLES;
+const {
+	agent_run: agentRun,
+	chat_session: chatSession,
+	chat_message: chatMessage
+} = SYSTEM_MODEL_TABLES;
 type BuiltQuery = Parameters<typeof executeBuilt>[2];
 
 export { McpToolError, SkillError, ToolNotAllowed } from '#lib/runtime/agents/agent-errors.js';
@@ -163,7 +183,15 @@ const TurnPart = Schema.Union([
 ]);
 type TurnPart = Schema.Schema.Type<typeof TurnPart>;
 
-const TurnStatus = Schema.Literals(['running', 'completed', 'failed', 'cancelled']);
+const TurnStatus = Schema.Literals([
+	'queued',
+	'running',
+	'paused',
+	'completed',
+	'failed',
+	'interrupted',
+	'dequeued'
+]);
 type TurnStatus = Schema.Schema.Type<typeof TurnStatus>;
 
 /**
@@ -176,7 +204,7 @@ type TurnStatus = Schema.Schema.Type<typeof TurnStatus>;
 const StoredTurn = Schema.Struct({
 	id: Schema.NonEmptyString,
 	status: TurnStatus,
-	subagent_id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
+	parent_agent_id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
 	parts: Schema.Array(TurnPart),
 	resumed: Schema.optionalKey(
 		Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
@@ -190,13 +218,35 @@ type StoredTurn = Schema.Schema.Type<typeof StoredTurn>;
 
 const StoredTurnMessageRow = Schema.Struct({ id: Schema.String, content: StoredTurn });
 const decodeStoredTurnMessageRow = Schema.decodeUnknownOption(StoredTurnMessageRow);
-const AwaitInput = Schema.Struct({ sessionId: Schema.NonEmptyString });
+const AwaitInput = Schema.Struct({
+	agentId: Schema.NonEmptyString,
+	taskId: Schema.NonEmptyString
+});
 const WaitingAnswer = Schema.Struct({ waiting: Schema.Literal(true) });
+const SandboxSpawnActionInput = Schema.Struct({
+	task: Schema.NonEmptyString,
+	depth: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))
+});
+const SandboxAdmitActionInput = Schema.Struct({
+	agentId: Schema.NonEmptyString,
+	agentName: Schema.NonEmptyString,
+	message: StoredAgentMessage,
+	depth: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))
+});
+const SandboxTaskActionInput = Schema.Struct({
+	agentId: Schema.NonEmptyString,
+	taskId: Schema.NonEmptyString
+});
+const SandboxReorderActionInput = Schema.Struct({
+	agentId: Schema.NonEmptyString,
+	orderedTaskIds: Schema.Array(Schema.NonEmptyString)
+});
+const SandboxAgentActionInput = Schema.Struct({ agentId: Schema.NonEmptyString });
 
 /** A completed delegated turn, returned to the parent as the answer to its await tool call. */
 const SettledTarget = Schema.Struct({
 	id: Schema.NonEmptyString,
-	status: Schema.Literals(['completed', 'failed', 'cancelled']),
+	status: Schema.Literals(['completed', 'failed', 'interrupted', 'dequeued']),
 	parts: Schema.Array(TurnPart)
 });
 const SettledTargetRow = Schema.Struct({ content: SettledTarget });
@@ -318,10 +368,8 @@ export interface ConversationUsage extends Schema.Schema.Type<typeof Conversatio
 /**
  * How deep the spend roll-up and the transcript walk follow delegation.
  *
- * The loop already refuses a subagent that spawns another, so the real tree is one level. The bound
- * exists so a cycle written into `parent_id` fails as a truncated walk rather than as a recursive
- * query that never returns — and so raising the delegation limit later changes one number here
- * instead of finding this code by way of a hung request.
+ * Delegation is recursive, but bounded. The limit also makes a cycle written into `parent_id`
+ * degrade to a truncated walk rather than a recursive query that never returns.
  */
 const maxDelegationDepth = 8;
 
@@ -406,6 +454,8 @@ const ConversationLinkRow = Schema.Struct({
 const decodeConversationLinkRow = Schema.decodeUnknownOption(ConversationLinkRow);
 const IdRow = Schema.Struct({ id: Schema.String });
 const decodeIdRow = Schema.decodeUnknownOption(IdRow);
+const TaskIdRow = Schema.Struct({ task_id: Schema.String });
+const decodeTaskIdRow = Schema.decodeUnknownOption(TaskIdRow);
 
 /**
  * Reads one counter off a session row.
@@ -439,7 +489,8 @@ const conversationUsage = (row: unknown): ConversationUsage => {
 };
 
 export type Interface = Readonly<{
-	readonly start: (
+	/** Opens an empty conversation only when a document must be bound before its first message. */
+	readonly open: (
 		effectId: EffectIdType,
 		subject: Identity.Subject,
 		agentName: string,
@@ -448,13 +499,25 @@ export type Interface = Readonly<{
 		void,
 		Workspace.WorkspaceLookupError | AccessControl.AccessDenied | Database.FacilityError
 	>;
-	/** A turn can run a tool that queries a collection, so a refused filter is one of its failures. */
-	readonly turn: (
+	/** Persists the message and queued turn atomically, then returns before inference starts. */
+	readonly enqueue: (
 		effectId: EffectIdType,
 		subject: Identity.Subject,
 		agentName: string,
 		conversationId: string,
 		message: StoredChatInput
+	) => Effect.Effect<
+		AgentEnqueueResultValue,
+		| Workspace.WorkspaceLookupError
+		| AccessControl.AccessDenied
+		| Database.FacilityError
+		| ChatDocuments.ChatDocumentError
+	>;
+	/** Executes one already-persisted queued turn. Only task invocations call this. */
+	readonly execute: (
+		effectId: EffectIdType,
+		conversationId: string,
+		turnId: string
 	) => Effect.Effect<
 		TurnResultValue,
 		| Workspace.WorkspaceLookupError
@@ -500,10 +563,11 @@ export type Interface = Readonly<{
 		void,
 		Database.FacilityError | AccessControl.AccessDenied | ChatDocuments.ChatDocumentError
 	>;
-	readonly resume: (
+	readonly continue: (
 		effectId: EffectIdType,
 		conversationId: string,
-		targetSessionId: string
+		agentId: string,
+		taskId: string
 	) => Effect.Effect<
 		void,
 		| Workspace.WorkspaceLookupError
@@ -517,10 +581,33 @@ export type Interface = Readonly<{
 		| AuthoredRefusal
 		| InvocationBudget.NestingLimitExceeded
 	>;
-	readonly cancel: (
+	readonly dequeue: (
 		effectId: EffectIdType,
+		subject: Identity.Subject,
+		conversationId: string,
 		taskId: string
-	) => Effect.Effect<void, Database.FacilityError>;
+	) => Effect.Effect<void, Database.FacilityError | AccessControl.AccessDenied>;
+	readonly reorder: (
+		effectId: EffectIdType,
+		subject: Identity.Subject,
+		conversationId: string,
+		orderedTaskIds: ReadonlyArray<string>
+	) => Effect.Effect<void, Database.FacilityError | AccessControl.AccessDenied>;
+	readonly interrupt: (
+		effectId: EffectIdType,
+		subject: Identity.Subject,
+		conversationId: string
+	) => Effect.Effect<void, Database.FacilityError | AccessControl.AccessDenied>;
+	readonly stop: (
+		effectId: EffectIdType,
+		subject: Identity.Subject,
+		conversationId: string
+	) => Effect.Effect<void, Database.FacilityError | AccessControl.AccessDenied>;
+	readonly resume: (
+		effectId: EffectIdType,
+		subject: Identity.Subject,
+		conversationId: string
+	) => Effect.Effect<void, Database.FacilityError | AccessControl.AccessDenied>;
 	readonly updateVerifier: (
 		effectId: EffectIdType,
 		conversationId: string,
@@ -670,6 +757,19 @@ export const layer = Layer.effect(
 			}
 			return conversation;
 		});
+		const requireControllableConversation = Effect.fn('Agents.requireControllableConversation')(
+			function* (effectId: EffectIdType, subject: Identity.Subject, conversationId: string) {
+				const conversation = yield* requireReadableConversation(effectId, subject, conversationId);
+				if (conversation.user_id !== subject.userId || conversation.visibility !== 'personal') {
+					return yield* new AccessControl.AccessDenied({
+						action: 'agent',
+						resource: conversationId,
+						reason: 'only the owner may control this agent conversation'
+					});
+				}
+				return conversation;
+			}
+		);
 
 		/**
 		 * The tools one turn is offered, decided by the subject's policies and nothing else.
@@ -819,6 +919,169 @@ export const layer = Layer.effect(
 			);
 		});
 
+		type QueuedAgentInput = StoredChatInput | StoredAgentMessageValue;
+		const admitTurn = Effect.fn('Agents.admitTurn')(function* (
+			effectId: EffectIdType,
+			subject: Identity.Subject,
+			agentName: string,
+			conversationId: string,
+			message: QueuedAgentInput,
+			options: Readonly<{ readonly parentId?: string; readonly depth?: number }> = {}
+		) {
+			const agent = yield* resolveAgent(agentName);
+			yield* access.authorize(subject, 'agent', agentName);
+			let parentId = options.parentId ?? null;
+			if (options.parentId === undefined) {
+				const existing = yield* executeBuilt(
+					EffectId.make(`${effectId}:existing-conversation`),
+					database,
+					composer
+						.select({
+							conversation_id: chatSession.conversation_id,
+							agent_name: chatSession.agent_name,
+							title: chatSession.title,
+							user_id: chatSession.user_id,
+							sandbox_key: chatSession.sandbox_key,
+							visibility: chatSession.visibility,
+							envoy_key: chatSession.envoy_key,
+							parent_id: chatSession.parent_id
+						})
+						.from(chatSession)
+						.where(eq(chatSession.conversation_id, conversationId))
+						.limit(1)
+				);
+				const row = existing.rows[0];
+				if (row !== undefined) {
+					const conversation = conversationRow(row);
+					if (
+						conversation === undefined ||
+						!canReadConversation(subject, conversation) ||
+						conversation.user_id !== subject.userId ||
+						conversation.agent_name !== agent.name
+					) {
+						return yield* new AccessControl.AccessDenied({
+							action: 'agent',
+							resource: conversationId,
+							reason: 'conversation belongs to a different agent or owner'
+						});
+					}
+					const storedParent =
+						row !== null && typeof row === 'object' ? Reflect.get(row, 'parent_id') : null;
+					parentId = typeof storedParent === 'string' ? storedParent : null;
+				}
+			}
+			if (message.kind === 'user_message') {
+				for (const file of message.documents) {
+					yield* documents.resolve(
+						EffectId.make(`${effectId}:document:${file.storage_key}`),
+						conversationId,
+						file.storage_key
+					);
+				}
+			}
+			const turnId = String(effectId);
+			const taskInput = {
+				conversationId,
+				turnId,
+				agent: agent.name
+			} satisfies Schema.Json;
+			const task = {
+				command: 'agents.execute',
+				input:
+					options.depth === undefined
+						? taskInput
+						: InvocationBudget.stampDepth(taskInput, options.depth),
+				effectId: turnId,
+				lane: conversationId
+			} as const;
+			const nowEpochMs = yield* Clock.currentTimeMillis;
+			const title =
+				message.kind === 'agent_message' ? undefined : chatInputText(message).slice(0, 48);
+			const group = conversationId.includes(':group:');
+			yield* transactionBuilt(effectId, database, [
+				composer
+					.insert(chatSession)
+					.values({
+						conversation_id: conversationId,
+						agent_name: agent.name,
+						user_id: subject.userId,
+						sandbox_key: sandboxKeyFor(subject, agent, conversationId),
+						title:
+							message.kind === 'agent_message'
+								? message.text.slice(0, 48)
+								: chatInputText(message).slice(0, 48),
+						parent_id: options.parentId ?? null,
+						visibility:
+							options.parentId !== undefined || agent.name === WEB_AGENT_NAME
+								? 'personal'
+								: group
+									? 'envoy_group'
+									: 'envoy_dm',
+						envoy_key:
+							options.parentId !== undefined || agent.name === WEB_AGENT_NAME ? null : agent.name
+					})
+					.onConflictDoNothing(),
+				// The pre-read gives a typed refusal for ordinary conflicts; this in-transaction assertion
+				// closes the concurrent-insert race before any message or task is written.
+				transactionSql(
+					`select case when exists (
+						select 1 from "chat_session"
+						where "conversation_id" = $1 and "user_id" = $2 and "agent_name" = $3
+					) then 1 else 1 / ((random() * 0)::integer) end`,
+					[conversationId, subject.userId, agent.name]
+				),
+				...(title === undefined
+					? []
+					: [
+							composer
+								.update(chatSession)
+								.set({ title })
+								.where(
+									and(
+										eq(chatSession.conversation_id, conversationId),
+										or(
+											isNull(chatSession.title),
+											eq(chatSession.title, ''),
+											eq(chatSession.title, 'New conversation')
+										)
+									)
+								)
+						]),
+				composer.insert(chatMessage).values({
+					conversation_id: conversationId,
+					turn_id: turnId,
+					role: 'user',
+					content: JSON.stringify(message)
+				}),
+				composer.insert(chatMessage).values({
+					conversation_id: conversationId,
+					turn_id: turnId,
+					role: 'assistant',
+					content: JSON.stringify({
+						id: turnId,
+						status: 'queued',
+						parent_agent_id: parentId,
+						parts: [],
+						resumed: 0,
+						subject,
+						agent_name: agent.name,
+						usage_unreported: false
+					})
+				}),
+				...queue.statements([task]).map(({ sql, parameters }) => transactionSql(sql, parameters))
+			]);
+			// Durable work exists before the scheduler is announced. An immediate tick can therefore never
+			// observe an empty queue and disarm ahead of the commit that asked it to run.
+			yield* queue.wake(EffectId.make(`${effectId}:wake`), nowEpochMs);
+			yield* syncWake.announce(EffectId.make(`${effectId}:sync`), [
+				'chat_session',
+				'chat_message',
+				'agent_mailbox',
+				'agent_run'
+			]);
+			return { conversationId, taskId: turnId, turnId, status: 'queued' as const };
+		});
+
 		const executeTool = Effect.fn('Agents.executeTool')(function* (
 			agent: ResolvedAgent,
 			name: string,
@@ -860,6 +1123,21 @@ export const layer = Layer.effect(
 			};
 			if (isPlatformTool(name)) return yield* executePlatformTool(name, input, context);
 			if (isSandboxTool(name)) {
+				const sandboxError = (error: unknown) =>
+					error instanceof Database.FacilityError ||
+					error instanceof ToolNotAllowed ||
+					error instanceof InvocationBudget.NestingLimitExceeded
+						? error
+						: new ToolNotAllowed({ agent: agent.name, tool: name });
+				const action = <A>(effect: Effect.Effect<A, unknown>) =>
+					effect.pipe(
+						Effect.map((value) => value as Schema.Json),
+						Effect.mapError(sandboxError)
+					);
+				const decodeAction = <S extends Schema.Top>(schema: S, value: Schema.Json) =>
+					Schema.decodeUnknownEffect(schema)(value).pipe(
+						Effect.mapError(() => new ToolNotAllowed({ agent: agent.name, tool: name }))
+					);
 				return yield* executeSandboxTool(name, input, {
 					effectId,
 					subject,
@@ -867,9 +1145,95 @@ export const layer = Layer.effect(
 					agentName: agent.name,
 					conversationId,
 					database,
-					mutate: syncMutation,
-					tasks: queue,
-					budget
+					budget,
+					spawn: (actionId, value) =>
+						action(
+							Effect.gen(function* () {
+								const parsed = yield* decodeAction(SandboxSpawnActionInput, value);
+								const childId = `agent:${String(actionId)}`;
+								const admitted = yield* admitTurn(
+									actionId,
+									subject,
+									agent.name,
+									childId,
+									{ kind: 'user_message', text: parsed.task, documents: [] },
+									{ parentId: conversationId, depth: parsed.depth }
+								);
+								return {
+									agentId: childId,
+									taskId: admitted.taskId,
+									status: admitted.status
+								};
+							})
+						),
+					admit: (actionId, value) =>
+						action(
+							Effect.gen(function* () {
+								const parsed = yield* decodeAction(SandboxAdmitActionInput, value);
+								const admitted = yield* admitTurn(
+									actionId,
+									subject,
+									parsed.agentName,
+									parsed.agentId,
+									parsed.message,
+									{ depth: parsed.depth }
+								);
+								return {
+									agentId: parsed.agentId,
+									taskId: admitted.taskId,
+									status: admitted.status
+								};
+							})
+						),
+					dequeue: (actionId, value) =>
+						action(
+							Effect.gen(function* () {
+								const parsed = yield* decodeAction(SandboxTaskActionInput, value);
+								return {
+									agentId: parsed.agentId,
+									taskId: parsed.taskId,
+									dequeued: yield* dequeueConversation(actionId, parsed.agentId, parsed.taskId)
+								};
+							})
+						),
+					reorder: (actionId, value) =>
+						action(
+							Effect.gen(function* () {
+								const parsed = yield* decodeAction(SandboxReorderActionInput, value);
+								yield* reorderConversation(actionId, parsed.agentId, parsed.orderedTaskIds);
+								return { agentId: parsed.agentId, reordered: true };
+							})
+						),
+					interrupt: (actionId, value) =>
+						action(
+							Effect.gen(function* () {
+								const parsed = yield* decodeAction(SandboxAgentActionInput, value);
+								return {
+									agentId: parsed.agentId,
+									interruptedTaskIds: yield* interruptConversation(actionId, parsed.agentId)
+								};
+							})
+						),
+					stop: (actionId, value) =>
+						action(
+							Effect.gen(function* () {
+								const parsed = yield* decodeAction(SandboxAgentActionInput, value);
+								return {
+									agentId: parsed.agentId,
+									pausedTaskIds: yield* stopConversation(actionId, parsed.agentId)
+								};
+							})
+						),
+					resume: (actionId, value) =>
+						action(
+							Effect.gen(function* () {
+								const parsed = yield* decodeAction(SandboxAgentActionInput, value);
+								return {
+									agentId: parsed.agentId,
+									resumedTaskIds: yield* resumeConversation(actionId, parsed.agentId)
+								};
+							})
+						)
 				});
 			}
 			if (declared?.mcp !== undefined)
@@ -1021,13 +1385,14 @@ export const layer = Layer.effect(
 		/**
 		 * Enqueues the parent continuation only after this delegated session has durably settled.
 		 *
-		 * Enqueueing from `await_sandbox_agent` races the child: the queue can run the continuation while
+		 * Enqueueing from `await_agent` races the child: the queue can run the continuation while
 		 * the child is still `running`. Settlement is the event that makes the input actionable, and the
 		 * key makes a replay of that settlement one enqueue.
 		 */
 		const resumeParent = Effect.fn('Agents.resumeParent')(function* (
 			effectId: EffectIdType,
-			conversationId: string
+			conversationId: string,
+			targetTaskId: string
 		) {
 			const parent = yield* executeBuilt(
 				EffectId.make(`${effectId}:read-parent`),
@@ -1046,8 +1411,12 @@ export const layer = Layer.effect(
 			const enqueueId = EffectId.make(`${effectId}:resume-parent`);
 			yield* queue.enqueue(enqueueId, [
 				{
-					command: 'agents.resume',
-					input: { conversationId: parentId, targetSessionId: conversationId },
+					command: 'agents.continue',
+					input: {
+						conversationId: parentId,
+						agentId: conversationId,
+						taskId: targetTaskId
+					},
 					effectId: enqueueId
 				}
 			]);
@@ -1155,8 +1524,8 @@ export const layer = Layer.effect(
 							content: JSON.stringify(encoded)
 						});
 						const waiting = Schema.decodeUnknownOption(WaitingAnswer)(encoded);
-						// `spawn_subagent` starts work; only the explicit join point parks its caller.
-						if (call.name === 'await_sandbox_agent' && waiting._tag === 'Some') {
+						// `spawn_agent` starts work; only the explicit exact-task join point parks its caller.
+						if (call.name === 'await_agent' && waiting._tag === 'Some') {
 							output = encoded;
 							status = 'waiting';
 							parked = true;
@@ -1182,8 +1551,167 @@ export const layer = Layer.effect(
 			);
 		});
 
+		/** Rewrites only the durable assistant turns whose task ids a queue lifecycle action changed. */
+		const setTurnStatuses = Effect.fn('Agents.setTurnStatuses')(function* (
+			effectId: EffectIdType,
+			conversationId: string,
+			taskIds: ReadonlyArray<string>,
+			status: TurnStatus
+		) {
+			if (taskIds.length === 0) return;
+			const candidates = yield* executeBuilt(
+				EffectId.make(`${effectId}:read`),
+				database,
+				composer
+					.select({ id: chatMessage.id, content: chatMessage.content })
+					.from(chatMessage)
+					.where(
+						and(
+							eq(chatMessage.conversation_id, conversationId),
+							eq(chatMessage.role, 'assistant'),
+							inArray(chatMessage.turn_id, taskIds)
+						)
+					)
+			);
+			const updates = candidates.rows.flatMap((row) => {
+				const decoded = decodeStoredTurnMessageRow(row);
+				return decoded._tag === 'Some'
+					? [
+							composer
+								.update(chatMessage)
+								.set({ content: JSON.stringify({ ...decoded.value.content, status }) })
+								.where(eq(chatMessage.id, decoded.value.id))
+						]
+					: [];
+			});
+			yield* syncTransaction(EffectId.make(`${effectId}:write`), updates, ['chat_message']);
+		});
+
+		const dequeueConversation = Effect.fn('Agents.dequeueConversation')(function* (
+			effectId: EffectIdType,
+			conversationId: string,
+			taskId: string
+		) {
+			const removed = yield* queue.dequeue(
+				EffectId.make(`${effectId}:task`),
+				taskId,
+				conversationId,
+				'agents.execute'
+			);
+			if (!removed) return false;
+			yield* setTurnStatuses(
+				EffectId.make(`${effectId}:turns`),
+				conversationId,
+				[taskId],
+				'dequeued'
+			);
+			yield* resumeParent(EffectId.make(`${effectId}:parent`), conversationId, taskId);
+			return true;
+		});
+
+		const reorderConversation = Effect.fn('Agents.reorderConversation')(function* (
+			effectId: EffectIdType,
+			conversationId: string,
+			orderedTaskIds: ReadonlyArray<string>
+		) {
+			const unique = [...new Set(orderedTaskIds)];
+			if (unique.length !== orderedTaskIds.length) {
+				return yield* new AccessControl.AccessDenied({
+					action: 'agent',
+					resource: conversationId,
+					reason: 'queue order contains the same task more than once'
+				});
+			}
+			const queued = yield* executeBuilt(
+				EffectId.make(`${effectId}:queued`),
+				database,
+				composer
+					.select({ task_id: agentRun.task_id })
+					.from(agentRun)
+					.where(
+						and(
+							eq(agentRun.conversation_id, conversationId),
+							inArray(agentRun.status, ['queued', 'paused', 'resuming'])
+						)
+					)
+			);
+			const available = new Set(
+				queued.rows.flatMap((row) => {
+					const decoded = decodeTaskIdRow(row);
+					return decoded._tag === 'Some' ? [decoded.value.task_id] : [];
+				})
+			);
+			if (unique.length !== available.size || unique.some((taskId) => !available.has(taskId))) {
+				return yield* new AccessControl.AccessDenied({
+					action: 'agent',
+					resource: conversationId,
+					reason: 'queue order must name every mutable task in this conversation exactly once'
+				});
+			}
+			yield* queue.reorder(
+				EffectId.make(`${effectId}:tasks`),
+				conversationId,
+				'agents.execute',
+				unique
+			);
+		});
+
+		const interruptConversation = Effect.fn('Agents.interruptConversation')(function* (
+			effectId: EffectIdType,
+			conversationId: string
+		) {
+			const taskIds = yield* queue.interruptLane(
+				EffectId.make(`${effectId}:tasks`),
+				conversationId,
+				'agents.execute'
+			);
+			yield* setTurnStatuses(
+				EffectId.make(`${effectId}:turns`),
+				conversationId,
+				taskIds,
+				'interrupted'
+			);
+			for (const taskId of taskIds)
+				yield* resumeParent(EffectId.make(`${effectId}:parent:${taskId}`), conversationId, taskId);
+			return taskIds;
+		});
+
+		const stopConversation = Effect.fn('Agents.stopConversation')(function* (
+			effectId: EffectIdType,
+			conversationId: string
+		) {
+			const taskIds = yield* queue.stopLane(
+				EffectId.make(`${effectId}:tasks`),
+				conversationId,
+				'agents.execute'
+			);
+			yield* setTurnStatuses(EffectId.make(`${effectId}:turns`), conversationId, taskIds, 'paused');
+			return taskIds;
+		});
+
+		const resumeConversation = Effect.fn('Agents.resumeConversation')(function* (
+			effectId: EffectIdType,
+			conversationId: string
+		) {
+			const paused = yield* executeBuilt(
+				EffectId.make(`${effectId}:paused`),
+				database,
+				composer
+					.select({ task_id: agentRun.task_id })
+					.from(agentRun)
+					.where(and(eq(agentRun.conversation_id, conversationId), eq(agentRun.status, 'paused')))
+			);
+			const taskIds = paused.rows.flatMap((row) => {
+				const decoded = decodeTaskIdRow(row);
+				return decoded._tag === 'Some' ? [decoded.value.task_id] : [];
+			});
+			yield* queue.resumeLane(EffectId.make(`${effectId}:tasks`), conversationId, 'agents.execute');
+			yield* setTurnStatuses(EffectId.make(`${effectId}:turns`), conversationId, taskIds, 'queued');
+			return taskIds;
+		});
+
 		return Service.of({
-			start: Effect.fn('Agents.start')(function* (effectId, subject, agentName, conversationId) {
+			open: Effect.fn('Agents.open')(function* (effectId, subject, agentName, conversationId) {
 				const agent = yield* resolveAgent(agentName);
 				yield* access.authorize(subject, 'agent', agentName);
 				yield* openConversation(effectId, agent, subject, conversationId);
@@ -1224,174 +1752,136 @@ export const layer = Layer.effect(
 					yield* documents.remove(effectId, conversationId, storageKey);
 				}
 			),
-			turn: Effect.fn('Agents.turn')(
+			enqueue: Effect.fn('Agents.enqueue')(
 				function* (effectId, subject, agentName, conversationId, message) {
-					const agent = yield* resolveAgent(agentName);
-					yield* access.authorize(subject, 'agent', agentName);
-					yield* openConversation(
-						EffectId.make(`${effectId}:ensure-conversation`),
-						agent,
-						subject,
-						conversationId
-					);
-					// The session row owns its label. Setting it once here keeps every reader — the live
-					// collection client, envoys, and server-side listings — on the same source of truth instead
-					// of making each client reconstruct a title from message history.
-					for (const file of message.kind === 'user_message' ? message.documents : []) {
-						yield* documents.resolve(
-							EffectId.make(`${effectId}:document:${file.storage_key}`),
-							conversationId,
-							file.storage_key
-						);
-					}
-					const messageText = chatInputText(message);
-					const currentTitle = yield* executeBuilt(
-						EffectId.make(`${effectId}:title:read`),
-						database,
-						composer
-							.select({ title: chatSession.title })
-							.from(chatSession)
-							.where(eq(chatSession.conversation_id, conversationId))
-							.limit(1)
-					);
-					const decodedTitle = decodeTitleRow(currentTitle.rows[0]);
-					const title = decodedTitle._tag === 'Some' ? decodedTitle.value.title?.trim() : undefined;
-					if (title === undefined || title === '' || title === 'New conversation') {
-						yield* syncMutation(
-							EffectId.make(`${effectId}:title`),
-							composer
-								.update(chatSession)
-								.set({ title: messageText.slice(0, 48) })
-								.where(eq(chatSession.conversation_id, conversationId)),
-							['chat_session']
-						);
-					}
-					const transcript = yield* executeBuilt(
-						EffectId.make(`${effectId}:read`),
-						database,
-						composer
-							.select({ role: chatMessage.role, content: chatMessage.content })
-							.from(chatMessage)
-							.where(eq(chatMessage.conversation_id, conversationId))
-							.orderBy(desc(chatMessage.sequence))
-							.limit(recentPromptRows)
-					);
-					const tools = toolsFor(subject, agent);
-					const messages: Array<Schema.Json> = [
-						...promptFor(agent, transcript.rows.toReversed(), subject, conversationId),
-						{ role: 'user', content: chatInputForModel(message) }
-					];
-					let written = 0;
-					/** Appends one record to the conversation log and returns its canonical collection id. */
-					const persist = (role: string, content: Schema.Json) =>
-						syncMutation(
-							EffectId.make(`${effectId}:persist:${(written += 1)}`),
-							composer
-								.insert(chatMessage)
-								.values({
-									conversation_id: conversationId,
-									role,
-									content: JSON.stringify(content),
-									turn_id: effectId
-								})
-								.returning({ id: chatMessage.id }),
-							['chat_message']
-						);
-					/**
-					 * The call this session was delegated by, or nothing when a person started it.
-					 *
-					 * `spawn_subagent` names the child session after the call that spawned it, so the id is
-					 * already the join the reader's panel makes between a call and the transcript beneath it.
-					 * It used to be written as `null` unconditionally, which is why a delegated transcript never
-					 * appeared under the call that caused it.
-					 */
-					const delegatedBy = conversationId.startsWith('subagent:') ? conversationId : null;
-					/**
-					 * The turn's own message, rewritten as each step lands.
-					 *
-					 * One agent turn is one assistant message, so the turn's lifecycle is a field of that message
-					 * rather than a record beside it: there is no second row to keep in step with the parts it owns,
-					 * and `content->>'id'` addresses it because only a turn carries one. The rewrite happens per step
-					 * rather than once at the end because a step the reader cannot see until the turn is over is a
-					 * step they watched the composer sit locked through.
-					 */
-					const parts: Array<TurnPart> = [];
-					let committed = 0;
-					let turnMessageId: string | undefined;
-					const commit: CommitTurn = (status, usage, usageUnreported) => {
-						if (turnMessageId === undefined) return Effect.void;
-						return syncMutation(
-							EffectId.make(`${effectId}:turn:${(committed += 1)}`),
-							composer
-								.update(chatMessage)
-								.set({
-									content: JSON.stringify({
-										id: effectId,
-										status,
-										subagent_id: delegatedBy,
-										parts,
-										resumed: 0,
-										subject,
-										agent_name: agent.name,
-										...(usage === undefined ? {} : { usage }),
-										usage_unreported: usageUnreported
-									})
-								})
-								.where(eq(chatMessage.id, turnMessageId)),
-							['chat_message']
-						);
-					};
-					// Written before the model runs, not after it answers: a turn that fails mid-flight is exactly
-					// the one the reader needs to see, and a prompt persisted only on success loses it.
-					yield* persist('user', message);
-					const assistantWrite = yield* persist('assistant', {
-						id: effectId,
-						status: 'running',
-						subagent_id: delegatedBy,
-						parts: [],
-						resumed: 0,
-						subject,
-						agent_name: agent.name,
-						usage_unreported: false
-					});
-					const assistantId = decodeIdRow(assistantWrite.rows[0]);
-					if (assistantId._tag === 'None')
-						return yield* Effect.die(
-							new Error('The assistant turn row was not returned after it was inserted.')
-						);
-					turnMessageId = assistantId.value.id;
-					const settleUsage: SettleUsage = (usage, newlyUnreported) =>
-						recordUsage(
-							EffectId.make(`${effectId}:usage`),
-							conversationId,
-							usage,
-							1,
-							newlyUnreported ? 1 : 0
-						);
-					const settled = yield* continueToolLoop(
-						effectId,
-						agent,
-						subject,
-						conversationId,
-						messages,
-						tools,
-						parts,
-						undefined,
-						false,
-						commit,
-						settleUsage
-					);
-					if (settled.status !== 'waiting') {
-						yield* commit(settled.status, settled.cumulative, settled.unreported);
-					}
-					yield* Effect.ignore(settleUsage(settled.segment, settled.unreported));
-					if (settled.status !== 'waiting') {
-						yield* resumeParent(effectId, conversationId);
-					}
-					return { conversationId, output: settled.output, status: settled.status };
+					return yield* admitTurn(effectId, subject, agentName, conversationId, message);
 				}
 			),
-			resume: Effect.fn('Agents.resume')(function* (effectId, conversationId, targetSessionId) {
+			execute: Effect.fn('Agents.execute')(function* (effectId, conversationId, turnId) {
+				const storedResult = yield* executeBuilt(
+					EffectId.make(`${effectId}:turn:read`),
+					database,
+					composer
+						.select({ id: chatMessage.id, content: chatMessage.content })
+						.from(chatMessage)
+						.where(
+							and(
+								eq(chatMessage.conversation_id, conversationId),
+								eq(chatMessage.turn_id, turnId),
+								eq(chatMessage.role, 'assistant')
+							)
+						)
+						.limit(1)
+				);
+				const decoded = decodeStoredTurnMessageRow(storedResult.rows[0]);
+				if (decoded._tag === 'None') {
+					return yield* new AccessControl.AccessDenied({
+						action: 'agent',
+						resource: conversationId,
+						reason: 'queued turn does not exist'
+					});
+				}
+				const stored = decoded.value.content;
+				if (stored.subject === undefined || stored.agent_name === undefined) {
+					return yield* new AccessControl.AccessDenied({
+						action: 'agent',
+						resource: conversationId,
+						reason: 'queued turn has no execution authority'
+					});
+				}
+				if (
+					stored.status === 'completed' ||
+					stored.status === 'interrupted' ||
+					stored.status === 'dequeued'
+				) {
+					return {
+						conversationId,
+						output: null,
+						status: stored.status === 'completed' ? 'completed' : 'failed'
+					};
+				}
+				// A failed assistant row is retryable state, not a second terminal authority. The task
+				// queue decides whether the failure receives another attempt; when it does, this exact
+				// persisted turn must be able to continue. A non-retryable or exhausted queue row is never
+				// dispatched again, so it remains failed without inventing a parallel retry flag here.
+				const subject = stored.subject;
+				const agent = yield* resolveAgent(stored.agent_name);
+				yield* access.authorize(subject, 'agent', stored.agent_name);
+				const transcript = yield* executeBuilt(
+					EffectId.make(`${effectId}:transcript`),
+					database,
+					composer
+						.select({ role: chatMessage.role, content: chatMessage.content })
+						.from(chatMessage)
+						.where(eq(chatMessage.conversation_id, conversationId))
+						.orderBy(desc(chatMessage.sequence))
+						.limit(recentPromptRows)
+				);
+				const parts: Array<TurnPart> = [...stored.parts];
+				let committed = 0;
+				const commit: CommitTurn = (status, usage, usageUnreported) =>
+					syncMutation(
+						EffectId.make(`${effectId}:turn:${(committed += 1)}`),
+						composer
+							.update(chatMessage)
+							.set({
+								content: JSON.stringify({
+									...stored,
+									status,
+									parts,
+									...(usage === undefined ? {} : { usage }),
+									usage_unreported: usageUnreported
+								})
+							})
+							.where(eq(chatMessage.id, decoded.value.id)),
+						['chat_message']
+					);
+				yield* commit('running', stored.usage, stored.usage_unreported ?? false);
+				const settleUsage: SettleUsage = (usage, newlyUnreported) =>
+					recordUsage(
+						EffectId.make(`${effectId}:usage`),
+						conversationId,
+						usage,
+						stored.status === 'queued' ? 1 : 0,
+						newlyUnreported ? 1 : 0
+					);
+				const settled = yield* continueToolLoop(
+					effectId,
+					agent,
+					subject,
+					conversationId,
+					promptFor(agent, transcript.rows.toReversed(), subject, conversationId),
+					toolsFor(subject, agent),
+					parts,
+					stored.usage,
+					stored.usage_unreported ?? false,
+					commit,
+					settleUsage
+				);
+				if (settled.status !== 'waiting') {
+					yield* commit(settled.status, settled.cumulative, settled.unreported);
+				}
+				yield* Effect.ignore(settleUsage(settled.segment, settled.unreported));
+				if (settled.status !== 'waiting') {
+					if ('audience' in agent) {
+						const completionId = EffectId.make(`${effectId}:envoy-complete`);
+						yield* queue.enqueue(completionId, [
+							{
+								command: 'envoys.complete',
+								input: {
+									envoy: agent.name,
+									conversationId,
+									output: settled.output
+								},
+								effectId: completionId
+							}
+						]);
+					}
+					yield* resumeParent(effectId, conversationId, turnId);
+				}
+				return { conversationId, output: settled.output, status: settled.status };
+			}),
+			continue: Effect.fn('Agents.continue')(function* (effectId, conversationId, agentId, taskId) {
 				/**
 				 * Authority is structural first: the target must be this conversation's child and both rows
 				 * must belong to the same sandbox. A task carries no credential, so accepting either id by
@@ -1406,33 +1896,33 @@ export const layer = Layer.effect(
 						.where(eq(chatSession.conversation_id, conversationId))
 						.limit(1)
 				);
-				const targetSessionResult = yield* executeBuilt(
+				const targetAgentResult = yield* executeBuilt(
 					EffectId.make(`${effectId}:authorize:target`),
 					database,
 					composer
 						.select({ parent_id: chatSession.parent_id, sandbox_key: chatSession.sandbox_key })
 						.from(chatSession)
-						.where(eq(chatSession.conversation_id, targetSessionId))
+						.where(eq(chatSession.conversation_id, agentId))
 						.limit(1)
 				);
 				const parent = Schema.decodeUnknownOption(Schema.Struct({ sandbox_key: Schema.String }))(
 					parentResult.rows[0]
 				);
-				const targetSession = Schema.decodeUnknownOption(
+				const targetAgent = Schema.decodeUnknownOption(
 					Schema.Struct({
 						parent_id: Schema.Union([Schema.String, Schema.Null]),
 						sandbox_key: Schema.String
 					})
-				)(targetSessionResult.rows[0]);
+				)(targetAgentResult.rows[0]);
 				if (
 					parent._tag === 'None' ||
-					targetSession._tag === 'None' ||
-					targetSession.value.parent_id !== conversationId ||
-					targetSession.value.sandbox_key !== parent.value.sandbox_key
+					targetAgent._tag === 'None' ||
+					targetAgent.value.parent_id !== conversationId ||
+					targetAgent.value.sandbox_key !== parent.value.sandbox_key
 				) {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
-						resource: targetSessionId,
+						resource: agentId,
 						reason: 'target is not a delegated session of this conversation'
 					});
 				}
@@ -1445,7 +1935,8 @@ export const layer = Layer.effect(
 						.from(chatMessage)
 						.where(
 							and(
-								eq(chatMessage.conversation_id, targetSessionId),
+								eq(chatMessage.conversation_id, agentId),
+								eq(chatMessage.turn_id, taskId),
 								eq(chatMessage.role, 'assistant')
 							)
 						)
@@ -1458,7 +1949,7 @@ export const layer = Layer.effect(
 				if (target === undefined) {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
-						resource: targetSessionId,
+						resource: agentId,
 						reason: 'target session has not settled'
 					});
 				}
@@ -1502,13 +1993,18 @@ export const layer = Layer.effect(
 				let waiting = false;
 				for (let index = parts.length - 1; index >= 0; index -= 1) {
 					const answer = parts[index];
-					if (answer?.kind !== 'tool-result' || answer.name !== 'await_sandbox_agent') continue;
+					if (answer?.kind !== 'tool-result' || answer.name !== 'await_agent') continue;
 					const call = parts.find(
 						(part) => part.kind === 'tool' && part.id === answer.id && part.name === answer.name
 					);
 					if (call?.kind !== 'tool') continue;
 					const input = Schema.decodeUnknownOption(AwaitInput)(call.input);
-					if (input._tag === 'None' || input.value.sessionId !== targetSessionId) continue;
+					if (
+						input._tag === 'None' ||
+						input.value.agentId !== agentId ||
+						input.value.taskId !== taskId
+					)
+						continue;
 					answerIndex = index;
 					waiting = Schema.decodeUnknownOption(WaitingAnswer)(answer.output)._tag === 'Some';
 					break;
@@ -1540,7 +2036,7 @@ export const layer = Layer.effect(
 
 				if (waiting && alreadyResumed >= maxResumes) {
 					yield* commit('failed', stored.usage, stored.usage_unreported ?? false);
-					yield* resumeParent(namespace, conversationId);
+					yield* resumeParent(namespace, conversationId, stored.id);
 					return;
 				}
 				if (waiting) {
@@ -1591,37 +2087,50 @@ export const layer = Layer.effect(
 					settleUsage(settled.segment, settled.unreported && !(stored.usage_unreported ?? false))
 				);
 				if (settled.status !== 'waiting') {
-					yield* resumeParent(namespace, conversationId);
+					yield* resumeParent(namespace, conversationId, stored.id);
 				}
 			}),
-			cancel: Effect.fn('Agents.cancel')(function* (effectId, taskId) {
-				yield* queue.cancel(EffectId.make(`${effectId}:task`), taskId, 'agents.turn');
-				const candidates = yield* executeBuilt(
-					EffectId.make(`${effectId}:turn:read`),
-					database,
-					composer
-						.select({ id: chatMessage.id, content: chatMessage.content })
-						.from(chatMessage)
-						.where(eq(chatMessage.role, 'assistant'))
-						.orderBy(desc(chatMessage.sequence))
+			dequeue: Effect.fn('Agents.dequeue')(function* (effectId, subject, conversationId, taskId) {
+				yield* requireControllableConversation(
+					EffectId.make(`${effectId}:authorize`),
+					subject,
+					conversationId
 				);
-				const running = candidates.rows.flatMap((row) => {
-					const decoded = decodeStoredTurnMessageRow(row);
-					return decoded._tag === 'Some' &&
-						decoded.value.content.id === taskId &&
-						decoded.value.content.status === 'running'
-						? [decoded.value]
-						: [];
-				})[0];
-				if (running === undefined) return;
-				yield* syncMutation(
-					EffectId.make(`${effectId}:turn`),
-					composer
-						.update(chatMessage)
-						.set({ content: JSON.stringify({ ...running.content, status: 'cancelled' }) })
-						.where(eq(chatMessage.id, running.id)),
-					['chat_message']
+				yield* dequeueConversation(effectId, conversationId, taskId);
+			}),
+			reorder: Effect.fn('Agents.reorder')(
+				function* (effectId, subject, conversationId, orderedTaskIds) {
+					yield* requireControllableConversation(
+						EffectId.make(`${effectId}:authorize`),
+						subject,
+						conversationId
+					);
+					yield* reorderConversation(effectId, conversationId, orderedTaskIds);
+				}
+			),
+			interrupt: Effect.fn('Agents.interrupt')(function* (effectId, subject, conversationId) {
+				yield* requireControllableConversation(
+					EffectId.make(`${effectId}:authorize`),
+					subject,
+					conversationId
 				);
+				yield* interruptConversation(effectId, conversationId);
+			}),
+			stop: Effect.fn('Agents.stop')(function* (effectId, subject, conversationId) {
+				yield* requireControllableConversation(
+					EffectId.make(`${effectId}:authorize`),
+					subject,
+					conversationId
+				);
+				yield* stopConversation(effectId, conversationId);
+			}),
+			resume: Effect.fn('Agents.resume')(function* (effectId, subject, conversationId) {
+				yield* requireControllableConversation(
+					EffectId.make(`${effectId}:authorize`),
+					subject,
+					conversationId
+				);
+				yield* resumeConversation(effectId, conversationId);
 			}),
 			updateVerifier: Effect.fn('Agents.updateVerifier')(
 				function* (effectId, conversationId, verifier) {
@@ -1680,13 +2189,7 @@ export const layer = Layer.effect(
 							envoy_key: chatSession.envoy_key
 						})
 						.from(chatSession)
-						.where(
-							and(
-								readScope,
-								isNull(chatSession.parent_id),
-								notLike(chatSession.conversation_id, 'subagent:%')
-							)
-						)
+						.where(and(readScope, isNull(chatSession.parent_id)))
 						.orderBy(desc(chatSession.conversation_id))
 				);
 				return result.rows.flatMap((row) => {

@@ -6,7 +6,6 @@ describe('Studio release controls', () => {
 		expect(
 			releaseControls({
 				busy: false,
-				accepting: true,
 				hasRelease: true
 			})
 		).toEqual({ canPreview: true, canRequestReview: true, canRollback: true });
@@ -16,7 +15,6 @@ describe('Studio release controls', () => {
 		expect(
 			releaseControls({
 				busy: true,
-				accepting: true,
 				hasRelease: true
 			})
 		).toMatchObject({ canPreview: false, canRequestReview: false, canRollback: false });

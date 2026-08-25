@@ -1,16 +1,24 @@
 import { resolve } from 'node:path';
+import { parseArgs } from 'node:util';
 import { Cause, Effect } from 'effect';
 import { syncWorkspace, type SyncResult } from './sync.js';
 
-const arguments_ = process.argv.slice(2);
-const command = arguments_.find((argument) => !argument.startsWith('-')) ?? 'help';
-const rootIndex = arguments_.findIndex((argument) => argument === '--root');
-const rootValue = rootIndex < 0 ? undefined : arguments_[rootIndex + 1];
+const { positionals, values: options } = parseArgs({
+	options: {
+		root: { type: 'string' },
+		name: { type: 'string' },
+		json: { type: 'boolean' },
+		watch: { type: 'boolean' }
+	},
+	allowPositionals: true,
+	strict: true
+});
+const command = positionals.length === 1 ? (positionals[0] ?? 'help') : 'help';
+const rootValue = options.root;
 const workspaceRoot = resolve(rootValue ?? process.cwd());
-const nameIndex = arguments_.findIndex((argument) => argument === '--name');
-const nameValue = nameIndex < 0 ? undefined : arguments_[nameIndex + 1];
-const json = arguments_.includes('--json');
-const watch = arguments_.includes('--watch');
+const nameValue = options.name;
+const json = options.json ?? false;
+const watch = options.watch ?? false;
 
 const report = (commandName: string, result: SyncResult): void => {
 	if (json) {

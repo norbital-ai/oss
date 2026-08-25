@@ -294,8 +294,12 @@ const scheduleModel = defineModel(
 /** One unit of background work; the task runner is its only reader and writer. */
 const taskModel = defineModel(
 	{
+		/** Stable queue order. Agent lanes may reorder this value without moving or copying the task. */
+		position: bigserial({ mode: 'number' }),
 		command: text().notNull(),
 		input: jsonb().notNull(),
+		/** A serial execution lane. Null keeps ordinary scheduled/background work independent. */
+		lane: text(),
 		status: text().notNull().default('pending'),
 		run_at: instant().notNull().defaultNow(),
 		attempts: integer().notNull().default(0),
@@ -314,9 +318,45 @@ const taskModel = defineModel(
 		indexes: [
 			{
 				name: 'bolt_task_due',
-				columns: ['run_at'],
-				where: "status = 'pending'"
+				columns: ['run_at', 'position'],
+				where: "status in ('pending', 'resuming', 'running')"
+			},
+			{
+				name: 'bolt_task_lane',
+				columns: ['lane', 'status', 'position']
 			}
+		]
+	}
+);
+
+/** One durable agent lane. The task queue owns it; the sync engine makes its state live in clients. */
+const agentMailboxModel = defineModel(
+	{
+		conversation_id: text().notNull().unique(),
+		status: text().notNull().default('active')
+	},
+	{ history: false, indexes: [systemIndex('conversation_id'), systemIndex('status')] }
+);
+
+/** Safe, sync-visible lifecycle projection for one private queued agent turn. */
+const agentRunModel = defineModel(
+	{
+		task_id: text().notNull().unique(),
+		conversation_id: text().notNull(),
+		turn_id: text().notNull(),
+		agent_name: text().notNull(),
+		status: text().notNull(),
+		position: bigint({ mode: 'number' }).notNull(),
+		error: text(),
+		next_run_at: instant()
+	},
+	{
+		history: false,
+		indexes: [
+			systemIndex('task_id'),
+			systemIndex('conversation_id'),
+			systemIndex('status'),
+			{ name: 'agent_run_order', columns: ['conversation_id', 'position'] }
 		]
 	}
 );
@@ -716,6 +756,8 @@ export const SYSTEM_COLLECTION_MODELS = Object.freeze({
 	chat_session: conversationModel,
 	chat_message: agentMessageModel,
 	chat_document: chatDocumentModel,
+	agent_mailbox: agentMailboxModel,
+	agent_run: agentRunModel,
 	automation_run: automationRunModel,
 	bolt_notifications: notificationModel
 });

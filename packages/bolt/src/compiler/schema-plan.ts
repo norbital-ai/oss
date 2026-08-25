@@ -407,6 +407,12 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 			// so queue code writes one source of truth and the browser never reads the queue itself.
 			id: 'bolt:function-automation-run-projection',
 			sql: `create or replace function bolt_project_automation_run() returns trigger language plpgsql as $bolt_automation_run$ begin if TG_OP = 'DELETE' then if OLD.command like 'automations.%' then delete from automation_run where task_id = OLD.effect_id; end if; return OLD; end if; if NEW.command like 'automations.%' then insert into automation_run (task_id, name, status, attempts, max_attempts, progress, progress_sequence, progress_updated_at, result, error, next_run_at) values (NEW.effect_id, substring(NEW.command from length('automations.') + 1), NEW.status, NEW.attempts, NEW.max_attempts, NEW.progress, NEW.progress_sequence, NEW.progress_updated_at, NEW.result, NEW.error, case when NEW.status in ('pending', 'resuming') then NEW.run_at else null end) on conflict (task_id) do update set name = excluded.name, status = excluded.status, attempts = excluded.attempts, max_attempts = excluded.max_attempts, progress = excluded.progress, progress_sequence = excluded.progress_sequence, progress_updated_at = excluded.progress_updated_at, result = excluded.result, error = excluded.error, next_run_at = excluded.next_run_at, updated_at = now(), row_version = automation_run.row_version + 1; end if; return NEW; end $bolt_automation_run$`
+		},
+		{
+			// Agent task inputs contain private authority and message references, so clients receive only
+			// the lane-safe lifecycle projection. The trigger keeps it atomic with the queue row.
+			id: 'bolt:function-agent-run-projection',
+			sql: `create or replace function bolt_project_agent_run() returns trigger language plpgsql as $bolt_agent_run$ begin if TG_OP = 'DELETE' then if OLD.command = 'agents.execute' then delete from agent_run where task_id = OLD.effect_id; end if; return OLD; end if; if NEW.command = 'agents.execute' then insert into agent_run (task_id, conversation_id, turn_id, agent_name, status, position, error, next_run_at) values (NEW.effect_id, NEW.input->>'conversationId', NEW.input->>'turnId', NEW.input->>'agent', case NEW.status when 'pending' then 'queued' when 'done' then 'completed' else NEW.status end, NEW.position, NEW.error, case when NEW.status in ('pending', 'resuming', 'running') then NEW.run_at else null end) on conflict (task_id) do update set conversation_id = excluded.conversation_id, turn_id = excluded.turn_id, agent_name = excluded.agent_name, status = excluded.status, position = excluded.position, error = excluded.error, next_run_at = excluded.next_run_at, updated_at = now(), row_version = agent_run.row_version + 1; end if; return NEW; end $bolt_agent_run$`
 		}
 	];
 	/**
@@ -461,6 +467,14 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 		.filter((collection) => collection.sync !== false)
 		.flatMap(({ name }) => syncTriggerSteps(name));
 	const taskProjectionTriggers: ReadonlyArray<SchemaStep> = [
+		{
+			id: 'sync-trigger:bolt_task-agent-run:1-drop',
+			sql: 'drop trigger if exists bolt_project_agent_run on bolt_task'
+		},
+		{
+			id: 'sync-trigger:bolt_task-agent-run:2-create',
+			sql: 'create trigger bolt_project_agent_run after insert or update or delete on bolt_task for each row execute function bolt_project_agent_run()'
+		},
 		{
 			id: 'sync-trigger:bolt_task-automation-run:1-drop',
 			sql: 'drop trigger if exists bolt_project_automation_run on bolt_task'

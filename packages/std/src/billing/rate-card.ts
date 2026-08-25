@@ -4,8 +4,9 @@ export const BILLING_ACCESS_TIERS = ['standard', 'builder'] as const;
 export type BillingAccessTier = (typeof BILLING_ACCESS_TIERS)[number];
 
 /**
- * Tenant-visible usage prices. Compute is one isolate-second: the isolate already
- * hard-walls CPU time and RAM together, so memory is not a separate meter.
+ * Tenant-visible usage prices. Compute is worker-thread event-loop utilization (ELU) active time,
+ * billed in seconds. Memory has no separate usage meter or per-worker hard wall; its infrastructure
+ * cost is included in the compute price.
  * Disc and files are GB-months converted to GB-hours over a 730-hour month.
  */
 export const COMPUTE_SGD_PER_SECOND = 0.0005;
@@ -35,8 +36,9 @@ export const HOURS_PER_BILLING_MONTH = 730;
 export const AI_SGD_PER_PROVIDER_USD = 2.6;
 
 /**
- * Local bare-metal cost allocation, kept for capacity planning. It is not a
- * customer-facing meter split: RAM is bundled into compute seconds.
+ * Local bare-metal cost allocation, kept for capacity planning. It is not a customer-facing meter
+ * split: the compute price includes RAM cost, while measured usage remains worker-thread ELU active
+ * time.
  */
 export const LOCAL_CLOUD_RATE_CARD = {
 	serverMonthlyCostSgd: 149.99,

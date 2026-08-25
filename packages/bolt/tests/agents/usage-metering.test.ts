@@ -176,6 +176,32 @@ const makeDatabase = (
 					}
 				});
 			}
+			if (selectsFrom(request.sql, 'chat_message') && request.sql.includes('turn_id')) {
+				const conversationId = String(request.parameters[0] ?? '');
+				const turnId = String(request.parameters[1] ?? '');
+				return Promise.resolve({
+					_tag: 'Success',
+					value: {
+						rows: [
+							{
+								id: `${turnId}:message`,
+								content: {
+									id: turnId,
+									status: 'queued',
+									parent_agent_id: conversationId.startsWith('agent:')
+										? 'conversation-parent'
+										: null,
+									parts: [],
+									subject,
+									agent_name: 'web',
+									usage_unreported: false
+								}
+							}
+						],
+						affectedRows: 0
+					}
+				});
+			}
 			if (
 				selectsFrom(request.sql, 'chat_session') &&
 				request.sql.includes('"conversation_id"') &&
@@ -202,17 +228,17 @@ const makeDatabase = (
 });
 
 const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
-	call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } })
+	call: () => Promise.resolve({ _tag: 'Success', value: {} })
 };
 
-const turnInvocation = (conversationId: string, message: string): Invocation => ({
+const turnInvocation = (conversationId: string, _message: string): Invocation => ({
 	_tag: 'Command',
 	protocolVersion: PROTOCOL_VERSION,
 	id: InvocationId.make(`agent-usage-${conversationId}`),
 	scope,
 	deadlineEpochMs: Date.now() + 10_000,
-	command: 'agents.turn',
-	input: { subject, agent: 'web', conversationId, message },
+	command: 'agents.execute',
+	input: { conversationId, turnId: `agent-usage-${conversationId}:turn` },
 	headers: { authorization: ['Bearer test-session'] }
 });
 
@@ -338,7 +364,7 @@ describe('agent turn usage', () => {
 		expect(rollup?.parameters).toContain('conversation-unpriced');
 	});
 
-	it('names a delegated session as the call that spawned it so its spend can be traced back', async () => {
+	it('preserves a child agent parent link so its spend can be traced through the hierarchy', async () => {
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: () =>
 				Promise.resolve<FacilityResult<AIResponse>>({
@@ -348,24 +374,15 @@ describe('agent turn usage', () => {
 		};
 		const statements: Array<Statement> = [];
 		const facilities: FacilityBindings = { scope, database: makeDatabase(statements), ai, tasks };
-		// Exactly the id `spawn_subagent` mints for a delegated session: `subagent:` plus the effect id
-		// of the tool call that spawned it, which is the join the panel makes to nest the transcript.
 		await bundle.dispatch(
-			turnInvocation('subagent:agent-usage:tool:0:0', 'Summarise the headcount'),
+			turnInvocation('agent:agent-usage:tool:0:0', 'Summarise the headcount'),
 			facilities,
 			new AbortController().signal
 		);
 		const settled = turnRewrites(statements).at(-1);
-		expect(settled?.subagent_id).toBe('subagent:agent-usage:tool:0:0');
-		// Its rows carry the turn that produced them, or the reader's projection cannot tell a delegated
-		// agent's messages from ones the person typed into the session it is nested in.
-		const appended = statements.filter((entry) => operationOn(entry, 'insert', 'chat_message'));
-		expect(appended.length).toBeGreaterThan(0);
-		expect(
-			appended.every((entry) =>
-				entry.parameters.some((parameter) => String(parameter).startsWith('agent-usage-'))
-			)
-		).toBe(true);
+		expect(settled?.parent_agent_id).toBe('conversation-parent');
+		// Execution rewrites the already-admitted child turn instead of appending replacement rows.
+		expect(turnRewrites(statements)).not.toHaveLength(0);
 	});
 
 	it('meters a second api.infer in one invocation instead of replaying the first', async () => {

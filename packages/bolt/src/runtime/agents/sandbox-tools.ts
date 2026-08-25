@@ -1,112 +1,185 @@
 import { Effect, Schema } from 'effect';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import type { ToolDeclaration } from '#lib/authoring/workspace-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import { composer, executeBuilt } from '#lib/runtime/persistence.js';
-import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import { ToolNotAllowed } from '#lib/runtime/agents/agent-errors.js';
-import { encodeAgentMessage } from '#lib/runtime/agents/agent-message.js';
+import {
+	encodeAgentMessage,
+	type StoredAgentMessage
+} from '#lib/runtime/agents/agent-message.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
 
 const { chat_session: chatSession, chat_message: chatMessage } = SYSTEM_MODEL_TABLES;
-type BuiltQuery = Parameters<typeof executeBuilt>[2];
 
 const sandboxToolNames = [
-	'spawn_subagent',
-	'list_sandbox_agents',
-	'read_sandbox_agent',
-	'message_sandbox_agent',
-	'await_sandbox_agent'
+	'spawn_agent',
+	'list_agents',
+	'read_agent',
+	'message_agent',
+	'await_agent',
+	'dequeue_agent_message',
+	'reorder_agent_queue',
+	'interrupt_agent',
+	'stop_agent',
+	'resume_agent'
 ] as const;
 const SandboxToolNames = Schema.Literals([...sandboxToolNames]);
 type SandboxToolName = Schema.Schema.Type<typeof SandboxToolNames>;
 
 export const isSandboxTool = Schema.is(SandboxToolNames);
 
+const objectInput = (
+	properties: Schema.JsonObject,
+	required: ReadonlyArray<string> = []
+): Schema.JsonObject => ({
+	type: 'object',
+	properties,
+	required: [...required],
+	additionalProperties: false
+});
+const agentIdInput = objectInput({ agentId: { type: 'string', minLength: 1 } }, ['agentId']);
+
 export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
-		name: 'spawn_subagent',
+		name: 'spawn_agent',
 		description:
-			'Spawn an in-session subagent for a task. Subagents cannot spawn further subagents.',
-		command: 'platform:spawn_subagent'
+			'Spawn a direct child agent and durably queue its first task. The child may spawn its own children.',
+		command: 'platform:spawn_agent',
+		inputSchema: objectInput({ task: { type: 'string', minLength: 1 } }, ['task'])
 	},
 	{
-		name: 'list_sandbox_agents',
-		description:
-			'List other agent sessions in this sandbox. A sandbox is one principal: the same person on web, one envoy, or one conversation with a public envoy.',
-		command: 'platform:list_sandbox_agents'
+		name: 'list_agents',
+		description: 'List this agent\'s direct parent and direct children.',
+		command: 'platform:list_agents',
+		inputSchema: objectInput({})
 	},
 	{
-		name: 'read_sandbox_agent',
-		description: 'Read a sibling session transcript in this sandbox.',
-		command: 'platform:read_sandbox_agent'
+		name: 'read_agent',
+		description: 'Read a direct child agent transcript.',
+		command: 'platform:read_agent',
+		inputSchema: agentIdInput
 	},
 	{
-		name: 'message_sandbox_agent',
-		description: 'Send a message to a sibling session in this sandbox.',
-		command: 'platform:message_sandbox_agent'
+		name: 'message_agent',
+		description: 'Durably queue a message to this agent\'s direct parent or a direct child.',
+		command: 'platform:message_agent',
+		inputSchema: objectInput(
+			{
+				agentId: { type: 'string', minLength: 1 },
+				message: { type: 'string', minLength: 1 }
+			},
+			['agentId', 'message']
+		)
 	},
 	{
-		name: 'await_sandbox_agent',
-		description: 'Park this turn until a sibling session in this sandbox settles.',
-		command: 'platform:await_sandbox_agent'
-	}
+		name: 'await_agent',
+		description: 'Wait for one exact queued task owned by a direct child agent.',
+		command: 'platform:await_agent',
+		inputSchema: objectInput(
+			{
+				agentId: { type: 'string', minLength: 1 },
+				taskId: { type: 'string', minLength: 1 }
+			},
+			['agentId', 'taskId']
+		)
+	},
+	{
+		name: 'dequeue_agent_message',
+		description: 'Remove one queued message from a direct child without deleting its audit record.',
+		command: 'platform:dequeue_agent_message',
+		inputSchema: objectInput(
+			{
+				agentId: { type: 'string', minLength: 1 },
+				taskId: { type: 'string', minLength: 1 }
+			},
+			['agentId', 'taskId']
+		)
+	},
+	{
+		name: 'reorder_agent_queue',
+		description: 'Replace the complete mutable queue order for a direct child agent.',
+		command: 'platform:reorder_agent_queue',
+		inputSchema: objectInput(
+			{
+				agentId: { type: 'string', minLength: 1 },
+				orderedTaskIds: { type: 'array', items: { type: 'string', minLength: 1 } }
+			},
+			['agentId', 'orderedTaskIds']
+		)
+	},
+	...(['interrupt_agent', 'stop_agent', 'resume_agent'] as const).map(
+		(name): ToolDeclaration => ({
+			name,
+			description:
+				name === 'interrupt_agent'
+					? 'Interrupt only the currently running task of a direct child agent.'
+					: name === 'stop_agent'
+						? 'Pause a direct child agent and preserve all of its queued work.'
+						: 'Resume the same paused tasks for a direct child agent.',
+			command: `platform:${name}`,
+			inputSchema: agentIdInput
+		})
+	)
 ];
+
+type SandboxActionFailure =
+	| Database.FacilityError
+	| ToolNotAllowed
+	| InvocationBudget.NestingLimitExceeded;
+type SandboxAction = (
+	effectId: EffectId,
+	input: Schema.Json
+) => Effect.Effect<Schema.Json, SandboxActionFailure>;
 
 type SandboxContext = Readonly<{
 	readonly effectId: EffectId;
 	readonly subject: Identity.Subject;
-	/**
-	 * Which sandbox this turn is in — one tree per principal, and the only thing that scopes one.
-	 *
-	 * **Isolation is structural, not an authorization check.** No tool below accepts a principal id,
-	 * so there is no call that could name somebody else's tree; every one of them takes a session id
-	 * and is answered only if that session is in *this* key. An administrator cannot read a person's
-	 * sandbox by being an administrator, for the same reason `bolt_personal_secrets` exists: bolting
-	 * a `user_id` column onto a shared store would have kept the access rule and lost the isolation.
-	 *
-	 * For a person it is their `id`. For an envoy it is the envoy's own principal id — and
-	 * on a **public** envoy it is that plus the conversation, because an envoy is one principal and
-	 * without the partition every stranger who ever messaged it would share one tree, with a document
-	 * one uploaded sitting where the next could read it.
-	 */
 	readonly sandboxKey: string;
 	readonly agentName: string;
 	readonly conversationId: string;
 	readonly database: Database.Interface;
-	/** Commits a chat write and wakes the existing sync stream after the trigger captures it. */
-	readonly mutate: (
-		effectId: EffectId,
-		query: BuiltQuery,
-		collections: ReadonlyArray<'chat_session' | 'chat_message'>
-	) => ReturnType<typeof executeBuilt>;
-	readonly tasks: TaskQueue.Interface;
-	/**
-	 * How deep the chain that reached this turn already is, so a delegated turn can be refused before
-	 * it is enqueued rather than after the tenth one has run.
-	 *
-	 * `spawn_subagent` already refuses to spawn from inside a subagent, which bounds delegation to one
-	 * level *by that route*. This bounds the route that check cannot see: a subagent whose work fires
-	 * an automation whose write fires a hook that starts another agent is a cycle in which no single
-	 * step is delegation, and every step is satisfied by its own local rule.
-	 */
 	readonly budget: InvocationBudget.Interface;
+	readonly spawn: SandboxAction;
+	readonly admit: SandboxAction;
+	readonly dequeue: SandboxAction;
+	readonly reorder: SandboxAction;
+	readonly interrupt: SandboxAction;
+	readonly stop: SandboxAction;
+	readonly resume: SandboxAction;
 }>;
 
+const EmptyInput = Schema.Struct({});
 const TaskInput = Schema.Struct({ task: Schema.NonEmptyString });
-const SessionInput = Schema.Struct({ sessionId: Schema.NonEmptyString });
+const AgentInput = Schema.Struct({ agentId: Schema.NonEmptyString });
 const MessageInput = Schema.Struct({
-	sessionId: Schema.NonEmptyString,
+	agentId: Schema.NonEmptyString,
 	message: Schema.NonEmptyString
 });
+const AwaitInput = Schema.Struct({
+	agentId: Schema.NonEmptyString,
+	taskId: Schema.NonEmptyString
+});
+const ReorderInput = Schema.Struct({
+	agentId: Schema.NonEmptyString,
+	orderedTaskIds: Schema.Array(Schema.NonEmptyString)
+});
 const NullableString = Schema.Union([Schema.String, Schema.Null]);
-const ConversationRow = Schema.Struct({
+const AgentRow = Schema.Struct({
 	conversation_id: Schema.String,
-	agent_name: Schema.optionalKey(Schema.String),
-	title: Schema.optionalKey(NullableString)
+	parent_id: NullableString,
+	sandbox_key: Schema.String,
+	agent_name: Schema.String,
+	title: NullableString
+});
+type AgentRow = Schema.Schema.Type<typeof AgentRow>;
+const decodeAgentRow = Schema.decodeUnknownOption(AgentRow);
+const SettledTurn = Schema.Struct({
+	status: Schema.Literals(['completed', 'failed', 'interrupted', 'dequeued']),
+	parts: Schema.Array(Schema.Json)
 });
 
 const decode = <S extends Schema.Top>(schema: S, input: unknown) =>
@@ -114,19 +187,16 @@ const decode = <S extends Schema.Top>(schema: S, input: unknown) =>
 		Effect.mapError(() => new ToolNotAllowed({ agent: 'sandbox', tool: 'invalid-input' }))
 	);
 
-/** The `ConversationRow` decoder, built once: it is evaluated for every listed session row. */
-const decodeConversationRow = Schema.decodeUnknownOption(ConversationRow);
+const agentView = (row: AgentRow) => ({
+	agentId: row.conversation_id,
+	agentName: row.agent_name,
+	title: row.title
+});
 
-/**
- * The sibling session, once it is established that it belongs to this sandbox.
- *
- * Its name and title come back with the check rather than in a second read: every caller that is
- * allowed to touch a session is also the caller that has to say which session it touched, and a raw
- * conversation id says that to nobody.
- */
-const sameSandbox = Effect.fn('Agents.sameSandbox')(function* (
+const related = Effect.fn('Agents.related')(function* (
 	context: SandboxContext,
-	sessionId: string
+	targetId: string,
+	allowed: 'child' | 'message'
 ) {
 	const result = yield* executeBuilt(
 		context.effectId,
@@ -134,34 +204,34 @@ const sameSandbox = Effect.fn('Agents.sameSandbox')(function* (
 		composer
 			.select({
 				conversation_id: chatSession.conversation_id,
+				parent_id: chatSession.parent_id,
 				sandbox_key: chatSession.sandbox_key,
 				agent_name: chatSession.agent_name,
 				title: chatSession.title
 			})
 			.from(chatSession)
-			.where(eq(chatSession.conversation_id, sessionId))
-			.limit(1)
+			.where(inArray(chatSession.conversation_id, [context.conversationId, targetId]))
 	);
-	const row = result.rows[0];
-	const decoded = Schema.decodeUnknownOption(
-		Schema.Struct({
-			conversation_id: Schema.String,
-			sandbox_key: Schema.String,
-			agent_name: Schema.optionalKey(NullableString),
-			title: Schema.optionalKey(NullableString)
-		})
-	)(row);
-	if (decoded._tag === 'None' || decoded.value.sandbox_key !== context.sandboxKey) {
-		return yield* new ToolNotAllowed({ agent: context.agentName, tool: 'sandbox-scope' });
+	const rows = result.rows.flatMap((row) => {
+		const decoded = decodeAgentRow(row);
+		return decoded._tag === 'Some' ? [decoded.value] : [];
+	});
+	const current = rows.find(({ conversation_id }) => conversation_id === context.conversationId);
+	const target = rows.find(({ conversation_id }) => conversation_id === targetId);
+	const child = target?.parent_id === context.conversationId;
+	const parent = current?.parent_id === targetId;
+	if (
+		current === undefined ||
+		target === undefined ||
+		current.sandbox_key !== context.sandboxKey ||
+		target.sandbox_key !== context.sandboxKey ||
+		(!child && (allowed === 'child' || !parent))
+	) {
+		return yield* new ToolNotAllowed({ agent: context.agentName, tool: 'agent-aperture' });
 	}
-	return {
-		id: decoded.value.conversation_id,
-		agentName: decoded.value.agent_name ?? null,
-		title: decoded.value.title ?? null
-	};
+	return { target, relation: child ? ('child' as const) : ('parent' as const) };
 });
 
-/** This session's own title, which is how the reader on the other end tells two of its sessions apart. */
 const ownTitle = Effect.fn('Agents.ownTitle')(function* (context: SandboxContext) {
 	const result = yield* executeBuilt(
 		EffectId.make(`${context.effectId}:sender`),
@@ -178,133 +248,163 @@ const ownTitle = Effect.fn('Agents.ownTitle')(function* (context: SandboxContext
 	return decoded._tag === 'Some' ? (decoded.value.title ?? null) : null;
 });
 
-/** Coordinates same-sandbox agent sessions and in-session subagent spawning. */
+/** Coordinates one direct parent-child aperture; the database remains the only queue state. */
 export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(function* (
 	name: SandboxToolName,
 	input: Schema.Json,
 	context: SandboxContext
 ) {
 	switch (name) {
-		case 'spawn_subagent': {
-			if (context.conversationId.startsWith('subagent:')) {
-				return yield* new ToolNotAllowed({ agent: context.agentName, tool: 'spawn_subagent' });
-			}
+		case 'spawn_agent': {
 			const parsed = yield* decode(TaskInput, input);
-			const depth = yield* context.budget.nest(`subagent of ${context.agentName}`);
-			const conversationId = `subagent:${context.effectId}`;
-			// `parent_id` is what makes the delegated session findable from the one that spawned it:
-			// the reader's transcript walks down it to nest this agent's work under the call, and the
-			// usage roll-up walks up it so what this agent spends lands on the conversation the person
-			// is actually looking at, however many levels of delegation lie between.
-			yield* context.mutate(
-				EffectId.make(`${context.effectId}:spawn`),
-				composer
-					.insert(chatSession)
-					.values({
-						conversation_id: conversationId,
-						agent_name: context.agentName,
-						user_id: context.subject.userId,
-						sandbox_key: context.sandboxKey,
-						title: parsed.task,
-						parent_id: context.conversationId
-					})
-					.onConflictDoNothing(),
-				['chat_session']
-			);
-			const spawnTaskId = `${context.effectId}:enqueue`;
-			yield* context.tasks.enqueue(EffectId.make(spawnTaskId), [
-				{
-					command: 'agents.turn',
-					input: InvocationBudget.stampDepth(
-						{
-							subject: context.subject,
-							agent: context.agentName,
-							conversationId,
-							message: parsed.task
-						},
-						depth
-					),
-					effectId: spawnTaskId
-				}
-			]);
-			return { spawned: true, conversationId };
+			const depth = yield* context.budget.nest(`child of ${context.agentName}`);
+			return yield* context.spawn(context.effectId, { task: parsed.task, depth });
 		}
-		case 'list_sandbox_agents': {
-			const result = yield* executeBuilt(
+		case 'list_agents': {
+			yield* decode(EmptyInput, input);
+			const currentResult = yield* executeBuilt(
 				context.effectId,
+				context.database,
+				composer
+					.select({ parent_id: chatSession.parent_id })
+					.from(chatSession)
+					.where(eq(chatSession.conversation_id, context.conversationId))
+					.limit(1)
+			);
+			const current = Schema.decodeUnknownOption(
+				Schema.Struct({ parent_id: NullableString })
+			)(currentResult.rows[0]);
+			const parentId = current._tag === 'Some' ? current.value.parent_id : null;
+			const parentResult =
+				parentId === null
+					? { rows: [] }
+					: yield* executeBuilt(
+							EffectId.make(`${context.effectId}:parent`),
+							context.database,
+							composer
+								.select({
+									conversation_id: chatSession.conversation_id,
+									parent_id: chatSession.parent_id,
+									sandbox_key: chatSession.sandbox_key,
+									agent_name: chatSession.agent_name,
+									title: chatSession.title
+								})
+								.from(chatSession)
+								.where(eq(chatSession.conversation_id, parentId))
+								.limit(1)
+						);
+			const childrenResult = yield* executeBuilt(
+				EffectId.make(`${context.effectId}:children`),
 				context.database,
 				composer
 					.select({
 						conversation_id: chatSession.conversation_id,
+						parent_id: chatSession.parent_id,
+						sandbox_key: chatSession.sandbox_key,
 						agent_name: chatSession.agent_name,
 						title: chatSession.title
 					})
 					.from(chatSession)
-					.where(eq(chatSession.sandbox_key, context.sandboxKey))
+					.where(eq(chatSession.parent_id, context.conversationId))
 			);
+			const adjacent = [...parentResult.rows, ...childrenResult.rows].flatMap((row) => {
+				const decoded = decodeAgentRow(row);
+				return decoded._tag === 'Some' && decoded.value.sandbox_key === context.sandboxKey
+					? [decoded.value]
+					: [];
+			});
+			const parent = adjacent.find(({ conversation_id }) => conversation_id === parentId);
 			return {
-				sessions: result.rows.flatMap((row) => {
-					const decoded = decodeConversationRow(row);
-					if (decoded._tag === 'None') return [];
-					const { conversation_id: id, ...fields } = decoded.value;
-					return [{ id, ...fields }];
-				})
+				parent: parent === undefined ? null : agentView(parent),
+				children: adjacent
+					.filter(({ parent_id }) => parent_id === context.conversationId)
+					.map(agentView)
 			};
 		}
-		case 'read_sandbox_agent': {
-			const parsed = yield* decode(SessionInput, input);
-			yield* sameSandbox(context, parsed.sessionId);
+		case 'read_agent': {
+			const parsed = yield* decode(AgentInput, input);
+			yield* related(context, parsed.agentId, 'child');
 			const result = yield* executeBuilt(
 				context.effectId,
 				context.database,
 				composer
 					.select({ role: chatMessage.role, content: chatMessage.content })
 					.from(chatMessage)
-					.where(eq(chatMessage.conversation_id, parsed.sessionId))
+					.where(eq(chatMessage.conversation_id, parsed.agentId))
 					.orderBy(asc(chatMessage.sequence))
 			);
-			return { sessionId: parsed.sessionId, messages: result.rows };
+			return { agentId: parsed.agentId, messages: result.rows };
 		}
-		case 'message_sandbox_agent': {
+		case 'message_agent': {
 			const parsed = yield* decode(MessageInput, input);
-			const target = yield* sameSandbox(context, parsed.sessionId);
+			const target = yield* related(context, parsed.agentId, 'message');
 			const title = yield* ownTitle(context);
-			// `::jsonb` with an encoded value, like every other write to this log. The bare message text
-			// went into a `jsonb` column unquoted, which is not JSON — the delivery failed in the database
-			// rather than in the tool, so the sender was told it had landed.
-			yield* context.mutate(
+			const depth = yield* context.budget.nest(`message from ${context.agentName}`);
+			const message: StoredAgentMessage = encodeAgentMessage(
+				{
+					agentId: context.conversationId,
+					agentName: context.agentName,
+					title
+				},
+				parsed.message
+			);
+			return yield* context.admit(context.effectId, {
+				agentId: parsed.agentId,
+				agentName: target.target.agent_name,
+				message,
+				depth
+			});
+		}
+		case 'await_agent': {
+			const parsed = yield* decode(AwaitInput, input);
+			yield* related(context, parsed.agentId, 'child');
+			const result = yield* executeBuilt(
 				context.effectId,
-				composer.insert(chatMessage).values({
-					conversation_id: parsed.sessionId,
-					role: 'user',
-					content: JSON.stringify(
-						encodeAgentMessage(
-							{ sessionId: context.conversationId, agentName: context.agentName, title },
-							parsed.message
+				context.database,
+				composer
+					.select({ content: chatMessage.content })
+					.from(chatMessage)
+					.where(
+						and(
+							eq(chatMessage.conversation_id, parsed.agentId),
+							eq(chatMessage.turn_id, parsed.taskId),
+							eq(chatMessage.role, 'assistant')
 						)
 					)
-				}),
-				['chat_message']
+					.limit(1)
 			);
-			// The recipient's name travels back so the sending transcript can say who it wrote to.
-			return {
-				sessionId: parsed.sessionId,
-				delivered: true,
-				agentName: target.agentName,
-				title: target.title
-			};
+			const settled = result.rows.flatMap((row) => {
+				const decoded = Schema.decodeUnknownOption(Schema.Struct({ content: SettledTurn }))(row);
+				return decoded._tag === 'Some' ? [decoded.value.content] : [];
+			})[0];
+			return settled === undefined
+				? { waiting: true, agentId: parsed.agentId, taskId: parsed.taskId }
+				: {
+						waiting: false,
+						agentId: parsed.agentId,
+						taskId: parsed.taskId,
+						status: settled.status,
+						output: settled.parts
+					};
 		}
-		case 'await_sandbox_agent': {
-			const parsed = yield* decode(SessionInput, input);
-			const target = yield* sameSandbox(context, parsed.sessionId);
-			// The target's settlement enqueues the continuation. Enqueueing here races the target and
-			// makes a task retry stand in for the event the database already records durably.
-			return {
-				waiting: true,
-				targetSessionId: parsed.sessionId,
-				agentName: target.agentName,
-				title: target.title
-			};
+		case 'dequeue_agent_message': {
+			const parsed = yield* decode(AwaitInput, input);
+			yield* related(context, parsed.agentId, 'child');
+			return yield* context.dequeue(context.effectId, parsed);
+		}
+		case 'reorder_agent_queue': {
+			const parsed = yield* decode(ReorderInput, input);
+			yield* related(context, parsed.agentId, 'child');
+			return yield* context.reorder(context.effectId, parsed);
+		}
+		case 'interrupt_agent':
+		case 'stop_agent':
+		case 'resume_agent': {
+			const parsed = yield* decode(AgentInput, input);
+			yield* related(context, parsed.agentId, 'child');
+			return yield* context[
+				name === 'interrupt_agent' ? 'interrupt' : name === 'stop_agent' ? 'stop' : 'resume'
+			](context.effectId, parsed);
 		}
 		default: {
 			const _exhaustive: never = name;

@@ -33,7 +33,6 @@
 		sessionVisibleInScope
 	} from '#lib/client/ui/agent/conversation-selector.js';
 	import {
-		AGENT_TURN_STALE_MS,
 		agentOrbBusyStatusKey,
 		agentOrbState,
 		agentOrbStatusKey
@@ -72,8 +71,10 @@
 	import { workspaceSession } from '#lib/client/session.js';
 	import {
 		chatDocumentStorageKey,
+		parseStoredChatInput,
 		type ChatDocumentRef
 	} from '#lib/runtime/agents/chat-messages.js';
+	import { parseAgentMessage } from '#lib/runtime/agents/agent-message.js';
 
 	const { t } = useI18n();
 	const agentClient = useAgentClient();
@@ -98,7 +99,6 @@
 		pending: boolean;
 		echo: string | null;
 		sendFailure: string | null;
-		waitedTooLong: boolean;
 		composingNew: boolean;
 	}>({
 		runId: undefined,
@@ -106,11 +106,11 @@
 		pending: false,
 		echo: null,
 		sendFailure: null,
-		waitedTooLong: false,
 		composingNew: false
 	});
 	let planMode = $state(false);
 	let verifierOverride = $state<string | null>(null);
+	let queueActionPending = $state<string | null>(null);
 	/**
 	 * The shell's live platform state, or nothing when the panel is mounted bare.
 	 *
@@ -368,11 +368,7 @@
 	);
 	const allSessions = $derived(sessionQuery.current ?? []);
 	/** Delegated sessions render beneath their parent call, never as conversations somebody opened. */
-	const sessions = $derived(
-		allSessions.filter(
-			(row) => row.parent_id === null && !row.conversation_id.startsWith('subagent:')
-		)
-	);
+	const sessions = $derived(allSessions.filter((row) => row.parent_id === null));
 	// The status the host reports, not a role. `roles.includes('admin')` was the old spelling and it
 	// never matched anything: `admin` is not a role any workspace declares, so the agent's cross-user
 	// scope picker was invisible to the administrators it exists for.
@@ -516,6 +512,29 @@
 	const activeConversation = $derived(projectStoredChatMessages(messageQuery?.current ?? []));
 	const activeMessages = $derived(activeConversation.messages);
 	const activeTurns = $derived(activeConversation.turns);
+	const runQuery = $derived(
+		activeChatId
+			? runtime.client.db.agent_run.findMany({
+					where: { conversation_id: { eq: activeChatId } },
+					orderBy: { position: 'asc' },
+					limit: 500
+				})
+			: undefined
+	);
+	const mailboxQuery = $derived(
+		activeChatId
+			? runtime.client.db.agent_mailbox.findMany({
+					where: { conversation_id: { eq: activeChatId } },
+					limit: 1
+				})
+			: undefined
+	);
+	const agentRuns = $derived(runQuery?.current ?? []);
+	const mutableRuns = $derived(
+		agentRuns.filter((run) => ['queued', 'paused', 'resuming'].includes(run.status))
+	);
+	const runningRun = $derived(agentRuns.find((run) => run.status === 'running') ?? null);
+	const mailboxPaused = $derived(mailboxQuery?.current?.[0]?.status === 'paused');
 	const activeSessionIsEnvoy = $derived(activeSession?.visibility.startsWith('envoy_') ?? false);
 	const activeSessionIsOtherUsersPersonal = $derived(
 		isAdmin &&
@@ -528,17 +547,16 @@
 	);
 	const stored = $derived(toPanelMessages(activeMessages, activeTurns));
 	const messages = $derived(withPendingEcho(stored, session.echo));
-	const rootTurn = $derived([...activeTurns].filter((turn) => turn.subagent_id == null).at(-1));
-	/** Interactive start returns before inference; the replicated root turn owns in-flight after that. */
-	const composerLocked = $derived(
-		!session.sendFailure &&
-			!session.waitedTooLong &&
-			(session.pending || rootTurn?.status === 'running')
+	const rootTurn = $derived([...activeTurns].filter((turn) => turn.parent_agent_id == null).at(-1));
+	/** Admission is the only brief composer lock. The durable lane may accept more work while running. */
+	const composerLocked = $derived(session.pending);
+	const agentWorking = $derived(
+		runningRun !== null || mutableRuns.length > 0 || rootTurn?.status === 'running'
 	);
 	const terminalMessage = $derived(messages.at(-1));
 	const replicaFailure = $derived.by(() => {
 		const root = rootTurn;
-		if (root?.status === 'failed' || root?.status === 'aborted') {
+		if (root?.status === 'failed') {
 			return typeof root.error === 'string' && root.error.trim()
 				? root.error
 				: t('bolt.agent.couldNotFinish');
@@ -549,14 +567,10 @@
 		}
 		return null;
 	});
-	const failure = $derived(
-		session.sendFailure ??
-			replicaFailure ??
-			(session.waitedTooLong ? t('bolt.agent.couldNotFinish') : null)
-	);
+	const failure = $derived(session.sendFailure ?? replicaFailure);
 	const activityState = $derived(
 		agentOrbState({
-			pending: composerLocked,
+			pending: composerLocked || agentWorking,
 			failed: failure != null,
 			messages: activeMessages,
 			turns: activeTurns
@@ -564,7 +578,7 @@
 	);
 	const canSend = $derived(
 		(draft.trim().length > 0 || documents.length > 0) &&
-			!composerLocked &&
+			!session.pending &&
 			!uploadingDocument &&
 			!activeSessionIsReadOnly
 	);
@@ -641,29 +655,70 @@
 		);
 	});
 
-	/** One timer for the in-flight turn. An inline `{@attach}` restarted it on every transcript tick. */
-	$effect(() => {
-		if (!composerLocked || agentHasSpoken) return;
-		const timer = window.setTimeout(() => {
-			session.waitedTooLong = true;
-			agentClient.writeSurface({
-				chatId: session.chatId,
-				composingNew: session.composingNew,
-				pending: false,
-				failed: true
-			});
-		}, AGENT_TURN_STALE_MS);
-		return () => window.clearTimeout(timer);
-	});
-
 	/** Pushes composer identity into the shared shell and FAB activity store. */
 	function syncAgentSurface(): void {
 		agentClient.writeSurface({
 			chatId: session.chatId,
 			composingNew: session.composingNew,
 			pending: session.pending,
-			failed: session.sendFailure != null || session.waitedTooLong
+			failed: session.sendFailure != null
 		});
+	}
+
+	function queueLabel(turnId: string): string {
+		const row = messageQuery?.current?.find(
+			(message) => message.turn_id === turnId && message.role === 'user'
+		);
+		const input = parseStoredChatInput(row?.content);
+		if (input?.kind === 'user_message') return input.text || t('bolt.agent.queuedMessage');
+		if (input?.kind === 'inbound_batch') {
+			return input.messages.at(-1)?.text || t('bolt.agent.queuedMessage');
+		}
+		const relayed = parseAgentMessage(row?.content);
+		return relayed?.text || t('bolt.agent.queuedMessage');
+	}
+
+	function performQueueAction(key: string, request: Effect.Effect<unknown, unknown>): void {
+		if (queueActionPending !== null) return;
+		queueActionPending = key;
+		session.sendFailure = null;
+		void Effect.runPromise(request)
+			.catch((cause) => {
+				session.sendFailure = cause instanceof Error ? cause.message : String(cause);
+			})
+			.finally(() => {
+				queueActionPending = null;
+				syncAgentSurface();
+			});
+	}
+
+	function moveQueuedTask(taskId: string, offset: -1 | 1): void {
+		if (!activeChatId) return;
+		const taskIds = mutableRuns.map((run) => run.task_id);
+		const index = taskIds.indexOf(taskId);
+		const target = index + offset;
+		if (index < 0 || target < 0 || target >= taskIds.length) return;
+		[taskIds[index], taskIds[target]] = [taskIds[target]!, taskIds[index]!];
+		performQueueAction(
+			`reorder:${taskId}`,
+			runtime.client.system.agents.reorder({ conversationId: activeChatId, taskIds })
+		);
+	}
+
+	function dequeueTask(taskId: string): void {
+		if (!activeChatId) return;
+		performQueueAction(
+			`dequeue:${taskId}`,
+			runtime.client.system.agents.dequeue({ conversationId: activeChatId, taskId })
+		);
+	}
+
+	function controlAgent(action: 'interrupt' | 'stop' | 'resume'): void {
+		if (!activeChatId) return;
+		performQueueAction(
+			action,
+			runtime.client.system.agents[action]({ conversationId: activeChatId })
+		);
 	}
 
 	/**
@@ -696,7 +751,10 @@
 
 	/** Starts an agent turn with the current draft, mentions, and model selection. */
 	function send(): Effect.Effect<void> {
+		let rejectedDraft: string | null = null;
+		let createdConversation = false;
 		return Effect.suspend(() => {
+			const originalDraft = draft;
 			const { message, references } = serializeMentions(draft, mention.mentions);
 			if (
 				(message.length === 0 && documents.length === 0) ||
@@ -705,12 +763,17 @@
 				activeSessionIsReadOnly
 			)
 				return Effect.void;
+			rejectedDraft = originalDraft;
+			createdConversation = activeRunId === undefined;
+			const conversationId = activeRunId ?? globalThis.crypto.randomUUID();
 			const sentDocuments = [...documents];
 			const { verify, verifierPrompt: resolvedVerifierPrompt } = previewIntent;
-			if (!activeChatId) session.composingNew = true;
+			if (!activeChatId) {
+				session.composingNew = true;
+				session.runId = conversationId;
+			}
 			session.pending = true;
 			session.sendFailure = null;
-			session.waitedTooLong = false;
 			session.echo = message;
 			draft = '';
 			mention.lastDraft = '';
@@ -724,6 +787,7 @@
 			syncAgentSurface();
 			const started = agentClient.start({
 				message,
+				runId: conversationId,
 				documents: sentDocuments,
 				// Only chips the picker created. An `@` that never matched is already in the text.
 				...(references.length > 0 ? { mentions: references } : {}),
@@ -756,6 +820,16 @@
 						? t('bolt.agent.couldNotStart')
 						: reason;
 				session.pending = false;
+				session.composingNew = false;
+				session.echo = null;
+				if (createdConversation) {
+					session.chatId = undefined;
+					session.runId = undefined;
+				}
+				if (rejectedDraft !== null) {
+					draft = rejectedDraft;
+					mention.lastDraft = rejectedDraft;
+				}
 				syncAgentSurface();
 				return Effect.void;
 			})
@@ -770,7 +844,7 @@
 			let conversationId = activeRunId;
 			if (conversationId === undefined) {
 				conversationId = globalThis.crypto.randomUUID();
-				yield* runtime.client.system.agents.start({
+				yield* runtime.client.system.agents.open({
 					agent: runtime.agentName,
 					conversationId
 				});
@@ -837,7 +911,6 @@
 		session.composingNew = false;
 		session.echo = null;
 		session.sendFailure = null;
-		session.waitedTooLong = false;
 		selectedEnvoy = sessionEnvoyId(row, selectorLabels);
 		syncAgentSurface();
 	}
@@ -878,7 +951,6 @@
 				session.composingNew = false;
 				session.echo = null;
 				session.sendFailure = null;
-				session.waitedTooLong = false;
 			}
 		}
 		syncAgentSurface();
@@ -894,7 +966,6 @@
 		session.composingNew = true;
 		session.echo = null;
 		session.sendFailure = null;
-		session.waitedTooLong = false;
 		syncAgentSurface();
 	}
 
@@ -1089,38 +1160,141 @@
 						}}
 					/>
 				{/each}
-				{#if (composerLocked || session.waitedTooLong) && !agentHasSpoken}
-					<Stack
-						as="li"
-						gap="sm"
-						aria-label={session.waitedTooLong
-							? t('bolt.agent.failed')
-							: t('bolt.agent.agentIsWorking')}
-					>
+				{#if (agentWorking || composerLocked) && !agentHasSpoken}
+					<Stack as="li" gap="sm" aria-label={t('bolt.agent.agentIsWorking')}>
 						<span class="px-1 text-tiny font-medium text-muted-foreground"
 							>{t('bolt.agent.agent')}</span
 						>
 						<Inline class="w-fit rounded-xl bg-muted px-3.5 py-2.5 text-sm">
-							{#if session.waitedTooLong}
-								<NorbitalThinkingOrb
-									state="error"
-									size={16}
-									label={t('bolt.agent.failed')}
-									class="text-destructive"
-								/>
-								<span class="text-destructive">{t('bolt.agent.failed')}</span>
-							{:else}
-								<Spinner
-									class="size-4 text-foreground"
-									label={t(agentOrbBusyStatusKey(activityState))}
-								/>
-								<span class="text-muted-foreground">{t(agentOrbBusyStatusKey(activityState))}</span>
-							{/if}
+							<Spinner
+								class="size-4 text-foreground"
+								label={t(agentOrbBusyStatusKey(activityState))}
+							/>
+							<span class="text-muted-foreground">{t(agentOrbBusyStatusKey(activityState))}</span>
 						</Inline>
 					</Stack>
 				{/if}
 			</Scroll>
 		</Bound>
+	{/if}
+
+	{#if activeChatId && (agentWorking || mailboxPaused)}
+		<Stack
+			as="section"
+			gap="sm"
+			class="border-t bg-card/55 px-3 py-2.5 sm:px-4"
+			aria-label={t('bolt.agent.queue')}
+		>
+			<Inline justify="between" align="center" gap="sm">
+				<Inline align="center" gap="xs" class="min-w-0 text-xs text-muted-foreground">
+					<Icon
+						icon={mailboxPaused
+							? 'lucide:pause'
+							: runningRun
+								? 'lucide:loader-circle'
+								: 'lucide:list-ordered'}
+						class={`size-3.5 shrink-0 ${runningRun ? 'animate-spin' : ''}`}
+					/>
+					<span class="font-medium text-foreground">
+						{mailboxPaused
+							? t('bolt.agent.queuePaused')
+							: runningRun
+								? t('bolt.agent.queueRunning')
+								: t('bolt.agent.queue')}
+					</span>
+					{#if mutableRuns.length > 0}
+						<span>{t('bolt.agent.queuedCount', { count: mutableRuns.length })}</span>
+					{/if}
+				</Inline>
+				<Inline justify="end" align="center" gap="xs">
+					{#if mailboxPaused}
+						<Button
+							variant="ghost"
+							size="sm"
+							disabled={queueActionPending !== null}
+							onclick={() => controlAgent('resume')}
+						>
+							<Icon icon="lucide:play" class="size-3.5" />
+							{t('bolt.agent.resume')}
+						</Button>
+					{:else}
+						{#if runningRun}
+							<Button
+								variant="ghost"
+								size="sm"
+								disabled={queueActionPending !== null}
+								onclick={() => controlAgent('interrupt')}
+							>
+								<Icon icon="lucide:octagon-x" class="size-3.5" />
+								{t('bolt.agent.interrupt')}
+							</Button>
+						{/if}
+						<Button
+							variant="ghost"
+							size="sm"
+							disabled={queueActionPending !== null}
+							onclick={() => controlAgent('stop')}
+						>
+							<Icon icon="lucide:pause" class="size-3.5" />
+							{t('bolt.agent.pause')}
+						</Button>
+					{/if}
+				</Inline>
+			</Inline>
+
+			{#if mutableRuns.length > 0}
+				<ol class="divide-y divide-border/60 border-t border-border/60" aria-live="polite">
+					{#each mutableRuns as run, index (run.task_id)}
+						<Inline as="li" align="center" gap="sm" class="min-w-0 py-1.5 text-xs">
+							<span class="w-5 shrink-0 text-center tabular-nums text-muted-foreground"
+								>{index + 1}</span
+							>
+							<span class="min-w-0 flex-1 truncate text-foreground" title={queueLabel(run.turn_id)}>
+								{queueLabel(run.turn_id)}
+							</span>
+							<span class="shrink-0 text-tiny text-muted-foreground">
+								{run.status === 'paused' ? t('bolt.agent.paused') : t('bolt.agent.queued')}
+							</span>
+							<Inline gap="none" class="shrink-0">
+								<Button
+									variant="ghost"
+									size="icon"
+									class="size-7"
+									disabled={index === 0 || queueActionPending !== null}
+									hint={t('bolt.agent.moveEarlier')}
+									aria-label={t('bolt.agent.moveEarlier')}
+									onclick={() => moveQueuedTask(run.task_id, -1)}
+								>
+									<Icon icon="lucide:chevron-up" class="size-3.5" />
+								</Button>
+								<Button
+									variant="ghost"
+									size="icon"
+									class="size-7"
+									disabled={index === mutableRuns.length - 1 || queueActionPending !== null}
+									hint={t('bolt.agent.moveLater')}
+									aria-label={t('bolt.agent.moveLater')}
+									onclick={() => moveQueuedTask(run.task_id, 1)}
+								>
+									<Icon icon="lucide:chevron-down" class="size-3.5" />
+								</Button>
+								<Button
+									variant="ghost"
+									size="icon"
+									class="size-7 text-muted-foreground hover:text-destructive"
+									disabled={queueActionPending !== null}
+									hint={t('bolt.agent.removeQueued')}
+									aria-label={t('bolt.agent.removeQueued')}
+									onclick={() => dequeueTask(run.task_id)}
+								>
+									<Icon icon="lucide:x" class="size-3.5" />
+								</Button>
+							</Inline>
+						</Inline>
+					{/each}
+				</ol>
+			{/if}
+		</Stack>
 	{/if}
 
 	<Stack shrink={false} gap="sm" class="bg-background px-3 pb-3 sm:px-4 sm:pb-4">

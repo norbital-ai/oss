@@ -13,6 +13,9 @@ import {
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
 
+/** Exercises the authored admin-team policy, not the administrator bypass under separate test. */
+const policySubject = { ...adminSubject, admin: false };
+
 /**
  * A three-level graph using the relationship metadata the compiler emits for authored workspaces.
  *
@@ -209,7 +212,7 @@ const mutateBudget = (
 	runtime.runtime.runPromise(
 		Effect.gen(function* () {
 			const collections = yield* Collections.Service;
-			return yield* collections.mutate(EffectId.make(effectId), adminSubject, 'budgets', [values]);
+			return yield* collections.mutate(EffectId.make(effectId), policySubject, 'budgets', [values]);
 		})
 	);
 
@@ -313,7 +316,7 @@ const seedApprovedBudget = async (runtime: BoltTestRuntime, effectId: string) =>
 			Effect.gen(function* () {
 				yield* (yield* Collections.Service).mutate(
 					EffectId.make(`${effectId}:mutate`),
-					adminSubject,
+					policySubject,
 					'budgets',
 					[
 						{
@@ -500,7 +503,7 @@ describe('declarative relationship reconciliation', () => {
 				Effect.gen(function* () {
 					yield* (yield* Collections.Service).mutate(
 						EffectId.make('approval-hook-probe'),
-						adminSubject,
+						policySubject,
 						'budgets',
 						[
 							{
@@ -568,7 +571,7 @@ describe('declarative relationship reconciliation', () => {
 				Effect.gen(function* () {
 					yield* (yield* Collections.Service).mutate(
 						EffectId.make('failing-before-hook'),
-						adminSubject,
+						policySubject,
 						'budgets',
 						[{ name: 'Rejected by hook' }],
 						false,
@@ -591,7 +594,7 @@ describe('declarative relationship reconciliation', () => {
 				Effect.gen(function* () {
 					return yield* (yield* Collections.Service).mutate(
 						EffectId.make('approval-graph'),
-						adminSubject,
+						policySubject,
 						'budgets',
 						[
 							{
@@ -648,7 +651,7 @@ describe('declarative relationship reconciliation', () => {
 				Effect.gen(function* () {
 					return yield* (yield* Collections.Service).mutate(
 						EffectId.make('approval-graph-update'),
-						adminSubject,
+						policySubject,
 						'budgets',
 						[
 							{
@@ -719,7 +722,7 @@ describe('declarative relationship reconciliation', () => {
 				Effect.gen(function* () {
 					yield* (yield* Collections.Service).mutate(
 						EffectId.make('generic-approval-inbox'),
-						adminSubject,
+						policySubject,
 						'budgets',
 						[
 							{
@@ -779,7 +782,7 @@ describe('declarative relationship reconciliation', () => {
 				Effect.gen(function* () {
 					yield* (yield* Collections.Service).mutate(
 						EffectId.make('approval-row-drift'),
-						adminSubject,
+						policySubject,
 						'budgets',
 						[
 							{
@@ -854,7 +857,7 @@ describe('declarative relationship reconciliation', () => {
 				Effect.gen(function* () {
 					yield* (yield* Collections.Service).mutate(
 						EffectId.make('approval-edge-drift'),
-						adminSubject,
+						policySubject,
 						'budgets',
 						[
 							{
@@ -875,7 +878,7 @@ describe('declarative relationship reconciliation', () => {
 			Effect.gen(function* () {
 				yield* (yield* Collections.Service).create(
 					EffectId.make('approval-edge-drift-child'),
-					adminSubject,
+					policySubject,
 					{
 						collection: 'cost_estimates',
 						id: '00000000-0000-4000-8000-000000000099',
@@ -916,7 +919,7 @@ describe('declarative relationship reconciliation', () => {
 				Effect.gen(function* () {
 					return yield* (yield* Collections.Service).mutate(
 						EffectId.make('locked-child-seed'),
-						adminSubject,
+						policySubject,
 						'budgets',
 						[
 							{
@@ -964,7 +967,7 @@ describe('declarative relationship reconciliation', () => {
 				Effect.gen(function* () {
 					yield* (yield* Collections.Service).update(
 						EffectId.make('locked-child-update'),
-						adminSubject,
+						policySubject,
 						{ collection: 'cost_estimates', id: childId, values: { amount: 11 } }
 					);
 				})
@@ -994,7 +997,7 @@ describe('declarative relationship reconciliation', () => {
 				Effect.gen(function* () {
 					return yield* (yield* Collections.Service).mutate(
 						EffectId.make('locked-child-graph'),
-						adminSubject,
+						policySubject,
 						'budgets',
 						[
 							{
@@ -1125,7 +1128,7 @@ describe('declarative relationship reconciliation', () => {
 				Effect.gen(function* () {
 					yield* (yield* Collections.Service).mutate(
 						EffectId.make('noncascade-omit-estimate'),
-						adminSubject,
+						policySubject,
 						'budgets',
 						[{ id: budgetId, budget_cost_estimates: [] }]
 					);
@@ -1281,7 +1284,7 @@ describe('declarative relationship reconciliation', () => {
 					const collections = yield* Collections.Service;
 					return yield* collections.mutate(
 						EffectId.make('rollback-invalid'),
-						adminSubject,
+						policySubject,
 						'budgets',
 						[
 							{

@@ -299,10 +299,16 @@ export const TaskRequest = Schema.TaggedUnion({
 	 * wakes, finds nothing due, re-arms — while a crash the other way round costs a committed job
 	 * nobody ever comes back for.
 	 */
-	Wake: { notLaterThanEpochMs: Schema.Number }
+	Wake: { notLaterThanEpochMs: Schema.Number },
+	/** Associates the current guest invocation with one exact durable task while it is executing. */
+	Active: { taskId: Schema.NonEmptyString },
+	/** Releases the host's ephemeral task-to-invocation association after the attempt settles. */
+	Settled: { taskId: Schema.NonEmptyString },
+	/** Accelerates a durable stop/interrupt by terminating only the invocation running this task. */
+	Interrupt: { taskId: Schema.NonEmptyString }
 });
 export type TaskRequest = typeof TaskRequest.Type;
-export const TaskResponse = Schema.Struct({ taskId: Schema.optionalKey(Schema.String) });
+export const TaskResponse = Schema.Struct({});
 export interface TaskResponse extends Schema.Schema.Type<typeof TaskResponse> {}
 
 export const HostToolRequest = Schema.Struct({ tool: Schema.NonEmptyString, input: Schema.Json });

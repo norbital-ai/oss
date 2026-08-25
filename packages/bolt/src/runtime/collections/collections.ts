@@ -861,7 +861,7 @@ type MutationError =
  *
  * Only `mutate` runs in phases, so only `mutate` can say which one failed. Widening `MutationError`
  * would have put the phase on `create`, `update`, `delete`, `import` and `resume` as well, and on
- * every service that declares an error union containing theirs — `sync.mutate` and `agents.turn`
+ * every service that declares an error union containing theirs — `sync.mutate` and `agents.execute`
  * both do — none of which can ever raise it. That is a type that says something false about five
  * paths in order to say something true about one.
  */

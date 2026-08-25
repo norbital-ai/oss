@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 import { Cause, Effect } from 'effect';
 import {
 	assertSha512Integrity,
@@ -33,19 +34,6 @@ const publicPackageDirectoryByName = new Map(
 
 function fail(message) {
 	throw new Error(message);
-}
-
-function argumentsFrom(argv) {
-	const options = {};
-	for (let index = 0; index < argv.length; index += 1) {
-		const argument = argv[index];
-		if (!argument.startsWith('--')) fail(`Unknown argument: ${argument}`);
-		const key = argument.slice(2);
-		const value = argv[++index];
-		if (!value || value.startsWith('--')) fail(`${argument} requires a value.`);
-		options[key] = value;
-	}
-	return options;
 }
 
 function normalizedRegistry(value) {
@@ -344,7 +332,20 @@ export function resolveWorkspacePackages({ archiveBaseUrl, archiveOutput }) {
 function main() {
 	return Effect.gen(function* () {
 		const options = yield* Effect.try({
-			try: () => argumentsFrom(process.argv.slice(2)),
+			try: () =>
+				parseArgs({
+					args: process.argv.slice(2),
+					options: {
+						source: { type: 'string' },
+						registry: { type: 'string' },
+						'archive-base-url': { type: 'string' },
+						output: { type: 'string' },
+						'archive-output': { type: 'string' },
+						'github-output': { type: 'string' }
+					},
+					strict: true,
+					allowPositionals: false
+				}).values,
 			catch: (cause) => cause
 		});
 		const source = options.source ?? process.env.NORBITAL_PACKAGE_SOURCE ?? 'registry';

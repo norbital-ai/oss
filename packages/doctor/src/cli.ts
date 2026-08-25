@@ -12,19 +12,7 @@
  * the failure this tool exists to prevent.
  */
 import { assess, audit, type Severity } from './index.js';
-
-const argv = process.argv.slice(2);
-const command = argv[0]?.startsWith('-') === false ? argv[0] : 'audit';
-const options = command === 'audit' && argv[0] !== 'audit' ? argv : argv.slice(1);
-const flag = (name: string) => options.includes(`--${name}`);
-const value = (name: string) => {
-	const index = options.indexOf(`--${name}`);
-	return index < 0 ? undefined : options[index + 1];
-};
-const values = (name: string) =>
-	options.flatMap((argument, index) =>
-		argument === `--${name}` ? [options[index + 1] ?? ''] : []
-	);
+import { parseArgs } from 'node:util';
 
 const usage = [
 	'norbital-doctor <command> [options]',
@@ -48,42 +36,47 @@ const usage = [
 const ORDER: ReadonlyArray<Severity> = ['error', 'hint'];
 
 async function main(): Promise<void> {
-	const valueOptions = new Set(['--root', '--path', '--out', '--format']);
-	const booleanOptions = new Set(['--include-tests', '--json', '--help']);
-	for (let index = 0; index < options.length; index += 1) {
-		const argument = options[index] ?? '';
-		if (booleanOptions.has(argument)) continue;
-		if (valueOptions.has(argument)) {
-			const next = options[index + 1];
-			if (next === undefined || next.startsWith('-')) throw new Error(`${argument} needs a value`);
-			index += 1;
-			continue;
-		}
-		throw new Error(`unknown argument "${argument}"`);
-	}
-	if (command === 'audit' && flag('out')) throw new Error('--out is assess-only');
-	if (command === 'audit' && flag('format')) throw new Error('--format is assess-only');
-	const format = value('format');
+	const { positionals, values: options } = parseArgs({
+		options: {
+			root: { type: 'string', multiple: true },
+			path: { type: 'string', multiple: true },
+			out: { type: 'string' },
+			format: { type: 'string' },
+			'include-tests': { type: 'boolean' },
+			json: { type: 'boolean' },
+			help: { type: 'boolean' }
+		},
+		allowPositionals: true,
+		strict: true
+	});
+	if (positionals.length > 1) throw new Error(`unexpected command argument "${positionals[1]}"`);
+	const command = positionals[0] ?? 'audit';
+	if (command === 'audit' && options.out !== undefined) throw new Error('--out is assess-only');
+	if (command === 'audit' && options.format !== undefined)
+		throw new Error('--format is assess-only');
+	if (command === 'audit' && (options.root?.length ?? 0) > 1)
+		throw new Error('--root may be repeated only for assess');
+	const format = options.format;
 	if (format !== undefined && !['json', 'markdown', 'both'].includes(format))
 		throw new Error('--format must be json, markdown, or both');
 
-	if (command === 'help' || flag('help')) {
+	if (command === 'help' || options.help === true) {
 		process.stdout.write(usage);
 		return;
 	}
 
 	const shared = {
-		includeTests: flag('include-tests'),
-		paths: values('path')
+		includeTests: options['include-tests'] ?? false,
+		paths: options.path ?? []
 	};
 
 	if (command === 'assess') {
-		const roots = values('root');
+		const roots = options.root ?? [];
 		const result = await assess({
 			...shared,
 			roots: roots.length ? roots : undefined,
-			out: value('out'),
-			format: value('format') as 'json' | 'markdown' | 'both' | undefined
+			out: options.out,
+			format: options.format as 'json' | 'markdown' | 'both' | undefined
 		});
 		process.stdout.write(result.report);
 		if (result.stderr) process.stderr.write(result.stderr);
@@ -97,8 +90,8 @@ async function main(): Promise<void> {
 		return;
 	}
 
-	const result = await audit({ ...shared, root: value('root') });
-	if (flag('json')) {
+	const result = await audit({ ...shared, root: options.root?.[0] });
+	if (options.json === true) {
 		process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 	} else {
 		const tiers = (['syntactic', 'graph', 'typeAware'] as const)

@@ -10,10 +10,15 @@ import { Tasks } from '#lib/runtime/facilities/services.js';
 import * as SyncWake from '#lib/runtime/sync/wake.js';
 import {
 	cancelStatement,
+	dequeueStatement,
 	enqueueStatements,
+	interruptLaneStatement,
 	makeQueue,
 	progressStatement,
+	reorderStatements,
+	resumeLaneStatements,
 	resumeStatement,
+	stopLaneStatements,
 	statusStatement,
 	stopStatement,
 	type Declaration,
@@ -117,6 +122,38 @@ export type Interface = Readonly<{
 		taskId: string,
 		command: string
 	) => Effect.Effect<void, Database.FacilityError>;
+	/** Removes one not-yet-running message from a serial agent lane. */
+	readonly dequeue: (
+		effectId: EffectIdType,
+		taskId: string,
+		lane: string,
+		command: string
+	) => Effect.Effect<boolean, Database.FacilityError>;
+	/** Reorders the queued task ids in one lane. */
+	readonly reorder: (
+		effectId: EffectIdType,
+		lane: string,
+		command: string,
+		orderedTaskIds: ReadonlyArray<string>
+	) => Effect.Effect<void, Database.FacilityError>;
+	/** Pauses queued and running work in one lane, preserving the same rows for resume. */
+	readonly stopLane: (
+		effectId: EffectIdType,
+		lane: string,
+		command: string
+	) => Effect.Effect<ReadonlyArray<string>, Database.FacilityError>;
+	/** Resumes the exact paused rows in one lane. */
+	readonly resumeLane: (
+		effectId: EffectIdType,
+		lane: string,
+		command: string
+	) => Effect.Effect<void, Database.FacilityError>;
+	/** Terminates only the currently running row in a lane. */
+	readonly interruptLane: (
+		effectId: EffectIdType,
+		lane: string,
+		command: string
+	) => Effect.Effect<ReadonlyArray<string>, Database.FacilityError>;
 }>;
 
 /** Identifies the task queue in Effect's context so dependency wiring remains explicit and type checked. */
@@ -146,6 +183,11 @@ const JsonObject = Schema.Record(Schema.String, Schema.Json);
 const DatabaseRows = Schema.Array(JsonObject);
 /** Built once: every facility response this module reads goes through it. */
 const decodeDatabaseRows = Schema.decodeUnknownEffect(DatabaseRows);
+const TaskIdRows = Schema.Array(Schema.Struct({ taskId: Schema.NonEmptyString }));
+const decodeTaskIdRows = (rows: unknown): ReadonlyArray<{ readonly taskId: string }> => {
+	const decoded = Schema.decodeUnknownOption(TaskIdRows)(rows);
+	return decoded._tag === 'Some' ? decoded.value : [];
+};
 
 export const layer = (context: CallContext) =>
 	Layer.effect(
@@ -191,7 +233,7 @@ export const layer = (context: CallContext) =>
 				makeQueue(executeUnder(effectId, label));
 
 			/**
-			 * Announces the instant, then writes the work — in that order, always.
+			 * Announces an already-durable instant to the host scheduler.
 			 *
 			 * A host holds the earliest instant it has been told and ignores a later one, so this can be
 			 * unconditional: the guest has no way to know what the host currently holds, and finding out
@@ -216,9 +258,14 @@ export const layer = (context: CallContext) =>
 						(earliest, enqueue) => Math.min(earliest, enqueue.runAtEpochMs ?? nowEpochMs),
 						Number.POSITIVE_INFINITY
 					);
-					yield* wake(EffectId.make(`${effectId}:wake`), soonest);
 					yield* database.execute(effectId, asRequest(enqueueStatements(enqueues)));
-					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['automation_run']);
+					yield* wake(EffectId.make(`${effectId}:wake`), soonest);
+					yield* syncWake.announce(
+						EffectId.make(`${effectId}:sync`),
+						enqueues.some(({ lane }) => lane !== undefined)
+							? ['automation_run', 'agent_mailbox', 'agent_run']
+							: ['automation_run']
+					);
 				}),
 				declare: Effect.fn('TaskQueue.declare')((effectId, declarations, nowEpochMs) =>
 					queueUnder(effectId, 'declare').declare(declarations, nowEpochMs)
@@ -226,7 +273,24 @@ export const layer = (context: CallContext) =>
 				tick: (effectId, run) =>
 					Effect.gen(function* () {
 						const nowEpochMs = yield* Clock.currentTimeMillis;
-						const report = yield* makeRunner(queueUnder(effectId, 'tick'), run).tick({
+						const controlledRun: typeof run = (task, attemptEffectId) =>
+							Effect.acquireUseRelease(
+								Effect.ignore(
+									tasks.execute(EffectId.make(`${attemptEffectId}:active`), {
+										_tag: 'Active',
+										taskId: task.effectId
+									})
+								),
+								() => run(task, attemptEffectId),
+								() =>
+									Effect.ignore(
+										tasks.execute(EffectId.make(`${attemptEffectId}:settled`), {
+											_tag: 'Settled',
+											taskId: task.effectId
+										})
+									)
+							);
+						const report = yield* makeRunner(queueUnder(effectId, 'tick'), controlledRun).tick({
 							nowEpochMs,
 							// Floored at one millisecond, exactly as `runtime/app.ts` floors the timeout it
 							// enforces against the same deadline. A late tick must not burn an attempt on work
@@ -235,7 +299,10 @@ export const layer = (context: CallContext) =>
 						});
 						// `finish` also prunes old task rows. Announce every real tick rather than trying to
 						// predict whether its private queue writes changed an automation projection.
-						yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['automation_run']);
+						yield* syncWake.announce(EffectId.make(`${effectId}:sync`), [
+							'automation_run',
+							'agent_run'
+						]);
 						return report;
 					}),
 				status: Effect.fn('TaskQueue.status')(function* (effectId, taskId) {
@@ -250,9 +317,9 @@ export const layer = (context: CallContext) =>
 					yield* database.execute(effectId, asRequest([cancelStatement(taskId, command)]));
 				}),
 				stop: Effect.fn('TaskQueue.stop')(function* (effectId, taskId, command) {
-					// A claim remains `pending` while its worker runs. Moving it to `paused` therefore
+					// A claim is `running` while its worker runs. Moving it to `paused` therefore
 					// fences both queued and in-flight work in one atomic write. Every finish statement is
-					// conditional on `pending`, so a late success or failure cannot erase the stop.
+					// conditional on `running`, so a late success or failure cannot erase the stop.
 					yield* database.execute(effectId, asRequest([stopStatement(taskId, command)]));
 					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['automation_run']);
 				}),
@@ -260,11 +327,75 @@ export const layer = (context: CallContext) =>
 					// Announce before writing, exactly like enqueue: a crash may cause an empty tick, but
 					// can never leave durable work with nobody scheduled to look for it. `resuming` is a
 					// lease fence. If an old guest still owns the row, its claim-time run_at is preserved;
-					// otherwise the same row is immediately due. Only `take` turns the fence into pending.
+					// otherwise the same row is immediately due. Only `take` turns the fence into running.
 					const nowEpochMs = yield* Clock.currentTimeMillis;
 					yield* wake(EffectId.make(`${effectId}:wake`), nowEpochMs);
 					yield* database.execute(effectId, asRequest([resumeStatement(taskId, command)]));
 					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['automation_run']);
+				}),
+				dequeue: Effect.fn('TaskQueue.dequeue')(function* (effectId, taskId, lane, command) {
+					const response = yield* database.execute(
+						effectId,
+						asRequest([dequeueStatement(taskId, lane, command)])
+					);
+					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['agent_run']);
+					return decodeTaskIdRows(response.rows).length === 1;
+				}),
+				reorder: Effect.fn('TaskQueue.reorder')(
+					function* (effectId, lane, command, orderedTaskIds) {
+						if (orderedTaskIds.length === 0) return;
+						yield* database.execute(
+							effectId,
+							asRequest(reorderStatements(lane, command, orderedTaskIds))
+						);
+						yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['agent_run']);
+					}
+				),
+				stopLane: Effect.fn('TaskQueue.stopLane')(function* (effectId, lane, command) {
+					const response = yield* database.execute(
+						effectId,
+						asRequest(stopLaneStatements(lane, command))
+					);
+					const rows = decodeTaskIdRows(response.rows);
+					for (const { taskId } of rows) {
+						yield* Effect.ignore(
+							tasks.execute(EffectId.make(`${effectId}:interrupt:${taskId}`), {
+								_tag: 'Interrupt',
+								taskId
+							})
+						);
+					}
+					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), [
+						'agent_mailbox',
+						'agent_run'
+					]);
+					return rows.map(({ taskId }) => taskId);
+				}),
+				resumeLane: Effect.fn('TaskQueue.resumeLane')(function* (effectId, lane, command) {
+					const nowEpochMs = yield* Clock.currentTimeMillis;
+					yield* wake(EffectId.make(`${effectId}:wake`), nowEpochMs);
+					yield* database.execute(effectId, asRequest(resumeLaneStatements(lane, command)));
+					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), [
+						'agent_mailbox',
+						'agent_run'
+					]);
+				}),
+				interruptLane: Effect.fn('TaskQueue.interruptLane')(function* (effectId, lane, command) {
+					const response = yield* database.execute(
+						effectId,
+						asRequest([interruptLaneStatement(lane, command)])
+					);
+					const rows = decodeTaskIdRows(response.rows);
+					for (const { taskId } of rows) {
+						yield* Effect.ignore(
+							tasks.execute(EffectId.make(`${effectId}:interrupt:${taskId}`), {
+								_tag: 'Interrupt',
+								taskId
+							})
+						);
+					}
+					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['agent_run']);
+					return rows.map(({ taskId }) => taskId);
 				})
 			});
 		})

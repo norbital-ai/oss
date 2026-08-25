@@ -7,7 +7,7 @@ import { encodeAgentMessage } from '../../src/runtime/agents/agent-message.js';
 
 const conversationId = 'conversation-inbox';
 const sender = {
-	sessionId: 'conversation-migrations',
+	agentId: 'conversation-migrations',
 	agentName: 'migrator',
 	title: 'Migration and performance verification'
 };
@@ -38,7 +38,7 @@ describe('inter-agent messages in the transcript', () => {
 				direction: 'in',
 				agentName: 'migrator',
 				sessionTitle: 'Migration and performance verification',
-				sessionId: 'conversation-migrations',
+				agentId: 'conversation-migrations',
 				content: 'Heads-up: four errors in auth-store.ts',
 				state: 'complete'
 			})
@@ -49,8 +49,8 @@ describe('inter-agent messages in the transcript', () => {
 		const call = {
 			kind: 'tool',
 			id: 'call-1',
-			name: 'message_sandbox_agent',
-			input: { sessionId: sender.sessionId, message: 'Those four are already fixed.' }
+			name: 'message_agent',
+			input: { agentId: sender.agentId, message: 'Those four are already fixed.' }
 		};
 		const panel = project([
 			{ role: 'user', content: 'Reply to the migration agent' },
@@ -59,7 +59,7 @@ describe('inter-agent messages in the transcript', () => {
 				content: {
 					id: 'turn-1',
 					status: 'completed',
-					subagent_id: null,
+					parent_agent_id: null,
 					parts: [
 						call,
 						{
@@ -75,7 +75,7 @@ describe('inter-agent messages in the transcript', () => {
 		expect(panel.find((message) => message.kind === 'agent-message')).toMatchObject({
 			direction: 'out',
 			agentName: 'migrator',
-			sessionId: 'conversation-migrations',
+			agentId: 'conversation-migrations',
 			content: 'Those four are already fixed.',
 			state: 'complete'
 		});

@@ -270,6 +270,52 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 				value: { rows: [{ id: `message-${chatMessageId}` }], affectedRows: 1 }
 			});
 		}
+		if (request._tag === 'Query' && request.sql.includes('from "chat_session"')) {
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [
+						{
+							conversation_id: 'conversation-1',
+							agent_name: 'web',
+							title: null,
+							user_id: subject.userId,
+							sandbox_key: subject.userId,
+							visibility: 'personal',
+							envoy_key: null,
+							parent_id: null
+						}
+					],
+					affectedRows: 0
+				}
+			});
+		}
+		if (
+			request._tag === 'Query' &&
+			request.sql.includes('from "chat_message"') &&
+			request.sql.includes('"turn_id"')
+		) {
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [
+						{
+							id: 'agent-turn-message',
+							content: {
+								id: 'invoke-agents.enqueue',
+								status: 'queued',
+								parent_agent_id: null,
+								parts: [],
+								subject,
+								agent_name: 'web',
+								usage_unreported: false
+							}
+						}
+					],
+					affectedRows: 0
+				}
+			});
+		}
 		if (
 			request._tag === 'Transaction' &&
 			request.statements.some((statement) => statement.sql.includes('__bolt_graph_record'))
@@ -300,7 +346,7 @@ const taskRequests: Array<TaskRequest> = [];
 const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
 	call: (_metadata, request) => {
 		taskRequests.push(request);
-		return Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } });
+		return Promise.resolve({ _tag: 'Success', value: {} });
 	}
 };
 const facilities: FacilityBindings = { scope, database, ai, tasks };
@@ -309,9 +355,9 @@ const facilities: FacilityBindings = { scope, database, ai, tasks };
  * The `user` row the session query above hands back, so it has to be a row the real query
  * could produce.
  *
- * Administration is identified by `user.status`, but that status is not a tenant-data grant.
- * `subjectFromRow` derives the trusted subject from this row; request payload roles remain
- * untrusted and cannot add authority.
+ * Administration is identified by `user.status`, and that trusted status bypasses authored access
+ * policy. `subjectFromRow` derives the subject from this row; request payload roles remain untrusted
+ * and cannot add authority.
  *
  * The role ladder is left empty on purpose. `admin` and `impersonator` were compiler-injected and
  * are gone, and an empty array keeps the authority under test the status alone: nothing here can be
@@ -389,11 +435,11 @@ describe('runnable Bolt vertical slice', () => {
 
 	it('derives command identity from credentials and ignores forged browser roles', async () => {
 		// The payload tries to supply an employee subject. The trusted identity still comes from the
-		// credential, and administrator status does not widen its grants to every app.
+		// credential. The forged employee payload cannot narrow or replace the administrator.
 		const forged = await invoke('apps.visible', { subject: employee });
 		expect(forged).toMatchObject({
 			_tag: 'Success',
-			response: { value: { apps: ['hr'] } }
+			response: { value: { apps: ['hr', 'finance'] } }
 		});
 		const unauthenticated: Invocation = {
 			_tag: 'Command',
@@ -508,12 +554,20 @@ describe('runnable Bolt vertical slice', () => {
 		});
 	});
 
-	it('communicates with an agent and persists the turn before scheduling continuation', async () => {
-		const result = await invoke('agents.turn', {
+	it('atomically admits an agent message before executing the persisted turn', async () => {
+		const admitted = await invoke('agents.enqueue', {
 			subject,
 			agent: 'web',
 			conversationId: 'conversation-1',
 			message: 'Hello'
+		});
+		expect(admitted, JSON.stringify(admitted)).toMatchObject({
+			_tag: 'Success',
+			response: { value: { status: 'queued', turnId: 'invoke-agents.enqueue' } }
+		});
+		const result = await invoke('agents.execute', {
+			conversationId: 'conversation-1',
+			turnId: 'invoke-agents.enqueue'
 		});
 		expect(result).toMatchObject({
 			_tag: 'Success',
@@ -527,7 +581,7 @@ describe('runnable Bolt vertical slice', () => {
 			response: { value: ['web'] }
 		});
 		expect(
-			await invoke('agents.turn', {
+			await invoke('agents.enqueue', {
 				subject,
 				agent: 'workspace',
 				conversationId: 'conversation-missing',
@@ -645,12 +699,13 @@ describe('runnable Bolt vertical slice', () => {
 			// cron is declared by a release and only the guest can read a release. Schedules are now
 			// rows in the tenant's own `bolt_schedule`, and what a host is told is one number.
 			registrations: [
-				{ command: 'agents.resume' },
-				{ command: 'agents.turn' },
+				{ command: 'agents.continue' },
+				{ command: 'agents.execute' },
 				// A refused approval has cleanup to do — the provisional row it locked. Routed beside
 				// `resume` because a rejection is followed up as deliberately as an approval is.
 				{ command: 'collections.discard' },
 				{ command: 'collections.resume' },
+				{ command: 'envoys.complete' },
 				{ command: 'envoys.receive' },
 				{ command: 'integrations.flush' },
 				{ command: 'integrations.pull' },
@@ -663,6 +718,6 @@ describe('runnable Bolt vertical slice', () => {
 			// has to cost nothing rather than a heartbeat.
 			nextDueAtEpochMs: null
 		});
-		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(9);
+		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(10);
 	});
 });

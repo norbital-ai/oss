@@ -15,6 +15,7 @@ import {
 } from 'drizzle-orm';
 import type { PolicyDeclaration, WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
+import { SYSTEM_COLLECTION_NAMES } from '#lib/runtime/schema/system-collections.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import { composer, executeBuilt, jsonb, toStatement } from '#lib/runtime/persistence.js';
 import * as Workspace from '#lib/runtime/workspace.js';
@@ -108,8 +109,9 @@ export class AccessDenied extends Schema.TaggedError<AccessDenied>()(
  * Whether this subject administers the workspace.
  *
  * Read off `user.status` by `Identity.authenticate` and off nothing else — not a header,
- * not a cookie, not a role array a caller can assert. It selects an explicit built-in policy; it is
- * never itself an authorization decision.
+ * not a cookie, not a role array a caller can assert. A real administrator bypasses authored
+ * access policy. A team preview explicitly clears this flag before evaluation, so impersonation
+ * remains the exact view of the selected team rather than an administrator overlay.
  *
  * `=== true` rather than a truthiness test, because the key is optional on `Subject`: a subject
  * built before this field existed, or projected from a table that has no `status` column, is an
@@ -215,8 +217,9 @@ const PolicyEvaluation = {
 		// The runtime's own policy, selected by a flag only `systemSubject` mints. Checked first
 		// because it is the one policy no team can confer and no name can reach.
 		if (policy.system === true) return subject.system === true;
-		// The administration policy is selected by status but still enumerates its grants. Status never
-		// turns into a general allow: a coordinate absent from that policy remains denied.
+		// Runtime controls remain enumerated even for administrators. The administrator bypass below is
+		// restricted to authored collections, apps and agents; this selector admits only coordinates in
+		// the runtime-owned administration policy.
 		if (policy.administrator === true) return isAdministrator(subject) && subject.system !== true;
 		// `SYSTEM_READ_POLICY`, which grants reads of the runtime's own collections to whoever signed
 		// in. Excluding the host principal is the point of writing it this way rather than as an
@@ -764,11 +767,29 @@ export const layer = Layer.effect(
 		 */
 		const held = (subject: Identity.Subject): ReadonlySet<string> =>
 			policiesHeld(workspace.definition, subject, reportedStalePolicies);
+		const authoredCollections = new Set(
+			workspace.definition.collections
+				.filter(({ name }) => !SYSTEM_COLLECTION_NAMES.has(name))
+				.map(({ name }) => name)
+		);
+		const administratorBypasses = (
+			subject: Identity.Subject,
+			action: string,
+			resource: string
+		): boolean =>
+			isAdministrator(subject) && (action === 'agent' || authoredCollections.has(resource));
+		const administratorPredicate = (): RowPredicate => ({
+			allowed: true,
+			reason: 'workspace administrator bypass',
+			sql: 'true',
+			parameters: []
+		});
 		const authorize = Effect.fn('AccessControl.authorize')(function* (
 			subject: Identity.Subject,
 			action: string,
 			app: string
 		) {
+			if (administratorBypasses(subject, action, app)) return;
 			const decision = decide(workspace.definition.policies, subject, action, app, held(subject));
 			if (!decision.allowed)
 				return yield* new AccessDenied({ action, resource: app, reason: decision.reason });
@@ -887,6 +908,9 @@ export const layer = Layer.effect(
 				 * it from there — the same place `AccessControl` reads authority from.
 				 */
 				teamPath: matched.path,
+				// Static identities may carry policies directly; a team preview is always a person's view and
+				// therefore clears any direct declaration authority as well as administrator status.
+				policies: [],
 				// Dropped explicitly so built-in administrator-selected controls do not leak into a team
 				// preview. Tenant access still comes solely from the substituted team's policies.
 				admin: false,
@@ -902,8 +926,11 @@ export const layer = Layer.effect(
 				teamPath
 			}),
 			predicate: (subject, action, resource) =>
-				rowPredicate(workspace.definition.policies, subject, action, resource, held(subject)),
+				administratorBypasses(subject, action, resource)
+					? administratorPredicate()
+					: rowPredicate(workspace.definition.policies, subject, action, resource, held(subject)),
 			mask: (subject, action, resource, value) => {
+				if (administratorBypasses(subject, action, resource)) return value;
 				const predicate = rowPredicate(
 					workspace.definition.policies,
 					subject,
@@ -918,8 +945,27 @@ export const layer = Layer.effect(
 				);
 			},
 			explain: (subject, action, resource) =>
-				decide(workspace.definition.policies, subject, action, resource, held(subject)),
+				administratorBypasses(subject, action, resource)
+					? administratorPredicate()
+					: decide(workspace.definition.policies, subject, action, resource, held(subject)),
 			capabilities: (subject) => {
+				if (isAdministrator(subject)) {
+					return {
+						apps: new Set(workspace.definition.apps.map(({ name }) => name)),
+						tools: new Set(
+							workspace.definition.tools
+								.filter(({ mcp }) => mcp === undefined)
+								.map(({ name }) => name)
+						),
+						mcp: new Set(
+							workspace.definition.tools.flatMap(({ mcp }) =>
+								mcp === undefined ? [] : [mcp.server]
+							)
+						),
+						skills: new Set(workspace.definition.skills.map(({ name }) => name)),
+						envoyHistory: true
+					};
+				}
 				const holds = held(subject);
 				const apps = new Set<string>();
 				const tools = new Set<string>();
@@ -966,6 +1012,7 @@ export const layer = Layer.effect(
 				);
 			},
 			visibleApps: (subject) => {
+				if (isAdministrator(subject)) return workspace.definition.apps.map(({ name }) => name);
 				const holds = held(subject);
 				return workspace.definition.apps
 					.filter(({ name }) =>

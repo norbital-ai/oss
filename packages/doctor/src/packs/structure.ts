@@ -200,6 +200,645 @@ const exportStar = defineRule({
 	}
 });
 
+const withoutModuleExtension = (path: string): string =>
+	path.replace(/\.(?:[cm]?[jt]sx?|svelte)$/, '');
+
+function resolvesToDeclaringModule(file: string, root: string, specifier: string): boolean {
+	if (!specifier.startsWith('.')) return false;
+	const current = withoutModuleExtension(resolve(root, file));
+	const target = withoutModuleExtension(resolve(root, dirname(file), specifier));
+	return current === target || current === join(target, 'index');
+}
+
+const selfModuleEdge = defineRule({
+	id: 'MOD1',
+	severity: 'error',
+	summary: 'module imports or re-exports itself',
+	principles: ['simplicity', 'modularity', 'colocation', 'no-bloat'],
+	when: ['ImportDeclaration', 'ExportDeclaration', 'ImportEqualsDeclaration', 'CallExpression'],
+	check(node, context) {
+		const ts = context.ts;
+		let specifier: import('typescript').StringLiteral | undefined;
+		if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+			if (node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier))
+				specifier = node.moduleSpecifier;
+		} else if (
+			ts.isImportEqualsDeclaration(node) &&
+			ts.isExternalModuleReference(node.moduleReference) &&
+			node.moduleReference.expression !== undefined &&
+			ts.isStringLiteral(node.moduleReference.expression)
+		) {
+			specifier = node.moduleReference.expression;
+		} else if (
+			ts.isCallExpression(node) &&
+			node.arguments.length === 1 &&
+			ts.isStringLiteral(node.arguments[0]!) &&
+			(node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+				context.calleeName(node) === 'require')
+		) {
+			specifier = node.arguments[0];
+		}
+		if (
+			specifier === undefined ||
+			!resolvesToDeclaringModule(context.file, context.root, specifier.text)
+		)
+			return;
+		// Recursive Svelte components name themselves as a component value; this is an executable
+		// render edge, not a module namespace pretending to add another public entrypoint.
+		if (
+			context.file.endsWith('.svelte') &&
+			specifier.text.endsWith('.svelte') &&
+			ts.isImportDeclaration(node) &&
+			node.importClause?.name !== undefined &&
+			node.importClause.namedBindings === undefined
+		)
+			return;
+		context.report(node, `module=${specifier.text}`);
+	}
+});
+
+/** A domain identity prefixed as unused inside a service that exists to enforce policy. */
+const ignoredPolicyIdentity = defineRule({
+	id: 'POLICY1',
+	severity: 'error',
+	summary: 'policy or admission service ignores the identity it is meant to isolate',
+	principles: ['simplicity', 'straightforwardness', 'testability'],
+	when: ['Parameter'],
+	check(node, context) {
+		const ts = context.ts;
+		const parameter = node as import('typescript').ParameterDeclaration;
+		if (!ts.isIdentifier(parameter.name)) return;
+		if (
+			!/^_?(?:tenant|workspace|account|organization|subject|principal|user)(?:Id|Key)?$/i.test(
+				parameter.name.text
+			)
+		)
+			return;
+		const parameterName = parameter.name.text;
+		const owner = context.ancestors(node).find((parent) => ts.isFunctionLike(parent)) as
+			import('typescript').FunctionLikeDeclaration | undefined;
+		if (owner?.body === undefined) return;
+		const parent = context.ancestors(owner)[0];
+		const ownerName =
+			'name' in owner && owner.name !== undefined && ts.isIdentifier(owner.name)
+				? owner.name.text
+				: parent !== undefined && ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)
+					? parent.name.text
+					: '';
+		const policyVocabulary =
+			/(?:capacity|admission|authori[sz]|access|permissions?|policy|quota|routing?|rbac|acl|gate)/i;
+		if (!policyVocabulary.test(context.file) && !policyVocabulary.test(ownerName)) return;
+		let usedForPolicy = false;
+		const contains = (
+			ownerNode: import('typescript').Node,
+			child: import('typescript').Node
+		): boolean => ownerNode.pos <= child.pos && ownerNode.end >= child.end;
+		const observationCall = (call: import('typescript').CallExpression): boolean =>
+			/(?:^|\.)(?:log|debug|trace|info|warn|error|metric|record|observe)$/.test(
+				context.calleeName(call) ?? ''
+			);
+		const trackedNames = new Set([parameterName]);
+		let addedAlias = true;
+		while (addedAlias) {
+			addedAlias = false;
+			const collectAliases = (current: import('typescript').Node): void => {
+				if (
+					ts.isVariableDeclaration(current) &&
+					ts.isIdentifier(current.name) &&
+					current.initializer !== undefined
+				) {
+					let readsTracked = false;
+					const inspect = (candidate: import('typescript').Node): void => {
+						if (ts.isIdentifier(candidate) && trackedNames.has(candidate.text)) readsTracked = true;
+						if (!readsTracked) ts.forEachChild(candidate, inspect);
+					};
+					inspect(current.initializer);
+					if (readsTracked && !trackedNames.has(current.name.text)) {
+						trackedNames.add(current.name.text);
+						addedAlias = true;
+					}
+				}
+				ts.forEachChild(current, collectAliases);
+			};
+			collectAliases(owner.body);
+		}
+		const ancestorUsesIdentity = (
+			ancestor: import('typescript').Node,
+			identity: import('typescript').Identifier
+		): boolean =>
+			(ts.isCallExpression(ancestor) &&
+				ancestor.arguments.some((argument) => contains(argument, identity))) ||
+			ts.isBinaryExpression(ancestor) ||
+			ts.isElementAccessExpression(ancestor) ||
+			(ts.isIfStatement(ancestor) && contains(ancestor.expression, identity)) ||
+			(ts.isConditionalExpression(ancestor) && contains(ancestor.condition, identity)) ||
+			(ts.isSwitchStatement(ancestor) && contains(ancestor.expression, identity));
+		const identityInfluencesPolicy = (identity: import('typescript').Identifier): boolean => {
+			if (!trackedNames.has(identity.text)) return false;
+			const ancestors = context.ancestors(identity);
+			const ownerIndex = ancestors.indexOf(owner);
+			const localAncestors = ownerIndex < 0 ? ancestors : ancestors.slice(0, ownerIndex);
+			const observed = localAncestors.some(
+				(ancestor) =>
+					ts.isVoidExpression(ancestor) ||
+					(ts.isCallExpression(ancestor) && observationCall(ancestor))
+			);
+			return (
+				!observed && localAncestors.some((ancestor) => ancestorUsesIdentity(ancestor, identity))
+			);
+		};
+		const visit = (current: import('typescript').Node): void => {
+			if (ts.isIdentifier(current) && identityInfluencesPolicy(current)) usedForPolicy = true;
+			if (!usedForPolicy) ts.forEachChild(current, visit);
+		};
+		visit(owner.body);
+		if (!usedForPolicy) context.report(node, `parameter=${parameterName}`);
+	}
+});
+
+/** Operational state must be an observation, not a constant that only looks like one. */
+const hardcodedOperationalState = defineRule({
+	id: 'OPS1',
+	severity: 'error',
+	summary: 'operational health or admission state is hard-coded',
+	principles: ['straightforwardness', 'testability'],
+	when: ['ObjectLiteralExpression'],
+	check(node, context) {
+		if (
+			/(?:^|\/)(?:tests?|fixtures?)(?:\/|$)/i.test(context.file) ||
+			/\.(?:test|spec)\.[^/]+$/i.test(context.file)
+		)
+			return;
+		const ts = context.ts;
+		const object = node as import('typescript').ObjectLiteralExpression;
+		const operationalVocabulary =
+			/(?:health|ready|status|operations?|capacity|admission|tenant[-_.]?matrix)/i;
+		const operationalOwner =
+			operationalVocabulary.test(context.file) ||
+			context.ancestors(node).some((parent) => {
+				if (
+					(ts.isVariableDeclaration(parent) ||
+						ts.isPropertyAssignment(parent) ||
+						ts.isFunctionDeclaration(parent) ||
+						ts.isMethodDeclaration(parent)) &&
+					parent.name !== undefined &&
+					ts.isIdentifier(parent.name)
+				)
+					return operationalVocabulary.test(parent.name.text);
+				return false;
+			});
+		if (!operationalOwner) return;
+		const properties = new Map<string, import('typescript').Expression>();
+		for (const property of object.properties) {
+			if (!ts.isPropertyAssignment(property)) continue;
+			const name = property.name;
+			if (ts.isIdentifier(name) || ts.isStringLiteral(name)) {
+				properties.set(name.text, property.initializer);
+			}
+		}
+		const health = properties.get('health') ?? properties.get('status');
+		const accepting = properties.get('accepting');
+		const outstanding = properties.get('outstanding');
+		const fixedHealth =
+			health !== undefined && ts.isStringLiteral(health) && health.text === 'ready';
+		const fixedAdmission =
+			accepting?.kind === ts.SyntaxKind.TrueKeyword &&
+			outstanding !== undefined &&
+			ts.isNumericLiteral(outstanding) &&
+			Number(outstanding.text) === 0;
+		if (fixedHealth || fixedAdmission) {
+			context.report(
+				node,
+				fixedHealth ? 'claim=readiness:ready' : 'claim=accepting:true,outstanding:0'
+			);
+		}
+	}
+});
+
+/** Node owns dotenv grammar; a local parser is both incomplete and another concept to maintain. */
+const customEnvParser = defineRule({
+	id: 'NODE1',
+	severity: 'error',
+	summary: 'source reimplements Node built-in environment parsing',
+	principles: ['simplicity', 'straightforwardness', 'no-bloat'],
+	when: ['FunctionDeclaration', 'MethodDeclaration', 'VariableDeclaration', 'PropertyAssignment'],
+	check(node, context) {
+		const ts = context.ts;
+		const callable = ts.isFunctionDeclaration(node)
+			? node
+			: ts.isMethodDeclaration(node)
+				? node
+				: ts.isVariableDeclaration(node) &&
+					  node.initializer !== undefined &&
+					  (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+					? node.initializer
+					: ts.isPropertyAssignment(node) &&
+						  (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+						? node.initializer
+						: undefined;
+		if (callable?.body === undefined) return;
+		const declarationName = ts.isFunctionDeclaration(node)
+			? (node.name?.text ?? '')
+			: ts.isMethodDeclaration(node) && ts.isIdentifier(node.name)
+				? node.name.text
+				: ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)
+					? node.name.text
+					: ts.isPropertyAssignment(node) && ts.isIdentifier(node.name)
+						? node.name.text
+						: '';
+		if (
+			!/(?:env|dotenv|environment)/i.test(declarationName) &&
+			!/(?:^|\/)(?:scripts?|config|bootstrap|tests?\/support)(?:\/|$)/i.test(context.file)
+		)
+			return;
+		let splitsLines = false;
+		let parsesAssignment = false;
+		const visit = (current: import('typescript').Node): void => {
+			if (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
+				const method = current.expression.name.text;
+				const [argument] = current.arguments;
+				const argumentText = argument === undefined ? '' : context.text(argument);
+				const assignmentText = `${context.text(current.expression.expression)} ${argumentText}`;
+				if (
+					method === 'split' &&
+					argument !== undefined &&
+					((ts.isStringLiteral(argument) && /(?:\r|\n|\\r|\\n)/.test(argument.text)) ||
+						(ts.isRegularExpressionLiteral(argument) &&
+							/\\[rn]|\[.*\\r.*\\n.*\]/.test(argument.text)))
+				)
+					splitsLines = true;
+				if (
+					['split', 'indexOf', 'startsWith', 'match', 'exec', 'search'].includes(method) &&
+					assignmentText.includes('=')
+				)
+					parsesAssignment = true;
+			}
+			ts.forEachChild(current, visit);
+		};
+		visit(callable.body);
+		const body = context.text(callable.body);
+		const buildsEnvironment =
+			/Object\.fromEntries|process\.env|\w+\s*\[[^\]]+\]\s*=|return\s+\w+/.test(body);
+		if (splitsLines && parsesAssignment && buildsEnvironment)
+			context.report(node, 'prefer=node:util.parseEnv');
+	}
+});
+
+/** Node can recurse through an unpruned directory tree without a handwritten visitor. */
+const customDirectoryRecursion = defineRule({
+	id: 'NODE2',
+	severity: 'error',
+	summary: 'unpruned recursive directory walk reimplements node:fs',
+	principles: ['simplicity', 'efficiency', 'no-bloat'],
+	when: ['SourceFile'],
+	check(node, context) {
+		const ts = context.ts;
+		type Callable = Readonly<{
+			name: string;
+			node: import('typescript').FunctionLikeDeclaration;
+			body: import('typescript').ConciseBody;
+		}>;
+		const callables = new Map<string, Callable>();
+		const collect = (current: import('typescript').Node): void => {
+			let found: Callable | undefined;
+			if (
+				ts.isFunctionDeclaration(current) &&
+				current.name !== undefined &&
+				current.body !== undefined
+			)
+				found = { name: current.name.text, node: current, body: current.body };
+			else if (
+				ts.isMethodDeclaration(current) &&
+				ts.isIdentifier(current.name) &&
+				current.body !== undefined
+			)
+				found = { name: current.name.text, node: current, body: current.body };
+			else if (
+				ts.isVariableDeclaration(current) &&
+				ts.isIdentifier(current.name) &&
+				current.initializer !== undefined &&
+				(ts.isArrowFunction(current.initializer) || ts.isFunctionExpression(current.initializer))
+			)
+				found = {
+					name: current.name.text,
+					node: current.initializer,
+					body: current.initializer.body
+				};
+			if (found !== undefined) callables.set(found.name, found);
+			ts.forEachChild(current, collect);
+		};
+		collect(node);
+		const pruneVocabulary = /\b(?:exclude|ignore|prun|skip|descendInto|ignoredFile)\w*\b/i;
+		const contains = (
+			owner: import('typescript').Node,
+			child: import('typescript').Node
+		): boolean => owner.pos <= child.pos && owner.end >= child.end;
+		const exitsBranch = (branch: import('typescript').Statement): boolean => {
+			let exits = false;
+			const visit = (current: import('typescript').Node): void => {
+				if (
+					ts.isContinueStatement(current) ||
+					ts.isReturnStatement(current) ||
+					ts.isThrowStatement(current)
+				)
+					exits = true;
+				if (!exits) ts.forEachChild(current, visit);
+			};
+			visit(branch);
+			return exits;
+		};
+		const conditionalPrunes = (
+			conditional: import('typescript').IfStatement,
+			call: import('typescript').CallExpression
+		): boolean => {
+			if (!pruneVocabulary.test(context.text(conditional.expression))) return false;
+			if (conditional.elseStatement !== undefined && contains(conditional.elseStatement, call))
+				return true;
+			return (
+				contains(conditional.thenStatement, call) &&
+				/(?:!|===?\s*false|!==?\s*true)/.test(context.text(conditional.expression))
+			);
+		};
+		const priorGuardPrunes = (
+			block: import('typescript').Block,
+			call: import('typescript').CallExpression
+		): boolean => {
+			const containingIndex = block.statements.findIndex((statement) => contains(statement, call));
+			if (containingIndex < 0) return false;
+			return block.statements
+				.slice(0, containingIndex)
+				.some(
+					(statement) =>
+						ts.isIfStatement(statement) &&
+						pruneVocabulary.test(context.text(statement.expression)) &&
+						exitsBranch(statement.thenStatement)
+				);
+		};
+		const isPruned = (
+			call: import('typescript').CallExpression,
+			owner: import('typescript').FunctionLikeDeclaration
+		): boolean => {
+			const ancestors = context.ancestors(call);
+			const ownerIndex = ancestors.indexOf(owner);
+			return (ownerIndex < 0 ? ancestors : ancestors.slice(0, ownerIndex)).some(
+				(ancestor) =>
+					(ts.isIfStatement(ancestor) && conditionalPrunes(ancestor, call)) ||
+					(ts.isBlock(ancestor) && priorGuardPrunes(ancestor, call))
+			);
+		};
+		const readsDirectory = new Set<string>();
+		const edges = new Map<string, Set<string>>();
+		for (const callable of callables.values()) {
+			const outgoing = new Set<string>();
+			const visit = (current: import('typescript').Node): void => {
+				if (ts.isCallExpression(current)) {
+					const callee = context.calleeName(current) ?? '';
+					if (/(?:^|\.)(?:readdir|readdirSync)$/.test(callee)) {
+						const options = current.arguments[1];
+						if (options === undefined || !/\brecursive\s*:\s*true\b/.test(context.text(options)))
+							readsDirectory.add(callable.name);
+					}
+					const target = callee.split('.').at(-1);
+					if (target !== undefined && callables.has(target) && !isPruned(current, callable.node))
+						outgoing.add(target);
+				}
+				ts.forEachChild(current, visit);
+			};
+			visit(callable.body);
+			edges.set(callable.name, outgoing);
+		}
+		const reachable = (from: string, target: string, seen: Set<string>): boolean => {
+			for (const next of edges.get(from) ?? []) {
+				if (next === target) return true;
+				if (!seen.has(next)) {
+					seen.add(next);
+					if (reachable(next, target, seen)) return true;
+				}
+			}
+			return false;
+		};
+		const reachesDirectoryRead = (from: string, seen: Set<string>): boolean => {
+			if (readsDirectory.has(from)) return true;
+			for (const next of edges.get(from) ?? []) {
+				if (seen.has(next)) continue;
+				seen.add(next);
+				if (reachesDirectoryRead(next, seen)) return true;
+			}
+			return false;
+		};
+		for (const callable of callables.values()) {
+			if (
+				reachable(callable.name, callable.name, new Set([callable.name])) &&
+				reachesDirectoryRead(callable.name, new Set([callable.name]))
+			) {
+				context.report(callable.node, `walker=${callable.name} prefer=readdir-recursive`);
+				return;
+			}
+		}
+	}
+});
+
+/** Node's CLI parser owns flag spelling, repeats, `--name=value`, and unknown-option rejection. */
+const customArgumentParser = defineRule({
+	id: 'NODE3',
+	severity: 'error',
+	summary: 'command entrypoint reimplements node:util parseArgs',
+	principles: ['simplicity', 'straightforwardness', 'no-bloat'],
+	when: ['SourceFile'],
+	check(node, context) {
+		const ts = context.ts;
+		if (
+			!/(?:^|\/)(?:scripts?|bin)(?:\/|$)|(?:cli|command)(?:[-_.][^/]*)?\.[cm]?[jt]s$/i.test(
+				context.file
+			)
+		)
+			return;
+		const source = context.text(node);
+		if (!/process\.argv/.test(source)) return;
+		const optionNames = new Set<string>();
+		let manualSearch = false;
+		const visit = (current: import('typescript').Node): void => {
+			if (
+				ts.isStringLiteral(current) &&
+				/^(?:--[a-z][a-z0-9-]*|-[a-zA-Z])(?:=|$)/.test(current.text)
+			)
+				optionNames.add(current.text.replace(/=.*/, ''));
+			if (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
+				const method = current.expression.name.text;
+				if (
+					['find', 'findIndex', 'includes', 'indexOf', 'some', 'filter', 'startsWith'].includes(
+						method
+					) &&
+					/(?:--[a-z]|-[a-zA-Z](?:['"`]|\b))/.test(context.text(current))
+				)
+					manualSearch = true;
+			}
+			if (
+				ts.isBinaryExpression(current) &&
+				/(?:--[a-z]|-[a-zA-Z](?:['"`]|\b))/.test(context.text(current))
+			)
+				manualSearch = true;
+			if (
+				ts.isCaseClause(current) &&
+				ts.isStringLiteral(current.expression) &&
+				/^(?:--[a-z]|-[a-zA-Z]$)/.test(current.expression.text)
+			)
+				manualSearch = true;
+			ts.forEachChild(current, visit);
+		};
+		visit(node);
+		if (
+			manualSearch ||
+			(optionNames.size > 0 &&
+				/(?:const|function)\s+(?:flag|option|argumentValue|value|values)\b/.test(source))
+		)
+			context.report(node, `options=${optionNames.size} prefer=node:util.parseArgs`);
+	}
+});
+
+/** A tool named glob must implement glob semantics, not substring search under another name. */
+const fakeGlob = defineRule({
+	id: 'NODE4',
+	severity: 'error',
+	summary: 'glob entrypoint uses substring matching instead of node:fs glob',
+	principles: ['simplicity', 'straightforwardness', 'testability'],
+	when: ['SourceFile'],
+	check(node, context) {
+		const ts = context.ts;
+		let substringMatcher = false;
+		const visit = (current: import('typescript').Node): void => {
+			if (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
+				const owner = context.ancestors(current).find((ancestor) => ts.isFunctionLike(ancestor)) as
+					import('typescript').FunctionLikeDeclaration | undefined;
+				const parent = owner === undefined ? undefined : context.ancestors(owner)[0];
+				const ownerName =
+					owner !== undefined &&
+					'name' in owner &&
+					owner.name !== undefined &&
+					ts.isIdentifier(owner.name)
+						? owner.name.text
+						: parent !== undefined &&
+							  (ts.isVariableDeclaration(parent) || ts.isPropertyAssignment(parent)) &&
+							  ts.isIdentifier(parent.name)
+							? parent.name.text
+							: '';
+				const ownerText = owner === undefined ? '' : context.text(owner);
+				const globEntrypoint =
+					/glob/i.test(ownerName) ||
+					/['"]sandbox_glob['"]/.test(ownerText) ||
+					/(?:^|\/)[^/]*glob[^/]*\.[cm]?[jt]sx?$/.test(context.file);
+				if (
+					globEntrypoint &&
+					['includes', 'indexOf', 'search'].includes(current.expression.name.text) &&
+					/(?:pattern|glob)/i.test(context.text(current))
+				)
+					substringMatcher = true;
+			}
+			if (!substringMatcher) ts.forEachChild(current, visit);
+		};
+		visit(node);
+		if (substringMatcher) context.report(node, 'matcher=substring prefer=node:fs/promises.glob');
+	}
+});
+
+/** Environment must be loaded before module-scope configuration captures `process.env`. */
+const lateEnvironmentLoad = defineRule({
+	id: 'BOOT1',
+	severity: 'error',
+	summary: 'environment file is loaded after configuration is captured',
+	principles: ['straightforwardness', 'testability'],
+	when: ['SourceFile'],
+	check(node, context) {
+		if (
+			!/(?:^|\/)(?:scripts?|bin|bootstrap)(?:\/|$)|(?:server|bootstrap)\.[cm]?[jt]s$/i.test(
+				context.file
+			)
+		)
+			return;
+		const ts = context.ts;
+		const source = node as import('typescript').SourceFile;
+		const importedLoaderNames = (
+			statement: import('typescript').Statement
+		): ReadonlyArray<string> => {
+			if (!ts.isImportDeclaration(statement) || statement.importClause === undefined) return [];
+			const bindings = statement.importClause.namedBindings;
+			if (bindings !== undefined && ts.isNamedImports(bindings))
+				return bindings.elements
+					.filter((element) => (element.propertyName?.text ?? element.name.text) === 'loadEnvFile')
+					.map((element) => element.name.text);
+			if (bindings !== undefined && ts.isNamespaceImport(bindings))
+				return [`${bindings.name.text}.loadEnvFile`];
+			return [];
+		};
+		const loaders = new Set(['loadEnvFile', ...source.statements.flatMap(importedLoaderNames)]);
+		const callables = new Map<string, import('typescript').FunctionLikeDeclaration>();
+		const collectCallable = (current: import('typescript').Node): void => {
+			if (
+				ts.isFunctionDeclaration(current) &&
+				current.name !== undefined &&
+				current.body !== undefined
+			)
+				callables.set(current.name.text, current);
+			else if (
+				ts.isVariableDeclaration(current) &&
+				ts.isIdentifier(current.name) &&
+				current.initializer !== undefined &&
+				(ts.isArrowFunction(current.initializer) || ts.isFunctionExpression(current.initializer))
+			)
+				callables.set(current.name.text, current.initializer);
+			ts.forEachChild(current, collectCallable);
+		};
+		collectCallable(source);
+		type Event = Readonly<{ kind: 'capture' | 'load'; node: import('typescript').Node }>;
+		const events: Array<Event> = [];
+		let execute: (current: import('typescript').Node, active: Set<string>) => void;
+		const executeCall = (
+			current: import('typescript').CallExpression,
+			active: Set<string>
+		): void => {
+			for (const argument of current.arguments) execute(argument, active);
+			let invoked: import('typescript').Expression = current.expression;
+			while (ts.isParenthesizedExpression(invoked)) invoked = invoked.expression;
+			if (ts.isArrowFunction(invoked) || ts.isFunctionExpression(invoked))
+				execute(invoked.body, active);
+			const callee = context.calleeName(current) ?? '';
+			if (loaders.has(callee)) events.push({ kind: 'load', node: current });
+			const localName = callee.split('.').at(-1);
+			if (localName === undefined) return;
+			const local = callables.get(localName);
+			if (local === undefined || active.has(localName)) return;
+			active.add(localName);
+			if (local.body !== undefined) execute(local.body, active);
+			active.delete(localName);
+		};
+		execute = (current: import('typescript').Node, active: Set<string>): void => {
+			if (ts.isFunctionDeclaration(current)) return;
+			if (
+				(ts.isArrowFunction(current) || ts.isFunctionExpression(current)) &&
+				!active.has(context.text(current))
+			)
+				return;
+			if (
+				ts.isPropertyAccessExpression(current) &&
+				ts.isIdentifier(current.expression) &&
+				current.expression.text === 'process' &&
+				current.name.text === 'env'
+			)
+				events.push({ kind: 'capture', node: current });
+			if (ts.isCallExpression(current)) {
+				executeCall(current, active);
+				return;
+			}
+			ts.forEachChild(current, (child) => execute(child, active));
+		};
+		for (const statement of source.statements) execute(statement, new Set());
+		const firstLoad = events.findIndex((event) => event.kind === 'load');
+		if (firstLoad < 0) return;
+		const captured = events.slice(0, firstLoad).find((event) => event.kind === 'capture');
+		if (captured !== undefined) context.report(captured.node, 'order=read-before-loadEnvFile');
+	}
+});
+
 const deepNesting = defineRule({
 	id: 'COMPLEX1',
 	severity: 'error',
@@ -523,6 +1162,14 @@ export const structureRules: ReadonlyArray<Rule> = [
 	catchRethrow,
 	awaitInLoop,
 	identicalBranches,
+	selfModuleEdge,
+	ignoredPolicyIdentity,
+	hardcodedOperationalState,
+	customEnvParser,
+	customDirectoryRecursion,
+	customArgumentParser,
+	fakeGlob,
+	lateEnvironmentLoad,
 	exportStar,
 	deepNesting,
 	silentCatch,

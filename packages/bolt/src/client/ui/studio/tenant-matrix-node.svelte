@@ -32,24 +32,11 @@
 		class="!h-px !w-px !border-0 !bg-transparent !opacity-0"
 	/>
 {:else}
-	<Bound
-		size="full"
-		clip
-		pad="sm"
-		class={[
-			'rounded-md border bg-card shadow-card',
-			data.healthy ? 'border-border' : 'border-amber-500/70'
-		]}
-	>
+	<Bound size="full" clip pad="sm" class="rounded-md border border-border bg-card shadow-card">
 		<Stack gap="xs" fill>
 			<Inline justify="between" align="center" gap="sm">
 				<span class="min-w-0 truncate text-xs font-semibold text-foreground">{data.title}</span>
-				<span
-					class={[
-						'shrink-0',
-						data.healthy ? 'text-micro text-muted-foreground' : 'text-micro text-amber-500'
-					]}
-				>
+				<span class="shrink-0 text-micro text-muted-foreground">
 					{data.status}
 				</span>
 			</Inline>

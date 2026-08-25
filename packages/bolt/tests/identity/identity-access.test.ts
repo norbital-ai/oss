@@ -40,33 +40,9 @@ describe('Identity and AccessControl owners', () => {
 			reason: 'no matching allow policy'
 		});
 	});
-	it('does not turn administrator status into an implicit grant', () => {
+	it('leaves authored-resource classification to the access service', () => {
 		const administrator = { ...subject, admin: true };
 		expect(decide([], administrator, 'read', 'people', held())).toEqual({
-			allowed: false,
-			reason: 'no matching allow policy'
-		});
-	});
-	it('selects only coordinates explicitly declared by an administrator policy', () => {
-		const administrator = { ...subject, admin: true };
-		const policies = [
-			{
-				name: 'workspace-administration',
-				effect: 'allow' as const,
-				administrator: true,
-				actions: ['manage'],
-				capabilities: { apps: ['identity', 'secrets'] }
-			}
-		];
-		expect(decide(policies, administrator, 'manage', 'identity', held())).toEqual({
-			allowed: true,
-			reason: 'explicit allow'
-		});
-		expect(decide(policies, administrator, 'manage', 'secrets', held())).toEqual({
-			allowed: true,
-			reason: 'explicit allow'
-		});
-		expect(decide(policies, administrator, 'read', 'people', held())).toEqual({
 			allowed: false,
 			reason: 'no matching allow policy'
 		});

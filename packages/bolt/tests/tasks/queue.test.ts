@@ -3,7 +3,17 @@ import { Effect } from 'effect';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildSchemaPlan } from '../../src/compiler/schema-plan.js';
 import type { WorkspaceDefinition } from '../../src/authoring/workspace-schema.js';
-import { makeQueue, slotEffectId, type ExecuteStatements } from '../../src/runtime/tasks/queue.js';
+import {
+	dequeueStatement,
+	enqueueStatements,
+	interruptLaneStatement,
+	makeQueue,
+	reorderStatements,
+	resumeLaneStatements,
+	slotEffectId,
+	stopLaneStatements,
+	type ExecuteStatements
+} from '../../src/runtime/tasks/queue.js';
 import { makeRunner, type Run } from '../../src/runtime/tasks/runner.js';
 
 /**
@@ -25,7 +35,9 @@ const taskSchemaSteps = () =>
 		relations: []
 	} as unknown as WorkspaceDefinition).steps.filter(
 		(step) =>
-			step.id.startsWith('collection:bolt_task') || step.id.startsWith('collection:bolt_schedule')
+			step.id.startsWith('collection:bolt_task') ||
+			step.id.startsWith('collection:bolt_schedule') ||
+			step.id.startsWith('collection:agent_mailbox')
 	);
 
 const at = (iso: string): number => Date.parse(iso);
@@ -117,7 +129,7 @@ describe('bolt task queue over a host facility', () => {
 	const tasks = async () =>
 		(
 			await database.query<Record<string, unknown>>(
-				'select id, command, status, attempts, max_attempts, effect_id, error, result, run_at from bolt_task order by created_at, effect_id'
+				'select id, command, lane, position, status, attempts, max_attempts, effect_id, error, result, run_at from bolt_task order by created_at, effect_id'
 			)
 		).rows;
 
@@ -382,10 +394,9 @@ describe('bolt task queue over a host facility', () => {
 			const taken = await queue().take([], { hideForMillis: 60_000, batchSize: 5 });
 			expect(taken.map((task) => task.effectId)).toEqual(['one']);
 			expect(taken[0]?.attempts).toBe(1);
-			// The row is still `pending` — hiding is `run_at` in the future and nothing else, which is
-			// why a run that dies needs no reaper.
+			// The row is visibly `running`; its future `run_at` is the crash-recovery lease.
 			const [row] = await tasks();
-			expect(row?.status).toBe('pending');
+			expect(row?.status).toBe('running');
 			expect(await queue().take([], { hideForMillis: 60_000, batchSize: 5 })).toEqual([]);
 		});
 
@@ -459,10 +470,9 @@ describe('bolt task queue over a host facility', () => {
 
 		it('preserves cancellation when an in-flight worker finishes later', async () => {
 			const task = await takeOne('cancelled-in-flight');
-			// `take` has handed the row to a worker but intentionally leaves its durable state pending.
-			// Cancellation can therefore race with either a success or failure reported by that worker.
+			// Cancellation can race with either a success or failure reported by that worker.
 			await database.query(
-				"update bolt_task set status = 'failed', error = 'cancelled' where effect_id = $1 and status = 'pending'",
+				"update bolt_task set status = 'failed', error = 'cancelled' where effect_id = $1 and status = 'running'",
 				['cancelled-in-flight']
 			);
 			await queue().finish([{ _tag: 'Done', task, result: { delivered: 2 } }]);
@@ -478,7 +488,7 @@ describe('bolt task queue over a host facility', () => {
 		it('fences a stopped in-flight run and reclaims the same row only after its lease', async () => {
 			const task = await takeOne('stopped-in-flight');
 			await database.query(
-				"update bolt_task set status = 'paused' where effect_id = $1 and status = 'pending'",
+				"update bolt_task set status = 'paused' where effect_id = $1 and status = 'running'",
 				['stopped-in-flight']
 			);
 			// A late answer from the old guest cannot turn the stopped row terminal.
@@ -499,7 +509,7 @@ describe('bolt task queue over a host facility', () => {
 			await database.exec("update bolt_task set run_at = now() - interval '1 second'");
 			const [resumed] = await queue().take([], { hideForMillis: 60_000, batchSize: 1 });
 			expect(resumed).toMatchObject({ effectId: 'stopped-in-flight', attempts: 2 });
-			expect((await tasks())[0]?.status).toBe('pending');
+			expect((await tasks())[0]?.status).toBe('running');
 		});
 
 		it('spaces a failure out rather than sleeping on it', async () => {
@@ -559,6 +569,76 @@ describe('bolt task queue over a host facility', () => {
 				'new-done',
 				'new-failed'
 			]);
+		});
+	});
+
+	describe('serial agent lanes', () => {
+		const lane = 'conversation-agent';
+		const command = 'agents.execute';
+		const enqueueLane = async (...effectIds: ReadonlyArray<string>) =>
+			runStatements(
+				enqueueStatements(
+					effectIds.map((effectId) => ({
+						command,
+						input: { conversationId: lane, turnId: effectId, agent: 'web' },
+						effectId,
+						lane
+					}))
+				)
+			);
+
+		it('runs only the first due item in a lane until that item settles', async () => {
+			await enqueueLane('first', 'second');
+			const [first] = await queue().take([], { hideForMillis: 60_000, batchSize: 10 });
+			expect(first?.effectId).toBe('first');
+			expect(await queue().take([], { hideForMillis: 60_000, batchSize: 10 })).toEqual([]);
+			if (first === undefined) throw new Error('first lane item was not claimed');
+			await queue().finish([{ _tag: 'Done', task: first, result: null }]);
+			const [second] = await queue().take([], { hideForMillis: 60_000, batchSize: 10 });
+			expect(second?.effectId).toBe('second');
+		});
+
+		it('reorders, dequeues, stops, resumes, and interrupts the same durable rows', async () => {
+			await enqueueLane('one', 'two', 'three');
+			await runStatements(reorderStatements(lane, command, ['three', 'one', 'two']));
+			const ordered = await database.query<{ effect_id: string }>(
+				`select effect_id from bolt_task
+				 where lane = $1 and status in ('pending', 'paused', 'resuming')
+				 order by position`,
+				[lane]
+			);
+			expect(ordered.rows.map(({ effect_id }) => effect_id)).toEqual(['three', 'one', 'two']);
+
+			await runStatements([dequeueStatement('one', lane, command)]);
+			expect((await tasks()).find(({ effect_id }) => effect_id === 'one')?.status).toBe('dequeued');
+			const [running] = await queue().take([], { hideForMillis: 60_000, batchSize: 1 });
+			expect(running?.effectId).toBe('three');
+
+			await runStatements(stopLaneStatements(lane, command));
+			expect(
+				(await database.query<{ status: string }>(
+					'select status from agent_mailbox where conversation_id = $1',
+					[lane]
+				)).rows[0]?.status
+			).toBe('paused');
+			expect(
+				(await tasks())
+					.filter(({ effect_id }) => effect_id === 'three' || effect_id === 'two')
+					.map(({ status }) => status)
+			).toEqual(['paused', 'paused']);
+			if (running === undefined) throw new Error('first reordered item was not claimed');
+			await queue().finish([{ _tag: 'Done', task: running, result: null }]);
+			expect((await tasks()).find(({ effect_id }) => effect_id === 'three')?.status).toBe('paused');
+
+			await runStatements(resumeLaneStatements(lane, command));
+			const [resumed] = await queue().take([], { hideForMillis: 60_000, batchSize: 1 });
+			expect(resumed?.effectId).toBe('three');
+			await runStatements([interruptLaneStatement(lane, command)]);
+			expect((await tasks()).find(({ effect_id }) => effect_id === 'three')?.status).toBe(
+				'interrupted'
+			);
+			const [remaining] = await queue().take([], { hideForMillis: 60_000, batchSize: 1 });
+			expect(remaining?.effectId).toBe('two');
 		});
 	});
 

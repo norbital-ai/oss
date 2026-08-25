@@ -15,9 +15,6 @@ import { toPanelMessages } from '#lib/client/ui/agent/transcript.js';
 type AgentOrbStatusKey =
 	'bolt.shell.workspaceAgentDescription' | 'bolt.agent.working' | 'bolt.agent.failed';
 
-/** A running turn with no agent output for this long is treated as failed so the composer unlocks. */
-export const AGENT_TURN_STALE_MS = 60_000;
-
 /** Copy key for the live orb — ready keeps the sheet description, the rest name what is happening. */
 export function agentOrbStatusKey(state: ThinkingOrbState): AgentOrbStatusKey {
 	switch (state) {
@@ -65,8 +62,8 @@ type AgentOrbStateInput = Readonly<{
 export function agentOrbState(input: AgentOrbStateInput): ThinkingOrbState {
 	const messages = input.messages ?? [];
 	const turns = input.turns ?? [];
-	const root = [...turns].filter((turn) => turn.subagent_id == null).at(-1);
-	if (input.failed === true || root?.status === 'failed' || root?.status === 'aborted') {
+	const root = [...turns].filter((turn) => turn.parent_agent_id == null).at(-1);
+	if (input.failed === true || root?.status === 'failed') {
 		return 'error';
 	}
 	const running = input.pending === true || root?.status === 'running' || root?.status === 'queued';

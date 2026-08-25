@@ -42,6 +42,9 @@ afterEach(async () => {
 	harness = undefined;
 });
 
+/** Requests approval through the authored `admin` team policy; administrator status bypasses it. */
+const policySubject = { ...adminSubject, admin: false };
+
 const gatedWorkspace = workspace({
 	name: 'test-workspace',
 	version: '1',
@@ -99,7 +102,7 @@ describe('approval gate over SQL', () => {
 			Effect.flip(
 				Effect.gen(function* () {
 					const collections = yield* Collections.Service;
-					yield* collections.create(effectId('create-held'), adminSubject, {
+					yield* collections.create(effectId('create-held'), policySubject, {
 						collection: 'people',
 						id: rid('person-1'),
 						values: { name: 'Ada' }
@@ -127,7 +130,7 @@ describe('approval gate over SQL', () => {
 		const failure = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(effectId('create-held'), adminSubject, {
+					yield* (yield* Collections.Service).create(effectId('create-held'), policySubject, {
 						collection: 'people',
 						id: rid('person-2'),
 						values: { name: 'Grace' }
@@ -164,7 +167,7 @@ describe('approval gate over SQL', () => {
 		const failure = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(effectId('create-decided'), adminSubject, {
+					yield* (yield* Collections.Service).create(effectId('create-decided'), policySubject, {
 						collection: 'people',
 						id: rid('person-decided'),
 						values: { name: 'Margaret' }
@@ -219,7 +222,7 @@ describe('approval gate over SQL', () => {
 			await harness.database.query('select recipient, payload from bolt_notifications')
 		).toEqual([
 			expect.objectContaining({
-				recipient: adminSubject.userId,
+				recipient: policySubject.userId,
 				payload: expect.objectContaining({
 					approvalRequestId: failure.requestId,
 					status: 'APPROVED'
@@ -239,7 +242,7 @@ describe('approval gate over SQL', () => {
 				Effect.gen(function* () {
 					yield* (yield* Collections.Service).create(
 						effectId('create-admin-superseded'),
-						adminSubject,
+						policySubject,
 						{
 							collection: 'people',
 							id: rid('person-admin-superseded'),
@@ -313,7 +316,7 @@ describe('approval gate over SQL', () => {
 		const failure = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).createMany(effectId('create-many'), adminSubject, [
+					yield* (yield* Collections.Service).createMany(effectId('create-many'), policySubject, [
 						{ collection: 'people', id: rid('person-4'), values: { name: 'Ada' } },
 						{ collection: 'people', id: rid('person-5'), values: { name: 'Grace' } }
 					]);
@@ -333,7 +336,7 @@ describe('approval gate over SQL', () => {
 		await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(effectId('create-held'), adminSubject, {
+					yield* (yield* Collections.Service).create(effectId('create-held'), policySubject, {
 						collection: 'people',
 						id: rid('person-6'),
 						values: { name: 'Ada' }

@@ -23,8 +23,8 @@ const ManifestValues = {
 };
 export const fingerprint = ManifestValues.fingerprint;
 
-export const ManifestInput = Schema.Struct({ artifactId: Schema.NonEmptyString });
-export interface ManifestInput extends Schema.Schema.Type<typeof ManifestInput> {}
+const ManifestInput = Schema.Struct({ artifactId: Schema.NonEmptyString });
+interface ManifestInput extends Schema.Schema.Type<typeof ManifestInput> {}
 
 export const buildManifest = (
 	workspace: WorkspaceDefinition,

@@ -18,7 +18,6 @@ export type MatrixEntry = Readonly<{
 	readonly environmentId: string;
 	readonly releaseId: string;
 	readonly artifactId: string;
-	readonly health: string;
 	readonly ownerEpoch: string;
 }>;
 
@@ -82,9 +81,6 @@ type StudioEnvironment = Readonly<{
 	readonly label: string;
 	readonly releaseId: string;
 	readonly artifactId: string;
-	readonly health: string;
-	/** Live is the shared production runtime; it is read-only in the Studio. */
-	readonly readOnly: boolean;
 }>;
 
 /**
@@ -229,9 +225,7 @@ export const studioEnvironments = (
 			// Live is named as itself; anything else is a workbench identifier shown as words.
 			label: entry.environmentId === LIVE ? 'Live' : humanize(entry.environmentId),
 			releaseId: entry.releaseId,
-			artifactId: entry.artifactId,
-			health: entry.health,
-			readOnly: entry.environmentId === LIVE
+			artifactId: entry.artifactId
 		});
 	}
 	if (seen.size === 0) {
@@ -240,9 +234,7 @@ export const studioEnvironments = (
 				id: LIVE,
 				label: 'Live',
 				releaseId: '',
-				artifactId: '',
-				health: 'unknown',
-				readOnly: true
+				artifactId: ''
 			}
 		];
 	}
@@ -281,17 +273,15 @@ export type ReleaseControls = Readonly<{
 
 type ReleaseControlInput = Readonly<{
 	readonly busy: boolean;
-	readonly accepting: boolean;
 	readonly hasRelease: boolean;
 }>;
 
 /**
  * What an operator may do to this environment right now.
  *
- * Nothing is actionable while a command is in flight or the host has stopped accepting work —
- * issuing a build into a draining host is how a release ends up half-applied. Live refuses
- * authoring but still allows a rollback, because rolling back is how a bad release is undone and
- * the environment that has one is exactly the one that is live.
+ * Nothing is actionable while Studio is loading or a command is in flight. Preview and Review
+ * always operate on the personal workbench; rollback operates on the routed environment when it
+ * has a release.
  */
 export const releaseControls = (input: ReleaseControlInput): ReleaseControls => {
 	if (input.busy) {
@@ -299,25 +289,18 @@ export const releaseControls = (input: ReleaseControlInput): ReleaseControls => 
 			canPreview: false,
 			canRequestReview: false,
 			canRollback: false,
-			reason: 'A command is already running.'
-		};
-	}
-	if (!input.accepting) {
-		return {
-			canPreview: false,
-			canRequestReview: false,
-			canRollback: false,
-			reason: 'The host is draining and is not accepting work.'
+			reason: 'Studio is loading or a command is already running.'
 		};
 	}
 	return { canPreview: true, canRequestReview: true, canRollback: input.hasRelease };
 };
 
 /**
- * What the workspace declares, as `workspace.manifest` publishes it.
+ * What the workspace declares, as `workspace.authoringManifest` publishes it.
  *
- * The command filters collections by the caller's read predicate, so this is not the whole
- * workspace — it is the part this subject may see, which is exactly what the Studio should list.
+ * This is the authored workspace model, never runtime-owned collections. The command is restricted
+ * to administrators, who already have complete workspace access unless they are actively previewing
+ * a team.
  * `description` and `icon` are decoded because the projection now carries them and they are what
  * names a collection to a reader; the field extras are decoded because the Model tab is the only
  * surface that can show an enum's members or mark a searchable column.
@@ -635,19 +618,16 @@ const meteredQuantity = new Intl.NumberFormat('en', {
 });
 
 /**
- * Operations' four resource tiles, each backed by something the host actually reported.
+ * Operations' resource tiles, each backed by something the host actually reported.
  *
  * Host disk is the authored source the tenant is holding, which the snapshot carries in full, so
  * it is measured here rather than asked for. The database and object-storage tiles read the
  * tenant's own metered usage; a kind the meter never observed yields `undefined` rather than a
- * zero, because this host meters lazily and an unobserved tenant is not an empty one. Workbench
- * inventory is the union of the host's open sessions and the trees materialized under the tenant,
- * reported by `Workbench.inventory` — a count of zero is a tenant with no workbenches.
+ * zero, because this host meters lazily and an unobserved tenant is not an empty one.
  */
 export const studioMetrics = (input: {
 	readonly usage: ReadonlyArray<UsageObservation>;
 	readonly source: SourceSnapshot | undefined;
-	readonly workbenches?: ReadonlyArray<{ readonly workspaceKey: string; readonly open: boolean }>;
 }): ReadonlyArray<StudioMetric> => {
 	/** Totals one meter kind, staying `undefined` when the meter observed the tenant not at all. */
 	const metered = (kind: string): number | undefined =>
@@ -661,9 +641,6 @@ export const studioMetrics = (input: {
 	const sourceBytes = files.reduce((total, contents) => total + contents.length, 0);
 	const database = metered('database');
 	const objects = metered('files');
-	const workbenches = input.workbenches ?? [];
-	const open = workbenches.filter((workbench) => workbench.open).length;
-	const materialized = workbenches.length - open;
 	return [
 		{
 			id: 'host-disk',
@@ -685,13 +662,6 @@ export const studioMetrics = (input: {
 			icon: 'lucide:package-open',
 			value: objects === undefined ? undefined : meteredQuantity.format(objects),
 			detail: 'Metered file usage for this tenant. The object store reports no size.'
-		},
-		{
-			id: 'workbenches',
-			label: 'Governed workbenches',
-			icon: 'lucide:boxes',
-			value: String(workbenches.length),
-			detail: `${plural(open, 'open session')}, ${plural(materialized, 'materialized tree')} under this tenant.`
 		}
 	];
 };

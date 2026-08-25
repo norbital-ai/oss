@@ -1,7 +1,5 @@
-import { Context, Effect, Layer, Schema } from 'effect';
+import { Schema } from 'effect';
 import type { WorkspaceDefinition } from '../authoring/workspace-schema.js';
-import { buildManifest, type ManifestInput } from '../manifest/manifest.js';
-import { buildSchemaPlan, type SchemaPlan } from './schema-plan.js';
 
 /**
  * Every exact name an application capability may grant.
@@ -59,72 +57,3 @@ const CompilerValues = {
 };
 export const discoverWorkspace = CompilerValues.discover;
 export const generateWorkspaceTypes = CompilerValues.generateTypes;
-
-/** Carries compilation error through the typed compiler failure channel without losing diagnostic context. */
-class CompilationError extends Schema.TaggedError<CompilationError>()(
-	'Bolt.Compiler.CompilationError',
-	{
-		message: Schema.NonEmptyString
-	}
-) {
-	readonly category = 'workspace-compilation' as const;
-	readonly retryable = false;
-	readonly phase = 'compile' as const;
-}
-
-type Compilation = Readonly<{
-	readonly workspace: WorkspaceDefinition;
-	readonly manifest: ReturnType<typeof buildManifest>;
-	readonly schemaPlan: SchemaPlan;
-	readonly generatedTypes: string;
-}>;
-
-type Interface = Readonly<{
-	readonly discover: (
-		candidates: ReadonlyArray<WorkspaceDefinition>
-	) => Effect.Effect<WorkspaceDefinition, DiscoveryError>;
-	readonly compile: (
-		workspace: WorkspaceDefinition,
-		input: ManifestInput
-	) => Effect.Effect<Compilation, CompilationError>;
-	readonly check: (workspace: WorkspaceDefinition) => Effect.Effect<void, CompilationError>;
-	readonly buildManifest: typeof buildManifest;
-	readonly buildSchemaPlan: typeof buildSchemaPlan;
-}>;
-
-/** Identifies the compiler service in Effect's context so dependency wiring remains explicit and type checked. */
-const Service = Context.Service<Interface>('@norbital-ai/bolt/Compiler');
-
-const checkWorkspace = Effect.fn('Compiler.check')(function* (workspace: WorkspaceDefinition) {
-	const names = workspace.collections.map(({ name }) => name);
-	if (new Set(names).size !== names.length) {
-		return yield* new CompilationError({ message: 'Collection names must be unique' });
-	}
-	const appNames = workspace.apps.map(({ name }) => name);
-	if (new Set(appNames).size !== appNames.length) {
-		return yield* new CompilationError({ message: 'Application names must be unique' });
-	}
-});
-
-const layer = Layer.succeed(
-	Service,
-	Service.of({
-		discover: Effect.fn('Compiler.discover')(function* (candidates) {
-			const found = discoverWorkspace(candidates);
-			if (found instanceof DiscoveryError) return yield* found;
-			return found;
-		}),
-		compile: Effect.fn('Compiler.compile')(function* (workspace, input) {
-			yield* checkWorkspace(workspace);
-			return {
-				workspace,
-				manifest: buildManifest(workspace, input),
-				schemaPlan: buildSchemaPlan(workspace),
-				generatedTypes: generateWorkspaceTypes(workspace)
-			};
-		}),
-		check: checkWorkspace,
-		buildManifest,
-		buildSchemaPlan
-	})
-);

@@ -36,7 +36,6 @@
 		view = 'manifest',
 		selected = 'collections',
 		expanded = [],
-		readOnly = false,
 		onselect,
 		ontoggle
 	}: {
@@ -46,7 +45,6 @@
 		view?: WorkbenchView;
 		selected?: string;
 		expanded?: ReadonlyArray<string>;
-		readOnly?: boolean;
 		onselect?: (key: string) => void;
 		ontoggle?: (id: string) => void;
 	} = $props();
@@ -65,7 +63,7 @@
 		type: entry.type,
 		path: entry.path,
 		sizeBytes: entry.sizeBytes,
-		writable: !readOnly
+		writable: true
 	});
 
 	const browseEntries = $derived(sourceTreeChildren(files, '', fileSizes).map(toFileTreeEntry));

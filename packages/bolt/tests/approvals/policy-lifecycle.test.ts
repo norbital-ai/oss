@@ -24,6 +24,9 @@ import {
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
 
+/** Exercises authored lifecycle policy; administrator status bypasses its approval gates. */
+const policySubject = { ...adminSubject, admin: false };
+
 const events: Array<string> = [];
 const decisionContexts: Array<unknown> = [];
 const objectAt = (context: unknown, key: string): Readonly<Record<string, unknown>> => {
@@ -239,7 +242,7 @@ describe('policy and hook lifecycle', () => {
 		const id = recordId('lifecycle-record');
 
 		const created = await pendingRequest(
-			service.create(harness.effectId('create'), adminSubject, {
+			service.create(harness.effectId('create'), policySubject, {
 				collection: 'records',
 				id,
 				values: { title: 'Draft' }
@@ -257,7 +260,7 @@ describe('policy and hook lifecycle', () => {
 		events.length = 0;
 		decisionContexts.length = 0;
 		const updated = await pendingRequest(
-			service.update(harness.effectId('update'), adminSubject, {
+			service.update(harness.effectId('update'), policySubject, {
 				collection: 'records',
 				id,
 				values: { title: 'Final' }
@@ -278,7 +281,7 @@ describe('policy and hook lifecycle', () => {
 		events.length = 0;
 		decisionContexts.length = 0;
 		const deleted = await pendingRequest(
-			service.delete(harness.effectId('delete'), adminSubject, 'records', id)
+			service.delete(harness.effectId('delete'), policySubject, 'records', id)
 		);
 		expect(events).toEqual([
 			'delete.before:updated-prepared',

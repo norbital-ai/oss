@@ -24,4 +24,15 @@ describe('agent UI source audit', () => {
 			expect(source, file).not.toMatch(/export\s+const\s+pod\b/);
 		}
 	});
+
+	it('drives mailbox controls from sync-backed live collections without polling', () => {
+		const panel = readFileSync(join(boltAgent, 'agent-chat-panel.svelte'), 'utf8');
+		expect(panel).toContain('runtime.client.db.agent_run.findMany');
+		expect(panel).toContain('runtime.client.db.agent_mailbox.findMany');
+		expect(panel).toContain('runtime.client.system.agents.dequeue');
+		expect(panel).toContain('runtime.client.system.agents.reorder');
+		expect(panel).toContain("action: 'interrupt' | 'stop' | 'resume'");
+		expect(panel).toContain('runtime.client.system.agents[action]');
+		expect(panel).not.toMatch(/setInterval|setTimeout|EventSource|WebSocket/);
+	});
 });

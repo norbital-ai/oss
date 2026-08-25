@@ -105,7 +105,7 @@ describe('instance 3 — every task row written is announced to the host', () =>
 	 */
 	const files = runtimeFiles();
 
-	it('enqueue announces before it writes, so its callers cannot get it wrong', () => {
+	it('enqueue announces after it commits, so an immediate host tick sees durable work', () => {
 		const tasks = readFileSync(join(RUNTIME, 'tasks/tasks.ts'), 'utf8');
 		const body = blocksOf(tasks).get('TaskQueue.enqueue');
 		expect(body).toBeDefined();
@@ -113,10 +113,9 @@ describe('instance 3 — every task row written is announced to the host', () =>
 		const writeAt = body?.indexOf('database.execute') ?? -1;
 		expect(wakeAt).toBeGreaterThan(-1);
 		expect(writeAt).toBeGreaterThan(-1);
-		// Order is the assertion, not merely presence. A crash between the announcement and the commit
-		// costs a false alarm — the host wakes, finds nothing, re-arms. A crash the other way round
-		// costs a committed job nobody comes back for.
-		expect(wakeAt).toBeLessThan(writeAt);
+		// Order is the assertion, not merely presence. An announcement before commit can fire
+		// immediately, observe an empty queue and disarm before the task becomes visible.
+		expect(wakeAt).toBeGreaterThan(writeAt);
 	});
 
 	it('every block that uses the statement-joining path announces in the same block', () => {

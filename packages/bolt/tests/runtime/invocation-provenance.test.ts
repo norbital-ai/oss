@@ -31,6 +31,9 @@ import {
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
 
+/** Requests approval through the authored admin-team policy; administrator status bypasses it. */
+const policySubject = { ...adminSubject, admin: false };
+
 /**
  * Which invocation tags may reach the command switch at all.
  *
@@ -97,14 +100,15 @@ const ENQUEUED_COMMANDS: ReadonlyArray<string> = [
 	'integrations.pull',
 	'integrations.flush',
 	'envoys.drain',
-	// A delegated turn. `sandbox-tools.ts` has enqueued `agents.turn` since delegation was written,
+	// A delegated turn. `sandbox-tools.ts` enqueues `agents.execute` after persisting its authority,
 	// and it was never listed here — harmless only for as long as nothing executed the queue. The
 	// first tick would have refused every subagent, and the refusal would have named the provenance
 	// gate rather than the missing entry. (`tasks.tick` is not listed because it is not task-runnable:
 	// the command that runs other commands is not itself one of them, so the tick is refused on a
 	// row.)
-	'agents.turn',
-	'agents.resume',
+	'agents.execute',
+	'agents.continue',
+	'envoys.complete',
 	'collections.resume',
 	'collections.discard'
 ];
@@ -346,7 +350,7 @@ describe('invocation provenance', () => {
 		const held = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(effectId('create-held'), adminSubject, {
+					yield* (yield* Collections.Service).create(effectId('create-held'), policySubject, {
 						collection: 'people',
 						id,
 						values: { name: 'Ada' }

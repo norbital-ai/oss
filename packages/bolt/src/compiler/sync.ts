@@ -295,25 +295,22 @@ class WorkspaceCompiler {
 		);
 
 	/** Owns files under behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
-	static readonly filesUnder = (root: string) => {
-		const walker = {
-			visit: (directory: string): Effect.Effect<Array<string>> =>
-				Effect.gen(function* () {
-					const entries = yield* Effect.tryPromise(() =>
-						readdir(directory, { withFileTypes: true })
-					).pipe(Effect.catch(() => Effect.succeed<Array<Dirent>>([])));
-					const nested = yield* Effect.all(
-						entries.map((entry) => {
-							const path = join(directory, entry.name);
-							return entry.isDirectory() ? walker.visit(path) : Effect.succeed([path]);
-						}),
-						{ concurrency: 'unbounded' }
-					);
-					return nested.flat();
-				})
-		};
-		return walker.visit(root);
-	};
+	static readonly filesUnder = (root: string) =>
+		Effect.tryPromise({
+			try: () => readdir(root, { withFileTypes: true, recursive: true }),
+			catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause)))
+		}).pipe(
+			Effect.catch((cause) =>
+				Reflect.get(cause, 'code') === 'ENOENT'
+					? Effect.succeed<Array<Dirent>>([])
+					: Effect.fail(cause)
+			),
+			Effect.map((entries) =>
+				entries.flatMap((entry) =>
+					entry.isDirectory() ? [] : [join(entry.parentPath, entry.name)]
+				)
+			)
+		);
 
 	/** Owns posix behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly posix = (path: string): string => path.split(sep).join('/');

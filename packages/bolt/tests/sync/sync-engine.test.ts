@@ -446,6 +446,8 @@ describe('Sync engine over SQL', () => {
 			// arrives with the record that owns it and there is nothing separate to bulk-replicate —
 			// which also stops every file's metadata in the workspace landing in every browser.
 		).toEqual([
+			'agent_mailbox',
+			'agent_run',
 			'approval_request',
 			'automation_run',
 			'bolt_notifications',
@@ -485,6 +487,8 @@ describe('Sync engine over SQL', () => {
 				})
 			)
 		).toEqual([
+			'agent_mailbox',
+			'agent_run',
 			'approval_request',
 			'automation_run',
 			'bolt_notifications',

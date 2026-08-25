@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import { TurnResult } from '#lib/runtime/agents/agent-schemas.js';
+import { AgentEnqueueResult } from '#lib/runtime/agents/agent-schemas.js';
 import { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
 import { WorkspaceAccessSchema } from '#lib/client/ui/settings/rows.js';
 import { AiModelCatalogSchema } from '#lib/client/ui/agent/agent-model-state.svelte.js';
@@ -11,15 +11,24 @@ import {
 import type { RemoteQuery, WorkspaceClientRuntime } from '#lib/client/runtime.js';
 
 const EmptyInput = Schema.Struct({});
-const AgentStartInput = Schema.Struct({
+const AgentOpenInput = Schema.Struct({
 	agent: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString
 });
-const AgentTurnInput = Schema.Struct({
+const AgentEnqueueInput = Schema.Struct({
 	agent: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
 	message: Schema.String,
 	documents: Schema.optionalKey(Schema.Array(ChatDocumentRef))
+});
+const AgentLaneInput = Schema.Struct({ conversationId: Schema.NonEmptyString });
+const AgentDequeueInput = Schema.Struct({
+	conversationId: Schema.NonEmptyString,
+	taskId: Schema.NonEmptyString
+});
+const AgentReorderInput = Schema.Struct({
+	conversationId: Schema.NonEmptyString,
+	taskIds: Schema.Array(Schema.NonEmptyString)
 });
 const AgentDocumentBindInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
@@ -58,10 +67,15 @@ const SchemaPlanResponse = Schema.Struct({
 	steps: Schema.Array(Schema.Struct({ id: Schema.String, sql: Schema.String }))
 });
 
-const AgentStartResponse = Schema.Struct({
-	started: Schema.Literal(true),
+const AgentOpenResponse = Schema.Struct({
+	opened: Schema.Literal(true),
 	conversationId: Schema.NonEmptyString
 });
+const AgentDequeueResponse = Schema.Struct({ dequeued: Schema.Literal(true) });
+const AgentReorderResponse = Schema.Struct({ reordered: Schema.Literal(true) });
+const AgentInterruptResponse = Schema.Struct({ interrupted: Schema.Literal(true) });
+const AgentStopResponse = Schema.Struct({ stopped: Schema.Literal(true) });
+const AgentResumeResponse = Schema.Struct({ resumed: Schema.Literal(true) });
 const AgentVerifierResponse = Schema.Struct({ updated: Schema.Literal(true) });
 const AgentDocumentBindResponse = Schema.Struct({ bound: Schema.Literal(true) });
 const AgentDocumentResolveResponse = Schema.Struct({ file: ChatDocumentRef });
@@ -107,11 +121,34 @@ type SystemQueryFactory = <
  */
 export type SystemClientApi = Readonly<{
 	agents: Readonly<{
-		start: SystemOperation<
-			CommandInput<typeof AgentStartInput>,
-			CommandOutput<typeof AgentStartResponse>
+		open: SystemOperation<
+			CommandInput<typeof AgentOpenInput>,
+			CommandOutput<typeof AgentOpenResponse>
 		>;
-		turn: SystemOperation<CommandInput<typeof AgentTurnInput>, CommandOutput<typeof TurnResult>>;
+		enqueue: SystemOperation<
+			CommandInput<typeof AgentEnqueueInput>,
+			CommandOutput<typeof AgentEnqueueResult>
+		>;
+		dequeue: SystemOperation<
+			CommandInput<typeof AgentDequeueInput>,
+			CommandOutput<typeof AgentDequeueResponse>
+		>;
+		reorder: SystemOperation<
+			CommandInput<typeof AgentReorderInput>,
+			CommandOutput<typeof AgentReorderResponse>
+		>;
+		interrupt: SystemOperation<
+			CommandInput<typeof AgentLaneInput>,
+			CommandOutput<typeof AgentInterruptResponse>
+		>;
+		stop: SystemOperation<
+			CommandInput<typeof AgentLaneInput>,
+			CommandOutput<typeof AgentStopResponse>
+		>;
+		resume: SystemOperation<
+			CommandInput<typeof AgentLaneInput>,
+			CommandOutput<typeof AgentResumeResponse>
+		>;
 		documents: Readonly<{
 			bind: SystemOperation<
 				CommandInput<typeof AgentDocumentBindInput>,
@@ -237,8 +274,13 @@ export const createSystemClient = (
 	makeQuery: SystemQueryFactory
 ): SystemClientApi => ({
 	agents: {
-		start: command(runtime, 'agents.start', AgentStartInput, AgentStartResponse),
-		turn: command(runtime, 'agents.turn', AgentTurnInput, TurnResult),
+		open: command(runtime, 'agents.open', AgentOpenInput, AgentOpenResponse),
+		enqueue: command(runtime, 'agents.enqueue', AgentEnqueueInput, AgentEnqueueResult),
+		dequeue: command(runtime, 'agents.dequeue', AgentDequeueInput, AgentDequeueResponse),
+		reorder: command(runtime, 'agents.reorder', AgentReorderInput, AgentReorderResponse),
+		interrupt: command(runtime, 'agents.interrupt', AgentLaneInput, AgentInterruptResponse),
+		stop: command(runtime, 'agents.stop', AgentLaneInput, AgentStopResponse),
+		resume: command(runtime, 'agents.resume', AgentLaneInput, AgentResumeResponse),
 		documents: {
 			bind: command(
 				runtime,

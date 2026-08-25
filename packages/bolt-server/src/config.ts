@@ -188,12 +188,12 @@ export const loadConfiguration = Effect.fn('BoltServer.Configuration.load')(
 			 * second knob for the latter — deliberately, because it could not honour one. The bundle
 			 * runs in this process rather than in a worker thread, so there is no thread to terminate
 			 * and no way to interrupt a synchronous tenant loop from inside the loop's own event loop.
-			 * A host that needs the isolate-thread bound has to run the bundle somewhere it can kill,
-			 * which is what Colony's worker-per-artifact isolate exists for.
+			 * Colony can enforce that bound because each inspection and invocation gets a fresh worker
+			 * and VM context, which it terminates when the work settles or times out.
 			 *
 			 * That is an acceptable difference because the exposure is different: this serves one
-			 * tenant, so a tenant that spins denies service to itself. The bound matters where one
-			 * thread is shared between workspaces that did not choose each other.
+			 * tenant, so a tenant that spins denies service to itself. The bound matters on the
+			 * multi-tenant host even though different workspaces never share a worker.
 			 */
 			invocationTimeoutMillis: Config.int('BOLT_SERVER_INVOCATION_TIMEOUT_MS').pipe(
 				Config.withDefault(30_000)

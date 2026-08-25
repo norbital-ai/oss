@@ -21,7 +21,7 @@ const rows = (status: string, answered: boolean) => [
 		content: {
 			id: 'turn-1',
 			status,
-			subagent_id: null,
+			parent_agent_id: null,
 			parts: [
 				{
 					kind: 'tool',

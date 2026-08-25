@@ -11,6 +11,7 @@ import type {
 } from '@norbital-ai/bolt-protocol';
 import { envoy, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Envoys from '../../src/runtime/envoys/envoys.js';
+import * as Agents from '../../src/runtime/agents/agents.js';
 import { makeBoltTestRuntime } from '../support/bolt-test-layer.js';
 
 const definition = workspace({
@@ -108,6 +109,31 @@ describe('envoy burst admission and chat documents', () => {
 						envoys.drain(harness.effectId(effectId), 'field_ops_whatsapp', conversationId)
 					)
 				);
+			const finishQueuedTurn = async (effectId: string) => {
+				const rows = await harness.database.query(
+					`select turn_id from agent_run
+					 where conversation_id = $1 and status in ('queued', 'resuming')
+					 order by position desc limit 1`,
+					[conversationId]
+				);
+				const turnId = String(rows[0]?.turn_id ?? '');
+				if (turnId.length === 0) throw new Error('expected one queued envoy turn');
+				const result = await harness.runtime.runPromise(
+					Effect.flatMap(Agents.Service, (agents) =>
+						agents.execute(harness.effectId(`${effectId}:execute`), conversationId, turnId)
+					)
+				);
+				return harness.runtime.runPromise(
+					Effect.flatMap(Envoys.Service, (envoys) =>
+						envoys.complete(
+							harness.effectId(`${effectId}:complete`),
+							'field_ops_whatsapp',
+							conversationId,
+							result.output
+						)
+					)
+				);
+			};
 
 			expect((await receive('receive:first', delivery('message-1'))).status).toBe('buffered');
 			const textOnly = {
@@ -127,7 +153,8 @@ describe('envoy burst admission and chat documents', () => {
 			expect(Array.from(write.bytes)).toEqual([137, 80, 78]);
 			expect(write.key).toMatch(/^chat-sessions\/.+\/.+\.png$/);
 
-			expect((await drain('drain:burst')).status).toBe('answered');
+			expect((await drain('drain:burst')).status).toBe('queued');
+			expect((await finishQueuedTurn('drain:burst')).status).toBe('answered');
 			expect(aiRequests).toHaveLength(1);
 			expect(communicationRequests).toHaveLength(1);
 			const request = aiRequests[0];
@@ -172,7 +199,8 @@ describe('envoy burst admission and chat documents', () => {
 			const next = { ...delivery('message-5'), text: 'One more update.', attachments: [] };
 			expect((await receive('receive:next', next)).status).toBe('buffered');
 			const competing = await Promise.all([drain('drain:race:a'), drain('drain:race:b')]);
-			expect(competing.map(({ status }) => status).toSorted()).toEqual(['answered', 'skipped']);
+			expect(competing.map(({ status }) => status).toSorted()).toEqual(['queued', 'skipped']);
+			expect((await finishQueuedTurn('drain:race')).status).toBe('answered');
 			expect(aiRequests).toHaveLength(2);
 			expect(communicationRequests).toHaveLength(2);
 

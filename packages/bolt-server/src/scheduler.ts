@@ -1,4 +1,9 @@
-import { TaskRequest, TaskResponse, type FacilityBinding } from '@norbital-ai/bolt-protocol';
+import {
+	TaskRequest,
+	TaskResponse,
+	type FacilityBinding,
+	type InvocationId
+} from '@norbital-ai/bolt-protocol';
 import { Effect } from 'effect';
 import { makeWireBinding } from './config.js';
 /**
@@ -71,6 +76,54 @@ export type Scheduler = Readonly<{
 	readonly armedFor: () => number | undefined;
 	readonly stop: () => void;
 }>;
+
+/**
+ * Ephemeral pointers from durable task ids to the exact in-process dispatch currently serving them.
+ *
+ * The tenant database remains the only queue. This object owns no task state and survives no process
+ * restart; it exists solely so an `Interrupt` arriving in another invocation can accelerate the
+ * durable stop by aborting the matching dispatch now.
+ */
+export type TaskInvocationControl = Readonly<{
+	readonly open: (invocationId: InvocationId) => AbortController;
+	readonly close: (invocationId: InvocationId, controller: AbortController) => void;
+	readonly active: (taskId: string, invocationId: InvocationId) => void;
+	readonly settled: (taskId: string, invocationId: InvocationId) => void;
+	readonly interrupt: (taskId: string) => void;
+}>;
+
+/** Makes one process-local task-to-dispatch control table, with no durable queue of its own. */
+export const makeTaskInvocationControl = (): TaskInvocationControl => {
+	const invocations = new Map<string, AbortController>();
+	const tasks = new Map<string, string>();
+	return {
+		open: (invocationId) => {
+			const controller = new AbortController();
+			invocations.set(String(invocationId), controller);
+			return controller;
+		},
+		close: (invocationId, controller) => {
+			const key = String(invocationId);
+			if (invocations.get(key) !== controller) return;
+			invocations.delete(key);
+			for (const [taskId, activeInvocation] of tasks) {
+				if (activeInvocation === key) tasks.delete(taskId);
+			}
+		},
+		active: (taskId, invocationId) => {
+			const key = String(invocationId);
+			if (invocations.has(key)) tasks.set(taskId, key);
+		},
+		settled: (taskId, invocationId) => {
+			if (tasks.get(taskId) === String(invocationId)) tasks.delete(taskId);
+		},
+		interrupt: (taskId) => {
+			const invocationId = tasks.get(taskId);
+			if (invocationId === undefined) return;
+			invocations.get(invocationId)?.abort(new Error(`task ${taskId} interrupted`));
+		}
+	};
+};
 
 const DEFAULT_RETRY_AFTER_MILLIS = 60_000;
 
@@ -200,18 +253,33 @@ export const makeScheduler = (options: SchedulerOptions): Scheduler => {
 
 export const makeTaskBinding = (
 	scheduler: Scheduler,
-	register: (command: string) => void = () => {}
+	register: (command: string) => void = () => {},
+	invocations?: TaskInvocationControl
 ): FacilityBinding<TaskRequest, TaskResponse> =>
 	makeWireBinding({
 		request: TaskRequest,
 		response: TaskResponse,
 		cancelled: { code: 'tasks.cancelled', message: 'Task call was cancelled' },
 		failed: { code: 'tasks.failed', message: 'Task facility call failed' },
-		invoke: (_metadata, input) =>
+		invoke: (metadata, input) =>
 			Effect.runPromise(
 				Effect.sync(() => {
-					if (input._tag === 'Register') register(input.command);
-					else scheduler.announce(input.notLaterThanEpochMs);
+					switch (input._tag) {
+						case 'Register':
+							register(input.command);
+							break;
+						case 'Wake':
+							scheduler.announce(input.notLaterThanEpochMs);
+							break;
+						case 'Active':
+							invocations?.active(input.taskId, metadata.invocationId);
+							break;
+						case 'Settled':
+							invocations?.settled(input.taskId, metadata.invocationId);
+							break;
+						case 'Interrupt':
+							invocations?.interrupt(input.taskId);
+					}
 					return TaskResponse.make({});
 				})
 			)

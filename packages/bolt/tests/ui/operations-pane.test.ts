@@ -6,7 +6,6 @@ const route = (environmentId: string, releaseId: string): MatrixEntry => ({
 	environmentId,
 	releaseId,
 	artifactId: releaseId === '' ? '' : `artifact-${releaseId}`,
-	health: 'ready',
 	ownerEpoch: 'colony'
 });
 

@@ -60,7 +60,8 @@ const subject = {
 	policies: []
 };
 const parentId = 'conversation-parent';
-const childId = 'subagent:parent-turn:tool:0:0';
+const childId = 'agent:parent-turn:tool:0:0';
+const childTaskId = 'child-turn';
 const turnId = 'parent-turn';
 const awaitCallId = `${turnId}:tool:1:0`;
 
@@ -140,19 +141,19 @@ const authRows = (statement: Statement): ReadonlyArray<JsonObject> | undefined =
 const parkedTurn = (resumed = 0): JsonObject => ({
 	id: turnId,
 	status: 'running',
-	subagent_id: null,
+	parent_agent_id: null,
 	parts: [
 		{
 			kind: 'tool',
 			id: awaitCallId,
-			name: 'await_sandbox_agent',
-			input: { sessionId: childId }
+			name: 'await_agent',
+			input: { agentId: childId, taskId: childTaskId }
 		},
 		{
 			kind: 'tool-result',
 			id: awaitCallId,
-			name: 'await_sandbox_agent',
-			output: { waiting: true, targetSessionId: childId }
+			name: 'await_agent',
+			output: { waiting: true, agentId: childId, taskId: childTaskId }
 		}
 	],
 	resumed,
@@ -163,7 +164,7 @@ const parkedTurn = (resumed = 0): JsonObject => ({
 });
 
 const targetTurn: JsonObject = {
-	id: 'child-turn',
+	id: childTaskId,
 	status: 'completed',
 	parts: [{ kind: 'text', text: 'The draft is ready.' }]
 };
@@ -191,7 +192,7 @@ const command = (name: string, input: Schema.Json): InvocationType =>
 	});
 
 const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
-	call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'task-1' } })
+	call: () => Promise.resolve({ _tag: 'Success', value: {} })
 };
 
 /** A stateful database boundary that applies exactly the resume statements the runtime emits. */
@@ -289,14 +290,15 @@ describe('agent continuation', () => {
 			}
 		};
 		const facilities: FacilityBindings = { scope, database: store.database, ai, tasks };
-		const invocation = task('agents.resume', {
+		const invocation = task('agents.continue', {
 			conversationId: parentId,
-			targetSessionId: childId
+			agentId: childId,
+			taskId: childTaskId
 		});
 		const result = await bundle.dispatch(invocation, facilities, new AbortController().signal);
 		expect(result, JSON.stringify(result)).toMatchObject({
 			_tag: 'Success',
-			response: { value: { resumed: true } }
+			response: { value: { continued: true } }
 		});
 		expect(calls).toBe(1);
 		expect(store.current()).toMatchObject({
@@ -354,7 +356,11 @@ describe('agent continuation', () => {
 			}
 		};
 		const result = await bundle.dispatch(
-			task('agents.resume', { conversationId: parentId, targetSessionId: childId }),
+			task('agents.continue', {
+				conversationId: parentId,
+				agentId: childId,
+				taskId: childTaskId
+			}),
 			{ scope, database: store.database, ai, tasks },
 			new AbortController().signal
 		);
@@ -373,7 +379,11 @@ describe('agent continuation', () => {
 			}
 		};
 		const result = await bundle.dispatch(
-			task('agents.resume', { conversationId: parentId, targetSessionId: childId }),
+			task('agents.continue', {
+				conversationId: parentId,
+				agentId: childId,
+				taskId: childTaskId
+			}),
 			{ scope, database: store.database, ai, tasks },
 			new AbortController().signal
 		);
@@ -403,6 +413,25 @@ describe('agent continuation', () => {
 						selectsColumn(statement, 'chat_session', 'parent_id')
 					) {
 						rows = [{ parent_id: parentId }];
+					} else if (
+						operationOn(statement, 'select', 'chat_message') &&
+						hasParameter(statement, childId) &&
+						hasParameter(statement, childTaskId)
+					) {
+						rows = [
+							{
+								id: 'child-turn-message',
+								content: {
+									id: childTaskId,
+									status: 'queued',
+									parent_agent_id: parentId,
+									parts: [],
+									subject,
+									agent_name: 'web',
+									usage_unreported: false
+								}
+							}
+						];
 					} else if (operationOn(statement, 'insert', 'chat_message')) {
 						insertedMessages += 1;
 						rows = [{ id: `message-${insertedMessages}` }];
@@ -424,11 +453,9 @@ describe('agent continuation', () => {
 				})
 		};
 		const result = await bundle.dispatch(
-			command('agents.turn', {
-				subject,
-				agent: 'web',
+			command('agents.execute', {
 				conversationId: childId,
-				message: 'Draft it.'
+				turnId: childTaskId
 			}),
 			{ scope, database, ai, tasks },
 			new AbortController().signal
@@ -436,64 +463,12 @@ describe('agent continuation', () => {
 		expect(result, JSON.stringify(result)).toMatchObject({ _tag: 'Success' });
 		const enqueue = statements.find((entry) => operationOn(entry, 'insert', 'bolt_task'));
 		expect(enqueue).toBeDefined();
-		expect(enqueue?.parameters).toContain('agents.resume');
-		expect(enqueue?.parameters).toContain('command-agents.turn:resume-parent');
+		expect(enqueue?.parameters).toContain('agents.continue');
+		expect(enqueue?.parameters).toContain('command-agents.execute:resume-parent');
 		expect(enqueue?.parameters.map(jsonParameter)).toContainEqual({
 			conversationId: parentId,
-			targetSessionId: childId
+			agentId: childId,
+			taskId: childTaskId
 		});
-	});
-
-	it('persists cancellation on the turn as well as cancelling queued work', async () => {
-		const statements: Array<Statement> = [];
-		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
-			call: (_metadata, request) => {
-				const requested =
-					request._tag === 'Query'
-						? [{ sql: request.sql, parameters: request.parameters }]
-						: request.statements;
-				let rows: ReadonlyArray<JsonObject> = [];
-				for (const entry of requested) {
-					const statement = { sql: entry.sql, parameters: entry.parameters } satisfies Statement;
-					statements.push(statement);
-					const authenticated = authRows(statement);
-					if (authenticated !== undefined) {
-						rows = authenticated;
-					} else if (operationOn(statement, 'select', 'chat_message')) {
-						rows = [{ id: 'parked-message', content: parkedTurn() }];
-					} else {
-						rows = [];
-					}
-				}
-				return Promise.resolve({
-					_tag: 'Success',
-					value: { rows, affectedRows: rows.length }
-				});
-			}
-		};
-		const ai: FacilityBinding<AIRequest, AIResponse> = {
-			call: () => Promise.resolve({ _tag: 'Success', value: { output: null } })
-		};
-		const result = await bundle.dispatch(
-			command('agents.cancel', { taskId: turnId }),
-			{ scope, database, ai, tasks },
-			new AbortController().signal
-		);
-		expect(result).toMatchObject({ _tag: 'Success', response: { value: { cancelled: true } } });
-		expect(
-			statements.some(
-				(entry) =>
-					operationOn(entry, 'update', 'chat_message') &&
-					objectParameter(entry)?.status === 'cancelled'
-			)
-		).toBe(true);
-		expect(
-			statements.some(
-				(entry) =>
-					operationOn(entry, 'update', 'bolt_task') &&
-					hasParameter(entry, 'failed') &&
-					hasParameter(entry, turnId)
-			)
-		).toBe(true);
 	});
 });

@@ -3,7 +3,11 @@ import { Schema } from 'effect';
 /**
  * The wire both hosts and every bundle agree on, as a single literal a mismatch is refused against.
  *
- * Bumped to 2 when `TaskRequest` stopped being a queue API and became a timer API: `Enqueue`,
+ * Bumped to 3 when the timer facility also became the ephemeral control seam for the exact task
+ * invocation currently running. `Active`, `Settled`, and `Interrupt` carry task ids only; durable
+ * queue state remains in the tenant database and the host still owns no second queue.
+ *
+ * Version 2 was introduced when `TaskRequest` stopped being a queue API and became a timer API: `Enqueue`,
  * `Schedule`, `Cancel` and `Signal` were deleted, `Register` lost `schedule` and `input`, and `Wake`
  * arrived. That is a *shrinking* change, so an old host and a new bundle do not compose in either
  * direction — the old host waits for enqueues that will never arrive, and the new bundle asks for a
@@ -11,7 +15,7 @@ import { Schema } from 'effect';
  * means a version mismatch is a refusal at the door rather than a capability discovered halfway
  * through an invocation.
  */
-export const PROTOCOL_VERSION = 2 as const;
+export const PROTOCOL_VERSION = 3 as const;
 
 export const ProtocolVersion = Schema.Literal(PROTOCOL_VERSION);
 export type ProtocolVersion = typeof ProtocolVersion.Type;

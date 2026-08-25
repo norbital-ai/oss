@@ -166,6 +166,52 @@ const CASES: ReadonlyArray<Case> = [
 		good: 'export async function f(xs: number[]) { await Promise.all(xs.map(go)); }'
 	},
 	{ rule: 'D2', bad: 'export const v = flag ? 42 : 42;', good: 'export const v = flag ? 42 : 0;' },
+	{
+		rule: 'MOD1',
+		file: 'src/workbench.ts',
+		bad: "export const Workbench = import('./workbench.js');",
+		good: "export * as Workbench from './workbench-contract.js';"
+	},
+	{
+		rule: 'POLICY1',
+		file: 'src/capacity.ts',
+		bad: 'export const admit = (tenantId: string, work: () => void) => { void tenantId; return work(); };',
+		good: 'export const admit = (tenantId: string, work: () => void) => schedule(tenantId, work);'
+	},
+	{
+		rule: 'OPS1',
+		file: 'src/health.ts',
+		bad: "export const route = { status: 'ready', service: 'colony' };",
+		good: "export const route = { status: snapshot.ready ? 'ready' : 'starting' };"
+	},
+	{
+		rule: 'NODE1',
+		file: 'scripts/config.ts',
+		bad: 'export class Config { parseEnvironment(text: string) { const out = {}; for (const line of text.split(/\\r?\\n/)) { const match = line.match(/^([^=]+)=(.*)$/); out[match[1]] = match[2]; } return out; } }',
+		good: "export { parseEnv } from 'node:util';"
+	},
+	{
+		rule: 'NODE2',
+		bad: 'async function scan(directory: string) { const entries = await readdir(directory); return descend(entries); } function descend(entries) { for (const entry of entries) if (entry.isDirectory()) scan(entry.name); }',
+		good: 'export const files = readdir(root, { withFileTypes: true, recursive: true });'
+	},
+	{
+		rule: 'NODE3',
+		file: 'scripts/cli.mjs',
+		bad: "import { parseArgs } from 'node:util'; const parsed = parseArgs({ options: { root: { type: 'string' } } }); const verbose = process.argv.includes('-v');",
+		good: "import { parseArgs } from 'node:util'; const { values } = parseArgs({ options: { root: { type: 'string' }, json: { type: 'boolean' } } });"
+	},
+	{
+		rule: 'NODE4',
+		bad: "import { glob } from 'node:fs/promises'; export const run = (entry, input) => input.tool === 'sandbox_glob' ? entry.name.indexOf(input.pattern) >= 0 : glob(input.pattern);",
+		good: "import { glob } from 'node:fs/promises'; export const run = (pattern) => glob(pattern);"
+	},
+	{
+		rule: 'BOOT1',
+		file: 'scripts/server.mjs',
+		bad: "const hydrate = () => loadEnvFile('.env'); const environment = process.env; hydrate();",
+		good: "loadEnvFile('.env'); const port = process.env.PORT;"
+	},
 	{ rule: 'P9', bad: "export * from './other.js';", good: "export { thing } from './other.js';" },
 	{
 		rule: 'COMPLEX1',
@@ -271,7 +317,7 @@ const CASES: ReadonlyArray<Case> = [
 		rule: 'SQL1',
 		bad:
 			"export const q = 'SELECT id FROM users';\n" +
-			"export const fragment = sql`now()`;\n" +
+			'export const fragment = sql`now()`;\n' +
 			"export const seed = 'insert into h (s) values (true) on conflict do nothing';\n" +
 			"export const stub = (i) => i.sql === 'select name from bolt_secrets';",
 		// Transaction control and narrowly identifiable schema bootstrap DDL are the only raw SQL
@@ -282,7 +328,7 @@ const CASES: ReadonlyArray<Case> = [
 			'export const hist = `create table ${t}_history (id uuid)`;\n' +
 			'export const trig = `create trigger t after insert on x execute function f()`;\n' +
 			"export const policy = 'create policy tenant_rows on things using (tenant_id = current_user)';\n" +
-			"export const predicate = { $sql: '\"tenant_id\" = current_user' } as const;\n" +
+			'export const predicate = { $sql: \'"tenant_id" = current_user\' } as const;\n' +
 			"export const begin = 'begin';\n" +
 			"export const commit = 'commit';\n" +
 			"export const rollback = 'rollback';"
@@ -295,17 +341,13 @@ const CASES: ReadonlyArray<Case> = [
 	},
 	{
 		rule: 'SQL1',
-		bad:
-			"export function request() { const statement = { sql: 'insert into things (id) values ($1)' }; return { _tag: 'Query', ...statement }; }",
-		good:
-			"export function request() { const statement = { sql: 'insert into things (id) values ($1)', parameters: [id] }; return { _tag: 'Transaction', statements: [statement] }; }"
+		bad: "export function request() { const statement = { sql: 'insert into things (id) values ($1)' }; return { _tag: 'Query', ...statement }; }",
+		good: "export function request() { const statement = { sql: 'insert into things (id) values ($1)', parameters: [id] }; return { _tag: 'Transaction', statements: [statement] }; }"
 	},
 	{
 		rule: 'SQL1',
-		bad:
-			"import { transactionSql } from './lookalike.js';\nexport const statement = transactionSql('insert into things (id) values ($1)', [id]);",
-		good:
-			"import { transactionSql } from '#lib/runtime/persistence.js';\nexport const statement = transactionSql('insert into things (id) values ($1)', [id]);"
+		bad: "import { transactionSql } from './lookalike.js';\nexport const statement = transactionSql('insert into things (id) values ($1)', [id]);",
+		good: "import { transactionSql } from '#lib/runtime/persistence.js';\nexport const statement = transactionSql('insert into things (id) values ($1)', [id]);"
 	},
 	{
 		rule: 'QRY2',
@@ -429,6 +471,180 @@ test('no ported rule reports its negative example', () => {
 			spurious.push(`${testCase.rule}: reported ${testCase.good.replace(/\n/g, ' ').slice(0, 60)}`);
 	}
 	assert.deepEqual(spurious, [], spurious.join('\n'));
+});
+
+test('simplification rules keep their declared service and bootstrap boundaries', () => {
+	const rule = (id: string): Rule => ALL.find((candidate) => candidate.id === id)!;
+	const reports = (id: string, source: string, file: string): boolean =>
+		scan(source, file, [rule(id)]).includes(id);
+
+	for (const source of [
+		"export * from '.';",
+		"const self = require('./index.js');",
+		"import Self = require('./index.js');",
+		"export const self = import('./index.js');"
+	])
+		assert.equal(reports('MOD1', source, 'src/index.ts'), true, source);
+	assert.equal(
+		reports('MOD1', "<script>import Tree from './Tree.svelte';</script>", 'src/Tree.svelte'),
+		false
+	);
+	assert.equal(
+		reports('MOD1', "<script>import * as Tree from './Tree.svelte';</script>", 'src/Tree.svelte'),
+		true
+	);
+
+	for (const source of [
+		'export const admit = (tenantId: string) => 1;',
+		'export const admit = (_tenantId: string) => void _tenantId;',
+		"export const admit = (tenantId: string) => console.log('tenant', tenantId);",
+		"export const admit = (tenantId: string) => { const key = tenantId; return console.log('tenant', JSON.stringify(key)); };",
+		'export const admit = (tenantId: string) => tenantId;',
+		'export const admit = (tenantId: string, enabled: boolean) => enabled ? tenantId : "none";',
+		'export const admit = (tenantId: string) => tenantId.length;'
+	])
+		assert.equal(reports('POLICY1', source, 'src/capacity.ts'), true, source);
+	assert.equal(
+		reports(
+			'POLICY1',
+			'export const admit = (tenantId: string) => capacityByTenant.get(tenantId);',
+			'src/capacity.ts'
+		),
+		false
+	);
+	assert.equal(
+		reports(
+			'POLICY1',
+			'export const admit = (tenantId: string) => { const key = tenantId; return capacityByTenant.get(key); };',
+			'src/capacity.ts'
+		),
+		false
+	);
+	assert.equal(
+		reports(
+			'POLICY1',
+			'export interface Policy { admit(tenantId: string): void }',
+			'src/policy.ts'
+		),
+		false
+	);
+
+	for (const source of [
+		"export const route = { health: 'ready' };",
+		"export const route = { status: 'ready', service: 'colony' };",
+		'export const state = { accepting: true, outstanding: 0 };'
+	])
+		assert.equal(reports('OPS1', source, 'src/health.ts'), true, source);
+	assert.equal(reports('OPS1', "export const row = { health: 'ready' };", 'src/domain.ts'), false);
+	assert.equal(
+		reports('OPS1', "export const row = { status: 'ready' };", 'src/health.test.ts'),
+		false
+	);
+	assert.equal(
+		reports(
+			'OPS1',
+			"export const route = { status: dependencies.ready ? 'ready' : 'starting' };",
+			'src/health.ts'
+		),
+		false
+	);
+
+	assert.equal(
+		reports('NODE1', 'export const parseEnv = (value: string) => value;', 'scripts/dev.mjs'),
+		false
+	);
+	for (const source of [
+		"export const environment = (text) => { const out = {}; for (const line of text.split('\\n')) { const at = line.indexOf('='); out[line.slice(0, at)] = line.slice(at + 1); } return out; };",
+		'export class Config { parseEnv(text) { const out = {}; for (const line of text.split(/\\r?\\n/)) { const pair = /^([^=]+)=(.*)$/.exec(line); out[pair[1]] = pair[2]; } return out; } }',
+		"export const parser = { environment(text) { return Object.fromEntries(text.split('\\n').map((line) => line.split('='))); } };"
+	])
+		assert.equal(reports('NODE1', source, 'scripts/dev.mjs'), true, source);
+
+	for (const source of [
+		'async function visit(root) { /* ignore this prose */ const entries = await readdir(root); entries.forEach((entry) => { if (entry.isDirectory()) visit(entry.name); }); }',
+		'function scan(root) { const entries = readdirSync(root); descend(entries); } function descend(entries) { for (const entry of entries) scan(entry.name); }',
+		'function visit(root) { const entries = readdirSync(root); if (ignoredFile(root)) log(root); for (const entry of entries) visit(entry.name); }'
+	])
+		assert.equal(reports('NODE2', source, 'src/files.ts'), true, source);
+	assert.equal(
+		reports(
+			'NODE2',
+			'function visit(root) { const entries = readdirSync(root); for (const entry of entries) { if (ignoredFile(entry)) continue; visit(entry.name); } }',
+			'src/files.ts'
+		),
+		false
+	);
+	assert.equal(
+		reports(
+			'NODE2',
+			'function visit(root) { const entries = readdirSync(root); for (const entry of entries) { if (ignoredFile(entry)) log(entry); else visit(entry.name); } }',
+			'src/files.ts'
+		),
+		false
+	);
+
+	assert.equal(
+		reports(
+			'NODE3',
+			"import { parseArgs } from 'node:util'; parseArgs({ options: { root: { type: 'string' } }, args: process.argv.slice(2) });",
+			'scripts/cli.mjs'
+		),
+		false
+	);
+	for (const source of [
+		"const verbose = process.argv.includes('-v');",
+		"import { parseArgs } from 'node:util'; parseArgs({ options: {} }); const root = process.argv.find((value) => value.startsWith('--root='));",
+		"const args = process.argv.slice(2); switch (args[0]) { case '-v': enableVerbose(); }"
+	])
+		assert.equal(reports('NODE3', source, 'scripts/cli.mjs'), true, source);
+
+	assert.equal(
+		reports(
+			'NODE4',
+			"import { glob } from 'node:fs/promises'; export const sandbox_glob = (pattern) => glob(pattern);",
+			'src/files.ts'
+		),
+		false
+	);
+	assert.equal(
+		reports(
+			'NODE4',
+			"import { glob } from 'node:fs/promises'; export const run = (name, patterns) => patterns.includes(name) ? glob('**/*') : [];",
+			'src/files.ts'
+		),
+		false
+	);
+	assert.equal(
+		reports(
+			'NODE4',
+			"import { glob } from 'node:fs/promises'; export const sandbox_glob = (name, pattern) => name.includes(pattern) ? [name] : glob(pattern);",
+			'src/files.ts'
+		),
+		true
+	);
+	assert.equal(
+		reports(
+			'NODE4',
+			'export const sandbox_glob = (name, pattern) => pattern.includes(name);',
+			'src/files.ts'
+		),
+		true
+	);
+
+	for (const source of [
+		"const environment = process.env; loadEnvFile('.env');",
+		"function hydrate() { loadEnvFile('.env'); } const port = process.env.PORT; hydrate();",
+		"const port = (() => process.env.PORT)(); loadEnvFile('.env');"
+	])
+		assert.equal(reports('BOOT1', source, 'scripts/server.mjs'), true, source);
+	assert.equal(
+		reports(
+			'BOOT1',
+			"function hydrate() { loadEnvFile('.env'); } hydrate(); const environment = process.env;",
+			'scripts/server.mjs'
+		),
+		false
+	);
 });
 
 test('every rule in every pack has a case in this table', () => {

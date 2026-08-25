@@ -1,12 +1,15 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
+	import { Badge } from '@norbital-ai/ui/badge';
 	import { Button } from '@norbital-ai/ui/button';
 	import { Inline, Scroll } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import type { WorkbenchView } from '#lib/client/ui/studio/studio-state.js';
+	import { presentWorkbenchStatus } from '#lib/client/ui/studio/workbench-status-presentation.js';
 
 	let {
 		hostStatus,
+		busy = false,
 		view = 'manifest',
 		previewReady = false,
 		updateRequired = false,
@@ -24,6 +27,7 @@
 		onrebase
 	}: {
 		hostStatus: string;
+		busy?: boolean;
 		view?: WorkbenchView;
 		previewReady?: boolean;
 		updateRequired?: boolean;
@@ -40,6 +44,8 @@
 		onopenreview?: (() => void) | undefined;
 		onrebase?: (() => void) | undefined;
 	} = $props();
+
+	const toolbarStatus = $derived(presentWorkbenchStatus({ hostStatus, busy, previewReady }));
 </script>
 
 <Inline shrink={false} class="h-10 border-b border-border/60 sm:h-9">
@@ -58,30 +64,23 @@
 				{ name: 'editor', label: 'Editor', icon: 'lucide:code-2', content: '' }
 			] satisfies TabConfig[]}
 		/>
-		{#if hostStatus !== 'Ready'}
-			<Inline
-				as="span"
-				gap="xs"
-				shrink={false}
-				class="min-w-0 px-1 text-micro text-amber-700 dark:text-amber-300"
-				data-testid="studio-host-status"
+		{#if toolbarStatus}
+			<Badge
+				variant={toolbarStatus.variant}
+				class="h-5 max-w-48 shrink-0 gap-1 px-2 py-0 text-micro"
+				data-testid={toolbarStatus.testId}
 				role="status"
+				aria-live="polite"
+				aria-busy={toolbarStatus.loading}
+				title={toolbarStatus.detail}
 			>
-				<Icon icon="lucide:circle-alert" class="size-3 shrink-0" />
-				<span class="max-w-72 truncate">{hostStatus}</span>
-			</Inline>
-		{:else if previewReady}
-			<Inline
-				as="span"
-				gap="xs"
-				shrink={false}
-				class="px-1 text-micro text-emerald-700 dark:text-emerald-300"
-				data-testid="studio-preview-status"
-				role="status"
-			>
-				<Icon icon="lucide:circle-check" class="size-3 shrink-0" />
-				<span>Ready for review</span>
-			</Inline>
+				<Icon
+					icon={toolbarStatus.icon}
+					class={toolbarStatus.loading ? 'size-3 shrink-0 animate-spin' : 'size-3 shrink-0'}
+					aria-hidden="true"
+				/>
+				<span class="truncate">{toolbarStatus.label}</span>
+			</Badge>
 		{/if}
 	</Scroll>
 

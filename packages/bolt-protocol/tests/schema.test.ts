@@ -74,24 +74,13 @@ describe('Bolt protocol schemas', () => {
 		expect(Schema.decodeUnknownResult(FacilityName)('sse')._tag).toBe('Failure');
 	});
 
-	/**
-	 * Register only describes durable routing now. Older senders may still include the unused lease
-	 * marker, and Effect's struct decoder deliberately strips that surplus field. Keeping this
-	 * compatibility is why deleting it does not require a protocol-version refusal.
-	 */
-	it('strips the retired task registration lease without changing the wire version', () => {
-		const decoded = Schema.decodeUnknownSync(TaskRequest)({
-			_tag: 'Register',
-			leaseId: 'legacy-lease',
-			releaseId: 'release-1',
-			command: 'tasks.tick'
-		});
-		expect(decoded).toEqual({
-			_tag: 'Register',
-			releaseId: 'release-1',
-			command: 'tasks.tick'
-		});
-		expect(PROTOCOL_VERSION).toBe(2);
+	it('carries exact task lifecycle signals on protocol version 3', () => {
+		for (const tag of ['Active', 'Settled', 'Interrupt'] as const) {
+			expect(
+				Schema.decodeUnknownSync(TaskRequest)({ _tag: tag, taskId: 'agent-turn-1' })
+			).toEqual({ _tag: tag, taskId: 'agent-turn-1' });
+		}
+		expect(PROTOCOL_VERSION).toBe(3);
 	});
 
 	it('decodes transport requests without selecting a wire protocol', () => {

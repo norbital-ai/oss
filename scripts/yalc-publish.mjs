@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 import { readManifest } from './lib/package-release.mjs';
 import { readJsonIfPresent, signatureField } from './lib/yalc-consumers.mjs';
 
@@ -31,8 +32,16 @@ const allPackages = [
 	{ name: '@norbital-ai/doctor', directory: 'packages/doctor' }
 ];
 
-const argumentValue = (flag) =>
-	process.argv.find((argument) => argument.startsWith(`${flag}=`))?.slice(flag.length + 1);
+const { values: arguments_ } = parseArgs({
+	options: {
+		only: { type: 'string' },
+		'build-target-only': { type: 'boolean' },
+		push: { type: 'boolean' },
+		force: { type: 'boolean' },
+		report: { type: 'string' }
+	},
+	strict: true
+});
 
 /**
  * `--only=bolt,ui` narrows the run to those packages. Accepts the bare directory name or the full
@@ -45,7 +54,7 @@ const argumentValue = (flag) =>
  * packages that import it, and nothing else.
  */
 const requested = (() => {
-	const only = argumentValue('--only');
+	const only = arguments_.only;
 	if (only === undefined) return undefined;
 	const names = new Set(
 		only.split(',').flatMap((entry) => {
@@ -63,10 +72,10 @@ const requested = (() => {
 const packages =
 	requested === undefined ? allPackages : allPackages.filter((entry) => requested.has(entry.name));
 
-const push = process.argv.includes('--push');
-const force = process.argv.includes('--force');
-const buildTargetOnly = process.argv.includes('--build-target-only');
-const reportPath = argumentValue('--report');
+const push = arguments_.push ?? false;
+const force = arguments_.force ?? false;
+const buildTargetOnly = arguments_['build-target-only'] ?? false;
+const reportPath = arguments_.report;
 
 const run = (command, args, cwd = repositoryRoot) => {
 	execFileSync(command, args, { cwd, stdio: 'inherit' });

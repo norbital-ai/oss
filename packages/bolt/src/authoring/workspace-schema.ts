@@ -880,9 +880,9 @@ export interface PolicyDeclaration {
 	/**
 	 * Selects the runtime-owned workspace-administration policy.
 	 *
-	 * Administrator status is a holder selector, not an access bypass. The selected policy still has
-	 * to enumerate every action/resource coordinate it grants, exactly like the system and
-	 * authenticated policies above. Authored policies cannot set this flag.
+	 * This policy enumerates platform controls such as identity and secrets. Authored collection,
+	 * app and agent access is instead the trusted administrator bypass at the access boundary, which
+	 * explicit team preview clears before evaluation. Authored policies cannot set this flag.
 	 */
 	readonly administrator?: boolean;
 	/**

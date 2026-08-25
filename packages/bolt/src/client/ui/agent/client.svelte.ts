@@ -24,7 +24,11 @@ type InteractiveAgentStartInput = {
 	}[];
 };
 
-type AgentChatStartResult = { readonly runId: string; readonly chatId: string };
+type AgentChatStartResult = {
+	readonly runId: string;
+	readonly chatId: string;
+	readonly taskId: string;
+};
 
 class AgentClientFailure extends Schema.TaggedError<AgentClientFailure>()(
 	'Bolt.AgentClientFailure',
@@ -44,7 +48,13 @@ export type AgentRuntimeConfig = Readonly<{
 	readonly client: Readonly<{
 		readonly db: Pick<
 			WorkspaceClient['db'],
-			'approval_request' | 'chat_session' | 'chat_message' | 'user' | 'bolt_notifications'
+			| 'approval_request'
+			| 'chat_session'
+			| 'chat_message'
+			| 'agent_mailbox'
+			| 'agent_run'
+			| 'user'
+			| 'bolt_notifications'
 		>;
 		readonly records: WorkspaceClient['records'];
 		readonly system: WorkspaceClient['system'];
@@ -93,35 +103,20 @@ function startInteractiveAgent(
 	randomId: () => string = () => globalThis.crypto.randomUUID()
 ): Effect.Effect<AgentChatStartResult, AgentClientFailure> {
 	const conversationId = input.runId ?? randomId();
-	return Effect.map(
-		agentRequest(
-			'start',
-			active.client.system.agents.start({
-				agent: active.agentName,
-				conversationId
-			})
-		),
-		() => {
-			Effect.runFork(
-				agentRequest(
-					'turn',
-					active.client.system.agents.turn({
-						agent: active.agentName,
-						conversationId,
-						message: input.message,
-						documents: input.documents ?? []
-					})
-				).pipe(
-					Effect.catch((failure) =>
-						Effect.logError(
-							'Agent turn transport failed after the conversation was started',
-							failure
-						)
-					)
-				)
-			);
-			return { runId: conversationId, chatId: conversationId };
-		}
+	return agentRequest(
+		'enqueue',
+		active.client.system.agents.enqueue({
+			agent: active.agentName,
+			conversationId,
+			message: input.message,
+			documents: input.documents ?? []
+		})
+	).pipe(
+		Effect.map((admitted) => ({
+			runId: conversationId,
+			chatId: conversationId,
+			taskId: admitted.taskId
+		}))
 	);
 }
 

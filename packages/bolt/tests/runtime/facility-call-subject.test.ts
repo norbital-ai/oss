@@ -27,7 +27,11 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+
 import { fixtureUserId, seedExternalSubject, seedSession } from '../support/fixture-identity.js';
+
+/** Requests approval through the authored admin-team policy; administrator status bypasses it. */
+const policySubject = { ...adminSubject, admin: false };
 
 /**
  * Which person a facility call is made for.
@@ -244,7 +248,7 @@ describe('the subject a facility call carries', () => {
 		const held = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(effectId('create-held'), adminSubject, {
+					yield* (yield* Collections.Service).create(effectId('create-held'), policySubject, {
 						collection: 'people',
 						id,
 						values: { name: 'Ada' }

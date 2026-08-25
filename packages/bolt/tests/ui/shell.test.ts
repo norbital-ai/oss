@@ -40,6 +40,23 @@ describe('shell record navigation ownership', () => {
 			settingsBranch.indexOf('</CollectionTableNavigationSurface>')
 		);
 	});
+
+	it('frames Approvals with the same fixed heading and responsive gutter as host plugins', () => {
+		const source = readFileSync(
+			new URL('../../src/client/ui/shell/shell.svelte', import.meta.url),
+			'utf8'
+		);
+		const approvalsBranch = source.slice(
+			source.indexOf('{:else if currentPath === APPROVALS_PATH'),
+			source.indexOf('{:else if currentPath === WORKSPACE_SETTINGS_PATH')
+		);
+
+		expect(approvalsBranch).toContain('<Cover class="relative bg-background" gap="none">');
+		expect(approvalsBranch).toContain('class="bg-background px-4 pt-4 sm:px-6 sm:pt-6"');
+		expect(approvalsBranch).toContain('class="px-4 pt-4 pb-4 sm:px-6 sm:pt-6 sm:pb-6"');
+		expect(approvalsBranch).toContain('<Bound size="full" grow clip');
+		expect(approvalsBranch).toContain('title="Pending requests"');
+	});
 });
 
 describe('Studio Preview', () => {

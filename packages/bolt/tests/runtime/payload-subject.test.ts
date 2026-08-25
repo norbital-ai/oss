@@ -27,7 +27,11 @@ import {
 	recordId,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+
 import { seedSession } from '../support/fixture-identity.js';
+
+/** Requests approval through the authored admin-team policy; administrator status bypasses it. */
+const policySubject = { ...adminSubject, admin: false };
 
 /**
  * Who a command runs as, and where that answer is allowed to come from.
@@ -134,8 +138,13 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	'sync.diff',
 	'sync.shape',
 	'sync.mutate',
-	'agents.turn',
-	'agents.start',
+	'agents.enqueue',
+	'agents.open',
+	'agents.dequeue',
+	'agents.reorder',
+	'agents.interrupt',
+	'agents.stop',
+	'agents.resume',
 	'agents.listConversations',
 	'agents.history',
 	'workspace.manifest',
@@ -339,7 +348,7 @@ describe('payload-supplied identity', () => {
 		const held = await runtime.runPromise(
 			Effect.flip(
 				Effect.gen(function* () {
-					yield* (yield* Collections.Service).create(effectId('create-held'), adminSubject, {
+					yield* (yield* Collections.Service).create(effectId('create-held'), policySubject, {
 						collection: 'people',
 						id,
 						values: { name: 'Ada' }

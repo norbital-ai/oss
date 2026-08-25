@@ -349,12 +349,13 @@ export const ActivationCommands = {
 		[
 			'collections.resume',
 			'collections.discard',
-			'agents.turn',
-			'agents.resume',
+			'agents.execute',
+			'agents.continue',
 			'notifications.drain',
 			'integrations.pull',
 			'integrations.flush',
 			'envoys.receive',
+			'envoys.complete',
 			// The tick, which is the one command a host's timer ever sends. A host that cannot route it
 			// still holds correct data — rows commit, schedules advance, retries are scheduled — it just
 			// loses punctuality, because nothing fires until somebody invokes this.

@@ -285,12 +285,13 @@ const result =
 Heavy durable infer belongs in a post-commit automation. Hooks may call `api.infer` for judgement
 on the write path (for example a photo), but they still must not queue work or send email.
 
-Timeout is host policy. The host admits each function — including reads — and kills the guest when
-the timeout fires. An automation can take longer overall because if the
-work is not finished, the host calls the same function again. `api.infer` yields: pre-inference
-writes roll back, the host runs the model, and a later admit resumes the handler with the stored
-result. The successful writes commit when the function returns. Keep the authored handler straightforward;
-do not add home-grown queues, timers or retry tables.
+Timeout and capacity are host policy. Colony stays running, but each inspection and invocation runs
+in a fresh worker and VM context that is terminated when the work settles or times out. A facility
+or `api.infer` wait yields the guest event loop; it does not end the invocation, release its capacity
+slot, or create a continuation that Colony later re-admits. Successful writes commit when the
+individual write API returns; a later handler or hook failure does not roll an earlier write back.
+Keep the authored handler straightforward; do not add home-grown queues, timers, continuations, or
+retry tables.
 
 Interactive chat and envoy inbound start the same way: persist the user turn, then admit the loop
 function. Authors never choose a queue.

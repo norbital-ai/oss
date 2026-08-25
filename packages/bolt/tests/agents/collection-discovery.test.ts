@@ -132,6 +132,32 @@ describe('agent collection discovery', () => {
 						value: { rows: [teamRow], affectedRows: 0 }
 					});
 				}
+				if (
+					request._tag === 'Query' &&
+					request.sql.includes('chat_message') &&
+					request.sql.includes('turn_id')
+				) {
+					return Promise.resolve({
+						_tag: 'Success',
+						value: {
+							rows: [
+								{
+									id: 'collection-discovery:turn:message',
+									content: {
+										id: 'collection-discovery:turn',
+										status: 'queued',
+										parent_agent_id: null,
+										parts: [],
+										subject,
+										agent_name: 'whatsapp-field',
+										usage_unreported: false
+									}
+								}
+							],
+							affectedRows: 0
+						}
+					});
+				}
 				if (request._tag === 'Query' && request.sql.includes('chat_message')) {
 					persisted.push(request.parameters);
 					if (
@@ -170,7 +196,7 @@ describe('agent collection discovery', () => {
 			}
 		};
 		const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
-			call: () => Promise.resolve({ _tag: 'Success', value: { taskId: 'unused' } })
+			call: () => Promise.resolve({ _tag: 'Success', value: {} })
 		};
 		const facilities: FacilityBindings = {
 			scope,
@@ -192,12 +218,10 @@ describe('agent collection discovery', () => {
 			id: InvocationId.make('collection-discovery'),
 			scope,
 			deadlineEpochMs: Date.now() + 10_000,
-			command: 'agents.turn',
+			command: 'agents.execute',
 			input: {
-				subject,
-				agent: 'whatsapp-field',
 				conversationId: 'conversation-discovery',
-				message: 'What can you access?'
+				turnId: 'collection-discovery:turn'
 			},
 			headers: { authorization: ['Bearer envoy-test-session'] }
 		};

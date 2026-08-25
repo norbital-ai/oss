@@ -28,6 +28,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { BundleLoader } from './bundle-loader.js';
 import type { ServerConfiguration } from './config.js';
 import { ServerHealth } from './health.js';
+import type { TaskInvocationControl } from './scheduler.js';
 
 /** Identifies a bounded Node transport operation that could not complete safely. */
 export class ServerTransportError extends Schema.TaggedError<ServerTransportError>()(
@@ -216,7 +217,8 @@ const writeDispatchResult = (response: ServerResponse, result: BundleResult): vo
 const dispatch = Effect.fn('BoltServer.Server.dispatch')(function* (
 	invocation: Invocation,
 	facilities: FacilityBindings,
-	timeoutMillis: number
+	timeoutMillis: number,
+	taskInvocations?: TaskInvocationControl
 ) {
 	const loader = yield* BundleLoader;
 	const health = yield* ServerHealth;
@@ -224,7 +226,18 @@ const dispatch = Effect.fn('BoltServer.Server.dispatch')(function* (
 		Effect.gen(function* () {
 			const bundle = yield* loader.load();
 			const unsafeResult = yield* Effect.tryPromise({
-				try: (signal) => bundle.dispatch(invocation, facilities, signal),
+				try: (signal) => {
+					const controller = taskInvocations?.open(invocation.id);
+					return bundle
+						.dispatch(
+							invocation,
+							facilities,
+							controller === undefined ? signal : AbortSignal.any([signal, controller.signal])
+						)
+						.finally(() => {
+							if (controller !== undefined) taskInvocations?.close(invocation.id, controller);
+						});
+				},
 				catch: (cause) =>
 					new ServerTransportError({
 						operation: 'BoltServer.Server.dispatch',
@@ -322,7 +335,8 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 	request: IncomingMessage,
 	response: ServerResponse,
 	configuration: ServerConfiguration,
-	facilities: FacilityBindings
+	facilities: FacilityBindings,
+	taskInvocations?: TaskInvocationControl
 ) {
 	const loader = yield* BundleLoader;
 	const health = yield* ServerHealth;
@@ -418,7 +432,8 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 					trustedContext: decodedPayload.success.trustedContext ?? {}
 				}),
 				facilities,
-				configuration.invocationTimeoutMillis
+				configuration.invocationTimeoutMillis,
+				taskInvocations
 			)
 		);
 		return;
@@ -478,7 +493,12 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 		});
 		writeDispatchResult(
 			response,
-			yield* dispatch(invocation, facilities, configuration.invocationTimeoutMillis)
+			yield* dispatch(
+				invocation,
+				facilities,
+				configuration.invocationTimeoutMillis,
+				taskInvocations
+			)
 		);
 		return;
 	}
@@ -518,7 +538,12 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 		headers: rawRequestHeaders(request),
 		...(body === undefined ? {} : { body })
 	});
-	const result = yield* dispatch(invocation, facilities, configuration.invocationTimeoutMillis);
+	const result = yield* dispatch(
+		invocation,
+		facilities,
+		configuration.invocationTimeoutMillis,
+		taskInvocations
+	);
 	writeDispatchResult(response, result);
 });
 
@@ -589,7 +614,8 @@ const processRealtimeEvent = Effect.fn('BoltServer.Server.processRealtimeEvent')
 const startServerEffect = <E>(
 	configuration: ServerConfiguration,
 	facilities: FacilityBindings,
-	runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, E>
+	runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, E>,
+	taskInvocations?: TaskInvocationControl
 ): Effect.Effect<RunningServer, ServerTransportError> =>
 	Effect.gen(function* () {
 		const websocketServer = new WebSocketServer({ noServer: true });
@@ -605,7 +631,7 @@ const startServerEffect = <E>(
 			});
 
 			runtime.runFork(
-				handleHttp(request, response, configuration, facilities).pipe(
+				handleHttp(request, response, configuration, facilities, taskInvocations).pipe(
 					Effect.catchCause((cause) =>
 						Effect.gen(function* () {
 							// The response body stays opaque, but an unexplained 500 with no
@@ -781,5 +807,6 @@ const startServerEffect = <E>(
 export const startServer = <E>(
 	configuration: ServerConfiguration,
 	facilities: FacilityBindings,
-	runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, E>
-) => Effect.runPromise(startServerEffect(configuration, facilities, runtime));
+	runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, E>,
+	taskInvocations?: TaskInvocationControl
+) => Effect.runPromise(startServerEffect(configuration, facilities, runtime, taskInvocations));
