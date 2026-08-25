@@ -2,7 +2,7 @@
 	import { cn } from '#lib/utils';
 	import { DataRenderer } from '#lib/data-renderer';
 	import RelationshipRenderer from '../relationship/relationship.renderer.svelte';
-	import type { MatrixColumn, MatrixRow } from './matrix.renderer.svelte';
+	import type { MatrixColumn, MatrixRow } from './matrix.types.js';
 
 	interface Props {
 		row: Record<string, unknown> & { __matrixRowId: string };

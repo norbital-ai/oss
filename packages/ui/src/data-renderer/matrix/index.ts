@@ -5,4 +5,4 @@ export type {
 	MatrixRendererProps,
 	MatrixRow,
 	MatrixRowActionProps
-} from './matrix.renderer.svelte';
+} from './matrix.types.js';
