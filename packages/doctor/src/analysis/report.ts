@@ -1,3 +1,4 @@
+// repository-health:allow SEM_PARALLEL -- report renders what snapshot assembles; sink/source of the same pipeline.
 /**
  * Report assembly surfaces: schema constants, the serialized report shapes, the bounded markdown
  * decision briefs, and atomic publication, ported from `analyze.mjs`.

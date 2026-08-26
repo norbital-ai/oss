@@ -1,3 +1,4 @@
+// repository-health:allow SEM_PARALLEL -- different analysis modules sharing the analyzer vocabulary; related by family, not duplication.
 /**
  * Per-function structure: cyclomatic complexity, nesting, pass-through shape, and inline
  * candidates, plus the AST walk that feeds every downstream metric, ported from `analyze.mjs`.

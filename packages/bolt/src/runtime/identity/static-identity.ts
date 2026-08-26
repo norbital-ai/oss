@@ -1,3 +1,4 @@
+// repository-health:allow SEM_PARALLEL -- siblings of one identity module sharing its vocabulary; distinct responsibilities (static stub vs live subject).
 import type * as Identity from '#lib/runtime/identity/identity.js';
 
 /**

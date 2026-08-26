@@ -1,3 +1,4 @@
+// repository-health:allow SEM_PARALLEL -- pattern forms the rule authoring surface carrying rules; provider/consumer of the same algebra.
 /**
  * How a rule is authored.
  *

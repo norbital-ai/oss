@@ -1,3 +1,4 @@
+// repository-health:allow SEM_PARALLEL -- index composes the catalog; one module, two entry points.
 import { DEFAULT_LOCALE } from './locale.js';
 
 /**

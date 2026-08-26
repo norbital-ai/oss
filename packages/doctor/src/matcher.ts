@@ -1,3 +1,4 @@
+// repository-health:allow SEM_PARALLEL -- matcher is the engine pattern.ts drives; one pipeline, two phases.
 /**
  * A relational rule algebra over the TypeScript parse tree.
  *

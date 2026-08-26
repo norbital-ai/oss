@@ -1,3 +1,4 @@
+// repository-health:allow SEM_PARALLEL -- inventory feeds the runner; provider/consumer pair, not parallel implementations.
 /**
  * Source inventory and physical LOC classification, ported from `analyze.mjs`.
  *

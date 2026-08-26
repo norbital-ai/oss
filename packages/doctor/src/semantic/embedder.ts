@@ -1,3 +1,4 @@
+// repository-health:allow SEM_PARALLEL -- SPI <-> adapter: openrouter implements the embedder contract.
 /**
  * The embedder contract every semantic provider satisfies, and the accounting every
  * indexing run reports.

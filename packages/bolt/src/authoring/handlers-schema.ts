@@ -78,14 +78,4 @@ const HandlerAuthoring: {
 export const defineQueryHandler = HandlerAuthoring.query;
 export const defineCommandHandler = HandlerAuthoring.command;
 
-interface TFileAttachment {
-	name: string;
-	contentType: 'HTML' | 'PDF' | 'CSV' | 'XLSX' | 'JSON' | 'TEXT' | 'BINARY';
-	content: unknown;
-}
-interface TExportAction {
-	label: string;
-	attachments: Array<TFileAttachment>;
-	metadata?: Record<string, unknown>;
-}
-export type TExportManifest = Array<TExportAction>;
+export type { TExportManifest } from './contracts-schema.js';

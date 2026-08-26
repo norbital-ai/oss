@@ -1,3 +1,4 @@
+// repository-health:allow SEM_PARALLEL -- authored facade consumes the collections contract leaf; the pair is linked through collections.contract, not parallel.
 import { Context, Duration, Effect, Option, Result, Schema, SchemaIssue } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
@@ -7,7 +8,7 @@ import type { AuthoredIntegrationModule } from '#lib/authoring/integration-intro
 import type { PolicyRuntimeFunction } from '#lib/authoring/policy-introspection.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
-import type * as Collections from '#lib/runtime/collections/collections.js';
+import type { Interface as CollectionsInterface } from './collections.contract.js';
 import type * as Automations from '#lib/runtime/automations/automations.js';
 import type { AIInterface, FilesInterface } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
@@ -681,7 +682,7 @@ export const makeAutomationApi = (
 export const nearestInputOf = (
 	collection: string,
 	input: Readonly<Record<string, unknown>>
-): Parameters<Collections.Interface['findNearest']>[2] => ({
+): Parameters<CollectionsInterface['findNearest']>[2] => ({
 	collection,
 	column: input['column'],
 	probe: input['probe'],
@@ -695,13 +696,13 @@ export const nearestInputOf = (
 export const makeBoundAuthoringOps = (
 	effectId: EffectIdType,
 	subject: Subject,
-	collections: Collections.Interface,
+	collections: CollectionsInterface,
 	ai: AIInterface,
 	files: FilesInterface,
 	automations: Automations.Interface,
 	randomId: () => string = () => globalThis.crypto.randomUUID()
 ): AuthoredCollectionOps => {
-	type QueryInput = Parameters<Collections.Interface['findMany']>[2];
+	type QueryInput = Parameters<CollectionsInterface['findMany']>[2];
 	const query = (collection: string, input: Readonly<Record<string, unknown>>): QueryInput => ({
 		collection,
 		...input

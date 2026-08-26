@@ -536,15 +536,8 @@ const assertVerifiableSignature = (binding: string, signature: WebhookSignatureS
 		);
 	}
 };
-export interface PrivateEnvReference {
-	readonly env: string;
-}
-export interface HttpConnection {
-	readonly baseUrl: string;
-	readonly authentication?:
-		| { readonly type: 'bearer'; readonly token: PrivateEnvReference }
-		| { readonly type: 'header'; readonly header: string; readonly value: PrivateEnvReference };
-}
+export type { PrivateEnvReference, HttpConnection } from './contracts-schema.js';
+import type { HttpConnection, PrivateEnvReference } from './contracts-schema.js';
 /** Owns define connection behavior at the authoring boundary so validation and typed semantics stay consistent for every caller. */
 export const defineConnection = <const Connection extends HttpConnection>(
 	connection: Connection

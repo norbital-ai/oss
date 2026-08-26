@@ -63,7 +63,7 @@ export interface TInfiniteLoadingConfig {
 /**
  * Base properties shared across all combobox types.
  */
-export interface TComboboxBaseProps<
+interface TComboboxBaseProps<
 	T,
 	TAdditionalProps extends Record<string, unknown>,
 	TMultiple extends boolean = false
@@ -165,7 +165,7 @@ export interface TComboboxBaseProps<
 /**
  * Configuration for client-side filtering.
  */
-export interface TClientConfig {
+interface TClientConfig {
 	/** An optional loading state, controlled by the parent. */
 	isLoading?: boolean;
 	/** An optional error message to display. */
@@ -175,7 +175,7 @@ export interface TClientConfig {
 /**
  * Configuration for server-side filtering.
  */
-export interface TServerConfig {
+interface TServerConfig {
 	/**
 	 * **Required.** A callback that communicates the search query to the parent.
 	 * The parent is responsible for updating the `options` prop.
@@ -193,7 +193,7 @@ export interface TServerConfig {
 /**
  * Properties for the client-side filtering combobox.
  */
-export interface TComboboxClientProps {
+interface TComboboxClientProps {
 	/** Specifies that filtering is handled client-side. */
 	type?: 'client';
 	/** An optional object for client-side configurations like loading and error states. */

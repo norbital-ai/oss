@@ -30,6 +30,7 @@ const ALLOWANCE = /repository-health:allow\s+([A-Za-z][A-Za-z0-9_]*)\s+--\s+(\S)
  * `:` and a greedy match would read a line number out of the evidence.
  */
 const LOCATION = /^(.+?):(\d+): /;
+const PAIR_OWNERS = /^(.*?) <-> (.*?):/;
 
 function marks(line: string, rule: string): boolean {
 	ALLOWANCE.lastIndex = 0;
@@ -94,10 +95,21 @@ export function applyAllowances(
 	};
 
 	return findings.filter((finding) => {
-		const match = LOCATION.exec(finding.location);
-		if (match === null) return true;
-		const lines = linesOf(match[1]!);
-		if (lines === undefined) return true;
-		return !allowedAt(lines, Number(match[2]), finding.rule);
+		// A pair location names two files (`a <-> b:1:`). The nomination is about the pair, so an
+		// allowance on *either* file's reported line suppresses it: the reviewer annotates the
+		// file they read, and whichever side that is, it counts.
+		const candidates = PAIR_OWNERS.exec(finding.location);
+		const files =
+			candidates === null
+				? [LOCATION.exec(finding.location)?.[1]]
+				: [candidates[1], candidates[2]];
+		const line = candidates === null ? Number(LOCATION.exec(finding.location)?.[2] ?? 1) : 1;
+		for (const file of files) {
+			if (file === undefined) continue;
+			const lines = linesOf(file);
+			if (lines === undefined) continue;
+			if (allowedAt(lines, line, finding.rule)) return false;
+		}
+		return true;
 	});
 }

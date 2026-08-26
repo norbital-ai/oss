@@ -9,7 +9,7 @@ import type {
 	ProviderOutcome
 } from '@norbital-ai/bolt-protocol';
 import { describeCause } from '#lib/runtime/workspace.js';
-import * as Identity from '#lib/runtime/identity/identity.js';
+import { currentSubject } from '#lib/runtime/identity/subject.js';
 
 /** Carries facility error through the typed facilities failure channel without losing diagnostic context. */
 export class FacilityError extends Schema.TaggedError<FacilityError>()('Bolt.FacilityError', {
@@ -65,7 +65,7 @@ export const invokeBinding = <Input, Output>(
 		// dispatch has authenticated, which happens after the call context is built. `serviceOption`
 		// is what makes a task or an activation — work with no person behind it — carry no subject
 		// instead of a fabricated one.
-		const subject = yield* Identity.currentSubject;
+		const subject = yield* currentSubject;
 		const metadata: FacilityCall = {
 			invocationId: context.invocationId,
 			effectId,

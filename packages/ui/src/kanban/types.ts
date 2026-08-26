@@ -2,13 +2,13 @@ import { Effect, Schema } from 'effect';
 import type { Snippet } from 'svelte';
 
 // Core interfaces
-export const TKanbanItemSchema = Schema.Struct({
+const TKanbanItemSchema = Schema.Struct({
 	_id: Schema.String,
 	type: Schema.Literals(['card', 'column'])
 });
 export type TKanbanItem = typeof TKanbanItemSchema.Type;
 
-export const TKanbanColumnDataSchema = Schema.Struct({
+const TKanbanColumnDataSchema = Schema.Struct({
 	_id: Schema.String,
 	title: Schema.String,
 	items: Schema.Array(TKanbanItemSchema),
@@ -17,10 +17,10 @@ export const TKanbanColumnDataSchema = Schema.Struct({
 	isLoading: Schema.optional(Schema.Boolean),
 	isFetchingNextPage: Schema.optional(Schema.Boolean)
 });
-export type TKanbanColumnData = typeof TKanbanColumnDataSchema.Type;
+type TKanbanColumnData = typeof TKanbanColumnDataSchema.Type;
 
 // Card-specific interface
-export type TKanbanCardData = TKanbanItem & {
+type TKanbanCardData = TKanbanItem & {
 	type: 'card';
 	title: string;
 	description?: string;
@@ -30,21 +30,21 @@ export type TKanbanCardData = TKanbanItem & {
 export type TCardSnippet = Snippet<[TKanbanItem & { columnId: string }]>;
 
 // Snippet type for column header actions (e.g. create-task button)
-export type TColumnHeaderActionSnippet = Snippet<[{ columnId: string }]>;
+type TColumnHeaderActionSnippet = Snippet<[{ columnId: string }]>;
 
 // Snippet type for custom column title rendering
-export type TColumnTitleSnippet = Snippet<
+type TColumnTitleSnippet = Snippet<
 	[{ columnId: string; title: string; column: TKanbanColumnData }]
 >;
 
-export const KanbanCardMoveSchema = Schema.Struct({
+const KanbanCardMoveSchema = Schema.Struct({
 	recordId: Schema.String,
 	fromColumnId: Schema.String,
 	toColumnId: Schema.String,
 	/** Target index in the destination column (from Sortable `newIndex`). */
 	toIndex: Schema.optional(Schema.Number)
 });
-export type KanbanCardMove = typeof KanbanCardMoveSchema.Type;
+type KanbanCardMove = typeof KanbanCardMoveSchema.Type;
 
 // Main component props interface
 export interface KanbanProps {

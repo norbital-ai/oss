@@ -1,3 +1,4 @@
+// repository-health:allow SEM_PARALLEL -- index is the barrel over rate-card; the public surface, not a second implementation.
 import { Schema } from 'effect';
 import {
 	AI_SGD_PER_PROVIDER_USD,

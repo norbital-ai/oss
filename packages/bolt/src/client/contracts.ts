@@ -1,3 +1,4 @@
+// repository-health:allow SEM_PARALLEL -- contract <-> runtime: runtime.ts consumes the client contract surface, linked through the #lib/client alias my probe cannot see.
 import type { RemoteQuery } from '@norbital-ai/std/collection';
 import type { InvocationScope } from '@norbital-ai/bolt-protocol';
 import type { Schema } from 'effect';
@@ -24,7 +25,7 @@ export type BoltClient = Readonly<{
 export type { RemoteQuery };
 
 /** The schemas the generated client declaration may build mutation graphs from. */
-export type MutationSchema = Readonly<{
+type MutationSchema = Readonly<{
 	readonly tables: Readonly<
 		Record<
 			string,
@@ -37,29 +38,29 @@ export type MutationSchema = Readonly<{
 	readonly relations: Readonly<Record<string, unknown>>;
 }>;
 
-export type MutationTableName<S extends MutationSchema> = keyof S['tables'] & string;
-export type MutationRow<
+type MutationTableName<S extends MutationSchema> = keyof S['tables'] & string;
+type MutationRow<
 	S extends MutationSchema,
 	N extends MutationTableName<S>
 > = S['tables'][N]['$inferSelect'];
-export type MutationInsert<
+type MutationInsert<
 	S extends MutationSchema,
 	N extends MutationTableName<S>
 > = S['tables'][N]['$inferInsert'];
-export type SystemMutationKey =
+type SystemMutationKey =
 	'id' | 'created_at' | 'updated_at' | 'sys_period' | 'row_version' | 'approval_id';
-export type AuthoredMutationInsert<S extends MutationSchema, N extends MutationTableName<S>> = Omit<
+type AuthoredMutationInsert<S extends MutationSchema, N extends MutationTableName<S>> = Omit<
 	MutationInsert<S, N>,
 	SystemMutationKey
 >;
-export type MutationIdentity<S extends MutationSchema, N extends MutationTableName<S>> =
+type MutationIdentity<S extends MutationSchema, N extends MutationTableName<S>> =
 	MutationRow<S, N> extends { readonly id: infer Identity } ? Identity : string;
 
-export type RelationsFor<
+type RelationsFor<
 	S extends MutationSchema,
 	N extends MutationTableName<S>
 > = N extends keyof S['relations'] ? S['relations'][N] : never;
-export type ManyRelation<S extends MutationSchema, N extends MutationTableName<S>> = {
+type ManyRelation<S extends MutationSchema, N extends MutationTableName<S>> = {
 	readonly [K in keyof RelationsFor<S, N>]: RelationsFor<S, N>[K] extends {
 		readonly cardinality: 'many';
 		readonly target: MutationTableName<S>;
@@ -77,14 +78,14 @@ export type ManyRelation<S extends MutationSchema, N extends MutationTableName<S
 					: never
 		: never;
 }[keyof RelationsFor<S, N>];
-export type RelationTarget<
+type RelationTarget<
 	S extends MutationSchema,
 	N extends MutationTableName<S>,
 	K extends ManyRelation<S, N>
 > = RelationsFor<S, N>[K] extends { readonly target: infer Target extends MutationTableName<S> }
 	? Target
 	: never;
-export type RelationColumn<
+type RelationColumn<
 	S extends MutationSchema,
 	N extends MutationTableName<S>,
 	K extends ManyRelation<S, N>
@@ -92,7 +93,7 @@ export type RelationColumn<
 	? Column
 	: never;
 
-export type WithoutKey<Value, Key extends PropertyKey> = Value extends unknown
+type WithoutKey<Value, Key extends PropertyKey> = Value extends unknown
 	? Omit<Value, Extract<Key, keyof Value>>
 	: never;
 
@@ -102,11 +103,11 @@ export type WithoutKey<Value, Key extends PropertyKey> = Value extends unknown
  * Identity lives inside the record at every level. Its presence is the operation discriminator;
  * callers cannot supply a separate id whose meaning changes between roots and children.
  */
-export type MutationRecord<S extends MutationSchema, N extends MutationTableName<S>> =
+type MutationRecord<S extends MutationSchema, N extends MutationTableName<S>> =
 	| AuthoredMutationInsert<S, N>
 	| (Readonly<{ id: MutationIdentity<S, N> }> & Partial<AuthoredMutationInsert<S, N>>);
 
-export type MutationChildren<S extends MutationSchema, N extends MutationTableName<S>> = {
+type MutationChildren<S extends MutationSchema, N extends MutationTableName<S>> = {
 	readonly [K in ManyRelation<S, N>]?: ReadonlyArray<
 		WithoutKey<CollectionMutationValues<S, RelationTarget<S, N, K>>, RelationColumn<S, N, K>>
 	>;

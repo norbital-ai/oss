@@ -1,23 +1,15 @@
 import type { TeamName } from './contracts-schema.js';
+import { ApprovalFlowBrand } from './contracts-schema.js';
+import type {
+	ApprovalFlow,
+	ApprovalReviewFlow,
+	NoApprovalFlow
+} from './contracts-schema.js';
 
-const ApprovalFlowBrand: unique symbol = Symbol('@norbital-ai/bolt/ApprovalFlow');
+export type { ApprovalFlow, ApprovalReviewFlow, NoApprovalFlow } from './contracts-schema.js';
 
 type ApprovalStage = Readonly<{
 	readonly approvers: readonly [TeamName, ...TeamName[]];
-}>;
-
-export type ApprovalFlow = ApprovalReviewFlow | NoApprovalFlow;
-
-export type ApprovalReviewFlow = Readonly<{
-	readonly _tag: 'Review';
-	readonly stages: ReadonlyArray<ApprovalStage>;
-	readonly thenBy: (first: TeamName, ...others: ReadonlyArray<TeamName>) => ApprovalReviewFlow;
-	readonly [ApprovalFlowBrand]: true;
-}>;
-
-export type NoApprovalFlow = Readonly<{
-	readonly _tag: 'NoApproval';
-	readonly [ApprovalFlowBrand]: true;
 }>;
 
 type ApprovalFlowDescriptor =

@@ -1,3 +1,4 @@
+// repository-health:allow SEM_PARALLEL -- host.ts re-exports signature definitions from system-principal; provider/consumer, not replication.
 export { makeHttpConnectorBinding } from './runtime/integrations/http-connector.js';
 /**
  * Identity's tables, re-exported for the hosts that must apply them.

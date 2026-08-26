@@ -2,7 +2,6 @@
 // contract and its workspace declaration; they already link by type-only imports in both directions.
 import { Effect, Schema } from 'effect';
 import type { SystemRowColumns } from './system-row-model.js';
-import type { TExportManifest } from './handlers-schema.js';
 import type {
 	AnyModelFieldBuilder,
 	FileRef,
@@ -11,11 +10,51 @@ import type {
 	ReferenceTargets
 } from './models-schema.js';
 import type { RateLimitKey, RateLimitRule, RateLimitRules } from './rate-limits-schema.js';
-import type { ApprovalFlow } from './approval-flow.js';
-// Type-only, and therefore erased: `workspace-schema.ts` already imports `EnvoyDefinition` from
-// here, so a value import in this direction would be a real cycle.
-import type { HttpConnection, PrivateEnvReference } from './workspace-schema.js';
 import type { WorkspaceAuthoringTypes, WorkspaceTeamAuthoringTypes } from './authoring-types.js';
+
+/** A pull or webhook connection's environment binding, validated by `defineConnection`. */
+export interface PrivateEnvReference {
+	readonly env: string;
+}
+export interface HttpConnection {
+	readonly baseUrl: string;
+	readonly authentication?:
+		| { readonly type: 'bearer'; readonly token: PrivateEnvReference }
+		| { readonly type: 'header'; readonly header: string; readonly value: PrivateEnvReference };
+}
+
+/** The brand an approval flow carries; present only on flows this contract minted. */
+export const ApprovalFlowBrand: unique symbol = Symbol('@norbital-ai/bolt/ApprovalFlow');
+
+export type ApprovalStage = Readonly<{
+	readonly approvers: readonly [TeamName, ...TeamName[]];
+}>;
+
+export type ApprovalFlow = ApprovalReviewFlow | NoApprovalFlow;
+
+export type ApprovalReviewFlow = Readonly<{
+	readonly _tag: 'Review';
+	readonly stages: ReadonlyArray<ApprovalStage>;
+	readonly thenBy: (first: TeamName, ...others: ReadonlyArray<TeamName>) => ApprovalReviewFlow;
+	readonly [ApprovalFlowBrand]: true;
+}>;
+
+export type NoApprovalFlow = Readonly<{
+	readonly _tag: 'NoApproval';
+	readonly [ApprovalFlowBrand]: true;
+}>;
+
+interface TFileAttachment {
+	name: string;
+	contentType: 'HTML' | 'PDF' | 'CSV' | 'XLSX' | 'JSON' | 'TEXT' | 'BINARY';
+	content: unknown;
+}
+interface TExportAction {
+	label: string;
+	attachments: Array<TFileAttachment>;
+	metadata?: Record<string, unknown>;
+}
+export type TExportManifest = Array<TExportAction>;
 /**
  * The generated team union is kept on a separate augmentation graph.
  *
