@@ -8,7 +8,7 @@ import type { RemoteQuery } from '@norbital-ai/std/collection';
 
 /** The queue row projected to a browser watching one durable automation run. */
 export const AutomationTaskSnapshot = Schema.Struct({
-	status: Schema.Literals(['pending', 'paused', 'resuming', 'done', 'failed']),
+	status: Schema.Literals(['pending', 'paused', 'resuming', 'running', 'done', 'failed']),
 	attempts: Schema.Number,
 	maxAttempts: Schema.Number,
 	error: Schema.NullOr(Schema.String),

@@ -137,6 +137,7 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	'approvals.timeline',
 	'sync.diff',
 	'sync.shape',
+	'sync.provisioning',
 	'sync.mutate',
 	'agents.enqueue',
 	'agents.open',

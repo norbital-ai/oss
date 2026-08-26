@@ -68,6 +68,69 @@ describe('workspace member rules', () => {
 	});
 });
 
+describe('envoy pairing workflow', () => {
+	const source = readFileSync(
+		new URL('../../src/client/ui/org/envoys-settings.svelte', import.meta.url),
+		'utf8'
+	);
+
+	it('opens a dialog and polls host status for an asynchronously published QR code', () => {
+		expect(source).toContain('<Dialog.Root open={pairingTarget !== undefined}');
+		expect(source).toContain(
+			'yield* Effect.promise(() => ownPairingOpen(envoy.name, envoy.transport))'
+		);
+		expect(source).toContain(
+			"yield* runPairingRequest(envoy.name, envoy.transport, 'status').pipe("
+		);
+		expect(source).toContain('Effect.repeat({');
+		expect(source).toContain('schedule: Schedule.spaced(750)');
+		expect(source).toContain('Fiber.interrupt(fiber)');
+		expect(source).toContain("connection?.state === 'disconnected'");
+		expect(source).toContain('The transport did not open');
+	});
+
+	it('keeps one uncancellable host pair open per envoy across dialog close and reopen', () => {
+		expect(source).toContain('const pairingOpens = new Map<string, Promise<void>>()');
+		expect(source).toMatch(
+			/const existing = pairingOpens\.get\(envoy\);\s*if \(existing !== undefined\) return existing;/
+		);
+		expect(source).toContain(
+			"completion = Effect.runPromise(runPairingRequest(envoy, provider, 'pair')).finally(() => {"
+		);
+		expect(source).toMatch(
+			/if \(pairingOpens\.get\(envoy\) !== completion\) return;\s*pairingOpens\.delete\(envoy\);\s*pairingBusy\[envoy\] = false;/
+		);
+		expect(source.match(/runPairingRequest\(envoy, provider, 'pair'\)/g)).toHaveLength(1);
+		expect(source.match(/^\s*pairingBusy\[envoy\] = false/gm)).toHaveLength(1);
+		expect(source).toContain("? 'Resume pairing'");
+		expect(source).toContain('disabled={unpairingBusy[envoy.name] === true}');
+	});
+
+	it('keeps reconnect intent with its envoy when another pairing modal opens', () => {
+		expect(source).toContain('let pairingReconnects = $state<Record<string, boolean>>({})');
+		expect(source).toContain(
+			'pairingReconnects[envoy.name] = connections[envoy.name]?.stored === true'
+		);
+		expect(source).toContain('{@const reconnecting = pairingReconnects[target.name] === true}');
+		expect(source).not.toContain('let pairingReconnect = $state(');
+	});
+
+	it('keeps reconnect and non-WhatsApp modal copy provider-neutral', () => {
+		expect(source).toContain('{#if reconnecting}');
+		expect(source).toContain("{:else if target.transport === 'whatsapp'}");
+		expect(source).toContain('The host is reopening the saved {target.transport} session.');
+		expect(source).toContain('Follow any');
+		expect(source).toMatch(/verification\s+steps its provider requests\./);
+		expect(source).toContain('The transport could not open');
+		expect(source).toContain('Envoy connected');
+		expect(source).toContain("? 'Reopening the transport…'");
+		expect(source).toContain(": 'Opening the transport…'");
+		expect(source).toContain(
+			': `Use this pairing code with ${target.transport}. It refreshes here if the provider rotates it.`}'
+		);
+	});
+});
+
 describe('invitation expiry', () => {
 	it('reports a pending invitation past its deadline as expired', () => {
 		expect(invitationStatusAt(invitation({ expiresAt: '2026-01-01T00:00:00.000Z' }), NOW)).toBe(

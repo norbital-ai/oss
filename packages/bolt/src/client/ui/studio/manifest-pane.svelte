@@ -64,6 +64,7 @@
 		'pending',
 		'paused',
 		'resuming',
+		'running',
 		'done',
 		'failed'
 	]);

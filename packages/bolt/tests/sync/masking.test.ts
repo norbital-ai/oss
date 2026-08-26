@@ -1,15 +1,25 @@
 import { createHash } from 'node:crypto';
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+	EnvironmentName,
+	Invocation,
+	InvocationId,
+	PROTOCOL_VERSION,
+	ReleaseId,
+	TenantId
+} from '@norbital-ai/bolt-protocol';
 import { collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import * as Sync from '../../src/runtime/sync/sync.js';
 import type * as Identity from '../../src/runtime/identity/identity.js';
+import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
 	type BoltTestRuntime
 } from '../support/bolt-test-layer.js';
+import { seedSession } from '../support/fixture-identity.js';
 
 /**
  * Column masking on the way into the replica.
@@ -85,6 +95,34 @@ afterEach(async () => {
 });
 
 describe('what the sync engine hands a field-restricted subject', () => {
+	it('reports the same field projection to the local query planner', async () => {
+		harness = await makeBoltTestRuntime(restrictedWorkspace());
+		await seedSession(harness, { token: 'viewer-token', user: 'viewer-1', team: 'viewer' });
+		const answer = await harness.runtime.runPromise(
+			dispatchInvocation(
+				Invocation.cases.Command.make({
+					protocolVersion: PROTOCOL_VERSION,
+					id: InvocationId.make('sync-provisioning-projection'),
+					scope: {
+						tenantId: TenantId.make('test-tenant'),
+						environment: EnvironmentName.make('development'),
+						releaseId: ReleaseId.make('local')
+					},
+					deadlineEpochMs: Date.now() + 30_000,
+					command: 'sync.provisioning',
+					input: null,
+					headers: { authorization: ['Bearer viewer-token'] }
+				})
+			)
+		);
+		const collections = Reflect.get(answer.value as object, 'collections');
+		expect(Array.isArray(collections)).toBe(true);
+		const people = (collections as ReadonlyArray<Record<string, unknown>>).find(
+			(entry) => entry['name'] === 'people'
+		);
+		expect(people).toMatchObject({ readableFields: ['id', 'name'] });
+	});
+
 	it('omits masked columns from a snapshot', async () => {
 		harness = await makeBoltTestRuntime(restrictedWorkspace());
 		const { runtime, effectId } = harness;

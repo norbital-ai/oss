@@ -75,7 +75,8 @@ const transportFor = (runtime: BoltTestRuntime): BootstrapTransport => ({
 								fingerprint: WorkspaceSchema.fingerprintSchemaSteps(steps),
 								collections: workspace.definition.collections.map(({ name, fields }) => ({
 									name,
-									fields
+									fields,
+									readableFields: null
 								})),
 								relations: workspace.definition.relations ?? []
 							};

@@ -22,7 +22,6 @@ const invitationsTable = SYSTEM_MODEL_TABLES.bolt_invitations;
 const workspaceIdentitySettingsTable = SYSTEM_MODEL_TABLES.bolt_workspace_identity_settings;
 const verificationTable = SYSTEM_MODEL_TABLES.verification;
 
-
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 const NullableString = Schema.NullOr(Schema.String);
 const SubjectDatabaseRow = Schema.Struct({
@@ -289,6 +288,12 @@ export type Interface = Readonly<{
 	readonly startSession: (
 		effectId: EffectId,
 		userId: string,
+		tenantId: string
+	) => Effect.Effect<string, AuthenticationError | Database.FacilityError>;
+	/** Mints a fresh tenant-local session for an existing member selected by verified address. */
+	readonly startSessionForEmail: (
+		effectId: EffectId,
+		email: string,
 		tenantId: string
 	) => Effect.Effect<string, AuthenticationError | Database.FacilityError>;
 	readonly endSession: (
@@ -651,6 +656,41 @@ export const layerWith = (
 						.values({ kind, subject_id: actorId, payload: JSON.stringify(payload) as never })
 				);
 			});
+			/** The one session constructor, shared by id-based and host-mediated sign-in. */
+			const startSession = Effect.fn('Identity.startSession')(function* (
+				effectId: EffectId,
+				userId: string,
+				tenantId: string
+			) {
+				const credential = `bolt:${tenantId}:${randomId()}`;
+				const admitted = yield* executeBuilt(
+					EffectId.make(`${effectId}:user-admit`),
+					database,
+					composer
+						.update(usersTable)
+						.set({ tenantId, updated_at: dbNow() })
+						.where(eq(usersTable.id, userId))
+						.returning({ id: usersTable.id })
+				);
+				if (admitted.rows[0] === undefined)
+					return yield* new AuthenticationError({ reason: 'invalid' });
+				yield* executeBuilt(
+					EffectId.make(`${effectId}:session-create`),
+					database,
+					composer.insert(sessionsTable).values({
+						id: randomId(),
+						token: credential,
+						userId,
+						expiresAt: dbNowPlusSeconds(8 * 60 * 60)
+					})
+				);
+				yield* identityHooks.emit(effectId, {
+					_tag: 'UserChanged',
+					userId,
+					organizationId: tenantId
+				});
+				return credential;
+			});
 			return Service.of({
 				/**
 				 * Resolves the credential against Better Auth's session table, which is the only session
@@ -982,36 +1022,24 @@ export const layerWith = (
 				 * somebody who had never signed in — or somebody who did not exist at all — and be them.
 				 * A session for an unknown subject is now refused rather than granted.
 				 */
-				startSession: Effect.fn('Identity.startSession')(function* (effectId, userId, tenantId) {
-					const credential = `bolt:${tenantId}:${randomId()}`;
-					const admitted = yield* executeBuilt(
-						EffectId.make(`${effectId}:user-admit`),
-						database,
-						composer
-							.update(usersTable)
-							.set({ tenantId, updated_at: dbNow() })
-							.where(eq(usersTable.id, userId))
-							.returning({ id: usersTable.id })
-					);
-					if (admitted.rows[0] === undefined)
-						return yield* new AuthenticationError({ reason: 'invalid' });
-					yield* executeBuilt(
-						EffectId.make(`${effectId}:session-create`),
-						database,
-						composer.insert(sessionsTable).values({
-							id: randomId(),
-							token: credential,
-							userId,
-							expiresAt: dbNowPlusSeconds(8 * 60 * 60)
-						})
-					);
-					yield* identityHooks.emit(effectId, {
-						_tag: 'UserChanged',
-						userId,
-						organizationId: tenantId
-					});
-					return credential;
-				}),
+				startSession,
+				startSessionForEmail: Effect.fn('Identity.startSessionForEmail')(
+					function* (effectId, email, tenantId) {
+						const found = yield* executeBuilt(
+							EffectId.make(`${effectId}:user-read`),
+							database,
+							composer
+								.select({ id: usersTable.id })
+								.from(usersTable)
+								.where(and(eq(usersTable.email, email), eq(usersTable.tenantId, tenantId)))
+								.limit(1)
+						);
+						const member = yield* Schema.decodeUnknownEffect(IdRow)(found.rows[0]).pipe(
+							Effect.mapError(() => new AuthenticationError({ reason: 'invalid' }))
+						);
+						return yield* startSession(effectId, member.id, tenantId);
+					}
+				),
 				endSession: Effect.fn('Identity.endSession')(function* (effectId, credential) {
 					// Deleted rather than flagged revoked. A revoked row that still authenticates if one
 					// query forgets the flag is the failure the old two-writer design actually had.

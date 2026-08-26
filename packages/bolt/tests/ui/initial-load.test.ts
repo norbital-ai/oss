@@ -50,6 +50,21 @@ describe('workspace initial load', () => {
 		expect(workspace).toContain('appMount.loading');
 	});
 
+	it('keeps user-triggered shell reads behind the first painted interaction', () => {
+		const workspace = source('ui/shell/workspace.svelte');
+		const shell = source('ui/shell/shell.svelte');
+
+		expect(workspace).toContain('interactiveQueriesRequestedScope = accessScope');
+		expect(workspace).toContain(
+			'deferredQueriesReady={interactiveQueriesRequestedScope === replicaAccessScope}'
+		);
+		expect(workspace).toContain("!accessScope.startsWith('team:')");
+		expect(shell).toContain('deferredQueriesReady\n\t\t\t? runtime.client.db.bolt_notifications');
+		expect(shell).toContain(
+			'deferredQueriesReady ? runtime.client.system.sync.shape({}) : undefined'
+		);
+	});
+
 	it('keeps PGlite out of the generated client static dependency graph', () => {
 		const runtime = source('runtime.ts');
 		const loader = source('replica/pglite-loader.ts');

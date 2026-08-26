@@ -50,7 +50,11 @@ import type { PGliteLike, ProvisioningStep } from '#lib/client/replica/pglite-sq
 import { openReplicaInvalidationBus } from '#lib/client/replica/cross-tab-invalidation.js';
 import { createSystemClient } from '#lib/client/system-client.js';
 export type { SystemClientApi } from '#lib/client/system-client.js';
-export type { CollectionMutationValues, WorkspaceClientRuntime, RemoteQuery } from '#lib/client/contracts.js';
+export type {
+	CollectionMutationValues,
+	WorkspaceClientRuntime,
+	RemoteQuery
+} from '#lib/client/contracts.js';
 
 export interface CollectionPageQuery<Value> extends RemoteQuery<Value> {
 	readonly nextCursor: string | null | undefined;
@@ -82,7 +86,6 @@ export class CollectionMutationPendingApproval extends Error {
 		this.action = outcome.action;
 	}
 }
-
 
 /**
  * `Array.isArray` narrows `any[]`, not `readonly Json[]`, so no arrangement of these guards makes
@@ -394,7 +397,7 @@ const AutomationStopResponse = Schema.Struct({ stopped: Schema.Literal(true) });
 const AutomationResumeResponse = Schema.Struct({ resumed: Schema.Literal(true) });
 const AutomationRunRow = Schema.Struct({
 	task_id: Schema.NonEmptyString,
-	status: Schema.Literals(['pending', 'paused', 'resuming', 'done', 'failed']),
+	status: Schema.Literals(['pending', 'paused', 'resuming', 'running', 'done', 'failed']),
 	attempts: Schema.Number,
 	max_attempts: Schema.Number,
 	error: Schema.NullOr(Schema.String),
@@ -938,14 +941,14 @@ const startReplica = (
 			return yield* Effect.fail(new Error('Local replica access scope changed during startup'));
 		}
 		const localReader = createLocalReader(local.store, local.shape, local.readable);
-		// The snapshot brought in rows no cursor accounts for, so everything cached predates it.
-		cache?.clear();
-		registry?.reexecuteAffected([ANY_COLLECTION]);
 
 		const invalidateNamed = (collections: ReadonlyArray<string>): void => {
 			if (cache === undefined || registry === undefined) return;
 			cache.invalidate(collections);
-			registry.reexecuteAffected(collections);
+			// Catch-up can invalidate queries mounted before the replica was ready. Keep their last remote
+			// value on screen until the ordered catch-up has drained; the one wildcard refresh below then
+			// runs with the reader installed instead of issuing a remote request for every streamed batch.
+			if (runtime.local?.current === localReader) registry.reexecuteAffected(collections);
 		};
 
 		const collectionsIn = (changes: ReadonlyArray<SyncChange>): ReadonlyArray<string> =>
@@ -985,7 +988,7 @@ const startReplica = (
 					runtime.local.current = localReader;
 				}
 				cache?.clear();
-				registry?.reexecuteAffected([ANY_COLLECTION]);
+				if (runtime.local?.current === localReader) registry?.reexecuteAffected([ANY_COLLECTION]);
 				yield* announceToTabs([ANY_COLLECTION]);
 			});
 
@@ -1016,6 +1019,22 @@ const startReplica = (
 		 */
 		const pendingBatches: Array<ReadonlyArray<SyncChange>> = [];
 		let applying = false;
+		let catchUpAnnounced = false;
+		let catchUpSettled = false;
+		let resolveCatchUp: () => void = () => undefined;
+		const initialCatchUp = new Promise<void>((resolve) => {
+			resolveCatchUp = resolve;
+		});
+		/**
+		 * The host's `ready` event means every catch-up frame has been emitted, not that this asynchronous
+		 * PGlite queue has applied it. Install the reader only after both halves are true; otherwise a read
+		 * can land in the gap and confidently answer from the older snapshot.
+		 */
+		const settleCatchUp = (): void => {
+			if (catchUpSettled || !catchUpAnnounced || applying || pendingBatches.length > 0) return;
+			catchUpSettled = true;
+			resolveCatchUp();
+		};
 		const applyPending = (): void => {
 			if (applying) return;
 			const changes = pendingBatches.shift();
@@ -1033,6 +1052,7 @@ const startReplica = (
 						Effect.sync(() => {
 							applying = false;
 							applyPending();
+							settleCatchUp();
 						})
 					)
 				)
@@ -1067,10 +1087,28 @@ const startReplica = (
 			subscription = subscribeToChanges({
 				cursor: client.cursor,
 				onChange: acceptChanges,
+				onOpen: () => {
+					catchUpAnnounced = true;
+					settleCatchUp();
+				},
 				onError: options.onError
 			});
 		};
+		const leadingAtStartup = leads();
+		if (!leadingAtStartup) {
+			// A follower reads the same shared database its elected leader has already brought up. It opens no
+			// duplicate stream of its own, so there is no local `ready` event to await in this document.
+			catchUpAnnounced = true;
+			settleCatchUp();
+		}
 		streamIfLeading();
+		if (leadingAtStartup) yield* Effect.promise(() => initialCatchUp);
+		if (accessScopeFor(runtime) !== options.accessScope) {
+			subscription?.stop();
+			client.stop();
+			yield* local.close();
+			return yield* Effect.fail(new Error('Local replica access scope changed during startup'));
+		}
 
 		/**
 		 * Leadership moves when the leading tab closes, and the sync loop has to move with it.
@@ -1087,9 +1125,12 @@ const startReplica = (
 		 * Installed after the snapshot rather than before: until the rows are in, a local answer would be
 		 * a confident empty result, which is worse than a slow correct one.
 		 */
-		if (runtime.local !== undefined && accessScopeFor(runtime) === options.accessScope) {
-			runtime.local.current = localReader;
-		}
+		if (runtime.local !== undefined) runtime.local.current = localReader;
+		// The snapshot and initial stream catch-up brought in rows no cache cursor accounts for. Install
+		// the reader first so every mounted-query refresh this invalidation starts is eligible to stay
+		// local instead of paying one final guest invocation after replica readiness.
+		cache?.clear();
+		registry?.reexecuteAffected([ANY_COLLECTION]);
 
 		const stopWatchingLeader = local.engine.onLeaderChange(() => {
 			if (leads()) {

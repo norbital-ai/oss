@@ -12,6 +12,15 @@ describe('Studio automation status presentation', () => {
 		});
 	});
 
+	it('keeps an actively claimed task visibly running and stoppable', () => {
+		expect(presentAutomationStatus('running')).toEqual({
+			status: 'running',
+			label: 'Running',
+			canStop: true,
+			canResume: false
+		});
+	});
+
 	it('keeps a generated latest run stoppable before its first status snapshot arrives', () => {
 		expect(presentAutomationStatus(undefined)).toEqual({
 			status: 'pending',

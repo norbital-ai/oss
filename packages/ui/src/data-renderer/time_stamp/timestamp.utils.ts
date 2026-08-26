@@ -1,11 +1,18 @@
 import { Effect, Option, Schema } from 'effect';
 import { getLocalTimeZone, parseAbsolute, parseDateTime } from '@internationalized/date';
+import type { CollectionField } from '@norbital-ai/std/collection';
 
 const localDateTimePartsSchema = Schema.Struct({
 	date: Schema.String,
 	time: Schema.String
 });
 type LocalDateTimeParts = typeof localDateTimePartsSchema.Type;
+
+export function instantFieldAllowsClear(
+	field: Pick<CollectionField, 'array' | 'nullable'>
+): boolean {
+	return field.array === true || field.nullable;
+}
 
 export function toLocalDateTimeParts(
 	value: unknown,

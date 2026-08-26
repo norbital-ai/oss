@@ -1,5 +1,5 @@
 /** The durable lifecycle states stored by the task queue for an automation run. */
-export type AutomationRunStatus = 'pending' | 'paused' | 'resuming' | 'done' | 'failed';
+export type AutomationRunStatus = 'pending' | 'paused' | 'resuming' | 'running' | 'done' | 'failed';
 
 type AutomationStatusPresentation = Readonly<{
 	readonly status: AutomationRunStatus;

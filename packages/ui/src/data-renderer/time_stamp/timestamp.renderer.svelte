@@ -3,6 +3,7 @@
 	import DateView from './views/date.view.svelte';
 	import TimeView from './views/time.view.svelte';
 	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
+	import { instantFieldAllowsClear } from './timestamp.utils';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -31,6 +32,7 @@
 		if (!Array.isArray(value)) return [];
 		return value.flatMap((item) => instantString(item) ?? []);
 	});
+	const allowClear = $derived(instantFieldAllowsClear(field));
 
 	function updateDate(next: string | string[] | null): void {
 		// Day precision changes only what the picker exposes. The selected value remains the exact
@@ -46,6 +48,7 @@
 		multi={true}
 		placeholder={placeholder === valuePlaceholderText ? t('dataRenderer.selectDate') : placeholder}
 		{disabled}
+		{allowClear}
 		class={className}
 		onValueChange={updateDate}
 	/>
@@ -55,6 +58,7 @@
 		multi={false}
 		placeholder={placeholder === valuePlaceholderText ? t('dataRenderer.selectDate') : placeholder}
 		{disabled}
+		{allowClear}
 		class={className}
 		onValueChange={updateDate}
 	/>
@@ -64,6 +68,7 @@
 		multiple={field.array ?? false}
 		{placeholder}
 		{disabled}
+		{allowClear}
 		class={className}
 		onValueChange={(next) => onValueChange?.(next)}
 	/>

@@ -181,7 +181,8 @@ describe('cross-tab replica invalidation', () => {
 							collections: [
 								{
 									name: 'job_assignments',
-									fields: { title: { type: 'string', required: false, indexed: false } }
+									fields: { title: { type: 'string', required: false, indexed: false } },
+									readableFields: null
 								}
 							],
 							relations: []
@@ -232,7 +233,52 @@ describe('cross-tab replica invalidation', () => {
 
 		const leaderRuntime = createBrowserWorkspaceRuntime({ transport });
 		const followerRuntime = createBrowserWorkspaceRuntime({ transport });
-		const leaderReplica = await startLocalReplica(leaderRuntime, open(true));
+		const leaderClient = createWorkspaceApiProxy(leaderRuntime);
+		const leaderAssignments = leaderClient.db.job_assignments as
+			| {
+					readonly findMany: () => CollectionPageQuery<ReadonlyArray<Schema.Json>>;
+					readonly mutate: (values: Schema.Json) => Promise<void>;
+			  }
+			| undefined;
+		if (leaderAssignments === undefined) throw new Error('job assignment client was not generated');
+		const leaderRows = leaderAssignments.findMany();
+		expect(await leaderRows).toMatchObject([{ title: 'Original title' }]);
+		expect(collectionReads).toBe(1);
+
+		let catchUpApplied = false;
+		let leaderSettled = false;
+		const leaderStarting = startLocalReplica(leaderRuntime, open(true), {
+			onChange: () => {
+				catchUpApplied = true;
+			}
+		});
+		void leaderStarting.then(() => {
+			leaderSettled = true;
+		});
+		await vi.waitFor(() => expect(streams).toHaveLength(1));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(leaderSettled).toBe(false);
+		streams[0]?.emit(
+			'sync',
+			JSON.stringify([
+				{
+					cursor: { xid: 0, sequence: 1 },
+					collection: 'job_assignments',
+					recordId: '019f7a10-2000-7000-8000-000000000001',
+					operation: 'update',
+					record: { title: 'Caught up before ready' }
+				}
+			])
+		);
+		streams[0]?.emit('ready');
+		const leaderReplica = await leaderStarting;
+		expect(catchUpApplied).toBe(true);
+		await expect
+			.poll(() => leaderRows.current, { timeout: 2_000 })
+			.toMatchObject([{ title: 'Caught up before ready' }]);
+		// Neither the streamed invalidation nor the post-ready refresh falls through to the transport.
+		expect(collectionReads).toBe(1);
+
 		const followerReplica = await startLocalReplica(followerRuntime, open(false));
 		replicas.push(leaderReplica, followerReplica);
 		expect(opens).toBe(2);
@@ -252,13 +298,9 @@ describe('cross-tab replica invalidation', () => {
 		if (followerAssignments === undefined)
 			throw new Error('job assignment query was not generated');
 		const assignmentRows = followerAssignments.findMany();
-		expect(await assignmentRows).toMatchObject([{ title: 'Original title' }]);
-		expect(collectionReads).toBe(0);
+		expect(await assignmentRows).toMatchObject([{ title: 'Caught up before ready' }]);
+		expect(collectionReads).toBe(1);
 
-		const leaderClient = createWorkspaceApiProxy(leaderRuntime);
-		const leaderAssignments = leaderClient.db.job_assignments as
-			{ readonly mutate: (values: Schema.Json) => Promise<void> } | undefined;
-		if (leaderAssignments === undefined) throw new Error('job assignment client was not generated');
 		await leaderAssignments.mutate({
 			id: '019f7a10-2000-7000-8000-000000000001',
 			title: 'Updated in the other tab'
@@ -271,8 +313,8 @@ describe('cross-tab replica invalidation', () => {
 		// may use the local replica, whose ordered change has not landed yet, so re-executing it here could
 		// repaint and cache the old row.
 		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect(assignmentRows.current).toMatchObject([{ title: 'Original title' }]);
-		expect(collectionReads).toBe(0);
+		expect(assignmentRows.current).toMatchObject([{ title: 'Caught up before ready' }]);
+		expect(collectionReads).toBe(1);
 
 		// Only the elected leader owns the sync stream. Its frame makes the ordered log catch up, then
 		// the cross-tab invalidation makes the follower's mounted local query observe the applied row.

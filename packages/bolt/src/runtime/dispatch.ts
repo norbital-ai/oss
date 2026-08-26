@@ -386,6 +386,11 @@ const IdentitySessionInput = Schema.Struct({
 	userId: Schema.NonEmptyString,
 	tenantId: Schema.NonEmptyString
 });
+const IdentityContinueSessionInput = Schema.Struct({
+	email: Schema.NonEmptyString,
+	tenantId: Schema.NonEmptyString,
+	subject: Subject
+});
 const IdentitySendCodeInput = Schema.Struct({ email: Schema.NonEmptyString });
 const IdentityAdmitFounderInput = Schema.Struct({
 	email: Schema.NonEmptyString,
@@ -791,6 +796,7 @@ const authorizeMembershipCommand = Effect.fn('Bolt.authorizeMembershipCommand')(
  */
 const SYSTEM_ONLY_COMMANDS: ReadonlySet<string> = new Set([
 	'identity.bootstrapFounder',
+	'identity.continueSession',
 	/**
 	 * The inbound envoy port, which would otherwise be the widest hole in this runtime.
 	 *
@@ -1978,6 +1984,16 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				)
 			});
 		}
+		case 'identity.continueSession': {
+			const input = yield* decode(IdentityContinueSessionInput, commandInput);
+			return json({
+				credential: yield* (yield* Identity.Service).startSessionForEmail(
+					effectId,
+					input.email,
+					input.tenantId
+				)
+			});
+		}
 		case 'identity.endSession': {
 			const input = yield* decode(IdentityCredentialInput, commandInput);
 			yield* (yield* Identity.Service).endSession(effectId, input.credential);
@@ -2534,8 +2550,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		 * for what Drizzle cannot express.
 		 */
 		case 'sync.provisioning': {
+			const input = yield* decode(SyncShapeInput, commandInput);
 			const plan = (yield* WorkspaceSchema.Service).plan();
 			const workspace = yield* Workspace.Service;
+			const access = yield* AccessControl.Service;
 			const steps = [
 				...plan.steps
 					.filter(({ id }) => id.startsWith('bolt:'))
@@ -2563,7 +2581,16 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				 * does not already state — these are the same collections, spelled as declarations
 				 * instead of as `create table`.
 				 */
-				collections: workspace.definition.collections.map(({ name, fields }) => ({ name, fields })),
+				collections: workspace.definition.collections.map(({ name, fields }) => {
+					const projection = access.predicate(input.subject, 'read', name);
+					return {
+						name,
+						fields,
+						...(projection.allowed
+							? { readableFields: projection.fields === undefined ? null : projection.fields }
+							: {})
+					};
+				}),
 				relations: workspace.definition.relations ?? []
 			};
 			return json(

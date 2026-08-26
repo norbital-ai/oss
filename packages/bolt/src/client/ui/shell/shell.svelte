@@ -64,6 +64,7 @@
 		search = '',
 		plugins = [],
 		isAdmin,
+		deferredQueriesReady = false,
 		impersonation = null,
 		onImpersonate,
 		onStopImpersonating,
@@ -142,6 +143,8 @@
 		search?: string;
 		plugins?: ReadonlyArray<HostPlugin>;
 		isAdmin?: boolean;
+		/** Whether user-triggered shell catalog and notification reads may begin. */
+		deferredQueriesReady?: boolean;
 		/**
 		 * The admin team-preview state the sidebar's account menu renders, or `null` for no menu.
 		 *
@@ -323,16 +326,20 @@
 	let shortcutModifier = $state(detectShortcutModifier());
 	const runtime = $derived(agentClient.runtime);
 	const notificationsQuery = $derived(
-		runtime.client.db.bolt_notifications.findMany({
-			where: { recipient: { eq: runtime.subject.userId } },
-			orderBy: { created_at: 'desc' },
-			limit: 500
-		})
+		deferredQueriesReady
+			? runtime.client.db.bolt_notifications.findMany({
+					where: { recipient: { eq: runtime.subject.userId } },
+					orderBy: { created_at: 'desc' },
+					limit: 500
+				})
+			: undefined
 	);
 	const manifestQuery = $derived(runtime.client.system.workspace.manifest({}));
 	const declaredEnvoys = $derived(manifestQuery.current?.envoys ?? []);
-	const finderCollectionsQuery = $derived(runtime.client.system.sync.shape({}));
-	const finderCollections = $derived(finderCollectionsQuery.current ?? []);
+	const finderCollectionsQuery = $derived(
+		deferredQueriesReady ? runtime.client.system.sync.shape({}) : undefined
+	);
+	const finderCollections = $derived(finderCollectionsQuery?.current ?? []);
 
 	const NotificationText = Schema.Union([
 		Schema.NonEmptyString,
@@ -353,14 +360,14 @@
 	};
 
 	const notificationItems = $derived(
-		(notificationsQuery.current ?? []).map(({ id, payload, read }) => ({
+		(notificationsQuery?.current ?? []).map(({ id, payload, read }) => ({
 			id,
 			text: notificationText(payload),
 			read
 		}))
 	);
 	const notificationsError = $derived(
-		notificationsQuery.error === undefined
+		notificationsQuery?.error === undefined
 			? undefined
 			: notificationsQuery.error instanceof Error
 				? notificationsQuery.error.message
@@ -512,7 +519,7 @@
 		<Notifications
 			{expanded}
 			items={notificationItems}
-			loading={notificationsQuery.loading}
+			loading={notificationsQuery?.loading ?? false}
 			error={notificationsError}
 			onread={markNotificationRead}
 		/>

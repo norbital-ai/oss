@@ -1,6 +1,6 @@
 // repository-health:allow SEM_PARALLEL -- local-reads consumes the replica store over the #lib
 // alias (#lib/client/replica/pglite-sql.js), so the pair is linked, not parallel.
-import { Effect, Result, Schema } from 'effect';
+import { Effect, Number as ENumber, Result, Schema } from 'effect';
 import {
 	compileOrderTerms,
 	compileWhere,
@@ -8,6 +8,10 @@ import {
 } from '#lib/runtime/collections/where.js';
 import type { LocalReplicaStore } from '#lib/client/replica/pglite-sql.js';
 import { decodeReferenceRow } from '#lib/runtime/collections/references.js';
+import {
+	compileCollectionCursorSeek,
+	encodeCollectionCursor
+} from '#lib/runtime/collections/cursor.js';
 
 /**
  * Answering a read from the replica instead of the server.
@@ -67,6 +71,7 @@ const ReplicaField = Schema.Struct({
 	fileMultiple: Schema.optionalKey(Schema.Boolean),
 	reference: Schema.optionalKey(ReferenceDefinition)
 });
+const ReadableFields = Schema.NullOr(Schema.Array(Schema.String));
 const RelationEndpoint = Schema.Struct({ collection: Schema.String, column: Schema.String });
 const ReplicaRelation = Schema.Struct({
 	name: Schema.String,
@@ -82,7 +87,12 @@ export const ReplicaShape = Schema.Struct({
 	collections: Schema.Array(
 		Schema.Struct({
 			name: Schema.String,
-			fields: Schema.Record(Schema.String, ReplicaField)
+			fields: Schema.Record(Schema.String, ReplicaField),
+			/**
+			 * The subject's field projection for this collection. `null` means unrestricted; absence
+			 * means an older server did not report enough information for a local ordered read.
+			 */
+			readableFields: Schema.optionalKey(ReadableFields)
 		})
 	),
 	relations: Schema.Array(ReplicaRelation)
@@ -103,7 +113,10 @@ const LocalReadInput = Schema.Struct({
 	collection: Schema.String,
 	where: Schema.optionalKey(Schema.Json),
 	orderBy: Schema.optionalKey(Schema.Json),
-	limit: Schema.optionalKey(Schema.Number)
+	limit: Schema.optionalKey(Schema.Number),
+	after: Schema.optionalKey(Schema.String),
+	// The server accepts this key but deliberately returns the whole row; the replica does the same.
+	columns: Schema.optionalKey(Schema.Json)
 });
 const decodeLocalReadInput = Schema.decodeUnknownResult(LocalReadInput);
 
@@ -114,7 +127,7 @@ const decodeLocalReadInput = Schema.decodeUnknownResult(LocalReadInput);
  * and the safe response to an unrecognised key is to decline the query rather than to ignore it and
  * answer a different question.
  */
-const SERVED_KEYS = new Set(['collection', 'where', 'orderBy', 'limit']);
+const SERVED_KEYS = new Set(['collection', 'where', 'orderBy', 'limit', 'after', 'columns']);
 
 export const createLocalReader = (
 	store: LocalReplicaStore,
@@ -124,6 +137,18 @@ export const createLocalReader = (
 ): LocalReader => {
 	const fieldsByCollection = Object.fromEntries(
 		shape.collections.map((entry) => [entry.name, entry.fields])
+	);
+	const readableFieldsByCollection = new Map(
+		shape.collections.flatMap((entry) =>
+			entry.readableFields === undefined
+				? []
+				: [
+						[
+							entry.name,
+							entry.readableFields === null ? null : new Set(entry.readableFields)
+						] as const
+					]
+		)
 	);
 	const contextFor = (collection: string): WhereContext | undefined => {
 		const fields = fieldsByCollection[collection];
@@ -147,7 +172,7 @@ export const createLocalReader = (
 			if (Object.keys(record.success).some((key) => !SERVED_KEYS.has(key))) return undefined;
 			const decoded = decodeLocalReadInput(record.success);
 			if (Result.isFailure(decoded)) return undefined;
-			const { collection, limit, orderBy, where } = decoded.success;
+			const { after, collection, limit, orderBy, where } = decoded.success;
 			if (!readable.has(collection)) return undefined;
 			const context = contextFor(collection);
 			if (context === undefined) return undefined;
@@ -168,35 +193,48 @@ export const createLocalReader = (
 				return yield* store.count(collection, filter);
 			}
 
-			const terms = orderBy === undefined ? [] : compileOrderTerms(orderBy, context);
-			// An ordering the compiler dropped would silently reorder the page, so an `orderBy` that
-			// yields no terms is declined rather than served unordered.
-			if (orderBy !== undefined && terms.length === 0) return undefined;
+			const terms = compileOrderTerms(orderBy, context);
+			const readableFields = readableFieldsByCollection.get(collection);
+			// The authoritative query orders the stored row and masks fields afterwards. The replica,
+			// however, stores masked-away nullable columns as SQL nulls. Unless the server reported that
+			// every cursor term reaches this subject, a local order could differ and a locally minted
+			// null-valued cursor could claim a position the authoritative row never exposed.
+			if (
+				readableFields === undefined ||
+				(readableFields !== null && terms.some(({ column }) => !readableFields.has(column)))
+			) {
+				return undefined;
+			}
+			const seek = yield* compileCollectionCursorSeek(
+				after,
+				terms,
+				collection,
+				filter.parameters.length
+			);
+			// Match DispatchValues.collectionQuery exactly: the replica answers the client command
+			// boundary, whose page ceiling is 500 even though authored server reads may request more.
+			const pageLimit = ENumber.clamp({ minimum: 1, maximum: 500 })(limit ?? 100);
 			const rows = yield* store.findMany({
 				collection,
-				filter,
+				filter: {
+					sql: `(${filter.sql}) and (${seek.sql})`,
+					parameters: [...filter.parameters, ...seek.parameters]
+				},
 				orderBy: terms,
 				// One more than asked for, which is how the server decides whether a successor exists.
-				...(limit === undefined ? {} : { limit: limit + 1 })
+				limit: pageLimit + 1
 			});
-			/**
-			 * A page with a successor is handed back to the server.
-			 *
-			 * The server's `nextCursor` is a keyset token encoding the ordering tuple the page ended on,
-			 * and re-deriving it here would be the second-opinion problem again — a token that decodes
-			 * but seeks to the wrong row produces a page that silently skips records. Declining means the
-			 * only cursor a caller ever receives is one the server minted, and a locally served answer is
-			 * always a complete result whose honest `nextCursor` is `null`.
-			 */
-			if (limit !== undefined && rows.length > limit) return undefined;
+			const page = rows.slice(0, pageLimit);
+			const last = page[page.length - 1];
 			return {
-				rows: rows.map((record) => {
+				rows: page.map((record) => {
 					const stored = decodeJsonObject(record);
 					return Result.isSuccess(stored)
 						? decodeReferenceRow(stored.success, context.fields)
 						: record;
 				}),
-				nextCursor: null
+				nextCursor:
+					rows.length > pageLimit && last !== undefined ? encodeCollectionCursor(terms, last) : null
 			};
 		})
 	};

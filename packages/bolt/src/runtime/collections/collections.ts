@@ -51,9 +51,10 @@ import {
 	makeWhereContext,
 	whereExpression,
 	WhereCompileError,
-	type OrderTerm,
 	type WhereContext
 } from '#lib/runtime/collections/where.js';
+import { compileCollectionCursorSeek } from '#lib/runtime/collections/cursor.js';
+export { encodeCollectionCursor } from '#lib/runtime/collections/cursor.js';
 import {
 	CollectionAction,
 	MutationPhaseFailure,
@@ -148,7 +149,6 @@ const collectionQueryTable = (name: string, fields: Readonly<Record<string, Fiel
 
 const columnsOf = (table: ReturnType<typeof collectionQueryTable>) =>
 	getColumns(table) as Readonly<Record<string, AnyPgColumn>>;
-
 
 type CompiledQuery = Readonly<{
 	readonly sql: string;
@@ -815,162 +815,6 @@ const searchClause = (
 	return { sql: clauses.join(' or '), parameters: [`%${trimmed}%`] };
 };
 
-/** The `CursorValue` schema, built once: every cursor field crosses the json boundary and is checked against it. */
-const CursorValueSchema = Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Null]);
-/** The scalar ordering values a cursor may carry — a json column has no total SQL order to seek along. */
-type CursorValue = typeof CursorValueSchema.Type;
-const isCursorValue = Schema.is(CursorValueSchema);
-
-/** The json envelope a cursor token carries: the sort it was cut from and the values it ended on. */
-const CursorPayloadFromJson = Schema.fromJsonString(
-	Schema.Struct({
-		v: Schema.Number,
-		order: Schema.Array(
-			Schema.Struct({
-				column: Schema.String,
-				direction: Schema.String,
-				value: CursorValueSchema
-			})
-		)
-	})
-);
-
-/**
- * The keyset cursor: an opaque token carrying the ordering tuple a page ended on.
- *
- * It records the sort it was cut from as well as the values, so a token handed back under a
- * different sort is refused rather than seeking on columns it was never measured against. Every
- * rejection travels through `WhereCompileError`, the failure this read path already carries, because
- * silently ignoring a bad cursor returns page one — indistinguishable from paging not working.
- */
-const CollectionCursor = {
-	isValue: isCursorValue,
-	// `btoa` only accepts latin1, so the payload is widened to bytes first: an ordering tuple holding
-	// an accented name would otherwise throw on encode.
-	encodeText: (text: string): string =>
-		btoa(String.fromCharCode(...new TextEncoder().encode(text)))
-			.replaceAll('+', '-')
-			.replaceAll('/', '_')
-			.replaceAll('=', ''),
-	decodeText: (token: string): Result.Result<string, unknown> =>
-		Result.try(() => {
-			const binary = atob(token.replaceAll('-', '+').replaceAll('_', '/'));
-			return new TextDecoder().decode(
-				Uint8Array.from(binary, (character) => character.charCodeAt(0))
-			);
-		}),
-	encode: (terms: ReadonlyArray<OrderTerm>, row: Schema.Json): string | null => {
-		if (row === null || typeof row !== 'object' || Array.isArray(row)) return null;
-		const order: Array<OrderTerm & { readonly value: CursorValue }> = [];
-		for (const term of terms) {
-			const value: unknown = Reflect.get(row, term.column);
-			// A field-masking policy can strip an ordering column out of the row it returns, and a json
-			// column has no scalar to seek on. Neither has an honest cursor, and a guessed one seeks to
-			// the wrong place — so the page reports no successor instead of a wrong one.
-			if (!CollectionCursor.isValue(value)) return null;
-			order.push({ ...term, value });
-		}
-		return CollectionCursor.encodeText(JSON.stringify({ v: 1, order }));
-	},
-	decode: (
-		cursor: string,
-		terms: ReadonlyArray<OrderTerm>,
-		collection: string
-	): Result.Result<ReadonlyArray<CursorValue>, WhereCompileError> => {
-		const refuse = (
-			message: string
-		): Result.Result<ReadonlyArray<CursorValue>, WhereCompileError> =>
-			Result.fail(new WhereCompileError({ collection, field: 'after', message }));
-		const text = CollectionCursor.decodeText(cursor);
-		if (Result.isFailure(text)) return refuse('Pagination cursor is not a decodable token.');
-		const parsed = Schema.decodeUnknownResult(CursorPayloadFromJson)(text.success);
-		if (Result.isFailure(parsed)) return refuse('Pagination cursor is not a decodable token.');
-		const { v, order } = parsed.success;
-		if (v !== 1) return refuse('Pagination cursor was issued in a different cursor format.');
-		if (order.length !== terms.length) {
-			return refuse('Pagination cursor does not match the active sort.');
-		}
-		const values: Array<CursorValue> = [];
-		for (let index = 0; index < terms.length; index += 1) {
-			const term = terms[index];
-			const entry = order[index];
-			if (term === undefined || entry === undefined)
-				return refuse('Pagination cursor does not match the active sort.');
-			if (entry.column !== term.column || entry.direction !== term.direction)
-				return refuse('Pagination cursor does not match the active sort.');
-			values.push(entry.value);
-		}
-		return Result.succeed(values);
-	},
-	/**
-	 * Every row that sorts strictly after the cursor tuple, expanded lexicographically: strictly after
-	 * on the first column, or equal there and strictly after on the second, and so on.
-	 *
-	 * Each column seeks in its own compiled direction — `desc` compares with `<` — and against
-	 * Postgres' null ordering, which places nulls last under `asc` and first under `desc`. Comparing a
-	 * null with `>` yields null rather than false, so the null cases are spelled out; without them a
-	 * page boundary landing on a nullable column silently drops every row that follows.
-	 */
-	seek: (terms: ReadonlyArray<OrderTerm>, values: ReadonlyArray<CursorValue>): CompiledQuery => {
-		const parameters: Array<CursorValue> = [];
-		const bind = (value: CursorValue): string => {
-			parameters.push(value);
-			return `$${parameters.length}`;
-		};
-		const branches: Array<string> = [];
-		for (let index = 0; index < terms.length; index += 1) {
-			const term = terms[index];
-			if (term === undefined) continue;
-			const value = values[index] ?? null;
-			// Nothing sorts after a null under `asc`: the non-nulls came first, and the nulls that remain
-			// are ties the later branches settle on the tiebreaker columns.
-			if (term.direction === 'asc' && value === null) continue;
-			const clauses: Array<string> = [];
-			for (let prior = 0; prior < index; prior += 1) {
-				const priorTerm = terms[prior];
-				if (priorTerm === undefined) continue;
-				const priorValue = values[prior] ?? null;
-				const priorColumn = quoteIdentifier(priorTerm.column);
-				clauses.push(
-					priorValue === null ? `${priorColumn} is null` : `${priorColumn} = ${bind(priorValue)}`
-				);
-			}
-			const column = quoteIdentifier(term.column);
-			clauses.push(
-				term.direction === 'asc'
-					? `(${column} > ${bind(value)} or ${column} is null)`
-					: value === null
-						? `${column} is not null`
-						: `${column} < ${bind(value)}`
-			);
-			branches.push(`(${clauses.join(' and ')})`);
-		}
-		return { sql: branches.length === 0 ? 'false' : branches.join(' or '), parameters };
-	}
-};
-
-/** Encodes the cursor a client sends back as `after`. Exported for the command boundary that cuts pages. */
-export const encodeCollectionCursor = CollectionCursor.encode;
-
-/**
- * Resolves one page's seek predicate.
- *
- * No cursor means the first page, which is `true` rather than a quietly widened query. An unusable
- * cursor fails the read instead of being dropped — a dropped cursor returns page one, which looks
- * exactly like pagination never having worked.
- */
-const seekFilter = (
-	after: string | undefined,
-	terms: ReadonlyArray<OrderTerm>,
-	collection: string
-): Effect.Effect<CompiledQuery, WhereCompileError> => {
-	if (after === undefined) return Effect.succeed({ sql: 'true', parameters: [] });
-	const values = CollectionCursor.decode(after, terms, collection);
-	return Result.isFailure(values)
-		? Effect.fail(values.failure)
-		: Effect.succeed(CollectionCursor.seek(terms, values.success));
-};
-
 /**
  * The refusal an authored `db.create` or `db.update` raises when the write stored no row.
  *
@@ -1609,7 +1453,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const visibility = access.predicate(subject, 'read', input.collection);
 				const limit = Math.max(1, input.limit ?? 100);
 				const ordering = compileOrderTerms(input.orderBy, context);
-				const seek = yield* seekFilter(input.after, ordering, input.collection);
+				const seek = yield* compileCollectionCursorSeek(input.after, ordering, input.collection);
 				const table = queryTableFor(input.collection, definition.fields);
 				const columns = columnsOf(table);
 				const orderedColumns = ordering.map((term) =>
@@ -2507,7 +2351,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						}
 					}
 					for (const [key, value] of Object.entries(payload)) {
-						if (key === 'id' || Object.hasOwn(definition.fields, key) || SYSTEM_COLUMN_NAMES.includes(key))
+						if (
+							key === 'id' ||
+							Object.hasOwn(definition.fields, key) ||
+							SYSTEM_COLUMN_NAMES.includes(key)
+						)
 							continue;
 						const relation = resolveWritableManyRelation(workspace.definition, collection, key);
 						if (relation === undefined || !Array.isArray(value)) continue;

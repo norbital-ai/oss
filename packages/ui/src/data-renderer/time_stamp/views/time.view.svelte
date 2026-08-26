@@ -16,6 +16,7 @@
 		value,
 		multiple = false,
 		disabled = false,
+		allowClear = true,
 		placeholder = t('dataRenderer.selectDateTime'),
 		class: className,
 		onValueChange
@@ -23,6 +24,7 @@
 		value: string | string[] | null;
 		multiple?: boolean;
 		disabled?: boolean;
+		allowClear?: boolean;
 		placeholder?: string;
 		class?: string;
 		onValueChange?: (value: string | string[] | null) => void;
@@ -85,6 +87,7 @@
 				multi={false}
 				{placeholder}
 				{disabled}
+				{allowClear}
 				borderless={true}
 				class="min-w-0 flex-1"
 				onValueChange={(next) => updateDate(index, next)}
@@ -129,6 +132,7 @@
 				multi={false}
 				{placeholder}
 				{disabled}
+				{allowClear}
 				borderless={true}
 				class="min-w-0 flex-1"
 				onValueChange={(next) => updateDate(0, next)}

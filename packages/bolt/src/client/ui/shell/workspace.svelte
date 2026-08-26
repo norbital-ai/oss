@@ -63,6 +63,7 @@
 
 	const session = workspaceSession();
 	let replicaAccessScope = $state(session.accessScope);
+	let interactiveQueriesRequestedScope = $state<string | undefined>(undefined);
 
 	/**
 	 * The authored record surfaces, keyed by collection.
@@ -276,10 +277,15 @@
 	 * that appears a round trip late.
 	 */
 	const impersonationQuery = $derived.by(() => {
-		void replicaAccessScope;
+		const accessScope = replicaAccessScope;
+		// A running team preview is an authority boundary and must be resolved immediately so host
+		// plugins cannot flash as available. In the ordinary operator scope this only feeds the account
+		// menu, so it waits for the first real interaction instead of competing with app data reads.
+		if (!accessScope.startsWith('team:') && interactiveQueriesRequestedScope !== accessScope)
+			return undefined;
 		return workspace.client.system.access.impersonation({});
 	});
-	const impersonation = $derived(impersonationQuery.current ?? null);
+	const impersonation = $derived(impersonationQuery?.current ?? null);
 
 	/**
 	 * The runtime accepts the preview first; only then does the host store it.
@@ -449,7 +455,10 @@
 			stopListening();
 			firstFrame = requestAnimationFrame(() => {
 				secondFrame = requestAnimationFrame(() => {
-					if (replicaAccessScope === accessScope) replicaRequestedScope = accessScope;
+					if (replicaAccessScope === accessScope) {
+						interactiveQueriesRequestedScope = accessScope;
+						replicaRequestedScope = accessScope;
+					}
 				});
 			});
 		};
@@ -591,6 +600,7 @@
 	plugins={WORKSPACE_HOST_PLUGINS}
 	{impersonation}
 	isAdmin={hostPluginsVisible}
+	deferredQueriesReady={interactiveQueriesRequestedScope === replicaAccessScope}
 	onImpersonate={impersonateTeam}
 	onStopImpersonating={stopImpersonating}
 	onNavigate={actions.navigate}

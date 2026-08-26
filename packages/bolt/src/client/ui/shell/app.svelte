@@ -22,6 +22,7 @@
 		user,
 		plugins,
 		isAdmin = true,
+		deferredQueriesReady = false,
 		impersonation = null,
 		onImpersonate,
 		onStopImpersonating,
@@ -87,6 +88,8 @@
 		 */
 		plugins: ReadonlyArray<HostPlugin>;
 		isAdmin?: boolean;
+		/** Non-critical shell reads start only after the first interaction with a painted workspace. */
+		deferredQueriesReady?: boolean;
 		/**
 		 * Admin team preview, forwarded verbatim to the shell.
 		 *
@@ -154,6 +157,7 @@
 	{user}
 	{plugins}
 	{isAdmin}
+	{deferredQueriesReady}
 	{impersonation}
 	{onImpersonate}
 	{onStopImpersonating}

@@ -20,7 +20,7 @@ import {
 import { systemSignature } from '../../src/host.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
-import { seedSession } from '../support/fixture-identity.js';
+import { fixtureUserId, seedSession } from '../support/fixture-identity.js';
 
 /**
  * `identity.bootstrapFounder`: the one command that turns a host's proof into a person and a session.
@@ -246,6 +246,43 @@ describe('who may bootstrap a founder', () => {
 			)
 		);
 		expect(await founderRow(harness, 'victim@example.com')).toBeUndefined();
+	});
+});
+
+describe('continuing a Colony session into another workspace', () => {
+	it('lets the host mint a fresh tenant-local session for an existing member', async () => {
+		harness = await makeBoltTestRuntime(peopleWorkspace);
+		await seedSession(harness, {
+			token: 'source-local-token',
+			user: 'ada',
+			email: 'ada@example.test',
+			team: 'Employee'
+		});
+		const response = await dispatch(
+			harness,
+			signed('identity.continueSession', { email: 'ada@example.test' })
+		);
+		const credential = read(response.value, 'credential');
+		expect(response.status).toBe(200);
+		expect(typeof credential).toBe('string');
+		expect(credential).not.toBe('source-local-token');
+		expect(await sessionCount(harness, fixtureUserId('ada'))).toBe(2);
+	});
+
+	it('refuses an administrator and an address with no target member', async () => {
+		harness = await makeBoltTestRuntime(peopleWorkspace);
+		await seedSession(harness, {
+			token: 'admin-token',
+			user: 'admin',
+			email: 'admin@example.test',
+			status: ADMIN_STATUS
+		});
+		await refusalOf(
+			harness,
+			asPerson('identity.continueSession', 'admin-token', { email: 'ada@example.test' })
+		);
+		await refusalOf(harness, signed('identity.continueSession', { email: 'missing@example.test' }));
+		expect(await founderRow(harness, 'missing@example.test')).toBeUndefined();
 	});
 });
 

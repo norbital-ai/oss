@@ -1,6 +1,8 @@
 <script lang="ts">
-	import { Effect, Schema } from 'effect';
+	import { Effect, Fiber, Schedule, Schema } from 'effect';
 	import { onMount } from 'svelte';
+	import { Button } from '@norbital-ai/ui/button';
+	import * as Dialog from '@norbital-ai/ui/dialog';
 	import { Bound, Cover, Grid, Inline, Scroll, Stack } from '@norbital-ai/ui/layout';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { workspaceSession } from '#lib/client/session.js';
@@ -112,7 +114,14 @@
 	let connections = $state<Record<string, Connection>>({});
 	let connectionErrors = $state<Record<string, string>>({});
 	let qrCodes = $state<Record<string, string>>({});
+	// This is ownership of an unresolved host `pair` operation, not ownership of the dialog.
+	// Closing the dialog must not clear it: the underlying operations.run Promise cannot be cancelled.
 	let pairingBusy = $state<Record<string, boolean>>({});
+	let unpairingBusy = $state<Record<string, boolean>>({});
+	let pairingTarget = $state<DeclaredEnvoy | undefined>(undefined);
+	let pairingReconnects = $state<Record<string, boolean>>({});
+	const connectionRequestVersions = new Map<string, number>();
+	const pairingOpens = new Map<string, Promise<void>>();
 
 	/**
 	 * How long one status read may take before this page says so.
@@ -156,49 +165,90 @@
 	 * `action: 'transport'`, not `'envoy'`. Colony supplies the wire and never sees a policy, so its
 	 * half of this is named for the wire.
 	 */
-	const runPairing = (
+	const runPairingRequest = (
 		envoy: string,
 		provider: string,
 		operation: 'pair' | 'status' | 'unpair'
 	): Effect.Effect<void> =>
-		Effect.gen(function* () {
-			if (pairingBusy[envoy] === true && operation !== 'status') return;
-			if (operation !== 'status') pairingBusy[envoy] = true;
-			const answer = yield* Schema.decodeUnknownEffect(ConnectionAnswerSchema)(
-				yield* Effect.tryPromise(() =>
-					operations.run({ action: 'transport', operation, envoy, provider })
+		Effect.suspend(() => {
+			const requestVersion = (connectionRequestVersions.get(envoy) ?? 0) + 1;
+			connectionRequestVersions.set(envoy, requestVersion);
+
+			return Effect.gen(function* () {
+				const answer = yield* Schema.decodeUnknownEffect(ConnectionAnswerSchema)(
+					yield* Effect.tryPromise(() =>
+						operations.run({ action: 'transport', operation, envoy, provider })
+					)
+				);
+				const next = answer.connection;
+				if (next === undefined)
+					return yield* Effect.fail(new Error('The host did not report this envoy.'));
+				// The page starts one status read per envoy. If somebody clicks Pair before that read
+				// settles, its older "disconnected" answer must not overwrite the newer pairing socket.
+				if (connectionRequestVersions.get(envoy) !== requestVersion) return;
+				connections[envoy] = next;
+				delete connectionErrors[envoy];
+				yield* renderQr(envoy, next.pairing);
+			}).pipe(
+				Effect.catch((cause) => {
+					if (connectionRequestVersions.get(envoy) !== requestVersion) return Effect.void;
+					// Shown verbatim. The refusals this host produces name what is wrong and what to do — no
+					// transport for this provider, no secret key to seal a credential with, two envoys open on
+					// one transport — and replacing them with "pairing failed" throws all of that away.
+					connectionErrors[envoy] =
+						cause instanceof Error ? cause.message : 'The host refused this operation.';
+					return Effect.void;
+				})
+			);
+		});
+
+	/**
+	 * Owns the one host-side socket open that may be unresolved for an envoy.
+	 *
+	 * `operations.run` returns a Promise and does not accept an AbortSignal. Running this request in
+	 * the modal fiber made interruption look like cancellation: its finalizer released `pairingBusy`
+	 * while the host was still opening the socket, so reopening dispatched a second `pair`. The
+	 * independently owned Promise below lives until the real host request settles. Every dialog that
+	 * opens in the meantime awaits that same Promise, and only its polling subscription is interruptible.
+	 */
+	const ownPairingOpen = (envoy: string, provider: string): Promise<void> => {
+		const existing = pairingOpens.get(envoy);
+		if (existing !== undefined) return existing;
+
+		pairingBusy[envoy] = true;
+		let completion: Promise<void>;
+		completion = Effect.runPromise(runPairingRequest(envoy, provider, 'pair')).finally(() => {
+			// Identity matters if this code ever grows a retry hand-off: an older completion must not
+			// release ownership held by a newer request.
+			if (pairingOpens.get(envoy) !== completion) return;
+			pairingOpens.delete(envoy);
+			pairingBusy[envoy] = false;
+		});
+		pairingOpens.set(envoy, completion);
+		return completion;
+	};
+
+	const runUnpairing = (envoy: string, provider: string): Effect.Effect<void> =>
+		Effect.suspend(() => {
+			if (pairingBusy[envoy] === true || unpairingBusy[envoy] === true) return Effect.void;
+			unpairingBusy[envoy] = true;
+			return runPairingRequest(envoy, provider, 'unpair').pipe(
+				Effect.ensuring(
+					Effect.sync(() => {
+						unpairingBusy[envoy] = false;
+					})
 				)
 			);
-			const next = answer.connection;
-			if (next === undefined)
-				return yield* Effect.fail(new Error('The host did not report this envoy.'));
-			connections[envoy] = next;
-			delete connectionErrors[envoy];
-			yield* renderQr(envoy, next.pairing);
-		}).pipe(
-			Effect.catch((cause) => {
-				// Shown verbatim. The refusals this host produces name what is wrong and what to do — no
-				// transport for this provider, no secret key to seal a credential with, two envoys open on
-				// one transport — and replacing them with "pairing failed" throws all of that away.
-				connectionErrors[envoy] =
-					cause instanceof Error ? cause.message : 'The host refused this operation.';
-				return Effect.void;
-			}),
-			Effect.ensuring(
-				Effect.sync(() => {
-					if (operation !== 'status') pairingBusy[envoy] = false;
-				})
-			)
-		);
+		});
 
-	const connectionLabel = (envoy: string): string => {
+	const connectionLabel = (envoy: string, provider: string): string => {
 		const connection = connections[envoy];
 		if (connection === undefined) return 'Reading…';
 		switch (connection.state) {
 			case 'connected':
 				return 'Connected';
 			case 'pairing':
-				return 'Scan to pair';
+				return provider === 'whatsapp' ? 'Scan to pair' : 'Pairing';
 			case 'connecting':
 				return 'Connecting';
 			case 'error':
@@ -207,6 +257,64 @@
 				return connection.stored ? 'Paired, not connected' : 'Not paired';
 		}
 	};
+
+	/**
+	 * Keeps the focused pairing flow current while its dialog is open.
+	 *
+	 * Opening a Baileys socket returns `connecting` immediately; the QR arrives on a later provider
+	 * event. A single `pair` request therefore cannot possibly return the code most of the time. The
+	 * paced status cadence reads that asynchronous state, refreshes rotated codes, and is cancelled
+	 * with the dialog so a closed pairing flow leaves no timer or request loop behind.
+	 */
+	const followPairing = (envoy: DeclaredEnvoy): Effect.Effect<void> =>
+		Effect.gen(function* () {
+			// This await is the modal's cancellable subscription to a separately owned host request.
+			// Interrupting it never interrupts or unlocks the unresolved `pair` Promise itself.
+			yield* Effect.promise(() => ownPairingOpen(envoy.name, envoy.transport));
+
+			const shouldContinue = (): boolean => {
+				if (pairingTarget?.name !== envoy.name || connectionErrors[envoy.name] !== undefined)
+					return false;
+				const state = connections[envoy.name]?.state;
+				return state !== 'connected' && state !== 'error' && state !== 'disconnected';
+			};
+
+			if (!shouldContinue()) return;
+			yield* runPairingRequest(envoy.name, envoy.transport, 'status').pipe(
+				Effect.map(shouldContinue),
+				Effect.repeat({
+					schedule: Schedule.spaced(750),
+					while: (continuePolling) => continuePolling
+				}),
+				Effect.asVoid
+			);
+		});
+
+	function openPairing(envoy: DeclaredEnvoy): void {
+		const resumingOpen = pairingOpens.has(envoy.name);
+		if (!resumingOpen) {
+			pairingReconnects[envoy.name] = connections[envoy.name]?.stored === true;
+			delete connectionErrors[envoy.name];
+			delete qrCodes[envoy.name];
+			// Do not paint the card's older disconnected snapshot as the outcome of the pair request that
+			// has only just started. The dialog owns a fresh host workflow and waits for its first answer.
+			delete connections[envoy.name];
+		}
+		pairingTarget = envoy;
+	}
+
+	function closePairing(): void {
+		pairingTarget = undefined;
+	}
+
+	$effect(() => {
+		const target = pairingTarget;
+		if (target === undefined) return;
+		const fiber = Effect.runFork(followPairing(target));
+		return () => {
+			Effect.runFork(Fiber.interrupt(fiber));
+		};
+	});
 
 	// The read is the browser's, as it is in `studio/envoys-panel.svelte`: server rendering must not
 	// issue a Bolt command, and a reader who opens Envoys has already asked the question it answers.
@@ -217,7 +325,7 @@
 		for (const envoy of envoys) {
 			if (pairingStarted.has(envoy.name)) continue;
 			pairingStarted.add(envoy.name);
-			Effect.runFork(runPairing(envoy.name, envoy.transport, 'status'));
+			Effect.runFork(runPairingRequest(envoy.name, envoy.transport, 'status'));
 		}
 	});
 </script>
@@ -225,7 +333,6 @@
 {#snippet pairingPanel(envoy: DeclaredEnvoy)}
 	{@const connection = connections[envoy.name]}
 	{@const failure = connectionErrors[envoy.name]}
-	{@const qr = qrCodes[envoy.name]}
 	<Stack as="section" gap="sm" class="border-t pt-4">
 		<Inline align="center" justify="between" gap="md">
 			<div>
@@ -238,8 +345,9 @@
 							? 'This host holds an open session for this envoy.'
 							: `Paired to ${connection.pairedAs}.`}
 					{:else if connection?.state === 'pairing'}
-						Open WhatsApp on the phone this envoy should answer as, then Linked devices → Link a
-						device.
+						{envoy.transport === 'whatsapp'
+							? 'Open WhatsApp on the phone this envoy should answer as, then Linked devices → Link a device.'
+							: 'The transport provider is waiting for pairing to finish.'}
 					{:else if connection?.stored === true}
 						A credential is stored, but this host has no open session for it.
 					{:else}
@@ -248,7 +356,7 @@
 				</p>
 			</div>
 			<span class="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-meta">
-				{connectionLabel(envoy.name)}
+				{connectionLabel(envoy.name, envoy.transport)}
 			</span>
 		</Inline>
 
@@ -260,47 +368,25 @@
 			<p class="text-xs text-destructive" role="alert">{connection.error}</p>
 		{/if}
 
-		{#if qr !== undefined && connection?.state === 'pairing'}
-			<Stack gap="sm" class="items-center">
-				<!--
-					Sized, on a white plate.
-
-					White regardless of theme for the same reason the code itself is drawn in fixed colours:
-					the quiet zone around a QR has to be light or a camera cannot find its edges.
-
-					The size cap is the part that was missing. `toDataURL` renders 240px and the image had
-					no width, so it stretched to whatever the column gave it — on a wide settings pane that
-					is a QR most of a screen tall, which pushed everything under it out of a pane that could
-					not scroll. A phone camera reads 240px from arm's length; larger is not more scannable.
-				-->
-				<img
-					src={qr}
-					alt="Pairing code for {envoy.name}"
-					width="240"
-					height="240"
-					class="size-60 max-w-full rounded-md bg-white p-2"
-				/>
-				<p class="max-w-sm text-center text-meta">
-					This is the code returned when pairing started. If it expires, restart pairing.
-				</p>
-			</Stack>
-		{/if}
-
 		<Inline gap="sm" align="center">
 			<button
 				type="button"
 				class="rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-50"
-				disabled={pairingBusy[envoy.name] === true}
-				onclick={() => void Effect.runPromise(runPairing(envoy.name, envoy.transport, 'pair'))}
+				disabled={unpairingBusy[envoy.name] === true}
+				onclick={() => openPairing(envoy)}
 			>
-				{connection?.stored === true ? 'Reconnect' : 'Pair this envoy'}
+				{pairingBusy[envoy.name] === true
+					? 'Resume pairing'
+					: connection?.stored === true
+						? 'Reconnect'
+						: 'Pair this envoy'}
 			</button>
 			{#if connection?.stored === true}
 				<button
 					type="button"
 					class="rounded-md border px-2.5 py-1 text-xs font-medium text-destructive disabled:opacity-50"
-					disabled={pairingBusy[envoy.name] === true}
-					onclick={() => void Effect.runPromise(runPairing(envoy.name, envoy.transport, 'unpair'))}
+					disabled={pairingBusy[envoy.name] === true || unpairingBusy[envoy.name] === true}
+					onclick={() => void Effect.runPromise(runUnpairing(envoy.name, envoy.transport))}
 				>
 					Unpair
 				</button>
@@ -473,3 +559,117 @@
 		</Bound>
 	</Inline>
 </Cover>
+
+<Dialog.Root open={pairingTarget !== undefined} onOpenChange={(open) => !open && closePairing()}>
+	{#if pairingTarget !== undefined}
+		{@const target = pairingTarget}
+		{@const connection = connections[target.name]}
+		{@const failure = connectionErrors[target.name]}
+		{@const qr = qrCodes[target.name]}
+		{@const reconnecting = pairingReconnects[target.name] === true}
+		<Dialog.Content class="w-[min(28rem,calc(100vw-2rem))]">
+			<Dialog.Header>
+				<Dialog.Title>{reconnecting ? 'Reconnect' : 'Pair'} {target.name}</Dialog.Title>
+				<Dialog.Description>
+					{#if reconnecting}
+						The host is reopening the saved {target.transport} session. Keep this dialog open while it
+						connects.
+					{:else if target.transport === 'whatsapp'}
+						Open WhatsApp on the phone this envoy should answer as, then choose Linked devices →
+						Link a device.
+					{:else}
+						Keep this dialog open while the host starts the {target.transport} transport. Follow any verification
+						steps its provider requests.
+					{/if}
+				</Dialog.Description>
+			</Dialog.Header>
+
+			{#if failure !== undefined}
+				<Stack
+					gap="sm"
+					align="center"
+					class="rounded-lg border border-destructive/30 p-5 text-center"
+				>
+					<IconWrapper name="lucide:circle-alert" class="size-8 text-destructive" />
+					<p class="text-sm font-medium text-foreground">The transport could not open</p>
+					<p class="text-xs text-destructive" role="alert">{failure}</p>
+				</Stack>
+			{:else if connection?.state === 'connected'}
+				<Stack gap="sm" align="center" class="rounded-lg border border-success/30 p-6 text-center">
+					<IconWrapper name="lucide:circle-check" class="size-9 text-success" />
+					<p class="text-sm font-medium text-foreground">Envoy connected</p>
+					<p class="text-meta">
+						{connection.pairedAs === undefined
+							? 'The transport connection is open.'
+							: `Connected as ${connection.pairedAs}.`}
+					</p>
+				</Stack>
+			{:else if connection?.state === 'error'}
+				<Stack
+					gap="sm"
+					align="center"
+					class="rounded-lg border border-destructive/30 p-5 text-center"
+				>
+					<IconWrapper name="lucide:circle-alert" class="size-8 text-destructive" />
+					<p class="text-sm font-medium text-foreground">The transport needs attention</p>
+					<p class="text-xs text-destructive" role="alert">
+						{connection.error ?? 'Close this dialog and try again.'}
+					</p>
+				</Stack>
+			{:else if connection?.state === 'disconnected'}
+				<Stack
+					gap="sm"
+					align="center"
+					class="rounded-lg border border-destructive/30 p-5 text-center"
+				>
+					<IconWrapper name="lucide:unplug" class="size-8 text-destructive" />
+					<p class="text-sm font-medium text-foreground">The transport did not open</p>
+					<p class="text-meta">Close this dialog, then try pairing again.</p>
+				</Stack>
+			{:else if connection?.state === 'pairing' && qr !== undefined}
+				<Stack gap="sm" align="center">
+					<!-- Fixed white quiet zone and a fixed pixel size keep the camera-readable code intact. -->
+					<img
+						src={qr}
+						alt="Pairing code for {target.name}"
+						width="240"
+						height="240"
+						class="size-60 max-w-full rounded-md bg-white p-2"
+					/>
+					<p class="max-w-sm text-center text-meta">
+						{target.transport === 'whatsapp'
+							? 'Scan this code with the linked-devices camera. It refreshes here if WhatsApp rotates it.'
+							: `Use this pairing code with ${target.transport}. It refreshes here if the provider rotates it.`}
+					</p>
+				</Stack>
+			{:else}
+				<Stack gap="sm" align="center" class="p-8 text-center" aria-live="polite">
+					<IconWrapper
+						name="lucide:loader-circle"
+						class="size-8 text-muted-foreground motion-safe:animate-spin"
+					/>
+					<p class="text-sm font-medium text-foreground">
+						{reconnecting
+							? 'Reopening the transport…'
+							: target.transport === 'whatsapp'
+								? 'Waiting for a pairing code…'
+								: 'Opening the transport…'}
+					</p>
+					<p class="text-meta">
+						{reconnecting
+							? 'The host is using the saved credential for this envoy.'
+							: target.transport === 'whatsapp'
+								? 'The code will appear when WhatsApp publishes it.'
+								: `The host is starting the ${target.transport} connection.`}
+					</p>
+				</Stack>
+			{/if}
+
+			<Dialog.Footer>
+				<Button variant="outline" onclick={closePairing}>
+					{connection?.state === 'connected' ? 'Done' : 'Close'}
+				</Button>
+			</Dialog.Footer>
+		</Dialog.Content>
+	{/if}
+</Dialog.Root>

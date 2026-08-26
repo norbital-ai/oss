@@ -114,6 +114,26 @@ describe('generated automation client state', () => {
 		expect(Reflect.has(run, 'settled')).toBe(false);
 	});
 
+	it('decodes the running queue state while an automation attempt is active', async () => {
+		const taskId = 'run-active';
+		const rows = new Map([[taskId, runRow(taskId, 'running')]]);
+		const bolt = createBoltClient(scope, {
+			command: (command, input) => {
+				if (command === 'automations.resume') return Promise.resolve({ resumed: true } as never);
+				if (command !== 'collections.findFirst') throw new Error(`unexpected command ${command}`);
+				const id = taskIdFrom(input);
+				return Promise.resolve((id === undefined ? null : (rows.get(id) ?? null)) as never);
+			}
+		});
+		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
+		const automation = Reflect.get(proxy.automations, 'rebuild') as AutomationSurface;
+
+		const run = await automation.resume(taskId);
+		await vi.waitFor(() => expect(run.current?.status).toBe('running'));
+		expect(run.error).toBeUndefined();
+		expect(automation.pending).toBe(1);
+	});
+
 	it('stops and resumes the same durable row while sync remains the only state observer', async () => {
 		const taskId = 'historical-task:start';
 		const rows = new Map([[taskId, runRow(taskId, 'paused')]]);

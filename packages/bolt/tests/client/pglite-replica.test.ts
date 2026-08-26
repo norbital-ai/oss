@@ -63,7 +63,11 @@ const readerFor = async () => {
 		reader: createLocalReader(
 			replica.store,
 			{
-				collections: definition.collections.map(({ name, fields }) => ({ name, fields })),
+				collections: definition.collections.map(({ name, fields }) => ({
+					name,
+					fields,
+					readableFields: null
+				})),
 				relations: definition.relations ?? []
 			},
 			new Set(definition.collections.map(({ name }) => name))
