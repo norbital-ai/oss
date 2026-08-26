@@ -524,16 +524,22 @@
 	 * The selected conversation's messages are another standard live collection query. Sync refreshes
 	 * it when `chat_message` advances; selecting a different conversation creates the corresponding
 	 * keyed query rather than fetching history through an agent command.
+	 *
+	 * Keyed on a string, not on `activeConversationIds` itself: the id array gets a fresh identity
+	 * every time any session row syncs (the agent writes `chat_session` usage totals throughout a
+	 * turn), and a query rebuilt on each of those ticks starts over at `current === undefined` and
+	 * never lives long enough to deliver rows — the transcript stays blank while the cost counter
+	 * ticks. A string key invalidates only when the conversation set genuinely changes.
 	 */
-	const messageQuery = $derived(
-		activeConversationIds.length > 0
-			? runtime.client.db.chat_message.findMany({
-					where: { conversation_id: { in: activeConversationIds } },
-					orderBy: { sequence: 'asc' },
-					limit: 5_000
-				})
-			: undefined
-	);
+	const activeConversationKey = $derived(activeConversationIds.join('\u0000'));
+	const messageQuery = $derived.by(() => {
+		if (activeConversationKey.length === 0) return undefined;
+		return runtime.client.db.chat_message.findMany({
+			where: { conversation_id: { in: activeConversationKey.split('\u0000') } },
+			orderBy: { sequence: 'asc' },
+			limit: 5_000
+		});
+	});
 	const activeConversation = $derived(projectStoredChatMessages(messageQuery?.current ?? []));
 	const activeMessages = $derived(activeConversation.messages);
 	const activeTurns = $derived(activeConversation.turns);
@@ -1229,7 +1235,9 @@
 		</Bound>
 	{/if}
 
-	{#if activeChatId && (agentWorking || mailboxPaused)}
+	<!-- Queue chrome earns its row only when something is actually waiting: a lone in-flight turn
+	     shows nothing here (its interrupt control lives on the composer instead). -->
+	{#if activeChatId && (mutableRuns.length > 0 || mailboxPaused)}
 		<Stack
 			as="section"
 			gap="sm"
@@ -1575,6 +1583,19 @@
 									disabled={composerLocked || modelState.status !== 'ready'}
 								/>
 							</div>
+							{#if runningRun && mutableRuns.length === 0 && !mailboxPaused}
+								<Button
+									variant="ghost"
+									size="icon"
+									class="size-8 shrink-0 rounded-full"
+									disabled={queueActionPending !== null}
+									hint={t('bolt.agent.interrupt')}
+									aria-label={t('bolt.agent.interrupt')}
+									onclick={() => controlAgent('interrupt')}
+								>
+									<Icon icon="lucide:octagon-x" class="size-4" />
+								</Button>
+							{/if}
 							<Button
 								type="submit"
 								disabled={!canSend}

@@ -54,4 +54,27 @@ describe('agent UI source audit', () => {
 		);
 		expect(panel).not.toMatch(/setInterval|setTimeout|EventSource|WebSocket/);
 	});
+
+	it('keys the transcript query on a string so sync ticks cannot rebuild it', () => {
+		// The id array gets a fresh identity whenever any chat_session row syncs — the agent writes
+		// usage totals throughout a turn — and a query derived from that array is torn down and
+		// recreated on every tick, so its `current` never leaves `undefined` and the transcript
+		// stays blank while the run is live. The string key is what makes streaming parts render.
+		const panel = readFileSync(join(boltAgent, 'agent-chat-panel.svelte'), 'utf8');
+		expect(panel).toContain(
+			"const activeConversationKey = $derived(activeConversationIds.join('\\u0000'))"
+		);
+		expect(panel).toContain("conversation_id: { in: activeConversationKey.split('\\u0000') }");
+		expect(panel).not.toMatch(/conversation_id:\s*\{\s*in:\s*activeConversationIds\s*\}/);
+	});
+
+	it('shows queue chrome only when work is actually queued or paused', () => {
+		// A lone in-flight turn keeps its interrupt control on the composer; the queue section is
+		// reserved for a genuinely non-empty queue, so it never renders as empty chrome over a
+		// single running conversation.
+		const panel = readFileSync(join(boltAgent, 'agent-chat-panel.svelte'), 'utf8');
+		expect(panel).toContain('{#if activeChatId && (mutableRuns.length > 0 || mailboxPaused)}');
+		expect(panel).not.toContain('{#if activeChatId && (agentWorking || mailboxPaused)}');
+		expect(panel).toContain('{#if runningRun && mutableRuns.length === 0 && !mailboxPaused}');
+	});
 });
