@@ -39,7 +39,10 @@ export const buildManifest = (
 		schemaFingerprint: schemaPlan.fingerprint,
 		schemaPlan,
 		requiredFacilities,
-		staticAssets: [],
+		// Empty here and filled by `bolt sync`, which is the only party that has seen a build: this
+		// function describes a workspace definition, and a definition ships no files.
+		browserAssets: [],
+		serverAssets: [],
 		// `workspace.integrations` used to reach this function only to be hashed into the fingerprint,
 		// which meant a host could tell that the integrations had *changed* and never what they were.
 		integrations: manifestIntegrations(workspace.integrations)

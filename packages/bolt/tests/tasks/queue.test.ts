@@ -25,7 +25,13 @@ import { makeRunner, type Run } from '../../src/runtime/tasks/runner.js';
  * partial index over a status — and none of those are checkable by reading a string.
  */
 
-/** The plan steps that create the two tables, read out of the plan rather than restated here. */
+/**
+ * The plan steps that create the tables a tick touches, read out of the plan rather than restated.
+ *
+ * The sync tables are here because `finish` compacts the outbox in the same batch it prunes terminal
+ * task rows in. A tick reaches them whether or not this suite is about them, so a harness that
+ * omitted them would fail every test in the file on a missing relation.
+ */
 const taskSchemaSteps = () =>
 	buildSchemaPlan({
 		name: 'tasks',
@@ -37,7 +43,9 @@ const taskSchemaSteps = () =>
 		(step) =>
 			step.id.startsWith('collection:bolt_task') ||
 			step.id.startsWith('collection:bolt_schedule') ||
-			step.id.startsWith('collection:agent_mailbox')
+			step.id.startsWith('collection:agent_mailbox') ||
+			step.id.startsWith('collection:bolt_sync_outbox') ||
+			step.id.startsWith('collection:bolt_sync_horizon')
 	);
 
 const at = (iso: string): number => Date.parse(iso);
@@ -616,10 +624,12 @@ describe('bolt task queue over a host facility', () => {
 
 			await runStatements(stopLaneStatements(lane, command));
 			expect(
-				(await database.query<{ status: string }>(
-					'select status from agent_mailbox where conversation_id = $1',
-					[lane]
-				)).rows[0]?.status
+				(
+					await database.query<{ status: string }>(
+						'select status from agent_mailbox where conversation_id = $1',
+						[lane]
+					)
+				).rows[0]?.status
 			).toBe('paused');
 			expect(
 				(await tasks())

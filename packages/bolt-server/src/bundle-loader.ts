@@ -1,4 +1,6 @@
 import {
+	ARTIFACT_ASSET_DIRECTORY,
+	type AssetIndexEntry,
 	type BoltBundle,
 	type FacilityBindings,
 	PROTOCOL_VERSION,
@@ -7,7 +9,8 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import { Context, Effect, Layer, Ref, Schema } from 'effect';
 import { pathToFileURL } from 'node:url';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 /** Identifies the immutable artifact validation phase that rejected a bundle. */
@@ -107,25 +110,63 @@ export const makeLayer = ({
 					});
 				}
 
-				const assetPaths = new Set<string>();
-				for (const asset of bundle.manifest.staticAssets) {
-					if (assetPaths.has(asset.path)) {
-						return yield* new BundleLoadError({
-							operation: 'BoltServer.BundleLoader.verifyAssets',
-							bundlePath: absolutePath,
-							message: `Bolt bundle contains duplicate static asset path: ${asset.path}`
+				/**
+				 * Every indexed asset is verified against the blob it names, once, before anything serves.
+				 *
+				 * The bytes used to ride inside the manifest, so this loop hashed what it had already been
+				 * handed. They now sit in `assets/<sha256>` beside the bundle, which means the checksum has
+				 * work to do that it did not have before: it is what closes the gap between "the artifact
+				 * says it ships this file" and "this directory happens to contain a file by that name".
+				 *
+				 * Both halves are checked. A `serverAssets` entry is never served over HTTP, but the guest
+				 * will ask for it by key at some point during an invocation, and a missing or corrupt blob
+				 * discovered there surfaces inside an isolate, mid-request, as an unexplained failure.
+				 */
+				const assetDirectory = join(dirname(absolutePath), ARTIFACT_ASSET_DIRECTORY);
+				const verify = Effect.fn('BoltServer.BundleLoader.verifyAssetSet')(function* (
+					half: string,
+					assets: ReadonlyArray<AssetIndexEntry>
+				) {
+					const seen = new Set<string>();
+					for (const asset of assets) {
+						if (seen.has(asset.path)) {
+							return yield* new BundleLoadError({
+								operation: 'BoltServer.BundleLoader.verifyAssets',
+								bundlePath: absolutePath,
+								message: `Bolt bundle contains duplicate ${half} asset path: ${asset.path}`
+							});
+						}
+						seen.add(asset.path);
+						const blob = join(assetDirectory, asset.sha256);
+						const bytes = yield* Effect.tryPromise({
+							try: () => readFile(blob),
+							catch: (cause) =>
+								new BundleLoadError({
+									operation: 'BoltServer.BundleLoader.verifyAssets',
+									bundlePath: absolutePath,
+									message: `Bolt bundle ${half} asset blob is missing: ${asset.path} (${asset.sha256})`,
+									cause
+								})
 						});
+						const actualSha256 = createHash('sha256').update(bytes).digest('hex');
+						if (actualSha256 !== asset.sha256.toLowerCase()) {
+							return yield* new BundleLoadError({
+								operation: 'BoltServer.BundleLoader.verifyAssets',
+								bundlePath: absolutePath,
+								message: `Bolt bundle ${half} asset checksum failed: ${asset.path}`
+							});
+						}
+						if (bytes.byteLength !== asset.byteLength) {
+							return yield* new BundleLoadError({
+								operation: 'BoltServer.BundleLoader.verifyAssets',
+								bundlePath: absolutePath,
+								message: `Bolt bundle ${half} asset length disagrees with its index: ${asset.path}`
+							});
+						}
 					}
-					assetPaths.add(asset.path);
-					const actualSha256 = createHash('sha256').update(asset.bytes).digest('hex');
-					if (actualSha256 !== asset.sha256.toLowerCase()) {
-						return yield* new BundleLoadError({
-							operation: 'BoltServer.BundleLoader.verifyAssets',
-							bundlePath: absolutePath,
-							message: `Bolt bundle static asset checksum failed: ${asset.path}`
-						});
-					}
-				}
+				});
+				yield* verify('browser', bundle.manifest.browserAssets);
+				yield* verify('server', bundle.manifest.serverAssets);
 
 				return bundle;
 			});

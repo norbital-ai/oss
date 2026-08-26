@@ -1,11 +1,11 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
 import type { Plugin, PluginOption } from 'vite';
-import { copyFile, mkdir, readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve, sep } from 'node:path';
 import { Effect, Result, Schema } from 'effect';
 import { auditAuthoredSystemColumns } from '../quality/audit.js';
-import { WORKSPACE_ENTRY_FILE_NAME } from './client-entry.js';
+import { SERVER_ASSET_DECLARATION_FILE_NAME, WORKSPACE_ENTRY_FILE_NAME } from './client-entry.js';
 
 export { WORKSPACE_ENTRY_FILE_NAME } from './client-entry.js';
 
@@ -256,6 +256,16 @@ const VitePlugins = {
 					entry.code = entry.code.replace(WORKSPACE_ENTRY_STYLESHEET_PLACEHOLDER, stylesheet);
 				}
 			},
+			/**
+			 * Copies the workspace's declared server assets, and writes down that it did.
+			 *
+			 * The copy alone is not enough. These files land in the same directory as the compiled
+			 * client, and `bolt sync` used to index everything it found there as a public browser asset
+			 * — so a WebAssembly module a workspace declared for its *own* runtime was published at a
+			 * URL the moment it was declared. The compiler cannot tell the two apart by looking: it
+			 * never reads `vite.config.ts` (Vite does), and a path is not a permission. The declaration
+			 * is the only authority, so it is written beside the output for the compiler to read.
+			 */
 			closeBundle: () =>
 				Effect.runPromise(
 					Effect.gen(function* () {
@@ -270,6 +280,17 @@ const VitePlugins = {
 								})
 							),
 							{ concurrency: 'unbounded' }
+						);
+						// The declared target *is* the key the guest's asset bridge asks for, so it is
+						// recorded exactly as authored — normalized to forward slashes, and to nothing else.
+						const targets = assets.map((asset) => asset.target.split(sep).join('/')).toSorted();
+						yield* Effect.tryPromise(() => mkdir(outDir, { recursive: true }));
+						yield* Effect.tryPromise(() =>
+							writeFile(
+								join(outDir, SERVER_ASSET_DECLARATION_FILE_NAME),
+								`${JSON.stringify({ targets }, null, '\t')}\n`,
+								'utf8'
+							)
 						);
 					})
 				)

@@ -2,6 +2,7 @@ import { Effect, Result, Schema } from 'effect';
 import { SyncCursor, type SyncChange } from '#lib/runtime/sync/sync.js';
 import { compareCursors, ORIGIN_CURSOR } from '#lib/client/replica/sync-client.js';
 import {
+	clearProvisioned,
 	createPGliteStore,
 	markProvisioned,
 	provision,
@@ -46,10 +47,18 @@ const ProvisioningResponse = Schema.Struct({
 const SnapshotRow = Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [
 	Schema.Record(Schema.String, Schema.Json)
 ]);
+/**
+ * The `sync.snapshot` envelope, with nothing in it optional.
+ *
+ * Every answer the runtime command produces states both keys — `nextAfter` is the next id or `null`,
+ * never absent. Accepting their absence made a page this client could not read indistinguishable from
+ * a collection that had ended, which is the one confusion the paging loop below must not have. The
+ * rows are decoded one at a time afterwards, because a row and a page fail for different reasons.
+ */
 const SnapshotPage = Schema.Struct({
-	rows: Schema.Array(SnapshotRow),
-	cursor: Schema.optionalKey(SyncCursor),
-	nextAfter: Schema.optionalKey(Schema.NullOr(Schema.String))
+	rows: Schema.Array(Schema.Json),
+	cursor: SyncCursor,
+	nextAfter: Schema.NullOr(Schema.String)
 });
 
 /** The ordered DDL this tenant's database was provisioned with. */
@@ -94,9 +103,14 @@ const oldestCursor = (
 /**
  * One page of one collection, decoded into what the snapshot loop needs.
  *
- * `undefined` means the server answered nothing at all — abort this collection's paging rather than
- * recording "no records". Rows are kept only when they name their `id`: an upsert cannot key
- * a row that cannot be rewritten, and one bad row failing a whole page would cost the page's good ones.
+ * An unreadable page is a failure, and the failure aborts the whole bootstrap. Answering it with
+ * `undefined` made it the same signal as "this collection is exhausted": the loop stopped, the
+ * partial load was reported as a success, and the fingerprint was stamped over a workspace that held
+ * one page of it — which every later session then resumed instead of rebuilding.
+ *
+ * Rows are kept only when they name their `id`. A field-restricted subject can be masked out of `id`
+ * itself, and an upsert cannot key a row that cannot be rewritten; dropping that row costs one row,
+ * while failing its page would cost every good one beside it.
  */
 const readSnapshotPage = Effect.fn('ReplicaBootstrap.readSnapshotPage')(function* (
 	transport: BootstrapTransport,
@@ -104,12 +118,11 @@ const readSnapshotPage = Effect.fn('ReplicaBootstrap.readSnapshotPage')(function
 	pageSize: number,
 	after: string | undefined
 ): Effect.fn.Return<
-	| Readonly<{
-			readonly rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
-			readonly cursor?: SyncCursor | undefined;
-			readonly after?: string | undefined;
-	  }>
-	| undefined,
+	Readonly<{
+		readonly rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
+		readonly cursor: SyncCursor;
+		readonly after?: string | undefined;
+	}>,
 	unknown
 > {
 	const answer = yield* transport.command('sync.snapshot', {
@@ -117,12 +130,19 @@ const readSnapshotPage = Effect.fn('ReplicaBootstrap.readSnapshotPage')(function
 		limit: pageSize,
 		...(after === undefined ? {} : { after })
 	});
-	const decoded = Schema.decodeUnknownResult(SnapshotPage)(answer);
-	if (Result.isFailure(decoded)) return undefined;
+	const decoded = yield* Schema.decodeUnknownEffect(SnapshotPage)(answer).pipe(
+		Effect.mapError(
+			(cause) =>
+				new Error(`Replica snapshot page for ${collection} could not be read: ${String(cause)}`)
+		)
+	);
 	return {
-		rows: decoded.success.rows,
-		cursor: decoded.success.cursor,
-		after: decoded.success.nextAfter ?? undefined
+		rows: decoded.rows.flatMap((row) => {
+			const keyed = Schema.decodeUnknownResult(SnapshotRow)(row);
+			return Result.isFailure(keyed) ? [] : [keyed.success];
+		}),
+		cursor: decoded.cursor,
+		after: decoded.nextAfter ?? undefined
 	};
 });
 
@@ -138,18 +158,11 @@ const loadCollectionSnapshot = Effect.fn('ReplicaBootstrap.loadCollectionSnapsho
 	let rows = 0;
 	do {
 		const page = yield* readSnapshotPage(transport, collection, pageSize, after);
-		if (page === undefined) break;
 		// The whole page in one statement. Per-row writes made a first visit take minutes.
 		rows += yield* write(collection, page.rows);
 		// The oldest cursor across every collection governs the stream, so a pick up after the first
 		// page was read re-delivers a little rather than missing something a later page had ahead of it.
-		const pageCursor = page.cursor;
-		if (
-			pageCursor !== undefined &&
-			(cursor === undefined || compareCursors(pageCursor, cursor) < 0)
-		) {
-			cursor = pageCursor;
-		}
+		if (cursor === undefined || compareCursors(page.cursor, cursor) < 0) cursor = page.cursor;
 		after = page.after;
 	} while (after !== undefined);
 	return cursor === undefined ? { rows } : { cursor, rows };
@@ -192,6 +205,44 @@ const readShape = (transport: BootstrapTransport): Effect.Effect<ReadonlyArray<s
 					) ?? []
 			)
 		);
+
+/**
+ * How long a tab that does not hold the database waits for the tab that does to finish building it.
+ *
+ * Provisioning drops the schema, so it cannot be something every tab does on its own: two tabs
+ * opening together both dropped, and each one's snapshot landed in a database the other was about to
+ * empty. Leadership already decides who holds the database — the same election that decides who
+ * streams — so the leader builds it and every other tab waits for the fingerprint to appear and then
+ * resumes what it built.
+ *
+ * A wait with no end would be worse than no replica at all, because the page would sit behind a tab
+ * that may never bootstrap. Giving up returns the tab to reading over the wire, which is the same
+ * degradation a browser that cannot run the engine already gets.
+ */
+const FOLLOWER_PROVISION_TIMEOUT_MILLIS = 30_000;
+const FOLLOWER_PROVISION_POLL_MILLIS = 50;
+
+const awaitProvisioned = Effect.fn('ReplicaBootstrap.awaitProvisioned')(function* (
+	database: PGliteLike,
+	steps: ReadonlyArray<ProvisioningStepType>,
+	fingerprint: string
+): Effect.fn.Return<boolean, unknown> {
+	const deadline = Date.now() + FOLLOWER_PROVISION_TIMEOUT_MILLIS;
+	for (;;) {
+		const state = yield* readReplicaState(database);
+		// Built and stamped by the leader: this tab reads that database and provisions nothing.
+		if (state?.fingerprint === fingerprint) return false;
+		// Leadership moves when the leading tab closes. A follower promoted while waiting is now the
+		// tab that has to build it, and the drop is safe precisely because it is the only one holding it.
+		if (database.isLeader !== false) return yield* provision(database, steps, fingerprint);
+		if (Date.now() >= deadline) {
+			return yield* Effect.fail(
+				new Error('Local replica timed out waiting for the leading tab to provision it')
+			);
+		}
+		yield* Effect.sleep(FOLLOWER_PROVISION_POLL_MILLIS);
+	}
+});
 
 type LocalDatabase = Readonly<{
 	readonly store: LocalReplicaStore;
@@ -250,7 +301,13 @@ export const openLocalDatabase = Effect.fn('ReplicaBootstrap.openLocalDatabase')
 	// repository-health:allow SQL1 -- session bootstrap for the sync engine's reconstructible mirror;
 	// this is neither application data access nor an exposed statement capability.
 	yield* database.exec('set session_replication_role = replica');
-	const provisioned = yield* provision(database, provisioning.steps, provisioning.fingerprint);
+	// Only the tab holding the database rebuilds it; see `awaitProvisioned`. An absent `isLeader` means
+	// an unshared engine — the test harness, or a browser without workers — which is the same thing as
+	// being the only tab.
+	const provisioned =
+		database.isLeader === false
+			? yield* awaitProvisioned(database, provisioning.steps, provisioning.fingerprint)
+			: yield* provision(database, provisioning.steps, provisioning.fingerprint);
 	const fieldsByCollection = Object.fromEntries(
 		provisioning.shape.collections.map((collection) => [collection.name, collection.fields])
 	);
@@ -260,9 +317,14 @@ export const openLocalDatabase = Effect.fn('ReplicaBootstrap.openLocalDatabase')
 		loadSnapshot(transport, (collection, rows) => store.applySnapshot(collection, rows), readable);
 	const resnapshot = () =>
 		Effect.gen(function* () {
+			// Unstamped for as long as it is incomplete. A repair empties the tables before it refills
+			// them, so a page that fails halfway leaves exactly the truncated projection the bootstrap
+			// refuses to create — and a fingerprint standing over that is what makes the next session
+			// resume it instead of rebuilding.
+			yield* clearProvisioned(database);
 			yield* store.reset();
 			const snapshot = yield* snapshotCurrent();
-			yield* writeReplicaCursor(database, snapshot.cursor);
+			yield* markProvisioned(database, provisioning.fingerprint, snapshot.cursor);
 			return snapshot;
 		});
 	if (!provisioned) {

@@ -74,13 +74,17 @@ describe('Bolt protocol schemas', () => {
 		expect(Schema.decodeUnknownResult(FacilityName)('sse')._tag).toBe('Failure');
 	});
 
-	it('carries exact task lifecycle signals on protocol version 3', () => {
+	it('carries exact task lifecycle signals on the current protocol version', () => {
 		for (const tag of ['Active', 'Settled', 'Interrupt'] as const) {
-			expect(
-				Schema.decodeUnknownSync(TaskRequest)({ _tag: tag, taskId: 'agent-turn-1' })
-			).toEqual({ _tag: tag, taskId: 'agent-turn-1' });
+			expect(Schema.decodeUnknownSync(TaskRequest)({ _tag: tag, taskId: 'agent-turn-1' })).toEqual({
+				_tag: tag,
+				taskId: 'agent-turn-1'
+			});
 		}
-		expect(PROTOCOL_VERSION).toBe(3);
+		// 4 is the version that stopped carrying asset bytes inside the artifact. The literal is
+		// asserted rather than the constant compared to itself: a bump is a deliberate act, and a
+		// release that changes shape without one is the failure this pins.
+		expect(PROTOCOL_VERSION).toBe(4);
 	});
 
 	it('decodes transport requests without selecting a wire protocol', () => {

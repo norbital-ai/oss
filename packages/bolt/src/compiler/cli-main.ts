@@ -27,7 +27,7 @@ const report = (commandName: string, result: SyncResult): void => {
 	}
 	process.stdout.write(
 		[
-			`Bolt ${commandName} complete: ${result.collectionNames.length} collections, ${result.appNames.length} apps, ${result.staticAssetCount} static assets`,
+			`Bolt ${commandName} complete: ${result.collectionNames.length} collections, ${result.appNames.length} apps, ${result.browserAssetCount} browser assets, ${result.serverAssetCount} server assets`,
 			`Artifact: ${result.artifactPath}`,
 			''
 		].join('\n')

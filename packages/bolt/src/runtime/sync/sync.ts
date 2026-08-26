@@ -1,6 +1,5 @@
 import { Context, Effect, Layer, Number as ENumber, Schema } from 'effect';
 import { and, asc, eq, exists, gt, lt, max, or } from 'drizzle-orm';
-import { alias as tableAlias } from 'drizzle-orm/pg-core';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
@@ -13,18 +12,18 @@ import * as Workspace from '#lib/runtime/workspace.js';
 import { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
 import { decodeReferenceRow } from '#lib/runtime/collections/references.js';
+import * as Compaction from '#lib/runtime/sync/compaction.js';
 import {
 	aliased,
 	asText,
 	coalesce,
 	commitHorizon,
 	composer,
-	dbNowMinusDays,
 	dynamicTable,
 	executeBuilt,
-	greatest,
-	horizonSequence,
+	nothing,
 	one,
+	onlyWhen,
 	qualified,
 	rowJson,
 	syncCursorJson,
@@ -33,7 +32,6 @@ import {
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 const { bolt_sync_horizon: syncHorizon, bolt_sync_outbox: syncOutbox } = SYSTEM_MODEL_TABLES;
-const newerSyncOutbox = tableAlias(syncOutbox, 'newer_sync_outbox');
 
 /** The `Schema.Json` predicate, built once: it is consulted for every value crossing the facility seam. */
 const isJson = Schema.is(Schema.Json);
@@ -86,6 +84,47 @@ export const SyncChange = Schema.Struct({
 export interface SyncChange extends Schema.Schema.Type<typeof SyncChange> {}
 
 /**
+ * One pass over the change log: what was examined, and what of it may be applied.
+ *
+ * The two are different facts and conflating them is a real defect rather than a tidiness question.
+ * A subject whose policy narrows a collection to a handful of rows can be handed a page of the log
+ * that contains none of theirs — and a caller told only "no changes" has nothing to advance a cursor
+ * to, so its next wake rescans the same invisible range, and the one after that, forever.
+ *
+ * `scanned` is the last outbox row this pass *looked at*, whether or not the subject may see it.
+ * `complete` says the window was not filled, which is the only honest end-of-log signal once the
+ * limit bounds rows examined rather than rows returned.
+ *
+ * **`scanned` is not an apply cursor.** Row visibility is decided against the collection's current
+ * state, so a row that is invisible now can become visible later — a record reassigned to the
+ * subject's team, say. A caller that hands `scanned` to a replica as its durable position would make
+ * that row permanently unreachable. It is a within-connection scan position: the server carries it
+ * while it reads, and the client's own cursor advances only over changes it was actually given.
+ */
+export const SyncScan = Schema.Struct({
+	changes: Schema.Array(SyncChange),
+	scanned: SyncCursor,
+	complete: Schema.Boolean
+});
+export interface SyncScan extends Schema.Schema.Type<typeof SyncScan> {}
+
+/**
+ * One outbox row as the scan reads it: always a position, and the rest only where the subject may
+ * see it.
+ *
+ * The columns are nulled in SQL rather than filtered in the guest so that a row this subject may not
+ * read crosses the facility boundary as a cursor and nothing else — no record body, and not even
+ * which collection it belonged to.
+ */
+const SyncScanRow = Schema.Struct({
+	cursor: SyncCursor,
+	collection: Schema.NullOr(Schema.NonEmptyString),
+	recordId: Schema.NullOr(Schema.NonEmptyString),
+	operation: Schema.NullOr(Schema.Literals(['create', 'update', 'delete'])),
+	record: Schema.Json
+});
+
+/**
  * One page of a collection's current state, taken at a cursor the log can be streamed from.
  *
  * `cursor` is the commit horizon at the moment the page was read, so everything already reflected in
@@ -116,6 +155,24 @@ export type Interface = Readonly<{
 	readonly head: (
 		effectId: EffectId
 	) => Effect.Effect<SyncCursor, Database.FacilityError | SyncDecodeError>;
+	/**
+	 * One window of the log after `cursor`: at most `limit` rows examined, and what of them applies.
+	 *
+	 * `limit` bounds rows *read*, not changes returned. That is what makes one pass constant work
+	 * regardless of how much of the log this subject can see — the previous shape applied the
+	 * visibility predicate first and the limit after, so filling a page for a narrowly-scoped subject
+	 * could scan the whole log, and failing to fill one always did.
+	 */
+	readonly scan: (
+		effectId: EffectId,
+		subject: Identity.Subject,
+		cursor: SyncCursor,
+		limit: number
+	) => Effect.Effect<
+		SyncScan,
+		Database.FacilityError | SyncDecodeError | AccessControl.AccessDenied
+	>;
+	/** `scan` projected to the rows the caller may apply, for a caller with nothing to advance. */
 	readonly diff: (
 		effectId: EffectId,
 		subject: Identity.Subject,
@@ -214,7 +271,9 @@ export const layer = Layer.effect(
 			) as Schema.Json;
 		};
 		const collections = yield* Collections.Service;
-		return Service.of({
+		// Named rather than returned inline so `diff` can be exactly `scan` projected, instead of a
+		// second query that has to be kept in step with it.
+		const service: Interface = {
 			head: Effect.fn('Sync.head')(function* (effectId) {
 				// Bounded by the same horizon `diff` serves under. A head taken from `max(xid)` would name a
 				// position `diff` refuses to reach while any transaction below it is still open, so a client
@@ -235,7 +294,7 @@ export const layer = Layer.effect(
 					Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync head row' }))
 				);
 			}),
-			diff: Effect.fn('Sync.diff')(function* (effectId, subject, cursor, limit) {
+			scan: Effect.fn('Sync.scan')(function* (effectId, subject, cursor, limit) {
 				// Read from the mark retention writes, not from the oldest surviving row. The old test —
 				// "is the cursor behind the first row still in the table" — could never be true, because
 				// nothing ever deleted a row; the reset path was unreachable and a stranded client had no way
@@ -261,21 +320,29 @@ export const layer = Layer.effect(
 					cursor.xid > 0 &&
 					compareCursors(cursor, incompleteBelow) < 0
 				) {
-					return [
-						{
-							cursor: incompleteBelow,
-							collection: '*',
-							recordId: 'reset',
-							operation: 'reset' as const
-						}
-					];
+					// Not `complete`: the mark is a new starting point rather than the end of the log, so the
+					// caller has to keep reading from it.
+					return {
+						changes: [
+							{
+								cursor: incompleteBelow,
+								collection: '*',
+								recordId: 'reset',
+								operation: 'reset' as const
+							}
+						],
+						scanned: incompleteBelow,
+						complete: false
+					};
 				}
 				const readable = workspace.definition.collections.flatMap((collection) => {
 					if (collection.sync === false) return [];
 					const predicate = access.predicate(subject, 'read', collection.name);
 					return predicate.allowed ? [{ name: collection.name, predicate }] : [];
 				});
-				if (readable.length === 0) return [];
+				// Nothing to examine rather than nothing found: a subject who may read no collection at all
+				// has no log to walk, so there is no position to advance to.
+				if (readable.length === 0) return { changes: [], scanned: cursor, complete: true };
 				const visibility = readable.map(({ name, predicate }) => {
 					const visibleId = qualified('visible', 'id');
 					const visibleRows = composer
@@ -292,20 +359,28 @@ export const layer = Layer.effect(
 						or(eq(syncOutbox.operation, 'delete'), exists(visibleRows))
 					);
 				});
+				// `or` is nullable and there is no readable collection left for it to be null on — the
+				// early return above took that case. `nothing()` rather than `always()` all the same: the
+				// fallback for a visibility expression has to be the one that shows nothing.
+				const visible = or(...visibility) ?? nothing();
 				const size = ENumber.clamp({ minimum: 1, maximum: 500 })(limit);
 				// The commit-horizon predicate is what makes the stream lossless. Rows are inserted in
 				// transaction order but become visible in commit order; withholding every transaction at or
 				// above the oldest in-flight xid means no late commit can appear behind a cursor already served.
+				//
+				// Visibility moved out of the `where` and into the projection, and that is the whole of the
+				// scan-cursor fix: the limit now bounds the window this pass reads, so the last row of the
+				// window is a position the caller can advance to whether or not any of it was theirs.
 				const result = yield* executeBuilt(
 					effectId,
 					database,
 					composer
 						.select({
 							cursor: aliased(syncCursorJson(syncOutbox.xid, syncOutbox.sequence), 'cursor'),
-							collection: aliased(syncOutbox.collection_name, 'collection'),
-							recordId: aliased(syncOutbox.record_id, 'recordId'),
-							operation: syncOutbox.operation,
-							record: syncOutbox.record
+							collection: aliased(onlyWhen(visible, syncOutbox.collection_name), 'collection'),
+							recordId: aliased(onlyWhen(visible, syncOutbox.record_id), 'recordId'),
+							operation: aliased(onlyWhen(visible, syncOutbox.operation), 'operation'),
+							record: aliased(onlyWhen(visible, syncOutbox.record), 'record')
 						})
 						.from(syncOutbox)
 						.where(
@@ -314,25 +389,43 @@ export const layer = Layer.effect(
 									gt(syncOutbox.xid, cursor.xid),
 									and(eq(syncOutbox.xid, cursor.xid), gt(syncOutbox.sequence, cursor.sequence))
 								),
-								lt(syncOutbox.xid, COMMIT_HORIZON),
-								or(...visibility)
+								lt(syncOutbox.xid, COMMIT_HORIZON)
 							)
 						)
 						.orderBy(asc(syncOutbox.xid), asc(syncOutbox.sequence))
 						.limit(size)
 				);
-				const changes = yield* Schema.decodeUnknownEffect(Schema.Array(SyncChange))(
-					result.rows
-				).pipe(Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync diff rows' })));
+				const rows = yield* Schema.decodeUnknownEffect(Schema.Array(SyncScanRow))(result.rows).pipe(
+					Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync diff rows' }))
+				);
 				// Row visibility is decided in SQL above; *column* visibility is decided here, by the same
 				// `access.mask` a direct read goes through. Without it the outbox's `to_jsonb(r)` hands the
 				// whole row over — a field-restricted policy would be enforced on every server read and then
 				// quietly undone by the replica, which persists what it receives in the browser.
-				return changes.map((change) =>
-					change.record == null
-						? change
-						: { ...change, record: maskRecord(subject, change.collection, change.record) }
+				const changes = rows.flatMap((row) =>
+					row.collection === null || row.recordId === null || row.operation === null
+						? []
+						: [
+								{
+									cursor: row.cursor,
+									collection: row.collection,
+									recordId: row.recordId,
+									operation: row.operation,
+									record:
+										row.record == null
+											? row.record
+											: maskRecord(subject, row.collection, row.record)
+								}
+							]
 				);
+				return {
+					changes,
+					scanned: rows[rows.length - 1]?.cursor ?? cursor,
+					complete: rows.length < size
+				};
+			}),
+			diff: Effect.fn('Sync.diff')(function* (effectId, subject, cursor, limit) {
+				return (yield* service.scan(effectId, subject, cursor, limit)).changes;
 			}),
 			shape: Effect.fn('Sync.shape')(function* (subject) {
 				return workspace.definition.collections
@@ -405,89 +498,27 @@ export const layer = Layer.effect(
 			}),
 			compact: Effect.fn('Sync.compact')(function* (effectId, retentionDays) {
 				const days = Math.max(1, Math.trunc(retentionDays));
-				// Only below the commit horizon: a row from a transaction that may still be open has no
-				// settled position, and collapsing around it would decide an ordering the database has not.
+				// Three calls rather than one batch, and each under its own effect id. The facility answers a
+				// transaction with its *last* statement's rows, so two counts cannot come back from one batch;
+				// and every facility is idempotent on `(scope, effectId)`, so three statements sharing this
+				// invocation's id would be answered with the first one's cached result.
 				const collapsed = yield* executeBuilt(
-					effectId,
+					EffectId.make(`${effectId}:collapse`),
 					database,
-					composer
-						.delete(syncOutbox)
-						.where(
-							and(
-								lt(syncOutbox.xid, COMMIT_HORIZON),
-								exists(
-									composer
-										.select({ one: one() })
-										.from(newerSyncOutbox)
-										.where(
-											and(
-												eq(newerSyncOutbox.collection_name, syncOutbox.collection_name),
-												eq(newerSyncOutbox.record_id, syncOutbox.record_id),
-												lt(newerSyncOutbox.xid, COMMIT_HORIZON),
-												or(
-													gt(newerSyncOutbox.xid, syncOutbox.xid),
-													and(
-														eq(newerSyncOutbox.xid, syncOutbox.xid),
-														gt(newerSyncOutbox.sequence, syncOutbox.sequence)
-													)
-												)
-											)
-										)
-								)
-							)
-						)
-						.returning({ removed: one() })
+					Compaction.collapse().returning({ removed: one() })
 				);
-				// Retention is the only operation that can strand a replica, because it can remove the newest
-				// row a record ever had. The mark moves to the highest cursor it deleted, and `diff` answers
-				// anything below that with a rebuild instead of a silently incomplete stream.
+				// Marked before anything is pruned, never after: the mark is what makes a gap detectable, so a
+				// crash between these two leaves replicas told to rebuild rather than silently short.
+				yield* executeBuilt(
+					EffectId.make(`${effectId}:mark`),
+					database,
+					Compaction.markRetained(days)
+				);
 				const pruned = yield* executeBuilt(
-					effectId,
+					EffectId.make(`${effectId}:prune`),
 					database,
-					composer
-						.delete(syncOutbox)
-						.where(
-							and(
-								lt(syncOutbox.xid, COMMIT_HORIZON),
-								lt(syncOutbox.created_at, dbNowMinusDays(days))
-							)
-						)
-						.returning({ xid: syncOutbox.xid, sequence: syncOutbox.sequence })
+					Compaction.prune(days).returning({ removed: one() })
 				);
-				const cursors = pruned.rows.flatMap((row) =>
-					row !== null && typeof row === 'object' && !Array.isArray(row)
-						? [
-								{
-									xid: Number(Reflect.get(row, 'xid') ?? 0),
-									sequence: Number(Reflect.get(row, 'sequence') ?? 0)
-								}
-							]
-						: []
-				);
-				const highest = cursors.reduce<SyncCursor | undefined>(
-					(best, entry) => (best === undefined || compareCursors(entry, best) > 0 ? entry : best),
-					undefined
-				);
-				if (highest !== undefined) {
-					// `greatest` because a later compaction must never move the mark backwards: that would
-					// re-admit cursors already declared stranded.
-					yield* executeBuilt(
-						effectId,
-						database,
-						composer
-							.update(syncHorizon)
-							.set({
-								xid: greatest(syncHorizon.xid, highest.xid),
-								sequence: horizonSequence(
-									syncHorizon.xid,
-									syncHorizon.sequence,
-									highest.xid,
-									highest.sequence
-								)
-							})
-							.where(eq(syncHorizon.singleton, true))
-					);
-				}
 				return { collapsed: collapsed.rows.length, pruned: pruned.rows.length };
 			}),
 			schema: () => ({ cursor: 'xid-sequence', version: 1 }),
@@ -520,6 +551,7 @@ export const layer = Layer.effect(
 				}
 			}),
 			wakeHint: (cursor) => ({ topic: 'bolt.sync', cursor })
-		});
+		};
+		return Service.of(service);
 	})
 );

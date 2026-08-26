@@ -49,6 +49,7 @@ import {
 	describeGeneratedColumnWrite,
 	describeInvalidCustomValue
 } from '#lib/runtime/collections/custom-values.js';
+import * as SyncCompaction from '#lib/runtime/sync/compaction.js';
 import * as Sync from '#lib/runtime/sync/sync.js';
 import { SyncCursor } from '#lib/runtime/sync/sync.js';
 import {
@@ -105,6 +106,7 @@ const ApprovalDecideInput = Schema.Struct({
 	decision: Schema.Literals(['approve', 'reject', 'request_changes', 'supersede']),
 	reason: Schema.optionalKey(Schema.String)
 });
+/** `sync.scan` and `sync.diff` ask the same question; they differ only in how much of it comes back. */
 const SyncDiffInput = Schema.Struct({ subject: Subject, cursor: SyncCursor, limit: Schema.Number });
 const AgentEnqueueInput = Schema.Struct({
 	subject: Subject,
@@ -316,7 +318,17 @@ const SyncSnapshotInput = Schema.Struct({
 	after: Schema.optional(Schema.String),
 	limit: Schema.optional(Schema.Number)
 });
-const SyncCompactInput = Schema.Struct({ retentionDays: Schema.optional(Schema.Number) });
+/**
+ * A `subject` on a command that acts on no subject's data, and that is exactly why it is here.
+ *
+ * Compaction deletes history for the whole workspace. It is gated by `SYSTEM_ONLY_COMMANDS`, and
+ * that gate reads `subject.system` — so the field is what the check has to look at, minted by the
+ * boundary from a verified gateway signature and refused when a payload claims it.
+ */
+const SyncCompactInput = Schema.Struct({
+	subject: Subject,
+	retentionDays: Schema.optional(Schema.Number)
+});
 const SyncMutateInput = Schema.Struct({
 	subject: Subject,
 	changes: Schema.Array(
@@ -812,7 +824,22 @@ const SYSTEM_ONLY_COMMANDS: ReadonlySet<string> = new Set([
 	 * hold, so the host authenticates the wire and says so with a signature over the timestamp, the
 	 * command, the tenant and the arguments. Nothing else can assert that a message arrived.
 	 */
-	'envoys.receive'
+	'envoys.receive',
+	/**
+	 * Compaction, which is destructive to everybody in the workspace at once.
+	 *
+	 * It used to sit behind no gate at all — neither table named it, and its input decoded no
+	 * `subject` — so it was reachable by any credential this boundary accepted. What that buys is not a
+	 * read: `sync.compact` deletes the outbox past the retention window and moves the horizon mark over
+	 * what it removed, so one call strands every replica in the workspace behind a full rebuild, and a
+	 * call naming a short window strands them behind a larger one.
+	 *
+	 * No policy would express this correctly either. Retention is a property of the deployment rather
+	 * than of the workspace's own authority model, and the host is the only party that knows when it is
+	 * safe to run — after a seed, or on the maintenance tick, which now carries a bounded pass of the
+	 * same work without coming through this boundary at all.
+	 */
+	'sync.compact'
 ]);
 
 /** The prefix a spent founder claim is filed under, so it cannot collide with a sign-in code's row. */
@@ -837,7 +864,7 @@ const authorizeSystemCommand = Effect.fn('Bolt.authorizeSystemCommand')(function
 	return yield* new AccessControl.AccessDenied({
 		action: 'manage',
 		resource: command,
-		reason: `${command} mints a session, so it is reachable only by the host proving itself per invocation; an administrator's own authority is not enough`
+		reason: `${command} is reachable only by the host proving itself per invocation; an administrator's own authority is not enough`
 	});
 });
 
@@ -2149,6 +2176,21 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const sync = yield* Sync.Service;
 			return json(yield* sync.diff(effectId, input.subject, input.cursor, input.limit));
 		}
+		/**
+		 * The same read as `sync.diff`, answering with the scan position as well as the changes.
+		 *
+		 * A distribution service reading one tenant's log on behalf of every browser watching it needs
+		 * to know where it got to, not merely what it found — an outbox page holding nothing this
+		 * subject may see is not the end of the log, and a caller told only "no changes" rescans that
+		 * page forever. `sync.diff` stays because what a *replica* stores is an apply cursor: `scanned`
+		 * runs ahead of rows the subject cannot see today and might be able to see tomorrow, so it
+		 * belongs to the connection reading the log and never to the client's durable position.
+		 */
+		case 'sync.scan': {
+			const input = yield* decode(SyncDiffInput, commandInput);
+			const sync = yield* Sync.Service;
+			return json(yield* sync.scan(effectId, input.subject, input.cursor, input.limit));
+		}
 		case 'sync.shape': {
 			const input = yield* decode(SyncShapeInput, commandInput);
 			return json(yield* (yield* Sync.Service).shape(input.subject));
@@ -2167,7 +2209,12 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		}
 		case 'sync.compact': {
 			const input = yield* decode(SyncCompactInput, commandInput);
-			return json(yield* (yield* Sync.Service).compact(effectId, input.retentionDays ?? 30));
+			return json(
+				yield* (yield* Sync.Service).compact(
+					effectId,
+					input.retentionDays ?? SyncCompaction.DEFAULT_RETENTION_DAYS
+				)
+			);
 		}
 		case 'sync.schema':
 			return json((yield* Sync.Service).schema());

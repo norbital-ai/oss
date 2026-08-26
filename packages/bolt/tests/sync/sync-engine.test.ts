@@ -1,15 +1,35 @@
 import { createHash } from 'node:crypto';
-import { Effect, Schema } from 'effect';
+import { Effect, Option, Redacted, Schema } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EffectId, success, type TransportRequest } from '@norbital-ai/bolt-protocol';
+import {
+	EffectId,
+	EnvironmentName,
+	Invocation,
+	InvocationId,
+	PROTOCOL_VERSION,
+	ReleaseId,
+	success,
+	TenantId,
+	type TransportRequest
+} from '@norbital-ai/bolt-protocol';
 import { approveBy } from '../../src/authoring/approval-flow.js';
 import { describePolicy } from '../../src/authoring/policy-introspection.js';
 import { policy } from '../../src/authoring/workspace-schema.js';
+import { systemSignature } from '../../src/host.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
+import {
+	GATEWAY_SECRET_VARIABLE,
+	HostConfig,
+	SYSTEM_SIGNATURE_HEADER,
+	SYSTEM_TIMESTAMP_HEADER,
+	systemSignaturePayload
+} from '../../src/runtime/access/system-principal.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
+import { dispatchInvocation } from '../../src/runtime/dispatch.js';
 import type * as Identity from '../../src/runtime/identity/identity.js';
 import * as Sync from '../../src/runtime/sync/sync.js';
 import { decodeWake, SYNC_TOPIC } from '../../src/runtime/sync/wake.js';
+import { makeQueue, type ExecuteStatements } from '../../src/runtime/tasks/queue.js';
 import {
 	adminSubject,
 	makeBoltTestRuntime,
@@ -847,5 +867,363 @@ describe('Sync engine over SQL', () => {
 		const change = changes[0];
 		if (change === undefined) throw new Error('expected a change');
 		expect(field(change.record ?? null, 'name')).toBe('Ada');
+	});
+});
+
+/**
+ * A subject who may read almost nothing still has to be able to reach the end of the log.
+ *
+ * `diff` answers with the rows a subject may *apply*, so an outbox page that holds none of theirs is
+ * indistinguishable from a drained log: the caller has nothing to advance a cursor to and rescans
+ * the same invisible range on every wake, forever. `scan` separates the two facts — what was
+ * examined, and what may be applied — so an empty page still moves the scan position.
+ */
+const SPARSE_TEAM = 'CoreOnly';
+const sparseWorkspace = () =>
+	testWorkspace({
+		policies: [
+			policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } }),
+			policy({
+				name: 'core-only',
+				effect: 'allow',
+				actions: ['read'],
+				capabilities: { apps: ['*'] },
+				grants: [{ collection: 'people', action: 'read', where: { $sql: `"team" = 'core'` } }]
+			})
+		],
+		teams: { admin: ['admin'], [SPARSE_TEAM]: ['core-only'] }
+	});
+
+const sparseSubject: Identity.Subject = {
+	userId: 'sparse-1',
+	tenantId: 'test-tenant',
+	teamPath: [SPARSE_TEAM],
+	policies: []
+};
+
+const compareCursors = (left: Sync.SyncCursor, right: Sync.SyncCursor): number =>
+	left.xid === right.xid ? left.sequence - right.sequence : left.xid - right.xid;
+
+const ORIGIN: Sync.SyncCursor = { xid: 0, sequence: 0 };
+
+describe('Sync scan position', () => {
+	it('advances past outbox rows the subject cannot see, so an empty page is not a dead end', async () => {
+		harness = await makeBoltTestRuntime(sparseWorkspace());
+		const { runtime, effectId } = harness;
+		await runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				// Five rows this subject may never see, then one it may. Written one at a time so each
+				// lands in its own transaction and the outbox holds six ordered rows.
+				for (const index of [1, 2, 3, 4, 5]) {
+					yield* collections.create(effectId(`hidden-${index}`), adminSubject, {
+						collection: 'people',
+						id: rid(`hidden-${index}`),
+						values: { name: `Hidden ${index}`, team: 'other' }
+					});
+				}
+				yield* collections.create(effectId('visible'), adminSubject, {
+					collection: 'people',
+					id: rid('visible'),
+					values: { name: 'Visible', team: 'core' }
+				});
+			})
+		);
+
+		const scan = (cursor: Sync.SyncCursor, name: string, limit: number) =>
+			runtime.runPromise(
+				Effect.gen(function* () {
+					return yield* (yield* Sync.Service).scan(effectId(name), sparseSubject, cursor, limit);
+				})
+			);
+
+		// The regression: this page holds nothing the subject may apply, and it still names a position
+		// strictly beyond the one it was asked from.
+		const first = await scan(ORIGIN, 'scan-1', 2);
+		expect(first.changes).toEqual([]);
+		expect(first.complete).toBe(false);
+		expect(compareCursors(first.scanned, ORIGIN)).toBeGreaterThan(0);
+
+		let cursor = first.scanned;
+		const seen: Array<Sync.SyncChange> = [];
+		for (let page = 0; page < 10; page += 1) {
+			const next = await scan(cursor, `scan-page-${page}`, 2);
+			seen.push(...next.changes);
+			expect(compareCursors(next.scanned, cursor)).toBeGreaterThanOrEqual(0);
+			cursor = next.scanned;
+			if (next.complete) break;
+		}
+		expect(seen.map((change) => field(change.record ?? null, 'name'))).toEqual(['Visible']);
+
+		// And a scan from the position it reached is drained rather than perpetually restarted.
+		const drained = await scan(cursor, 'scan-drained', 2);
+		expect(drained.changes).toEqual([]);
+		expect(drained.complete).toBe(true);
+	});
+
+	it('reports the scan as complete when the window is not filled', async () => {
+		harness = await makeBoltTestRuntime();
+		const { runtime, effectId } = harness;
+		await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).create(effectId('c1'), adminSubject, {
+					collection: 'people',
+					id: rid('p1'),
+					values: { name: 'Ada', team: 'core' }
+				});
+			})
+		);
+		const page = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).scan(effectId('scan'), adminSubject, ORIGIN, 100);
+			})
+		);
+		expect(page.complete).toBe(true);
+		expect(page.changes).toHaveLength(1);
+		// `diff` is the same read projected to the rows the caller may apply.
+		const changes = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).diff(effectId('diff'), adminSubject, ORIGIN, 100);
+			})
+		);
+		expect(changes).toEqual(page.changes);
+	});
+});
+
+const HOST_SECRET = 'a-test-gateway-secret';
+const compactScope = {
+	tenantId: TenantId.make('test-tenant'),
+	environment: EnvironmentName.make('test'),
+	releaseId: ReleaseId.make('local')
+};
+
+let invocationSequence = 0;
+const signedCompact = (input: Record<string, unknown>) => {
+	const timestamp = Date.now();
+	return Invocation.cases.Command.make({
+		protocolVersion: PROTOCOL_VERSION,
+		id: InvocationId.make(`compact-signed-${(invocationSequence += 1)}`),
+		scope: compactScope,
+		deadlineEpochMs: Date.now() + 30_000,
+		command: 'sync.compact',
+		input: input as never,
+		headers: {
+			[SYSTEM_SIGNATURE_HEADER]: [
+				systemSignature(
+					HOST_SECRET,
+					systemSignaturePayload({
+						timestamp,
+						command: 'sync.compact',
+						tenantId: String(compactScope.tenantId),
+						input
+					})
+				)
+			],
+			[SYSTEM_TIMESTAMP_HEADER]: [String(timestamp)]
+		}
+	});
+};
+
+const compactAsPerson = (credential: string) =>
+	Invocation.cases.Command.make({
+		protocolVersion: PROTOCOL_VERSION,
+		id: InvocationId.make(`compact-person-${(invocationSequence += 1)}`),
+		scope: compactScope,
+		deadlineEpochMs: Date.now() + 30_000,
+		command: 'sync.compact',
+		input: {} as never,
+		headers: { authorization: [`Bearer ${credential}`] }
+	});
+
+const withHostSecret = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+	effect.pipe(
+		Effect.provideService(HostConfig, {
+			read: (key: string) =>
+				Effect.succeed(
+					key === GATEWAY_SECRET_VARIABLE
+						? Option.some(Redacted.make(HOST_SECRET))
+						: Option.none<Redacted.Redacted<string>>()
+				)
+		})
+	);
+
+/**
+ * Compaction deletes another tenant's history, so it is the host's to run and nobody else's.
+ *
+ * It used to decode no subject at all and appear in neither authorization table, which made it
+ * reachable by any credential the boundary accepted: an ordinary member could prune the outbox and
+ * strand every replica in the workspace behind a rebuild.
+ */
+describe('who may compact the outbox', () => {
+	it('refuses an administrator and admits the signed host', async () => {
+		harness = await makeBoltTestRuntime();
+		// Administrative status *and* the team holding the workspace's `*` policy: whatever authority a
+		// person can hold in this workspace, this one holds it.
+		await seedSession(harness, {
+			token: 'admin-token',
+			user: 'admin',
+			team: 'admin',
+			status: 'admin'
+		});
+
+		const refused = await harness.runtime.runPromise(
+			withHostSecret(dispatchInvocation(compactAsPerson('admin-token'))).pipe(Effect.result)
+		);
+		expect(refused._tag).toBe('Failure');
+
+		const admitted = await harness.runtime.runPromise(
+			withHostSecret(dispatchInvocation(signedCompact({})))
+		);
+		expect(admitted.status).toBe(200);
+		expect(admitted.value).toMatchObject({ collapsed: 0, pruned: 0 });
+	});
+});
+
+/**
+ * The tick that already exists is where maintenance belongs.
+ *
+ * `finish` prunes terminal task rows for exactly this reason — a maintenance cron would wake every
+ * tenant daily whether or not it had work. Outbox compaction is the same shape of chore, so it rides
+ * the same batch and is bounded the same way.
+ */
+describe('outbox compaction on the task tick', () => {
+	/** The batch seam a host binds: the tick's statements, in order, answering with what they read. */
+	const executeOver =
+		(database: BoltTestRuntime['database']): ExecuteStatements =>
+		(statements) =>
+			Effect.promise(async () => {
+				const rows: Array<Record<string, unknown>> = [];
+				for (const statement of statements) {
+					rows.push(...(await database.query(statement.sql, statement.parameters)));
+				}
+				return rows;
+			});
+
+	it('collapses superseded rows and prunes expired ones without a separate schedule', async () => {
+		harness = await makeBoltTestRuntime();
+		const { runtime, effectId, database } = harness;
+		await runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				yield* collections.create(effectId('c1'), adminSubject, {
+					collection: 'people',
+					id: rid('p1'),
+					values: { name: 'Ada' }
+				});
+				yield* collections.update(effectId('u1'), adminSubject, {
+					collection: 'people',
+					id: rid('p1'),
+					values: { name: 'Ada L' }
+				});
+				yield* collections.update(effectId('u2'), adminSubject, {
+					collection: 'people',
+					id: rid('p1'),
+					values: { name: 'Ada Lovelace' }
+				});
+				yield* collections.create(effectId('c2'), adminSubject, {
+					collection: 'people',
+					id: rid('p2'),
+					values: { name: 'Grace' }
+				});
+			})
+		);
+		await database.query(
+			`update bolt_sync_outbox set created_at = now() - interval '40 days' where record_id = $1`,
+			[rid('p2')]
+		);
+		expect(await database.query('select count(*)::int as count from bolt_sync_outbox', [])).toEqual(
+			[{ count: 4 }]
+		);
+
+		// One ordinary tick with nothing to run. Compaction is not something a caller asks for.
+		await Effect.runPromise(makeQueue(executeOver(database)).finish([]));
+
+		expect(
+			await database.query(
+				'select collection_name, record_id from bolt_sync_outbox order by xid, sequence',
+				[]
+			)
+		).toEqual([{ collection_name: 'people', record_id: rid('p1') }]);
+		const mark = await database.query(
+			'select xid, sequence from bolt_sync_horizon where singleton',
+			[]
+		);
+		expect(Number(mark[0]?.['xid'] ?? 0)).toBeGreaterThan(0);
+	});
+});
+
+describe('the compaction horizon', () => {
+	it('moves forward only, and strands a replica below it exactly once', async () => {
+		harness = await makeBoltTestRuntime();
+		const { runtime, effectId, database } = harness;
+		await runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				yield* collections.create(effectId('c1'), adminSubject, {
+					collection: 'people',
+					id: rid('p1'),
+					values: { name: 'Ada' }
+				});
+				yield* collections.create(effectId('c2'), adminSubject, {
+					collection: 'people',
+					id: rid('p2'),
+					values: { name: 'Grace' }
+				});
+			})
+		);
+		await database.query(
+			`update bolt_sync_outbox set created_at = now() - interval '40 days' where record_id = $1`,
+			[rid('p1')]
+		);
+		const compact = (name: string) =>
+			runtime.runPromise(
+				Effect.gen(function* () {
+					return yield* (yield* Sync.Service).compact(effectId(name), 30);
+				})
+			);
+		expect(await compact('compact-1')).toMatchObject({ pruned: 1 });
+		const first = await database.query(
+			'select xid, sequence from bolt_sync_horizon where singleton',
+			[]
+		);
+		const marked = {
+			xid: Number(first[0]?.['xid'] ?? 0),
+			sequence: Number(first[0]?.['sequence'] ?? 0)
+		};
+		expect(marked.xid).toBeGreaterThan(0);
+
+		// Nothing is left to prune, so a second pass must leave the mark exactly where it stands: a
+		// mark that fell back would re-admit cursors already declared stranded.
+		expect(await compact('compact-2')).toMatchObject({ pruned: 0 });
+		expect(
+			await database.query('select xid, sequence from bolt_sync_horizon where singleton', [])
+		).toEqual(first);
+
+		// A replica below the mark is told to rebuild once, and the cursor that reset carries is above
+		// the mark — so the next read is an ordinary continuation rather than a second reset.
+		const stranded = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).diff(
+					effectId('diff-stranded'),
+					adminSubject,
+					{ xid: 1, sequence: 1 },
+					100
+				);
+			})
+		);
+		expect(stranded.map((change) => change.operation)).toEqual(['reset']);
+		const resumeFrom = stranded[0]?.cursor;
+		if (resumeFrom === undefined) throw new Error('expected a reset cursor');
+		const after = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).diff(
+					effectId('diff-after-reset'),
+					adminSubject,
+					resumeFrom,
+					100
+				);
+			})
+		);
+		expect(after.map((change) => change.operation)).not.toContain('reset');
 	});
 });

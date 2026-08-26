@@ -6,7 +6,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build, type Plugin } from 'vite';
 import { Effect, Schema } from 'effect';
-import { PROTOCOL_VERSION } from '@norbital-ai/bolt-protocol';
+import { type AssetIndexEntry, PROTOCOL_VERSION } from '@norbital-ai/bolt-protocol';
 import {
 	describeSkill,
 	type RelationDefinition,
@@ -15,8 +15,13 @@ import {
 } from '../authoring/workspace-schema.js';
 import { platformCustomTypes } from '../authoring/models-schema.js';
 import {
+	ARTIFACT_ASSET_DIRECTORY,
+	ARTIFACT_ASSET_INDEX_FILE,
+	ARTIFACT_BUNDLE_FILE,
+	ARTIFACT_DIRECTORY,
 	BOLT_TENANT_REQUEST_PREFIX,
 	BOLT_TENANT_STATIC_PREFIX,
+	SERVER_ASSET_DECLARATION_FILE_NAME,
 	WORKSPACE_ENTRY_FILE_NAME
 } from './client-entry.js';
 import { appCapabilityNames } from './compiler.js';
@@ -82,7 +87,10 @@ export type SyncResult = Readonly<{
 	readonly automationNames: ReadonlyArray<string>;
 	readonly mcpServerNames: ReadonlyArray<string>;
 	readonly artifactPath: string;
-	readonly staticAssetCount: number;
+	/** What the host serves over HTTP, and what only the guest may reach — counted separately
+	 * because a file moving from one to the other is the change most worth noticing. */
+	readonly browserAssetCount: number;
+	readonly serverAssetCount: number;
 }>;
 
 type PackageMetadata = Readonly<{
@@ -204,12 +212,23 @@ const resolveMutationRelation = (
 	};
 };
 
-type EmbeddedAsset = Readonly<{
-	readonly path: string;
-	readonly contentType: string;
-	readonly sha256: string;
-	readonly base64: string;
+/**
+ * The two halves of what an artifact ships, as the manifest and `asset-index.json` both carry them.
+ *
+ * `browser` is served over HTTP by whichever host is routing the tenant; `server` is reachable only
+ * through the guest's asset bridge, by the exact key the workspace declared. Nothing in this shape
+ * holds bytes — the bytes are in `assets/<sha256>` beside the bundle.
+ */
+type ArtifactAssetIndex = Readonly<{
+	readonly browser: ReadonlyArray<AssetIndexEntry>;
+	readonly server: ReadonlyArray<AssetIndexEntry>;
 }>;
+
+/** What the plugin left behind naming the files it copied for the workspace's own runtime. */
+const ServerAssetDeclaration = Schema.Struct({ targets: Schema.Array(Schema.NonEmptyString) });
+const decodeServerAssetDeclaration = Schema.decodeUnknownEffect(
+	Schema.fromJsonString(ServerAssetDeclaration)
+);
 
 /**
  * Everything one artifact is rendered from, named.
@@ -265,7 +284,7 @@ type RenderArtifactInput = Readonly<{
 	 */
 	readonly prompt: string;
 	readonly root: string;
-	readonly assets: ReadonlyArray<EmbeddedAsset>;
+	readonly assetIndex: ArtifactAssetIndex;
 	readonly customTypeDefinitions: ReadonlyArray<string>;
 	readonly migrations: ReadonlyArray<WorkspaceMigrationEntry>;
 	/** The workspace's `+integrations.ts` files, one per collection directory that declares one. */
@@ -753,21 +772,64 @@ class WorkspaceCompiler {
 		return 'application/octet-stream';
 	};
 
-	/** Owns embedded assets behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
-	static readonly embeddedAssets = (root: string, workspaceKey: string) => {
-		const read = (path: string, servedAt: string) =>
-			Effect.map(
-				Effect.tryPromise(() => readFile(path)),
-				(bytes) => ({
-					path: servedAt,
+	/**
+	 * Indexes everything the artifact ships and writes the bytes beside it, one file per digest.
+	 *
+	 * This used to be `embeddedAssets`, and it base64-encoded every file into the artifact's own
+	 * source. A workspace shipping PGlite produced a 33 MB `bundle.mjs` whose two largest *lines* were
+	 * 13.4 MB and 8.4 MB of encoded WebAssembly, and an isolate had to parse all of it before it could
+	 * answer anything. Nothing about that was necessary: a host serves those bytes over HTTP or hands
+	 * them to the guest through the asset bridge, and neither reads them out of the module graph.
+	 *
+	 * So the bytes go to `assets/<sha256>` and the artifact carries only the index. The digest is the
+	 * whole of a blob's name, which makes deduplication a property of the layout rather than a step
+	 * anyone performs: two files with the same content are one file, within a release and across
+	 * every release a store ever holds.
+	 */
+	static readonly assetIndex = (root: string, workspaceKey: string, artifactDirectory: string) => {
+		const blobDirectory = join(artifactDirectory, ARTIFACT_ASSET_DIRECTORY);
+		// A digest already written is a digest already correct — the name *is* the content — so a
+		// second file with the same bytes costs a hash and no write.
+		const written = new Set<string>();
+		const store = (path: string, key: string): Effect.Effect<AssetIndexEntry, Error> =>
+			Effect.gen(function* () {
+				const bytes = yield* Effect.tryPromise(() => readFile(path));
+				const sha256 = createHash('sha256').update(bytes).digest('hex');
+				if (!written.has(sha256)) {
+					written.add(sha256);
+					yield* Effect.tryPromise(() => writeFile(join(blobDirectory, sha256), bytes));
+				}
+				return {
+					path: key,
 					contentType: WorkspaceCompiler.contentType(path),
-					sha256: createHash('sha256').update(bytes).digest('hex'),
-					base64: bytes.toString('base64')
-				})
-			);
+					sha256,
+					byteLength: bytes.byteLength
+				};
+			});
 		return Effect.gen(function* () {
 			const dist = join(root, '.norbital', 'dist');
-			const built = (yield* WorkspaceCompiler.filesUnder(dist)).toSorted();
+			const emitted = (yield* WorkspaceCompiler.filesUnder(dist)).toSorted();
+			/**
+			 * What the workspace declared for its own runtime, in the plugin's words rather than ours.
+			 *
+			 * Absent means the workspace declared none: the plugin writes this file on every build, and
+			 * the build empties `dist` first, so there is no third state where the list is merely stale.
+			 */
+			const declarationPath = join(dist, SERVER_ASSET_DECLARATION_FILE_NAME);
+			const declared = (yield* fileExists(declarationPath))
+				? (yield* decodeServerAssetDeclaration(
+						yield* Effect.tryPromise(() => readFile(declarationPath, 'utf8'))
+					).pipe(
+						Effect.mapError(
+							(cause) =>
+								new Error(
+									`The client build under ${dist} left an unreadable ${SERVER_ASSET_DECLARATION_FILE_NAME}: ${String(cause)}`
+								)
+						)
+					)).targets
+				: [];
+			// The declaration is not one of the files it describes.
+			const built = emitted.filter((path) => path !== declarationPath);
 			/**
 			 * A workspace with no compiled client is a build failure, not a quiet artifact.
 			 *
@@ -812,23 +874,72 @@ class WorkspaceCompiler {
 					)
 				);
 			}
+			/**
+			 * A declared server asset the build did not produce is a broken declaration, not an empty one.
+			 *
+			 * The copy happens in the plugin's `closeBundle` and can fail on a source path that moved
+			 * with a dependency bump. Left unchecked the index would simply omit the file and the guest
+			 * would learn about it at the first bridge call, inside an isolate, as a missing key.
+			 */
+			const emittedKeys = new Set(
+				built.map((path) => WorkspaceCompiler.posix(relative(dist, path)))
+			);
+			const missing = declared.filter((target) => !emittedKeys.has(target));
+			if (missing.length > 0) {
+				return yield* Effect.fail(
+					new Error(
+						`The workspace declares server assets the client build did not copy into ${dist}: ${missing.join(', ')}. Check the \`serverAssets\` sources in vite.config.ts.`
+					)
+				);
+			}
+			const serverKeys = new Set(declared);
 			// Authored media travels in the artifact under the URL the workspace already writes into its
 			// `<meta bolt:banner>` tags. Serving it from a host route instead would make an app header
 			// depend on which host loaded the bundle, and the artifact is supposed to run unchanged on both.
 			const media = join(root, 'assets');
 			const authored = (yield* WorkspaceCompiler.filesUnder(media)).toSorted();
-			return yield* Effect.all(
+			/**
+			 * The blob directory is rebuilt, not added to.
+			 *
+			 * A digest-named file is never wrong, but a digest nothing in this release's index names is
+			 * an artifact carrying a previous build's dead weight — and `bolt sync` is supposed to
+			 * produce a report of exactly one build, the same reason the client build empties `dist`.
+			 */
+			yield* Effect.tryPromise(() => rm(blobDirectory, { recursive: true, force: true }));
+			yield* Effect.tryPromise(() => mkdir(blobDirectory, { recursive: true }));
+			const [browser, server] = yield* Effect.all(
 				[
-					...built.map((path) => read(path, `/${WorkspaceCompiler.posix(relative(dist, path))}`)),
-					...authored.map((path) =>
-						read(
-							path,
-							`${BOLT_TENANT_REQUEST_PREFIX}/api/template-seed-assets/${workspaceKey}/${WorkspaceCompiler.posix(relative(media, path))}`
-						)
+					Effect.all(
+						[
+							...built
+								.filter((path) => !serverKeys.has(WorkspaceCompiler.posix(relative(dist, path))))
+								.map((path) => store(path, `/${WorkspaceCompiler.posix(relative(dist, path))}`)),
+							...authored.map((path) =>
+								store(
+									path,
+									`${BOLT_TENANT_REQUEST_PREFIX}/api/template-seed-assets/${workspaceKey}/${WorkspaceCompiler.posix(relative(media, path))}`
+								)
+							)
+						],
+						{ concurrency: 'unbounded' }
+					),
+					// Keyed by the declared target verbatim, with no leading slash: this is what the guest
+					// asks the asset bridge for, not a URL, and it must survive the round trip unaltered.
+					Effect.all(
+						declared.toSorted().map((target) => store(join(dist, target), target)),
+						{ concurrency: 'unbounded' }
 					)
-				],
+				] as const,
 				{ concurrency: 'unbounded' }
 			);
+			const index: ArtifactAssetIndex = { browser, server };
+			// Written beside the bundle for every reader that has the release on disk and no reason to
+			// evaluate it — a deploy path moving blobs, a store asking which digests it already holds.
+			yield* WorkspaceCompiler.write(
+				join(artifactDirectory, ARTIFACT_ASSET_INDEX_FILE),
+				`${JSON.stringify(index, null, '\t')}\n`
+			);
+			return index;
 		});
 	};
 
@@ -867,7 +978,7 @@ class WorkspaceCompiler {
 			mcpFiles = [],
 			prompt,
 			root,
-			assets,
+			assetIndex,
 			customTypeDefinitions,
 			environmentFile,
 			migrations,
@@ -1160,7 +1271,7 @@ class WorkspaceCompiler {
 					`${JSON.stringify(basename(path).slice(1, -3))}: (input, api) => tool${index}.run(api, Schema.decodeUnknownSync(tool${index}.input)(input))`
 			)
 			.join(',\n\t');
-		return `import { makeBundle } from '@norbital-ai/bolt/runtime';\nimport { describeEnvoy, describeHooks, describeIntegrations, compileModel, describePolicy, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';\n${modelImports}\n${hookImports}\n${policyImports}\n${functionImports}\n${toolImports}\n${automationImports}\n${pipelineImports}\n${envoyImports}\n${customTypeImports}\n${integrationImports}\n${environmentImport}\n${rateLimitImport}\n${teamsImport}\n// Keyed by file name, because a policy's name *is* its file and the module states none. Only what\n// the workspace declares reaches this map: two synthetic policies used to be appended and both were\n// mistakes of the same kind — authority modelled as a group. \`admin\` granted every action on every\n// app to a founder even though administrative status must not imply tenant access; \`local-authoring\` granted the same to\n// every authenticated subject in any workspace that had authored no policies at all.\nconst authoredPolicies = {${policyEntries}};\n// A policy's name is its filename, attached here and stated nowhere else. \`describePolicy\` also\n// normalises the four capability lists, resolves every rate rule's key, and derives an approval's\n// identity from (policy, collection, action, step key) — so there is no authored id anywhere for a\n// copy-paste to duplicate and no \`name:\` field to disagree with the file it is in.\nconst policies = Object.entries(authoredPolicies).map(([name, declaration]) => describePolicy(name, declaration));\nconst declaredModels = {${modelEntries}};\nconst declaredHooks = {${hookEntriesByCollection}};\nconst collectionSourcePaths = {${sourcePaths}};\nconst declaredCustomTypes = { ...platformCustomTypes, ${customTypeEntries} };\nconst declaredEnvoys = {${envoyEntries}};\nconst declaredPipelines = {${pipelineEntriesByCollection}};\nconst declaredIntegrationModules = {${integrationEntries}};\n// Split here, at artifact boot, because the two halves go to two different places: the declarations\n// join the workspace definition a host can read, and the live schemas and closures ride in the\n// authored runtime beside hooks and pipelines.\nconst describedIntegrations = describeIntegrations(declaredIntegrationModules);\nconst declaredAutomations = Object.fromEntries([${automationEntries}].map((automation) => [automation.name, automation]));\nconst declaredWorkspace = ${JSON.stringify(workspace, null, 2)};\n// The declaration is the authority: it carries generated expressions and enum members that\n// reading the source text cannot recover.\nconst collections = declaredWorkspace.collections.map((collection) =>\n\tcompileModel(collection, declaredModels[collection.name], {\n\t\thooks: describeHooks(declaredHooks[collection.name]),\n\t\tsourcePath: collectionSourcePaths[collection.name]\n\t})\n);\n// The authored module is the authority on every field but its name, which comes from the file.\nconst envoys = declaredWorkspace.envoys.map(({ name }) => describeEnvoy(name, declaredEnvoys[name]));\n// An automation's declaration is the trigger and the name the descriptor carries, plus the policies\n// the module declares — its authority, which used to be whatever its trigger happened to hold.\nconst automations = declaredWorkspace.automations.map((automation) => ({ ...automation, ...(declaredAutomations[automation.name] === undefined ? {} : { trigger: declaredAutomations[automation.name].trigger, policies: declaredAutomations[automation.name].policies }) }));\nconst workspace = { ...declaredWorkspace, collections, envoys, automations, policies, customTypes: declaredCustomTypes, integrations: describedIntegrations.declarations${environmentEntry}${rateLimitEntry}${teamsEntry} };\nconst encodedAssets = ${JSON.stringify(assets)};\nconst staticAssets = encodedAssets.map(({ base64, ...asset }) => ({ ...asset, bytes: Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)) }));\n// Integrations are projected here rather than baked into the literal above, for the same reason\n// they are spliced into the workspace here: they only exist once the live modules have been\n// imported and split. The manifest literal is written at compile time and cannot hold them, which\n// is why \`buildManifest\` publishing them reached every test and no artifact.\nconst manifestValue = { ...${JSON.stringify(manifest, null, 2)}, staticAssets, integrations: manifestIntegrations(describedIntegrations.declarations) };\nconst remoteHandlers = {\n\t${functionEntries}\n};\nconst toolHandlers = {\n\t${toolEntries}\n};\nconst authoredRuntime = { hooks: declaredHooks, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };
+		return `import { makeBundle } from '@norbital-ai/bolt/runtime';\nimport { describeEnvoy, describeHooks, describeIntegrations, compileModel, describePolicy, manifestIntegrations } from '@norbital-ai/bolt/authoring/internals';\n${modelImports}\n${hookImports}\n${policyImports}\n${functionImports}\n${toolImports}\n${automationImports}\n${pipelineImports}\n${envoyImports}\n${customTypeImports}\n${integrationImports}\n${environmentImport}\n${rateLimitImport}\n${teamsImport}\n// Keyed by file name, because a policy's name *is* its file and the module states none. Only what\n// the workspace declares reaches this map: two synthetic policies used to be appended and both were\n// mistakes of the same kind — authority modelled as a group. \`admin\` granted every action on every\n// app to a founder even though administrative status must not imply tenant access; \`local-authoring\` granted the same to\n// every authenticated subject in any workspace that had authored no policies at all.\nconst authoredPolicies = {${policyEntries}};\n// A policy's name is its filename, attached here and stated nowhere else. \`describePolicy\` also\n// normalises the four capability lists, resolves every rate rule's key, and derives an approval's\n// identity from (policy, collection, action, step key) — so there is no authored id anywhere for a\n// copy-paste to duplicate and no \`name:\` field to disagree with the file it is in.\nconst policies = Object.entries(authoredPolicies).map(([name, declaration]) => describePolicy(name, declaration));\nconst declaredModels = {${modelEntries}};\nconst declaredHooks = {${hookEntriesByCollection}};\nconst collectionSourcePaths = {${sourcePaths}};\nconst declaredCustomTypes = { ...platformCustomTypes, ${customTypeEntries} };\nconst declaredEnvoys = {${envoyEntries}};\nconst declaredPipelines = {${pipelineEntriesByCollection}};\nconst declaredIntegrationModules = {${integrationEntries}};\n// Split here, at artifact boot, because the two halves go to two different places: the declarations\n// join the workspace definition a host can read, and the live schemas and closures ride in the\n// authored runtime beside hooks and pipelines.\nconst describedIntegrations = describeIntegrations(declaredIntegrationModules);\nconst declaredAutomations = Object.fromEntries([${automationEntries}].map((automation) => [automation.name, automation]));\nconst declaredWorkspace = ${JSON.stringify(workspace, null, 2)};\n// The declaration is the authority: it carries generated expressions and enum members that\n// reading the source text cannot recover.\nconst collections = declaredWorkspace.collections.map((collection) =>\n\tcompileModel(collection, declaredModels[collection.name], {\n\t\thooks: describeHooks(declaredHooks[collection.name]),\n\t\tsourcePath: collectionSourcePaths[collection.name]\n\t})\n);\n// The authored module is the authority on every field but its name, which comes from the file.\nconst envoys = declaredWorkspace.envoys.map(({ name }) => describeEnvoy(name, declaredEnvoys[name]));\n// An automation's declaration is the trigger and the name the descriptor carries, plus the policies\n// the module declares — its authority, which used to be whatever its trigger happened to hold.\nconst automations = declaredWorkspace.automations.map((automation) => ({ ...automation, ...(declaredAutomations[automation.name] === undefined ? {} : { trigger: declaredAutomations[automation.name].trigger, policies: declaredAutomations[automation.name].policies }) }));\nconst workspace = { ...declaredWorkspace, collections, envoys, automations, policies, customTypes: declaredCustomTypes, integrations: describedIntegrations.declarations${environmentEntry}${rateLimitEntry}${teamsEntry} };\n// The index of what this release ships, and no byte of it. Both lists were one \`staticAssets\`\n// array whose entries carried their own bytes, base64 in this very literal: 21.8 MB of it in the\n// workspace that ships PGlite, parsed by the isolate before it could answer anything. The bytes\n// are in \`assets/<sha256>\` beside this file; a host serves the browser half over HTTP and hands\n// the server half to the guest by declared key, and neither ever wanted them in the module graph.\nconst browserAssets = ${JSON.stringify(assetIndex.browser)};\nconst serverAssets = ${JSON.stringify(assetIndex.server)};\n// Integrations are projected here rather than baked into the literal above, for the same reason\n// they are spliced into the workspace here: they only exist once the live modules have been\n// imported and split. The manifest literal is written at compile time and cannot hold them, which\n// is why \`buildManifest\` publishing them reached every test and no artifact.\nconst manifestValue = { ...${JSON.stringify(manifest, null, 2)}, browserAssets, serverAssets, integrations: manifestIntegrations(describedIntegrations.declarations) };\nconst remoteHandlers = {\n\t${functionEntries}\n};\nconst toolHandlers = {\n\t${toolEntries}\n};\nconst authoredRuntime = { hooks: declaredHooks, pipelines: declaredPipelines, automations: declaredAutomations, integrations: describedIntegrations.authored };
 const bundle = makeBundle(workspace, manifestValue, remoteHandlers, toolHandlers, authoredRuntime);\nexport const protocolVersion = bundle.protocolVersion;\nexport const manifest = bundle.manifest;\nexport const dispatch = bundle.dispatch;\nexport const activate = bundle.activate;\nexport default bundle;\n`;
 	};
 
@@ -1872,15 +1983,16 @@ const WorkspaceSynchronization = {
 						? cause
 						: new Error(`Workspace client build failed: ${String(cause)}`)
 			});
+			const artifactDirectory = join(root, ARTIFACT_DIRECTORY);
+			const artifactEntry = join(artifactDirectory, 'bundle-entry.mjs');
+			const artifactPath = join(artifactDirectory, ARTIFACT_BUNDLE_FILE);
 			// The authored URL keys assets by template name, not by npm scope: `@template/hr-payroll`
 			// is served under `hr-payroll`.
-			const assets = yield* compiler.embeddedAssets(
+			const assetIndex = yield* compiler.assetIndex(
 				root,
-				metadata.name.split('/').at(-1) ?? metadata.name
+				metadata.name.split('/').at(-1) ?? metadata.name,
+				artifactDirectory
 			);
-			const artifactDirectory = join(root, '.norbital', 'artifact');
-			const artifactEntry = join(artifactDirectory, 'bundle-entry.mjs');
-			const artifactPath = join(artifactDirectory, 'bundle.mjs');
 			const appDescriptors = yield* Effect.all(
 				appFiles.map((path, index) =>
 					Effect.map(
@@ -1943,7 +2055,7 @@ const WorkspaceSynchronization = {
 					mcpFiles,
 					prompt,
 					root,
-					assets,
+					assetIndex,
 					customTypeDefinitions: definitions,
 					environmentFile,
 					migrations: yield* readWorkspaceMigrations(root),
@@ -2045,12 +2157,21 @@ const WorkspaceSynchronization = {
 				automationNames,
 				mcpServerNames,
 				artifactPath,
-				staticAssetCount: assets.length
+				browserAssetCount: assetIndex.browser.length,
+				serverAssetCount: assetIndex.server.length
 			};
 		});
 	}
 };
 export const syncWorkspace = WorkspaceSynchronization.sync;
+/**
+ * Exported for the suite that owns the asset diet, which needs a built tree and nothing else.
+ *
+ * The alternative is asserting on a full `syncWorkspace`, which builds a workspace client through
+ * Vite twice. Classification, content addressing and the on-disk index are decided entirely by what
+ * is under `.norbital/dist`, so a fixture directory is the same assertion without the build.
+ */
+export const buildAssetIndex = WorkspaceCompiler.assetIndex;
 export const renderI18nMessages = WorkspaceCompiler.renderI18nMessages;
 export const renderArtifact = WorkspaceCompiler.renderArtifact;
 export const renderAuthoringTypes = WorkspaceCompiler.renderAuthoringTypes;

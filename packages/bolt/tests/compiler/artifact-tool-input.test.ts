@@ -42,7 +42,7 @@ const artifactWithOneTool = (): string =>
 		skills: [],
 		prompt: 'You are the test workspace agent.',
 		root,
-		assets: [],
+		assetIndex: { browser: [], server: [] },
 		customTypeDefinitions: [],
 		environmentFile: undefined,
 		migrations: []

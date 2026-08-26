@@ -3,13 +3,70 @@ import type { FacilityBindings } from './facilities.js';
 import type { Activation, Invocation } from './invocation.js';
 import { FacilityName, ProtocolVersion, WireError } from './wire.js';
 
-export const StaticAsset = Schema.Struct({
+/**
+ * One file an artifact ships, described rather than carried.
+ *
+ * This used to be a `StaticAsset` with a `bytes: Uint8Array` field, and every one of those bytes was
+ * base64 in the artifact's own source: a workspace that ships PGlite produced a 33 MB `bundle.mjs`
+ * of which two single lines were 13.4 MB and 8.4 MB of encoded WebAssembly. An isolate had to parse
+ * all of it before the first request, and every tenant held its own copy of bytes that were
+ * byte-identical across all of them.
+ *
+ * So the manifest now carries the index and the bytes live beside it, one flat file per digest. The
+ * digest is the only name a blob has, which is what makes two artifacts that ship the same PGlite
+ * build share one file, and what lets a host re-verify what it is about to serve without trusting
+ * the path it found it under.
+ */
+export const AssetIndexEntry = Schema.Struct({
+	/**
+	 * What this file answers to.
+	 *
+	 * A browser entry's path is the URL suffix a host serves it at (`/workspace.js`). A server
+	 * entry's path is the exact key the guest's asset bridge is asked for
+	 * (`node_modules/pdq-wasm/wasm/pdq.wasm`) — a declared name, never a filesystem path, because
+	 * nothing inside the isolate may name a location on the host's disk.
+	 */
 	path: Schema.NonEmptyString,
 	contentType: Schema.NonEmptyString,
 	sha256: Schema.NonEmptyString,
-	bytes: Schema.Uint8Array
-});
-export interface StaticAsset extends Schema.Schema.Type<typeof StaticAsset> {}
+	byteLength: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+}).annotate({ identifier: 'BoltAssetIndexEntry' });
+export interface AssetIndexEntry extends Schema.Schema.Type<typeof AssetIndexEntry> {}
+
+/**
+ * The sidecar layout a compiled artifact is written in, named once for everyone who reads it.
+ *
+ * These constants live here rather than in the compiler because the compiler is not the only party
+ * that has to agree on them: `bolt-server` resolves a blob beside the bundle it imported, and Colony
+ * reads the index without evaluating the bundle at all. Both are forbidden from importing
+ * `@norbital-ai/bolt`, so a string spelled in the compiler alone would have to be spelled again in
+ * every host — which is how a layout drifts.
+ *
+ * Everything is relative to the directory holding `bundle.mjs`:
+ *
+ * ```text
+ * .norbital/artifact/
+ * ├── bundle.mjs          code only, no encoded bytes
+ * ├── asset-index.json    { browser: AssetIndexEntry[], server: AssetIndexEntry[] }
+ * └── assets/<sha256>     one flat file per distinct digest
+ * ```
+ */
+export const ARTIFACT_BUNDLE_FILE = 'bundle.mjs';
+export const ARTIFACT_ASSET_DIRECTORY = 'assets';
+export const ARTIFACT_ASSET_INDEX_FILE = 'asset-index.json';
+
+/**
+ * `asset-index.json`, for a reader that has the release on disk and no reason to evaluate it.
+ *
+ * The same two arrays the manifest carries. A host that imports the bundle reads them off the
+ * manifest; a deploy path that only moves blobs around reads them from here, and neither has to
+ * take the other's word for the split.
+ */
+export const ArtifactAssetIndex = Schema.Struct({
+	browser: Schema.Array(AssetIndexEntry),
+	server: Schema.Array(AssetIndexEntry)
+}).annotate({ identifier: 'BoltArtifactAssetIndex' });
+export interface ArtifactAssetIndex extends Schema.Schema.Type<typeof ArtifactAssetIndex> {}
 
 export const RealtimeOutput = Schema.Struct({
 	frames: Schema.Array(
@@ -143,7 +200,18 @@ export const BundleManifest = Schema.Struct({
 	schemaFingerprint: Schema.NonEmptyString,
 	schemaPlan: ManifestSchemaPlan,
 	requiredFacilities: Schema.Array(FacilityName),
-	staticAssets: Schema.Array(StaticAsset),
+	/**
+	 * What a host serves over HTTP, and what only the guest may read.
+	 *
+	 * Two lists rather than one with a flag, because the distinction is a permission and a permission
+	 * that is a boolean on a shared list gets tested in one place and forgotten in the next. A
+	 * `serverAssets` entry is a file the workspace declared for its own runtime — a WebAssembly module
+	 * an authored hook instantiates — and `bolt-server` has no route that can reach one. Before this
+	 * split those files were copied into the client output directory and swept into the same public
+	 * asset set as `workspace.js`, so declaring a server-side dependency published it.
+	 */
+	browserAssets: Schema.Array(AssetIndexEntry),
+	serverAssets: Schema.Array(AssetIndexEntry),
 	/**
 	 * What this artifact mirrors from the outside world, and when it wants each mirror refreshed.
 	 *

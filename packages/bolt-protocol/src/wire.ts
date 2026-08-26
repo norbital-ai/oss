@@ -3,6 +3,13 @@ import { Schema } from 'effect';
 /**
  * The wire both hosts and every bundle agree on, as a single literal a mismatch is refused against.
  *
+ * Bumped to 4 when the artifact stopped carrying its own bytes. `staticAssets`, whose every entry
+ * held a `Uint8Array` decoded from base64 in the bundle's own source, is replaced by `browserAssets`
+ * and `serverAssets` — indexes of digests, with the bytes in flat sidecar files beside the bundle.
+ * A version-3 host given a version-4 release would find no assets at all and serve a workspace with
+ * no client; a version-4 host given a version-3 release would find the fields absent. Neither
+ * composes, so neither is allowed to try.
+ *
  * Bumped to 3 when the timer facility also became the ephemeral control seam for the exact task
  * invocation currently running. `Active`, `Settled`, and `Interrupt` carry task ids only; durable
  * queue state remains in the tenant database and the host still owns no second queue.
@@ -15,7 +22,7 @@ import { Schema } from 'effect';
  * means a version mismatch is a refusal at the door rather than a capability discovered halfway
  * through an invocation.
  */
-export const PROTOCOL_VERSION = 3 as const;
+export const PROTOCOL_VERSION = 4 as const;
 
 export const ProtocolVersion = Schema.Literal(PROTOCOL_VERSION);
 export type ProtocolVersion = typeof ProtocolVersion.Type;

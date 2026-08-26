@@ -33,6 +33,7 @@ import {
 	type Statement
 } from '#lib/runtime/persistence.js';
 import * as Cron from '#lib/runtime/tasks/cron.js';
+import * as SyncCompaction from '#lib/runtime/sync/compaction.js';
 
 const {
 	agent_mailbox: agentMailbox,
@@ -384,7 +385,7 @@ export const resumeStatement = (taskId: string, command: string): Statement =>
 				)
 			)
 			.toSQL()
-		);
+	);
 
 /** Removes one queued lane item without touching a running attempt. */
 export const dequeueStatement = (taskId: string, lane: string, command: string): Statement =>
@@ -409,38 +410,37 @@ export const reorderStatements = (
 	lane: string,
 	command: string,
 	orderedTaskIds: ReadonlyArray<string>
-): ReadonlyArray<Statement> =>
-	[
-		// Updating the lane row takes the same row lock enqueue uses. An enqueue racing this reorder
-		// therefore lands entirely before or after it instead of receiving a position inside a partial
-		// rewrite.
+): ReadonlyArray<Statement> => [
+	// Updating the lane row takes the same row lock enqueue uses. An enqueue racing this reorder
+	// therefore lands entirely before or after it instead of receiving a position inside a partial
+	// rewrite.
+	toStatement(
+		composer
+			.insert(agentMailbox)
+			.values({ conversation_id: lane, status: 'active' })
+			.onConflictDoUpdate({
+				target: agentMailbox.conversation_id,
+				set: { updated_at: dbNow() }
+			})
+			.toSQL()
+	),
+	...orderedTaskIds.map((taskId, position) =>
 		toStatement(
 			composer
-				.insert(agentMailbox)
-				.values({ conversation_id: lane, status: 'active' })
-				.onConflictDoUpdate({
-					target: agentMailbox.conversation_id,
-					set: { updated_at: dbNow() }
-				})
-				.toSQL()
-		),
-		...orderedTaskIds.map((taskId, position) =>
-			toStatement(
-				composer
-					.update(boltTask)
-					.set({ position, updated_at: dbNow() })
-					.where(
-						and(
-							eq(boltTask.effect_id, taskId),
-							eq(boltTask.lane, lane),
-							eq(boltTask.command, command),
-							inArray(boltTask.status, ['pending', 'paused', 'resuming'])
-						)
+				.update(boltTask)
+				.set({ position, updated_at: dbNow() })
+				.where(
+					and(
+						eq(boltTask.effect_id, taskId),
+						eq(boltTask.lane, lane),
+						eq(boltTask.command, command),
+						inArray(boltTask.status, ['pending', 'paused', 'resuming'])
 					)
-					.toSQL()
-			)
+				)
+				.toSQL()
 		)
-	];
+	)
+];
 
 /** Pauses a whole lane, including the exact running row, and returns every fenced task id. */
 export const stopLaneStatements = (lane: string, command: string): ReadonlyArray<Statement> => [
@@ -487,11 +487,7 @@ export const resumeLaneStatements = (lane: string, command: string): ReadonlyArr
 			.update(boltTask)
 			.set({ status: 'resuming', error: null, run_at: dbNow(), updated_at: dbNow() })
 			.where(
-				and(
-					eq(boltTask.lane, lane),
-					eq(boltTask.command, command),
-					eq(boltTask.status, 'paused')
-				)
+				and(eq(boltTask.lane, lane), eq(boltTask.command, command), eq(boltTask.status, 'paused'))
 			)
 			.toSQL()
 	)
@@ -504,11 +500,7 @@ export const interruptLaneStatement = (lane: string, command: string): Statement
 			.update(boltTask)
 			.set({ status: 'interrupted', error: 'interrupted', updated_at: dbNow() })
 			.where(
-				and(
-					eq(boltTask.lane, lane),
-					eq(boltTask.command, command),
-					eq(boltTask.status, 'running')
-				)
+				and(eq(boltTask.lane, lane), eq(boltTask.command, command), eq(boltTask.status, 'running'))
 			)
 			.returning({ taskId: boltTask.effect_id })
 			.toSQL()
@@ -685,7 +677,7 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 			})
 		);
 
-		/**
+	/**
 	 * Hands out due tasks, hiding them while they run — one statement, and it has to be one.
 	 *
 	 * A `select … for update skip locked` sent as its own facility call commits and drops its locks
@@ -746,8 +738,8 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 											inArray(earlier.status, ['pending', 'resuming', 'running']),
 											lt(earlier.position, boltTask.position)
 										)
+									)
 							)
-						)
 						)
 					)
 				)
@@ -807,6 +799,13 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 	 * tenant daily whether or not it had any work, which is the one thing this design exists to avoid;
 	 * folded into a tick that was already happening it costs nothing.
 	 *
+	 * **Outbox compaction rides here for exactly the same reason, and only ever did not because
+	 * nothing called it.** `sync.compact` existed end to end with zero callers, so the change log grew
+	 * without bound and every far-behind replica was answered with a rebuild instead — the fast-forward
+	 * hid the symptom while the table kept growing. The statements are composed by the module that owns
+	 * those tables, bounded the same way this prune is, and non-returning so the batch keeps its one
+	 * row-returning statement last.
+	 *
 	 * `when` rides the same batch for the same reason: the connection is open and the transaction is
 	 * happening anyway, so the number the host arms its timer to is free.
 	 */
@@ -837,23 +836,31 @@ export const makeQueue = <E>(execute: ExecuteStatements<E>) => {
 				return toStatement(
 					composer
 						.update(boltTask)
-					.set({
-						error: outcome.error,
-						updated_at: dbNow(),
-						...(exhausted
-							? { status: 'failed' as const }
-							: {
-									status: 'pending' as const,
-									run_at: dbNowPlusSeconds(
+						.set({
+							error: outcome.error,
+							updated_at: dbNow(),
+							...(exhausted
+								? { status: 'failed' as const }
+								: {
+										status: 'pending' as const,
+										run_at: dbNowPlusSeconds(
 											RetrySchedule.secondsAfter(outcome.task.attempts, random)
 										)
 									})
 						})
-					.where(and(eq(boltTask.id, outcome.task.id), eq(boltTask.status, 'running')))
+						.where(and(eq(boltTask.id, outcome.task.id), eq(boltTask.status, 'running')))
 						.toSQL()
 				);
 			});
-			return Effect.map(execute([...statements, pruneStatement(), whenStatement()]), readWhen);
+			return Effect.map(
+				execute([
+					...statements,
+					pruneStatement(),
+					...SyncCompaction.tickStatements(),
+					whenStatement()
+				]),
+				readWhen
+			);
 		});
 
 	const when = (): Effect.Effect<number | undefined, E> =>

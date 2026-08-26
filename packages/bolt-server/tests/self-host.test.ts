@@ -50,6 +50,43 @@ it.effect('runs one exact artifact through static, health and request paths', ()
 				 */
 				const asset = yield* Effect.tryPromise(() => fetch(`${base}/index.html`));
 				assert.strictEqual(yield* Effect.tryPromise(() => asset.text()), 'bolt fixture');
+				// The bytes come from `assets/<sha256>` beside the bundle, and the digest that names that
+				// file is the validator the response carries — one fact, not two that can disagree.
+				assert.strictEqual(
+					asset.headers.get('etag'),
+					'"4290f01183a1ad0c3b7ba37eb33d0a307d414b04c98acf67307d881192bb118d"'
+				);
+				assert.strictEqual(asset.headers.get('content-length'), '12');
+				const head = yield* Effect.tryPromise(() =>
+					fetch(`${base}/index.html`, { method: 'HEAD' })
+				);
+				assert.strictEqual(head.status, 200);
+				assert.strictEqual(head.headers.get('content-length'), '12');
+				assert.strictEqual(yield* Effect.tryPromise(() => head.text()), '');
+
+				/**
+				 * A declared server asset has no HTTP route, at any spelling of its key.
+				 *
+				 * These are files the workspace declared for its own runtime and the guest reads through the
+				 * asset bridge by exact key. They used to be copied into the client output directory and
+				 * indexed with everything else there, so declaring one published it. The manifest now keeps
+				 * them in a separate list and `server.ts` searches only `browserAssets` — this is the
+				 * assertion that would fail the moment those two lists are merged back into one.
+				 *
+				 * A miss falls through to the artifact's own request dispatch, which echoes the URL. The
+				 * fixture's blob content (`private wasm`) is what a leak would look like instead.
+				 */
+				for (const path of [
+					'/node_modules/pdq-wasm/wasm/pdq.wasm',
+					'/d3b313ed56aa21fe4420bf0439db6e687affdbc22a3a4ef85f626d3f10c43012',
+					'/assets/d3b313ed56aa21fe4420bf0439db6e687affdbc22a3a4ef85f626d3f10c43012'
+				]) {
+					const refused = yield* Effect.tryPromise(() => fetch(`${base}${path}`));
+					const body = yield* Effect.tryPromise(() => refused.text());
+					assert.notInclude(body, 'private wasm');
+					assert.deepStrictEqual(JSON.parse(body).url, path);
+				}
+
 				/**
 				 * And the half that was never asserted: `/` falls through to the artifact's own request
 				 * dispatch, which is where an authored root route lives.

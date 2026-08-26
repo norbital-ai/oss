@@ -180,6 +180,16 @@ export const provision = Effect.fn('ReplicaSql.provision')(function* (
 	return true;
 });
 
+/**
+ * Withdraws the fingerprint while the replica is being rebuilt.
+ *
+ * A rebuild empties the tables before it refills them. Leaving the stamp in place across that window
+ * means a session that opens on a rebuild which failed halfway reads a truncated database and calls
+ * it the workspace — the same wrong answer an unreadable snapshot page used to produce.
+ */
+export const clearProvisioned = (database: PGliteLike): Effect.Effect<void, unknown> =>
+	executeBuilt(() => databaseView(database).delete(schemaState)).pipe(Effect.asVoid);
+
 /** Marks a replica usable only after both its DDL and authoritative snapshot have landed. */
 export const markProvisioned = Effect.fn('ReplicaSql.markProvisioned')(function* (
 	database: PGliteLike,

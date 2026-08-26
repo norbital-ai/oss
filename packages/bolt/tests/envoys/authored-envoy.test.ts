@@ -63,7 +63,7 @@ const renderInput = (envoyFiles: ReadonlyArray<string>) =>
 		skills: [],
 		prompt: 'You are the crm workspace agent.',
 		root,
-		assets: [],
+		assetIndex: { browser: [], server: [] },
 		customTypeDefinitions: [],
 		environmentFile: undefined,
 		migrations: []

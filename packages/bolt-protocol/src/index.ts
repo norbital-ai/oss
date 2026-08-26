@@ -10,6 +10,11 @@ export {
 
 export {
 	ActivationResult,
+	ARTIFACT_ASSET_DIRECTORY,
+	ARTIFACT_ASSET_INDEX_FILE,
+	ARTIFACT_BUNDLE_FILE,
+	ArtifactAssetIndex,
+	AssetIndexEntry,
 	BundleManifest,
 	BundleModuleError,
 	BundleResult,
@@ -23,8 +28,7 @@ export {
 	ManifestSchemaStep,
 	missingFacilities,
 	RealtimeOutput,
-	Registration,
-	StaticAsset
+	Registration
 } from './bundle.js';
 export type { BoltBundle } from './bundle.js';
 

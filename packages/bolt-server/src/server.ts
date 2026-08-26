@@ -1,4 +1,5 @@
 import {
+	ARTIFACT_ASSET_DIRECTORY,
 	BundleResult,
 	EffectId,
 	Invocation,
@@ -23,6 +24,9 @@ import {
 	Semaphore
 } from 'effect';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createReadStream } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import { BundleLoader } from './bundle-loader.js';
@@ -172,6 +176,37 @@ const writeJson = (response: ServerResponse, status: number, value: unknown): vo
 	}
 	response.end(body);
 };
+
+/**
+ * Where an artifact's blobs sit: beside the bundle module the host was pointed at.
+ *
+ * Derived rather than configured, because the compiler writes both and a second setting is a second
+ * thing that can disagree with the first. The blob's name is its digest, which the loader has
+ * already re-verified against the index at startup.
+ */
+const assetDirectoryOf = (bundlePath: string): string =>
+	join(dirname(resolve(bundlePath)), ARTIFACT_ASSET_DIRECTORY);
+
+/**
+ * Sends one blob without holding it in memory.
+ *
+ * A workspace that ships PGlite serves a 13 MB WebAssembly module; buffering it per request is the
+ * memory profile this whole change exists to remove, one layer up. `pipeline` also closes the read
+ * stream when the client disconnects mid-transfer, which a manual `pipe` does not.
+ */
+const streamAssetBlob = (
+	response: ServerResponse,
+	blobPath: string
+): Effect.Effect<void, ServerTransportError> =>
+	Effect.tryPromise({
+		try: () => pipeline(createReadStream(blobPath), response),
+		catch: (cause) =>
+			new ServerTransportError({
+				operation: 'BoltServer.Server.streamAsset',
+				message: `Unable to stream Bolt asset blob ${blobPath}`,
+				cause
+			})
+	});
 
 /** Preserves every incoming HTTP header value while normalizing names for case-insensitive lookup. */
 const rawRequestHeaders = (request: IncomingMessage): Record<string, Array<string>> => {
@@ -511,15 +546,34 @@ const handleHttp = Effect.fn('BoltServer.Server.handleHttp')(function* (
 	 * answers those questions by asserting them is the defect, not a convenience. `/` now falls
 	 * through to the artifact's own request dispatch, which is where an authored root route lives.
 	 */
-	const asset = bundle.manifest.staticAssets.find(
+	/**
+	 * Only `browserAssets` is searched, and there is no route that reaches the other half.
+	 *
+	 * `serverAssets` are files the workspace declared for its own runtime — the WebAssembly module an
+	 * authored hook instantiates — and they reach the guest through the asset bridge, by exact
+	 * declared key. They were previously indistinguishable from the client's own output, because the
+	 * plugin copied them into the same directory and the compiler indexed that directory wholesale, so
+	 * declaring a server-side dependency published it. Two lists rather than one list with a flag is
+	 * what makes the omission here structural: there is no field to forget to test.
+	 */
+	const asset = bundle.manifest.browserAssets.find(
 		(candidate) => `/${candidate.path.replace(/^\/+/, '')}` === url.pathname
 	);
 	if (asset !== undefined && (request.method === 'GET' || request.method === 'HEAD')) {
 		response.statusCode = 200;
 		response.setHeader('content-type', asset.contentType);
+		// The digest is both the ETag and the blob's filename, so a validator can never disagree with
+		// the bytes it was computed from.
 		response.setHeader('etag', `"${asset.sha256}"`);
-		response.setHeader('content-length', asset.bytes.byteLength);
-		response.end(request.method === 'HEAD' ? undefined : asset.bytes);
+		response.setHeader('content-length', asset.byteLength);
+		if (request.method === 'HEAD') {
+			response.end();
+			return;
+		}
+		yield* streamAssetBlob(
+			response,
+			join(assetDirectoryOf(configuration.bundlePath), asset.sha256)
+		);
 		return;
 	}
 

@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 
 /**
- * What a workspace's embedded assets are served as.
+ * What a workspace's indexed assets are served as.
+ *
+ * The bytes moved out of the artifact and into digest-named sidecar blobs, which are extensionless
+ * by construction — `assets/3f2a…` says nothing about what it holds. The content type recorded here,
+ * at index time, from the *source* filename, is therefore the only surviving statement of what a
+ * blob is, and a host has nothing else to answer with.
  *
  * Read off the source rather than imported, because `WorkspaceCompiler` pulls in the whole compiler
  * — Vite, the artifact renderer, the schema planner — to answer a question about a filename. The

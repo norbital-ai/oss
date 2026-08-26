@@ -44,7 +44,7 @@ const artifactWithPrompt = (prompt: string): string =>
 		skills: [],
 		prompt,
 		root,
-		assets: [],
+		assetIndex: { browser: [], server: [] },
 		customTypeDefinitions: [],
 		environmentFile: undefined,
 		migrations: [],

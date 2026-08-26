@@ -35,7 +35,7 @@ const artifactWithEverything = (): string =>
 		skills: [{ name: 'payroll', body: '# Payroll\n\nUse the approved workflow.' }],
 		prompt: 'You are the test workspace agent.',
 		root,
-		assets: [],
+		assetIndex: { browser: [], server: [] },
 		customTypeDefinitions: [],
 		environmentFile: undefined,
 		migrations: []
@@ -92,7 +92,7 @@ describe('emitted artifact bindings', () => {
 	it('boots one automation descriptor with its declared policies intact', () => {
 		const artifact = artifactWithEverything();
 		const start = artifact.indexOf('const automations = declaredWorkspace.automations.map(');
-		const end = artifact.indexOf('\nconst encodedAssets =', start);
+		const end = artifact.indexOf('\n// The index of what this release ships', start);
 		if (start < 0 || end < 0) {
 			throw new Error('the artifact no longer builds its runtime workspace in one emitted block');
 		}

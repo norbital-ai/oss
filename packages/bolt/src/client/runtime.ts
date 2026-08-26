@@ -907,6 +907,21 @@ export const startLocalReplica = (
 	return Effect.runPromise(running);
 };
 
+/**
+ * How many undrained SSE batches one tab will hold before it stops reading the stream.
+ *
+ * The queue exists because DOM events do not await an asynchronous listener, not so the browser can
+ * buffer a catch-up in memory. A far-behind replica receives frames as fast as the host can emit them
+ * while PGlite applies one batch at a time, and an array with no ceiling simply grows until the tab
+ * does — a bounded queue is the only version of this that has a worst case.
+ *
+ * Pausing intake is safe because the cursor is durable: the stream reopens from the last cursor the
+ * replica actually applied and the host replays from exactly there, so a frame dropped by the closed
+ * connection is redelivered rather than lost. This is the stopgap; the poke/pull rewrite replaces the
+ * whole arrangement with one in-flight pull and byte-bounded patches.
+ */
+const MAX_PENDING_BATCHES = 64;
+
 const startReplica = (
 	runtime: WorkspaceClientRuntime,
 	open:
@@ -1015,9 +1030,12 @@ const startReplica = (
 		 *
 		 * DOM events do not await an asynchronous listener. One PGlite batch can therefore still be
 		 * writing when the next event arrives even though EventSource delivered them sequentially. The
-		 * small in-memory queue preserves that order; the stream itself remains the only network queue.
+		 * small in-memory queue preserves that order; the stream itself remains the only network queue,
+		 * and `MAX_PENDING_BATCHES` is what keeps "small" true when the host outruns PGlite.
 		 */
 		const pendingBatches: Array<ReadonlyArray<SyncChange>> = [];
+		let subscription: Subscription | undefined;
+		let paused = false;
 		let applying = false;
 		let catchUpAnnounced = false;
 		let catchUpSettled = false;
@@ -1034,6 +1052,20 @@ const startReplica = (
 			if (catchUpSettled || !catchUpAnnounced || applying || pendingBatches.length > 0) return;
 			catchUpSettled = true;
 			resolveCatchUp();
+		};
+		/**
+		 * Stops reading the stream while the queue drains, and starts again once it has.
+		 *
+		 * Backpressure has to act on the source, because a listener cannot refuse a frame the DOM has
+		 * already delivered. Closing the connection is the one signal EventSource has for "not now", and
+		 * resuming only at an empty queue means the cursor the reopened stream presents is exactly what
+		 * PGlite holds — the host replays the rest, and nothing is both dropped and forgotten.
+		 */
+		const pauseIntake = (): void => {
+			if (subscription === undefined) return;
+			subscription.stop();
+			subscription = undefined;
+			paused = true;
 		};
 		const applyPending = (): void => {
 			if (applying) return;
@@ -1052,14 +1084,21 @@ const startReplica = (
 						Effect.sync(() => {
 							applying = false;
 							applyPending();
+							resumeIntake();
 							settleCatchUp();
 						})
 					)
 				)
 			);
 		};
+		const resumeIntake = (): void => {
+			if (!paused || applying || pendingBatches.length > 0) return;
+			paused = false;
+			streamIfLeading();
+		};
 		const acceptChanges = (changes: ReadonlyArray<SyncChange>): void => {
 			pendingBatches.push(changes);
+			if (pendingBatches.length >= MAX_PENDING_BATCHES) pauseIntake();
 			applyPending();
 		};
 
@@ -1079,9 +1118,8 @@ const startReplica = (
 		// which is the same thing as being the only tab.
 		const leads = (): boolean => local.engine.isLeader !== false;
 
-		let subscription: Subscription | undefined;
 		const streamIfLeading = (): void => {
-			if (!leads() || subscription !== undefined) return;
+			if (!leads() || subscription !== undefined || paused) return;
 			// The frame is the ordered, permission-filtered outbox batch. The host caught up from this
 			// replica's cursor before it marked the stream ready; no browser diff request exists here.
 			subscription = subscribeToChanges({

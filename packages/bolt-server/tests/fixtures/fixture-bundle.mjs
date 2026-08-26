@@ -1,18 +1,29 @@
-export const protocolVersion = 3;
+export const protocolVersion = 4;
 
 export const manifest = {
-	protocolVersion: 3,
+	protocolVersion: 4,
 	artifactId: 'bolt-server-fixture',
 	artifactVersion: 'fixture-1',
 	schemaFingerprint: 'fixture-schema',
 	schemaPlan: { fingerprint: 'fixture-schema', steps: [] },
 	requiredFacilities: [],
-	staticAssets: [
+	// The bytes live in `./assets/<sha256>` beside this module, exactly as `bolt sync` writes them.
+	browserAssets: [
 		{
 			path: 'index.html',
 			contentType: 'text/plain; charset=utf-8',
 			sha256: '4290f01183a1ad0c3b7ba37eb33d0a307d414b04c98acf67307d881192bb118d',
-			bytes: new TextEncoder().encode('bolt fixture')
+			byteLength: 12
+		}
+	],
+	// Declared for the workspace's own runtime and reachable only through the guest's asset bridge.
+	// It is here so the suite can prove there is no HTTP route that answers for it.
+	serverAssets: [
+		{
+			path: 'node_modules/pdq-wasm/wasm/pdq.wasm',
+			contentType: 'application/wasm',
+			sha256: 'd3b313ed56aa21fe4420bf0439db6e687affdbc22a3a4ef85f626d3f10c43012',
+			byteLength: 12
 		}
 	],
 	// Present and empty, not absent: the manifest schema requires the field so a host can tell a

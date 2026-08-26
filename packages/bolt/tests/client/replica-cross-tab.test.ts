@@ -10,6 +10,7 @@ import {
 } from '../../src/client/runtime.js';
 import { adaptPGlite } from '../../src/client/replica/pglite-loader.js';
 import type { PGliteLike } from '../../src/client/replica/pglite-sql.js';
+import { openLocalDatabase, type BootstrapTransport } from '../../src/client/replica/bootstrap.js';
 import {
 	openReplicaInvalidationBus,
 	type ReplicaInvalidationChannel
@@ -136,6 +137,84 @@ describe('cross-tab replica invalidation', () => {
 		);
 		expect(() => bus.announce(['job_assignments'])).not.toThrow();
 		expect(() => bus.close()).not.toThrow();
+	});
+
+	it('lets only the tab holding the database provision it', async () => {
+		// Provisioning drops the schema. Two tabs opening a fresh workspace together therefore both
+		// dropped it, and each one's snapshot landed in a database the other was about to empty — with
+		// the fingerprint stamped either way, so whatever survived was believed on every later visit.
+		const provisioning: Schema.Json = {
+			steps: REPLICA_STEPS,
+			fingerprint: 'cross-tab-provisioning-v1',
+			collections: [
+				{
+					name: 'job_assignments',
+					fields: { title: { type: 'string', required: false, indexed: false } },
+					readableFields: null
+				}
+			],
+			relations: []
+		};
+		// The `sync.snapshot` envelope exactly as the runtime command answers it.
+		const snapshot: Schema.Json = {
+			collection: 'job_assignments',
+			rows: [{ id: '019f7a10-2000-7000-8000-000000000001', title: 'Shared' }],
+			cursor: { xid: 0, sequence: 0 },
+			nextAfter: null
+		};
+		const commands: Array<string> = [];
+		const transport: BootstrapTransport = {
+			command: (command) =>
+				Effect.sync((): Schema.Json => {
+					commands.push(command);
+					switch (command) {
+						case 'sync.provisioning':
+							return provisioning;
+						case 'sync.shape':
+							return ['job_assignments'];
+						case 'sync.snapshot':
+							return snapshot;
+						default:
+							throw new Error(`Unexpected command ${command}`);
+					}
+				})
+		};
+
+		const database = await PGlite.create('memory://');
+		opened.push(database);
+		const base = adaptPGlite(database);
+		const statements: Array<string> = [];
+		const engineFor = (leader: boolean): PGliteLike => ({
+			...base,
+			exec: (sql) => {
+				statements.push(sql);
+				return base.exec(sql);
+			},
+			isLeader: leader
+		});
+
+		const [leader, follower] = await Promise.all([
+			Effect.runPromise(openLocalDatabase(transport, () => Effect.succeed(engineFor(true)))),
+			Effect.runPromise(openLocalDatabase(transport, () => Effect.succeed(engineFor(false))))
+		]);
+
+		// One drop, by the one tab that holds the database. The other waits for the fingerprint.
+		expect(statements.filter((sql) => sql.includes('drop schema'))).toHaveLength(1);
+		expect(commands.filter((command) => command === 'sync.snapshot')).toHaveLength(1);
+		expect(leader.resumed).toBe(false);
+		expect(follower.resumed).toBe(true);
+
+		// And neither tab is left reading a database somebody else was still building.
+		const rowsOf = (replica: typeof leader) =>
+			Effect.runPromise(
+				replica.store.findMany({
+					collection: 'job_assignments',
+					filter: { sql: 'true', parameters: [] },
+					orderBy: []
+				})
+			);
+		expect(await rowsOf(leader)).toMatchObject([{ title: 'Shared' }]);
+		expect(await rowsOf(follower)).toMatchObject([{ title: 'Shared' }]);
 	});
 
 	it('updates a follower runtime after the leader applies a shared change', async () => {

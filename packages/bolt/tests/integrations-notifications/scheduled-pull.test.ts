@@ -137,9 +137,9 @@ const manifest = buildManifest(definition, { artifactId: 'scheduled-pull' });
 
 describe('a host can read an integration out of the manifest', () => {
 	/**
-	 * `requiredFacilities` and `staticAssets` are already in the manifest because a host has to know
-	 * what a tenant runtime needs and what it serves. What it wants recurring is the same class of
-	 * fact, and it was the one the manifest did not carry.
+	 * `requiredFacilities` and the asset indexes are already in the manifest because a host has to
+	 * know what a tenant runtime needs and what it serves. What it wants recurring is the same class
+	 * of fact, and it was the one the manifest did not carry.
 	 */
 	it('publishes the declaration half of every binding, schedule included', () => {
 		expect(manifest.integrations).toEqual([
@@ -219,7 +219,7 @@ describe('a host can read an integration out of the manifest', () => {
 			skills: [],
 			prompt: 'You are the test workspace agent.',
 			root: '/workspace',
-			assets: [],
+			assetIndex: { browser: [], server: [] },
 			customTypeDefinitions: [],
 			environmentFile: undefined,
 			migrations: []
@@ -228,11 +228,12 @@ describe('a host can read an integration out of the manifest', () => {
 		const end = artifact.indexOf('\nconst remoteHandlers', start);
 		if (start < 0 || end < 0) throw new Error('the artifact no longer assembles a manifestValue');
 		const built = new Function(
-			'staticAssets',
+			'browserAssets',
+			'serverAssets',
 			'describedIntegrations',
 			'manifestIntegrations',
 			`${artifact.slice(start, end)}\nreturn manifestValue;`
-		)([], described, manifestIntegrations) as Readonly<Record<string, unknown>>;
+		)([], [], described, manifestIntegrations) as Readonly<Record<string, unknown>>;
 		expect(built['integrations']).toEqual(manifest.integrations);
 	});
 

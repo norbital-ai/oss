@@ -73,6 +73,15 @@ export const dbNowMinusDays = (days: number): SQL<string> =>
 /** A typed `true` predicate for a builder branch that intentionally matches every row. */
 export const always = (): SQL<boolean> => expression([fixed('true')]);
 
+/**
+ * A typed `false` predicate for a builder branch that intentionally matches no row.
+ *
+ * The fail-closed half of `always`, and it exists so an unreachable branch of a *visibility*
+ * expression has somewhere safe to go: the alternative is a nullable predicate, and the obvious
+ * fallback for one of those is `true`.
+ */
+export const nothing = (): SQL<boolean> => expression([fixed('false')]);
+
 /** A typed constant used only as an EXISTS/RETURNING projection. */
 export const one = (): SQL<number> => expression([fixed('1')]);
 
@@ -190,29 +199,42 @@ export const jsonb = (value: Schema.Json): SQL<Schema.Json> =>
 	expression([sql.param(JSON.stringify(value)), fixed('::jsonb')]);
 
 /** Lexicographically keeps the largest durable cursor value. */
-export const greatest = <T>(left: SQLWrapper<T>, right: T): SQL<T> =>
-	expression([fixed('greatest('), left, fixed(', '), sql.param(right), fixed(')')]);
+export const greatest = <T>(left: SQLWrapper<T>, right: SQLWrapper): SQL<T> =>
+	expression([fixed('greatest('), left, fixed(', '), right, fixed(')')]);
 
 /** Advances the sync sequence with the xid, never moving either component backwards. */
 export const horizonSequence = (
 	xid: SQLWrapper,
 	sequence: SQLWrapper,
-	nextXid: number,
-	nextSequence: number
+	nextXid: SQLWrapper,
+	nextSequence: SQLWrapper
 ): SQL<number> =>
 	expression([
 		fixed('case when '),
-		sql.param(nextXid),
+		nextXid,
 		fixed(' > '),
 		xid,
 		fixed(' then '),
-		sql.param(nextSequence),
+		nextSequence,
 		fixed(' else greatest('),
 		sequence,
 		fixed(', '),
-		sql.param(nextSequence),
+		nextSequence,
 		fixed(') end')
 	]);
+
+/**
+ * A subquery standing where a single value is expected.
+ *
+ * Drizzle renders a select builder without enclosing parentheses, so a subquery spliced into an
+ * expression is a syntax error until something adds them. Naming that here keeps the parentheses off
+ * the callers, where one omission produces SQL that fails only at execution time.
+ */
+export const scalar = (query: SQLWrapper): SQL => expression([fixed('('), query, fixed(')')]);
+
+/** The value where the condition holds, and null everywhere else. */
+export const onlyWhen = <T>(condition: SQLWrapper, value: SQLWrapper<T>): SQL<T | null> =>
+	expression([fixed('case when '), condition, fixed(' then '), value, fixed(' end')]);
 
 /** Chooses the earliest non-null result of two scalar queries. */
 export const least = <T>(left: SQLWrapper<T>, right: SQLWrapper<T>): SQL<T> =>
