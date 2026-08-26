@@ -37,6 +37,9 @@ export type EventSourceLike = {
 
 export type Subscription = Readonly<{ readonly stop: () => void }>;
 
+/** How long after a failed stream construction to try again. */
+const RETRY_OPEN_MILLIS = 2_000;
+
 const withCursor = (url: string, cursor: SyncCursor): string => {
 	const hashAt = url.indexOf('#');
 	const base = hashAt < 0 ? url : url.slice(0, hashAt);
@@ -74,6 +77,7 @@ export const subscribeToChanges = (options: SubscribeOptions): Subscription => {
 
 	let stopped = false;
 	let current: EventSourceLike | undefined;
+	let retry: ReturnType<typeof setTimeout> | undefined;
 	const open = (): void => {
 		if (stopped) return;
 		const opened = Result.try(() =>
@@ -81,6 +85,11 @@ export const subscribeToChanges = (options: SubscribeOptions): Subscription => {
 		);
 		if (Result.isFailure(opened)) {
 			options.onError?.(opened.failure);
+			// One failed construction must not permanently silence the stream: EventSource owns its own
+			// reconnection only once it exists, so a throw before it exists — a session field not yet
+			// populated, a constructor rejection — used to leave a healthy leader with no feed and no
+			// error anyone could see. The workspace then simply never updated until a reload.
+			retry = setTimeout(open, RETRY_OPEN_MILLIS);
 			return;
 		}
 		const source = opened.success;
@@ -108,6 +117,7 @@ export const subscribeToChanges = (options: SubscribeOptions): Subscription => {
 	return {
 		stop: () => {
 			stopped = true;
+			if (retry !== undefined) clearTimeout(retry);
 			const source = current;
 			current = undefined;
 			if (source !== undefined) void Result.try(() => source.close());

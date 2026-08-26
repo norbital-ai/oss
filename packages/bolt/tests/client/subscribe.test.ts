@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { subscribeToChanges, type EventSourceLike } from '../../src/client/replica/subscribe.js';
 import { setWorkspaceSession } from '../../src/client/session.js';
 import type { SyncChange, SyncCursor } from '../../src/runtime/sync/sync.js';
@@ -162,5 +162,36 @@ describe('subscribing to database changes', () => {
 		});
 		expect(causes).toHaveLength(1);
 		expect(() => subscription.stop()).not.toThrow();
+	});
+
+	it('retries a failed stream construction instead of silencing the leader forever', async () => {
+		// EventSource owns reconnection only once it exists. A throw before it exists — a session
+		// field not yet populated during boot, a transient constructor rejection — used to leave a
+		// healthy database leader with no feed and no visible error: the workspace simply never
+		// updated until a reload. The failed open must schedule another attempt.
+		vi.useFakeTimers();
+		try {
+			const stub = stubSource();
+			let attempts = 0;
+			const received: Array<ReadonlyArray<SyncChange>> = [];
+			const subscription = subscribeToChanges({
+				cursor: () => cursor,
+				onChange: (changes) => received.push(changes),
+				onError: () => undefined,
+				source: () => {
+					attempts += 1;
+					if (attempts === 1) throw new Error('session not ready');
+					return stub.source;
+				}
+			});
+			expect(attempts).toBe(1);
+			await vi.advanceTimersByTimeAsync(2_500);
+			expect(attempts).toBe(2);
+			stub.emit('sync', JSON.stringify([change]));
+			expect(received).toEqual([[change]]);
+			subscription.stop();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
