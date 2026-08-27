@@ -27,6 +27,11 @@
 		"lint": {
 			"dependsOn": ["^build", "^lint"]
 		},
+		// The database-backed half of bolt's suite. Kept off `test` so a merge is not gated on
+		// twenty-five minutes of Postgres boots; run on its own schedule, and on demand.
+		"test:integration": {
+			"dependsOn": ["^build"]
+		},
 		"test": {
 			// Dependencies' builds only. A package's own `build` was also listed, for two suites that
 			// executed their own build output: pod's runtime harness ran `build/bin/invocation/index.js`

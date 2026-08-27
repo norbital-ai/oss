@@ -51,8 +51,9 @@ reads each exact package version from an npm-compatible registry packument, down
 `dist.tarball`, and verifies `dist.integrity`; from the workspace source it packs each public
 package from source in a staging directory and computes the sha512 integrity of its own archives.
 Each entry carries `{ name, version, tarball, integrity }` where `integrity` is an exact sha512 SRI,
-and the 16-hex `packageKey` hashes the sorted name/version/integrity content identity. The release workflow
-pins the canonical release identity by asserting the resolved key against `EXPECTED_PACKAGE_KEY`,
+and the 16-hex `packageKey` hashes the sorted name/version/integrity content identity. The release
+workflow records that key in its job summary — it changes with any change to built output, so it is
+an audit record of what was published rather than a value that can be asserted against a constant —
 then publishes each archive with `npm publish --provenance`; a version already on the registry is
 skipped so the set converges without a failed release. Credentials are accepted through environment
 variables and are never written into any published file.

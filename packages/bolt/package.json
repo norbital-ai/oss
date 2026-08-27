@@ -87,6 +87,7 @@
 		"build": "node ../../scripts/build-package.mjs svelte-package -i src -o {} --tsconfig tsconfig.json",
 		"lint": "svelte-check --tsconfig ./tsconfig.json && tsc -p tests/tsconfig.json --noEmit",
 		"test": "vitest run",
+		"test:integration": "BOLT_TEST_SUITE=integration vitest run",
 		"prepack": "pnpm exec turbo run build --filter=@norbital-ai/bolt"
 	},
 	"dependencies": {

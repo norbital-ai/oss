@@ -21,6 +21,7 @@
 		"skills:check": "node scripts/generate-skills.mjs --check",
 		"skills:generate": "node scripts/generate-skills.mjs",
 		"test": "turbo test",
+		"test:integration": "turbo test:integration",
 		"test:scripts": "node --test scripts/tests/*.test.mjs",
 		"yalc:publish": "node scripts/yalc-publish.mjs",
 		"yalc:push": "node scripts/yalc-publish.mjs --push"

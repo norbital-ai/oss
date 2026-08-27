@@ -1,0 +1,42 @@
+name: Integration tests
+
+# Bolt's database-backed suite: 71 files, each provisioning a real PGlite Postgres, about
+# twenty-five minutes of CPU. It is 93% of the package's test time for 41% of its files, and it was
+# gating every merge and every release — so a one-line doc fix waited nine minutes for Postgres to
+# boot seventy-one times.
+#
+# It runs here instead: nightly against main, and on demand. Off the merge path, but not unrun.
+# See packages/bolt/vitest.config.ts for how the two suites are separated.
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run database-backed tests
+        run: pnpm test:integration

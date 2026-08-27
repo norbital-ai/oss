@@ -10,12 +10,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# No `packages: read`. Every `@norbital-ai/*` dependency in this workspace resolves to
+# `workspace:* -> link:`, and no other dependency is scoped to a private registry, so nothing here
+# ever authenticates against one. Publishing lives in release.yml, which holds that permission
+# alone.
 permissions:
   contents: read
-  packages: read
-
-env:
-  NORBITAL_PACKAGE_REGISTRY: ${{ vars.NORBITAL_PACKAGE_REGISTRY || 'https://npm.pkg.github.com' }}
 
 jobs:
   check:
@@ -45,17 +45,14 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
-          registry-url: ${{ env.NORBITAL_PACKAGE_REGISTRY }}
-          scope: '@norbital-ai'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
 
       # Public and private templates have their own repositories and CI; this repository gates the
       # publishable package graph plus the tests that exercise those packages.
+      #
+      # `test` here is the unit suite. Bolt's database-backed suite runs in integration.yml — see
+      # packages/bolt/vitest.config.ts for why it is not on the merge path.
       - name: Check publishable packages
         run: pnpm check:packages:ci
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}

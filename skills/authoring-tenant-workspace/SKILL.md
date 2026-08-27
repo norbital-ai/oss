@@ -26,9 +26,28 @@ hand-author assembly or generated output. The sealed authoring contract is the
 
 A tenant page loads an immutable artifact. Template and package source are never tenant HMR inputs.
 For local package/template work, stop Colony and run `pnpm --dir norbital dev --ui`; it builds OSS,
-establishes yalc links in every consumer, materializes them with pnpm, syncs templates, then starts a
-fresh Colony bootstrap that publishes and routes the artifacts. Use `--template=<directory|handle>`
-to narrow template linking and sync. `yalc push` alone is insufficient.
+establishes yalc links in every consumer, materializes them with pnpm, stages those builds for tenant
+sandboxes, syncs templates, then starts a fresh Colony bootstrap that publishes and routes the
+artifacts. Use `--template=<directory|handle>` to narrow template linking and sync. `yalc push` alone
+is insufficient.
+
+To publish locally without starting Colony, run `pnpm --dir norbital publish:local`. It performs the
+same three steps `dev` does — push, link, stage — and shares their implementation.
+
+Yalc reaches a tenant build through a mount, not through its lockfile. A tenant compiles inside a
+microVM that installs `--offline --frozen-lockfile` against Colony's package store, so a linked
+package is invisible to it: the compile whose output actually ships would keep using the published
+build. Colony therefore mounts the staged builds read-only at `/var/lib/norbital-local-packages` and
+the guest installer overlays them onto the installed tree, which is yalc's own rule — the local build
+replaces the resolved one. A deployed host stages nothing, the mount is empty, and the install is
+exactly what the lockfile pinned. The wrapper and the mount point live in the sandbox image, so this
+only takes effect after `scripts/build-microsandbox-image.sh` is rerun.
+
+`dev` refuses to build on a clobbered link. Linking restores `package.json` and the lockfile so no
+local pin is ever committed, which leaves the tree and the manifest disagreeing on purpose; a later
+`pnpm install` re-resolves the registry pin and drops the local build with no message. The run
+compares each consumer's materialised `yalcSignature` against the one the push left in `.yalc` and
+names any checkout that would compile against the published packages.
 
 Colony source uses its own Vite HMR; restart for `.env`, dependency, bootstrap, or artifact-routing
 changes. Website source uses its own Vite HMR; after an OSS package change, run
