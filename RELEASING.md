@@ -1,22 +1,24 @@
 # Releasing
 
-All public packages intentionally use the fixed version `0.0.1` while Norbital is in beta. A package
-change on `main` replaces the complete seven-package set in GitHub Packages so internal package
+All seven public packages carry one version, taken from the workspace manifest, and move together.
+A package change on `main` publishes the complete set to GitHub Packages so internal package
 versions and archive integrity stay coherent.
 
 ## Contributor flow
 
 1. Make and verify the package change with `pnpm check`.
-2. Keep every public package manifest at exactly `0.0.1`.
+2. Keep every public package manifest at the workspace version in the root `package.json`.
 3. Merge to `main`. CI runs the unit suite and the package gates; the release workflow starts only
    once CI has passed, on the exact commit CI passed, and builds, packs, and publishes each package
    whose version is not already on the registry, using the attested archives prepared by
    `resolve-published-packages.mjs`. It does not re-run CI's checks.
-4. Re-resolve and commit every consumer lockfile because replacing fixed-version archives changes
-   their integrity hashes.
+4. After the release publishes, re-resolve and commit every consumer lockfile. A consumer manifest
+   bumped to the new version while its lockfile still pins the old one fails
+   `pnpm install --frozen-lockfile` on every deployed host, so the manifest bump and the lockfile
+   must land in the same commit — and neither can land before the version exists on the registry.
 
-The release workflow and script tests reject a public package version other than `0.0.1`. Normal
-SemVer releases can replace this policy when the beta period ends.
+`readPublicPackageEntries` rejects any package whose version differs from the workspace version —
+the set is coherent or it does not publish. No specific version is required, only one shared one.
 
 ## Package registry
 
@@ -28,9 +30,7 @@ published. Set
 `NPM_REGISTRY_TOKEN` when publication needs a separate credential (the workflow falls back to the
 GitHub token). An already-published version is skipped, not failed — the set converges rather than
 turning an ordinary source-only push into a red release. Consumers configure the `@norbital-ai`
-scope and a read token through normal npm/pnpm configuration. The fixed-version replacement policy
-depends on GitHub Packages' delete-and-republish behavior and is intentionally limited to the beta
-period.
+scope and a read token through normal npm/pnpm configuration.
 
 ## Template refs
 

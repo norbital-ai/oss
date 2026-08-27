@@ -21,7 +21,7 @@ move only when their own owner moves them.
 
 | Train        | Moves when                                                                            |
 | ------------ | ------------------------------------------------------------------------------------- |
-| **Bolt**     | a change lands on `main` → republish the fixed `0.0.1` set, attested per archive.     |
+| **Bolt**     | a change lands on `main` → publish the seven-package set, attested per archive.       |
 | **Template** | a developer edits source and pushes. It pins its own bolt version until they bump it. |
 | **Tenant**   | its owner says so. Forked from a template, managed independently.                     |
 
