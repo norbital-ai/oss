@@ -44,7 +44,7 @@ export type AutomationTrigger<S extends AnySchema = AnySchema> =
 /**
  * Keeps the public declaration a closed object even though `defineAutomation` needs a generic to
  * preserve its literal trigger and infer the incoming-record shape. A bare generic constraint would
- * otherwise accept legacy or misspelled properties as structural extras.
+ * otherwise accept unknown or misspelled properties as structural extras.
  */
 type ExactAutomationTrigger<T> = T &
 	Readonly<Record<Exclude<keyof T, 'schedule' | 'trigger'>, never>>;

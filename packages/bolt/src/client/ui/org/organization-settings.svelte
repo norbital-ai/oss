@@ -29,11 +29,10 @@
 	 *
 	 * Two transports, because two authorities own the data.
 	 *
-	 * The profile is host state. In the legacy Core app it is columns on the `organization` row of
-	 * the system database, written by `saveOrganizationWorkspaceDetails` — never by the tenant — and
-	 * the host owns it, so it is read and written through the host operations seam. Bolt is not
-	 * asked: `bolt_workspace_identity_settings` is a two-column tenant table with a reader and no
-	 * writer, and `dispatch.ts` has no command that mutates a workspace attribute at all.
+	 * The profile is host state — never the tenant's — so it is read and written through the host
+	 * operations seam. Bolt is not asked: `bolt_workspace_identity_settings` is a two-column tenant
+	 * table with a reader and no writer, and `dispatch.ts` has no command that mutates a workspace
+	 * attribute at all.
 	 *
 	 * Both reads live here rather than in the panes because `Tabs` unmounts the pane it is leaving: a
 	 * pane that fetched for itself would re-read the whole operations snapshot — which carries the

@@ -47,7 +47,7 @@
 	/** A failed read and a failed write are the same news to an operator, so they share one surface. */
 	const failure = $derived(writeFailure ?? loadFailure);
 
-	/** Ported: the same five buckets, and the same labels, the legacy Core app's form has always offered. */
+	/** Five buckets, chosen so the labels stay readable in the select rather than to fit a range. */
 	const COMPANY_SIZE_OPTIONS = [
 		{ value: '', label: 'Select…' },
 		{ value: '1-10', label: '1-10 employees' },
@@ -57,7 +57,7 @@
 		{ value: '501+', label: '501+ employees' }
 	];
 
-	/** Ported from the legacy Core app, so a logo that is valid there is valid here. */
+	/** The raster and vector types a logo may be uploaded as; the extension is derived from the type. */
 	const LOGO_TYPES: Readonly<Record<string, string>> = {
 		'image/png': 'png',
 		'image/jpeg': 'jpg',
