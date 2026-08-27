@@ -337,7 +337,7 @@ const conversationUsage = (row: unknown): ConversationUsage => {
 };
 
 export type Interface = Readonly<{
-	/** Opens an empty conversation only when a document must be bound before its first message. */
+	/** Opens an empty conversation; a session's source files attach to it by key, never at open time. */
 	readonly open: (
 		effectId: EffectIdType,
 		subject: Identity.Subject,
@@ -393,7 +393,7 @@ export type Interface = Readonly<{
 		| ChatDocuments.ChatDocumentError
 		| InvocationBudget.NestingLimitExceeded
 	>;
-	readonly bindDocument: (
+	readonly attachFile: (
 		effectId: EffectIdType,
 		subject: Identity.Subject,
 		conversationId: string,
@@ -402,16 +402,16 @@ export type Interface = Readonly<{
 		void,
 		Database.FacilityError | AccessControl.AccessDenied | ChatDocuments.ChatDocumentError
 	>;
-	readonly resolveDocument: (
+	readonly readMedia: (
 		effectId: EffectIdType,
 		subject: Identity.Subject,
 		conversationId: string,
 		storageKey: string
 	) => Effect.Effect<
-		ChatDocumentRef,
+		Readonly<{ readonly file: ChatDocumentRef; readonly bytes: Uint8Array }>,
 		Database.FacilityError | AccessControl.AccessDenied | ChatDocuments.ChatDocumentError
 	>;
-	readonly removeDocument: (
+	readonly removeFile: (
 		effectId: EffectIdType,
 		subject: Identity.Subject,
 		conversationId: string,
@@ -843,15 +843,6 @@ export const layer = Layer.effect(
 					parentId = typeof storedParent === 'string' ? storedParent : null;
 				}
 			}
-			if (message.kind === 'user_message') {
-				for (const file of message.documents) {
-					yield* documents.resolve(
-						EffectId.make(`${effectId}:document:${file.storage_key}`),
-						conversationId,
-						file.storage_key
-					);
-				}
-			}
 			const taskInput = {
 				conversationId,
 				turnId,
@@ -1023,7 +1014,37 @@ export const layer = Layer.effect(
 				collections,
 				hostTools
 			};
-			if (isPlatformTool(name)) return yield* executePlatformTool(name, input, context);
+			if (isPlatformTool(name)) {
+				if (name === 'load_media') {
+					const decoded = Schema.decodeUnknownOption(
+						Schema.Struct({ storageKey: Schema.NonEmptyString })
+					)(input);
+					if (decoded._tag === 'None') {
+						return yield* new ToolNotAllowed({ agent: agent.name, tool: `${name}: no storageKey` });
+					}
+					const media = yield* documents
+						.media(EffectId.make(`${effectId}:media`), conversationId, decoded.value.storageKey)
+						.pipe(
+							Effect.catch((failure) =>
+								Effect.succeed({ error: failure.message })
+							)
+						);
+					if ('error' in media) return media;
+					// A media part means an image the model can see: sources that are not images are
+					// refused by name, and one oversized object is refused rather than smuggled in.
+					if (!media.file.mime_type.startsWith('image/')) {
+						return yield* new ToolNotAllowed({ agent: agent.name, tool: `${name}: not an image` });
+					}
+					if (media.bytes.byteLength > 20 * 1024 * 1024) {
+						return yield* new ToolNotAllowed({ agent: agent.name, tool: `${name}: > 20 MiB` });
+					}
+					return {
+						file: media.file,
+						bytesBase64: Buffer.from(media.bytes).toString('base64')
+					};
+				}
+				return yield* executePlatformTool(name, input, context);
+			}
 			if (isSandboxTool(name)) {
 				const sandboxError = (error: unknown) =>
 					error instanceof Database.FacilityError ||
@@ -1059,7 +1080,7 @@ export const layer = Layer.effect(
 									agent.name,
 									childId,
 									String(actionId),
-									{ kind: 'user_message', text: parsed.task, documents: [] },
+									{ kind: 'user_message', text: parsed.task },
 									{ parentId: conversationId, depth: parsed.depth }
 								);
 								return {
@@ -1621,33 +1642,27 @@ export const layer = Layer.effect(
 				yield* access.authorize(subject, 'agent', agentName);
 				yield* openConversation(effectId, agent, subject, conversationId);
 			}),
-			bindDocument: Effect.fn('Agents.bindDocument')(
+			attachFile: Effect.fn('Agents.attachFile')(
 				function* (effectId, subject, conversationId, file) {
 					yield* requireReadableConversation(
 						EffectId.make(`${effectId}:authorize`),
 						subject,
 						conversationId
 					);
-					if (!isChatDocumentStorageKey(conversationId, file.storage_key)) {
-						return yield* new ChatDocuments.ChatDocumentError({
-							conversationId,
-							message: 'The document key is outside this chat session namespace.'
-						});
-					}
-					yield* documents.bind(effectId, conversationId, file, { source: 'web' });
+					yield* documents.attach(effectId, conversationId, file);
 				}
 			),
-			resolveDocument: Effect.fn('Agents.resolveDocument')(
+			readMedia: Effect.fn('Agents.readMedia')(
 				function* (effectId, subject, conversationId, storageKey) {
 					yield* requireReadableConversation(
 						EffectId.make(`${effectId}:authorize`),
 						subject,
 						conversationId
 					);
-					return yield* documents.resolve(effectId, conversationId, storageKey);
+					return yield* documents.media(effectId, conversationId, storageKey);
 				}
 			),
-			removeDocument: Effect.fn('Agents.removeDocument')(
+			removeFile: Effect.fn('Agents.removeFile')(
 				function* (effectId, subject, conversationId, storageKey) {
 					yield* requireReadableConversation(
 						EffectId.make(`${effectId}:authorize`),

@@ -933,6 +933,32 @@ type MutatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (con
  * `perRecord` is where every decision lives, once, for one record — whether the write was one row or
  * four thousand.
  */
+/**
+ * The context one `mutate.before` handler receives, named from the collection's own hooks type.
+ *
+ * A merged `mutate` arm often wants its create and edit halves as separate named functions, and each
+ * needs the context's type. Deriving it by hand means restating four levels of `NonNullable` in every
+ * `+hooks.ts` — and getting the `Prepared` parameter wrong, because the generated `Hooks` alias fixes
+ * it at `void`. Take it from the hooks type the collection actually satisfies and both problems go.
+ */
+export type MutateBeforeContext<H> = H extends {
+	readonly mutate?: { readonly perRecord?: { readonly before?: infer B } };
+}
+	? B extends { readonly handler: (context: infer C) => unknown }
+		? C
+		: never
+	: never;
+
+/**
+ * The same context on an edit, where `existing` is the stored row rather than `undefined`.
+ *
+ * `existing === undefined` is how an author tells a create from an edit, so the edit half of a split
+ * handler wants that narrowing in its signature instead of re-checking what the caller already knows.
+ */
+export type MutateEditContext<H> = MutateBeforeContext<H> & {
+	readonly existing: NonNullable<MutateBeforeContext<H>['existing']>;
+};
+
 export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepared = void> = {
 	readonly mutate?: {
 		readonly prepare?: MutatePrepare<S, N, Prepared>;

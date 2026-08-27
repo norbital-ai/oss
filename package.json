@@ -24,7 +24,7 @@
 		"test:integration": "turbo test:integration",
 		"test:scripts": "node --test scripts/tests/*.test.mjs",
 		"yalc:publish": "node scripts/yalc-publish.mjs",
-		"yalc:push": "node scripts/yalc-publish.mjs --push"
+		"yalc:refresh": "node scripts/yalc-refresh.mjs"
 	},
 	"devDependencies": {
 		"@types/node": "^26.2.0",

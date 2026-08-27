@@ -24,6 +24,7 @@ const platformToolNames = [
 	'list_skills',
 	'read_skill',
 	'search_envoy_history',
+	'load_media',
 	'read_collection',
 	'write_collection'
 ] as const;
@@ -64,6 +65,18 @@ export const platformToolSpecs: ReadonlyArray<ToolDeclaration> = [
 				limit: { type: 'integer', minimum: 1, maximum: 50 },
 				cursor: { type: 'string' }
 			},
+			additionalProperties: false
+		}
+	},
+	{
+		name: 'load_media',
+		description:
+			'Load one image this conversation holds as a source, into the turn as bytes the model can see.',
+		command: 'platform:load_media',
+		inputSchema: {
+			type: 'object',
+			properties: { storageKey: { type: 'string', minLength: 1 } },
+			required: ['storageKey'],
 			additionalProperties: false
 		}
 	},
@@ -483,6 +496,10 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 			return { collection: parsed.collection, id: parsed.id, operation: parsed.operation };
 		}
 		default: {
+			// `load_media` is intercepted by the turn ahead of this switch — it reads session media
+			// through the documents service, which this module does not hold. Naming the reachable
+			// case keeps the switch exhaustive without a fallback that could answer a media load.
+			if (name === 'load_media') return new ToolNotAllowed({ agent: context.agentName, tool: name });
 			const _exhaustive: never = name;
 			return _exhaustive;
 		}

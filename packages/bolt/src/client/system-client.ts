@@ -78,8 +78,11 @@ const AgentInterruptResponse = Schema.Struct({ interrupted: Schema.Literal(true)
 const AgentStopResponse = Schema.Struct({ stopped: Schema.Literal(true) });
 const AgentResumeResponse = Schema.Struct({ resumed: Schema.Literal(true) });
 const AgentVerifierResponse = Schema.Struct({ updated: Schema.Literal(true) });
-const AgentDocumentBindResponse = Schema.Struct({ bound: Schema.Literal(true) });
-const AgentDocumentResolveResponse = Schema.Struct({ file: ChatDocumentRef });
+const AgentDocumentAttachResponse = Schema.Struct({ attached: Schema.Literal(true) });
+const AgentDocumentReadResponse = Schema.Struct({
+	file: ChatDocumentRef,
+	bytesBase64: Schema.NonEmptyString
+});
 const AgentDocumentRemoveResponse = Schema.Struct({ removed: Schema.Literal(true) });
 const SecretWriteResponse = Schema.Struct({
 	saved: Schema.Literal(true),
@@ -151,13 +154,13 @@ export type SystemClientApi = Readonly<{
 			CommandOutput<typeof AgentResumeResponse>
 		>;
 		documents: Readonly<{
-			bind: SystemOperation<
+			attach: SystemOperation<
 				CommandInput<typeof AgentDocumentBindInput>,
-				CommandOutput<typeof AgentDocumentBindResponse>
+				CommandOutput<typeof AgentDocumentAttachResponse>
 			>;
-			resolve: SystemOperation<
+			read: SystemOperation<
 				CommandInput<typeof AgentDocumentInput>,
-				CommandOutput<typeof AgentDocumentResolveResponse>
+				CommandOutput<typeof AgentDocumentReadResponse>
 			>;
 			remove: SystemOperation<
 				CommandInput<typeof AgentDocumentInput>,
@@ -283,17 +286,17 @@ export const createSystemClient = (
 		stop: command(runtime, 'agents.stop', AgentLaneInput, AgentStopResponse),
 		resume: command(runtime, 'agents.resume', AgentLaneInput, AgentResumeResponse),
 		documents: {
-			bind: command(
+			attach: command(
 				runtime,
-				'agents.documents.bind',
+				'agents.documents.attach',
 				AgentDocumentBindInput,
-				AgentDocumentBindResponse
+				AgentDocumentAttachResponse
 			),
-			resolve: command(
+			read: command(
 				runtime,
-				'agents.documents.resolve',
+				'agents.documents.read',
 				AgentDocumentInput,
-				AgentDocumentResolveResponse
+				AgentDocumentReadResponse
 			),
 			remove: command(
 				runtime,

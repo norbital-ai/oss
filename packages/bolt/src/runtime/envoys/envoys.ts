@@ -499,14 +499,7 @@ export const layer = Layer.effect(
 							EffectId.make(`${effectId}:attachment:${index}`),
 							conversationId,
 							file,
-							bytes,
-							{
-								source: 'envoy',
-								messageId: delivery.messageId,
-								provider: attachment.provider,
-								providerAttachmentId: attachment.attachmentId,
-								...(senderId === undefined ? {} : { senderId })
-							}
+							bytes
 						);
 						stored.push({
 							provider: attachment.provider,

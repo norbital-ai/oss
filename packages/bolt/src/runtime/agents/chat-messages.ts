@@ -46,11 +46,16 @@ export const ChatAttachment = Schema.Struct({
 });
 export interface ChatAttachment extends Schema.Schema.Type<typeof ChatAttachment> {}
 
-/** A message entered on a first-party chat surface. */
+/**
+ * A message entered on a first-party chat surface.
+ *
+ * Media is not part of a message: media lives as a `file()` attribute on the session, and the
+ * turn reads it on demand through its media tool — a message is words, and the sources are the
+ * conversation's.
+ */
 const StoredUserMessage = Schema.Struct({
 	kind: Schema.Literal('user_message'),
-	text: Schema.String,
-	documents: Schema.Array(ChatDocumentRef)
+	text: Schema.String
 });
 
 /** One transport message inside a persisted envoy burst. */
@@ -86,15 +91,10 @@ export const parseStoredChatInput = (content: unknown): StoredChatInput | null =
 	return Option.match(decoded, { onNone: () => null, onSome: (message) => message });
 };
 
-const documentLine = (document: ChatDocumentRef): string =>
-	`[document ${document.file_name} · ${document.mime_type} · ${document.file_size} bytes]`;
-
 /** The exact text a stored chat input contributes to a model prompt. */
 export const chatInputForModel = (input: StoredChatInput): string => {
 	if (input.kind === 'user_message') {
-		return [input.text, ...input.documents.map(documentLine)]
-			.filter((line) => line.length > 0)
-			.join('\n');
+		return input.text;
 	}
 	return [
 		'INBOUND BATCH',
@@ -110,7 +110,7 @@ export const chatInputForModel = (input: StoredChatInput): string => {
 				...(message.text.length === 0 ? [] : [message.text]),
 				...message.attachments.map(
 					({ provider, attachmentId, file }) =>
-						`${documentLine(file)} provider=${provider} attachment=${attachmentId}`
+						`[document ${file.file_name} · ${file.mime_type} · ${file.file_size} bytes] provider=${provider} attachment=${attachmentId}`
 				)
 			];
 		})

@@ -9,7 +9,7 @@ import {
 	uuid
 } from 'drizzle-orm/pg-core';
 import { compileModelTables } from './model-introspection.js';
-import { defineModel, instant, text, type ModelIndex } from './models-schema.js';
+import { defineModel, file, instant, text, type ModelIndex } from './models-schema.js';
 import type { TransportIdentity } from '../runtime/envoys/transport-identity.js';
 
 const systemIndex = (column: string): ModelIndex => ({ columns: [column] });
@@ -536,6 +536,12 @@ const conversationModel = defineModel(
 		user_id: text().notNull(),
 		sandbox_key: text().notNull(),
 		title: text(),
+		/**
+		 * The media added to this conversation: file refs whose bytes live in the object store.
+		 * This attribute is the whole record — no side table — so an upload is one append and a
+		 * reader asks the session itself what its sources are.
+		 */
+		files: file({ multiple: true }),
 		verifier: jsonb(),
 		visibility: text().notNull().default('personal'),
 		envoy_key: text(),
@@ -550,32 +556,6 @@ const conversationModel = defineModel(
 	{
 		history: false,
 		indexes: [systemIndex('envoy_key'), systemIndex('parent_id')]
-	}
-);
-
-/**
- * One document owned by one chat session.
- *
- * The object-store key is deliberately not the authority. Every chat upload, whichever surface it
- * arrived through, creates one of these rows and every chat read resolves the key through it. That
- * keeps the workbench a place for delegated agent sessions rather than a shared document namespace.
- */
-const chatDocumentModel = defineModel(
-	{
-		conversation_id: text().notNull(),
-		storage_key: text().notNull().unique(),
-		file_name: text().notNull(),
-		file_size: integer().notNull(),
-		mime_type: text().notNull(),
-		source: text().notNull(),
-		message_id: text(),
-		provider: text(),
-		provider_attachment_id: text(),
-		sender_id: text()
-	},
-	{
-		history: false,
-		indexes: [systemIndex('conversation_id')]
 	}
 );
 
@@ -886,7 +866,6 @@ export const SYSTEM_COLLECTION_MODELS = Object.freeze({
 	team: teamModel,
 	chat_session: conversationModel,
 	chat_message: agentMessageModel,
-	chat_document: chatDocumentModel,
 	agent_mailbox: agentMailboxModel,
 	agent_run: agentRunModel,
 	automation_run: automationRunModel,

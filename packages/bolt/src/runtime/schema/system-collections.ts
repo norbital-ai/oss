@@ -45,7 +45,6 @@ export const SYSTEM_COLLECTIONS: ReadonlyArray<
 	collections.requestor,
 	collections.chat_session,
 	collections.chat_message,
-	collections.chat_document,
 	collections.agent_mailbox,
 	collections.agent_run,
 	collections.automation_run,
@@ -193,11 +192,6 @@ const OWN_CONVERSATION_MESSAGE = Object.freeze({
 		'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
 		'where owned."user_id" = ${requestor.id})'
 });
-const OWN_CONVERSATION_DOCUMENT = Object.freeze({
-	$sql:
-		'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
-		'where owned."user_id" = ${requestor.id})'
-});
 const OWN_AGENT_MAILBOX = Object.freeze({
 	$sql:
 		'"conversation_id" in (select owned."conversation_id" from chat_session owned ' +
@@ -308,11 +302,6 @@ export const SYSTEM_READ_POLICY: PolicyDeclaration = Object.freeze<PolicyDeclara
 			collection: collections.chat_message.name,
 			action: 'read' as const,
 			where: OWN_CONVERSATION_MESSAGE
-		},
-		{
-			collection: collections.chat_document.name,
-			action: 'read' as const,
-			where: OWN_CONVERSATION_DOCUMENT
 		},
 		{
 			collection: collections.agent_mailbox.name,

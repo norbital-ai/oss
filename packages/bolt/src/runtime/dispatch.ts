@@ -246,8 +246,7 @@ const AgentEnqueueInput = Schema.Struct({
 	agent: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
 	turnId: Schema.NonEmptyString,
-	message: Schema.String,
-	documents: Schema.optionalKey(Schema.Array(ChatDocumentRef))
+	message: Schema.String
 });
 const AgentExecuteInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
@@ -2708,8 +2707,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					input.turnId,
 					{
 						kind: 'user_message',
-						text: input.message,
-						documents: input.documents ?? []
+						text: input.message
 					}
 				)
 			);
@@ -2725,30 +2723,32 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				)
 			);
 		}
-		case 'agents.documents.bind': {
+		case 'agents.documents.attach': {
 			const input = yield* decode(AgentDocumentBindInput, commandInput);
-			yield* (yield* Agents.Service).bindDocument(
+			yield* (yield* Agents.Service).attachFile(
 				effectId,
 				input.subject,
 				input.conversationId,
 				input.file
 			);
-			return json({ bound: true });
+			return json({ attached: true });
 		}
-		case 'agents.documents.resolve': {
+		case 'agents.documents.read': {
 			const input = yield* decode(AgentDocumentInput, commandInput);
+			const media = yield* (yield* Agents.Service).readMedia(
+				effectId,
+				input.subject,
+				input.conversationId,
+				input.storageKey
+			);
 			return json({
-				file: yield* (yield* Agents.Service).resolveDocument(
-					effectId,
-					input.subject,
-					input.conversationId,
-					input.storageKey
-				)
+				file: media.file,
+				bytesBase64: Buffer.from(media.bytes).toString('base64')
 			});
 		}
 		case 'agents.documents.remove': {
 			const input = yield* decode(AgentDocumentInput, commandInput);
-			yield* (yield* Agents.Service).removeDocument(
+			yield* (yield* Agents.Service).removeFile(
 				effectId,
 				input.subject,
 				input.conversationId,

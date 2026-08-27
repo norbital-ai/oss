@@ -2,7 +2,6 @@ import { Effect, Schema } from 'effect';
 import { getContext, setContext } from 'svelte';
 import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 import type { Subject } from '#lib/runtime/identity/identity.js';
-import type { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
 import {
 	createAgentModelController,
 	type AgentModelController,
@@ -17,7 +16,6 @@ type InteractiveAgentStartInput = {
 	readonly intent?: 'do' | 'plan';
 	readonly verifierPrompt?: string;
 	readonly model?: string;
-	readonly documents?: ReadonlyArray<ChatDocumentRef>;
 	readonly mentions?: readonly {
 		readonly collection: string;
 		readonly recordId: string;
@@ -110,8 +108,7 @@ function startInteractiveAgent(
 			agent: active.agentName,
 			conversationId,
 			turnId: input.turnId,
-			message: input.message,
-			documents: input.documents ?? []
+			message: input.message
 		})
 	).pipe(
 		Effect.map((admitted) => ({

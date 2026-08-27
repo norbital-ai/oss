@@ -19,6 +19,8 @@ export type {
 	Api,
 	CollectionMutationValues,
 	CollectionHooks,
+	MutateBeforeContext,
+	MutateEditContext,
 	CollectionIntegrations,
 	CollectionPipelines,
 	EnvoyDefinition,
