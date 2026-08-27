@@ -313,11 +313,11 @@ export type MutationError =
 /**
  * What the *batched* path adds, and why it is not a member of `MutationError`.
  *
- * Only `mutate` runs in phases, so only `mutate` can say which one failed. Widening `MutationError`
- * would have put the phase on `create`, `update`, `delete`, `import` and `resume` as well, and on
-	 * every service that declares an error union containing theirs — such as `agents.execute` — none
-	 * of which can ever raise it. That is a type that says something false about five
- * paths in order to say something true about one.
+ * Only the batched `mutate` reports a phase. `update` runs a graph too now, but it unwraps a phase
+ * failure to the refusal underneath before returning, so its callers — `agents.execute` among them —
+ * keep an error union that says only what they can actually raise. Widening `MutationError` would
+ * have put the phase on `create`, `update`, `delete`, `import` and `resume` alike: a type that says
+ * something false about five paths in order to say something true about one.
  */
 export type BatchMutationError = MutationError | MutationPhaseFailure;
 export type ResumeError =

@@ -5382,16 +5382,16 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					false,
 					existing
 				);
-				if (module?.update?.perRecord?.after !== undefined) {
+				if (module?.mutate?.perRecord?.after !== undefined) {
 					const afterApi = buildApi(effectId, subject, true, depth + 1);
 					const record = yield* readRowElevated(effectId, input.collection, input.id);
 					yield* runHook(
-						module.update.perRecord.after,
+						module.mutate.perRecord.after,
 						{ previous: existing, changes: values, record, api: afterApi },
 						afterApi,
 						{
 							collection: input.collection,
-							action: 'update.after'
+							action: 'mutate.after'
 						}
 					);
 				}
@@ -5828,13 +5828,20 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						// waiting on a decision.
 						yield* releaseLock(effectId, operation.collection, operation.id, requestId);
 						const createdModule = authored.hooks[operation.collection];
-						if (createdModule?.create?.perRecord?.after !== undefined) {
+						if (createdModule?.mutate?.perRecord?.after !== undefined) {
 							const api = buildApi(effectId, operation.subject, true);
 							const record = yield* readRowElevated(effectId, operation.collection, operation.id);
-							yield* runHook(createdModule.create.perRecord.after, { record, api }, api, {
-								collection: operation.collection,
-								action: 'create.after'
-							});
+							// `previous` is undefined because this settled an approved *create*; the unified
+							// after-hook tells the two apart by exactly that, as the id does everywhere else.
+							yield* runHook(
+								createdModule.mutate.perRecord.after,
+								{ previous: undefined, changes: operation.values, record, api },
+								api,
+								{
+									collection: operation.collection,
+									action: 'mutate.after'
+								}
+							);
 						}
 						yield* emitChangeEvents(effectId, operation.collection, operation.id, 'created');
 						return;
@@ -5851,16 +5858,16 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							previous
 						);
 						const updatedModule = authored.hooks[operation.collection];
-						if (updatedModule?.update?.perRecord?.after !== undefined) {
+						if (updatedModule?.mutate?.perRecord?.after !== undefined) {
 							const api = buildApi(effectId, operation.subject, true);
 							const record = yield* readRowElevated(effectId, operation.collection, operation.id);
 							yield* runHook(
-								updatedModule.update.perRecord.after,
+								updatedModule.mutate.perRecord.after,
 								{ previous, changes: operation.values, record, api },
 								api,
 								{
 									collection: operation.collection,
-									action: 'update.after'
+									action: 'mutate.after'
 								}
 							);
 						}
@@ -5940,7 +5947,22 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								: Effect.fail(mutationPhaseFailure('commit', collection, [], cause))
 						)
 					),
-				update,
+				// The implementation carries a `depth` argument for its own recursion guard; the service
+				// contract is the three-argument call, so the extra parameter stops here rather than
+				// widening the published signature.
+				update: (effectId, subject, input) =>
+					update(effectId, subject, input).pipe(
+						// A replayed browser mutation has already been decided; the update returns nothing
+						// either way, so there is no outcome left to report. `delete` settles it identically.
+						Effect.catchIf(isBrowserMutationReplay, () => Effect.void),
+						// An update runs a graph, so it can fail inside a phase — but a single-row update has
+						// no batch for a phase to be meaningful about, and its callers' error unions do not
+						// carry one. The refusal underneath is the answer they wanted; the wrapper is not.
+						Effect.catchIf(
+							(cause): cause is MutationPhaseFailure => cause instanceof MutationPhaseFailure,
+							(cause) => Effect.fail(cause.underlying as MutationError)
+						)
+					),
 				delete: (effectId, subject, collection, id, options) =>
 					deleteRecord(effectId, subject, collection, id, 0, options).pipe(
 						Effect.catchIf(isBrowserMutationReplay, () => Effect.void)

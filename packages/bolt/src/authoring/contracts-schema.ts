@@ -712,10 +712,23 @@ type DescribedHook<Handler> = { readonly description: string; readonly handler: 
  * carries into `before` and the only way `prepare` — which sees a batch and no rows — can tell a
  * recalculation from a first build.
  */
+/**
+ * What one write states, and it states the whole record.
+ *
+ * `mutate` is an upsert: no id creates, an id updates, and an included `many` relationship is that
+ * parent's complete desired state. The input follows the same rule — this is the collection's insert
+ * shape, not a patch of it, so every required column is present on every write whether it creates or
+ * updates. A hook therefore reads `input.company_id` and gets a `string`, never a `string |
+ * undefined` it has to resolve against `existing` before it can use.
+ *
+ * The alternative — a partial — makes every required column optional at the type level on a write
+ * that is usually a create, so each hook re-derives the value it was already given and the compiler
+ * cannot tell a genuinely absent column from one the caller simply did not restate.
+ */
 type MutateInput<S extends AnySchema, N extends TableName<S>> = Readonly<{
 	readonly id?: MutationIdentity<S, N>;
 }> &
-	Partial<MutationInsertFor<S, N>>;
+	MutationInsertFor<S, N>;
 
 /** The relations `+relationship.ts` declared for one collection, as the compiler emits them. */
 type RelationsOf<S extends AnySchema, N extends TableName<S>> = S extends {

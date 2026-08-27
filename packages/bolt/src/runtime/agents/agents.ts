@@ -158,6 +158,41 @@ const protectedAssistantTurns = 3;
 const softToolOutputCharacters = 4_000;
 const hardToolOutputCharacters = 50_000;
 
+/** How many tool steps one progress note shows; the rest collapse into a count. */
+const progressVisibleLines = 3;
+
+/**
+ * How long one note must rest before it is rewritten, and how long rewrites are tried at all.
+ *
+ * The interval coalesces a burst of quick tools into a few honest updates instead of a flickering
+ * bubble; the window is WhatsApp's own edit horizon with margin, past which a rewrite is refused
+ * by the provider and a replacement message would be exactly the noise in-place updates exist
+ * to avoid.
+ */
+const PROGRESS_EDIT_INTERVAL_MS = 3_500;
+const PROGRESS_WINDOW_MS = 13 * 60_000;
+
+/**
+ * The compact body of one progress note, read straight off the turn's own parts.
+ *
+ * The parts a turn commits are the only record of its tool steps — a note invents none. A part
+ * with a matching result is done and carries a check; one still waiting carries a gear; everything
+ * older than the newest few collapses into a count, because a turn that ran six tools does not
+ * narrate six lines into somebody's chat.
+ */
+const renderProgress = (parts: ReadonlyArray<TurnPart>): string => {
+	const done = new Set(parts.flatMap((part) => (part.kind === 'tool-result' ? [part.id] : [])));
+	const steps = parts.flatMap((part) =>
+		part.kind === 'tool' ? [{ name: part.name, state: done.has(part.id) }] : []
+	);
+	const shown = steps
+		.slice(-progressVisibleLines)
+		.map(({ name, state }) => `${state ? '✓' : '⚙︎'} ${name}`);
+	const elided =
+		steps.length > progressVisibleLines ? [`… ${steps.length - progressVisibleLines} earlier`] : [];
+	return ['⚙︎ Working', ...elided, ...shown].join('\n');
+};
+
 /**
  * One step of an agent turn. "Step" and "part" name the same thing: what the turn produced next.
  *
@@ -518,7 +553,14 @@ export type Interface = Readonly<{
 	readonly execute: (
 		effectId: EffectIdType,
 		conversationId: string,
-		turnId: string
+		turnId: string,
+		/**
+		 * Observes each durable turn commit, with the note body rendered from the parts just
+		 * committed and the transport key of the message to rewrite next. Returns the key to hand
+		 * the next observation. Transport envoys keep one message current with this; absent, the
+		 * turn commits and nobody watches.
+		 */
+		observe?: (body: string, updateOf: string | null) => Effect.Effect<string | null>
 	) => Effect.Effect<
 		TurnResultValue,
 		| Workspace.WorkspaceLookupError
@@ -1792,7 +1834,12 @@ export const layer = Layer.effect(
 					return yield* admitTurn(effectId, subject, agentName, conversationId, turnId, message);
 				}
 			),
-			execute: Effect.fn('Agents.execute')(function* (effectId, conversationId, turnId) {
+			execute: Effect.fn('Agents.execute')(function* (
+				effectId,
+				conversationId,
+				turnId,
+				observe
+			) {
 				const storedResult = yield* executeBuilt(
 					EffectId.make(`${effectId}:turn:read`),
 					database,
@@ -1854,7 +1901,17 @@ export const layer = Layer.effect(
 				);
 				const parts: Array<TurnPart> = [...stored.parts];
 				let committed = 0;
-				const commit: CommitTurn = (status, usage, usageUnreported) =>
+				/**
+				 * The one observer of turn beats, when a transport wants them.
+				 *
+				 * The loop already commits after every tool step, and the committed parts are the only
+				 * progress there is — so the note is rendered from `parts` at the commit boundary rather
+				 * than the loop growing a second record of its own steps. Throttled because WhatsApp
+				 * rewrites a sent message, not a stream: three and a half seconds turns a burst of quick
+				 * tools into a few honest updates, and past WhatsApp's edit horizon the observer goes
+				 * quiet rather than replacing the bubble and doubling the messages. Never fails a turn.
+				 */
+				const persistTurn = (status: TurnStatus, usage: AIUsage | undefined, usageUnreported: boolean) =>
 					syncMutation(
 						EffectId.make(`${effectId}:turn:${(committed += 1)}`),
 						composer
@@ -1871,6 +1928,28 @@ export const layer = Layer.effect(
 							.where(eq(chatMessage.id, decoded.value.id)),
 						['chat_message']
 					);
+				let progressKey: string | null = null;
+				let lastBeatAt = 0;
+				const startedAt = Date.now();
+				const commit: CommitTurn =
+					observe === undefined
+						? persistTurn
+						: (status, usage, usageUnreported) =>
+								Effect.gen(function* () {
+									const result = yield* persistTurn(status, usage, usageUnreported);
+									const now = Date.now();
+									if (
+										now - startedAt < PROGRESS_WINDOW_MS &&
+										(progressKey === null || now - lastBeatAt >= PROGRESS_EDIT_INTERVAL_MS)
+									) {
+										lastBeatAt = now;
+										progressKey = yield* Effect.catch(
+											observe(renderProgress(parts), progressKey),
+											() => Effect.succeed(progressKey)
+										);
+									}
+									return result;
+								});
 				yield* commit('running', stored.usage, stored.usage_unreported ?? false);
 				const settleUsage: SettleUsage = (usage, newlyUnreported) =>
 					recordUsage(
@@ -1906,7 +1985,10 @@ export const layer = Layer.effect(
 								input: {
 									envoy: agent.name,
 									conversationId,
-									output: settled.output
+									output: settled.output,
+									// The observed bubble rides along so the answer can replace it in place.
+									// A turn nobody observed carries `null`, and the answer is sent fresh.
+									progressKey: progressKey ?? null
 								},
 								effectId: completionId
 							}

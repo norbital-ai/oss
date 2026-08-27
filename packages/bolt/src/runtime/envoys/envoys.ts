@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Schema } from 'effect';
+import { Clock, Context, Effect, Layer, Option, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { and, asc, count, eq, inArray, isNull, lt, or } from 'drizzle-orm';
 import type { EnvoyDefinition } from '#lib/authoring/contracts-schema.js';
@@ -147,6 +147,12 @@ type InboundRow = Schema.Schema.Type<typeof InboundRow>;
 const decodeInboundRow = Schema.decodeUnknownOption(InboundRow);
 const IdRow = Schema.Struct({ id: Schema.NonEmptyString });
 const decodeIdRow = Schema.decodeUnknownOption(IdRow);
+/** The transport address a turn in flight answers on, and the envoy that declared it. */
+const ProcessingRecipient = Schema.Struct({
+	id: Schema.NonEmptyString,
+	envoy_name: Schema.NonEmptyString,
+	transport_conversation_id: Schema.NonEmptyString
+});
 
 type EnvoyFailure =
 	| EnvoyError
@@ -182,7 +188,13 @@ export type Interface = Readonly<{
 		effectId: EffectId,
 		envoyName: string,
 		conversationId: string,
-		output: Schema.Json
+		output: Schema.Json,
+		/**
+		 * The provider key of this turn's progress bubble, when one is on the wire. The answer edits
+		 * that bubble in place, so one conversation turn stays one message; when the edit cannot
+		 * land, the answer is sent fresh — compactness never outranks the answer arriving.
+		 */
+		progressKey: string | null
 	) => Effect.Effect<DrainReport, EnvoyError | Database.FacilityError>;
 	readonly reply: (
 		effectId: EffectId,
@@ -190,6 +202,20 @@ export type Interface = Readonly<{
 		recipient: string,
 		payload: Schema.Json
 	) => Effect.Effect<void, EnvoyError | Database.FacilityError>;
+	/**
+	 * Posts or rewrites one compact progress note on this conversation's transport.
+	 *
+	 * Best effort by contract: a conversation that is not a transport one — the web agent's — has
+	 * nothing in flight to post on and answers `null`, and so does a transport that refused. The
+	 * returned key is the bubble to edit next; an edit that landed keeps the key it was given,
+	 * because rewriting a message does not change which message it is.
+	 */
+	readonly progress: (
+		effectId: EffectId,
+		conversationId: string,
+		body: string,
+		updateOf: string | null
+	) => Effect.Effect<string | null, EnvoyError | Database.FacilityError>;
 	readonly status: (
 		effectId: EffectId,
 		envoyName: string
@@ -270,19 +296,51 @@ export const layer = Layer.effect(
 				})
 			);
 
-		const send = Effect.fn('Envoys.send')(function* (
+		/**
+		 * Delivers one outbound message and reports what it became on the wire.
+		 *
+		 * The provider key the receipt carries back is what turns a reply into a conversation that
+		 * can update itself: progress is one bubble edited in place, and the final answer edits that
+		 * same bubble. Never fails — a transport that refused names that in `delivered`, and a
+		 * provider that answers no key still delivered, with `key: null` as the honest answer.
+		 */
+		const deliver = Effect.fn('Envoys.deliver')(function* (
 			effectId: EffectId,
 			envoy: EnvoyDefinition & { readonly name: string },
 			recipient: string,
-			payload: Schema.Json
+			payload: Schema.Json,
+			updateOf?: string | null
 		) {
-			yield* communication.execute(effectId, {
-				_tag: 'Send',
-				channel: envoy.transport,
+			const response = yield* communication
+				.execute(EffectId.make(`${effectId}:reply`), {
+					_tag: 'Send',
+					channel: envoy.transport,
+					recipient,
+					payload:
+						updateOf === undefined || updateOf === null
+							? payload
+							: {
+									...(payload !== null && typeof payload === 'object'
+										? payload
+										: { text: String(payload) }),
+									updateOf
+								}
+				})
+				.pipe(Effect.option);
+			yield* recordReceipt(
+				EffectId.make(`${effectId}:receipt`),
+				envoy.name,
 				recipient,
-				payload
-			});
-			yield* recordReceipt(EffectId.make(`${effectId}:receipt`), envoy.name, recipient, 'outbound');
+				'outbound'
+			);
+			if (Option.isNone(response)) return { delivered: false as const, key: null };
+			const receipt: unknown = response.value.receipt;
+			const id =
+				receipt !== null && typeof receipt === 'object' ? Reflect.get(receipt, 'id') : undefined;
+			return {
+				delivered: true as const,
+				key: typeof id === 'string' && id !== '' ? id : null
+			};
 		});
 
 		return Service.of({
@@ -637,7 +695,8 @@ export const layer = Layer.effect(
 				effectId,
 				envoyName,
 				conversationId,
-				output
+				output,
+				progressKey
 			) {
 				const envoy = yield* requireEnvoy(envoyName);
 				const processing = yield* executeBuilt(
@@ -646,6 +705,7 @@ export const layer = Layer.effect(
 					composer
 						.select({
 							id: boltEnvoyInbound.id,
+							envoy_name: boltEnvoyInbound.envoy_name,
 							transport_conversation_id: boltEnvoyInbound.transport_conversation_id
 						})
 						.from(boltEnvoyInbound)
@@ -658,23 +718,24 @@ export const layer = Layer.effect(
 						.orderBy(asc(boltEnvoyInbound.sent_at))
 				);
 				const rows = processing.rows.flatMap((row) => {
-					const decoded = Schema.decodeUnknownOption(
-						Schema.Struct({
-							id: Schema.NonEmptyString,
-							transport_conversation_id: Schema.NonEmptyString
-						})
-					)(row);
+					const decoded = Schema.decodeUnknownOption(ProcessingRecipient)(row);
 					return decoded._tag === 'Some' ? [decoded.value] : [];
 				});
 				if (rows.length === 0)
 					return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
 				const recipient = rows.at(-1)?.transport_conversation_id;
-				const answered =
-					recipient !== undefined &&
-					(yield* send(EffectId.make(`${effectId}:reply`), envoy, recipient, output).pipe(
-						Effect.as(true),
-						Effect.catch(() => Effect.succeed(false))
-					));
+				let answered = false;
+				if (recipient !== undefined) {
+					// The turn's progress bubble is edited into the answer when one is on the wire; when
+					// that edit cannot land — the bubble was never sent, or the transport lost it — the
+					// answer is sent fresh. One bubble per turn is the aim, never at the cost of the answer.
+					if (progressKey !== null) {
+						answered = (yield* deliver(effectId, envoy, recipient, output, progressKey)).delivered;
+					}
+					if (!answered) {
+						answered = (yield* deliver(effectId, envoy, recipient, output)).delivered;
+					}
+				}
 				const status = answered ? ('answered' as const) : ('failed' as const);
 				yield* executeBuilt(
 					EffectId.make(`${effectId}:settle`),
@@ -689,7 +750,44 @@ export const layer = Layer.effect(
 
 			reply: Effect.fn('Envoys.reply')(function* (effectId, envoyName, recipient, payload) {
 				const envoy = yield* requireEnvoy(envoyName);
-				yield* send(effectId, envoy, recipient, payload);
+				yield* deliver(effectId, envoy, recipient, payload);
+			}),
+
+			progress: Effect.fn('Envoys.progress')(function* (effectId, conversationId, body, updateOf) {
+				const processing = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({
+							envoy_name: boltEnvoyInbound.envoy_name,
+							transport_conversation_id: boltEnvoyInbound.transport_conversation_id
+						})
+						.from(boltEnvoyInbound)
+						.where(
+							and(
+								eq(boltEnvoyInbound.conversation_id, conversationId),
+								eq(boltEnvoyInbound.status, 'processing')
+							)
+						)
+						.orderBy(asc(boltEnvoyInbound.sent_at))
+						.limit(1)
+				);
+				const decoded = Schema.decodeUnknownOption(ProcessingRecipient)(processing.rows[0]);
+				// A conversation with nothing in flight is not a transport one: the web agent's turns
+				// land here, and progress has nowhere to be posted. Silence is the correct answer.
+				if (decoded._tag === 'None') return null;
+				const envoy = yield* requireEnvoy(decoded.value.envoy_name);
+				const outcome = yield* deliver(
+					effectId,
+					envoy,
+					decoded.value.transport_conversation_id,
+					{ text: body, progress: true },
+					updateOf
+				);
+				if (!outcome.delivered) return null;
+				// An edit that landed rewrites the very message `updateOf` names, so the key to edit
+				// next is the key that was handed in; only a fresh send mints a new one.
+				return outcome.key ?? updateOf;
 			}),
 
 			status: Effect.fn('Envoys.status')(function* (effectId, envoyName) {

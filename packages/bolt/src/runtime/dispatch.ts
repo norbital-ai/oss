@@ -141,6 +141,26 @@ const SyncDistributeInput = Schema.Struct({
 	subject: Subject,
 	...Sync.SyncDistributeRequest.fields
 });
+
+/**
+ * The commit observer one transport turn reports through.
+ *
+ * The turn renders its own note from the parts it committed; all this adds is the envoy hop —
+ * post or rewrite the conversation's one bubble, best effort, answering the key to rewrite next.
+ * A conversation that is not a transport one (the web agent's) has nothing in flight to post on
+ * and answers `null`, which the turn treats as nobody watching.
+ */
+type TurnObserver = (body: string, updateOf: string | null) => Effect.Effect<string | null>;
+const observeProgress = (
+	effectId: EffectId,
+	conversationId: string,
+	envoys: Envoys.Interface
+): TurnObserver => (body, updateOf) =>
+	Effect.catch(
+		envoys.progress(EffectId.make(`${effectId}:progress`), conversationId, body, updateOf),
+		() => Effect.succeed(null)
+	);
+
 const AgentEnqueueInput = Schema.Struct({
 	subject: Subject,
 	agent: Schema.NonEmptyString,
@@ -269,7 +289,8 @@ const EnvoyDrainInput = Schema.Struct({
 const EnvoyCompleteInput = Schema.Struct({
 	envoy: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
-	output: Schema.Json
+	output: Schema.Json,
+	progressKey: Schema.optionalKey(Schema.NullOr(Schema.NonEmptyString))
 });
 /**
  * `binding` is what a scheduled pull carries and an enqueued one does not.
@@ -2616,7 +2637,12 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		case 'agents.execute': {
 			const input = yield* decode(AgentExecuteInput, commandInput);
 			return json(
-				yield* (yield* Agents.Service).execute(effectId, input.conversationId, input.turnId)
+				yield* (yield* Agents.Service).execute(
+					effectId,
+					input.conversationId,
+					input.turnId,
+					observeProgress(effectId, input.conversationId, yield* Envoys.Service)
+				)
 			);
 		}
 		case 'agents.documents.bind': {
@@ -3516,7 +3542,8 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					effectId,
 					input.envoy,
 					input.conversationId,
-					input.output
+					input.output,
+					input.progressKey ?? null
 				)
 			);
 		}
