@@ -47,15 +47,25 @@ whole because migrations and doctor configuration are committed. The authored `t
 
 ## Local package propagation
 
-Local OSS changes cross five boundaries:
+Local OSS changes cross five boundaries. One command covers the first four:
+
+```sh
+pnpm --dir oss yalc:refresh
+```
 
 1. Build `oss/packages/<name>/build`.
 2. Publish that build into the yalc store.
 3. Copy it into each consumer's `.yalc/`.
-4. Run `pnpm install` so pnpm re-materializes its virtual-store copy in `node_modules`.
+4. Hand `node_modules` back to pnpm (`yalc add --pure` + install) so it re-materializes its
+   virtual-store copy.
 5. Run `bolt sync`, then restart Colony so its bootstrap publishes and routes the new artifact.
 
-`yalc push` stops at step 3. Equal `.yalc` and `node_modules` package signatures prove step 4.
+`yalc push` stops at step 3 — and on its own it is worse than incomplete: it replaces
+`node_modules/<name>` with a plain link to a directory that carries no `node_modules`, orphaning the
+package's own dependencies (`ERR_MODULE_NOT_FOUND` on the first `drizzle-orm` import), while
+`pnpm install` reports "Already up to date". There is no standalone push command any more.
+`yalc:refresh` ends by verifying that every workspace resolves through pnpm's store and actually
+imports, so a missed hop fails loudly instead of surfacing later as an edit that did nothing.
 
 The realm command performs all five for Colony and templates and also links OSS packages into the
 website:
