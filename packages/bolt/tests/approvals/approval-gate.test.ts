@@ -352,7 +352,7 @@ describe('approval gate over SQL', () => {
 		const outbox = (await harness.database.query(
 			"select operation, after_record from bolt_sync_outbox where collection_name = 'people' order by xid, sequence"
 		)) as ReadonlyArray<{ readonly operation: string; readonly after_record: unknown }>;
-		// Legacy `create` publishes the inserted row and then the approval lock that makes it held. The
+		// The imperative `create` publishes the inserted row and then the approval lock that holds it. The
 		// replica applies both in cursor order, so the reviewer ends on the locked representation. The
 		// declarative browser mutation path is different by contract: it holds before a domain row exists.
 		expect(outbox).toHaveLength(2);

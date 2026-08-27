@@ -135,7 +135,7 @@ describe('WorkspaceSchema owner', () => {
 		);
 		try {
 			await harness.database.query('alter table "people" drop column "team"');
-			await harness.database.query('alter table "people" add column "legacy_id" text');
+			await harness.database.query('alter table "people" add column "stray_id" text');
 
 			const divergences = await harness.runtime.runPromise(
 				Effect.flatMap(WorkspaceSchema.Service, (schema) =>
@@ -144,7 +144,7 @@ describe('WorkspaceSchema owner', () => {
 			);
 			expect(divergences).toEqual([
 				'people: missing column team',
-				'people: unexpected column legacy_id'
+				'people: unexpected column stray_id'
 			]);
 
 			const failure = await harness.runtime.runPromise(
@@ -155,7 +155,7 @@ describe('WorkspaceSchema owner', () => {
 				)
 			);
 			expect(failure.message).toContain('people: missing column team');
-			expect(failure.message).toContain('people: unexpected column legacy_id');
+			expect(failure.message).toContain('people: unexpected column stray_id');
 		} finally {
 			await harness.dispose();
 		}

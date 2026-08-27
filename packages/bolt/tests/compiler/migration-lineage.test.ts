@@ -76,7 +76,7 @@ describe('Bolt migration lineage', () => {
 		).toEqual([]);
 	});
 
-	it('reads a current drizzle snapshot back without sending it through the legacy upgrader', async () => {
+	it('reads a drizzle snapshot back unchanged', async () => {
 		const migrationsRoot = await mkdtemp(join(tmpdir(), 'bolt-lineage-'));
 		const snapshot = await generateDrizzleJson({});
 		await Effect.runPromise(

@@ -93,7 +93,13 @@ jobs:
             --output dist/package-release.json \
             --archive-output dist/package-archives
           resolved_key="$(node -p "require('./dist/package-release.json').packageKey")"
-          test "$resolved_key" = "$EXPECTED_PACKAGE_KEY"
+          # Say which key the runner actually packed. A bare `test` fails with no output, so pinning a
+          # new release meant guessing: the key depends on this runner's npm and platform, and a local
+          # value does not reproduce it.
+          if test "$resolved_key" != "$EXPECTED_PACKAGE_KEY"; then
+            echo "::error::package key mismatch — runner packed '$resolved_key', workflow expects '$EXPECTED_PACKAGE_KEY'. Pin EXPECTED_PACKAGE_KEY to the packed value once it is reviewed."
+            exit 1
+          fi
           published=0
           skipped=0
           mapfile -t packages < <(node --input-type=module -e \

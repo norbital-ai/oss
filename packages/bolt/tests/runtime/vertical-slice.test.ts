@@ -655,7 +655,7 @@ describe('runnable Bolt vertical slice', () => {
 				subject,
 				agent: 'web',
 				conversationId: 'conversation-without-turn-id',
-				message: 'This legacy shape is not accepted.'
+				message: 'A turnless enqueue is not accepted.'
 			})
 		).toMatchObject({ _tag: 'Failure' });
 		const admitted = await invoke('agents.enqueue', {

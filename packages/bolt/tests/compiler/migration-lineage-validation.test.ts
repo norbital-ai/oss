@@ -134,7 +134,7 @@ describe('sync migration-lineage validation', () => {
 	it('rejects a compatibility ledger whose current checkpoint describes another schema', async () => {
 		const models = currentModels();
 		const { root } = await committedWorkspace(models);
-		const staleSnapshot = (await committedWorkspace({ tickets: defineModel({ legacy: text() }) }))
+		const staleSnapshot = (await committedWorkspace({ tickets: defineModel({ stale: text() }) }))
 			.snapshot;
 		await writeCurrentCompatibility(root, staleSnapshot);
 

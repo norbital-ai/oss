@@ -372,7 +372,7 @@ describe('secrets at rest', () => {
 	it('reports a pre-encryption plaintext row as unreadable rather than handing it back', async () => {
 		harness = await makeBoltTestRuntime(vaultWorkspace);
 		await harness.database.query(
-			"insert into bolt_secrets (tenant_id, name, value, updated_by) values ('', $1, $2, 'legacy')",
+			"insert into bolt_secrets (tenant_id, name, value, updated_by) values ('', $1, $2, 'seed')",
 			[SECRET_NAME, WORKSPACE_VALUE]
 		);
 		await harness.database.query(

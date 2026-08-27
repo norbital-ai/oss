@@ -71,12 +71,10 @@ const loadDrizzleKitPostgres: Effect.Effect<typeof DrizzleKitPostgres> = Effect.
 );
 
 /**
- * The stable envelope of a current drizzle-kit PostgreSQL snapshot.
+ * The stable envelope of a drizzle-kit PostgreSQL snapshot.
  *
- * `up()` only accepts drizzle-kit's legacy `schemas`/`tables` document. Current snapshots already
- * use the `ddl` representation consumed by `generateMigration`, so passing one through `up()` makes
- * the upgrader read properties that deliberately no longer exist. Keep the envelope check here so
- * snapshots written by this version round-trip unchanged while older lineages still use `up()`.
+ * Checked on read so a document that is not the `ddl` representation `generateMigration` consumes
+ * is a named failure of this read rather than a value the differ trusts.
  */
 const CurrentWorkspaceSnapshot = Schema.Struct({
 	dialect: Schema.Literal('postgres'),
@@ -498,8 +496,8 @@ const restoreGeneratedColumnNotNull = (
  * when the two already agree.
  *
  * An empty diff is the only honest "nothing to do" signal, which is why this carries no fingerprint
- * cache: the legacy path kept one to avoid paying for a subprocess, and a cache that disagrees with
- * the schema is how a changed column reaches the client with no migration behind it.
+ * cache: one would exist only to avoid paying for a subprocess, and a cache that disagrees with the
+ * schema is how a changed column reaches the client with no migration behind it.
  */
 export const planWorkspaceMigration = (
 	input: WorkspaceMigrationPlanInput
@@ -630,17 +628,10 @@ export const latestSnapshot = (
 				const parsed = Schema.decodeUnknownSync(
 					Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))
 				)(source);
-				if (Schema.is(CurrentWorkspaceSnapshot)(parsed)) {
-					return parsed as WorkspaceSnapshot;
-				}
-				const { up } = yield* loadDrizzleKitPostgres;
-				return yield* Effect.try({
-					try: () => up(parsed).snapshot,
-					catch: (cause) =>
-						new Error(`Could not read drizzle snapshot ${join(migrationsRoot, tag)}.`, {
-							cause
-						})
-				});
+				if (Schema.is(CurrentWorkspaceSnapshot)(parsed)) return parsed as WorkspaceSnapshot;
+				return yield* Effect.fail(
+					new Error(`Could not read drizzle snapshot ${join(migrationsRoot, tag)}.`)
+				);
 			}
 		}
 		return undefined;

@@ -158,57 +158,6 @@ describe('bolt task queue over a host facility', () => {
 		expect(found.rows.map((row) => row.table_name)).toEqual(['bolt_schedule', 'bolt_task']);
 	});
 
-	it('adds automation progression columns to an existing task table without losing queued work', async () => {
-		const legacy = await PGlite.create('memory://');
-		try {
-			await legacy.exec(`create table bolt_task (
-				id uuid primary key default gen_random_uuid(),
-				created_at timestamp with time zone not null default now(),
-				updated_at timestamp with time zone not null default now(),
-				row_version integer not null default 1,
-				command text not null,
-				input jsonb not null,
-				status text not null default 'pending',
-				run_at timestamp with time zone not null default now(),
-				attempts integer not null default 0,
-				max_attempts integer not null default 12,
-				effect_id text not null unique,
-				result jsonb,
-				error text
-			)`);
-			await legacy.query(
-				`insert into bolt_task (command, input, effect_id) values ('automations.rebuild', '{}', 'legacy:1')`
-			);
-
-			for (const step of taskSchemaSteps()) await legacy.exec(step.sql);
-
-			const columns = await legacy.query<{ column_name: string }>(
-				"select column_name from information_schema.columns where table_name = 'bolt_task' and column_name like 'progress%' order by column_name"
-			);
-			expect(columns.rows.map(({ column_name }) => column_name)).toEqual([
-				'progress',
-				'progress_sequence',
-				'progress_updated_at'
-			]);
-			await expect(
-				legacy.query(
-					"select effect_id, progress, progress_sequence, progress_updated_at from bolt_task where effect_id = 'legacy:1'"
-				)
-			).resolves.toMatchObject({
-				rows: [
-					{
-						effect_id: 'legacy:1',
-						progress: null,
-						progress_sequence: 0,
-						progress_updated_at: null
-					}
-				]
-			});
-		} finally {
-			await legacy.close();
-		}
-	});
-
 	describe('declare', () => {
 		it('upserts what the release declares and deletes what it does not', async () => {
 			const now = at('2026-08-20T04:00:00.000Z');

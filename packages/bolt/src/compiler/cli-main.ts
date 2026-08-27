@@ -164,7 +164,7 @@ const run = (): Promise<void> => {
 		// Its own command rather than a step inside `sync`. `sync` is idempotent — run it twice and the
 		// workspace is unchanged — while generating a migration appends a timestamped entry to a lineage
 		// that is then applied to real databases. Folding it into the command a dev server runs on every
-		// save is what forced the legacy path to carry a fingerprint cache to suppress its own output.
+		// save is what would force this to carry a fingerprint cache to suppress its own output.
 		const program = Effect.gen(function* () {
 			// Imported here rather than at process startup: both migrate and sync use the diff engine, but
 			// commands that only inspect CLI metadata should not pay to load drizzle-kit.
