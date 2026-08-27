@@ -8,7 +8,7 @@
 		row: () => Record<string, unknown>;
 		value: (name: string) => unknown;
 		setValue: (name: string, value: unknown) => void;
-		register: (name: string) => () => void;
+		register: (name: string, hidden: boolean) => () => void;
 		dirty: (name: string) => boolean;
 		errors: (name: string) => string[];
 		disabled: () => boolean;
@@ -25,7 +25,7 @@
 
 <script lang="ts" generics="TFieldName extends string">
 	import { humanize } from '@norbital-ai/std/string';
-	import { DataRenderer } from '#lib/data-renderer';
+	import { DataRenderer, type FieldRendererComponent } from '#lib/data-renderer';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
@@ -39,22 +39,19 @@
 		name,
 		label,
 		class: className,
-		renderer: Renderer,
-		rendererProps
+		hidden = false,
+		readonly = false,
+		disabled: disabledProp,
+		placeholder,
+		relationOptions,
+		renderer,
+		rendererProps = {}
 	}: CollectionFormFieldProps<TFieldName> = $props();
 
 	const context = getCollectionFormFieldContext();
 	const field = $derived(context.field(name));
 	const value = $derived(context.value(name));
-	const resolvedRendererProps = $derived(rendererProps ?? {});
-	const readonly = $derived.by(() => {
-		const flag = Reflect.get(resolvedRendererProps, 'readonly');
-		return typeof flag === 'boolean' ? flag : false;
-	});
-	const disabled = $derived.by(() => {
-		const flag = Reflect.get(resolvedRendererProps, 'disabled');
-		return typeof flag === 'boolean' ? flag : context.disabled();
-	});
+	const disabled = $derived((disabledProp ?? false) || context.disabled());
 	const fieldId = $derived(`${context.collectionName()}-${name}`);
 	const dirty = $derived(context.dirty(name));
 	const errors = $derived(context.errors(name));
@@ -62,10 +59,10 @@
 	const fieldLabel = $derived(label ?? field?.label ?? humanize(name));
 
 	// svelte-ignore state_referenced_locally -- field names are immutable for a mounted Field composition.
-	onDestroy(context.register(name));
+	onDestroy(context.register(name, hidden));
 </script>
 
-{#if field}
+{#if field && !hidden}
 	<div
 		class={cn('flex min-h-0 flex-col gap-2', className)}
 		data-collection-field={name}
@@ -95,28 +92,19 @@
 			{/if}
 		</Inline>
 		<div class="min-h-0 min-w-0 flex-1">
-			{#if Renderer}
-				<Renderer
-					{...resolvedRendererProps}
-					{field}
-					{value}
-					row={context.row()}
-					{readonly}
-					{disabled}
-					onValueChange={(next) => context.setValue(name, next)}
-				/>
-			{:else}
-				<DataRenderer
-					{...resolvedRendererProps}
-					id={fieldId}
-					{field}
-					{value}
-					row={context.row()}
-					mode={readonly ? 'display' : 'edit'}
-					{disabled}
-					onValueChange={(next) => context.setValue(name, next)}
-				/>
-			{/if}
+			<DataRenderer
+				id={fieldId}
+				{field}
+				{value}
+				row={context.row()}
+				mode={readonly ? 'display' : 'edit'}
+				{disabled}
+				{placeholder}
+				{relationOptions}
+				renderer={renderer as FieldRendererComponent | undefined}
+				rendererProps={rendererProps as Readonly<Record<string, unknown>>}
+				onValueChange={(next) => context.setValue(name, next)}
+			/>
 		</div>
 		{#if errors.length > 0}
 			<Stack id={errorId} gap="xs" shrink={false} class="text-sm text-destructive" role="alert">

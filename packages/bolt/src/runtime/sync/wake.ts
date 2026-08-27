@@ -17,8 +17,8 @@ import { Transport } from '#lib/runtime/facilities/services.js';
  * ## What travels, and what does not
  *
  * Only the names of the collections that changed. Not the rows, not the cursor, not the operation.
- * A replica that receives this asks for the changes through `sync.diff` exactly as it would have on
- * a poll, so the log stays the single ordered source of what happened. Putting the rows in the frame
+ * A replica that receives this drains its partition through `sync.pull`, so the outbox stays the
+ * single ordered source of what happened. Putting the rows in the frame
  * would make this a second delivery path with weaker guarantees than the one beside it — no cursor,
  * no ordering, no replay — and every divergence between them would be invisible.
  *

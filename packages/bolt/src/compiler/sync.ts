@@ -4,11 +4,12 @@ import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promise
 import { isBuiltin } from 'node:module';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { build, type Plugin } from 'vite';
+import { build, esbuildVersion, type Plugin, rolldownVersion, version as viteVersion } from 'vite';
 import { Effect, Schema } from 'effect';
 import { type AssetIndexEntry, PROTOCOL_VERSION } from '@norbital-ai/bolt-protocol';
 import {
 	describeSkill,
+	type MutationCompatibilityDefinition,
 	type RelationDefinition,
 	type SkillDeclaration,
 	type WorkspaceMigrationEntry
@@ -19,6 +20,7 @@ import {
 	ARTIFACT_ASSET_INDEX_FILE,
 	ARTIFACT_BUNDLE_FILE,
 	ARTIFACT_DIRECTORY,
+	ARTIFACT_RELEASE_FILE,
 	BOLT_TENANT_REQUEST_PREFIX,
 	BOLT_TENANT_STATIC_PREFIX,
 	SERVER_ASSET_DECLARATION_FILE_NAME,
@@ -33,6 +35,14 @@ import {
 	extractRelationships,
 	type CollectionCatalogEntry
 } from './model-fields.js';
+import {
+	type EmittedServerChunk,
+	readLockfileProvenance,
+	readSchemaProvenance,
+	serverModulePartition,
+	writeTenantRelease
+} from './artifact-release.js';
+import { mutationCompatibilityArtifact } from './mutation-schema-compatibility.js';
 
 const boltPackageRoot = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -63,6 +73,144 @@ export const tenantRuntimeBoundary = (): Plugin => ({
 	}
 });
 
+type ParsedModuleNode = Readonly<{
+	type: string;
+	start: number;
+	end: number;
+	[key: string]: unknown;
+}>;
+
+/**
+ * Lowers every statically named server `import()` to an asynchronous facade over a static import.
+ *
+ * Tenant isolates load a complete, content-addressed ESM graph and deliberately expose no module
+ * loader. A literal dynamic import still names a compiler-known module, so making that edge eager
+ * preserves its namespace and Promise-shaped result while producing the static graph the target
+ * executes. Computed imports remain untouched here because their source module may be tree-shaken;
+ * the emitted-graph capture rejects any that actually survive.
+ */
+const closeServerModuleGraph = (): Plugin => ({
+	name: '@norbital-ai/bolt:close-server-module-graph',
+	transform(code) {
+		if (!code.includes('import(')) return null;
+		const imports: Array<{
+			readonly start: number;
+			readonly end: number;
+			readonly source: string;
+		}> = [];
+		const visit = (value: unknown): void => {
+			if (Array.isArray(value)) {
+				for (const child of value) visit(child);
+				return;
+			}
+			if (value === null || typeof value !== 'object') return;
+			const node = value as Partial<ParsedModuleNode>;
+			if (node.type === 'ImportExpression') {
+				const source = node.source as
+					{ readonly type?: string; readonly value?: unknown } | undefined;
+				if (
+					typeof node.start !== 'number' ||
+					typeof node.end !== 'number' ||
+					source?.type !== 'Literal' ||
+					typeof source.value !== 'string'
+				)
+					return;
+				imports.push({ start: node.start, end: node.end, source: source.value });
+				return;
+			}
+			for (const child of Object.values(value)) visit(child);
+		};
+		visit(this.parse(code));
+		if (imports.length === 0) return null;
+
+		const bindings = new Map<string, string>();
+		for (const { source } of imports) {
+			if (bindings.has(source)) continue;
+			let suffix = bindings.size;
+			let binding = `__bolt_static_import_${suffix}`;
+			while (code.includes(binding)) {
+				suffix += 1;
+				binding = `__bolt_static_import_${suffix}`;
+			}
+			bindings.set(source, binding);
+		}
+		let transformed = code;
+		for (const entry of imports.toSorted((left, right) => right.start - left.start)) {
+			const binding = bindings.get(entry.source);
+			if (binding === undefined) this.error(`Missing static import binding for ${entry.source}`);
+			transformed = `${transformed.slice(0, entry.start)}Promise.resolve(${binding})${transformed.slice(entry.end)}`;
+		}
+		const declarations = [...bindings]
+			.map(([source, binding]) => `import * as ${binding} from ${JSON.stringify(source)};`)
+			.join('\n');
+		return { code: `${declarations}\n${transformed}`, map: null };
+	}
+});
+
+/** Captures Rollup's exact server ESM graph and its compiler-known module provenance. */
+const captureServerCodeGraph = (
+	partitionInput: Parameters<typeof serverModulePartition>[1],
+	receive: (chunks: ReadonlyArray<EmittedServerChunk>) => void
+): Plugin => ({
+	name: '@norbital-ai/bolt:server-code-graph',
+	generateBundle(_options, bundle) {
+		const encoder = new TextEncoder();
+		const containsDynamicImport = (code: string): boolean => {
+			let found = false;
+			const visit = (value: unknown): void => {
+				if (found) return;
+				if (Array.isArray(value)) {
+					for (const child of value) visit(child);
+					return;
+				}
+				if (value === null || typeof value !== 'object') return;
+				const node = value as Partial<ParsedModuleNode>;
+				if (node.type === 'ImportExpression') {
+					found = true;
+					return;
+				}
+				for (const child of Object.values(value)) visit(child);
+			};
+			visit(this.parse(code));
+			return found;
+		};
+		receive(
+			Object.values(bundle).flatMap((output) => {
+				if (output.type !== 'chunk') return [];
+				if (output.dynamicImports.length > 0 || containsDynamicImport(output.code)) {
+					this.error(
+						`Tenant server module ${output.fileName} retains dynamic imports${output.dynamicImports.length === 0 ? '' : ` (${output.dynamicImports.join(', ')})`}. ` +
+							'Isolate modules support only a closed static graph; import dependencies statically or move lazy loading behind a facility.'
+					);
+				}
+				const roles = new Set(
+					Object.keys(output.modules).flatMap((id) => {
+						const partition = serverModulePartition(id, partitionInput);
+						return partition === undefined ? [] : [partition.role];
+					})
+				);
+				if (roles.size > 1) {
+					this.error(
+						`Tenant server module ${output.fileName} mixes compiler provenance roles: ${[...roles].toSorted().join(', ')}`
+					);
+				}
+				const role = roles.values().next().value ?? (output.isEntry ? 'tenant' : undefined);
+				if (role === undefined)
+					this.error(`Tenant server module ${output.fileName} has no compiler provenance role`);
+				return [
+					{
+						path: output.fileName,
+						role,
+						imports: output.imports,
+						dynamicImports: output.dynamicImports,
+						bytes: encoder.encode(output.code)
+					} satisfies EmittedServerChunk
+				];
+			})
+		);
+	}
+});
+
 /** Tests file presence without blocking the compiler's Effect-owned workflow. */
 const fileExists = (path: string): Effect.Effect<boolean> =>
 	Effect.tryPromise(() => access(path)).pipe(
@@ -87,6 +235,9 @@ export type SyncResult = Readonly<{
 	readonly automationNames: ReadonlyArray<string>;
 	readonly mcpServerNames: ReadonlyArray<string>;
 	readonly artifactPath: string;
+	readonly releasePath: string;
+	/** SHA-256 of the canonical complete `TenantRelease`, never only the code graph digest. */
+	readonly releaseId: string;
 	/** What the host serves over HTTP, and what only the guest may reach — counted separately
 	 * because a file moving from one to the other is the change most worth noticing. */
 	readonly browserAssetCount: number;
@@ -287,6 +438,9 @@ type RenderArtifactInput = Readonly<{
 	readonly assetIndex: ArtifactAssetIndex;
 	readonly customTypeDefinitions: ReadonlyArray<string>;
 	readonly migrations: ReadonlyArray<WorkspaceMigrationEntry>;
+	/** Compiler-generated compatibility adapters and the fingerprint they were generated from. */
+	readonly mutationCompatibility: MutationCompatibilityDefinition;
+	readonly schemaFingerprint: string;
 	/** The workspace's `+integrations.ts` files, one per collection directory that declares one. */
 	readonly integrationFiles?: ReadonlyArray<string>;
 	/** `+env.ts` at the workspace root, when the workspace declares an environment. */
@@ -515,7 +669,7 @@ class WorkspaceCompiler {
 
 	/** Owns render types behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderTypes = (relations: ReadonlyArray<RelationDefinition> = []): string =>
-		`import type { AfterHookApi as CollectionAfterHookApi, BeforeApi, HookApi as CollectionHookApi, SchemaQueryConfig, SchemaQueryRow } from '@norbital-ai/bolt/authoring';\nimport type { InputValuesForTables, MutationInsertFor, TablesForModels } from '@norbital-ai/bolt/authoring/internals';\nimport type { Models } from './models.js';\n\ntype WorkspaceTables = TablesForModels<Models>;\ntype WorkspaceRelations = ${WorkspaceCompiler.renderRelationTypes(relations)};\nexport type WorkspaceSchema = { readonly tables: WorkspaceTables; readonly relations: WorkspaceRelations; readonly inputs: InputValuesForTables<WorkspaceTables> };\nexport type Api = BeforeApi<WorkspaceSchema>;\nexport type HookApi = CollectionHookApi<WorkspaceSchema>;\nexport type AfterHookApi = CollectionAfterHookApi<WorkspaceSchema>;\nexport type WorkspaceRow<N extends keyof WorkspaceSchema['tables'] & string, Cfg extends SchemaQueryConfig<WorkspaceSchema, N> | undefined = undefined> = SchemaQueryRow<WorkspaceSchema, N, Cfg>;\nexport type WorkspaceInsert<N extends keyof WorkspaceSchema['tables'] & string> = MutationInsertFor<WorkspaceSchema, N>;\n`;
+		`import type { Api as AuthoringApi, SchemaQueryConfig, SchemaQueryRow } from '@norbital-ai/bolt/authoring';\nimport type { TablesForModels } from '@norbital-ai/bolt/authoring/internals';\nimport type { Models } from './models.js';\n\ntype WorkspaceTables = TablesForModels<Models>;\ntype WorkspaceRelations = ${WorkspaceCompiler.renderRelationTypes(relations)};\nexport type WorkspaceSchema = { readonly tables: WorkspaceTables; readonly relations: WorkspaceRelations };\nexport type Api = AuthoringApi<WorkspaceSchema>;\nexport type WorkspaceRow<N extends keyof WorkspaceSchema['tables'] & string, Cfg extends SchemaQueryConfig<WorkspaceSchema, N> | undefined = undefined> = SchemaQueryRow<WorkspaceSchema, N, Cfg>;\n`;
 
 	/** Owns render custom augmentation behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderCustomAugmentation = (
@@ -545,7 +699,7 @@ class WorkspaceCompiler {
 
 	/** Owns render collection types behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderCollectionTypes = (name: string): string =>
-		`import type { CollectionHooks, CollectionIntegrations, CollectionPipelines } from '@norbital-ai/bolt/authoring';\nimport type { WorkspaceRow, WorkspaceSchema } from '../../../generated/types.js';\nexport type { AfterHookApi, Api, HookApi, WorkspaceRow } from '../../../generated/types.js';\nexport type Row = WorkspaceRow<${JSON.stringify(name)}>;\nexport type RepresentationProps = { readonly record: Row | null; close(): void };\nexport type Hooks<Prepared = void> = CollectionHooks<WorkspaceSchema, ${JSON.stringify(name)}, Prepared>;\nexport type Pipelines = CollectionPipelines<WorkspaceSchema, ${JSON.stringify(name)}>;\nexport type Integrations = CollectionIntegrations<WorkspaceSchema, ${JSON.stringify(name)}>;\n`;
+		`import type { CollectionHooks, CollectionIntegrations, CollectionPipelines } from '@norbital-ai/bolt/authoring';\nimport type { WorkspaceRow, WorkspaceSchema } from '../../../generated/types.js';\nexport type { Api, WorkspaceRow } from '../../../generated/types.js';\nexport type Row = WorkspaceRow<${JSON.stringify(name)}>;\nexport type RepresentationProps = { readonly record: Row | null; close(): void };\nexport type Hooks<Prepared = void> = CollectionHooks<WorkspaceSchema, ${JSON.stringify(name)}, Prepared>;\nexport type Pipelines = CollectionPipelines<WorkspaceSchema, ${JSON.stringify(name)}>;\nexport type Integrations = CollectionIntegrations<WorkspaceSchema, ${JSON.stringify(name)}>;\n`;
 
 	/** Owns render relationship types behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderRelationshipTypes = (): string =>
@@ -595,21 +749,14 @@ class WorkspaceCompiler {
 
 	/** Owns render client runtime declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderClientRuntimeDeclaration = (): string =>
-		`declare module 'virtual:bolt/client-runtime' {\n\timport type { CollectionCatalog, ErasedAutomationClientApi, SystemClientApi, WorkspaceClientRuntime } from '@norbital-ai/bolt/client-runtime';\n\texport function createBrowserWorkspaceRuntime(): WorkspaceClientRuntime;\n\texport function createWorkspaceApiProxy(runtime: WorkspaceClientRuntime, catalog?: CollectionCatalog): { readonly db: object; readonly automations: ErasedAutomationClientApi; readonly invoke: object; readonly collections: object; readonly system: SystemClientApi };\n\texport function startLocalReplica(runtime: WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }): Promise<unknown>;\n\texport function switchWorkspaceAccessScope(runtime: WorkspaceClientRuntime, accessScope: string): void;\n}\n`;
+		`declare module 'virtual:bolt/client-runtime' {\n\timport type { CollectionCatalog, ErasedAutomationClientApi, SystemClientApi, WorkspaceClientRuntime } from '@norbital-ai/bolt/client-runtime';\n\texport function createBrowserWorkspaceRuntime(): WorkspaceClientRuntime;\n\texport function createWorkspaceApiProxy(runtime: WorkspaceClientRuntime, catalog?: CollectionCatalog): { readonly db: object; readonly automations: ErasedAutomationClientApi; readonly invoke: object; readonly collections: object; readonly system: SystemClientApi };\n\texport function createWorkspaceBootstrapController(runtime: WorkspaceClientRuntime, accessScope: string): import('@norbital-ai/bolt/client').WorkspaceBootstrapController;\n\texport function startLocalReplica(runtime: WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }): Promise<unknown>;\n\texport function switchWorkspaceAccessScope(runtime: WorkspaceClientRuntime, accessScope: string): void;\n}\n`;
 
 	/** Owns render client declaration behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
 	static readonly renderClientDeclaration = (
-		hooks: ReadonlyArray<string>,
 		functions: ReadonlyArray<string>,
 		root: string,
 		automations: ReadonlyArray<string> = []
 	): string => {
-		const hookEntries = hooks
-			.map(
-				(path) =>
-					`\treadonly ${JSON.stringify(basename(dirname(path)))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
-			)
-			.join('\n');
 		const invokeEntries = functions
 			.map(
 				(path) =>
@@ -622,7 +769,7 @@ class WorkspaceCompiler {
 					`\treadonly ${JSON.stringify(basename(path).slice(1, -3))}: typeof import(${JSON.stringify(WorkspaceCompiler.sourceImport(root, path))}).default;`
 			)
 			.join('\n');
-		return `import type { CollectionRegistryFor, InvokeClientApi, PlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { AutomationClientApi, CollectionMutationValues, SystemClientApi } from '@norbital-ai/bolt/client-runtime';\nimport type { CollectionClient } from '@norbital-ai/std/collection';\nimport type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';\nimport type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';\nimport type { Component } from 'svelte';\nimport type { WorkspaceSchema } from './types.js';\ntype CollectionHooks = {\n${hookEntries}\n};\ntype AutomationRegistry = {\n${automationEntries}\n};\ntype MutationRegistry<S extends { readonly tables: Readonly<Record<string, { readonly $inferSelect: object; readonly $inferInsert: object }>>; readonly relations: Readonly<Record<string, unknown>> }, Registry> = { readonly [N in keyof Registry]: Registry[N] & { readonly mutation: CollectionMutationValues<S, N & keyof S['tables'] & string> } };\ntype TenantCollections = MutationRegistry<WorkspaceSchema, CollectionRegistryFor<WorkspaceSchema, CollectionHooks>>;\ntype PlatformCollections = MutationRegistry<PlatformSchema, CollectionRegistryFor<PlatformSchema>>;\ntype Collections = TenantCollections & PlatformCollections;\ntype TenantDatabase = { readonly [N in keyof TenantCollections]: CollectionClient<TenantCollections>['db'][N] };\ntype PlatformDatabase = { readonly [N in Exclude<keyof PlatformCollections, keyof TenantCollections>]: CollectionClient<PlatformCollections>['db'][N] };\ntype Invoke = {\n${invokeEntries}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceMutation<N extends keyof TenantCollections> = TenantCollections[N]['mutation'];\nexport type Client = Omit<CollectionClient<Collections>, 'db'> & { readonly db: TenantDatabase & PlatformDatabase; readonly automations: AutomationClientApi<AutomationRegistry>; readonly invoke: InvokeClientApi<Invoke>; readonly system: SystemClientApi };\nexport declare const client: Client;\nexport declare const runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime;\nexport declare const changeAccessScope: (accessScope: string) => void;\nexport declare const startLocalReplica: (runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }) => Promise<{ readonly stop: () => void }>;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<Component>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<CustomTypeRendererMap[string]>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string }>>;\nexport declare const policyNames: ReadonlyArray<string>;\n`;
+		return `import type { CollectionRegistryFor, InvokeClientApi, PlatformSchema } from '@norbital-ai/bolt/authoring/internals';\nimport type { AutomationClientApi, SystemClientApi } from '@norbital-ai/bolt/client-runtime';\nimport type { CollectionClient } from '@norbital-ai/std/collection';\nimport type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';\nimport type { CustomTypeRenderer } from '@norbital-ai/ui/data-renderer';\nimport type { Component } from 'svelte';\nimport type { WorkspaceSchema } from './types.js';\ntype AutomationRegistry = {\n${automationEntries}\n};\ntype TenantCollections = CollectionRegistryFor<WorkspaceSchema>;\ntype PlatformCollections = CollectionRegistryFor<PlatformSchema>;\ntype Collections = TenantCollections & PlatformCollections;\ntype TenantDatabase = { readonly [N in keyof TenantCollections]: CollectionClient<TenantCollections>['db'][N] };\ntype PlatformDatabase = { readonly [N in Exclude<keyof PlatformCollections, keyof TenantCollections>]: CollectionClient<PlatformCollections>['db'][N] };\ntype Invoke = {\n${invokeEntries}\n};\nexport type { WorkspaceRow } from './types.js';\nexport type WorkspaceCollections = Collections;\nexport type WorkspaceMutation<N extends keyof TenantCollections> = TenantCollections[N]['mutation'];\nexport type Client = Omit<CollectionClient<Collections>, 'db'> & { readonly db: TenantDatabase & PlatformDatabase; readonly automations: AutomationClientApi<AutomationRegistry>; readonly invoke: InvokeClientApi<Invoke>; readonly system: SystemClientApi };\nexport declare const client: Client;\nexport declare const runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime;\nexport declare const changeAccessScope: (accessScope: string) => void;\nexport declare const startLocalReplica: (runtime: import('@norbital-ai/bolt/client-runtime').WorkspaceClientRuntime, open?: unknown, options?: { readonly accessScope?: string }) => Promise<{ readonly stop: () => void }>;\nexport declare const appLoaders: Readonly<Record<string, () => Promise<Component>>>;\nexport declare const representationLoaders: Readonly<Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>>>;\nexport declare const customTypeRendererLoaders: Readonly<Record<string, () => Promise<CustomTypeRenderer>>>;\nexport declare const appGroups: Readonly<Record<string, { readonly defaultChild?: string; readonly label?: string; readonly description?: string; readonly icon?: string }>>;\nexport declare const appMeta: Readonly<Record<string, { readonly label?: string; readonly icon?: string; readonly description?: string; readonly banner?: string; readonly thumbnail?: string }>>;\nexport declare const policyNames: ReadonlyArray<string>;\n`;
 	};
 
 	/** Owns render client runtime behavior at the compiler boundary so validation and typed semantics stay consistent for every caller. */
@@ -671,7 +818,7 @@ class WorkspaceCompiler {
 					})}`
 			)
 			.join(',\n');
-		return `import './app.css';\n// The workspace stylesheet rides this module, not the entry.\n//\n// Vite links an entry's CSS from the HTML document it generates, and this build generates no\n// document — so a sheet imported by the entry is emitted beside it and never loaded. A sheet\n// imported by a *dynamically* imported chunk is different: Vite's own preload helper inserts the\n// link before the chunk executes. This module is only ever reached through \`import('$bolt/client')\`\n// inside \`mountWorkspace\`, so the supported mechanism applies and nothing has to rewrite chunk\n// text to make the workspace render styled.\nimport { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startLocalReplica, switchWorkspaceAccessScope } from 'virtual:bolt/client-runtime';\nimport { collectionCatalog } from './collections.js';\nimport { platformCustomTypeRenderers } from '@norbital-ai/ui/data-renderer';\nconst runtime = createBrowserWorkspaceRuntime();\nexport const client = createWorkspaceApiProxy(runtime, collectionCatalog);\n// The replica is started by whoever owns its lifetime, never by importing this module.\n//\n// It used to start here, at module scope. But this module is also what a host imports to read\n// \`appLoaders\` — so merely reaching for the app registry opened a database, and it opened one\n// before anybody had signed in: \`sync.provisioning\` answered 401 and the replica gave up on a\n// workspace it would have been allowed to read a moment later. A host that then started its own\n// replica after sign-in got a second engine for the same scope, because starting one is not\n// idempotent.\n//\n// \`startLocalReplica\` is re-exported instead, so the owner starts it once it has a session and can\n// stop it on teardown. PGlite is several megabytes of WebAssembly, so bringing it up after the page\n// is interactive — rather than before first paint — remains the point.\nexport const changeAccessScope = (accessScope) => switchWorkspaceAccessScope(runtime, accessScope);\nexport { runtime, startLocalReplica };\nexport const appLoaders = {\n${loaders}\n};\nexport const representationLoaders = {\n${representationLoaders}\n};\n// Platform datatypes' renderers are injected, not discovered: the same map a workspace's own\n// \`src/datatypes/<name>/+renderer.svelte\` files land in, keyed by the kind the catalog emits. A\n// tenant datatype cannot reach here — the compiler rejects a platform-owned name before this runs.\nexport const customTypeRendererLoaders = {\n...platformCustomTypeRenderers,\n${customRendererLoaders}\n};\nexport const appGroups = {\n${groupEntries}\n};\nexport const appMeta = ${JSON.stringify(appMeta)};\nexport const policyNames = ${JSON.stringify(policies)};\n`;
+		return `import './app.css';\n// The workspace stylesheet rides this module, not the entry.\n//\n// Vite links an entry's CSS from the HTML document it generates, and this build generates no\n// document — so a sheet imported by the entry is emitted beside it and never loaded. A sheet\n// imported by a *dynamically* imported chunk is different: Vite's own preload helper inserts the\n// link before the chunk executes. This module is only ever reached through \`import('$bolt/client')\`\n// inside \`mountWorkspace\`, so the supported mechanism applies and nothing has to rewrite chunk\n// text to make the workspace render styled.\nimport { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startLocalReplica, switchWorkspaceAccessScope } from 'virtual:bolt/client-runtime';\nimport { collectionCatalog } from './collections.js';\nconst runtime = createBrowserWorkspaceRuntime();\nexport const client = createWorkspaceApiProxy(runtime, collectionCatalog);\n// The replica is started by whoever owns its lifetime, never by importing this module.\n//\n// It used to start here, at module scope. But this module is also what a host imports to read\n// \`appLoaders\` — so merely reaching for the app registry opened a database, and it opened one\n// before anybody had signed in: \`sync.provisioning\` answered 401 and the replica gave up on a\n// workspace it would have been allowed to read a moment later. A host that then started its own\n// replica after sign-in got a second engine for the same scope, because starting one is not\n// idempotent.\n//\n// \`startLocalReplica\` is re-exported instead, so the owner starts it once it has a session and can\n// stop it on teardown. PGlite is several megabytes of WebAssembly, so bringing it up after the page\n// is interactive — rather than before first paint — remains the point.\nexport const changeAccessScope = (accessScope) => switchWorkspaceAccessScope(runtime, accessScope);\nexport { runtime, startLocalReplica };\nexport const appLoaders = {\n${loaders}\n};\nexport const representationLoaders = {\n${representationLoaders}\n};\nexport const customTypeRendererLoaders = {\n${customRendererLoaders}\n};\nexport const appGroups = {\n${groupEntries}\n};\nexport const appMeta = ${JSON.stringify(appMeta)};\nexport const policyNames = ${JSON.stringify(policies)};\n`;
 	};
 
 	/**
@@ -982,6 +1129,8 @@ class WorkspaceCompiler {
 			customTypeDefinitions,
 			environmentFile,
 			migrations,
+			mutationCompatibility,
+			schemaFingerprint,
 			integrationFiles = [],
 			anonymousLimitFile,
 			teamsFile
@@ -991,22 +1140,6 @@ class WorkspaceCompiler {
 		const tools = toolFiles.map((path) => basename(path).slice(1, -3));
 		const envoys = envoyFiles.map((path) => basename(path).slice(1, -3));
 		const mcpServers = mcpFiles.map((path) => basename(path).slice(1, -3));
-		const fingerprint = createHash('sha256')
-			.update(
-				JSON.stringify({
-					collections: collections.map((collection) => collection.name),
-					apps: apps.map((app) => app.name),
-					policies: policyNames,
-					functions: functionNames,
-					tools,
-					envoys,
-					automations,
-					mcpServers,
-					skills,
-					prompt
-				})
-			)
-			.digest('hex');
 		const authoredTools = tools.map((name) => ({
 			name,
 			description: `Workspace tool ${name}`,
@@ -1070,7 +1203,8 @@ class WorkspaceCompiler {
 			// its own schema history: `bolt migrate` wrote entries into `.norbital/migrations`, `sync`
 			// embedded `.norbital/dist` and `assets` and nothing else, and no code path on any host ever
 			// opened one — so every ALTER the lineage held stayed on the authoring machine's disk.
-			migrations
+			migrations,
+			mutationCompatibility
 		};
 		const manifest = {
 			// The version the artifact speaks, and the same constant the host validates it against —
@@ -1079,7 +1213,7 @@ class WorkspaceCompiler {
 			protocolVersion: PROTOCOL_VERSION,
 			artifactId: `${metadata.name}:local`,
 			artifactVersion: metadata.version,
-			schemaFingerprint: `sha256:${fingerprint}`,
+			schemaFingerprint,
 			requiredFacilities: manifestFacilities
 		};
 		const modelImports = collections
@@ -1501,7 +1635,7 @@ export const discoverAuthoredSource = (workspaceRoot = process.cwd()) => {
 		/**
 		 * `src/+env.ts` — the workspace's declared relationship with its outside environment.
 		 *
-		 * It is a compiler-owned source declaration like `+agents.md` and `+seed.ts`, so it belongs under
+		 * It is a compiler-owned source declaration like `+agents.md`, so it belongs under
 		 * `src/`. Looking at the repository root made the compiler miss the tracked declaration in every
 		 * template and then reject it as an unknown authored path.
 		 */
@@ -1756,6 +1890,25 @@ const WorkspaceSynchronization = {
 				skillNames,
 				groupFiles
 			} = yield* discoverAuthoredSource(workspaceRoot);
+			const relationshipSource = yield* Effect.tryPromise(() =>
+				readFile(join(root, 'src', 'collections', '+relationship.ts'), 'utf8')
+			).pipe(Effect.catch(() => Effect.succeed<string | undefined>(undefined)));
+			const relations =
+				relationshipSource === undefined ? [] : extractRelationships(relationshipSource);
+			/**
+			 * Validate author-owned lineage before this transaction writes generated output or starts
+			 * either Vite build. Importing the Drizzle diff lazily keeps the ordinary CLI startup small,
+			 * while the read-only diff makes `sync` fail before a stale tree can replace a good artifact.
+			 */
+			const { importWorkspaceModels, validateWorkspaceMigrationLineage } = yield* Effect.promise(
+				() => import('./schema-migrations.js')
+			);
+			const authoredModels = yield* importWorkspaceModels(models);
+			const { mutationCompatibilityLedger } = yield* validateWorkspaceMigrationLineage({
+				workspaceRoot: root,
+				models: authoredModels,
+				relations
+			});
 			const skills = yield* Effect.all(
 				skillFiles.map((path) =>
 					Effect.tryPromise(() => readFile(path, 'utf8')).pipe(
@@ -1765,14 +1918,10 @@ const WorkspaceSynchronization = {
 				{ concurrency: 'unbounded' }
 			);
 			const metadata = yield* compiler.readPackageMetadata(root);
+			const compilerMetadata = yield* compiler.readPackageMetadata(boltPackageRoot);
 			const i18nMessages = yield* compiler.readI18nMessages(root);
 			const generated = join(root, '.norbital', 'generated');
 			const types = join(root, '.norbital', 'types');
-			const relationshipSource = yield* Effect.tryPromise(() =>
-				readFile(join(root, 'src', 'collections', '+relationship.ts'), 'utf8')
-			).pipe(Effect.catch(() => Effect.succeed<string | undefined>(undefined)));
-			const relations =
-				relationshipSource === undefined ? [] : extractRelationships(relationshipSource);
 			const collectionCatalog = yield* Effect.all(
 				models.map((path) =>
 					Effect.map(
@@ -1882,7 +2031,7 @@ const WorkspaceSynchronization = {
 					compiler.write(join(generated, 'types.ts'), compiler.renderTypes(relations)),
 					compiler.write(
 						join(generated, 'client.d.ts'),
-						compiler.renderClientDeclaration(hookFiles, functionFiles, root, automationFiles)
+						compiler.renderClientDeclaration(functionFiles, root, automationFiles)
 					),
 					compiler.write(
 						join(generated, 'client.js'),
@@ -1986,6 +2135,11 @@ const WorkspaceSynchronization = {
 			const artifactDirectory = join(root, ARTIFACT_DIRECTORY);
 			const artifactEntry = join(artifactDirectory, 'bundle-entry.mjs');
 			const artifactPath = join(artifactDirectory, ARTIFACT_BUNDLE_FILE);
+			// A prior authority must not remain visible while its object directory is being rebuilt.
+			// Absence means "not publishable yet"; a stale manifest naming deleted objects is ambiguous.
+			yield* Effect.tryPromise(() =>
+				rm(join(artifactDirectory, ARTIFACT_RELEASE_FILE), { force: true })
+			);
 			// The authored URL keys assets by template name, not by npm scope: `@template/hr-payroll`
 			// is served under `hr-payroll`.
 			const assetIndex = yield* compiler.assetIndex(
@@ -2037,6 +2191,11 @@ const WorkspaceSynchronization = {
 				),
 				{ concurrency: 'unbounded' }
 			);
+			const migrations = yield* readWorkspaceMigrations(root);
+			const mutationCompatibility = mutationCompatibilityArtifact(
+				mutationCompatibilityLedger,
+				Date.now()
+			);
 			yield* compiler.write(
 				artifactEntry,
 				compiler.renderArtifact({
@@ -2058,7 +2217,9 @@ const WorkspaceSynchronization = {
 					assetIndex,
 					customTypeDefinitions: definitions,
 					environmentFile,
-					migrations: yield* readWorkspaceMigrations(root),
+					migrations,
+					mutationCompatibility,
+					schemaFingerprint: mutationCompatibilityLedger.currentSchemaFingerprint,
 					integrationFiles,
 					anonymousLimitFile,
 					teamsFile
@@ -2084,11 +2245,29 @@ const WorkspaceSynchronization = {
 				] as const,
 				{ concurrency: 'unbounded' }
 			);
+			const partitionInput = {
+				workspaceRoot: root,
+				platformPackagesRoot: dirname(boltPackageRoot),
+				artifactEntry
+			};
+			let serverCodeChunks: ReadonlyArray<EmittedServerChunk> = [];
+			yield* Effect.tryPromise(() =>
+				Promise.all([
+					rm(artifactPath, { force: true }),
+					rm(join(artifactDirectory, 'code'), { recursive: true, force: true })
+				])
+			);
 			yield* Effect.promise(() =>
 				build({
 					root,
 					configFile: false,
-					plugins: [tenantRuntimeBoundary()],
+					plugins: [
+						tenantRuntimeBoundary(),
+						closeServerModuleGraph(),
+						captureServerCodeGraph(partitionInput, (chunks) => {
+							serverCodeChunks = chunks;
+						})
+					],
 					/**
 					 * Node's `global`, for dependencies that still reach for it.
 					 *
@@ -2142,9 +2321,72 @@ const WorkspaceSynchronization = {
 						minify: false,
 						rollupOptions: {
 							input: artifactEntry,
-							preserveEntrySignatures: 'strict',
-							output: { entryFileNames: 'bundle.mjs', inlineDynamicImports: true }
+							// Manual package partitions must be allowed to extend the entry chunk, but the
+							// host-facing exports still have to survive. Rolldown requires this (or false)
+							// when dependency capture is non-recursive; false would let Vite discard the
+							// artifact's protocolVersion/manifest/dispatch/activate contract.
+							preserveEntrySignatures: 'allow-extension',
+							output: {
+								// Non-recursive manual partitions otherwise may reorder module execution across
+								// chunks. This is Rolldown's paired safety contract for the split below.
+								strictExecutionOrder: true,
+								entryFileNames: 'bundle.mjs',
+								// Logical paths stay stable while the CAS digest carries content identity. A
+								// content hash in the import specifier would rewrite every importer after a
+								// dependency-only change and defeat chunk-level upload deduplication.
+								chunkFileNames: 'code/[name].mjs',
+								codeSplitting: {
+									includeDependenciesRecursively: false,
+									groups: [
+										{
+											// A dynamic name creates one deterministic package partition for each
+											// dependency while leaving the entry facade at `bundle.mjs`.
+											name: (id) => serverModulePartition(id, partitionInput)?.name ?? null
+										}
+									]
+								}
+							}
 						}
+					}
+				})
+			);
+			if (serverCodeChunks.length === 0)
+				return yield* Effect.fail(new Error('Server build emitted no executable code graph'));
+			const lockfile = yield* Effect.tryPromise(() => readLockfileProvenance(root));
+			const schema = yield* Effect.tryPromise(() =>
+				readSchemaProvenance(root, migrations, {
+					collections: collectionDescriptors.map(({ name, sourcePath, fields }) => ({
+						name,
+						sourcePath,
+						fields
+					})),
+					relations
+				})
+			);
+			const builtRelease = yield* Effect.tryPromise(() =>
+				writeTenantRelease(artifactDirectory, {
+					protocolVersion: PROTOCOL_VERSION,
+					artifactId: `${metadata.name}:local`,
+					artifactVersion: metadata.version,
+					requiredFacilities:
+						mcpFiles.length === 0
+							? ['ai', 'database', 'tasks']
+							: ['ai', 'connector', 'database', 'tasks'],
+					assets: assetIndex,
+					schema: {
+						...schema,
+						fingerprint: mutationCompatibilityLedger.currentSchemaFingerprint
+					},
+					migrations,
+					code: { entrypoint: ARTIFACT_BUNDLE_FILE, chunks: serverCodeChunks },
+					lockfile,
+					toolchain: {
+						bolt: compilerMetadata.version,
+						esbuild: esbuildVersion,
+						node: process.versions.node,
+						protocol: String(PROTOCOL_VERSION),
+						rolldown: rolldownVersion,
+						vite: viteVersion
 					}
 				})
 			);
@@ -2157,6 +2399,8 @@ const WorkspaceSynchronization = {
 				automationNames,
 				mcpServerNames,
 				artifactPath,
+				releasePath: join(artifactDirectory, ARTIFACT_RELEASE_FILE),
+				releaseId: builtRelease.releaseId,
 				browserAssetCount: assetIndex.browser.length,
 				serverAssetCount: assetIndex.server.length
 			};

@@ -48,6 +48,8 @@ export type RowPredicate = Readonly<{
 	readonly reason: string;
 	readonly sql: string;
 	readonly parameters: ReadonlyArray<Schema.Json>;
+	/** Whether this row set is bound to the authenticated actor rather than only shared authority. */
+	readonly actorBound: boolean;
 	readonly fields?: ReadonlyArray<string> | undefined;
 	readonly authorization?: Schema.Json | undefined;
 	readonly approval?: Schema.Json | undefined;
@@ -63,7 +65,8 @@ export const unrestricted: RowPredicate = {
 	allowed: true,
 	reason: 'elevated',
 	sql: 'true',
-	parameters: []
+	parameters: [],
+	actorBound: false
 };
 
 /**
@@ -430,6 +433,19 @@ const resolveOwnerOperand = (value: unknown, subject: Identity.Subject): unknown
 	);
 };
 
+/**
+ * Actor-valued requestor operands prevent two members of the same authority holder from sharing a
+ * streamed partition. Team, tenant and administrator operands remain uniform inside their existing
+ * holder partition; id, email and the team-scope expansion carry the concrete actor into SQL.
+ */
+const isActorBoundWhere = (value: unknown): boolean => {
+	if (typeof value === 'string')
+		return /\$\{requestor\.(?:id|userId|email|team_scope_users)\}/u.test(value);
+	if (Array.isArray(value)) return value.some(isActorBoundWhere);
+	if (value === null || typeof value !== 'object') return false;
+	return Object.values(value).some(isActorBoundWhere);
+};
+
 /** Compiles trusted authored row scope into parameterized SQL while binding every identity value separately. */
 const compileWhereOwner = {
 	compile: (
@@ -563,22 +579,35 @@ const rowPredicate = (
 			[]
 	);
 	if (applicable.some(({ effect }) => effect === 'deny'))
-		return { allowed: false, reason: 'explicit deny', sql: 'false', parameters: [] };
+		return {
+			allowed: false,
+			reason: 'explicit deny',
+			sql: 'false',
+			parameters: [],
+			actorBound: false
+		};
 	if (grants.length === 0) {
 		const decision = decide(policies, subject, action, resource, held);
-		return { ...decision, sql: decision.allowed ? 'true' : 'false', parameters: [] };
+		return {
+			...decision,
+			sql: decision.allowed ? 'true' : 'false',
+			parameters: [],
+			actorBound: false
+		};
 	}
 	if (grants.length > 1) {
 		return {
 			allowed: false,
 			reason: `overlapping grants for ${action} ${resource}`,
 			sql: 'false',
-			parameters: []
+			parameters: [],
+			actorBound: false
 		};
 	}
 	const compiled = grants.map((grant) => ({
 		grant,
-		predicate: compileWhereOwner.compile(grant.where, subject)
+		predicate: compileWhereOwner.compile(grant.where, subject),
+		actorBound: isActorBoundWhere(grant.where)
 	}));
 	if (
 		compiled.some(({ predicate }) => predicate.sql === 'true' && predicate.parameters.length === 0)
@@ -591,6 +620,7 @@ const rowPredicate = (
 			reason: 'matching authored grant',
 			sql: 'true',
 			parameters: [],
+			actorBound: compiled.some(({ actorBound }) => actorBound),
 			fields: fields.length === 0 ? undefined : [...new Set(fields)],
 			authorization:
 				authorization === undefined
@@ -625,6 +655,7 @@ const rowPredicate = (
 		reason: 'matching authored grant',
 		sql,
 		parameters,
+		actorBound: compiled.some(({ actorBound }) => actorBound),
 		fields: fields.length === 0 ? undefined : [...new Set(fields)],
 		authorization:
 			authorization === undefined
@@ -784,7 +815,8 @@ export const layer = Layer.effect(
 			allowed: true,
 			reason: 'workspace administrator bypass',
 			sql: 'true',
-			parameters: []
+			parameters: [],
+			actorBound: false
 		});
 		const authorize = Effect.fn('AccessControl.authorize')(function* (
 			subject: Identity.Subject,
@@ -942,8 +974,15 @@ export const layer = Layer.effect(
 				);
 				if (!predicate.allowed) return {};
 				if (predicate.fields === undefined) return value;
+				// Replica rows are version-gated identities. A read field restriction may hide every
+				// authored field except those named by the grant, but it cannot remove the two system
+				// facts required to install and order an authoritative full-row update safely.
 				return Object.fromEntries(
-					Object.entries(value).filter(([field]) => predicate.fields?.includes(field))
+					Object.entries(value).filter(
+						([field]) =>
+							predicate.fields?.includes(field) ||
+							(action === 'read' && (field === 'id' || field === 'row_version'))
+					)
 				);
 			},
 			explain: (subject, action, resource) =>

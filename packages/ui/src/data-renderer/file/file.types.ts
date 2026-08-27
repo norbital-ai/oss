@@ -15,27 +15,12 @@ const FileRefSchema = Schema.Struct({
 });
 type FileRef = Schema.Schema.Type<typeof FileRefSchema>;
 
-const fileRefLegacySchema = Schema.Struct({
-	storage_key: Schema.NonEmptyString,
-	file_name: Schema.optionalKey(Schema.String),
-	file_size: Schema.optionalKey(Schema.Number),
-	mime_type: Schema.optionalKey(Schema.String)
-});
-const decodeFileRefLegacy = Schema.decodeUnknownResult(fileRefLegacySchema);
+const decodeFileRef = Schema.decodeUnknownResult(FileRefSchema);
 
-/**
- * The tolerant read of a stored file-column value: older uploads predate the column carrying its
- * own display facts, so missing ones fall back to the only stable identity a file has.
- */
+/** Reads a stored file-column value; anything that is not the full reference is not a file. */
 export function readFileRef(candidate: unknown): FileRef | null {
-	const decoded = decodeFileRefLegacy(candidate);
-	if (decoded._tag === 'Failure') return null;
-	return {
-		storage_key: decoded.success.storage_key,
-		file_name: decoded.success.file_name ?? decoded.success.storage_key,
-		file_size: decoded.success.file_size ?? 0,
-		mime_type: decoded.success.mime_type ?? 'application/octet-stream'
-	};
+	const decoded = decodeFileRef(candidate);
+	return decoded._tag === 'Failure' ? null : decoded.success;
 }
 
 /** Hydrates a stored reference without assuming anything about the host's public file route. */

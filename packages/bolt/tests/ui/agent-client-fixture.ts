@@ -36,7 +36,7 @@ const page = <T extends object>(current: T[]): CollectionPageQuery<T> => ({
 	nextCursor: null
 });
 
-const emptyOperations = <T extends CollectionType<object, object, object>>() =>
+const emptyOperations = <T extends CollectionType<object, object>>() =>
 	({
 		findMany: () => page<T['row']>([]),
 		findFirst: () => settledQuery<T['row'] | undefined>(undefined),
@@ -62,7 +62,7 @@ export const emptyAgentClient = (transport: BoltTransport): AgentRuntimeConfig['
 		)
 	};
 	return {
-			db: {
+		db: {
 			approval_request: emptyOperations<AgentCollections['approval_request']>(),
 			agent_mailbox: emptyOperations<AgentCollections['agent_mailbox']>(),
 			agent_run: emptyOperations<AgentCollections['agent_run']>(),

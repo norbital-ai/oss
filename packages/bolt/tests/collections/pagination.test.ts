@@ -131,21 +131,71 @@ const findMany = (input: Record<string, unknown>) =>
 		headers: { authorization: ['Bearer admin-token'] }
 	});
 
-type Page = Readonly<{ rows: ReadonlyArray<Record<string, unknown>>; nextCursor: string | null }>;
+const collectionRead = (command: string, input: Record<string, unknown>) =>
+	Invocation.cases.Command.make({
+		protocolVersion: PROTOCOL_VERSION,
+		id: InvocationId.make(`${command}-${JSON.stringify(input)}`),
+		scope: {
+			tenantId: TenantId.make('test-tenant'),
+			environment: EnvironmentName.make('development'),
+			releaseId: ReleaseId.make('local')
+		},
+		deadlineEpochMs: Date.now() + 30_000,
+		command,
+		input,
+		headers: { authorization: ['Bearer admin-token'] }
+	});
+
+type Page = Readonly<{
+	rows: ReadonlyArray<Record<string, unknown>>;
+	retainedRows: ReadonlyArray<Record<string, unknown>>;
+	baseRows: ReadonlyArray<Record<string, unknown>>;
+	relationshipRefs: ReadonlyArray<Record<string, unknown>>;
+	pageCursor: string | null;
+	nextCursor: string | null;
+	readCursor: Readonly<{ xid: number; sequence: number }>;
+}>;
 
 const page = async (harness: BoltTestRuntime, input: Record<string, unknown>): Promise<Page> => {
 	const response = await harness.runtime.runPromise(dispatchInvocation(findMany(input)));
 	const value = (response.value ?? {}) as Record<string, unknown>;
 	const rows = value['rows'];
+	const baseRows = value['baseRows'];
+	const relationshipRefs = value['relationshipRefs'];
+	const lookahead = value['lookahead'];
+	const pageCursor = value['pageCursor'];
 	const nextCursor = value['nextCursor'];
+	const readCursor = value['readCursor'];
 	// Asserted rather than defaulted. A response missing either field is the bug this file exists for,
 	// and a default would report it as a perfectly well-formed single last page.
-	if (!Array.isArray(rows) || !(nextCursor === null || typeof nextCursor === 'string')) {
+	if (
+		!Array.isArray(rows) ||
+		!Array.isArray(baseRows) ||
+		!Array.isArray(relationshipRefs) ||
+		typeof lookahead !== 'number' ||
+		lookahead < 0 ||
+		lookahead > rows.length ||
+		!(pageCursor === null || typeof pageCursor === 'string') ||
+		!(nextCursor === null || typeof nextCursor === 'string') ||
+		typeof readCursor !== 'object' ||
+		readCursor === null ||
+		typeof Reflect.get(readCursor, 'xid') !== 'number' ||
+		typeof Reflect.get(readCursor, 'sequence') !== 'number'
+	) {
 		throw new Error(
 			`collections.findMany did not answer a page: ${JSON.stringify(response.value)}`
 		);
 	}
-	return { rows: rows as ReadonlyArray<Record<string, unknown>>, nextCursor };
+	const retainedRows = rows as ReadonlyArray<Record<string, unknown>>;
+	return {
+		rows: retainedRows.slice(0, retainedRows.length - lookahead),
+		retainedRows,
+		baseRows: baseRows as ReadonlyArray<Record<string, unknown>>,
+		relationshipRefs: relationshipRefs as ReadonlyArray<Record<string, unknown>>,
+		pageCursor,
+		nextCursor,
+		readCursor: readCursor as Page['readCursor']
+	};
 };
 
 /** Walks every page the server offers, capped so a cursor that never advances fails as a loop. */
@@ -156,14 +206,102 @@ const walk = async (harness: BoltTestRuntime, input: Record<string, unknown>) =>
 	for (let turn = 0; turn < 20; turn += 1) {
 		const answer: Page = await page(harness, { ...input, ...(after === null ? {} : { after }) });
 		ids.push(...answer.rows.map((row) => String(row['id'])));
-		cursors.push(answer.nextCursor);
-		if (answer.nextCursor === null) return { ids, cursors, pages: turn + 1 };
-		after = answer.nextCursor;
+		cursors.push(answer.pageCursor);
+		if (answer.pageCursor === null) return { ids, cursors, pages: turn + 1 };
+		after = answer.pageCursor;
 	}
 	throw new Error(`pagination did not terminate: ${ids.join(',')}`);
 };
 
 describe('collection pagination', () => {
+	it('answers count with one SQL aggregate and proof facts, never row hydration', async () => {
+		harness = await makeBoltTestRuntime(people);
+		await seed(harness);
+		await session(harness);
+		harness.database.forget();
+
+		const response = await harness.runtime.runPromise(
+			dispatchInvocation(
+				collectionRead('collections.count', {
+					collection: 'people',
+					where: { team: { eq: 'Research' } }
+				})
+			)
+		);
+		const value = (response.value ?? {}) as Record<string, unknown>;
+		expect(value['count']).toBe(3);
+		expect(value['readCursor']).toEqual(
+			expect.objectContaining({ xid: expect.any(Number), sequence: expect.any(Number) })
+		);
+		expect(value['confirmedDependencies']).toEqual(['people']);
+		expect(value['dependencyGenerations']).toEqual(
+			expect.objectContaining({ people: expect.any(Number) })
+		);
+		expect(value['reproducibility']).toEqual(
+			expect.objectContaining({ _tag: 'ServerProof', reasons: expect.arrayContaining(['aggregate']) })
+		);
+		const reads = harness.database.statements.filter((statement) =>
+			/\bfrom\s+(?:"people"|people)(?:\s|$)/iu.test(statement)
+		);
+		expect(reads).toHaveLength(1);
+		expect(reads[0]).toMatch(/count\s*\(/iu);
+		expect(reads[0]).not.toMatch(/jsonb_agg|\blimit\b/iu);
+	});
+
+	it('groups the complete authorized set in SQL instead of projecting a 500-row page', async () => {
+		harness = await makeBoltTestRuntime(people);
+		await seed(harness);
+		await session(harness);
+		harness.database.forget();
+
+		const response = await harness.runtime.runPromise(
+			dispatchInvocation(
+				collectionRead('collections.findGrouped', {
+					collection: 'people',
+					group: { by: 'team', lanes: ['Engineering', 'Research'] },
+					orderBy: { name: 'asc' }
+				})
+			)
+		);
+		const value = (response.value ?? {}) as Record<string, unknown>;
+		const groups = value['groups'] as Record<string, Array<Record<string, unknown>>>;
+		expect(groups['Engineering']?.map(({ name }) => name)).toEqual(['Ada', 'Ada', 'Bea']);
+		expect(groups['Research']?.map(({ name }) => name)).toEqual(['Ada', 'Bea', 'Cy']);
+		expect(value['baseRows']).toHaveLength(6);
+		expect(value['reproducibility']).toEqual(
+			expect.objectContaining({ _tag: 'ServerProof', reasons: expect.arrayContaining(['grouped']) })
+		);
+		const reads = harness.database.statements.filter((statement) =>
+			/\bfrom\s+(?:"people"|people)(?:\s|$)/iu.test(statement)
+		);
+		expect(reads).toHaveLength(1);
+		expect(reads[0]).toMatch(/jsonb_agg\s*\(/iu);
+		expect(reads[0]).toMatch(/\blimit\b/iu);
+	});
+
+	it('stamps the page with a sync head sampled before the row query', async () => {
+		harness = await makeBoltTestRuntime(people);
+		await seed(harness);
+		await session(harness);
+		harness.database.forget();
+
+		const input = { collection: 'people', orderBy: { name: 'asc' }, limit: 2 };
+		const answer = await page(harness, input);
+		expect(answer.rows).toHaveLength(2);
+		expect(answer.readCursor.sequence).toBeGreaterThanOrEqual(0);
+
+		const expectedInvocationId = `page-${JSON.stringify(input)}`;
+		const headIndex = harness.database.calls.findIndex(
+			({ effectId }) => effectId.startsWith(`${expectedInvocationId}:page-position`)
+		);
+		const pageIndex = harness.database.statements.findIndex(
+			(sql, index) => index > headIndex && /\bfrom\s+(?:"people"|people)(?:\s|$)/iu.test(sql)
+		);
+		expect(headIndex).toBeGreaterThanOrEqual(0);
+		expect(pageIndex).toBeGreaterThan(headIndex);
+		expect(harness.database.statements[headIndex]).toContain('bolt_sync_outbox');
+	});
+
 	it('visits every row exactly once across pages of a non-unique sort column', async () => {
 		harness = await makeBoltTestRuntime(people);
 		await seed(harness);
@@ -211,7 +349,7 @@ describe('collection pagination', () => {
 		// wrong: it offers a next page that comes back empty, and the table keeps offering one forever.
 		const exact = await page(harness, { collection: 'people', orderBy: { name: 'asc' }, limit: 6 });
 		expect(exact.rows).toHaveLength(6);
-		expect(exact.nextCursor).toBeNull();
+		expect(exact.pageCursor).toBeNull();
 	});
 
 	it('pages the filtered set when a cursor is combined with a search term', async () => {
@@ -260,7 +398,7 @@ describe('collection pagination', () => {
 			orderBy: { name: 'asc' },
 			limit: 2
 		});
-		expect(ascending.nextCursor).not.toBeNull();
+		expect(ascending.pageCursor).not.toBeNull();
 		// The tuple was measured against `name asc`. Seeking with it under `name desc` would compare the
 		// right values with the wrong operator and quietly skip rows.
 		const outcome = await harness.runtime.runPromise(
@@ -269,7 +407,7 @@ describe('collection pagination', () => {
 					collection: 'people',
 					orderBy: { name: 'desc' },
 					limit: 2,
-					after: ascending.nextCursor
+					after: ascending.pageCursor
 				})
 			).pipe(Effect.result)
 		);

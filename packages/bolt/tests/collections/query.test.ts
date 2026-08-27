@@ -1,4 +1,4 @@
-import { Result } from 'effect';
+import { Effect, Result } from 'effect';
 import { describe, expect, it } from 'vitest';
 import { field } from '../../src/authoring/workspace-schema.js';
 import { compilePredicate, quoteIdentifier } from '../../src/runtime/collections/collections.js';
@@ -8,6 +8,10 @@ import {
 	renderOrderBy,
 	type WhereContext
 } from '../../src/runtime/collections/where.js';
+import {
+	compileCollectionCursorSeek,
+	encodeCollectionCursor
+} from '../../src/runtime/collections/cursor.js';
 
 /** Unwraps a where compilation the test expects to succeed. */
 const whereSql = (where: unknown, context: WhereContext) => {
@@ -74,7 +78,9 @@ describe('Collections query owner', () => {
 			{ name: { eq: 'Acme' }, approval_id: { isNull: true } },
 			context('companies')
 		);
-		expect(compiled.sql).toBe('"companies"."name" = $1 AND "companies"."approval_id" is null');
+		expect(compiled.sql).toBe(
+			'"companies"."name" collate "C" = $1 AND "companies"."approval_id" is null'
+		);
 		expect(compiled.parameters).toEqual(['Acme']);
 	});
 
@@ -106,7 +112,7 @@ describe('Collections query owner', () => {
 			context('employees')
 		);
 		expect(compiled.sql).toBe(
-			'exists (select 1 from "employments" where "employments"."employee_id" = "employees"."id" AND ("employments"."approval_id" is null AND "employments"."company_id" = $1))'
+			'exists (select 1 from "employments" where "employments"."employee_id" = "employees"."id" AND ("employments"."approval_id" is null AND "employments"."company_id" collate "C" = $1))'
 		);
 		expect(compiled.parameters).toEqual(['seed-company']);
 	});
@@ -127,7 +133,7 @@ describe('Collections query owner', () => {
 			context('companies')
 		);
 		expect(compiled.sql).toBe(
-			'"companies"."name" >= $1 AND "companies"."name" <= $2 AND "companies"."name" <> $3 AND "companies"."name" > $4 AND "companies"."name" < $5'
+			'"companies"."name" collate "C" >= $1 AND "companies"."name" collate "C" <= $2 AND "companies"."name" collate "C" <> $3 AND "companies"."name" collate "C" > $4 AND "companies"."name" collate "C" < $5'
 		);
 		expect(compiled.parameters).toEqual(['A', 'M', 'Bob', 'A', 'Z']);
 	});
@@ -143,10 +149,10 @@ describe('Collections query owner', () => {
 
 	it('expands in and notIn to placeholder lists', () => {
 		const included = whereSql({ name: { in: ['Acme', 'Globex'] } }, context('companies'));
-		expect(included.sql).toBe('"companies"."name" in ($1, $2)');
+		expect(included.sql).toBe('"companies"."name" collate "C" in ($1, $2)');
 		expect(included.parameters).toEqual(['Acme', 'Globex']);
 		const excluded = whereSql({ name: { notIn: ['Acme'] } }, context('companies'));
-		expect(excluded.sql).toBe('"companies"."name" not in ($1)');
+		expect(excluded.sql).toBe('"companies"."name" collate "C" not in ($1)');
 		expect(excluded.parameters).toEqual(['Acme']);
 	});
 
@@ -194,7 +200,7 @@ describe('Collections query owner', () => {
 
 	it('compiles pattern operators', () => {
 		const compiled = whereSql({ name: { ilike: '%acme%' } }, context('companies'));
-		expect(compiled.sql).toBe('"companies"."name" ilike $1');
+		expect(compiled.sql).toBe('"companies"."name" collate "C" ilike $1');
 		expect(compiled.parameters).toEqual(['%acme%']);
 	});
 
@@ -203,13 +209,15 @@ describe('Collections query owner', () => {
 			{ OR: [{ name: { eq: 'Acme' } }, { company_id: { eq: 'c-1' } }] },
 			context('companies')
 		);
-		expect(compiled.sql).toBe('("companies"."name" = $1 OR "companies"."company_id" = $2)');
+		expect(compiled.sql).toBe(
+			'("companies"."name" collate "C" = $1 OR "companies"."company_id" collate "C" = $2)'
+		);
 		expect(compiled.parameters).toEqual(['Acme', 'c-1']);
 	});
 
 	it('negates a nested where under NOT', () => {
 		const compiled = whereSql({ NOT: { name: { eq: 'Acme' } } }, context('companies'));
-		expect(compiled.sql).toBe('not ("companies"."name" = $1)');
+		expect(compiled.sql).toBe('not ("companies"."name" collate "C" = $1)');
 		expect(compiled.parameters).toEqual(['Acme']);
 	});
 
@@ -238,7 +246,7 @@ describe('Collections query owner', () => {
 		// The tiebreaker is not decoration: keyset paging seeks past the last row's ordering tuple, so a
 		// sort that is not total repeats or skips rows at every page boundary.
 		expect(renderOrderBy(compileOrderTerms({ name: 'asc' }, context('companies')))).toBe(
-			' order by "name" asc, "id" asc'
+			' order by "name" collate "C" asc, "id" asc'
 		);
 		expect(renderOrderBy(compileOrderTerms({ unknown: 'asc' }, context('companies')))).toBe(
 			' order by "id" asc'
@@ -246,5 +254,20 @@ describe('Collections query owner', () => {
 		expect(renderOrderBy(compileOrderTerms({ id: 'desc' }, context('companies')))).toBe(
 			' order by "id" desc'
 		);
+	});
+
+	it('pins text order and every matching cursor seek term to C collation', async () => {
+		const terms = compileOrderTerms({ name: 'asc' }, context('companies'));
+		expect(terms).toEqual([
+			{ column: 'name', direction: 'asc', collation: 'C' },
+			{ column: 'id', direction: 'asc' }
+		]);
+		const cursor = encodeCollectionCursor(terms, { name: 'Ada', id: 'company-1' });
+		if (cursor === null) throw new Error('expected an encoded collection cursor');
+		const seek = await Effect.runPromise(
+			compileCollectionCursorSeek(cursor, terms, 'companies')
+		);
+		expect(seek.sql).toContain('"name" collate "C" > $1');
+		expect(seek.sql).toContain('"name" collate "C" = $2');
 	});
 });

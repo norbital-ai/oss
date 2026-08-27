@@ -62,7 +62,6 @@ export default {
 		};
 	};
 	readonly relations: Record<never, never>;
-	readonly inputs: { readonly records: { readonly create: object; readonly update: object } };
 };
 `
 		);
@@ -72,7 +71,8 @@ export default {
 		);
 		await writeFile(
 			join(root, 'src', 'witness.ts'),
-			`import { approveBy, noApproval, type AppName, type PolicyDefinition, type TeamName } from '@norbital-ai/bolt/authoring';
+			`import { approveBy, noApproval, type Api, type AppName, type PolicyDefinition, type TeamName } from '@norbital-ai/bolt/authoring';
+import type { WorkspaceSchema } from '../.norbital/generated/types.js';
 const valid: TeamName = 'Reviewers';
 // @ts-expect-error -- a generated team union must still reject misspellings.
 const typo: TeamName = 'Reviewer';
@@ -92,7 +92,7 @@ export default {
 					const visible: string = record.visible;
 					// @ts-expect-error -- database-generated columns do not exist on a prepared create.
 					void record.row_version;
-					void api.db.query.records;
+					void api.db.records.findMany;
 					void api.requestor.id;
 					void id;
 					return visible.length > 0;
@@ -100,11 +100,11 @@ export default {
 				approval: {
 					flow: ({ record }, api) => {
 						const visible: string = record.visible;
-						void api.db.query.records;
+						void api.db.records.findMany;
 						// @ts-expect-error -- the condition row is this grant's generated collection row.
 						void record.missing;
 						// @ts-expect-error -- policy decisions receive reads only, never mutation methods.
-						void api.db.records;
+						void api.db.records.mutate;
 						return visible === 'review' ? approveBy(valid) : noApproval;
 					},
 					superceded_by: [valid]
@@ -124,6 +124,10 @@ export default {
 		}
 	}
 } satisfies PolicyDefinition;
+declare const api: Api<WorkspaceSchema>;
+void api.db.records.findMany({ where: { visible: { eq: 'open' } } });
+void api.db.records.mutate({ visible: 'open' });
+void api.db.records.mutate({ id: 'record-id', visible: 'closed' });
 const invalidFieldPolicy = {
 	description: 'A field mask must name a real row field.',
 	grants: { records: { read: { fields: [

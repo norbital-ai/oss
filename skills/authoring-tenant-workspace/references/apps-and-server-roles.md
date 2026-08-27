@@ -179,13 +179,14 @@ relationship carries that relationship's complete desired state. Present rows ar
 previously stored rows absent from the submitted relationship are deleted. Explicitly included
 relationships reconcile recursively, omitted relationships remain untouched, and the entire root graph
 commits atomically. This makes a rendered matrix safe to submit as the desired state without handwritten
-insert/update/delete diffing. Do not send a relationship for additive or partial behavior, do not erase
-the generated graph type with a cast, and do not invent `client.mutate(...)` or a top-level delete
-encoding. Authorization, approvals, hooks, history, sync invalidation, and events all remain inside the
-canonical mutation pipeline.
+diffing. Submit a relationship only for complete desired-state reconciliation and preserve the generated
+graph type. Authorization, approvals, hooks, history, sync invalidation, and events all remain inside
+the canonical mutation pipeline.
 
-Server roles reach the same collections under the same names, but through Effects rather than
-promises — `yield* api.db.query.<collection>.findMany(...)`, `yield* api.db.<collection>.create(...)`.
+Server roles reach the same direct collection surface, but through Effects rather than promises —
+`yield* api.db.<collection>.findMany(...)` and
+`yield* api.db.<collection>.mutate(recordOrGraph)`. Authored collection writes use the singular
+`mutate(recordOrGraph)` operation.
 
 ## Automation
 
@@ -203,7 +204,7 @@ export default defineAutomation(
 		policies: ['operations'],
 		handler: (api) =>
 			Effect.gen(function* () {
-				const sites = yield* api.db.query.sites.findMany({ limit: 250 });
+				const sites = yield* api.db.sites.findMany({ limit: 250 });
 				return { count: sites.length };
 			})
 	}
@@ -223,7 +224,7 @@ export default defineAutomation(
 		policies: ['operations'],
 		handler: (api, { scope }) =>
 			Effect.gen(function* () {
-				const count = yield* api.db.query.sites.count({});
+				const count = yield* api.db.sites.count({});
 				return { count, site: scope.incoming_record.id };
 			})
 	}
@@ -310,7 +311,7 @@ export default defineQueryHandler({
 	schema: Schema.Struct({ site_id: Schema.String.check(Schema.isUUID()) }),
 	handler: ({ site_id }, api: Api) =>
 		Effect.gen(function* () {
-			const count = yield* api.db.query.site_visits.count({
+			const count = yield* api.db.site_visits.count({
 				where: { site_id: { eq: site_id } }
 			});
 			return count;

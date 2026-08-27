@@ -19,7 +19,11 @@
  */
 
 export { labelTermText, resolveRecordLabel } from './record-label.js';
-export { isSystemCollectionField, SYSTEM_COLLECTION_FIELD_NAMES } from './system-fields.js';
+export {
+	isSystemCollectionField,
+	SYSTEM_COLLECTION_FIELD_NAMES,
+	type SystemCollectionFieldName
+} from './system-fields.js';
 
 export interface CollectionRecord {
 	readonly [field: string]: unknown;
@@ -43,30 +47,21 @@ export interface CollectionPageQuery<TRow extends object> extends RemoteQuery<TR
 
 export interface CollectionType<
 	TRow extends object = CollectionRecord,
-	TCreate extends object = CollectionRecord,
-	TUpdate extends object = CollectionRecord,
 	TMutation extends object = CollectionRecord
 > {
 	readonly row: TRow;
-	readonly create: TCreate;
-	readonly update: TUpdate;
 	/** Exact recursively generated graph accepted by the declarative browser mutation. */
-	readonly mutation?: TMutation;
+	readonly mutation: TMutation;
 }
 
-export type CollectionRegistry = Readonly<Record<string, CollectionType<object, object, object>>>;
+export type CollectionRegistry = Readonly<Record<string, CollectionType<CollectionRecord, object>>>;
 export type ErasedCollectionRegistry = Readonly<Record<string, CollectionType>>;
 
-export type CollectionRow<TCollection extends CollectionType<object, object, object>> =
-	TCollection['row'];
-export type CollectionCreateInput<TCollection extends CollectionType<object, object, object>> =
-	TCollection['create'];
-export type CollectionUpdateInput<TCollection extends CollectionType<object, object, object>> =
-	TCollection['update'];
-export type CollectionMutationInput<TCollection extends CollectionType<object, object, object>> =
-	NonNullable<TCollection['mutation']>;
-export type CollectionFieldName<TCollection extends CollectionType<object, object, object>> =
-	Extract<keyof CollectionRow<TCollection>, string>;
+export type CollectionRow<TCollection extends CollectionType<object, object>> = TCollection['row'];
+export type CollectionFieldName<TCollection extends CollectionType<object, object>> = Extract<
+	keyof CollectionRow<TCollection>,
+	string
+>;
 
 export type NumericRendererVariant =
 	| { readonly type: 'number' }
@@ -141,7 +136,7 @@ export interface CollectionRelationship {
 }
 
 export interface CollectionDefinition<
-	TCollection extends CollectionType<object, object, object> = CollectionType
+	TCollection extends CollectionType<object, object> = CollectionType
 > {
 	readonly name: string;
 	readonly recordLabel?: string | null;
@@ -214,7 +209,7 @@ export interface CollectionRelationOptions<TRow extends object = CollectionRecor
  * same set is how the two drift.
  */
 export interface CollectionFilter {
-	/** One or two segments: `status`, or `agreement_employment.employee_number` split in two. */
+	/** Root field path or a path reached through at most two relationship edges. */
 	readonly path: readonly string[];
 	readonly operator:
 		| 'eq'
@@ -238,27 +233,96 @@ export interface CollectionFilterOptions {
 	readonly filters?: readonly CollectionFilter[];
 }
 
-export interface CollectionOperations<TCollection extends CollectionType<object, object, object>> {
-	readonly findMany: (
+/** Durable client-side progression of one local-first collection mutation. */
+export type CollectionMutationPushState =
+	| 'queued'
+	| 'pushing'
+	| 'awaiting-authoritative-delta'
+	| 'quarantined';
+
+export interface CollectionMutationQuarantine {
+	readonly code: 'compatibility-horizon-expired' | 'schema-incompatible' | 'manual-review';
+	readonly message: string;
+	readonly atEpochMs: number;
+}
+
+/** Server-authoritative M4 outcome, deliberately independent of Bolt's runtime implementation. */
+export type CollectionMutationSettlement = Readonly<
+	| {
+			readonly kind: 'accepted';
+			readonly idempotencyKey: string;
+			readonly settledAtEpochMs: number;
+	  }
+	| {
+			readonly kind: 'rebased';
+			readonly idempotencyKey: string;
+			readonly fromSchemaFingerprint: string;
+			readonly toSchemaFingerprint: string;
+			readonly settledAtEpochMs: number;
+	  }
+	| {
+			readonly kind: 'rejected';
+			readonly idempotencyKey: string;
+			readonly code: string;
+			readonly message: string;
+			readonly settledAtEpochMs: number;
+	  }
+	| {
+			readonly kind: 'quarantined';
+			readonly idempotencyKey: string;
+			readonly quarantine: CollectionMutationQuarantine;
+			readonly settledAtEpochMs: number;
+	  }
+>;
+
+export type CollectionMutationSettlementStatus =
+	| CollectionMutationPushState
+	| CollectionMutationSettlement['kind']
+	| 'unknown';
+
+export interface CollectionMutationSettlementHandle {
+	readonly idempotencyKey: string;
+	readonly settled: Promise<CollectionMutationSettlement>;
+	readonly status: () => Promise<CollectionMutationSettlementStatus>;
+	readonly wait: (signal?: AbortSignal) => Promise<CollectionMutationSettlement>;
+}
+
+/**
+ * What browser `await mutate()` means: the graph is durable and visible locally, while settlement
+ * remains explicitly asynchronous and may still be rejected or quarantined by the authority.
+ */
+export interface LocallyDurableCollectionMutationResult<TRow extends object> {
+	readonly durability: 'local';
+	readonly pending: true;
+	readonly row: TRow | null;
+	readonly idempotencyKey: string;
+	readonly deviceSequence: number;
+	readonly settlement: CollectionMutationSettlementHandle;
+}
+
+export type CollectionOperations<TCollection extends CollectionType<object, object>> = Readonly<{
+	findMany(
 		query?: CollectionQuery<CollectionRow<TCollection>>,
 		options?: CollectionFilterOptions
-	) => CollectionPageQuery<CollectionRow<TCollection>>;
-	readonly findFirst: (
+	): CollectionPageQuery<CollectionRow<TCollection>>;
+	findFirst(
 		query?: CollectionBaseQuery<CollectionRow<TCollection>>
-	) => RemoteQuery<CollectionRow<TCollection> | undefined>;
-	readonly findGrouped: (
+	): RemoteQuery<CollectionRow<TCollection> | undefined>;
+	findGrouped(
 		query: CollectionGroupedQuery<CollectionRow<TCollection>>,
 		options?: CollectionFilterOptions
-	) => RemoteQuery<CollectionGroupedResult<CollectionRow<TCollection>>>;
-	readonly count: (
+	): RemoteQuery<CollectionGroupedResult<CollectionRow<TCollection>>>;
+	count(
 		query?: CollectionBaseQuery<CollectionRow<TCollection>>,
 		options?: CollectionFilterOptions
-	) => RemoteQuery<number>;
-	// repository-health:allow EFF2 -- Generated browser mutations intentionally expose completion as Promise<void> at the public client boundary.
-	readonly mutate: (values: CollectionMutationInput<TCollection>) => Promise<void>;
+	): RemoteQuery<number>;
+	// repository-health:allow EFF2 -- The public browser seam resolves at local durability; authority settlement remains on the returned handle.
+	mutate(
+		values: TCollection['mutation']
+	): Promise<LocallyDurableCollectionMutationResult<CollectionRow<TCollection>>>;
 	/** Number of in-flight writes for this collection. */
 	readonly pending: number;
-}
+}>;
 
 export interface CollectionApprovalRequest {
 	readonly id: string;

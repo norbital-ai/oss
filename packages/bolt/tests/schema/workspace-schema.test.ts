@@ -343,41 +343,6 @@ describe('WorkspaceSchema owner', () => {
 	});
 
 	/**
-	 * Baselining survives for exactly one case, and it is no longer inferable from "has tables".
-	 *
-	 * A database the older plan provisioned has the tables and has never recorded a lineage tag.
-	 * Running the lineage there fails on `CREATE TABLE "people"`; skipping the record leaves its
-	 * position unknown, so the next authored entry queues behind entries that can never run. The
-	 * discriminator is a plan fingerprint written by a previous migrate, which only such a database has.
-	 */
-	it('records without running when a previous plan provisioned the tables', async () => {
-		const harness = await makeBoltTestRuntime(
-			probeWorkspace([
-				{ tag: '20260101000000_unreplayable', statements: ['create table "people" (x int)'] }
-			])
-		);
-		try {
-			// Tables present, ledger empty, and a fingerprint from a migrate that predates the lineage.
-			await harness.database.query('drop table if exists __drizzle_migrations');
-			await harness.database.query(
-				'create table if not exists __drizzle_migrations (id serial primary key, tag text not null unique, created_at timestamptz not null default now())'
-			);
-			await harness.database.query("insert into bolt_schema_state (fingerprint) values ('legacy')");
-
-			await harness.runtime.runPromise(
-				Effect.flatMap(WorkspaceSchema.Service, (schema) =>
-					schema.migrate(harness.effectId('migrate'))
-				)
-			);
-			// Recorded, and not run: `people` still has its real columns rather than the entry's `x`.
-			expect(await ledgerTags(harness)).toEqual(['20260101000000_unreplayable']);
-			expect(await harness.database.query('select name from people')).toEqual([]);
-		} finally {
-			await harness.dispose();
-		}
-	});
-
-	/**
 	 * A first lineage may fail after the plan's foundation commits but before its CREATE TABLE
 	 * transaction does. That leaves a fingerprint and Bolt-owned tables, but no authored table and no
 	 * lineage tag. It is a retryable partial provision, not an old plan-provisioned database to baseline.

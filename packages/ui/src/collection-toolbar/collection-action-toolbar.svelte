@@ -15,16 +15,11 @@
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Inline, Scroll, Stack } from '#lib/layout';
 	import { Tooltip } from '#lib/tooltip';
-	import CollectionQueryControls from '../collection-table/collection-query-controls.svelte';
-	import CollectionTableOperations from '../collection-table/collection-table-operations.svelte';
+	import CollectionToolbarQueryControls from './collection-toolbar-query-controls.svelte';
+	import CollectionToolbarOperations from './collection-toolbar-operations.svelte';
 	import CollectionToolbarAction from './collection-toolbar-action.svelte';
-	import CollectionToolbarFilter, {
-		setCollectionToolbarFilterContext
-	} from './collection-toolbar-filter.svelte';
 	import type {
 		CollectionActionToolbarProps,
-		CollectionToolbarFilterComponent,
-		CollectionToolbarFilterDeclaration,
 		CollectionToolbarName
 	} from '#lib/collection-toolbar/collection-toolbar.types';
 
@@ -40,7 +35,6 @@
 		initialFilters = [],
 		filterPersistenceKey,
 		operations,
-		filters,
 		actions
 	}: CollectionActionToolbarProps<TCollections, TName, TRow> = $props();
 
@@ -49,24 +43,9 @@
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionActionToolbar');
 	const definition = $derived(
 		workspaceClient.collections[String(collection)] as CollectionDefinition<
-			CollectionType<TRow, object, object>
+			CollectionType<TRow, object>
 		> // stupidity: boundary-cast — the generated client and runtime manifest share collection keys.
 	);
-
-	// Declared filter controls, registered from a hidden render of `filters` so the popover trigger
-	// can count them while the popover itself is closed and unmounted.
-	const declarations = new Map<object, CollectionToolbarFilterDeclaration>();
-	let customFilters = $state<readonly CollectionToolbarFilterDeclaration[]>([]);
-	setCollectionToolbarFilterContext({
-		setFilter: (token, filter) => {
-			declarations.set(token, filter);
-			customFilters = [...declarations.values()];
-		},
-		removeFilter: (token) => {
-			declarations.delete(token);
-			customFilters = [...declarations.values()];
-		}
-	});
 
 	// Only the caller's opt-out. Whether the collection has anything to search is the schema's
 	// answer, taken inside the control from the fields carrying `search: true`.
@@ -84,20 +63,6 @@
 		query.setFilters(next);
 	}
 </script>
-
-<!--
-	The declarations, rendered where they cannot be seen. `Filter` draws nothing itself; the toolbar
-	draws every filter control so a derived predicate looks and behaves like a field condition.
--->
-<div class="hidden" aria-hidden="true">
-	{#if filters}
-		{@render filters({
-			Filter: CollectionToolbarFilter as CollectionToolbarFilterComponent,
-			Action: CollectionToolbarAction,
-			query
-		})}
-	{/if}
-</div>
 
 <!--
 	One toolbar for every collection surface.
@@ -150,22 +115,20 @@
 					{/snippet}
 				</Tooltip>
 			{/if}
-			<CollectionQueryControls
+			<CollectionToolbarQueryControls
 				{definition}
 				collections={workspaceClient.collections}
 				{disabled}
 				{searchEnabled}
 				{filterEnabled}
-				{customFilters}
 				initialSearch={query.search}
 				{initialFilters}
 				{filterPersistenceKey}
 				onSearchChange={(search) => query.setSearch(search)}
 				onFilterChange={applyFilters}
-				onCustomFilterChange={() => query.setPageIndex(0)}
 			/>
 			{#if operations && operationsVisible}
-				<CollectionTableOperations
+				<CollectionToolbarOperations
 					collectionName={String(collection)}
 					exportPipelines={operations.exportPipelines ?? []}
 					importPipelines={operations.importPipelines ?? []}
@@ -180,7 +143,6 @@
 	{#if actions}
 		<Inline gap="xs" shrink={false}>
 			{@render actions({
-				Filter: CollectionToolbarFilter as CollectionToolbarFilterComponent,
 				Action: CollectionToolbarAction,
 				query
 			})}

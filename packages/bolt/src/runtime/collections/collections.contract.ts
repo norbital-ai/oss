@@ -6,7 +6,11 @@
  * against. Both import the contract here rather than each other, so the module graph stays acyclic.
  */
 import { Context, Effect, Schema } from 'effect';
-import type { EffectId } from '@norbital-ai/bolt-protocol';
+import type {
+	CollectionMutationBaseVersion,
+	CollectionMutationIdempotencyKey,
+	EffectId
+} from '@norbital-ai/bolt-protocol';
 import type { Subject } from '#lib/runtime/identity/subject.js';
 import type * as Workspace from '#lib/runtime/workspace.js';
 import type * as AccessControl from '#lib/runtime/access/access-control.js';
@@ -33,6 +37,8 @@ export type QueryInput = Readonly<{
 	// `where` and `orderBy` stay `unknown`: authored handlers bind `Date` operands the wire form
 	// never carries, and the where compiler is the one place that decides what is bindable.
 	readonly where?: unknown | undefined;
+	/** A generic surface's narrowing predicate, kept distinct from the authored predicate. */
+	readonly userFilter?: unknown | undefined;
 	readonly orderBy?: unknown | undefined;
 	readonly limit?: number | undefined;
 	/**
@@ -58,30 +64,224 @@ export type QueryInput = Readonly<{
 	readonly after?: string | undefined;
 }>;
 
+/** A collection query always returns records; scalar JSON is not a valid database row. */
+export type QueryRow = Readonly<Record<string, Schema.Json>>;
+
+/**
+ * A nearest-neighbour read: an ordinary query plus the vector to measure against.
+ *
+ * It reuses `QueryInput` rather than restating narrowing, because excluding rows from a vector
+ * search is not a different question from excluding them from any other read. The removed version
+ * carried its own `excludeIds`, which meant a second filtering vocabulary that only this one call
+ * understood and that no `where` clause could extend.
+ */
+export type NearestQueryInput = Omit<QueryInput, 'after' | 'orderBy' | 'search'> &
+	Readonly<{
+		readonly column: string;
+		readonly probe: ReadonlyArray<number>;
+		readonly metric: 'l2' | 'cosine' | 'ip';
+		readonly maxDistance?: number | undefined;
+	}>;
+
+/** A nearest-neighbour row carries the measured distance beside the record's own columns. */
+export type NearestQueryRow = QueryRow & Readonly<{ readonly distance: number }>;
+
+/** One complete authoritative SQL grouping. It has no paging or local-recompute semantics. */
+export type GroupedQueryInput = Omit<QueryInput, 'limit' | 'after'> &
+	Readonly<{
+		readonly groupBy: string;
+		readonly lanes: ReadonlyArray<Schema.Json>;
+	}>;
+export type GroupedQueryRows = Readonly<Record<string, ReadonlyArray<QueryRow>>>;
+
 export type MutationInput = Readonly<{
 	readonly collection: string;
 	readonly id: string;
 	readonly values: Readonly<Record<string, Schema.Json>>;
 }>;
 
-/**
- * One nearest-neighbour read against a pgvector column.
- *
- * The operands stay `unknown` for the reason `QueryInput.where` does: they arrive from authored
- * code, and the one place that decides what a vector search may be given is the place that renders
- * the SQL for it. Everything here was previously spread into an ordinary `findMany`, which knows no
- * `column`, no `probe` and no `metric` — so the whole config was dropped on the floor and the caller
- * received the collection's first hundred rows as its "nearest" neighbours.
- */
-export type NearestInput = Readonly<{
-	readonly collection: string;
-	readonly column: unknown;
-	readonly probe: unknown;
-	readonly metric: unknown;
-	readonly limit: unknown;
-	readonly maxDistance?: unknown;
-	readonly excludeIds?: unknown;
+/** Host/authentication facts under which one browser mutation key has meaning. */
+export type BrowserMutationScope = Readonly<{
+	readonly tenantId: string;
+	readonly environment: string;
+	readonly principalId: string;
+	/** Effective server-resolved authority (ordinary membership or a validated preview team). */
+	readonly authorityId: string;
+	readonly command: 'collections.mutate';
 }>;
+
+/** Stable authenticated identities to which one server-issued physical partition is bound. */
+export type BrowserMutationPartitionBinding = Readonly<{
+	readonly tenantId: string;
+	readonly environment: string;
+	readonly actorId: string;
+	readonly effectiveSubjectId: string;
+	readonly impersonationBinding: string;
+}>;
+
+/** Structural twin of SyncPartitionIdentity kept here to avoid a runtime service dependency cycle. */
+export type BrowserMutationPartitionIdentity = Readonly<{
+	readonly key: string;
+	readonly tenantId: string;
+	readonly environment: string;
+	readonly effectivePolicyHolder: string;
+	readonly impersonationTarget: string | null;
+	readonly authorityGeneration: number;
+	readonly schemaFingerprint: string;
+}>;
+
+/** An authenticated mutation whose complete committed outbox transaction is below this cursor. */
+export type BrowserMutationConfirmation = Readonly<{
+	readonly mutationId: string;
+	readonly cursor: Readonly<{ readonly xid: number; readonly sequence: number }>;
+}>;
+/** A terminal approval refusal for an authenticated mutation awaiting authoritative delivery. */
+export type BrowserMutationRejection = Readonly<{
+	readonly mutationId: string;
+	readonly code: 'refused' | 'forbidden';
+	readonly message: string;
+}>;
+export type BrowserMutationDelivery = Readonly<{
+	readonly ownedMutationIds: ReadonlyArray<string>;
+	readonly confirmations: ReadonlyArray<BrowserMutationConfirmation>;
+	readonly rejections: ReadonlyArray<BrowserMutationRejection>;
+}>;
+
+/** The compact durable answer sufficient to replay a browser mutation without executing it. */
+export const BrowserMutationOutcome = Schema.TaggedUnion({
+	Committed: {
+		collection: Schema.NonEmptyString,
+		id: Schema.NonEmptyString,
+		action: CollectionAction,
+		resolution: Schema.Literals(['accepted', 'rebased']),
+		deviceSequence: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+		fromSchemaFingerprint: Schema.NonEmptyString,
+		toSchemaFingerprint: Schema.NonEmptyString
+	},
+	PendingApproval: {
+		requestId: Schema.NonEmptyString,
+		collection: Schema.NonEmptyString,
+		id: Schema.NonEmptyString,
+		action: CollectionAction,
+		schemaFingerprint: Schema.NonEmptyString
+	},
+	VersionConflict: {
+		collection: Schema.NonEmptyString,
+		id: Schema.NonEmptyString,
+		baseVersion: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+		currentVersion: Schema.NullOr(
+			Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1))
+		),
+		schemaFingerprint: Schema.NonEmptyString
+	},
+	Rejected: {
+		code: Schema.Literals(['refused', 'forbidden']),
+		message: Schema.NonEmptyString,
+		schemaFingerprint: Schema.NonEmptyString,
+		collection: Schema.optionalKey(Schema.NonEmptyString),
+		/** Refusal sites may be more precise than the root verb (for example `update.before`). */
+		action: Schema.optionalKey(Schema.NonEmptyString)
+	},
+	Quarantined: {
+		idempotencyKey: Schema.NonEmptyString,
+		reason: Schema.NonEmptyString,
+		deviceSequence: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+		schemaFingerprint: Schema.NonEmptyString
+	}
+});
+export type BrowserMutationOutcome = typeof BrowserMutationOutcome.Type;
+
+/** Internal fence passed only after dispatch has authenticated and digested the public request. */
+export type BrowserMutationFence = Readonly<{
+	readonly scope: BrowserMutationScope;
+	readonly idempotencyKey: CollectionMutationIdempotencyKey;
+	readonly requestDigest: string;
+	readonly issuedAtEpochMs: number;
+	readonly deviceSequence: number;
+	readonly partitionKey: string;
+	readonly schemaFingerprint: string;
+	readonly currentSchemaFingerprint: string;
+	readonly baseVersions: ReadonlyArray<CollectionMutationBaseVersion>;
+	readonly outcome: BrowserMutationOutcome;
+}>;
+
+export const BrowserMutationBegin = Schema.TaggedUnion({
+	Acquired: {},
+	Replay: { outcome: BrowserMutationOutcome },
+	InProgress: { retryAfterSeconds: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)) }
+});
+export type BrowserMutationBegin = typeof BrowserMutationBegin.Type;
+
+/** The same key was presented for a different canonical request under the same authority. */
+export class MutationIdempotencyConflict extends Schema.TaggedError<MutationIdempotencyConflict>()(
+	'Bolt.Collections.MutationIdempotencyConflict',
+	{
+		idempotencyKey: Schema.NonEmptyString
+	}
+) {
+	readonly retryable = false;
+	readonly message = 'The mutation idempotency key is already bound to a different request.';
+}
+
+/** A retry arrived after its dedup record may legally have been pruned. */
+export class MutationRetryExpired extends Schema.TaggedError<MutationRetryExpired>()(
+	'Bolt.Collections.MutationRetryExpired',
+	{
+		issuedAtEpochMs: Schema.Number
+	}
+) {
+	readonly retryable = false;
+	readonly message =
+		'The mutation is outside the server retry horizon and cannot be applied safely.';
+}
+
+/** Another live invocation owns this key; the client keeps the journal entry and retries it. */
+export class MutationInProgress extends Schema.TaggedError<MutationInProgress>()(
+	'Bolt.Collections.MutationInProgress',
+	{ retryAfterSeconds: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)) }
+) {
+	readonly retryable = true;
+	readonly message = 'The same mutation is still being evaluated by the server.';
+}
+
+/** The authoritative row changed after the browser read the version it submitted. */
+export class MutationVersionConflict extends Schema.TaggedError<MutationVersionConflict>()(
+	'Bolt.Collections.MutationVersionConflict',
+	{
+		collection: Schema.NonEmptyString,
+		id: Schema.NonEmptyString,
+		baseVersion: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+		currentVersion: Schema.NullOr(
+			Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1))
+		)
+	}
+) {
+	readonly retryable = false;
+	readonly message =
+		this.currentVersion === null
+			? `${this.collection} ${this.id} no longer exists at row version ${this.baseVersion}.`
+			: `${this.collection} ${this.id} changed from row version ${this.baseVersion} to ${this.currentVersion}.`;
+}
+
+/**
+ * The mutation remains durable client-side because this release cannot safely interpret it.
+ *
+ * This is not a rejection: removing the overlay would lose user work. A client keeps the journal
+ * entry, surfaces one sync issue, and may retry it only after a release with a matching adapter is
+ * active or after an explicit user resolution.
+ */
+export class MutationQuarantined extends Schema.TaggedError<MutationQuarantined>()(
+	'Bolt.Collections.MutationQuarantined',
+	{
+		idempotencyKey: Schema.NonEmptyString,
+		deviceSequence: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+		schemaFingerprint: Schema.NonEmptyString,
+		reason: Schema.NonEmptyString
+	}
+) {
+	readonly retryable = false;
+	readonly message = this.reason;
+}
 
 /**
  * `AuthoredRefusal` is a member of all three channels because authored code runs on all three
@@ -103,6 +303,11 @@ export type MutationError =
 	| Database.FacilityError
 	| ApprovalConflict
 	| PendingApproval
+	| MutationIdempotencyConflict
+	| MutationRetryExpired
+	| MutationInProgress
+	| MutationVersionConflict
+	| MutationQuarantined
 	| AuthoredRefusal
 	| NestingLimitExceeded;
 /**
@@ -110,8 +315,8 @@ export type MutationError =
  *
  * Only `mutate` runs in phases, so only `mutate` can say which one failed. Widening `MutationError`
  * would have put the phase on `create`, `update`, `delete`, `import` and `resume` as well, and on
- * every service that declares an error union containing theirs — `sync.mutate` and `agents.execute`
- * both do — none of which can ever raise it. That is a type that says something false about five
+	 * every service that declares an error union containing theirs — such as `agents.execute` — none
+	 * of which can ever raise it. That is a type that says something false about five
  * paths in order to say something true about one.
  */
 export type BatchMutationError = MutationError | MutationPhaseFailure;
@@ -123,12 +328,28 @@ export type ResumeError =
 	| AuthoredRefusal
 	| MutationPhaseFailure
 	| NestingLimitExceeded;
+
+/** A requested relationship has more authorized rows than one bounded prefetch may hydrate. */
+export class RelationshipPrefetchLimitExceeded extends Schema.TaggedError<RelationshipPrefetchLimitExceeded>()(
+	'Bolt.Collections.RelationshipPrefetchLimitExceeded',
+	{
+		sourceCollection: Schema.NonEmptyString,
+		relation: Schema.NonEmptyString,
+		targetCollection: Schema.NonEmptyString,
+		limit: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1))
+	}
+) {
+	readonly retryable = false;
+	readonly message = `Relationship ${this.sourceCollection}.${this.relation} has more than ${this.limit} authorized ${this.targetCollection} rows and cannot be hydrated exactly.`;
+}
+
 /** Query paths add the where-compiler failure so an unsupported filter surfaces instead of silently widening the result. */
 export type QueryError =
 	| Workspace.WorkspaceLookupError
 	| AccessControl.AccessDenied
 	| Database.FacilityError
 	| WhereCompileError
+	| RelationshipPrefetchLimitExceeded
 	| AuthoredRefusal
 	| NestingLimitExceeded;
 
@@ -220,28 +441,27 @@ export type Interface = Readonly<{
 		effectId: EffectId,
 		subject: Subject,
 		input: QueryInput
-	) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
-	/** Reads the approval inbox through the same authorization and field-masking path as collections. */
-	readonly approvalFindFirst: (
-		effectId: EffectId,
-		subject: Subject,
-		input: Omit<QueryInput, 'collection'>
-	) => Effect.Effect<Schema.Json | undefined, QueryError>;
+	) => Effect.Effect<ReadonlyArray<QueryRow>, QueryError>;
 	readonly findFirst: (
 		effectId: EffectId,
 		subject: Subject,
 		input: QueryInput
-	) => Effect.Effect<Schema.Json | undefined, QueryError>;
-	readonly findNearest: (
-		effectId: EffectId,
-		subject: Subject,
-		input: NearestInput
-	) => Effect.Effect<ReadonlyArray<Schema.Json>, QueryError>;
+	) => Effect.Effect<QueryRow | undefined, QueryError>;
 	readonly count: (
 		effectId: EffectId,
 		subject: Subject,
 		input: QueryInput
 	) => Effect.Effect<number, QueryError>;
+	readonly findNearest: (
+		effectId: EffectId,
+		subject: Subject,
+		input: NearestQueryInput
+	) => Effect.Effect<ReadonlyArray<NearestQueryRow>, QueryError>;
+	readonly findGrouped: (
+		effectId: EffectId,
+		subject: Subject,
+		input: GroupedQueryInput
+	) => Effect.Effect<GroupedQueryRows, QueryError>;
 	readonly create: (
 		effectId: EffectId,
 		subject: Subject,
@@ -271,6 +491,8 @@ export type Interface = Readonly<{
 			readonly declarative?: boolean;
 			/** Explicit only for an invocation-bound create/update whose chosen id must not imply action. */
 			readonly root?: Readonly<{ readonly id: string; readonly action: 'create' | 'update' }>;
+			/** Browser-only exactly-once fence; authored callers never construct or receive this. */
+			readonly browserMutation?: BrowserMutationFence;
 		}
 	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, BatchMutationError>;
 	readonly update: (
@@ -282,8 +504,49 @@ export type Interface = Readonly<{
 		effectId: EffectId,
 		subject: Subject,
 		collection: string,
-		id: string
+		id: string,
+		options?: Readonly<{
+			readonly baseVersion?: number;
+			readonly browserMutation?: BrowserMutationFence;
+		}>
 	) => Effect.Effect<void, MutationError>;
+	readonly browserMutationOutcome: (
+		effectId: EffectId,
+		scope: BrowserMutationScope,
+		idempotencyKey: CollectionMutationIdempotencyKey,
+		requestDigest: string
+	) => Effect.Effect<
+		BrowserMutationOutcome | undefined,
+		Database.FacilityError | MutationIdempotencyConflict
+	>;
+	readonly registerBrowserMutationPartition: (
+		effectId: EffectId,
+		binding: BrowserMutationPartitionBinding,
+		identity: BrowserMutationPartitionIdentity
+	) => Effect.Effect<BrowserMutationPartitionIdentity, Database.FacilityError>;
+	readonly browserMutationPartition: (
+		effectId: EffectId,
+		binding: BrowserMutationPartitionBinding,
+		partitionKey: string
+	) => Effect.Effect<BrowserMutationPartitionIdentity | undefined, Database.FacilityError>;
+	readonly browserMutationDelivery: (
+		effectId: EffectId,
+		scope: BrowserMutationScope,
+		idempotencyKeys: ReadonlyArray<string>,
+		through: Readonly<{ readonly xid: number; readonly sequence: number }>
+	) => Effect.Effect<BrowserMutationDelivery, Database.FacilityError>;
+	readonly rememberBrowserMutationOutcome: (
+		effectId: EffectId,
+		fence: BrowserMutationFence,
+		outcome: BrowserMutationOutcome
+	) => Effect.Effect<
+		BrowserMutationOutcome | undefined,
+		Database.FacilityError | MutationIdempotencyConflict
+	>;
+	readonly beginBrowserMutation: (
+		effectId: EffectId,
+		fence: BrowserMutationFence
+	) => Effect.Effect<BrowserMutationBegin, Database.FacilityError | MutationIdempotencyConflict>;
 	readonly resume: (effectId: EffectId, requestId: string) => Effect.Effect<void, ResumeError>;
 	readonly discard: (effectId: EffectId, requestId: string) => Effect.Effect<void, ResumeError>;
 	readonly import: (

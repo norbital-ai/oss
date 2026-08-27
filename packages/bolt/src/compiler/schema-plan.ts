@@ -1,4 +1,14 @@
 import { collectionSearchTrigramIndexName } from '@norbital-ai/std/collection';
+import type { Schema } from 'effect';
+import {
+	type CollectionMutationBaseVersion,
+	type CollectionMutationGraph
+} from '@norbital-ai/bolt-protocol';
+import {
+	canonicalSchemaStepEncoding,
+	digestSchemaSteps
+} from '@norbital-ai/std/reckon/hash';
+export { canonicalSchemaStepEncoding, digestSchemaSteps };
 import type { ModelExclusion, ModelIndex } from '../authoring/models-schema.js';
 import {
 	compileModel,
@@ -18,22 +28,15 @@ import {
 	withSystemCollections
 } from '../runtime/schema/system-collections.js';
 
-type SchemaStep = Readonly<{
+export type SchemaStep = Readonly<{
 	readonly id: string;
 	/** Compiler-owned DDL, or the explicitly named bootstrap seed below; never application CRUD. */
 	readonly sql: string;
 }>;
 
 /** Fingerprints the exact ordered DDL a database or replica will apply. */
-export const fingerprintSchemaSteps = (steps: ReadonlyArray<SchemaStep>): string => {
-	const source = JSON.stringify(steps);
-	let hash = 2_166_136_261;
-	for (let index = 0; index < source.length; index += 1) {
-		hash ^= source.charCodeAt(index);
-		hash = Math.imul(hash, 16_777_619);
-	}
-	return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, '0')}`;
-};
+export const fingerprintSchemaSteps = (steps: ReadonlyArray<SchemaStep>): string =>
+	digestSchemaSteps(steps);
 
 export type SchemaPlan = Readonly<{
 	readonly fingerprint: string;
@@ -42,6 +45,141 @@ export type SchemaPlan = Readonly<{
 
 /** Quotes a PostgreSQL identifier. Shared so plan DDL and migration DDL cannot quote differently. */
 const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
+
+/** Quotes one PostgreSQL text literal assembled exclusively from compiler-owned schema names. */
+const quoteLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+
+const containsOpaquePolicySql = (value: unknown): boolean => {
+	if (Array.isArray(value)) return value.some(containsOpaquePolicySql);
+	if (value === null || typeof value !== 'object') return false;
+	if ('$sql' in value) return true;
+	return Object.values(value).some(containsOpaquePolicySql);
+};
+
+const policyRelationshipDependencies = (
+	workspace: WorkspaceDefinition,
+	rootCollection: string,
+	where: unknown
+): ReadonlySet<string> => {
+	const dependencies = new Set<string>();
+	const collections = new Map(
+		workspace.collections.map((collection) => [collection.name, collection] as const)
+	);
+	const visit = (value: unknown, collection: string): void => {
+		if (value === null || typeof value !== 'object' || Array.isArray(value)) return;
+		const fields = collections.get(collection)?.fields ?? {};
+		for (const [key, condition] of Object.entries(value)) {
+			if (key === '$sql') continue;
+			if (key === 'AND' || key === 'OR') {
+				if (Array.isArray(condition)) {
+					for (const branch of condition) visit(branch, collection);
+				}
+				continue;
+			}
+			if (key === 'NOT') {
+				visit(condition, collection);
+				continue;
+			}
+			// The where compiler gives a column precedence over a same-named relation.
+			if (Object.hasOwn(fields, key)) continue;
+			const relation = workspace.relations.find(
+				(candidate) => candidate.source === collection && candidate.name === key
+			);
+			if (relation === undefined) continue;
+			dependencies.add(relation.target);
+			visit(condition, relation.target);
+		}
+	};
+	visit(where, rootCollection);
+	return dependencies;
+};
+
+/**
+ * The compile-time policy dependency graph used by sync generations.
+ *
+ * Keys are collections that may be written; values are collections whose row visibility can
+ * change as a result. The target collection always depends on itself. Structured relationship
+ * traversals contribute their target collections automatically; authored `dependencies` are
+ * additive and therefore cannot erase an edge the predicate itself proves. An opaque `$sql` read
+ * conservatively depends on every synced collection because an authored dependency list cannot
+ * prove which tables arbitrary SQL does not read. This is a safe migration path for existing
+ * workspaces: incomplete metadata costs bounded refills, never a silently-valid proof.
+ */
+export const syncPolicyDependencyGraph = (
+	authored: WorkspaceDefinition
+): ReadonlyMap<string, ReadonlySet<string>> => {
+	const workspace = withSystemCollections(authored);
+	const synced = new Set(
+		workspace.collections.filter(({ sync }) => sync !== false).map(({ name }) => name)
+	);
+	const graph = new Map<string, Set<string>>();
+	const link = (source: string, dependent: string): void => {
+		const targets = graph.get(source) ?? new Set<string>();
+		targets.add(dependent);
+		graph.set(source, targets);
+	};
+	for (const collection of synced) link(collection, collection);
+	for (const policy of workspace.policies) {
+		for (const grant of policy.grants ?? []) {
+			if (grant.action !== 'read' || !synced.has(grant.collection)) continue;
+			for (const dependency of policyRelationshipDependencies(
+				workspace,
+				grant.collection,
+				grant.where
+			)) {
+				if (!synced.has(dependency)) {
+					throw new TypeError(
+						`Policy ${policy.name} read grant ${grant.collection} traverses unavailable sync dependency ${dependency}.`
+					);
+				}
+				link(dependency, grant.collection);
+			}
+			const declared = grant.dependencies;
+			if (declared !== undefined) {
+				for (const dependency of declared) {
+					if (!synced.has(dependency)) {
+						throw new TypeError(
+							`Policy ${policy.name} read grant ${grant.collection} declares unavailable sync dependency ${dependency}.`
+						);
+					}
+					link(dependency, grant.collection);
+				}
+			}
+			if (containsOpaquePolicySql(grant.where)) {
+				for (const dependency of synced) link(dependency, grant.collection);
+			}
+		}
+	}
+	return new Map(
+		[...graph].map(([source, dependents]) => [source, new Set([...dependents].toSorted())])
+	);
+};
+
+const syncGenerationStatements = (workspace: WorkspaceDefinition): string => {
+	const graph = syncPolicyDependencyGraph(workspace);
+	const bump = (collection: string): string =>
+		`insert into bolt_sync_generation (collection_name, generation, last_xid) values (${collection}, 1, pg_current_xact_id()::text::bigint) on conflict (collection_name) do update set generation = case when bolt_sync_generation.last_xid = excluded.last_xid then bolt_sync_generation.generation else bolt_sync_generation.generation + 1 end, last_xid = excluded.last_xid;`;
+	const dependentBumps = [...graph]
+		.flatMap(([source, dependents]) => {
+			const indirect = [...dependents].filter((dependent) => dependent !== source);
+			if (indirect.length === 0) return [];
+			return [
+				`if TG_TABLE_NAME = ${quoteLiteral(source)} then ${indirect.map((dependent) => bump(quoteLiteral(dependent))).join(' ')} end if;`
+			];
+		})
+		.join(' ');
+	return `${bump('TG_TABLE_NAME')} ${dependentBumps} if TG_TABLE_NAME in ('user', 'team') then ${bump("'__authority__'")} end if;`;
+};
+
+const syncInvalidatedCollectionsExpression = (workspace: WorkspaceDefinition): string => {
+	const branches = [...syncPolicyDependencyGraph(workspace)].flatMap(([source, dependents]) => {
+		const indirect = [...dependents].filter((dependent) => dependent !== source).toSorted();
+		return indirect.length === 0
+			? []
+			: [`when ${quoteLiteral(source)} then ${quoteLiteral(JSON.stringify(indirect))}::jsonb`];
+	});
+	return `case TG_TABLE_NAME ${branches.join(' ')} else '[]'::jsonb end`;
+};
 
 /**
  * The tables the plan's steps create, read back out of the DDL this module rendered.
@@ -348,6 +486,8 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 	// Runtime-owned collections are planned exactly like authored ones: authored queries read them,
 	// so they need the same row columns rather than a private hand-written table shape.
 	const workspace = withSystemCollections(authored);
+	const generationStatements = syncGenerationStatements(authored);
+	const invalidatedCollections = syncInvalidatedCollectionsExpression(authored);
 	// Step ids are sorted, and every `bolt:` id sorts before every `collection:` id, so these
 	// projections exist before the generated columns that call them are created.
 	const foundation: ReadonlyArray<SchemaStep> = [
@@ -394,12 +534,12 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 			sql: "create or replace function bolt_daterange(payload jsonb) returns daterange language sql immutable parallel safe as $bolt_daterange$ select daterange(nullif(payload->>'start', '')::date, nullif(payload->>'end', '')::date, '[)') $bolt_daterange$"
 		},
 		{
-			// Every sync-visible row enters the ordered outbox because PostgreSQL changed it, not
-			// because each caller remembered a companion insert. That makes raw runtime writes and
-			// collection mutations identical to the replica and keeps the record plus its change in one
-			// transaction by construction.
+			// Every sync-visible row enters the ordered outbox with both full images, and advances the
+			// direct/dependent collection generations in the same transaction. Before-images make a
+			// policy transition decidable without consulting a page; dependent generation bumps cover
+			// the cases where a linking row changes visibility without writing the visible collection.
 			id: 'bolt:function-sync-capture',
-			sql: `create or replace function bolt_capture_sync_change() returns trigger language plpgsql as $bolt_sync_capture$ begin if TG_OP = 'DELETE' then insert into bolt_sync_outbox (collection_name, record_id, operation) values (TG_TABLE_NAME, OLD.id::text, 'delete'); return OLD; end if; insert into bolt_sync_outbox (collection_name, record_id, operation, record) values (TG_TABLE_NAME, NEW.id::text, case when TG_OP = 'INSERT' then 'create' else 'update' end, to_jsonb(NEW)); return NEW; end $bolt_sync_capture$`
+			sql: `create or replace function bolt_capture_sync_change() returns trigger language plpgsql as $bolt_sync_capture$ declare mutation_id text := nullif(current_setting('bolt.mutation_id', true), ''); begin ${generationStatements} if TG_OP = 'DELETE' then insert into bolt_sync_outbox (collection_name, record_id, operation, mutation_id, before_record, after_record, invalidated_collections) values (TG_TABLE_NAME, OLD.id::text, 'delete', mutation_id, to_jsonb(OLD), null, ${invalidatedCollections}); return OLD; end if; insert into bolt_sync_outbox (collection_name, record_id, operation, mutation_id, before_record, after_record, invalidated_collections) values (TG_TABLE_NAME, NEW.id::text, case when TG_OP = 'INSERT' then 'create' else 'update' end, mutation_id, case when TG_OP = 'UPDATE' then to_jsonb(OLD) else null end, to_jsonb(NEW), ${invalidatedCollections}); return NEW; end $bolt_sync_capture$`
 		},
 		{
 			// The task queue remains private: command inputs are arbitrary and may contain secrets.
@@ -491,6 +631,197 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 		...taskProjectionTriggers
 	].toSorted((left, right) => left.id.localeCompare(right.id));
 	return { fingerprint: fingerprintSchemaSteps(steps), steps };
+};
+
+/**
+ * Exact ordered DDL a browser replica receives from `sync.provisioning`.
+ *
+ * Both the endpoint and `sync.schema` consume this function. That shared source is what makes the
+ * advertised migration digest a verification of the bytes that are later applied, instead of a
+ * digest of a similar plan assembled along another path.
+ */
+export const replicaProvisioningSteps = (
+	workspace: WorkspaceDefinition
+): ReadonlyArray<SchemaStep> => {
+	const plan = buildSchemaPlan(workspace);
+	return [
+		...plan.steps.filter(({ id }) => id.startsWith('bolt:')),
+		...[...(workspace.migrations ?? [])]
+			.toSorted((left, right) => left.tag.localeCompare(right.tag))
+			.flatMap((entry) =>
+				entry.statements.map((sql, index) => ({ id: `lineage:${entry.tag}:${index}`, sql }))
+			),
+		...plan.steps.filter(({ id }) => !id.startsWith('bolt:'))
+	];
+};
+
+export type MutationCompatibilityResolution = Readonly<
+	| { readonly resolution: 'accepted'; readonly graph: CollectionMutationGraph; readonly baseVersions: ReadonlyArray<CollectionMutationBaseVersion> }
+	| { readonly resolution: 'rebased'; readonly graph: CollectionMutationGraph; readonly baseVersions: ReadonlyArray<CollectionMutationBaseVersion> }
+	| { readonly resolution: 'quarantined'; readonly reason: string }
+>;
+
+/**
+ * Selects and applies the one compiler-generated forward adapter for an offline mutation.
+ *
+ * Unknown fields are deliberately left in the transformed graph. The ordinary declarative graph
+ * validator then refuses them, so an incomplete adapter can never turn a removed field into a
+ * silently dropped write.
+ */
+export const reconcileMutationSchema = (
+	workspace: WorkspaceDefinition,
+	input: Readonly<{
+		readonly fromSchemaFingerprint: string;
+		readonly toSchemaFingerprint: string;
+		readonly ageMillis: number;
+		readonly graph: CollectionMutationGraph;
+		readonly baseVersions: ReadonlyArray<CollectionMutationBaseVersion>;
+	}>
+): MutationCompatibilityResolution => {
+	const compatibility = workspace.mutationCompatibility;
+	if (compatibility === undefined)
+		return {
+			resolution: 'quarantined',
+			reason: 'The compiled workspace carries no mutation compatibility lineage.'
+		};
+	const horizon = compatibility.offlineHorizonMillis;
+	if (input.ageMillis > horizon)
+		return {
+			resolution: 'quarantined',
+			reason: `The mutation was authored ${input.ageMillis}ms ago, outside the ${horizon}ms schema compatibility horizon.`
+		};
+	if (input.fromSchemaFingerprint === input.toSchemaFingerprint)
+		return { resolution: 'accepted', graph: input.graph, baseVersions: input.baseVersions };
+	const adapter = compatibility.adapters.find(
+		(entry) => entry.fromSchemaFingerprint === input.fromSchemaFingerprint
+	);
+	if (adapter === undefined)
+		return {
+			resolution: 'quarantined',
+			reason: `No retained compatibility adapter understands schema ${input.fromSchemaFingerprint}.`
+		};
+	if (
+		adapter.fieldRenames?.[input.graph.collection]?.['id'] !== undefined &&
+		adapter.fieldRenames[input.graph.collection]?.['id'] !== 'id'
+	)
+		return {
+			resolution: 'quarantined',
+			reason: `Compatibility adapter for ${input.graph.collection} cannot rewrite record identity.`
+		};
+	if ((adapter.incompatibleActions?.[input.graph.collection] ?? []).includes(input.graph.action))
+		return {
+			resolution: 'quarantined',
+			reason: `Compatibility adapter for ${input.graph.collection} cannot preserve ${input.graph.action} semantics.`
+		};
+	const collection = adapter.collectionRenames?.[input.graph.collection] ?? input.graph.collection;
+	type AdaptedValues =
+		| Readonly<{ readonly ok: true; readonly values: Readonly<Record<string, Schema.Json>> }>
+		| Readonly<{ readonly ok: false; readonly reason: string }>;
+	const oldCollectionName = (current: string): string =>
+		Object.entries(adapter.collectionRenames ?? {}).find(([, target]) => target === current)?.[0] ??
+		current;
+	const baseVersionKeys = new Set(
+		input.baseVersions.map(({ row }) => `${row.collection}\u0000${row.recordId}`)
+	);
+	const renameValues = (
+		oldName: string,
+		currentName: string,
+		values: Readonly<Record<string, Schema.Json>>,
+		action: 'create' | 'update'
+	): AdaptedValues => {
+		if ((adapter.incompatibleActions?.[oldName] ?? []).includes(action))
+			return {
+				ok: false,
+				reason: `Compatibility adapter for ${oldName} cannot preserve ${action} semantics.`
+			};
+		const renames = adapter.fieldRenames?.[oldName] ?? {};
+		const incompatible = new Set(adapter.incompatibleFields?.[oldName] ?? []);
+		if (renames['id'] !== undefined && renames['id'] !== 'id')
+			return {
+				ok: false,
+				reason: `Compatibility adapter for ${oldName} cannot rewrite record identity.`
+			};
+		const adapted: Record<string, Schema.Json> = {};
+		for (const [field, value] of Object.entries(values)) {
+			if (incompatible.has(field))
+				return {
+					ok: false,
+					reason: `Compatibility adapter for ${oldName} cannot losslessly translate field ${field}.`
+				};
+			const renamed = renames[field] ?? field;
+			if (renamed in adapted)
+				return {
+					ok: false,
+					reason: `Compatibility adapter for ${oldName} maps more than one field to ${renamed}.`
+				};
+			const relation = workspace.relations.find(
+				(entry) =>
+					entry.source === currentName && entry.cardinality === 'many' && entry.name === renamed
+			);
+			if (relation === undefined || !Array.isArray(value)) {
+				adapted[renamed] = value;
+				continue;
+			}
+			const nestedOldName = oldCollectionName(relation.target);
+			// A many relationship included in an update is a complete desired state. Rows omitted from
+			// it are deletes even though they do not appear as child objects in the graph.
+			if (
+				action === 'update' &&
+				(adapter.incompatibleActions?.[nestedOldName] ?? []).includes('delete')
+			)
+				return {
+					ok: false,
+					reason: `Compatibility adapter for ${nestedOldName} cannot preserve delete semantics.`
+				};
+			const children: Array<Schema.Json> = [];
+			for (const child of value) {
+				if (child === null || typeof child !== 'object' || Array.isArray(child)) {
+					children.push(child);
+					continue;
+				}
+				const childValues = child as Readonly<Record<string, Schema.Json>>;
+				const childId = childValues['id'];
+				const childAction =
+					action === 'create' ||
+					typeof childId !== 'string' ||
+					!baseVersionKeys.has(`${nestedOldName}\u0000${childId}`)
+						? 'create'
+						: 'update';
+				const nested = renameValues(
+					nestedOldName,
+					relation.target,
+					childValues,
+					childAction
+				);
+				if (!nested.ok) return nested;
+				children.push(nested.values);
+			}
+			adapted[renamed] = children;
+		}
+		return { ok: true, values: adapted };
+	};
+	const adaptedValues =
+		input.graph.action === 'delete'
+			? undefined
+			: renameValues(input.graph.collection, collection, input.graph.values, input.graph.action);
+	if (adaptedValues !== undefined && !adaptedValues.ok)
+		return { resolution: 'quarantined', reason: adaptedValues.reason };
+	const graph: CollectionMutationGraph =
+		input.graph.action === 'delete'
+			? { ...input.graph, collection }
+			: { ...input.graph, collection, values: adaptedValues!.values };
+	return {
+		resolution: 'rebased',
+		graph,
+		baseVersions: input.baseVersions.map((entry) => ({
+			...entry,
+			row: {
+				...entry.row,
+				collection:
+					adapter.collectionRenames?.[entry.row.collection] ?? entry.row.collection
+			}
+		}))
+	};
 };
 
 /**

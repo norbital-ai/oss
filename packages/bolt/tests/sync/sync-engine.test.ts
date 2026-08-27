@@ -8,15 +8,10 @@ import {
 	InvocationId,
 	PROTOCOL_VERSION,
 	ReleaseId,
-	success,
-	TenantId,
-	type TransportRequest
+	TenantId
 } from '@norbital-ai/bolt-protocol';
-import { approveBy } from '../../src/authoring/approval-flow.js';
-import { describePolicy } from '../../src/authoring/policy-introspection.js';
 import { policy } from '../../src/authoring/workspace-schema.js';
 import { systemSignature } from '../../src/host.js';
-import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import {
 	GATEWAY_SECRET_VARIABLE,
 	HostConfig,
@@ -26,9 +21,8 @@ import {
 } from '../../src/runtime/access/system-principal.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
-import type * as Identity from '../../src/runtime/identity/identity.js';
+import * as Identity from '../../src/runtime/identity/identity.js';
 import * as Sync from '../../src/runtime/sync/sync.js';
-import { decodeWake, SYNC_TOPIC } from '../../src/runtime/sync/wake.js';
 import { makeQueue, type ExecuteStatements } from '../../src/runtime/tasks/queue.js';
 import {
 	adminSubject,
@@ -56,827 +50,8 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-const field = (row: Schema.Json, name: string): unknown =>
-	row !== null && typeof row === 'object' && !Array.isArray(row)
-		? Reflect.get(row, name)
-		: undefined;
-
-type Published = { readonly topic: string; readonly collections: ReadonlyArray<string> };
-
-/** A mounted client has its own cursor even when another tab has already drained the same write. */
-type MountedClient = Readonly<{
-	readonly subject: Identity.Subject;
-	readonly cursor: Sync.SyncCursor;
-}>;
-
-const drainMountedClient = (
-	runtime: BoltTestRuntime,
-	client: MountedClient,
-	name: string
-): Promise<
-	Readonly<{
-		client: MountedClient;
-		changes: ReadonlyArray<Sync.SyncChange>;
-	}>
-> =>
-	runtime.runtime.runPromise(
-		Effect.gen(function* () {
-			const changes = yield* (yield* Sync.Service).diff(
-				runtime.effectId(`mounted-${name}`),
-				client.subject,
-				client.cursor,
-				100
-			);
-			return {
-				client: { ...client, cursor: changes.at(-1)?.cursor ?? client.cursor },
-				changes
-			};
-		})
-	);
-
-describe('Sync engine over SQL', () => {
-	it('advances the head as collection writes land, and replays them in order from a cursor', async () => {
-		harness = await makeBoltTestRuntime();
-		const { runtime, effectId } = harness;
-
-		const start = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).head(effectId('head-empty'));
-			})
-		);
-		expect(start).toEqual({ xid: 0, sequence: 0 });
-
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				yield* collections.create(effectId('create-ada'), adminSubject, {
-					collection: 'people',
-					id: rid('p1'),
-					values: { name: 'Ada', team: 'core' }
-				});
-				yield* collections.create(effectId('create-grace'), adminSubject, {
-					collection: 'people',
-					id: rid('p2'),
-					values: { name: 'Grace', team: 'core' }
-				});
-				yield* collections.update(effectId('rename-ada'), adminSubject, {
-					collection: 'people',
-					id: rid('p1'),
-					values: { name: 'Ada Lovelace' }
-				});
-			})
-		);
-
-		const head = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).head(effectId('head-after'));
-			})
-		);
-		expect(head.sequence).toBeGreaterThan(0);
-
-		const changes = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(
-					effectId('diff'),
-					adminSubject,
-					{ xid: 0, sequence: 0 },
-					100
-				);
-			})
-		);
-		expect(changes.map((change) => [change.collection, change.recordId, change.operation])).toEqual(
-			[
-				['people', rid('p1'), 'create'],
-				['people', rid('p2'), 'create'],
-				['people', rid('p1'), 'update']
-			]
-		);
-
-		// Resuming from a cursor replays only what came after it.
-		const first = changes[0];
-		if (first === undefined) throw new Error('expected a first change');
-		const resumed = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(
-					effectId('diff-resumed'),
-					adminSubject,
-					first.cursor,
-					100
-				);
-			})
-		);
-		expect(resumed.map((change) => change.recordId)).toEqual([rid('p2'), rid('p1')]);
-	});
-
-	it('applies a client mutation to the collection it names, not to a queue nothing reads', async () => {
-		harness = await makeBoltTestRuntime();
-		const { runtime, effectId, database } = harness;
-
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).mutate(effectId('mutate'), adminSubject, [
-					{
-						cursor: { xid: 0, sequence: 0 },
-						collection: 'people',
-						recordId: rid('p9'),
-						operation: 'create',
-						record: { name: 'Katherine', team: 'flight' }
-					}
-				]);
-			})
-		);
-
-		const rows = await database.query('select id, name, team from people where id = $1', [
-			rid('p9')
-		]);
-		expect(rows).toEqual([{ id: rid('p9'), name: 'Katherine', team: 'flight' }]);
-
-		// The write is replicable: a client that applied it optimistically sees it confirmed.
-		const changes = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(
-					effectId('diff-after-mutate'),
-					adminSubject,
-					{ xid: 0, sequence: 0 },
-					100
-				);
-			})
-		);
-		expect(
-			changes.some((change) => change.recordId === rid('p9') && change.operation === 'create')
-		).toBe(true);
-	});
-
-	it('applies update and delete mutations through the same path', async () => {
-		harness = await makeBoltTestRuntime();
-		const { runtime, effectId, database } = harness;
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				const sync = yield* Sync.Service;
-				yield* sync.mutate(effectId('m1'), adminSubject, [
-					{
-						cursor: { xid: 0, sequence: 0 },
-						collection: 'people',
-						recordId: rid('p1'),
-						operation: 'create',
-						record: { name: 'Ada', team: 'core' }
-					}
-				]);
-				yield* sync.mutate(effectId('m2'), adminSubject, [
-					{
-						cursor: { xid: 0, sequence: 0 },
-						collection: 'people',
-						recordId: rid('p1'),
-						operation: 'update',
-						record: { team: 'analytical' }
-					}
-				]);
-			})
-		);
-		expect(await database.query('select team from people where id = $1', [rid('p1')])).toEqual([
-			{ team: 'analytical' }
-		]);
-		const updateEvent = await database.query(
-			"select record from bolt_sync_outbox where collection_name = 'people' and operation = 'update' order by xid desc, sequence desc limit 1"
-		);
-		expect(updateEvent[0]?.['record']).toMatchObject({
-			id: rid('p1'),
-			name: 'Ada',
-			team: 'analytical'
-		});
-
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).mutate(effectId('m3'), adminSubject, [
-					{
-						cursor: { xid: 0, sequence: 0 },
-						collection: 'people',
-						recordId: rid('p1'),
-						operation: 'delete'
-					}
-				]);
-			})
-		);
-		expect(await database.query('select id from people where id = $1', [rid('p1')])).toEqual([]);
-	});
-
-	it('refuses a mutation the subject may not perform, and writes nothing', async () => {
-		harness = await makeBoltTestRuntime();
-		const { runtime, effectId, database } = harness;
-		const outsider = {
-			userId: 'guest-1',
-			tenantId: 'test-tenant',
-			teamPath: ['guest'],
-			policies: []
-		};
-
-		const outcome = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).mutate(effectId('denied'), outsider, [
-					{
-						cursor: { xid: 0, sequence: 0 },
-						collection: 'people',
-						recordId: rid('p1'),
-						operation: 'create',
-						record: { name: 'Mallory' }
-					}
-				]);
-			}).pipe(Effect.result)
-		);
-		expect(outcome._tag).toBe('Failure');
-		expect(await database.query('select id from people')).toEqual([]);
-	});
-
-	it('reports a reset when the requested cursor is older than the retained outbox', async () => {
-		harness = await makeBoltTestRuntime();
-		const { runtime, effectId, database } = harness;
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				yield* collections.create(effectId('c1'), adminSubject, {
-					collection: 'people',
-					id: rid('p1'),
-					values: { name: 'Ada' }
-				});
-				yield* collections.create(effectId('c2'), adminSubject, {
-					collection: 'people',
-					id: rid('p2'),
-					values: { name: 'Grace' }
-				});
-			})
-		);
-		// Aged past the retention window so `compact` prunes it for the reason production would.
-		await database.query(
-			"update bolt_sync_outbox set created_at = now() - interval '40 days' where record_id = $1",
-			[rid('p1')]
-		);
-		const removed = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).compact(effectId('compact'), 30);
-			})
-		);
-		expect(removed.pruned).toBe(1);
-
-		const changes = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(
-					effectId('diff-reset'),
-					adminSubject,
-					{ xid: 1, sequence: 1 },
-					100
-				);
-			})
-		);
-		expect(changes.map((change) => change.operation)).toEqual(['reset']);
-	});
-
-	it('collapses superseded versions without stranding any cursor', async () => {
-		harness = await makeBoltTestRuntime();
-		const { runtime, effectId, database } = harness;
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				const collections = yield* Collections.Service;
-				yield* collections.create(effectId('c1'), adminSubject, {
-					collection: 'people',
-					id: rid('p1'),
-					values: { name: 'Ada' }
-				});
-				yield* collections.update(effectId('u1'), adminSubject, {
-					collection: 'people',
-					id: rid('p1'),
-					values: { name: 'Ada L' }
-				});
-				yield* collections.update(effectId('u2'), adminSubject, {
-					collection: 'people',
-					id: rid('p1'),
-					values: { name: 'Ada Lovelace' }
-				});
-			})
-		);
-		const outcome = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).compact(effectId('compact'), 30);
-			})
-		);
-		// Two of the three rows for this record are superseded; the newest survives.
-		expect(outcome.collapsed).toBe(2);
-		expect(outcome.pruned).toBe(0);
-
-		// Collapsing is safe at any cursor, so the mark must not have moved and a replay from the
-		// origin must still converge on the final state rather than being told to rebuild.
-		const mark = await database.query(
-			'select xid, sequence from bolt_sync_horizon where singleton',
-			[]
-		);
-		expect(mark[0]).toMatchObject({ xid: 0, sequence: 0 });
-		const changes = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(
-					effectId('replay'),
-					adminSubject,
-					{ xid: 0, sequence: 0 },
-					100
-				);
-			})
-		);
-		expect(changes).toHaveLength(1);
-		expect(field(changes[0]?.record ?? null, 'name')).toBe('Ada Lovelace');
-	});
-
-	it('serves a snapshot of seeded rows with a cursor beyond their captured change', async () => {
-		harness = await makeBoltTestRuntime();
-		const { runtime, effectId, database } = harness;
-		// Written straight to the table, exactly as a seed, an import or a restore does. Database-owned
-		// capture means this path cannot bypass sync just because it did not call Collections.
-		await database.query("insert into people (id, name, team) values ($1, 'Seeded', 'core')", [
-			rid('seeded-1')
-		]);
-		const outboxed = await database.query(
-			'select count(*)::int as count from bolt_sync_outbox',
-			[]
-		);
-		expect(outboxed[0]?.count).toBe(1);
-
-		const page = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).snapshot(
-					effectId('snap'),
-					adminSubject,
-					'people',
-					undefined,
-					500
-				);
-			})
-		);
-		expect(page.collection).toBe('people');
-		expect(page.rows).toHaveLength(1);
-		expect(field(page.rows[0] ?? null, 'name')).toBe('Seeded');
-		expect(page.nextAfter).toBeNull();
-
-		// A write after the snapshot must be reachable from the cursor the snapshot handed back.
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Collections.Service).create(effectId('after'), adminSubject, {
-					collection: 'people',
-					id: rid('after-1'),
-					values: { name: 'Later', team: 'core' }
-				});
-			})
-		);
-		const changes = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(
-					effectId('after-diff'),
-					adminSubject,
-					page.cursor,
-					100
-				);
-			})
-		);
-		expect(changes.map((change) => field(change.record ?? null, 'name'))).toEqual(['Later']);
-	});
-
-	it('replicates only the collections the subject may read', async () => {
-		harness = await makeBoltTestRuntime();
-		const { runtime, effectId } = harness;
-		const outsider = {
-			userId: 'guest-1',
-			tenantId: 'test-tenant',
-			teamPath: ['guest'],
-			policies: []
-		};
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Collections.Service).create(effectId('c1'), adminSubject, {
-					collection: 'people',
-					id: rid('p1'),
-					values: { name: 'Ada' }
-				});
-			})
-		);
-
-		// Runtime-owned collections replicate too: the UI reads approval status from `approval_request`.
-		expect(
-			await runtime.runPromise(
-				Effect.gen(function* () {
-					return yield* (yield* Sync.Service).shape(adminSubject);
-				})
-			)
-			// No file collection replicates with them. A `file()` column carries the file inline, so it
-			// arrives with the record that owns it and there is nothing separate to bulk-replicate —
-			// which also stops every file's metadata in the workspace landing in every browser.
-		).toEqual([
-			'agent_mailbox',
-			'agent_run',
-			'approval_request',
-			'automation_run',
-			'bolt_notifications',
-			'chat_document',
-			'chat_message',
-			'chat_session',
-			'people',
-			'requestor',
-			'team',
-			'user'
-		]);
-		/**
-		 * The authored collection is what an outsider does not replicate; runtime collections remain
-		 * are what they do.
-		 *
-		 * This used to assert `[]`, and that was the defect rather than the rule: `SYSTEM_READ_POLICY`
-		 * grants these reads to any authenticated subject, but nothing selected it — no team can
-		 * declare `bolt.system-collections` — so only the `isAdministrator` short-circuit reached them
-		 * and every ordinary member replicated an empty shape. The same argument the admin case above
-		 * makes applies to a member: approval rows are scoped to their parties, while the user/team
-		 * directories are field-masked to `id` and `name`.
-		 *
-		 * `people` staying out is what carries the test. An outsider holds no authored policy, and the
-		 * built-in grant names the runtime's collections and no workspace's.
-		 *
-		 * **A shape is a list of collections, not a licence over their rows**, and the two answers
-		 * moved apart when `approval_request` and `requestor` became conditional. `shape` filters on
-		 * `predicate.allowed`, and a narrowed grant is still *allowed* — it carries a `where` instead
-		 * of `true` — so both still appear here and both are row-filtered on the way out by the same
-		 * predicate `diff` and `snapshot` splice into their SQL. The case below is what pins that
-		 * second half; asserting only this list would read as "an outsider replicates every approval".
-		 */
-		expect(
-			await runtime.runPromise(
-				Effect.gen(function* () {
-					return yield* (yield* Sync.Service).shape(outsider);
-				})
-			)
-		).toEqual([
-			'agent_mailbox',
-			'agent_run',
-			'approval_request',
-			'automation_run',
-			'bolt_notifications',
-			'chat_document',
-			'chat_message',
-			'chat_session',
-			'requestor',
-			'team',
-			'user'
-		]);
-		expect(
-			await runtime.runPromise(
-				Effect.gen(function* () {
-					return yield* (yield* Sync.Service).diff(
-						effectId('diff-guest'),
-						outsider,
-						{ xid: 0, sequence: 0 },
-						100
-					);
-				})
-			)
-		).toEqual([]);
-	});
-
-	/**
-	 * The rows behind the shape: a replica pulls the approvals its subject is party to or may decide,
-	 * and no others.
-	 *
-	 * Asserted through `snapshot` rather than `diff` because `bolt_sync_outbox` is written by
-	 * `Collections` alone — `Approvals` projects `approval_request` with its own SQL, so an approval
-	 * never produces a change row and a `diff` assertion here would pass against any predicate at
-	 * all. `snapshot` is the half of replication that reads the table, and it splices in exactly the
-	 * predicate `diff` correlates through.
-	 *
-	 * The approver holds no authored policy whatsoever — `Approvers` is declared with an empty policy
-	 * list — so what admits their read is the built-in grant and nothing else.
-	 */
-	it('replicates only the approvals a subject raised or may decide', async () => {
-		const CONTRACTOR_TEAM = 'Contractors';
-		const APPROVER_TEAM = 'Approvers';
-		const REQUEST_ID = '019f6f10-0004-7000-8000-000000000001';
-		const concreteApproval = {
-			id: '019f6f10-0004-7000-8000-000000000101',
-			steps: [
-				{
-					id: '019f6f10-0004-7000-8000-000000000201',
-					approvers: [APPROVER_TEAM]
-				}
-			],
-			superceded_by: []
-		};
-		harness = await makeBoltTestRuntime(
-			testWorkspace({
-				policies: [
-					policy({
-						name: 'contractor',
-						effect: 'allow',
-						capabilities: { apps: ['*'] },
-						grants: [
-							{ collection: 'people', action: 'read' },
-							{
-								collection: 'people',
-								action: 'create',
-								approval: concreteApproval
-							}
-						]
-					})
-				],
-				teams: { [CONTRACTOR_TEAM]: ['contractor'], [APPROVER_TEAM]: [] }
-			})
-		);
-		const { runtime, effectId } = harness;
-		await seedTeam(harness, CONTRACTOR_TEAM);
-		await seedTeam(harness, APPROVER_TEAM);
-		await seedSession(harness, { token: 'p', user: 'party', team: CONTRACTOR_TEAM });
-		await seedSession(harness, { token: 'a', user: 'approver', team: APPROVER_TEAM });
-		await seedSession(harness, { token: 'b', user: 'bystander', team: CONTRACTOR_TEAM });
-		const member = (user: string, team: string): Identity.Subject => ({
-			userId: fixtureUserId(user),
-			tenantId: 'test-tenant',
-			teamPath: [team],
-			policies: []
-		});
-		const party = member('party', CONTRACTOR_TEAM);
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Approvals.Service).request(effectId('raise'), party, REQUEST_ID, {
-					collection: 'people',
-					id: rid('p-approved'),
-					action: 'create',
-					values: { name: 'Grace' },
-					approval: concreteApproval
-				});
-			})
-		);
-		const replicated = (subject: Identity.Subject, collection: string) =>
-			runtime.runPromise(
-				Effect.gen(function* () {
-					const page = yield* (yield* Sync.Service).snapshot(
-						effectId(`snapshot-${subject.userId}-${collection}`),
-						subject,
-						collection,
-						undefined,
-						100
-					);
-					return page.rows.map((row) => field(row, 'id'));
-				})
-			);
-
-		expect(await replicated(party, 'approval_request')).toEqual([REQUEST_ID]);
-		expect(await replicated(member('approver', APPROVER_TEAM), 'approval_request')).toEqual([
-			REQUEST_ID
-		]);
-		// The row exists and two other subjects replicate it, so an empty page here is a narrowing
-		// rather than an empty table — the assertion a collapsed `true` predicate could not survive.
-		expect(await replicated(member('bystander', CONTRACTOR_TEAM), 'approval_request')).toEqual([]);
-		expect(await replicated(adminSubject, 'approval_request')).toEqual([REQUEST_ID]);
-		expect(await replicated(member('bystander', CONTRACTOR_TEAM), 'requestor')).toEqual([]);
-		expect(await replicated(party, 'requestor')).toHaveLength(1);
-		expect(await replicated(adminSubject, 'requestor')).toHaveLength(1);
-	});
-
-	it('publishes a declarative create approval to two mounted inboxes and resumes it atomically', async () => {
-		const REQUESTER_TEAM = 'Requesters';
-		const APPROVER_TEAM = 'Approvers';
-		const published: Array<Published> = [];
-		harness = await makeBoltTestRuntime(
-			testWorkspace({
-				policies: [
-					describePolicy('requester', {
-						description: 'Creates people through the approver team.',
-						grants: {
-							people: {
-								read: {},
-								create: {
-									approval: {
-										flow: () => approveBy(APPROVER_TEAM),
-										superceded_by: []
-									}
-								}
-							}
-						}
-					}),
-					describePolicy('reviewer', {
-						description: 'Reads people under review.',
-						grants: { people: { read: {} } }
-					})
-				],
-				teams: { [REQUESTER_TEAM]: ['requester'], [APPROVER_TEAM]: ['reviewer'] }
-			}),
-			{
-				transport: {
-					call: async (_metadata: unknown, request: TransportRequest) => {
-						if (request._tag === 'Publish')
-							published.push({
-								topic: request.topic,
-								collections: decodeWake(request.bytes).collections
-							});
-						return success({ delivered: 2 });
-					}
-				} as never
-			}
-		);
-		await seedSession(harness, { token: 'requester', user: 'requester', team: REQUESTER_TEAM });
-		await seedSession(harness, { token: 'approver', user: 'approver', team: APPROVER_TEAM });
-		await harness.database.query('delete from bolt_sync_outbox');
-		published.length = 0;
-		const requester: Identity.Subject = {
-			userId: fixtureUserId('requester'),
-			tenantId: 'test-tenant',
-			teamPath: [REQUESTER_TEAM],
-			policies: []
-		};
-		const approver: Identity.Subject = {
-			userId: fixtureUserId('approver'),
-			tenantId: 'test-tenant',
-			teamPath: [APPROVER_TEAM],
-			policies: []
-		};
-		let requesterClient: MountedClient = { subject: requester, cursor: { xid: 0, sequence: 0 } };
-		let approverClient: MountedClient = { subject: approver, cursor: { xid: 0, sequence: 0 } };
-
-		const held = await harness.runtime.runPromise(
-			Effect.flip(
-				Effect.gen(function* () {
-					return yield* (yield* Collections.Service).mutate(
-						EffectId.make('mounted-approval-create'),
-						requester,
-						'people',
-						[{ name: 'Awaiting review', team: 'core' }],
-						false,
-						0,
-						{ declarative: true }
-					);
-				})
-			)
-		);
-		expect(held).toBeInstanceOf(Collections.PendingApproval);
-		if (!(held instanceof Collections.PendingApproval)) return;
-
-		// A pending graph is discoverable by request id, never through an uncommitted root row.
-		expect(await harness.database.query('select id from people')).toEqual([]);
-		expect(
-			await harness.database.query(
-				'select collection_name, record_id, action, status from approval_request where id = $1',
-				[held.requestId]
-			)
-		).toEqual([
-			expect.objectContaining({
-				collection_name: 'people',
-				action: 'create',
-				status: 'ONGOING'
-			})
-		]);
-		expect(
-			await harness.database.query(
-				'select approval_request_id, user_id from requestor where approval_request_id = $1',
-				[held.requestId]
-			)
-		).toEqual([{ approval_request_id: held.requestId, user_id: requester.userId }]);
-		expect(
-			await harness.database.query(
-				'select collection_name, operation from bolt_sync_outbox order by sequence'
-			)
-		).toEqual([
-			{ collection_name: 'approval_request', operation: 'create' },
-			{ collection_name: 'requestor', operation: 'create' }
-		]);
-		expect(published).toEqual([
-			{ topic: SYNC_TOPIC, collections: ['approval_request', 'requestor'] }
-		]);
-
-		const requesterRequest = await drainMountedClient(
-			harness,
-			requesterClient,
-			'requester-request'
-		);
-		requesterClient = requesterRequest.client;
-		const approverRequest = await drainMountedClient(harness, approverClient, 'approver-request');
-		approverClient = approverRequest.client;
-		for (const changes of [requesterRequest.changes, approverRequest.changes]) {
-			expect(changes.map(({ collection, operation }) => [collection, operation])).toEqual([
-				['approval_request', 'create'],
-				['requestor', 'create']
-			]);
-			expect(field(changes[0]?.record ?? null, 'id')).toBe(held.requestId);
-			expect(field(changes[0]?.record ?? null, 'status')).toBe('ONGOING');
-			expect(field(changes[1]?.record ?? null, 'approval_request_id')).toBe(held.requestId);
-		}
-
-		const pending = await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Approvals.Service).status(
-					EffectId.make('mounted-approval-status'),
-					held.requestId
-				);
-			})
-		);
-		expect(pending?._tag).toBe('Pending');
-		if (pending === undefined) return;
-		const decided = await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Approvals.Service).decide(
-					EffectId.make('mounted-approval-decide'),
-					approver,
-					pending,
-					'approve'
-				);
-			})
-		);
-		expect(decided._tag).toBe('Approved');
-		// A decision updates the inbox first. The approved graph is still absent until its queued resume.
-		expect(await harness.database.query('select id from people')).toEqual([]);
-		expect(
-			await harness.database.query(
-				'select collection_name, operation from bolt_sync_outbox order by sequence'
-			)
-		).toEqual([
-			{ collection_name: 'approval_request', operation: 'create' },
-			{ collection_name: 'requestor', operation: 'create' },
-			{ collection_name: 'bolt_notifications', operation: 'create' },
-			{ collection_name: 'approval_request', operation: 'update' }
-		]);
-		expect(published.at(-1)).toEqual({
-			topic: SYNC_TOPIC,
-			collections: ['approval_request', 'bolt_notifications']
-		});
-
-		const requesterDecision = await drainMountedClient(
-			harness,
-			requesterClient,
-			'requester-decision'
-		);
-		requesterClient = requesterDecision.client;
-		const approverDecision = await drainMountedClient(harness, approverClient, 'approver-decision');
-		approverClient = approverDecision.client;
-		expect(
-			requesterDecision.changes.map(({ collection, operation }) => [collection, operation])
-		).toEqual([
-			['bolt_notifications', 'create'],
-			['approval_request', 'update']
-		]);
-		expect(field(requesterDecision.changes[0]?.record ?? null, 'recipient')).toBe(requester.userId);
-		expect(field(requesterDecision.changes[0]?.record ?? null, 'read')).toBe(false);
-		expect(field(requesterDecision.changes[1]?.record ?? null, 'status')).toBe('APPROVED');
-		expect(
-			approverDecision.changes.map(({ collection, operation }) => [collection, operation])
-		).toEqual([['approval_request', 'update']]);
-		expect(field(approverDecision.changes[0]?.record ?? null, 'status')).toBe('APPROVED');
-
-		await harness.runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Collections.Service).resume(
-					EffectId.make('mounted-approval-resume'),
-					held.requestId
-				);
-			})
-		);
-		expect(await harness.database.query('select name, team from people')).toEqual([
-			{ name: 'Awaiting review', team: 'core' }
-		]);
-		expect(published.at(-1)).toEqual({ topic: SYNC_TOPIC, collections: ['people'] });
-
-		const requesterResume = await drainMountedClient(harness, requesterClient, 'requester-resume');
-		const approverResume = await drainMountedClient(harness, approverClient, 'approver-resume');
-		for (const changes of [requesterResume.changes, approverResume.changes]) {
-			expect(changes.map(({ collection, operation }) => [collection, operation])).toEqual([
-				['people', 'create']
-			]);
-			expect(field(changes[0]?.record ?? null, 'name')).toBe('Awaiting review');
-		}
-	}, 60_000);
-
-	it('carries the record body so a replica can apply a change without refetching', async () => {
-		harness = await makeBoltTestRuntime();
-		const { runtime, effectId } = harness;
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Collections.Service).create(effectId('c1'), adminSubject, {
-					collection: 'people',
-					id: rid('p1'),
-					values: { name: 'Ada', team: 'core' }
-				});
-			})
-		);
-		const changes = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(
-					effectId('diff'),
-					adminSubject,
-					{ xid: 0, sequence: 0 },
-					100
-				);
-			})
-		);
-		const change = changes[0];
-		if (change === undefined) throw new Error('expected a change');
-		expect(field(change.record ?? null, 'name')).toBe('Ada');
-	});
-});
-
 /**
- * A subject who may read almost nothing still has to be able to reach the end of the log.
- *
- * `diff` answers with the rows a subject may *apply*, so an outbox page that holds none of theirs is
- * indistinguishable from a drained log: the caller has nothing to advance a cursor to and rescans
- * the same invisible range on every wake, forever. `scan` separates the two facts — what was
- * examined, and what may be applied — so an empty page still moves the scan position.
+ * A narrow streamed predicate exercises before/after visibility without widening its partition.
  */
 const SPARSE_TEAM = 'CoreOnly';
 const sparseWorkspace = () =>
@@ -905,92 +80,476 @@ const compareCursors = (left: Sync.SyncCursor, right: Sync.SyncCursor): number =
 	left.xid === right.xid ? left.sequence - right.sequence : left.xid - right.xid;
 
 const ORIGIN: Sync.SyncCursor = { xid: 0, sequence: 0 };
-
-describe('Sync scan position', () => {
-	it('advances past outbox rows the subject cannot see, so an empty page is not a dead end', async () => {
+describe('Partition-oriented sync pull', () => {
+	it('emits full-row upserts and removes from before/after visibility transitions', async () => {
 		harness = await makeBoltTestRuntime(sparseWorkspace());
+		const { runtime, effectId, database } = harness;
+		const start = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).positions(
+					effectId('partition-start'),
+					sparseSubject,
+					['people']
+				);
+			})
+		);
+		await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).create(
+					effectId('partition-visible-create'),
+					adminSubject,
+					{
+						collection: 'people',
+						id: rid('partition-visible'),
+						values: { name: 'Ada', team: 'core' }
+					}
+				);
+			})
+		);
+		const created = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).pull(
+					effectId('partition-created'),
+					sparseSubject,
+					{
+						collections: ['people'],
+						cursor: start.cursor,
+						generations: start.generations
+					}
+				);
+			})
+		);
+		expect(created.kind).toBe('delta');
+		expect(created.deltas).toHaveLength(1);
+		expect(created.deltas[0]).toMatchObject({
+			collection: 'people',
+			op: 'upsert',
+			recordId: rid('partition-visible'),
+			row: { id: rid('partition-visible'), name: 'Ada', team: 'core' }
+		});
+		if (created.deltas[0]?.op !== 'upsert') throw new Error('expected full-row upsert');
+		expect(created.deltas[0].rowVersion).toBe(created.deltas[0].row['row_version']);
+
+		await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).update(
+					effectId('partition-visible-leaves'),
+					adminSubject,
+					{
+						collection: 'people',
+						id: rid('partition-visible'),
+						values: { team: 'other' }
+					}
+				);
+			})
+		);
+		const removed = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).pull(
+					effectId('partition-removed'),
+					sparseSubject,
+					{
+						collections: ['people'],
+						cursor: created.cursor,
+						generations: created.generations
+					}
+				);
+			})
+		);
+		expect(removed.deltas).toEqual([
+			expect.objectContaining({
+				collection: 'people',
+				op: 'remove',
+				recordId: rid('partition-visible')
+			})
+		]);
+		expect(JSON.stringify(removed)).not.toContain('other');
+
+		const images = await database.query(
+			`select before_record, after_record
+			 from bolt_sync_outbox
+			 where record_id = $1 and operation = 'update'
+			 order by sequence desc limit 1`,
+			[rid('partition-visible')]
+		);
+		expect(images[0]?.['before_record']).toMatchObject({ team: 'core' });
+		expect(images[0]?.['after_record']).toMatchObject({ team: 'other' });
+	});
+
+	it('keeps generations at the durable input position until a bounded replay reaches head', async () => {
+		harness = await makeBoltTestRuntime();
 		const { runtime, effectId } = harness;
+		const start = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).positions(
+					effectId('atomic-position'),
+					adminSubject,
+					['people']
+				);
+			})
+		);
 		await runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				// Five rows this subject may never see, then one it may. Written one at a time so each
-				// lands in its own transaction and the outbox holds six ordered rows.
-				for (const index of [1, 2, 3, 4, 5]) {
-					yield* collections.create(effectId(`hidden-${index}`), adminSubject, {
+				for (const index of [1, 2, 3]) {
+					yield* collections.create(effectId(`atomic-${index}`), adminSubject, {
 						collection: 'people',
-						id: rid(`hidden-${index}`),
-						values: { name: `Hidden ${index}`, team: 'other' }
+						id: rid(`atomic-${index}`),
+						values: { name: `Person ${index}`, team: 'core' }
 					});
 				}
-				yield* collections.create(effectId('visible'), adminSubject, {
-					collection: 'people',
-					id: rid('visible'),
-					values: { name: 'Visible', team: 'core' }
+			})
+		);
+		const partial = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).pull(effectId('atomic-partial'), adminSubject, {
+					collections: ['people'],
+					cursor: start.cursor,
+					generations: start.generations,
+					limit: 1
 				});
 			})
 		);
-
-		const scan = (cursor: Sync.SyncCursor, name: string, limit: number) =>
-			runtime.runPromise(
-				Effect.gen(function* () {
-					return yield* (yield* Sync.Service).scan(effectId(name), sparseSubject, cursor, limit);
-				})
-			);
-
-		// The regression: this page holds nothing the subject may apply, and it still names a position
-		// strictly beyond the one it was asked from.
-		const first = await scan(ORIGIN, 'scan-1', 2);
-		expect(first.changes).toEqual([]);
-		expect(first.complete).toBe(false);
-		expect(compareCursors(first.scanned, ORIGIN)).toBeGreaterThan(0);
-
-		let cursor = first.scanned;
-		const seen: Array<Sync.SyncChange> = [];
-		for (let page = 0; page < 10; page += 1) {
-			const next = await scan(cursor, `scan-page-${page}`, 2);
-			seen.push(...next.changes);
-			expect(compareCursors(next.scanned, cursor)).toBeGreaterThanOrEqual(0);
-			cursor = next.scanned;
-			if (next.complete) break;
-		}
-		expect(seen.map((change) => field(change.record ?? null, 'name'))).toEqual(['Visible']);
-
-		// And a scan from the position it reached is drained rather than perpetually restarted.
-		const drained = await scan(cursor, 'scan-drained', 2);
-		expect(drained.changes).toEqual([]);
-		expect(drained.complete).toBe(true);
+		expect(partial.complete).toBe(false);
+		expect(partial.generations).toEqual(start.generations);
+		expect(compareCursors(partial.cursor, start.cursor)).toBeGreaterThan(0);
+		expect(compareCursors(partial.cursor, partial.headCursor)).toBeLessThan(0);
 	});
 
-	it('reports the scan as complete when the window is not filled', async () => {
-		harness = await makeBoltTestRuntime();
-		const { runtime, effectId } = harness;
+	it('keeps linking invalidation distinct when the same batch also has an own-row delta', async () => {
+		const linked = testWorkspace({
+			policies: [
+				policy({ name: 'admin', effect: 'allow', actions: ['*'], capabilities: { apps: ['*'] } }),
+				policy({
+					name: 'linked-reader',
+					effect: 'allow',
+					actions: ['read'],
+					grants: [
+						{
+							collection: 'people',
+							action: 'read',
+							dependencies: ['team']
+						}
+					]
+				})
+			],
+			teams: { admin: ['admin'], reader: ['linked-reader'] }
+		});
+		harness = await makeBoltTestRuntime(linked);
+		const { runtime, effectId, database } = harness;
+		await database.query(
+			'insert into people (id, name, team) values ($1, $2, $3), ($4, $5, $6)',
+			[rid('generation-a'), 'A', 'core', rid('generation-b'), 'B', 'core']
+		);
+		expect(
+			await database.query(
+				`select generation from bolt_sync_generation where collection_name = 'people'`
+			)
+		).toEqual([{ generation: 1 }]);
+		const reader: Identity.Subject = {
+			userId: 'generation-reader',
+			tenantId: 'test-tenant',
+			teamPath: ['reader'],
+			policies: []
+		};
+		const beforeLinkWrite = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).positions(
+					effectId('linked-generation-position'),
+					reader,
+					['people']
+				);
+			})
+		);
+		await seedTeam(harness, 'reader');
+		expect(
+			await database.query(
+				`select collection_name, generation
+				 from bolt_sync_generation
+				 where collection_name in ('people', 'team')
+				 order by collection_name`
+			)
+		).toEqual([
+			{ collection_name: 'people', generation: 2 },
+			{ collection_name: 'team', generation: 1 }
+		]);
+		const linkEvent = await database.query(
+			`select invalidated_collections from bolt_sync_outbox
+			 where collection_name = 'team' order by sequence desc limit 1`
+		);
+		expect(linkEvent[0]?.['invalidated_collections']).toContain('people');
 		await runtime.runPromise(
 			Effect.gen(function* () {
-				return yield* (yield* Collections.Service).create(effectId('c1'), adminSubject, {
+				return yield* (yield* Collections.Service).create(
+					effectId('linked-generation-direct-row'),
+					adminSubject,
+					{
+						collection: 'people',
+						id: rid('linked-generation-direct-row'),
+						values: { name: 'Direct row', team: 'core' }
+					}
+				);
+			})
+		);
+
+		// The direct row is M1 work, but it cannot explain away the independent team-driven visibility
+		// bump. `refillCollections` remains an unconditional M2 instruction for the people proof.
+		const invalidated = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).pull(
+					effectId('linked-generation-invalidated'),
+					reader,
+					{
+						collections: ['people'],
+						cursor: beforeLinkWrite.cursor,
+						generations: beforeLinkWrite.generations
+					}
+				);
+			})
+		);
+		expect(invalidated).toMatchObject({
+			kind: 'delta',
+			deltas: [
+				expect.objectContaining({
 					collection: 'people',
-					id: rid('p1'),
-					values: { name: 'Ada', team: 'core' }
+					op: 'upsert',
+					recordId: rid('linked-generation-direct-row')
+				})
+			],
+			affectedCollections: ['people'],
+			refillCollections: ['people'],
+			complete: true,
+			generations: { people: 3 }
+		});
+	});
+
+	it('chooses replay or rehydration from bounded cost metadata and detects a backwards head', async () => {
+		harness = await makeBoltTestRuntime();
+		const { runtime, effectId, database } = harness;
+		const position = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).positions(
+					effectId('recovery-position'),
+					adminSubject,
+					['people']
+				);
+			})
+		);
+		await database.query(
+			`insert into people (id, name)
+			 select gen_random_uuid(), 'bulk-' || value::text
+			 from generate_series(1, $1) value`,
+			[20]
+		);
+		const advised = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).pull(effectId('rehydrate-advised'), adminSubject, {
+					collections: ['people'],
+					cursor: position.cursor,
+					generations: position.generations,
+					rehydration: {
+						activeWindows: 1,
+						rowsPerWindow: 1,
+						estimatedBytesPerRow: 1
+					}
 				});
 			})
 		);
-		const page = await runtime.runPromise(
+		expect(advised).toMatchObject({
+			kind: 'rehydrateAdvised',
+			deltas: [],
+			complete: true,
+			affectedCollections: ['people'],
+			refillCollections: ['people'],
+			cost: {
+				replayEvents: 20,
+				estimatedRehydrateBytes: 1
+			}
+		});
+		expect(advised.cost.estimatedReplayBytes).toBeGreaterThan(
+			advised.cost.estimatedRehydrateBytes ?? 0
+		);
+		expect(advised.cursor).toEqual(advised.headCursor);
+
+		const replayed = await runtime.runPromise(
 			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).scan(effectId('scan'), adminSubject, ORIGIN, 100);
+				return yield* (yield* Sync.Service).pull(effectId('replay-cheaper'), adminSubject, {
+					collections: ['people'],
+					cursor: position.cursor,
+					generations: position.generations,
+					rehydration: {
+						activeWindows: Sync.MAX_SYNC_ACTIVE_WINDOWS,
+						rowsPerWindow: 500,
+						estimatedBytesPerRow: Sync.MAX_SYNC_ESTIMATED_ROW_BYTES
+					}
+				});
 			})
 		);
-		expect(page.complete).toBe(true);
-		expect(page.changes).toHaveLength(1);
-		// `diff` is the same read projected to the rows the caller may apply.
-		const changes = await runtime.runPromise(
+		expect(replayed).toMatchObject({
+			kind: 'delta',
+			complete: true,
+			cost: { replayEvents: 20 }
+		});
+		expect(replayed.deltas).toHaveLength(20);
+		expect(replayed.cost.estimatedReplayBytes).toBeLessThan(
+			replayed.cost.estimatedRehydrateBytes ?? 0
+		);
+
+		// A durable cursor ahead of the first authoritative head is a backwards-head replacement, not
+		// an empty replay. The same explicit recovery shape preserves the overlay and rebuilds windows.
+		const ahead = { xid: advised.headCursor.xid + 10_000, sequence: 0 };
+		const expired = await runtime.runPromise(
 			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(effectId('diff'), adminSubject, ORIGIN, 100);
+				return yield* (yield* Sync.Service).pull(effectId('cursor-expired'), adminSubject, {
+					collections: ['people'],
+					cursor: ahead,
+					generations: advised.generations
+				});
 			})
 		);
-		expect(changes).toEqual(page.changes);
+		expect(expired).toMatchObject({
+			kind: 'cursorExpired',
+			deltas: [],
+			complete: true,
+			affectedCollections: ['people'],
+			refillCollections: ['people']
+		});
+		expect(expired.cursor).toEqual(expired.headCursor);
+	});
+
+	it('refuses unknown and unauthorized subscriptions indistinguishably', async () => {
+		harness = await makeBoltTestRuntime(sparseWorkspace());
+		const { runtime, effectId } = harness;
+		const noAccess: Identity.Subject = {
+			userId: 'no-access',
+			tenantId: 'test-tenant',
+			teamPath: [],
+			policies: []
+		};
+		const attempt = (collection: string, name: string) =>
+			runtime.runPromise(
+				Effect.result(
+					Effect.gen(function* () {
+						return yield* (yield* Sync.Service).pull(effectId(name), noAccess, {
+							collections: [collection],
+							cursor: ORIGIN,
+							generations: {}
+						});
+					})
+				)
+			);
+		const unknown = await attempt('does_not_exist', 'subscription-unknown');
+		const unauthorized = await attempt('people', 'subscription-unauthorized');
+		expect(unknown._tag).toBe('Failure');
+		expect(unauthorized._tag).toBe('Failure');
+		if (unknown._tag !== 'Failure' || unauthorized._tag !== 'Failure') return;
+		expect(unknown.failure).toMatchObject({
+			action: 'read',
+			resource: 'sync.subscription',
+			reason: 'sync subscription unavailable'
+		});
+		expect(unauthorized.failure).toMatchObject({
+			action: 'read',
+			resource: 'sync.subscription',
+			reason: 'sync subscription unavailable'
+		});
+	});
+
+	it('reuses one partition evaluation while applying cost advice per member', async () => {
+		harness = await makeBoltTestRuntime();
+		const { runtime, effectId, database } = harness;
+		const position = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).positions(
+					effectId('fanout-position'),
+					adminSubject,
+					['people']
+				);
+			})
+		);
+		await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Collections.Service).create(effectId('fanout-write'), adminSubject, {
+					collection: 'people',
+					id: rid('fanout-write'),
+					values: { name: 'One computation', team: 'core' }
+				});
+			})
+		);
+		database.forget();
+		const results = await runtime.runPromise(
+			Effect.gen(function* () {
+				return yield* (yield* Sync.Service).distribute(effectId('fanout'), [
+					{
+						requestId: 'member-a',
+						subject: adminSubject,
+						pull: {
+							collections: ['people'],
+							cursor: position.cursor,
+							generations: position.generations,
+							pendingMutationIds: ['member-a-mutation'],
+							rehydration: {
+								activeWindows: 1,
+								rowsPerWindow: 1,
+								estimatedBytesPerRow: 1
+							}
+						}
+					},
+					{
+						requestId: 'member-b',
+						subject: adminSubject,
+						pull: {
+							collections: ['people'],
+							cursor: position.cursor,
+							generations: position.generations,
+							pendingMutationIds: ['member-b-mutation'],
+							rehydration: {
+								activeWindows: Sync.MAX_SYNC_ACTIVE_WINDOWS,
+								rowsPerWindow: 500,
+								estimatedBytesPerRow: Sync.MAX_SYNC_ESTIMATED_ROW_BYTES
+							}
+						}
+					}
+				]);
+			})
+		);
+		expect(results).toHaveLength(2);
+		const advised = results[0];
+		const replayed = results[1];
+		if (!advised || !('response' in advised) || !replayed || !('response' in replayed)) {
+			throw new Error('expected two admitted partition members');
+		}
+		expect(advised.response).toMatchObject({
+			kind: 'rehydrateAdvised',
+			deltas: [],
+			cost: { estimatedRehydrateBytes: 1 }
+		});
+		expect(replayed.response.kind).toBe('delta');
+		expect(replayed.response.deltas).toHaveLength(1);
+		expect(advised.response.cost.estimatedReplayBytes).toBe(
+			replayed.response.cost.estimatedReplayBytes
+		);
+		expect(
+			database.statements.filter((statement) => statement.includes('jsonb_populate_record'))
+		).toHaveLength(1);
 	});
 });
 
 const HOST_SECRET = 'a-test-gateway-secret';
+
+/** Supplies the host signing secret explicitly so these boundary tests never depend on machine env. */
+const withHostSecret = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+	effect.pipe(
+		Effect.provideService(HostConfig, {
+			read: (key: string) =>
+				Effect.succeed(
+					key === GATEWAY_SECRET_VARIABLE
+						? Option.some(Redacted.make(HOST_SECRET))
+						: Option.none<Redacted.Redacted<string>>()
+				)
+		})
+	);
+
 const compactScope = {
 	tenantId: TenantId.make('test-tenant'),
 	environment: EnvironmentName.make('test'),
@@ -998,14 +557,17 @@ const compactScope = {
 };
 
 let invocationSequence = 0;
-const signedCompact = (input: Record<string, unknown>) => {
+const signedHostCommand = (
+	command: 'sync.compact' | 'sync.distribute',
+	input: Record<string, unknown>
+) => {
 	const timestamp = Date.now();
 	return Invocation.cases.Command.make({
 		protocolVersion: PROTOCOL_VERSION,
-		id: InvocationId.make(`compact-signed-${(invocationSequence += 1)}`),
+		id: InvocationId.make(`host-signed-${(invocationSequence += 1)}`),
 		scope: compactScope,
 		deadlineEpochMs: Date.now() + 30_000,
-		command: 'sync.compact',
+		command,
 		input: input as never,
 		headers: {
 			[SYSTEM_SIGNATURE_HEADER]: [
@@ -1013,7 +575,7 @@ const signedCompact = (input: Record<string, unknown>) => {
 					HOST_SECRET,
 					systemSignaturePayload({
 						timestamp,
-						command: 'sync.compact',
+						command,
 						tenantId: String(compactScope.tenantId),
 						input
 					})
@@ -1023,6 +585,12 @@ const signedCompact = (input: Record<string, unknown>) => {
 		}
 	});
 };
+
+const signedCompact = (input: Record<string, unknown>) =>
+	signedHostCommand('sync.compact', input);
+
+const signedDistribute = (input: Record<string, unknown>) =>
+	signedHostCommand('sync.distribute', input);
 
 const compactAsPerson = (credential: string) =>
 	Invocation.cases.Command.make({
@@ -1035,17 +603,224 @@ const compactAsPerson = (credential: string) =>
 		headers: { authorization: [`Bearer ${credential}`] }
 	});
 
-const withHostSecret = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-	effect.pipe(
-		Effect.provideService(HostConfig, {
-			read: (key: string) =>
-				Effect.succeed(
-					key === GATEWAY_SECRET_VARIABLE
-						? Option.some(Redacted.make(HOST_SECRET))
-						: Option.none<Redacted.Redacted<string>>()
+describe('sync.pull dispatch boundary', () => {
+	const pullCommand = (token: string, input: Record<string, unknown>) =>
+		Invocation.cases.Command.make({
+			protocolVersion: PROTOCOL_VERSION,
+			id: InvocationId.make(`pull-command-${(invocationSequence += 1)}`),
+			scope: compactScope,
+			deadlineEpochMs: Date.now() + 30_000,
+			command: 'sync.pull',
+			input: input as never,
+			headers: { authorization: [`Bearer ${token}`] }
+		});
+
+	it('injects authority and returns the partition recovery wire shape', async () => {
+		harness = await makeBoltTestRuntime();
+		await seedSession(harness, { token: 'pull-admin', user: 'pull-admin', team: 'admin' });
+		const response = await harness.runtime.runPromise(
+			dispatchInvocation(
+				pullCommand('pull-admin', {
+					collections: ['people'],
+					cursor: null,
+					generations: {}
+				})
+			)
+		);
+		expect(response.status).toBe(200);
+		const value = Schema.decodeUnknownSync(Sync.SyncPullResponse)(response.value);
+		expect(value).toMatchObject({
+			kind: 'rehydrateAdvised',
+			deltas: [],
+			affectedCollections: ['people'],
+			complete: true,
+			partition: {
+				tenantId: 'test-tenant',
+				environment: 'test',
+				effectivePolicyHolder: `actor:${fixtureUserId('pull-admin')}`
+			}
+		});
+		expect(value.cursor).toEqual(value.headCursor);
+	});
+
+	it('refuses a payload subject and cannot use it to widen a bearer', async () => {
+		harness = await makeBoltTestRuntime();
+		await seedSession(harness, { token: 'pull-outsider', user: 'pull-outsider' });
+		const outcome = await harness.runtime.runPromise(
+			dispatchInvocation(
+				pullCommand('pull-outsider', {
+					subject: adminSubject,
+					collections: ['people'],
+					cursor: ORIGIN,
+					generations: {}
+				})
+			).pipe(Effect.result)
+		);
+		expect(outcome._tag).toBe('Failure');
+	});
+});
+
+describe('host sync distribution', () => {
+	it('authenticates opaque credentials and reuses an identical partition pull', async () => {
+		harness = await makeBoltTestRuntime(sparseWorkspace());
+		const { runtime, effectId, database } = harness;
+		await seedSession(harness, { token: 'distribute-admin', user: 'distribution-admin', team: 'admin' });
+		await seedSession(harness, {
+			token: 'distribute-core',
+			user: 'distribution-core',
+			team: SPARSE_TEAM
+		});
+		const positions = await runtime.runPromise(
+			Effect.gen(function* () {
+				const identity = yield* Identity.Service;
+				const sync = yield* Sync.Service;
+				const admin = yield* identity.authenticate(
+					effectId('distribute-admin-position-auth'),
+					'distribute-admin'
+				);
+				const core = yield* identity.authenticate(
+					effectId('distribute-core-position-auth'),
+					'distribute-core'
+				);
+				return {
+					admin: yield* sync.positions(effectId('distribute-admin-position'), admin, ['people']),
+					core: yield* sync.positions(effectId('distribute-core-position'), core, ['people'])
+				};
+			})
+		);
+		await runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				yield* collections.create(effectId('distribute-visible'), adminSubject, {
+					collection: 'people',
+					id: rid('distribute-visible'),
+					values: { name: 'Core row', team: 'core' }
+				});
+				yield* collections.create(effectId('distribute-hidden'), adminSubject, {
+					collection: 'people',
+					id: rid('distribute-hidden'),
+					values: { name: 'Other row', team: 'other' }
+				});
+			})
+		);
+		database.forget();
+		const adminPull = {
+			collections: ['people'],
+			cursor: positions.admin.cursor,
+			generations: positions.admin.generations
+		};
+		const corePull = {
+			collections: ['people'],
+			cursor: positions.core.cursor,
+			generations: positions.core.generations
+		};
+		const response = await runtime.runPromise(
+			withHostSecret(
+				dispatchInvocation(
+					signedDistribute({
+						entries: [
+							{
+								requestId: 'admin-request',
+								credential: 'distribute-admin',
+								pull: adminPull
+							},
+							{
+								requestId: 'core-request-a',
+								credential: 'distribute-core',
+								pull: corePull
+							},
+							{
+								requestId: 'core-request-b',
+								credential: 'distribute-core',
+								pull: corePull
+							},
+							{
+								requestId: 'revoked-request',
+								credential: 'not-a-session',
+								pull: adminPull
+							},
+							{
+								requestId: 'denied-request',
+								credential: 'distribute-core',
+								pull: {
+									collections: ['not-a-collection'],
+									cursor: ORIGIN,
+									generations: {}
+								}
+							}
+						]
+					})
 				)
-		})
-	);
+			)
+		);
+		const distributed = Schema.decodeUnknownSync(Sync.SyncDistributeResponse)(response.value);
+		expect(distributed.results.map(({ requestId, status }) => ({ requestId, status }))).toEqual([
+			{ requestId: 'admin-request', status: 200 },
+			{ requestId: 'core-request-a', status: 200 },
+			{ requestId: 'core-request-b', status: 200 },
+			{ requestId: 'revoked-request', status: 401 },
+			{ requestId: 'denied-request', status: 403 }
+		]);
+		const admin = distributed.results[0];
+		const coreA = distributed.results[1];
+		const coreB = distributed.results[2];
+		if (admin?.status !== 200 || coreA?.status !== 200 || coreB?.status !== 200) {
+			throw new Error('expected admitted distribution members');
+		}
+		expect(admin.value.deltas.map(({ recordId }) => recordId)).toEqual([
+			rid('distribute-visible'),
+			rid('distribute-hidden')
+		]);
+		expect(coreA.value.deltas.map(({ recordId }) => recordId)).toEqual([
+			rid('distribute-visible')
+		]);
+		expect(coreB.value).toEqual(coreA.value);
+		expect(compareCursors(admin.value.cursor, positions.admin.cursor)).toBeGreaterThanOrEqual(0);
+		expect(compareCursors(coreA.value.cursor, positions.core.cursor)).toBeGreaterThanOrEqual(0);
+		expect(admin.value.generations['people']).toBeGreaterThanOrEqual(
+			positions.admin.generations['people'] ?? 0
+		);
+		expect(coreA.value.generations['people']).toBeGreaterThanOrEqual(
+			positions.core.generations['people'] ?? 0
+		);
+		expect(admin.value.partition.effectivePolicyHolder).toBe(
+			`actor:${fixtureUserId('distribution-admin')}`
+		);
+		expect(coreA.value.partition.effectivePolicyHolder).toBe(
+			`actor:${fixtureUserId('distribution-core')}`
+		);
+		expect(coreA.value.partition.key).not.toBe(admin.value.partition.key);
+		expect(JSON.stringify(response.value)).not.toContain('distribute-admin');
+		expect(JSON.stringify(response.value)).not.toContain('distribute-core');
+		// One visibility evaluation for the admin partition and one shared by both core members.
+		expect(
+			database.statements.filter((statement) => statement.includes('jsonb_populate_record'))
+		).toHaveLength(2);
+	});
+
+	it('refuses an ordinary administrator without a host signature', async () => {
+		harness = await makeBoltTestRuntime();
+		await seedSession(harness, {
+			token: 'distribute-person',
+			user: 'distribution-person',
+			team: 'admin',
+			status: 'admin'
+		});
+		const invocation = Invocation.cases.Command.make({
+			protocolVersion: PROTOCOL_VERSION,
+			id: InvocationId.make(`distribute-person-${(invocationSequence += 1)}`),
+			scope: compactScope,
+			deadlineEpochMs: Date.now() + 30_000,
+			command: 'sync.distribute',
+			input: { entries: [] } as never,
+			headers: { authorization: ['Bearer distribute-person'] }
+		});
+		const outcome = await harness.runtime.runPromise(
+			withHostSecret(dispatchInvocation(invocation)).pipe(Effect.result)
+		);
+		expect(outcome._tag).toBe('Failure');
+	});
+});
 
 /**
  * Compaction deletes another tenant's history, so it is the host's to run and nobody else's.
@@ -1153,77 +928,49 @@ describe('outbox compaction on the task tick', () => {
 });
 
 describe('the compaction horizon', () => {
-	it('moves forward only, and strands a replica below it exactly once', async () => {
+	it('returns one partition recovery move when its durable cursor is below the horizon', async () => {
 		harness = await makeBoltTestRuntime();
 		const { runtime, effectId, database } = harness;
 		await runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				yield* collections.create(effectId('c1'), adminSubject, {
+				yield* collections.create(effectId('pull-compact-old'), adminSubject, {
 					collection: 'people',
-					id: rid('p1'),
-					values: { name: 'Ada' }
+					id: rid('pull-compact-old'),
+					values: { name: 'Old' }
 				});
-				yield* collections.create(effectId('c2'), adminSubject, {
+				yield* collections.create(effectId('pull-compact-fresh'), adminSubject, {
 					collection: 'people',
-					id: rid('p2'),
-					values: { name: 'Grace' }
+					id: rid('pull-compact-fresh'),
+					values: { name: 'Fresh' }
 				});
 			})
 		);
 		await database.query(
 			`update bolt_sync_outbox set created_at = now() - interval '40 days' where record_id = $1`,
-			[rid('p1')]
+			[rid('pull-compact-old')]
 		);
-		const compact = (name: string) =>
-			runtime.runPromise(
-				Effect.gen(function* () {
-					return yield* (yield* Sync.Service).compact(effectId(name), 30);
-				})
-			);
-		expect(await compact('compact-1')).toMatchObject({ pruned: 1 });
-		const first = await database.query(
-			'select xid, sequence from bolt_sync_horizon where singleton',
-			[]
-		);
-		const marked = {
-			xid: Number(first[0]?.['xid'] ?? 0),
-			sequence: Number(first[0]?.['sequence'] ?? 0)
-		};
-		expect(marked.xid).toBeGreaterThan(0);
-
-		// Nothing is left to prune, so a second pass must leave the mark exactly where it stands: a
-		// mark that fell back would re-admit cursors already declared stranded.
-		expect(await compact('compact-2')).toMatchObject({ pruned: 0 });
-		expect(
-			await database.query('select xid, sequence from bolt_sync_horizon where singleton', [])
-		).toEqual(first);
-
-		// A replica below the mark is told to rebuild once, and the cursor that reset carries is above
-		// the mark — so the next read is an ordinary continuation rather than a second reset.
-		const stranded = await runtime.runPromise(
+		await runtime.runPromise(
 			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(
-					effectId('diff-stranded'),
-					adminSubject,
-					{ xid: 1, sequence: 1 },
-					100
-				);
+				return yield* (yield* Sync.Service).compact(effectId('pull-compact'), 30);
 			})
 		);
-		expect(stranded.map((change) => change.operation)).toEqual(['reset']);
-		const resumeFrom = stranded[0]?.cursor;
-		if (resumeFrom === undefined) throw new Error('expected a reset cursor');
-		const after = await runtime.runPromise(
+		const result = await runtime.runPromise(
 			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(
-					effectId('diff-after-reset'),
-					adminSubject,
-					resumeFrom,
-					100
-				);
+				return yield* (yield* Sync.Service).pull(effectId('pull-after-compact'), adminSubject, {
+					collections: ['people'],
+					cursor: { xid: 1, sequence: 1 },
+					generations: { people: 0 }
+				});
 			})
 		);
-		expect(after.map((change) => change.operation)).not.toContain('reset');
+
+		expect(result).toMatchObject({
+			kind: 'cursorExpired',
+			deltas: [],
+			affectedCollections: ['people'],
+			complete: true
+		});
+		expect(result.cursor).toEqual(result.headCursor);
 	});
 });

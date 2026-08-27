@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/ui",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"description": "Svelte component library and design tokens for Norbital tenant applications.",
 	"type": "module",
 	"sideEffects": false,
@@ -44,11 +44,6 @@
 			"types": "./build/feature-colors/index.d.ts",
 			"import": "./build/feature-colors/index.js",
 			"default": "./build/feature-colors/index.js"
-		},
-		"./collection-table/navigation": {
-			"types": "./build/collection-table/collection-table-navigation.svelte.d.ts",
-			"svelte": "./build/collection-table/collection-table-navigation.svelte.js",
-			"default": "./build/collection-table/collection-table-navigation.svelte.js"
 		},
 		"./utils/*": {
 			"types": "./build/utils/*.d.ts",
@@ -97,6 +92,7 @@
 		"#lib/code-editor/*": "./build/code-editor/*.js",
 		"#lib/collection-form/*": "./build/collection-form/*.js",
 		"#lib/collection-kanban/*": "./build/collection-kanban/*.js",
+		"#lib/collection-navigation/*": "./build/collection-navigation/*.js",
 		"#lib/collection-record-metadata/*": "./build/collection-record-metadata/*.js",
 		"#lib/collection-table/*": "./build/collection-table/*.js",
 		"#lib/collection-toolbar/*": "./build/collection-toolbar/*.js",

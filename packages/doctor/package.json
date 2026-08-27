@@ -1,6 +1,6 @@
 {
 	"name": "@norbital-ai/doctor",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"description": "Norbital Doctor: deterministic static code-quality analysis for TypeScript, JavaScript, and Svelte, with a CLI and a type-safe rule authoring surface.",
 	"type": "module",
 	"license": "AGPL-3.0-only",
@@ -37,6 +37,7 @@
 		"test": "pnpm build && node --test engine/scripts/*.test.mjs \"tests/**/*.test.ts\""
 	},
 	"dependencies": {
+		"@norbital-ai/std": "workspace:*",
 		"effect": "4.0.0-rc.111",
 		"typescript": "catalog:",
 		"yaml": "^2.9.0"

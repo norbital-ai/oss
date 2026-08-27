@@ -33,4 +33,54 @@ describe('remote query failure reporting', () => {
 			'Remote invocation completed without a value'
 		);
 	});
+
+	it('keeps the last value visible and rejects an older response after a newer reload', async () => {
+		let reload: (() => Effect.Effect<void, unknown>) | undefined;
+		let call = 0;
+		let resolveSecond: (value: string) => void = () => undefined;
+		let resolveThird: (value: string) => void = () => undefined;
+		const query = createRemoteQuery(
+			() => {
+				call += 1;
+				if (call === 1) return Effect.succeed('retained');
+				return Effect.promise(
+					() =>
+						new Promise<string>((resolve) => {
+							if (call === 2) resolveSecond = resolve;
+							else resolveThird = resolve;
+						})
+				);
+			},
+			{
+				key: 'window',
+				collections: ['jobs'],
+				cache: {
+					hydrated: Effect.void,
+					read: () => Effect.succeed(undefined),
+					write: () => undefined,
+					invalidate: () => [],
+					clear: () => undefined
+				},
+				registry: {
+					register: (registration) => {
+						reload = registration.reexecute;
+					},
+					reexecuteAffected: () => 0,
+					size: () => 1
+				}
+			},
+			Schema.String
+		);
+		expect(await Promise.resolve(query)).toBe('retained');
+		const older = Effect.runPromise(reload?.() ?? Effect.void);
+		expect(query.current).toBe('retained');
+		expect(query.loading).toBe(true);
+		const newer = Effect.runPromise(reload?.() ?? Effect.void);
+		resolveThird('newest');
+		await newer;
+		resolveSecond('superseded');
+		await older;
+		expect(query.current).toBe('newest');
+		expect(query.loading).toBe(false);
+	});
 });

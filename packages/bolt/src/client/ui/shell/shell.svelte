@@ -29,13 +29,12 @@
 		type AppHeaderActionsSlot
 	} from './app-header-actions.svelte.js';
 	import { setPlatformStateContext, type PlatformState } from '#lib/client/ui/state/platform.js';
-	import {
-		CollectionTable,
-		CollectionTableNavigationSurface
-	} from '@norbital-ai/ui/collection-table';
+	import { CollectionTable } from '@norbital-ai/ui/collection-table';
+	import { CollectionNavigationSurface } from '@norbital-ai/ui/collection-navigation';
 	import BillingBanner from './billing-banner.svelte';
 	import OmniFinder from './omni-finder.svelte';
 	import Notifications from './notifications.svelte';
+	import type { WorkspaceSyncStatus } from '#lib/client/runtime.js';
 	import {
 		AGENT_PATH,
 		APPROVALS_PATH,
@@ -53,7 +52,6 @@
 	let {
 		app = 'Bolt',
 		status = 'ready',
-		offline = false,
 		organization,
 		organizations = [],
 		user,
@@ -65,6 +63,7 @@
 		plugins = [],
 		isAdmin,
 		deferredQueriesReady = false,
+		syncStatus,
 		impersonation = null,
 		onImpersonate,
 		onStopImpersonating,
@@ -83,7 +82,6 @@
 	}: {
 		app?: string;
 		status?: 'starting' | 'syncing' | 'ready' | 'error';
-		offline?: boolean;
 		tenantMessages?: TenantMessageCatalogs | undefined;
 		organization?: { id: string; name: string; logoUrl?: string | null } | undefined;
 		organizations?: ReadonlyArray<{
@@ -145,6 +143,8 @@
 		isAdmin?: boolean;
 		/** Whether user-triggered shell catalog and notification reads may begin. */
 		deferredQueriesReady?: boolean;
+		/** Engine-owned data freshness and mutation settlement facts; absent is explicitly unverified. */
+		syncStatus?: WorkspaceSyncStatus | undefined;
 		/**
 		 * The admin team-preview state the sidebar's account menu renders, or `null` for no menu.
 		 *
@@ -246,7 +246,7 @@
 	/**
 	 * The URL a collection detail stack is read from and written to.
 	 *
-	 * `CollectionTableNavigationSurface` owns the rest — the navigation context every `CollectionTable`
+	 * `CollectionNavigationSurface` owns the rest — the navigation context every collection surface
 	 * requires, the registration bookkeeping, and the sheet the record renders in. Without it mounted,
 	 * opening any row threw "CollectionTable requires a record navigation provider": nothing in Bolt
 	 * had ever provided one.
@@ -304,7 +304,21 @@
 		applicationsHref: '/'
 	} satisfies WorkspaceNavigationModel);
 
-	const statusLabel = $derived(offline ? 'Offline' : status === 'ready' ? 'Up to date' : status);
+	const statusLabel = $derived.by(() => {
+		if (status !== 'ready') return status;
+		if (syncStatus === undefined) return 'Sync status unavailable';
+		if (syncStatus.issues.length > 0) return 'Sync issues need attention';
+		if (syncStatus.connectivity === 'offline') return 'Offline — downloaded data only';
+		if (syncStatus.connectivity === 'disconnected')
+			return 'Sync disconnected — downloaded data only';
+		if (syncStatus.connectivity === 'connecting') return 'Connecting to sync';
+		if (syncStatus.connectivity === 'unverified') return 'Sync connection unverified';
+		if (syncStatus.offlineRetainedOnly) return 'Data freshness unverified';
+		if (syncStatus.pendingMutations > 0)
+			return 'Changes are saved locally and awaiting confirmation';
+		if (syncStatus.staleServerProofWindows > 0) return 'Server-verified results may be out of date';
+		return 'Up to date';
+	});
 
 	const onAgentPath = $derived(
 		currentPath === AGENT_PATH || currentPath.startsWith(`${AGENT_PATH}/`)
@@ -524,174 +538,177 @@
 			onread={markNotificationRead}
 		/>
 	{/snippet}
-	<Bound size="full" clip>
-		{#if currentPath === '/' || onAgentPath}
-			<Scroll name="Workspace overview" inset>
-				<Center measure="wide">
-					<Stack gap="xl" class="py-2 sm:py-4 lg:py-6">
-						<Stack as="header" gap="xs">
-							<h1 class="text-base font-semibold text-foreground">{activeOrganization.name}</h1>
-							<p class="text-meta">Pick an application</p>
-						</Stack>
+	<Stack gap="none" fill>
+		<Bound size="full" clip grow>
+			{#if currentPath === '/' || onAgentPath}
+				<Scroll name="Workspace overview" inset>
+					<Center measure="wide">
+						<Stack gap="xl" class="py-2 sm:py-4 lg:py-6">
+							<Stack as="header" gap="xs">
+								<h1 class="text-base font-semibold text-foreground">{activeOrganization.name}</h1>
+								<p class="text-meta">Pick an application</p>
+							</Stack>
 
-						<Stack as="section" gap="sm">
-							<h2 class="text-overline">Applications</h2>
-							{#if navigationModel.applications.length === 0}
-								<Stack
-									align="center"
-									justify="center"
-									gap="xs"
-									class="rounded-lg border border-dashed p-8"
-								>
-									<IconWrapper
-										name="lucide:layout-dashboard"
-										class="size-8 text-muted-foreground"
-									/>
-									<span class="text-meta">No applications yet</span>
-									<span class="max-w-72 pt-1 text-center text-micro text-muted-foreground">
-										Add an application to this workspace to see it here.
-									</span>
-								</Stack>
-							{:else}
-								<!--
+							<Stack as="section" gap="sm">
+								<h2 class="text-overline">Applications</h2>
+								{#if navigationModel.applications.length === 0}
+									<Stack
+										align="center"
+										justify="center"
+										gap="xs"
+										class="rounded-lg border border-dashed p-8"
+									>
+										<IconWrapper
+											name="lucide:layout-dashboard"
+											class="size-8 text-muted-foreground"
+										/>
+										<span class="text-meta">No applications yet</span>
+										<span class="max-w-72 pt-1 text-center text-micro text-muted-foreground">
+											Add an application to this workspace to see it here.
+										</span>
+									</Stack>
+								{:else}
+									<!--
 									A group is a heading over its own apps, not a card standing in for them. Rendering
 									every entry flat put "HR Controller" beside its own children as though it were a
 									sibling, and gave a card to something you cannot actually open.
 								-->
-								{@const standalone = navigationModel.applications.filter(
-									(app) => (app.children?.length ?? 0) === 0
-								)}
-								{@const grouped = navigationModel.applications.filter(
-									(app) => (app.children?.length ?? 0) > 0
-								)}
-								{#if standalone.length > 0}
-									<Scroll
-										axis="x"
-										name="overview-apps"
-										layout="inline"
-										gap="sm"
-										class="-mx-1 snap-x snap-mandatory px-1 pb-2"
-									>
-										{#each standalone as app (app.key)}
-											{@render applicationCard(app)}
-										{/each}
-									</Scroll>
-								{/if}
-								{#each grouped as group (group.key)}
-									<Stack as="section" gap="sm" class="border-l-2 border-brand/40 pl-3">
-										<Inline gap="sm" align="center">
-											<Inline
-												shrink={false}
-												justify="center"
-												align="center"
-												class="size-8 rounded-md border border-input bg-background text-foreground shadow-xs"
-											>
-												<IconWrapper name={group.icon ?? 'lucide:layout-grid'} class="size-4" />
-											</Inline>
-											<Stack gap="xs" class="min-w-0">
-												<p class="truncate text-sm font-semibold text-foreground">{group.label}</p>
-												{#if group.description}
-													<p class="text-micro text-muted-foreground">{group.description}</p>
-												{/if}
-											</Stack>
-										</Inline>
+									{@const standalone = navigationModel.applications.filter(
+										(app) => (app.children?.length ?? 0) === 0
+									)}
+									{@const grouped = navigationModel.applications.filter(
+										(app) => (app.children?.length ?? 0) > 0
+									)}
+									{#if standalone.length > 0}
 										<Scroll
 											axis="x"
-											name={`overview-group-${group.key}`}
+											name="overview-apps"
 											layout="inline"
 											gap="sm"
 											class="-mx-1 snap-x snap-mandatory px-1 pb-2"
 										>
-											{#each group.children ?? [] as child (child.key)}
-												{@render applicationCard(child)}
+											{#each standalone as app (app.key)}
+												{@render applicationCard(app)}
 											{/each}
 										</Scroll>
-									</Stack>
-								{/each}
-							{/if}
+									{/if}
+									{#each grouped as group (group.key)}
+										<Stack as="section" gap="sm" class="border-l-2 border-brand/40 pl-3">
+											<Inline gap="sm" align="center">
+												<Inline
+													shrink={false}
+													justify="center"
+													align="center"
+													class="size-8 rounded-md border border-input bg-background text-foreground shadow-xs"
+												>
+													<IconWrapper name={group.icon ?? 'lucide:layout-grid'} class="size-4" />
+												</Inline>
+												<Stack gap="xs" class="min-w-0">
+													<p class="truncate text-sm font-semibold text-foreground">
+														{group.label}
+													</p>
+													{#if group.description}
+														<p class="text-micro text-muted-foreground">{group.description}</p>
+													{/if}
+												</Stack>
+											</Inline>
+											<Scroll
+												axis="x"
+												name={`overview-group-${group.key}`}
+												layout="inline"
+												gap="sm"
+												class="-mx-1 snap-x snap-mandatory px-1 pb-2"
+											>
+												{#each group.children ?? [] as child (child.key)}
+													{@render applicationCard(child)}
+												{/each}
+											</Scroll>
+										</Stack>
+									{/each}
+								{/if}
+							</Stack>
 						</Stack>
-					</Stack>
-				</Center>
-			</Scroll>
-		{:else if currentPath === APPROVALS_PATH || currentPath.startsWith(`${APPROVALS_PATH}/`)}
-			<CollectionTableNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
-				<!--
+					</Center>
+				</Scroll>
+			{:else if currentPath === APPROVALS_PATH || currentPath.startsWith(`${APPROVALS_PATH}/`)}
+				<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
+					<!--
 					Approvals is a system surface, but it follows the same page contract as the host plugins:
 					one fixed heading, one responsive page gutter, then one bounded content region whose table
 					owns its vertical and horizontal scrolling. Rendering the table directly under the shell used
 					to put its toolbar against the viewport edge and its pagination against the shell footer.
 				-->
-				<Cover class="relative bg-background" gap="none">
-					{#snippet top()}
-						<Stack
-							as="header"
-							gap="xs"
-							shrink={false}
-							class="bg-background px-4 pt-4 sm:px-6 sm:pt-6"
-						>
-							<h1 class="text-heading">Approvals</h1>
-							<p class="max-w-2xl text-meta">
-								Review pending changes before they are applied to workspace records.
-							</p>
-						</Stack>
-					{/snippet}
-
-					<Inline align="stretch" gap="none" fill class="px-4 pt-4 pb-4 sm:px-6 sm:pt-6 sm:pb-6">
-						<Bound size="full" grow clip class="relative min-w-0 w-full">
-							<CollectionTable
-								client={runtime.client}
-								collection="approval_request"
-								view="bolt:approval-inbox"
-								title="Pending requests"
-								description="Changes awaiting your review, including creates that do not have a provisional record."
-								features={{ create: false }}
-								query={{
-									where: { status: { eq: 'ONGOING' } },
-									orderBy: { created_at: 'desc' }
-								}}
-								class="min-h-0"
+					<Cover class="relative bg-background" gap="none">
+						{#snippet top()}
+							<Stack
+								as="header"
+								gap="xs"
+								shrink={false}
+								class="bg-background px-4 pt-4 sm:px-6 sm:pt-6"
 							>
-								{#snippet columns({ Column })}
-									<Column name="collection_name" label="Collection" card="title" />
-									<Column name="action" label="Action" card="badge" />
-									<Column name="record_id" label="Record" card="subtitle" />
-									<Column name="status" label="Status" />
-									<Column name="proposed_values" label="Proposed change" />
-									<Column name="created_at" label="Requested" />
-								{/snippet}
-							</CollectionTable>
-						</Bound>
-					</Inline>
-				</Cover>
-			</CollectionTableNavigationSurface>
-		{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`) || activeHostPlugin}
-			{#key activeHostPlugin?.key ?? WORKSPACE_SETTINGS_PATH}
-				<Bound size="full" clip data-testid="host-plugin-surface" class="bg-background">
-					<!--
+								<h1 class="text-heading">Approvals</h1>
+								<p class="max-w-2xl text-meta">
+									Review pending changes before they are applied to workspace records.
+								</p>
+							</Stack>
+						{/snippet}
+
+						<Inline align="stretch" gap="none" fill class="px-4 pt-4 pb-4 sm:px-6 sm:pt-6 sm:pb-6">
+							<Bound size="full" grow clip class="relative min-w-0 w-full">
+								<CollectionTable
+									client={runtime.client}
+									collection="approval_request"
+									view="bolt:approval-inbox"
+									title="Pending requests"
+									description="Changes awaiting your review, including creates that do not have a provisional record."
+									features={{ create: false }}
+									query={{
+										where: { status: { eq: 'ONGOING' } },
+										orderBy: { created_at: 'desc' }
+									}}
+									class="min-h-0"
+								>
+									{#snippet columns({ Column })}
+										<Column name="collection_name" label="Collection" card="title" />
+										<Column name="action" label="Action" card="badge" />
+										<Column name="record_id" label="Record" card="subtitle" />
+										<Column name="status" label="Status" />
+										<Column name="proposed_values" label="Proposed change" />
+									{/snippet}
+								</CollectionTable>
+							</Bound>
+						</Inline>
+					</Cover>
+				</CollectionNavigationSurface>
+			{:else if currentPath === WORKSPACE_SETTINGS_PATH || currentPath.startsWith(`${WORKSPACE_SETTINGS_PATH}/`) || activeHostPlugin}
+				{#key activeHostPlugin?.key ?? WORKSPACE_SETTINGS_PATH}
+					<Bound size="full" clip data-testid="host-plugin-surface" class="bg-background">
+						<!--
 						Workspace settings and host plugins may render CollectionTable just like authored apps do.
 						Keep their rows inside the same URL-owned detail surface so selecting a member, invitation,
 						or plugin record opens a sheet instead of throwing for a missing navigation provider.
 					-->
-					<CollectionTableNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
-						{@render children?.()}
-					</CollectionTableNavigationSurface>
-				</Bound>
-			{/key}
-		{:else}
-			<!--
+						<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
+							{@render children?.()}
+						</CollectionNavigationSurface>
+					</Bound>
+				{/key}
+			{:else}
+				<!--
 				`gap="none"` sat the app's first row flush against the banner image, so a tab strip began
 				on the pixel the artwork ended. The banner is a header, not a border: the content below it
 				needs the same separation any other section gets.
 			-->
-			<Cover gap="md" {...resolvedHeaderTitle ? { top: activeAppBanner } : {}}>
-				<Bound size="full" clip data-workspace-app-surface class="[container-name:bolt-app]">
-					<CollectionTableNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
-						{@render children?.()}
-					</CollectionTableNavigationSurface>
-				</Bound>
-			</Cover>
-		{/if}
-	</Bound>
+				<Cover gap="md" {...resolvedHeaderTitle ? { top: activeAppBanner } : {}}>
+					<Bound size="full" clip data-workspace-app-surface class="[container-name:bolt-app]">
+						<CollectionNavigationSurface url={detailUrl} navigate={(href) => onNavigate?.(href)}>
+							{@render children?.()}
+						</CollectionNavigationSurface>
+					</Bound>
+				</Cover>
+			{/if}
+		</Bound>
+	</Stack>
 </WorkspaceShell>
 
 <svelte:window
@@ -763,9 +780,7 @@
 	</Sheet.Content>
 </Sheet.Root>
 
-{#if offline}
-	<p class="sr-only" role="status">Changes will be queued until the connection returns.</p>
-{:else if status === 'error'}
+{#if status === 'error'}
 	<p class="sr-only" role="alert">The application could not finish loading.</p>
 {/if}
 

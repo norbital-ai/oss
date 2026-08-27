@@ -10,12 +10,7 @@ import * as AccessControl from '../../src/runtime/access/access-control.js';
 import * as Approvals from '../../src/runtime/approvals/approvals.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { PendingApproval } from '../../src/runtime/collections/collections.js';
-import {
-	emptyAuthoredRuntime,
-	makeBoundAuthoringOps
-} from '../../src/runtime/collections/authored.js';
-import { AI, Files } from '../../src/runtime/facilities/services.js';
-import * as Automations from '../../src/runtime/automations/automations.js';
+import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import { Subject } from '../../src/runtime/identity/identity.js';
 import {
 	adminSubject,
@@ -386,9 +381,9 @@ describe('policy and hook lifecycle', () => {
 											transitionEvents.push(`prepare:${predecessor}`);
 											const database = objectAt(api, 'db');
 											const versions = objectAt(database, 'versions');
-											const update = Reflect.get(versions, 'update');
-											if (typeof update !== 'function') throw new Error('update is unavailable');
-											yield* update(predecessor, { closed_by: successorId });
+											const mutate = Reflect.get(versions, 'mutate');
+											if (typeof mutate !== 'function') throw new Error('mutate is unavailable');
+											yield* mutate({ id: predecessor, closed_by: successorId });
 											return input;
 										})
 								}
@@ -407,19 +402,19 @@ describe('policy and hook lifecycle', () => {
 		const raised = await transitionHarness.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
-				const ops = makeBoundAuthoringOps(
-					transitionHarness.effectId('authored-transition'),
-					transitionSubject,
-					collections,
-					yield* AI.Service,
-					yield* Files.Service,
-					yield* Automations.Service
-				);
 				return yield* Effect.flip(
-					ops.create('versions', successorId, {
-						label: 'Successor',
-						supersedes_id: predecessorId
-					})
+					collections.mutate(
+						transitionHarness.effectId('authored-transition'),
+						transitionSubject,
+						'versions',
+						[{ label: 'Successor', supersedes_id: predecessorId }],
+						false,
+						0,
+						{
+							declarative: true,
+							root: { id: successorId, action: 'create' }
+						}
+					)
 				);
 			})
 		);

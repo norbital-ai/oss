@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { CollectionTable } from '@norbital-ai/ui/collection-table';
-	import { getCollectionTableNavigationContext } from '@norbital-ai/ui/collection-table/navigation';
+	import { getCollectionNavigationContext } from '@norbital-ai/ui/collection-navigation';
 	import { Bound, Cluster, Cover, Inline, Stack } from '@norbital-ai/ui/layout';
 	import { Tabs, type TabConfig } from '@norbital-ai/ui/tabs';
 	import type { CollectionDefinition, CollectionRecord } from '@norbital-ai/std/collection';
@@ -147,7 +147,7 @@
 	 * its owning tab is not mounted. The getter keeps an already-open sheet on the latest async access
 	 * payload instead of pinning the empty client created before workspace access finishes loading.
 	 */
-	const detailNavigation = getCollectionTableNavigationContext();
+	const detailNavigation = getCollectionNavigationContext();
 	const releaseDetailClients = [MEMBERS_COLLECTION, INVITATIONS_COLLECTION, EVENTS_COLLECTION].map(
 		(collectionName) =>
 			detailNavigation?.registerCollectionClient(collectionName, () => peopleClient)
@@ -245,11 +245,7 @@
 				<Column name="email" label="Email" card="subtitle" />
 				<Column name="role" label="Role" card="badge" />
 				<Column name="status" label="Status" />
-				<Column
-					name="team"
-					label="Team"
-					render={({ value }) => (typeof value === 'string' && value !== '' ? value : '—')}
-				/>
+				<Column name="team" label="Team" />
 			{/snippet}
 		</CollectionTable>
 	{/key}

@@ -56,7 +56,9 @@ describe('custom SQL where entries', () => {
 
 		expect(Result.isSuccess(result)).toBe(true);
 		if (Result.isSuccess(result)) {
-			expect(result.success.sql).toBe('"component_entries"."odd""name" = $1');
+			expect(result.success.sql).toBe(
+				'"component_entries"."odd""name" collate "C" = $1'
+			);
 			expect(result.success.sql).not.toContain(attemptedSql);
 			expect(result.success.parameters).toEqual([attemptedSql]);
 		}

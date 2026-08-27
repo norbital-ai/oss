@@ -7,22 +7,22 @@ hand-write a schema or renderer for it.** Storage primitives are named builders 
 `@norbital-ai/bolt/authoring`. Platform-owned structured values use the same `custom()` accessor as
 tenant-defined datatypes.
 
-| import                   | stores                | notes                                                                                                 |
-| ------------------------ | --------------------- | ----------------------------------------------------------------------------------------------------- |
-| `text()`                 | text                  | `{ search: true }` puts it in the search index                                                        |
-| `numeric()`              | exact decimal         | never `number` for anything you do arithmetic on                                                      |
-| `integer()`              | integer               |                                                                                                       |
-| `boolean()`              | boolean               |                                                                                                       |
-| `uuid()`                 | uuid                  | foreign keys and ids                                                                                  |
-| `instant()`              | timestamptz           | an instant; `{ precision: 'day' }` narrows the picker/formatter only (no second column type)          |
-| `custom('instant_range', options?)` | `{ start, end }`      | a span of UTC instants; options: `{ precision: 'day' \| 'minute', multiple?: true }`                    |
-| `custom('money', options?)`         | `{ value, currency }` | JSONB validated by `MoneyValueSchema`; options: `{ allowedCurrencies: […] }`                             |
-| `enums([...])`           | a closed set          | the members reach the manifest                                                                        |
-| `file()`                 | a file                | the column carries the file (`{ mimeTypes?, multiple?: true }`)                                       |
-| `geolocation()`          | a point               | picker and map come with it                                                                           |
-| `phone()`                | a phone number        |                                                                                                       |
-| `vector({ dimensions })` | an embedding          |                                                                                                       |
-| `jsonb()`                | opaque JSON           | last resort; nothing can query or render it meaningfully                                              |
+| import                              | stores                | notes                                                                                        |
+| ----------------------------------- | --------------------- | -------------------------------------------------------------------------------------------- |
+| `text()`                            | text                  | `{ search: true }` puts it in the search index                                               |
+| `numeric()`                         | exact decimal         | never `number` for anything you do arithmetic on                                             |
+| `integer()`                         | integer               |                                                                                              |
+| `boolean()`                         | boolean               |                                                                                              |
+| `uuid()`                            | uuid                  | foreign keys and ids                                                                         |
+| `instant()`                         | timestamptz           | an instant; `{ precision: 'day' }` narrows the picker/formatter only (no second column type) |
+| `custom('instant_range', options?)` | `{ start, end }`      | a span of UTC instants; options: `{ precision: 'day' \| 'minute', multiple?: true }`         |
+| `custom('money', options?)`         | `{ value, currency }` | JSONB validated by `MoneyValueSchema`; options: `{ allowedCurrencies: […] }`                 |
+| `enums([...])`                      | a closed set          | the members reach the manifest                                                               |
+| `file()`                            | a file                | the column carries the file (`{ mimeTypes?, multiple?: true }`)                              |
+| `geolocation()`                     | a point               | picker and map come with it                                                                  |
+| `phone()`                           | a phone number        |                                                                                              |
+| `vector({ dimensions })`            | an embedding          |                                                                                              |
+| `jsonb()`                           | opaque JSON           | last resort; nothing can query or render it meaningfully                                     |
 
 `custom('<name>')` accesses every structured datatype — whether platform-injected (`money`,
 `instant_range`) or tenant-discovered (`work_pattern`, `leave_event`, `settlement_policy`). Platform
@@ -117,10 +117,10 @@ indexes: [
 ];
 ```
 
-Nearest-neighbor search is **server-only** (`api.db.query.<collection>.findNearest` in hooks /
-functions / automations); the browser client exposes no distance operators. The replica loads the
-pgvector extension but the client query surface declares no `findNearest` — do not invent a parallel
-one to reach for it.
+Nearest-neighbor search is **server-only** (`api.db.<collection>.findNearest` in hooks / functions /
+automations); the browser client exposes no distance operators. The replica loads the pgvector
+extension but the client query surface declares no `findNearest` — do not invent a parallel one to
+reach for it.
 
 ## Temporal fields
 
@@ -165,7 +165,7 @@ export default {
 		prepare: ({ inputs, api }) =>
 			Effect.gen(function* () {
 				const siteIds = [...new Set(inputs.map((input) => input.site_id))];
-				const sites = yield* api.db.query.sites.findMany({
+				const sites = yield* api.db.sites.findMany({
 					where: { id: { in: siteIds } },
 					columns: { id: true },
 					limit: 5000
@@ -211,9 +211,9 @@ Handlers are **Effect-native**: `perRecord.before` receives `{ input, prepared, 
 `{ record, api }`, plus `prepared` on a create. Every `api.db.*`, `api.infer`, and `api.readFileAsset` call returns
 an `Effect.Effect` composed with `yield*`. `before` returns the accepted payload or patch — and for a
 create it may return a **nested graph**, the record plus the records that belong to it, keyed by the
-relation name `+relationship.ts` declared. `after` makes follow-on database or asset changes through
-the elevated `api.db.<collection>.mutate([...])` / `api.db.<collection>.delete([...])`. A collection
-is always reached as a property, never as a first argument. Neither may send traffic, email, or
+relation name `+relationship.ts` declared. Follow-on writes use the same singular declarative
+`api.db.<collection>.mutate(recordOrGraph)` in every hook phase; after hooks have elevated authority,
+not a different method set. A collection is always reached as a property. Neither may send traffic, email, or
 notify, and neither may invoke AI beyond a bounded `api.infer` for judgement on the write path.
 Background work is the one exception and it has exactly one door: `api.automations.run(name, input,
 { after })` starts a **declared** automation, durably and with retry — there is deliberately no

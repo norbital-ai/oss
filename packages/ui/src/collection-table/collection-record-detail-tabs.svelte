@@ -18,7 +18,6 @@
 		actions,
 		ui,
 		approval,
-		raw,
 		banner = null
 	}: {
 		title: string;
@@ -29,7 +28,6 @@
 		actions?: Snippet;
 		ui: Snippet;
 		approval: Snippet;
-		raw: Snippet;
 		/** Full-width image above the sheet header, from the collection's `+representation.svelte`. */
 		banner?: string | null;
 	} = $props();
@@ -48,13 +46,6 @@
 			description: t('table.tabApproval'),
 			icon: 'lucide:shield-check',
 			content: approvalContent
-		},
-		{
-			name: 'raw',
-			label: '',
-			description: t('table.tabRaw'),
-			icon: 'lucide:braces',
-			content: rawContent
 		}
 	] satisfies TabConfig[]);
 
@@ -136,16 +127,6 @@
 			{@render unavailableState()}
 		{:else}
 			{@render approval()}
-		{/if}
-	</Scroll>
-{/snippet}
-
-{#snippet rawContent()}
-	<Scroll name={t('table.rawRegion', { title })} inset>
-		{#if error || !found}
-			{@render unavailableState()}
-		{:else}
-			{@render raw()}
 		{/if}
 	</Scroll>
 {/snippet}

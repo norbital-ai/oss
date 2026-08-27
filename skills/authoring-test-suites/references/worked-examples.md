@@ -35,10 +35,9 @@ Everything worth copying is in that header:
   is what stops the next person adding a slow, redundant test to cover it again — and stops a reader
   believing coverage that is not there.
 
-And when the declaration test arrives (`:244`, "the declarations that cascade"), it explains what
-would have been worse: a hook looping over `api.db.<collection>.delete(identifiers)` "would have been
-wrong in a way no happy-path test catches, because that call takes `identifiers[0]` and drops the
-rest: the release would free one claim out of several hundred and report success."
+And when the declaration test arrives (`:244`, "the declarations that cascade"), it keeps the
+boundary narrow: authored collection writes use singular declarative `mutate(recordOrGraph)`, while
+relationship omission and reconciliation semantics stay explicit.
 
 That sentence is the whole skill in miniature. The dangerous bugs are the ones that report success.
 

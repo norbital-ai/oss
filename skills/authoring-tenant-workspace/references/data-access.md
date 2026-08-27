@@ -134,7 +134,7 @@ create: {
 			const employmentIds = [...new Set(inputs.map((input) => input.employment_id))];
 			const dates = inputs.map((input) => input.work_date).sort();
 			// One query over the window the whole batch spans, not one question per person-day.
-			const requests = yield* api.db.query.leave_requests.findMany({
+			const requests = yield* api.db.leave_requests.findMany({
 				where: {
 					employment_id: { in: employmentIds },
 					kind: { eq: 'TIME_OFF' },
@@ -237,8 +237,7 @@ Rules that hold:
   complete desired state: present rows are inserted or updated, stored rows absent from that submitted
   relationship are deleted, and explicitly included relationships synchronize recursively. An omitted
   relationship stays untouched. The root and all included relationships reconcile atomically. Do not
-  submit a relationship for additive or partial behavior, erase its generated type with a cast, invent
-  `client.mutate(...)`, or claim a top-level delete encoding.
+  submit a relationship for additive or partial behavior or erase its generated type with a cast.
 
 This is what replaced writing a parent and then its children in separate calls: a payroll run
 committed, and _then_ its payslips in a second transaction and their lines in a third — a build that
@@ -261,7 +260,7 @@ Collect and deduplicate keys, query once, then index the result:
 Effect.gen(function* () {
 	// Bad: N employments produce N database calls.
 	for (const employment of employments) {
-		const terms = yield* api.db.query.employment_terms.findMany({
+		const terms = yield* api.db.employment_terms.findMany({
 			where: { employment_id: { eq: employment.id } },
 			limit: 5000
 		});
@@ -271,7 +270,7 @@ Effect.gen(function* () {
 	// Good: one filtered query and O(1) lookup per employment.
 	const employmentIds = [...new Set(employments.map((row) => row.id))];
 	const terms = employmentIds.length
-		? yield* api.db.query.employment_terms.findMany({
+		? yield* api.db.employment_terms.findMany({
 				where: { employment_id: { in: employmentIds } },
 				limit: 5000
 			})
@@ -299,14 +298,14 @@ Push filtering and projection into the database:
 ```typescript
 Effect.gen(function* () {
 	// Bad: loads unrelated rows and columns into memory.
-	const allEntries = yield* api.db.query.time_entries.findMany({ limit: 5000 });
+	const allEntries = yield* api.db.time_entries.findMany({ limit: 5000 });
 	const periodEntries = allEntries.filter(
 		(row) =>
 			employmentIds.includes(row.employment_id) && row.work_date >= start && row.work_date <= end
 	);
 
 	// Good: returns only required rows and columns.
-	const periodEntries = yield* api.db.query.time_entries.findMany({
+	const periodEntries = yield* api.db.time_entries.findMany({
 		where: {
 			AND: [{ employment_id: { in: employmentIds } }, { work_date: { gte: start, lte: end } }]
 		},
@@ -329,14 +328,14 @@ aggregation query instead of inventing an RQB method:
 ```typescript
 const openCount =
 	yield *
-	api.db.query.time_entries.count({
+	api.db.time_entries.count({
 		where: { AND: [{ employment_id: { in: employmentIds } }, { clock_out: { isNull: true } }] }
 	});
 ```
 
 Every server-role example above runs inside a hook, automation, remote, or pipeline handler — an
 `Effect.gen` where `api.db.*` calls are `yield*`'d. Server and browser roles use the same structured
-`db.query.<collection>.findMany|findFirst` query objects. Custom SQL callbacks, SQL wrappers,
+`db.<collection>.findMany|findFirst` query objects. Custom SQL callbacks, SQL wrappers,
 placeholders, and SQL comments are not part of that API. If the structured operators cannot express
 a predicate, extend the typed query vocabulary rather than adding a raw escape hatch.
 
@@ -345,7 +344,7 @@ Query from a selective parent when it narrows the child set:
 ```typescript
 const employments =
 	yield *
-	api.db.query.employments.findMany({
+	api.db.employments.findMany({
 		where: { legal_entity_id: { eq: legalEntityId } },
 		columns: { id: true, employee_id: true },
 		with: {
@@ -360,23 +359,28 @@ const employments =
 
 ## Nearest-neighbor search (server-only)
 
-`findNearest` runs on the tenant Postgres with pgvector (`ORDER BY column <op> probe`) against a
-`vector(n)` column. Available on hook / remote / automation `api.db.query.<collection>` only — not
-on the browser client. Metrics: `cosine`, `l2`, `ip`.
+`findNearest` runs on the tenant Postgres with pgvector against a `vector(n)` column, ordering by
+the distance so the column's index answers the query. Available on hook / remote / automation
+`api.db.<collection>` only — not on the browser client. Metrics: `l2`, `cosine`, `ip`.
 
 ```typescript
-const near =
-	yield *
-	api.db.query.photo_evidence.findNearest({
-		column: 'perceptual_embedding',
-		probe: record.perceptual_embedding, // number[]
-		metric: 'l2', // binary PDQ embedding; use 'cosine' for Gemini omni
-		maxDistance: Math.sqrt(31),
-		limit: 50,
-		excludeIds: [record.id]
-	});
-// each row includes `.distance`
+const near = yield* api.db.photo_evidence.findNearest({
+	column: 'perceptual_embedding',
+	probe: record.perceptual_embedding,
+	metric: 'l2', // binary PDQ embedding; use 'cosine' for a normalized model embedding
+	maxDistance: Math.sqrt(31),
+	limit: 50,
+	// Narrowing is the ordinary where clause — including excluding the probe's own row.
+	where: { id: { ne: record.id } }
+});
+// each row carries `.distance` beside the record's own columns
 ```
 
-There is no `withinDistance` operator and no ANN-ordered function in the client surface: `findNearest`
-is the one vector path, and it is server-only.
+`column` accepts only the collection's vector columns and `probe` is typed as that column's value,
+so a text column, a typo, or a probe of the wrong shape is a compile error rather than a refusal
+from a database that has already been asked to do the work. There is no `orderBy`: the distance
+*is* the ordering. There is no `excludeIds` either — it could exclude by id and by nothing else,
+while `where` excludes by anything the collection has.
+
+Do not compute distances after reading rows. The measurement is cheap; the read is not, and a
+client-side comparison has to load the collection to sort it.

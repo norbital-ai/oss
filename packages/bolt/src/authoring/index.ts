@@ -14,22 +14,24 @@ export { approveBy, noApproval } from './approval-flow.js';
 export type { ApprovalFlow, ApprovalReviewFlow, NoApprovalFlow } from './approval-flow.js';
 
 export type {
-	AfterHookApi,
 	AnySchema,
 	AppName,
-	BeforeApi,
+	Api,
+	CollectionMutationValues,
 	CollectionHooks,
 	CollectionIntegrations,
 	CollectionPipelines,
 	EnvoyDefinition,
-	HookApi,
+	NearestMetric,
 	PolicyDecisionApi,
 	PolicyDefinition,
 	PolicyWriteContext,
 	SchemaQueryConfig,
+	SchemaNearestConfig,
 	SchemaQueryRow,
 	TeamName,
-	Teams
+	Teams,
+	VectorColumnName
 } from './contracts-schema.js';
 
 export { defineCommandHandler, defineQueryHandler } from './handlers-schema.js';

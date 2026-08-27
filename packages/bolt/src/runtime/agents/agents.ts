@@ -529,12 +529,14 @@ export type Interface = Readonly<{
 		| ApprovalConflict
 		| PendingApproval
 		| WhereCompileError
+		| Collections.MutationError
 		// A turn runs authored code — its tools reach collections and remotes — so a business rule
 		// can refuse it, and a delegated turn can be stopped by the nesting bound. Both were
 		// reaching this boundary already; only the declaration did not say so, which is how a
 		// refusal here left as something a caller could not name.
 		| AuthoredRefusal
 		| ChatDocuments.ChatDocumentError
+		| Collections.RelationshipPrefetchLimitExceeded
 		| InvocationBudget.NestingLimitExceeded
 	>;
 	readonly bindDocument: (
@@ -579,7 +581,9 @@ export type Interface = Readonly<{
 		| ApprovalConflict
 		| PendingApproval
 		| WhereCompileError
+		| Collections.MutationError
 		| AuthoredRefusal
+		| Collections.RelationshipPrefetchLimitExceeded
 		| InvocationBudget.NestingLimitExceeded
 	>;
 	readonly dequeue: (

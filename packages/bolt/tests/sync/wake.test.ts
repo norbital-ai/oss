@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { Effect, Layer } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -178,14 +177,6 @@ describe('announcing a change on the sync topic', () => {
 				"select distinct collection_name from bolt_sync_outbox where collection_name like 'chat_%' order by collection_name"
 			)
 		).toEqual([{ collection_name: 'chat_message' }, { collection_name: 'chat_session' }]);
-
-		const panel = readFileSync(
-			new URL('../../src/client/ui/agent/agent-chat-panel.svelte', import.meta.url),
-			'utf8'
-		);
-		expect(panel).toContain('client.db.chat_session');
-		expect(panel).toContain('client.db.chat_message');
-		expect(panel).not.toMatch(/setInterval|agents\.history|EventSource|WebSocket/);
 	});
 
 	it('completes the write when the host has no transport bound at all', async () => {

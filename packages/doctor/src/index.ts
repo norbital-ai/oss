@@ -35,7 +35,7 @@ export type {
 	RuleContext,
 	Severity
 } from './rules.js';
-export { defineConfig, findConfig, loadConfig } from './config.js';
+export { defineConfig, DOCTOR_CONFIG_DIRECTORY, findConfig, loadConfig } from './config.js';
 export type { LoadedConfig, OverlapBinding, ProbeConfig } from './config.js';
 export { overlapRules } from './overlaps.js';
 export type { OverlapShape } from './overlaps.js';
@@ -169,7 +169,7 @@ export type AuditResult = Readonly<{
 	readonly cataloguePath: string;
 	/** Absolute path to the derived metrics table. */
 	readonly metricsPath: string;
-	/** Packs loaded from the repository's `doctor.config.ts`, if it has one. */
+	/** Packs loaded from the repository's `.norbital/config/doctor` config, if it has one. */
 	readonly packs: ReadonlyArray<string>;
 	/** How many findings came from authored rules rather than the built-in detector. */
 	readonly authoredFindings: number;

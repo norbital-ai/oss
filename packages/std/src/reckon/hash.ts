@@ -94,6 +94,27 @@ export function sha256Text(message: string): string {
 	return H.map((v) => (v >>> 0).toString(16).padStart(8, '0')).join('');
 }
 
+/** The only fields whose exact ordered bytes participate in a schema migration digest. */
+export type DigestibleSchemaStep = Readonly<{
+	readonly id: string;
+	readonly sql: string;
+}>;
+
+/**
+ * Browser-safe byte-for-byte input for a schema migration digest.
+ *
+ * This is UTF-8 `JSON.stringify` of an array of `{ id, sql }` objects, with those keys in that
+ * order, steps in application order, and no whitespace or newline. Re-projecting the keys prevents
+ * caller metadata or object construction order from changing the digest. SQL remains exact.
+ */
+export const canonicalSchemaStepEncoding = (
+	steps: ReadonlyArray<DigestibleSchemaStep>
+): string => JSON.stringify(steps.map(({ id, sql }) => ({ id, sql })));
+
+/** SHA-256 of `canonicalSchemaStepEncoding`, labelled so algorithms cannot be confused. */
+export const digestSchemaSteps = (steps: ReadonlyArray<DigestibleSchemaStep>): string =>
+	`sha256:${sha256Text(canonicalSchemaStepEncoding(steps))}`;
+
 function rr(v: number, n: number): number {
 	return ((v >>> n) | (v << (32 - n))) >>> 0;
 }

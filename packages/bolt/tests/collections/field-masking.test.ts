@@ -92,7 +92,7 @@ describe('authored policy field masks', () => {
 			})
 		);
 
-		expect(rows).toEqual([{ id, title: 'Inspect site' }]);
+  expect(rows).toEqual([{ id, row_version: 1, title: 'Inspect site' }]);
 		expect(JSON.stringify(rows)).not.toContain('controller_note');
 		expect(JSON.stringify(rows)).not.toContain('Do not disclose');
 	});

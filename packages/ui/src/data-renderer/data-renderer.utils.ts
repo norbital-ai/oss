@@ -59,10 +59,8 @@ function formatInstantRange(
 	locale: string,
 	t?: Translate
 ): string {
-	const lower = objectProperty(value, 'lower') ?? objectProperty(value, 'start');
-	const upper = objectProperty(value, 'upper') ?? objectProperty(value, 'end');
-	let start = lower;
-	let end = upper;
+	let start = objectProperty(value, 'start');
+	let end = objectProperty(value, 'end');
 	if (typeof value === 'string') {
 		if (value === 'empty') return resolveText(t, 'dataRenderer.null');
 		const match = value.match(/^[[(]\"?([^,\"]*)\"?,\"?([^\]\)\"]*)\"?[\])]$/);

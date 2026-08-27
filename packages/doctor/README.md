@@ -45,7 +45,7 @@ Where `@norbital-ai/bolt` is installed, the same audit is available as `bolt aud
 ## Write a rule
 
 ```yaml
-# dr/no-raw-fetch.yml
+# .norbital/config/doctor/no-raw-fetch.yaml
 id: ACME1
 summary: raw fetch bypasses the http client
 severity: error
@@ -55,7 +55,7 @@ rule:
 ```
 
 ```yaml
-# dr/retries.yml — the same rule may carry a semantic half instead of, or beside, a structural one
+# .norbital/config/doctor/retries.yaml — the same rule may carry a semantic half instead of, or beside, a structural one
 id: RETRY_SEM
 summary: hand-rolled retry around async work
 severity: hint
@@ -71,12 +71,11 @@ semantic tier.
 ## Configure
 
 ```ts
-// doctor.config.ts — the complete surface
+// .norbital/config/doctor/doctor.config.ts — the complete surface
 import { defineConfig } from '@norbital-ai/doctor';
 
 export default defineConfig({
-	packs: ['norbital'],       // registered curated packs; or './dr/packs/house.ts'
-	patterns: 'dr/*.yml',      // this glob is also the default
+	packs: ['norbital'],       // registered curated packs
 	disable: ['SEM_TWIN'],
 	semantic: {
 		provider: 'openrouter',               // built-in today; or an inline function
@@ -86,6 +85,11 @@ export default defineConfig({
 	}
 });
 ```
+
+YAML extensions sit beside that file under `.norbital/config/doctor/*.yaml` and join automatically.
+
+OSS and Colony audit the monorepo as one `--root`. Templates audit each published template so the
+same config ships in a tenant workspace.
 
 Credentials are referenced by environment-variable name and resolved from the invoking
 environment, so a config file can be shared anywhere without sharing anyone's key. Any

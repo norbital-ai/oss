@@ -16,10 +16,14 @@ import { Context, Layer } from 'effect';
  * read by services deciding who is acting, and putting it there would mean every facility binding
  * received a field none of them read.
  */
-export type Interface = Readonly<{ readonly tenantId: string }>;
+export type Interface = Readonly<{
+	readonly tenantId: string;
+	/** Host-scoped deployment environment; never accepted from a command body. */
+	readonly environment: string;
+}>;
 
 /** Identifies the tenant scope in Effect's context so it is provided rather than ambient. */
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/TenantScope');
 
-export const layer = (tenantId: string): Layer.Layer<Interface> =>
-	Layer.succeed(Service, { tenantId });
+export const layer = (tenantId: string, environment = 'unknown'): Layer.Layer<Interface> =>
+	Layer.succeed(Service, { tenantId, environment });

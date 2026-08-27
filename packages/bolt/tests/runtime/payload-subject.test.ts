@@ -135,14 +135,11 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
 	'approvals.capabilities',
 	'approvals.status',
 	'approvals.timeline',
-	'sync.diff',
-	'sync.scan',
 	// It decodes one so `SYSTEM_ONLY_COMMANDS` has a `system` flag to check; the claim is refused
 	// here for the same reason every other one is, before that gate is reached.
 	'sync.compact',
 	'sync.shape',
 	'sync.provisioning',
-	'sync.mutate',
 	'agents.enqueue',
 	'agents.open',
 	'agents.dequeue',

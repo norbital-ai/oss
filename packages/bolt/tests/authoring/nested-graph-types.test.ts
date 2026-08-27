@@ -54,12 +54,6 @@ interface TestSchema {
 			};
 		};
 	};
-	readonly inputs: {
-		readonly payroll_runs: { create: unknown; update: unknown };
-		readonly payslips: { create: unknown; update: unknown };
-		readonly payslip_lines: { create: unknown; update: unknown };
-		readonly companies: { create: unknown; update: unknown };
-	};
 }
 
 type RunGraph = CreateGraph<TestSchema, 'payroll_runs'>;

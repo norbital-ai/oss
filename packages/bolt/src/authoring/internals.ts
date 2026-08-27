@@ -34,9 +34,9 @@ export type {
 	IntegrationsModuleInput
 } from './integration-introspection.js';
 import type {
-	BeforeApi,
+	Api,
+	CollectionMutationValues,
 	DefaultWorkspaceSchema,
-	InputValuesForTables as ContractInputValuesForTables,
 	TableName,
 	TablesForModels
 } from './contracts-schema.js';
@@ -98,13 +98,6 @@ export type PlatformRelationshipsFor<M extends Readonly<Record<string, ModelDecl
 ) => Readonly<Record<string, unknown>>;
 
 export type { TablesForModels } from './contracts-schema.js';
-export type InputValuesForTables<
-	T extends Readonly<Record<string, import('./contracts-schema.js').TableShape<unknown, unknown>>>
-> = import('./contracts-schema.js').InputValuesForTables<T>;
-export type MutationInsertFor<
-	S extends import('./contracts-schema.js').AnySchema,
-	N extends import('./contracts-schema.js').TableName<S>
-> = import('./contracts-schema.js').MutationInsertFor<S, N>;
 
 export const platformIdentityTables: Readonly<Record<string, never>> = {};
 
@@ -156,16 +149,11 @@ type PlatformModelTables = TablesForModels<typeof SYSTEM_COLLECTION_MODELS>;
 export type PlatformSchema = {
 	readonly tables: PlatformModelTables;
 	readonly relations: Readonly<Record<string, unknown>>;
-	readonly inputs: ContractInputValuesForTables<PlatformModelTables>;
 };
-export type CollectionRegistryFor<
-	S extends import('./contracts-schema.js').AnySchema,
-	_Hooks = never
-> = {
+export type CollectionRegistryFor<S extends import('./contracts-schema.js').AnySchema> = {
 	readonly [N in TableName<S>]: {
-		readonly create: Partial<import('./contracts-schema.js').MutationInsertFor<S, N>>;
-		readonly update: import('./contracts-schema.js').MutationUpdateFor<S, N>;
 		readonly row: import('./contracts-schema.js').SchemaRow<S, N>;
+		readonly mutation: CollectionMutationValues<S, N>;
 	};
 };
 export type InvokeClientApi<
@@ -184,4 +172,4 @@ type HandlerSuccess<Value> = Value extends import('effect').Effect.Effect<
 	: Awaited<Value>;
 export type InvokeClientRuntime<
 	S extends import('./contracts-schema.js').AnySchema = DefaultWorkspaceSchema
-> = Readonly<{ readonly api: BeforeApi<S> }>;
+> = Readonly<{ readonly api: Api<S> }>;

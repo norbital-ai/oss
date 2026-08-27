@@ -38,7 +38,7 @@ export default {
   rather than something the application has to remember to enforce. `fields` masks which columns the
   grant exposes.
 - `authorize` is a server-only decision function — `(context, api) => boolean` running in the write
-  path, with reads and nothing else (`api.db.query` without the mutation half), over the prepared
+  path, with reads and nothing else (`api.db.<collection>` without `mutate`), over the prepared
   candidate. The action key itself is the opt-in: an empty object means every prepared candidate,
   and an absent key means no authority for it.
 - `capabilities` grants apps, authored tools, MCP servers, and workspace skills. `limits` holds the

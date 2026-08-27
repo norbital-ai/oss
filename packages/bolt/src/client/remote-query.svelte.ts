@@ -21,15 +21,29 @@ type RemoteQueryCaching = Readonly<{
 	readonly registry: LiveQueryRegistry;
 }>;
 
+/**
+ * One reload attempt's publication fence.
+ *
+ * Transport cancellation is an optimisation, not a correctness boundary: a response may win the
+ * network race after a newer search/filter request has already started. Callers use this fence
+ * before installing any durable proof, while this module uses the same fence before changing the
+ * reactive value. That makes "request 10 cannot publish over request 11" one invariant rather than
+ * two best-effort checks.
+ */
+export type RemoteQueryAttempt = Readonly<{
+	readonly generation: number;
+	readonly isCurrent: () => boolean;
+}>;
+
 /** Holds one in-flight command so `$derived` / CollectionTable see rows after the response lands. */
 class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Value> {
 	current = $state.raw<Value | undefined>(undefined);
 	error = $state.raw<Error | undefined>(undefined);
 	loading = $state(false);
 	readonly #pending: Fiber.Fiber<Value, unknown>;
-	readonly #fetch: () => Effect.Effect<Value, unknown>;
+	readonly #fetch: (attempt: RemoteQueryAttempt) => Effect.Effect<Value, unknown>;
 	readonly #caching: RemoteQueryCaching | undefined;
-	readonly #decodeCached: (value: unknown) => Effect.Effect<Value, unknown>;
+	#requestGeneration = 0;
 	/** Keeps the registry's weak registration alive for exactly as long as this query is alive. */
 	readonly #liveRegistration:
 		| Readonly<{
@@ -39,13 +53,11 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 		| undefined;
 
 	constructor(
-		fetchValue: () => Effect.Effect<Value, unknown>,
-		caching: RemoteQueryCaching | undefined,
-		decodeCached: (value: unknown) => Effect.Effect<Value, unknown>
+		fetchValue: (attempt: RemoteQueryAttempt) => Effect.Effect<Value, unknown>,
+		caching: RemoteQueryCaching | undefined
 	) {
 		this.#fetch = fetchValue;
 		this.#caching = caching;
-		this.#decodeCached = decodeCached;
 		if (caching === undefined) {
 			this.#liveRegistration = undefined;
 		} else {
@@ -85,40 +97,35 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 		// Captured because `Effect.gen` bodies are plain generators, and `this` inside one is
 		// whatever it was called with — not the query instance.
 		const self = this;
+		const generation = (this.#requestGeneration += 1);
+		const attempt: RemoteQueryAttempt = {
+			generation,
+			isCurrent: () => self.#requestGeneration === generation
+		};
 		return Effect.gen(function* () {
 			yield* Effect.sync(() => {
 				self.loading = true;
 				self.error = undefined;
 			});
 			const caching = self.#caching;
-			if (caching !== undefined && self.current === undefined) {
-				const cached = yield* caching.cache.read(caching.key);
-				// Re-checked after the await: a fetch that resolved while the cache was being read has
-				// already written the fresh answer, and overwriting it with the stale one would be a
-				// visible flicker backwards.
-				if (cached !== undefined && self.current === undefined) {
-					// A package upgrade may make a persisted answer older than the operation's schema.
-					// Such an entry is a cache miss: it must never paint an invalid value, and the wire
-					// revalidation below is still the authority that can replace it.
-					const decoded = yield* self
-						.#decodeCached(cached)
-						.pipe(Effect.match({ onFailure: () => undefined, onSuccess: (value) => value }));
-					if (self.current === undefined) self.current = decoded;
-				}
-			}
-			yield* self.#fetch().pipe(
+			// Persisted query values carry no coverage cursor. They remain useful as post-fetch
+			// bookkeeping/dedup metadata, but never paint: a page is local only through a PGlite proof,
+			// and every other command revalidates with its authority before becoming visible.
+			yield* self.#fetch(attempt).pipe(
 				Effect.match({
 					onFailure: (cause) => {
+						if (!attempt.isCurrent()) return;
 						self.error = asError(cause);
 					},
 					onSuccess: (value) => {
+						if (!attempt.isCurrent()) return;
 						self.current = value;
 						caching?.cache.write(caching.key, value, caching.collections);
 					}
 				})
 			);
 			yield* Effect.sync(() => {
-				self.loading = false;
+				if (attempt.isCurrent()) self.loading = false;
 			});
 		});
 	};
@@ -129,8 +136,8 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 
 /** Starts a command and exposes its result as Svelte-tracked query state. */
 export const createRemoteQuery = <Output extends Schema.ConstraintDecoder<Schema.Json>>(
-	fetchValue: () => Effect.Effect<Output['Type'], unknown>,
+	fetchValue: (attempt: RemoteQueryAttempt) => Effect.Effect<Output['Type'], unknown>,
 	caching: RemoteQueryCaching | undefined,
-	schema: Output
+	_schema: Output
 ): RemoteQuery<Output['Type']> =>
-	new ReactiveRemoteQuery(fetchValue, caching, Schema.decodeUnknownEffect(schema));
+	new ReactiveRemoteQuery(fetchValue, caching);

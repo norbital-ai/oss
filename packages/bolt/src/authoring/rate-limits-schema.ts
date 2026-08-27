@@ -107,7 +107,7 @@ export const resolvePolicyLimits = (
 export interface RateLimitSpec {
 	/**
 	 * Command pattern → rule, or rules. A pattern is an exact command name or a `prefix.*` wildcard;
-	 * the most specific match wins, so `collections.create` overrides `collections.*`.
+	 * the most specific match wins, so `collections.mutate` overrides `collections.*`.
 	 */
 	readonly rules: Readonly<Record<string, RateLimitRules>>;
 }
@@ -237,7 +237,7 @@ export const validatePolicyLimits = (
 /**
  * The rules that govern one command, empty when none does.
  *
- * Most specific wins, measured by pattern length: an exact `collections.create` beats
+ * Most specific wins, measured by pattern length: an exact `collections.mutate` beats
  * `collections.*`, and a workspace can therefore tighten one command without restating the class it
  * belongs to. An unmatched command is unlimited by this layer — the edge ceiling still applies, and
  * inventing a default here would silently throttle every command a workspace never thought about.

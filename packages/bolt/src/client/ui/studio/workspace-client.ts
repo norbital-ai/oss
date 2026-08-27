@@ -1,7 +1,6 @@
 import type { CollectionField } from '@norbital-ai/ui/data-renderer';
 import type { CollectionClient } from '@norbital-ai/std/collection';
 import type { CollectionRegistryFor, PlatformSchema } from '#lib/authoring/internals.js';
-import type { CollectionMutationValues } from '#lib/client/contracts.js';
 import type { SystemClientApi } from '#lib/client/system-client.js';
 import type { ErasedAutomationClientApi } from '#lib/client/automation-client.svelte.js';
 
@@ -13,7 +12,7 @@ type ErasedRecord = Readonly<Record<string, unknown>>;
  *
  * The equivalent erased registry is `ErasedCollectionRegistry` in `@norbital-ai/std/collection`, and
  * these surfaces depend only on the neutral client seam and the design system — Studio never reaches
- * into a workspace's own data layer. The shape is three members, so writing them out keeps that seam
+ * into a workspace's own data layer. The shape is two members, so writing them out keeps that seam
  * whole.
  */
 type ErasedCollections = Readonly<
@@ -21,20 +20,13 @@ type ErasedCollections = Readonly<
 		string,
 		{
 			readonly row: ErasedRecord;
-			readonly create: ErasedRecord;
-			readonly update: ErasedRecord;
 			readonly mutation: ErasedRecord;
 		}
 	>
 >;
 
 /** Runtime-owned collections retain their generated row types even on the workspace shell seam. */
-type PlatformRegistry = CollectionRegistryFor<PlatformSchema>;
-type PlatformCollections = {
-	readonly [N in keyof PlatformRegistry]: PlatformRegistry[N] & {
-		readonly mutation: CollectionMutationValues<PlatformSchema, N & string>;
-	};
-};
+type PlatformCollections = CollectionRegistryFor<PlatformSchema>;
 type WorkspaceCollections = ErasedCollections & PlatformCollections;
 
 /**

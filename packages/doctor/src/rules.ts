@@ -10,7 +10,7 @@
  * restriction is what makes them cheap enough to run on every save and safe to run in parallel.
  *
  * ```ts
- * // dr/rules/no-raw-fetch.ts
+ * // .norbital/config/doctor/no-raw-fetch.ts
  * import { defineRule } from '@norbital-ai/doctor';
  *
  * export default defineRule({

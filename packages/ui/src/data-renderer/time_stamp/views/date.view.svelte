@@ -9,7 +9,8 @@
 	} from '@internationalized/date';
 	import { buttonVariants } from '#lib/button';
 	import { formatDistance } from 'date-fns/formatDistance';
-	import { enUS, zhCN } from 'date-fns/locale';
+	import { enUS } from 'date-fns/locale/en-US';
+	import { zhCN } from 'date-fns/locale/zh-CN';
 	import { Calendar } from '#lib/calendar';
 	import { useI18n, type UiKeys } from '#lib/i18n';
 	import { Cluster, Inline, Scroll, Stack } from '#lib/layout';

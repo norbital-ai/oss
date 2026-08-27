@@ -130,15 +130,13 @@ describe('routed policy approvals', () => {
 				const entries = (
 					api as {
 						readonly db: {
-							readonly query: {
-								readonly entries: {
-									readonly findMany: () => Effect.Effect<ReadonlyArray<unknown>>;
-								};
+							readonly entries: {
+								readonly findMany: () => Effect.Effect<ReadonlyArray<unknown>>;
 							};
 						};
 					}
-				).db.query.entries;
-				exposedWrites.push('create' in entries || 'update' in entries || 'delete' in entries);
+				).db.entries;
+				exposedWrites.push('mutate' in entries);
 				yield* entries.findMany();
 				const normalized = Reflect.get(
 					Reflect.get(context as object, 'record') as object,

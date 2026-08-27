@@ -1,5 +1,6 @@
 // repository-health:allow SEM_PARALLEL -- schema-migrations imports collectionIndexName from
 // ./schema-plan.js, so the pair is linked, not parallel.
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -37,6 +38,14 @@ import type {
 import { extractRelationships } from './model-fields.js';
 import { collectionIndexName } from './schema-plan.js';
 import { STATEMENT_BREAKPOINT, discoverAuthoredSource } from './sync.js';
+import {
+	advanceMutationCompatibilityLedger,
+	mutationSchemaDescriptor,
+	mutationSchemaFingerprint,
+	readMutationCompatibilityLedger,
+	type MutationCompatibilityLedger,
+	writeMutationCompatibilityLedger
+} from './mutation-schema-compatibility.js';
 
 /**
  * Drizzle-driven schema migration.
@@ -553,7 +562,17 @@ export const compileHostModelSchema = (
  */
 const importModel = (modelFile: string) =>
 	Effect.tryPromise({
-		try: () => import(pathToFileURL(modelFile).href),
+		try: async () => {
+			/**
+			 * `sync --watch` validates repeatedly in one Node process. A plain file URL is an ESM cache
+			 * key, so importing it again after an author edits `+model.ts` returns the old declaration and
+			 * can falsely report that the committed snapshot still agrees. Content is the revision: an
+			 * unchanged model keeps the cheap cached module, while a changed model receives a new URL.
+			 */
+			const source = await readFile(modelFile, 'utf8');
+			const revision = createHash('sha256').update(source).digest('hex');
+			return import(`${pathToFileURL(modelFile).href}?bolt-model=${revision}`);
+		},
 		catch: (caught) =>
 			new Error(
 				`Could not import ${modelFile} to read its columns.\n\n` +
@@ -578,6 +597,16 @@ const importModel = (modelFile: string) =>
 			return Effect.succeed(declaration as ModelDeclaration);
 		})
 	);
+
+/** Imports the model declarations named by filesystem-first discovery, keyed by collection name. */
+export const importWorkspaceModels = (modelFiles: ReadonlyArray<string>) =>
+	Effect.gen(function* () {
+		const models: Record<string, ModelDeclaration> = {};
+		for (const modelFile of modelFiles) {
+			models[basename(dirname(modelFile))] = yield* importModel(modelFile);
+		}
+		return models;
+	});
 
 /** The newest lineage entry's snapshot, or `undefined` when the workspace has no lineage yet. */
 export const latestSnapshot = (
@@ -617,6 +646,79 @@ export const latestSnapshot = (
 		return undefined;
 	});
 
+export type ValidatedWorkspaceMigrationLineage = Readonly<{
+	readonly snapshot: WorkspaceSnapshot;
+	readonly mutationCompatibilityLedger: MutationCompatibilityLedger;
+}>;
+
+/**
+ * Proves that sync is compiling exactly the schema its author committed.
+ *
+ * This is the read-only half of `bolt migrate`: it runs the same Drizzle diff but never writes a
+ * migration, snapshot, compatibility checkpoint, generated module, or artifact. A successful
+ * result is therefore safe for sync to reuse as its schema authority; every failure tells the
+ * author to run the one command that is allowed to advance that authority.
+ */
+export const validateWorkspaceMigrationLineage = (
+	input: Readonly<{
+		readonly workspaceRoot: string;
+		readonly models: Readonly<Record<string, ModelDeclaration>>;
+		readonly relations: ReadonlyArray<RelationDefinition>;
+	}>
+) =>
+	Effect.gen(function* () {
+		const migrationsRoot = join(input.workspaceRoot, '.norbital', 'migrations');
+		const snapshot = yield* latestSnapshot(migrationsRoot);
+		if (snapshot === undefined) {
+			return yield* Effect.fail(
+				new Error(
+					'Migration lineage has no committed schema snapshot. Run `bolt migrate` and commit the resulting lineage before `bolt sync`.'
+				)
+			);
+		}
+		const mutationCompatibilityLedger = yield* readMutationCompatibilityLedger(input.workspaceRoot);
+		if (mutationCompatibilityLedger === undefined) {
+			return yield* Effect.fail(
+				new Error(
+					'Mutation compatibility lineage is missing. Run `bolt migrate` and commit the resulting lineage before `bolt sync`.'
+				)
+			);
+		}
+
+		const pending = yield* planWorkspaceMigration({
+			models: input.models,
+			relations: input.relations,
+			previous: snapshot
+		});
+		if (pending !== undefined) {
+			return yield* Effect.fail(
+				new Error(
+					`Authored models or relationships do not agree with the latest committed migration snapshot (${pending.statements.length} pending statement${pending.statements.length === 1 ? '' : 's'}). Run \`bolt migrate\` and commit the resulting lineage before \`bolt sync\`.`
+				)
+			);
+		}
+
+		const schema = mutationSchemaDescriptor(snapshot, input.relations);
+		const fingerprint = mutationSchemaFingerprint(schema);
+		const currentCheckpoint = mutationCompatibilityLedger.checkpoints.find(
+			(checkpoint) =>
+				checkpoint.schemaFingerprint === mutationCompatibilityLedger.currentSchemaFingerprint
+		);
+		if (
+			mutationCompatibilityLedger.currentSchemaFingerprint !== fingerprint ||
+			currentCheckpoint === undefined ||
+			mutationSchemaFingerprint(currentCheckpoint.schema) !== fingerprint
+		) {
+			return yield* Effect.fail(
+				new Error(
+					'Mutation compatibility lineage does not match the latest committed schema. Run `bolt migrate` and commit the resulting lineage before `bolt sync`.'
+				)
+			);
+		}
+
+		return { snapshot, mutationCompatibilityLedger } satisfies ValidatedWorkspaceMigrationLineage;
+	});
+
 /**
  * Generates the next lineage entry for a workspace on disk.
  *
@@ -629,22 +731,43 @@ export const generateWorkspaceMigration = (workspaceRoot: string, name?: string)
 		// compiler emits, and two rules for "what is a collection" would eventually disagree.
 		const { root, models: modelFiles } = yield* discoverAuthoredSource(workspaceRoot);
 		const migrationsRoot = join(root, '.norbital', 'migrations');
-		const models: Record<string, ModelDeclaration> = {};
-		for (const modelFile of modelFiles) {
-			models[basename(dirname(modelFile))] = yield* importModel(modelFile);
-		}
+		const models = yield* importWorkspaceModels(modelFiles);
 		const relationshipSource = yield* Effect.tryPromise(() =>
 			readFile(join(root, 'src', 'collections', '+relationship.ts'), 'utf8')
 		).pipe(Effect.catch(() => Effect.succeed<string | undefined>(undefined)));
+		const previous = yield* latestSnapshot(migrationsRoot);
+		const relations =
+			relationshipSource === undefined ? [] : extractRelationships(relationshipSource);
 		const migration = yield* planWorkspaceMigration({
 			models,
-			relations: relationshipSource === undefined ? [] : extractRelationships(relationshipSource),
-			previous: yield* latestSnapshot(migrationsRoot),
+			relations,
+			previous,
 			...(name === undefined ? {} : { name })
 		});
-		if (migration === undefined) return { migrationsRoot, statements: [] };
-		yield* writeMigration(migrationsRoot, migration);
-		return { migrationsRoot, tag: migration.tag, statements: migration.statements };
+		if (migration !== undefined) yield* writeMigration(migrationsRoot, migration);
+		const currentSnapshot = migration?.snapshot ?? previous;
+		if (currentSnapshot === undefined)
+			return yield* Effect.fail(
+				new Error('A workspace with authored models did not produce a mutation schema snapshot.')
+			);
+		const previousCompatibility = yield* readMutationCompatibilityLedger(root);
+		const nextCompatibility = advanceMutationCompatibilityLedger({
+			previous: previousCompatibility,
+			schema: mutationSchemaDescriptor(currentSnapshot, relations),
+			statements: migration?.statements ?? [],
+			atEpochMs: Date.now()
+		});
+		const compatibilityLedgerWritten = nextCompatibility !== previousCompatibility;
+		if (compatibilityLedgerWritten)
+			yield* writeMutationCompatibilityLedger(root, nextCompatibility);
+		return migration === undefined
+			? { migrationsRoot, statements: [], compatibilityLedgerWritten }
+			: {
+					migrationsRoot,
+					tag: migration.tag,
+					statements: migration.statements,
+					compatibilityLedgerWritten
+				};
 	});
 
 /** Writes one lineage entry in the layout drizzle-kit and the existing migrations already use. */

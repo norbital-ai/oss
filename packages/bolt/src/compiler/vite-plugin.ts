@@ -134,7 +134,7 @@ const VitePlugins = {
 				// resolution boundary: an omission survives `bolt sync` and fails only when Vite builds a
 				// tenant, which is how the old replica bootstrap remained broken unnoticed.
 				if (id === clientRuntimeId)
-					return `export { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, startLocalReplica, switchWorkspaceAccessScope } from '@norbital-ai/bolt/client-runtime';`;
+					return `export { createBrowserWorkspaceRuntime, createWorkspaceApiProxy, createWorkspaceBootstrapController, startLocalReplica, switchWorkspaceAccessScope } from '@norbital-ai/bolt/client-runtime';`;
 				if (id === applicationId) {
 					return Effect.runPromise(
 						workspaceTitleOf(workspaceRoot).pipe(
@@ -198,6 +198,7 @@ const VitePlugins = {
 									`\t\t\t\tagentNames: workspace.agentNames,`,
 									`\t\t\t\ttenantMessages: messages.tenantMessages,`,
 									`\t\t\t\tclient: workspace.client,`,
+									`\t\t\t\truntime: workspace.runtime,`,
 									`\t\t\t\tchangeAccessScope: workspace.changeAccessScope,`,
 									`\t\t\t\tstartLocalReplica: (accessScope) => workspace.startLocalReplica(workspace.runtime, undefined, { accessScope })`,
 									`\t\t\t\t}))`,

@@ -10,7 +10,7 @@
 	} from '@norbital-ai/ui/collection-runtime';
 	import {
 		setDataRendererRuntimeContext,
-		type CustomTypeRendererMap
+		type CustomTypeRendererState
 	} from '@norbital-ai/ui/data-renderer';
 	import BoltApp from './app.svelte';
 	import { Scroll, Stack } from '@norbital-ai/ui/layout';
@@ -29,6 +29,10 @@
 	import { WEB_AGENT_ID } from '#lib/client/ui/agent/conversation-selector.js';
 	import { WorkspaceUploadClient } from '../state/file-upload-client.svelte.js';
 	import { workspaceSession } from '#lib/client/session.js';
+	import {
+		createWorkspaceBootstrapController,
+		type WorkspaceSyncStatus
+	} from '#lib/client/runtime.js';
 	import type {
 		CompiledWorkspace,
 		WorkspaceHostActions,
@@ -64,6 +68,17 @@
 	const session = workspaceSession();
 	let replicaAccessScope = $state(session.accessScope);
 	let interactiveQueriesRequestedScope = $state<string | undefined>(undefined);
+	const syncStatusSignal = untrack(() => workspace.runtime?.syncStatus);
+	let syncStatus = $state.raw<WorkspaceSyncStatus | undefined>(syncStatusSignal?.current());
+
+	/**
+	 * Mirrors the engine's one platform status signal into this bundle's Svelte graph.
+	 *
+	 * No signal means no proof: leave the value absent so the shell says freshness and settlement are
+	 * unverified. It must never synthesize “online”, “settled”, or an exact local result from browser
+	 * connectivity alone.
+	 */
+	$effect(() => syncStatusSignal?.subscribe((next) => (syncStatus = next)));
 
 	/**
 	 * The authored record surfaces, keyed by collection.
@@ -128,31 +143,42 @@
 	 * `custom('leave_event')` is a jsonb column whose shape only its author knows, so the type ships
 	 * the component that reads it. Without these every custom field falls through to the JSON dump.
 	 */
-	const loadedCustomTypeRenderers = $state<Record<string, CustomTypeRendererMap[string]>>({});
+	const customTypeRendererStates = $state<Record<string, CustomTypeRendererState>>({});
 	const requestedCustomTypeRenderers = new Set<string>();
-	const customTypeRenderers = new Proxy(loadedCustomTypeRenderers, {
-		get: (renderers, property, receiver) => {
-			if (typeof property === 'string' && !requestedCustomTypeRenderers.has(property)) {
-				const load = workspace.customTypeRendererLoaders[property];
-				if (load !== undefined) {
-					requestedCustomTypeRenderers.add(property);
-					void Effect.runPromise(
-						Effect.tryPromise(load).pipe(
-							Effect.tap((renderer) =>
-								Effect.sync(() =>
-									Object.assign(loadedCustomTypeRenderers, { [property]: renderer })
-								)
-							),
-							Effect.catch(() => Effect.void)
+	const customTypeRendererLoading = { status: 'loading' } as const;
+	function customTypeRenderer(kind: string): CustomTypeRendererState | undefined {
+		const current = customTypeRendererStates[kind];
+		if (current) return current;
+		const load = workspace.customTypeRendererLoaders[kind];
+		if (!load) return undefined;
+		if (!requestedCustomTypeRenderers.has(kind)) {
+			requestedCustomTypeRenderers.add(kind);
+			void Effect.runPromise(
+				Effect.tryPromise(load).pipe(
+					Effect.tap((renderer) =>
+						Effect.sync(() =>
+							Object.assign(customTypeRendererStates, {
+								[kind]: { status: 'ready', renderer }
+							})
 						)
-					);
-				}
-			}
-			return Reflect.get(renderers, property, receiver);
+					),
+					Effect.catch((cause) =>
+						Effect.sync(() =>
+							Object.assign(customTypeRendererStates, {
+								[kind]: {
+									status: 'failed',
+									error: cause instanceof Error ? cause : new Error(String(cause))
+								}
+							})
+						)
+					)
+				)
+			);
 		}
-	});
+		return customTypeRendererStates[kind] ?? customTypeRendererLoading;
+	}
 	setDataRendererRuntimeContext({
-		customTypeRenderers,
+		customTypeRenderer,
 		// File records persist storage keys, never routes. The host owns the route and declares it on
 		// the session, so generic renderers and authored representations resolve the same key through
 		// the same capability.
@@ -242,30 +268,6 @@
 	const applicationsReady = $derived(
 		visibleAppsQuery.current !== undefined || (view.user.admin && replicaAccessScope === 'operator')
 	);
-	let paintedAccessScope = $state<string | undefined>(undefined);
-
-	/**
-	 * Records the authority scope only after its navigation has reached a browser paint.
-	 *
-	 * Two animation frames are intentional: the first runs before the browser paints the reactive
-	 * application list, and the second runs after that paint. Replica boot and optional module imports
-	 * key off this marker, so the first useful navigation wins the network and main-thread race without
-	 * a timer, poll, or guessed delay.
-	 */
-	$effect(() => {
-		const accessScope = replicaAccessScope;
-		if (!applicationsReady || paintedAccessScope === accessScope) return;
-		let secondFrame: number | undefined;
-		const firstFrame = requestAnimationFrame(() => {
-			secondFrame = requestAnimationFrame(() => {
-				paintedAccessScope = accessScope;
-			});
-		});
-		return () => {
-			cancelAnimationFrame(firstFrame);
-			if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
-		};
-	});
 
 	/**
 	 * Whether this session may preview the workspace as one of its teams, and which team it is on now.
@@ -392,7 +394,6 @@
 	});
 	const appRequest = { latest: 0 };
 	const App = $derived(appMount.component);
-	let replicaRequestedScope = $state<string | undefined>(undefined);
 
 	/**
 	 * Which navigation the mounted component belongs to.
@@ -434,81 +435,42 @@
 		);
 	};
 
-	/**
-	 * PGlite is a background acceleration path, not an initial-render dependency.
-	 *
-	 * One real interaction opts the current authority scope into it. Waiting two paint frames lets the
-	 * interaction's own navigation update `appMount.loading`; the replica effect below then waits for
-	 * that selected application module to finish instead of racing it for bandwidth and main-thread
-	 * evaluation. No interaction means no PGlite request in the initial workspace graph.
-	 */
+	/** User-triggered shell reads stay deferred, independently of root-owned replica startup. */
 	$effect(() => {
 		const accessScope = replicaAccessScope;
-		if (paintedAccessScope !== accessScope || replicaRequestedScope === accessScope) return;
-		let firstFrame: number | undefined;
-		let secondFrame: number | undefined;
+		if (!applicationsReady || interactiveQueriesRequestedScope === accessScope) return;
 		const stopListening = (): void => {
-			window.removeEventListener('pointerdown', requestReplica, true);
-			window.removeEventListener('keydown', requestReplica, true);
+			window.removeEventListener('pointerdown', requestDeferredQueries, true);
+			window.removeEventListener('keydown', requestDeferredQueries, true);
 		};
-		const requestReplica = (): void => {
+		const requestDeferredQueries = (): void => {
 			stopListening();
-			firstFrame = requestAnimationFrame(() => {
-				secondFrame = requestAnimationFrame(() => {
-					if (replicaAccessScope === accessScope) {
-						interactiveQueriesRequestedScope = accessScope;
-						replicaRequestedScope = accessScope;
-					}
-				});
-			});
+			if (replicaAccessScope === accessScope) interactiveQueriesRequestedScope = accessScope;
 		};
-		window.addEventListener('pointerdown', requestReplica, { capture: true, passive: true });
-		window.addEventListener('keydown', requestReplica, { capture: true });
+		window.addEventListener('pointerdown', requestDeferredQueries, {
+			capture: true,
+			passive: true
+		});
+		window.addEventListener('keydown', requestDeferredQueries, { capture: true });
 		return () => {
 			stopListening();
-			if (firstFrame !== undefined) cancelAnimationFrame(firstFrame);
-			if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
 		};
 	});
 
 	/**
-	 * Starts the local replica, which is what makes a second visit cheap.
+	 * Gives the host a starter for this exact authority scope.
 	 *
-	 * Deliberately late and deliberately optional. Failures are swallowed on purpose: a browser
-	 * without wasm, without IndexedDB, or in a private window that refuses persistence must keep
-	 * working over the wire — degraded to exactly what it had before any of this existed, never
-	 * broken. There is no fallback path to write because the fallback *is* the ordinary path.
-	 *
-	 * The returned teardown matters: starting the replica opens the change subscription, and a shell
-	 * that unmounted without stopping it would leave a stream per mount holding a host connection
-	 * open.
+	 * Registration is not initiation. Colony's persistent root calls `start`, races initial catch-up
+	 * readiness against its hard online boundary and owns the returned teardown. A generated workspace
+	 * therefore contains no interaction, paint or application-module gate in front of replica work.
 	 */
 	$effect(() => {
 		const accessScope = replicaAccessScope;
-		if (
-			paintedAccessScope !== accessScope ||
-			replicaRequestedScope !== accessScope ||
-			appMount.loading
-		)
-			return;
-		let stop: (() => void) | undefined;
-		let unmounted = false;
-		void Effect.runPromise(
-			Effect.tryPromise(() => workspace.startLocalReplica(accessScope)).pipe(
-				Effect.tap((replica) =>
-					Effect.sync(() => {
-						// Resolved after teardown — stop it now rather than leaking its stream.
-						if (unmounted) replica.stop();
-						else stop = replica.stop;
-					})
-				),
-				Effect.catch(() => Effect.void)
-			)
+		return actions.registerBootstrap?.(
+			workspace.runtime === undefined
+				? { start: () => workspace.startLocalReplica(accessScope) }
+				: createWorkspaceBootstrapController(workspace.runtime, accessScope)
 		);
-		return () => {
-			unmounted = true;
-			stop?.();
-		};
 	});
 
 	$effect(() => {
@@ -577,6 +539,7 @@
 
 <BoltApp
 	title={workspace.title}
+	{syncStatus}
 	search={view.search}
 	{apps}
 	{accessibleApps}

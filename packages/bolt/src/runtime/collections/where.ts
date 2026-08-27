@@ -5,6 +5,7 @@ import type {
 	RelationDefinition,
 	WorkspaceDefinition
 } from '#lib/authoring/workspace-schema.js';
+import { searchableColumns } from '#lib/authoring/model-introspection.js';
 import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 
 /** Parameterized SQL rendered inside this compiler before it crosses the opaque public boundary. */
@@ -220,21 +221,25 @@ const compileOperator = (
 	context: WhereContext,
 	field: string,
 	fieldSql: string,
+	textual: boolean,
 	operator: string,
 	operand: unknown
 ): InternalWhereResult => {
+	// PostgreSQL and PGlite both provide the deterministic built-in `C` collation. Pinning every
+	// text-sensitive expression is what makes a local ordering/filter proof portable between them.
+	const comparableFieldSql = textual ? `${fieldSql} collate "C"` : fieldSql;
 	if (Object.hasOwn(COMPARISON_SQL, operator)) {
 		const value = WhereSql.parameter(operand);
 		if (value === undefined) return operandFailure(context, field, operator);
 		return Result.succeed({
-			sql: `${fieldSql} ${COMPARISON_SQL[operator as keyof typeof COMPARISON_SQL]} $1`,
+			sql: `${comparableFieldSql} ${COMPARISON_SQL[operator as keyof typeof COMPARISON_SQL]} $1`,
 			parameters: [value]
 		});
 	}
 	if (Object.hasOwn(PATTERN_SQL, operator)) {
 		if (typeof operand !== 'string') return operandFailure(context, field, operator);
 		return Result.succeed({
-			sql: `${fieldSql} ${PATTERN_SQL[operator as keyof typeof PATTERN_SQL]} $1`,
+			sql: `${comparableFieldSql} ${PATTERN_SQL[operator as keyof typeof PATTERN_SQL]} $1`,
 			parameters: [operand]
 		});
 	}
@@ -259,7 +264,7 @@ const compileOperator = (
 		}
 		const placeholders = parameters.map((_value, index) => `$${index + 1}`).join(', ');
 		return Result.succeed({
-			sql: `${fieldSql} ${operator === 'in' ? 'in' : 'not in'} (${placeholders})`,
+			sql: `${comparableFieldSql} ${operator === 'in' ? 'in' : 'not in'} (${placeholders})`,
 			parameters
 		});
 	}
@@ -450,9 +455,10 @@ const compileFieldCondition = (
 			condition as Readonly<Record<string, unknown>>
 		);
 	const fieldSql = WhereSql.qualify(context.collection, field);
+	const textual = context.fields[field]?.type === 'string';
 	const clauses: Array<RenderedQuery> = [];
 	for (const [operator, operand] of Object.entries(condition)) {
-		const compiled = compileOperator(context, field, fieldSql, operator, operand);
+		const compiled = compileOperator(context, field, fieldSql, textual, operator, operand);
 		if (Result.isFailure(compiled)) return compiled;
 		clauses.push(compiled.success);
 	}
@@ -546,6 +552,38 @@ export const compileWhere = (where: unknown, context: WhereContext, offset = 0):
 	return Result.succeed(Object.freeze(compiled));
 };
 
+/** Escapes a person's free-text term so `%` and `_` remain text, never SQL wildcards. */
+const escapeSearchPattern = (value: string): string =>
+	value.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_');
+
+/**
+ * The one free-text predicate shared by authoritative Postgres and the PGlite evaluator.
+ *
+ * Search is literal, case-insensitive containment over exactly the fields declared `search: true`.
+ * Both engines execute the same parameterized `COLLATE "C" ILIKE ... ESCAPE` expression; local
+ * exactness therefore never depends on JavaScript's different Unicode case-folding rules.
+ */
+export const compileSearch = (
+	fields: Readonly<Record<string, FieldDefinition>>,
+	term: string | null | undefined,
+	collection?: string
+): RenderedQuery => {
+	const trimmed = term?.trim() ?? '';
+	if (trimmed === '') return { sql: 'true', parameters: [] };
+	const searchable = searchableColumns(fields);
+	if (searchable.length === 0) return { sql: 'false', parameters: [] };
+	const columnSql = (name: string): string =>
+		collection === undefined
+			? WhereSql.quoteIdentifier(name)
+			: WhereSql.qualify(collection, name);
+	return {
+		sql: searchable
+			.map((name) => `${columnSql(name)}::text collate "C" ilike $1 escape '\\'`)
+			.join(' or '),
+		parameters: [`%${escapeSearchPattern(trimmed)}%`]
+	};
+};
+
 /** Converts only nominal compiler output into a bound Drizzle predicate. */
 export const whereExpression = (query: CompiledWhere): SQL => {
 	if (query[COMPILED_WHERE] !== true)
@@ -563,7 +601,12 @@ export const whereExpression = (query: CompiledWhere): SQL => {
 };
 
 /** One term of a compiled `order by`: the persisted column, and the direction it sorts in. */
-export type OrderTerm = Readonly<{ readonly column: string; readonly direction: 'asc' | 'desc' }>;
+export type OrderTerm = Readonly<{
+	readonly column: string;
+	readonly direction: 'asc' | 'desc';
+	/** Present only for authored text columns; cursor seeks must apply the same collation. */
+	readonly collation?: 'C';
+}>;
 
 /**
  * Compiles a whitelist `order by` over known collection columns, always ending on the primary key.
@@ -586,7 +629,11 @@ export const compileOrderTerms = (
 			// ordering it as though it were a normal column would emit invalid SQL.
 			if (context.fields[field]?.reference !== undefined) continue;
 			if (direction !== 'asc' && direction !== 'desc') continue;
-			terms.push({ column: WhereSql.mapColumn(field), direction });
+			terms.push({
+				column: WhereSql.mapColumn(field),
+				direction,
+				...(context.fields[field]?.type === 'string' ? { collation: 'C' as const } : {})
+			});
 		}
 	}
 	return terms.some(({ column }) => column === 'id')
@@ -598,4 +645,4 @@ export const compileOrderTerms = (
 export const renderOrderBy = (terms: ReadonlyArray<OrderTerm>): string =>
 	terms.length === 0
 		? ''
-		: ` order by ${terms.map(({ column, direction }) => `${WhereSql.quoteIdentifier(column)} ${direction}`).join(', ')}`;
+		: ` order by ${terms.map(({ column, direction, collation }) => `${WhereSql.quoteIdentifier(column)}${collation === undefined ? '' : ` collate "${collation}"`} ${direction}`).join(', ')}`;

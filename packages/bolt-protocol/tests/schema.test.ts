@@ -81,10 +81,10 @@ describe('Bolt protocol schemas', () => {
 				taskId: 'agent-turn-1'
 			});
 		}
-		// 4 is the version that stopped carrying asset bytes inside the artifact. The literal is
+		// 5 is the version that made browser writes idempotent and version-guarded. The literal is
 		// asserted rather than the constant compared to itself: a bump is a deliberate act, and a
 		// release that changes shape without one is the failure this pins.
-		expect(PROTOCOL_VERSION).toBe(4);
+		expect(PROTOCOL_VERSION).toBe(5);
 	});
 
 	it('decodes transport requests without selecting a wire protocol', () => {

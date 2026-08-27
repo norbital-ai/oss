@@ -357,7 +357,7 @@
 			{:else}
 				<Stack gap="sm">
 					{#each workspace.automations as automation (automation.name)}
-						{@const path = `src/automation/+${automation.name}.ts`}
+						{@const path = `src/automations/+${automation.name}.ts`}
 						{@const execution = automationState(automation.name)}
 						{@const run = execution?.latest}
 						{@const latest = run?.current}

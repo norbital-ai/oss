@@ -69,8 +69,9 @@ show `—`, not the underlying uuid.
 
 Do not mount a lookup query per row. Prefer:
 
-1. **`query.with`** on the table/form so related labels arrive with the rows, or
-2. **One** `$derived` label query for the scoped page, then Map lookup in `render`.
+1. Let a declared table/Kanban relationship field add its automatic `query.with`, or
+2. **One** `$derived` label query for a genuinely composite explicit renderer or whole `Card`
+   override.
 
 Avoid spraying many parallel `findMany` calls “just in case.” Usually one scoped query (or one
 parent + nested `with`) is enough. See [data-access.md](data-access.md#eliminate-query-per-record-loops).
@@ -82,39 +83,53 @@ as Combobox option labels, as `recordLabel` fields, or as fallbacks when a map m
 
 | Surface               | Required                                                                   |
 | --------------------- | -------------------------------------------------------------------------- |
-| Table relation column | Human label / nested relation; miss → `—`                                  |
-| Form relation `Field` | Explicit human `label` + `RelationshipRenderer` with human `options.label` |
-| Auto `CollectionForm` | Forbidden when the schema has uuid FKs — author `+representation.svelte`   |
+| Table relation column | Declare the column; automatic relation label, optional `relationOptions`   |
+| Form relation `Field` | Declare the field; automatic picker, optional contextual `relationOptions` |
+| Kanban relation field | Declare the field; automatic relation label, optional `relationOptions`    |
 | Charts / summaries    | Keys are labels (`code · name`), never ids                                 |
 
 ```svelte
 <!-- WRONG -->
-<Column name="company_id" render={({ value }) => labels.get(String(value)) ?? value} />
-<Field name="company_id" />
-
-<!-- RIGHT — inlined at the call site -->
 <Column
 	name="company_id"
-	label="Company"
-	render={({ value }) => (value == null || value === '' ? '—' : (labels.get(String(value)) ?? '—'))}
+	renderer={FormattedValueRenderer}
+	rendererProps={{ format: ({ value }) => labels.get(String(value)) ?? String(value) }}
 />
+<Field name="id" hidden />
+
+<!-- RIGHT — the relationship strategy is automatic; only contextual options are authored -->
+<Column name="company_id" label="Company" />
 <Field
 	name="company_id"
 	label="Company"
-	renderer={RelationshipRenderer}
-	rendererProps={{
-		target: 'companies',
-		options: {
-			label: (record) => (record.name != null && record.name !== '' ? String(record.name) : '—'),
-			orderBy: { name: 'asc' },
-			limit: 500
-		}
+	relationOptions={{
+		label: (record) => (record.name != null && record.name !== '' ? String(record.name) : '—'),
+		orderBy: { name: 'asc' },
+		limit: 500
 	}}
 />
 ```
 
-Stupidity scanner **UI17** flags common violations (`?? value` on id columns, `label="… Id"`,
-`Column name="id"`, bare `Field name="*_id"`).
+Doctor **UI17** rejects system-field composition such as `<Column name="id">` and even
+`<Field name="id" hidden>`. Form identity is framework-hidden automatically; authors never declare
+it.
+
+### 7. One datatype strategy on every collection surface
+
+`DataRenderer` is the single routing boundary. Its precedence is: explicit `renderer` override,
+relationship strategy, custom datatype renderer, built-in datatype renderer/fallback. Every branch
+is mounted in the same input-sized control frame; a renderer may be directly mutable or use a
+trigger + dropdown, but it does not invent a different surface height.
+
+| Surface            | Authoring contract                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CollectionTable`  | `columns` is required. An absent `<Column>` is omitted; no `renderer` means automatic; `renderer` is the only field-content override and still runs through the standard control frame. System fields cannot be declared.                                                                                                                                                                                                                                 |
+| `CollectionKanban` | `fields` is required. The automatic card uses only declared `<Field>` entries and the same renderer options. `Card` is the explicit whole-card override. System fields cannot be declared or used as collapsed-card content.                                                                                                                                                                                                                              |
+| `CollectionForm`   | `children` is required. Every mutable model field must occur exactly once. Use `<Field hidden>` for a value supplied by custom composition or a collection hook; it registers without painting a control or running visible-input required checks. Missing/duplicate fields throw at runtime. System fields, including `id`, are internal and already hidden. Generated read-only fields may be declared for display but do not satisfy the mutate shape. |
+| Toolbar filters    | No templated overrides. The field tree is automatic: root attributes plus attributes reached through one or two relationship edges. Operand controls and applied values use the same datatype strategy.                                                                                                                                                                                                                                                   |
+
+Do not pass `RelationshipRenderer` explicitly for an ordinary relationship, do not use the removed
+table `render` prop, and do not rely on schema declaration order to create table or card fields.
 
 ## Product rules
 

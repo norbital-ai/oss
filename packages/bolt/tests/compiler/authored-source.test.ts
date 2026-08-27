@@ -100,8 +100,8 @@ describe('Bolt authored source discovery', () => {
 		// A policy is named by its file and nothing else, so a file called `+agent.ts` under
 		// `access/policies/` is a policy called `agent`. There is no suffix left to carry the kind.
 		expect(discovered.policies).toEqual(['agent']);
-		expect(discovered.teamsFile).toBeDefined();
-		expect(discovered.anonymousLimitFile).toBeDefined();
+		expect(discovered.teamsFile).toBe(join(root, 'src', 'access', '+teams.ts'));
+		expect(discovered.anonymousLimitFile).toBe(join(root, 'src', 'access', '+anonymous_limits.ts'));
 		expect(discovered.environmentFile).toBe(join(root, 'src', '+env.ts'));
 		expect(discovered.prompt).toContain('Answer from tickets.');
 	});

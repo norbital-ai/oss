@@ -1,43 +1,49 @@
-import { Context, Effect, Layer, Number as ENumber, Schema } from 'effect';
-import { and, asc, eq, exists, gt, lt, max, or } from 'drizzle-orm';
-import { EffectId } from '@norbital-ai/bolt-protocol';
+import { Context, Effect, Layer, Number as ENumber, Result, Schema } from 'effect';
+import { and, asc, eq, exists, gt, inArray, isNotNull, lt, max, or } from 'drizzle-orm';
+import { sha256Json } from '@norbital-ai/std/reckon/hash';
+import {
+	EffectId,
+	PROTOCOL_VERSION,
+	SyncSchemaFacts,
+	WireError
+} from '@norbital-ai/bolt-protocol';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
+import {
+	digestSchemaSteps,
+	replicaProvisioningSteps
+} from '#lib/compiler/schema-plan.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
-import * as Collections from '#lib/runtime/collections/collections.js';
-import { PendingApproval } from '#lib/runtime/collections/collections.js';
-import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
+import * as TenantScope from '#lib/runtime/tenant.js';
 import * as Workspace from '#lib/runtime/workspace.js';
-import { AuthoredRefusal } from '#lib/authoring/refusal.js';
-import * as InvocationBudget from '#lib/runtime/budget.js';
 import { decodeReferenceRow } from '#lib/runtime/collections/references.js';
 import * as Compaction from '#lib/runtime/sync/compaction.js';
 import {
 	aliased,
-	asText,
 	coalesce,
 	commitHorizon,
 	composer,
-	dynamicTable,
 	executeBuilt,
+	jsonArrayContainsAny,
+	jsonRecord,
 	nothing,
 	one,
 	onlyWhen,
-	qualified,
-	rowJson,
-	syncCursorJson,
-	uuidAfter
+	syncReplayEventBytes,
+	syncCursorJson
 } from '#lib/runtime/persistence.js';
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
-const { bolt_sync_horizon: syncHorizon, bolt_sync_outbox: syncOutbox } = SYSTEM_MODEL_TABLES;
+const {
+	bolt_sync_generation: syncGeneration,
+	bolt_sync_horizon: syncHorizon,
+	bolt_sync_outbox: syncOutbox
+} = SYSTEM_MODEL_TABLES;
 
 /** The `Schema.Json` predicate, built once: it is consulted for every value crossing the facility seam. */
 const isJson = Schema.is(Schema.Json);
 const isJsonObject = Schema.is(JsonObject);
-
-/** Identity collections by name, for the membership checks the change stream and shape both perform. */
 
 /**
  * The newest transaction id that is guaranteed to have no earlier writer still running.
@@ -51,7 +57,7 @@ const isJsonObject = Schema.is(JsonObject);
 const COMMIT_HORIZON = commitHorizon();
 
 /** Orders two cursors the way the outbox does. */
-const compareCursors = (left: SyncCursor, right: SyncCursor): number =>
+export const compareSyncCursors = (left: SyncCursor, right: SyncCursor): number =>
 	left.xid === right.xid ? left.sequence - right.sequence : left.xid - right.xid;
 
 export const SyncCursor = Schema.Struct({
@@ -74,73 +80,403 @@ const DatabaseSyncCursor = Schema.Struct({
 	sequence: DatabaseInteger
 });
 export const decodeDatabaseSyncCursor = Schema.decodeUnknownEffect(DatabaseSyncCursor);
-export const SyncChange = Schema.Struct({
+
+/** At most this many distinct dependency collections may be mounted in one partition pull. */
+export const MAX_SYNC_PARTITION_COLLECTIONS = 64;
+/** Rows examined by a pull when the caller does not choose a smaller window. */
+export const DEFAULT_SYNC_PULL_LIMIT = 200;
+/** A single pull cannot opt out of row backpressure by naming an arbitrarily large window. */
+export const MAX_SYNC_PULL_LIMIT = 500;
+/** Approximate serialized patch weight accepted by a pull when no budget is supplied. */
+export const DEFAULT_SYNC_PULL_MAX_BYTES = 512 * 1024;
+/** A single pull cannot opt out of backpressure by naming an arbitrarily large byte budget. */
+export const MAX_SYNC_PULL_MAX_BYTES = 2 * 1024 * 1024;
+/** Physical work bound for replay-cost probing; it is not a history or replay cutoff. */
+export const MAX_SYNC_REPLAY_COST_SCAN_EVENTS = 2_048;
+/** Server-owned A×P×B fallback when a client has no durable active-window estimate yet. */
+export const DEFAULT_SYNC_REHYDRATION_ACTIVE_WINDOWS = 8;
+export const DEFAULT_SYNC_REHYDRATION_ROWS_PER_WINDOW = 100;
+export const DEFAULT_SYNC_REHYDRATION_ESTIMATED_BYTES_PER_ROW = 4_096;
+export const DEFAULT_SYNC_REHYDRATE_BYTES =
+	DEFAULT_SYNC_REHYDRATION_ACTIVE_WINDOWS *
+	DEFAULT_SYNC_REHYDRATION_ROWS_PER_WINDOW *
+	DEFAULT_SYNC_REHYDRATION_ESTIMATED_BYTES_PER_ROW;
+/** Untrusted client cost facts are useful only inside conservative allocation bounds. */
+export const MAX_SYNC_ACTIVE_WINDOWS = 256;
+export const MAX_SYNC_ROWS_PER_WINDOW = 500;
+export const MAX_SYNC_ESTIMATED_ROW_BYTES = 1024 * 1024;
+export const MAX_SYNC_PENDING_MUTATIONS = 256;
+export const MAX_SYNC_MUTATION_ID_LENGTH = 256;
+
+const SyncPartitionCollections = Schema.Array(Schema.NonEmptyString).check(
+	Schema.isNonEmpty(),
+	Schema.makeFilter(
+		(collections) =>
+			collections.length <= MAX_SYNC_PARTITION_COLLECTIONS ||
+			`at most ${MAX_SYNC_PARTITION_COLLECTIONS} sync dependency collections are accepted`
+	),
+	Schema.makeFilter((collections) => {
+		return (
+			new Set(collections).size === collections.length ||
+			'a sync pull cannot declare a dependency collection twice'
+		);
+	})
+);
+
+export const SyncCollectionGenerations = Schema.Record(
+	Schema.NonEmptyString,
+	Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+).check(
+	Schema.makeFilter(
+		(generations) =>
+			Object.keys(generations).length <= MAX_SYNC_PARTITION_COLLECTIONS ||
+			`at most ${MAX_SYNC_PARTITION_COLLECTIONS} sync collection generations are accepted`
+	)
+);
+export interface SyncCollectionGenerations
+	extends Schema.Schema.Type<typeof SyncCollectionGenerations> {}
+
+/** The complete, server-derived security and schema coordinate for one replica namespace. */
+export const SyncPartitionIdentity = Schema.Struct({
+	key: Schema.NonEmptyString,
+	tenantId: Schema.NonEmptyString,
+	environment: Schema.NonEmptyString,
+	effectivePolicyHolder: Schema.NonEmptyString,
+	impersonationTarget: Schema.NullOr(Schema.NonEmptyString),
+	authorityGeneration: Schema.Number.check(
+		Schema.isInt(),
+		Schema.isGreaterThanOrEqualTo(0)
+	),
+	schemaFingerprint: Schema.NonEmptyString
+});
+export interface SyncPartitionIdentity
+	extends Schema.Schema.Type<typeof SyncPartitionIdentity> {}
+
+/** A canonical read position captured before an authoritative page query executes. */
+export const SyncPartitionPosition = Schema.Struct({
+	partition: SyncPartitionIdentity,
+	cursor: SyncCursor,
+	generations: SyncCollectionGenerations
+});
+export interface SyncPartitionPosition
+	extends Schema.Schema.Type<typeof SyncPartitionPosition> {}
+
+/** Bounded aggregate facts; query identities and window keys never become history coordinates. */
+export const SyncRehydrationCost = Schema.Struct({
+	activeWindows: Schema.Number.check(
+		Schema.isInt(),
+		Schema.isGreaterThanOrEqualTo(0),
+		Schema.isLessThanOrEqualTo(MAX_SYNC_ACTIVE_WINDOWS)
+	),
+	rowsPerWindow: Schema.Number.check(
+		Schema.isInt(),
+		Schema.isGreaterThan(0),
+		Schema.isLessThanOrEqualTo(MAX_SYNC_ROWS_PER_WINDOW)
+	),
+	estimatedBytesPerRow: Schema.Number.check(
+		Schema.isInt(),
+		Schema.isGreaterThan(0),
+		Schema.isLessThanOrEqualTo(MAX_SYNC_ESTIMATED_ROW_BYTES)
+	)
+});
+export interface SyncRehydrationCost
+	extends Schema.Schema.Type<typeof SyncRehydrationCost> {}
+
+const SyncMutationId = Schema.String.check(
+	Schema.isMinLength(1),
+	Schema.isMaxLength(MAX_SYNC_MUTATION_ID_LENGTH)
+);
+export const SyncPendingMutationIds = Schema.Array(SyncMutationId).check(
+	Schema.makeFilter(
+		(ids) =>
+			ids.length <= MAX_SYNC_PENDING_MUTATIONS ||
+			`at most ${MAX_SYNC_PENDING_MUTATIONS} pending mutation ids are accepted`
+	),
+	Schema.makeFilter(
+		(ids) => new Set(ids).size === ids.length || 'a sync status request cannot repeat a mutation id'
+	)
+);
+
+/** Authenticated write-only status lookup; it deliberately accepts no collection dependency. */
+export const SyncPartitionStatusRequest = Schema.Struct({
+	pendingMutationIds: Schema.optionalKey(SyncPendingMutationIds)
+});
+export interface SyncPartitionStatusRequest
+	extends Schema.Schema.Type<typeof SyncPartitionStatusRequest> {}
+
+/**
+ * The public pull request, excluding the subject the dispatch boundary authenticates and injects.
+ *
+ * Collections are dependency subscriptions, not query/page identities. The one cursor and generation
+ * map are durable O6 positions for the whole O2 partition.
+ */
+export const SyncPullRequest = Schema.Struct({
+	collections: SyncPartitionCollections,
+	cursor: Schema.NullOr(SyncCursor),
+	generations: SyncCollectionGenerations,
+	rehydration: Schema.optionalKey(SyncRehydrationCost),
+	pendingMutationIds: Schema.optionalKey(SyncPendingMutationIds),
+	limit: Schema.optionalKey(
+		Schema.Number.check(
+			Schema.isInt(),
+			Schema.isGreaterThan(0),
+			Schema.isLessThanOrEqualTo(MAX_SYNC_PULL_LIMIT)
+		)
+	),
+	maxBytes: Schema.optionalKey(
+		Schema.Number.check(
+			Schema.isInt(),
+			Schema.isGreaterThan(0),
+			Schema.isLessThanOrEqualTo(MAX_SYNC_PULL_MAX_BYTES)
+		)
+	)
+});
+export interface SyncPullRequest extends Schema.Schema.Type<typeof SyncPullRequest> {}
+
+const SyncDeltaBase = {
 	cursor: SyncCursor,
 	collection: Schema.NonEmptyString,
 	recordId: Schema.NonEmptyString,
-	operation: Schema.Literals(['create', 'update', 'delete', 'reset']),
-	record: Schema.optionalKey(Schema.Json)
+	/** Cursor is the primary lifecycle fence; this is the same-cursor row/tombstone tie-breaker. */
+	rowVersion: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+	mutationId: Schema.NullOr(SyncMutationId)
+};
+export const SyncPartitionUpsert = Schema.Struct({
+	...SyncDeltaBase,
+	op: Schema.Literal('upsert'),
+	row: JsonObject
 });
-export interface SyncChange extends Schema.Schema.Type<typeof SyncChange> {}
+export const SyncPartitionRemove = Schema.Struct({
+	...SyncDeltaBase,
+	op: Schema.Literal('remove')
+});
+export const SyncPartitionDelta = Schema.Union([SyncPartitionUpsert, SyncPartitionRemove]);
+export type SyncPartitionDelta = Schema.Schema.Type<typeof SyncPartitionDelta>;
+
+export const SyncPullCost = Schema.Struct({
+	replayEvents: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+	/** False means the bounded probe is a lower bound and rehydration is advised. */
+	replayEstimateComplete: Schema.Boolean,
+	estimatedBytesPerEvent: Schema.Number.check(
+		Schema.isInt(),
+		Schema.isGreaterThanOrEqualTo(0)
+	),
+	estimatedReplayBytes: Schema.Number.check(
+		Schema.isInt(),
+		Schema.isGreaterThanOrEqualTo(0)
+	),
+	estimatedRehydrateBytes: Schema.NullOr(
+		Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+	)
+});
+export interface SyncPullCost extends Schema.Schema.Type<typeof SyncPullCost> {}
+
+export const SyncMutationConfirmation = Schema.Struct({
+	mutationId: SyncMutationId,
+	cursor: SyncCursor
+});
+export interface SyncMutationConfirmation
+	extends Schema.Schema.Type<typeof SyncMutationConfirmation> {}
+
+export const SyncMutationRejection = Schema.Struct({
+	mutationId: SyncMutationId,
+	code: Schema.Literals(['refused', 'forbidden']),
+	message: Schema.String
+});
+export interface SyncMutationRejection
+	extends Schema.Schema.Type<typeof SyncMutationRejection> {}
 
 /**
- * One pass over the change log: what was examined, and what of it may be applied.
+ * Server-issued O2 identity and exact actor-scoped terminal mutation status.
  *
- * The two are different facts and conflating them is a real defect rather than a tidiness question.
- * A subject whose policy narrows a collection to a handful of rows can be handed a page of the log
- * that contains none of theirs — and a caller told only "no changes" has nothing to advance a cursor
- * to, so its next wake rescans the same invisible range, and the one after that, forever.
- *
- * `scanned` is the last outbox row this pass *looked at*, whether or not the subject may see it.
- * `complete` says the window was not filled, which is the only honest end-of-log signal once the
- * limit bounds rows examined rather than rows returned.
- *
- * **`scanned` is not an apply cursor.** Row visibility is decided against the collection's current
- * state, so a row that is invisible now can become visible later — a record reassigned to the
- * subject's team, say. A caller that hands `scanned` to a replica as its durable position would make
- * that row permanently unreachable. It is a within-connection scan position: the server carries it
- * while it reads, and the client's own cursor advances only over changes it was actually given.
+ * This command is the completion path for a caller with no readable dependency, so it carries no
+ * collection names, rows or existence signal. A visible replica continues to retire mutations from
+ * pull confirmations only after applying the corresponding authoritative batch.
  */
-export const SyncScan = Schema.Struct({
-	changes: Schema.Array(SyncChange),
-	scanned: SyncCursor,
+export const SyncPartitionStatusResponse = Schema.Struct({
+	partition: SyncPartitionIdentity,
+	mutationConfirmations: Schema.Array(SyncMutationConfirmation),
+	mutationRejections: Schema.Array(SyncMutationRejection)
+});
+export interface SyncPartitionStatusResponse
+	extends Schema.Schema.Type<typeof SyncPartitionStatusResponse> {}
+
+/**
+ * One bounded pull answer.
+ *
+ * Recovery is a discriminated move. Expiry and advised rehydration never carry deltas, and clients
+ * must not persist their returned head position until rebuilding active windows commits.
+ */
+export const SyncPullResponse = Schema.Struct({
+	partition: SyncPartitionIdentity,
+	kind: Schema.Literals(['delta', 'cursorExpired', 'rehydrateAdvised']),
+	deltas: Schema.Array(SyncPartitionDelta),
+	cursor: SyncCursor,
+	headCursor: SyncCursor,
+	generations: SyncCollectionGenerations,
+	affectedCollections: Schema.Array(Schema.NonEmptyString),
+	refillCollections: Schema.Array(Schema.NonEmptyString),
+	cost: SyncPullCost,
+	mutationConfirmations: Schema.Array(SyncMutationConfirmation),
+	mutationRejections: Schema.Array(SyncMutationRejection),
 	complete: Schema.Boolean
 });
-export interface SyncScan extends Schema.Schema.Type<typeof SyncScan> {}
+export interface SyncPullResponse extends Schema.Schema.Type<typeof SyncPullResponse> {}
+
+/** One host aggregation pass is deliberately small enough to keep its SQL projection bounded. */
+export const MAX_SYNC_DISTRIBUTE_ENTRIES = MAX_SYNC_PARTITION_COLLECTIONS;
+/** A session credential is opaque, but an unbounded opaque string is still an allocation attack. */
+export const MAX_SYNC_DISTRIBUTE_CREDENTIAL_LENGTH = 4096;
 
 /**
- * One outbox row as the scan reads it: always a position, and the rest only where the subject may
- * see it.
+ * One public, host-signed distribution request.
  *
- * The columns are nulled in SQL rather than filtered in the guest so that a row this subject may not
- * read crosses the facility boundary as a cursor and nothing else — no record body, and not even
- * which collection it belonged to.
+ * The host forwards the same opaque credential an individual `sync.pull` would carry. The guest
+ * authenticates it inside the tenant immediately before reading; no `Subject` crosses this wire.
  */
-const SyncScanRow = Schema.Struct({
-	cursor: SyncCursor,
-	collection: Schema.NullOr(Schema.NonEmptyString),
-	recordId: Schema.NullOr(Schema.NonEmptyString),
-	operation: Schema.NullOr(Schema.Literals(['create', 'update', 'delete'])),
-	record: Schema.Json
+export const SyncDistributeEntry = Schema.Struct({
+	requestId: Schema.NonEmptyString,
+	credential: Schema.String.check(
+		Schema.isMinLength(1),
+		Schema.isMaxLength(MAX_SYNC_DISTRIBUTE_CREDENTIAL_LENGTH)
+	),
+	impersonatedTeam: Schema.optionalKey(Schema.NonEmptyString),
+	pull: SyncPullRequest
 });
+export interface SyncDistributeEntry extends Schema.Schema.Type<typeof SyncDistributeEntry> {}
 
-/**
- * One page of a collection's current state, taken at a cursor the log can be streamed from.
- *
- * `cursor` is the commit horizon at the moment the page was read, so everything already reflected in
- * these rows sits below it and everything after arrives through `diff`. Anything that commits while
- * the snapshot is being paged is delivered twice — once here, once from the log — which is why the
- * replica applies rows as upserts. At-least-once is the achievable guarantee; exactly-once across a
- * paged read and a live log is not, and pretending otherwise is how rows go missing.
- */
-const SyncSnapshotPage = Schema.Struct({
+const SyncDistributeEntries = Schema.Array(SyncDistributeEntry).check(
+	Schema.isNonEmpty(),
+	Schema.makeFilter(
+		(entries) =>
+			entries.length <= MAX_SYNC_DISTRIBUTE_ENTRIES ||
+			`at most ${MAX_SYNC_DISTRIBUTE_ENTRIES} sync pulls are accepted in one distribution batch`
+	),
+	Schema.makeFilter((entries) => {
+		const ids = entries.map(({ requestId }) => requestId);
+		return new Set(ids).size === ids.length || 'a distribution batch cannot repeat a request id';
+	}),
+	Schema.makeFilter(
+		(entries) =>
+			entries.reduce((total, entry) => total + entry.pull.collections.length, 0) <= 1_024 ||
+			'at most 1024 total sync dependency collections are accepted in one distribution batch'
+	)
+);
+
+export const SyncDistributeRequest = Schema.Struct({ entries: SyncDistributeEntries });
+export interface SyncDistributeRequest
+	extends Schema.Schema.Type<typeof SyncDistributeRequest> {}
+
+export const SyncDistributeSuccess = Schema.Struct({
+	requestId: Schema.NonEmptyString,
+	status: Schema.Literal(200),
+	value: SyncPullResponse
+});
+export const SyncDistributeFailure = Schema.Struct({
+	requestId: Schema.NonEmptyString,
+	status: Schema.Union([Schema.Literal(401), Schema.Literal(403)]),
+	error: WireError
+});
+export const SyncDistributeResult = Schema.Union([
+	SyncDistributeSuccess,
+	SyncDistributeFailure
+]);
+export type SyncDistributeResult = Schema.Schema.Type<typeof SyncDistributeResult>;
+export const SyncDistributeResponse = Schema.Struct({
+	results: Schema.Array(SyncDistributeResult)
+});
+export interface SyncDistributeResponse
+	extends Schema.Schema.Type<typeof SyncDistributeResponse> {}
+
+/** The already-authenticated service entry; only dispatch may turn a wire credential into this. */
+export type SyncDistributionServiceEntry = Readonly<{
+	readonly requestId: string;
+	readonly subject: Identity.Subject;
+	readonly pull: SyncPullRequest;
+}>;
+
+export type SyncDistributionServiceResult = Readonly<
+	| { readonly requestId: string; readonly response: SyncPullResponse }
+	| { readonly requestId: string; readonly error: AccessControl.AccessDenied }
+>;
+
+const SyncPullRow = Schema.Struct({
+	cursor: SyncCursor,
 	collection: Schema.NonEmptyString,
-	rows: Schema.Array(Schema.Json),
-	cursor: SyncCursor,
-	/** The id to pass as `after` for the next page; `null` when the collection is exhausted. */
-	nextAfter: Schema.NullOr(Schema.String)
+	recordId: Schema.NullOr(Schema.NonEmptyString),
+	beforeVisible: Schema.Boolean,
+	afterVisible: Schema.Boolean,
+	beforeRecord: Schema.Json,
+	afterRecord: Schema.Json,
+	invalidatedCollections: Schema.Array(Schema.NonEmptyString),
+	mutationId: Schema.NullOr(SyncMutationId)
 });
-interface SyncSnapshotPage extends Schema.Schema.Type<typeof SyncSnapshotPage> {}
+const SyncGenerationRow = Schema.Struct({
+	collection: Schema.NonEmptyString,
+	generation: DatabaseInteger
+});
+const SyncReplayProbeRow = Schema.Struct({
+	relevant: Schema.Boolean,
+	eventBytes: DatabaseInteger
+});
+
+type PartitionPullEvaluation = Readonly<{
+	response: SyncPullResponse;
+	currentGenerations: SyncCollectionGenerations;
+	recoveryCollections: ReadonlyArray<string>;
+}>;
+
+type PartitionGenerationState = Readonly<{
+	authorityGeneration: number;
+	generations: SyncCollectionGenerations;
+}>;
+
+type PreparedPartitionPull = Readonly<{
+	predicates: ReadonlyMap<string, AccessControl.RowPredicate>;
+	state: PartitionGenerationState;
+	partition: SyncPartitionIdentity;
+	currentHead: SyncCursor;
+	initialHorizon?: SyncCursor | undefined;
+}>;
+
+const estimatedRehydrateBytes = (cost: SyncRehydrationCost | undefined): number =>
+	cost === undefined
+		? DEFAULT_SYNC_REHYDRATE_BYTES
+		: cost.activeWindows * cost.rowsPerWindow * cost.estimatedBytesPerRow;
+
+/** Applies a member's bounded cost facts after the common partition history was evaluated once. */
+const adviseRehydration = (
+	evaluation: PartitionPullEvaluation,
+	rehydration: SyncRehydrationCost | undefined
+): SyncPullResponse => {
+	const rehydrateBytes = estimatedRehydrateBytes(rehydration);
+	const cost = {
+		...evaluation.response.cost,
+		estimatedRehydrateBytes: rehydrateBytes
+	};
+	if (
+		evaluation.response.kind !== 'delta' ||
+		(evaluation.response.cost.replayEstimateComplete &&
+			(evaluation.response.cost.replayEvents === 0 ||
+				rehydrateBytes >= evaluation.response.cost.estimatedReplayBytes))
+	) {
+		return { ...evaluation.response, cost };
+	}
+	const recoveryCollections = [...new Set(evaluation.recoveryCollections)].toSorted();
+	return {
+		...evaluation.response,
+		kind: 'rehydrateAdvised',
+		deltas: [],
+		cursor: evaluation.response.headCursor,
+		generations: evaluation.currentGenerations,
+		affectedCollections: recoveryCollections,
+		refillCollections: recoveryCollections,
+		cost,
+		mutationConfirmations: [],
+		mutationRejections: [],
+		complete: true
+	};
+};
 
 /** Carries sync decode error through the typed sync failure channel without losing diagnostic context. */
 class SyncDecodeError extends Schema.TaggedError<SyncDecodeError>()('Bolt.Sync.DecodeError', {
@@ -155,54 +491,40 @@ export type Interface = Readonly<{
 	readonly head: (
 		effectId: EffectId
 	) => Effect.Effect<SyncCursor, Database.FacilityError | SyncDecodeError>;
-	/**
-	 * One window of the log after `cursor`: at most `limit` rows examined, and what of them applies.
-	 *
-	 * `limit` bounds rows *read*, not changes returned. That is what makes one pass constant work
-	 * regardless of how much of the log this subject can see — the previous shape applied the
-	 * visibility predicate first and the limit after, so filling a page for a narrowly-scoped subject
-	 * could scan the whole log, and failing to fill one always did.
-	 */
-	readonly scan: (
+	/** Server-derived O2 identity without accepting or revealing a collection dependency. */
+	readonly partition: (
+		effectId: EffectId,
+		subject: Identity.Subject
+	) => Effect.Effect<SyncPartitionIdentity, Database.FacilityError | SyncDecodeError>;
+	/** Server-derived partition identity plus the pre-query O6 cursor and dependency generations. */
+	readonly positions: (
 		effectId: EffectId,
 		subject: Identity.Subject,
-		cursor: SyncCursor,
-		limit: number
+		collections: ReadonlyArray<string>
 	) => Effect.Effect<
-		SyncScan,
+		SyncPartitionPosition,
 		Database.FacilityError | SyncDecodeError | AccessControl.AccessDenied
 	>;
-	/** `scan` projected to the rows the caller may apply, for a caller with nothing to advance. */
-	readonly diff: (
+	/** Partition-oriented, byte- and row-bounded pull used by browser replicas. */
+	readonly pull: (
 		effectId: EffectId,
 		subject: Identity.Subject,
-		cursor: SyncCursor,
-		limit: number
+		request: SyncPullRequest
 	) => Effect.Effect<
-		ReadonlyArray<SyncChange>,
+		SyncPullResponse,
 		Database.FacilityError | SyncDecodeError | AccessControl.AccessDenied
+	>;
+	/** Resolves many already-authenticated pulls from one shared outbox window. */
+	readonly distribute: (
+		effectId: EffectId,
+		entries: ReadonlyArray<SyncDistributionServiceEntry>
+	) => Effect.Effect<
+		ReadonlyArray<SyncDistributionServiceResult>,
+		Database.FacilityError | SyncDecodeError
 	>;
 	readonly shape: (
 		subject: Identity.Subject
 	) => Effect.Effect<ReadonlyArray<string>, AccessControl.AccessDenied>;
-	/**
-	 * The current state of one collection, plus the cursor the caller should stream on from.
-	 *
-	 * A replica still starts from a snapshot rather than replaying an unbounded log. Database triggers
-	 * capture collection writes regardless of whether they came through `Collections`, a seed, an import,
-	 * or a runtime projection; the snapshot supplies current state while its cursor makes later outbox
-	 * changes an ordered continuation.
-	 */
-	readonly snapshot: (
-		effectId: EffectId,
-		subject: Identity.Subject,
-		collection: string,
-		after: string | undefined,
-		limit: number
-	) => Effect.Effect<
-		SyncSnapshotPage,
-		Database.FacilityError | SyncDecodeError | AccessControl.AccessDenied
-	>;
 	/** Collapses superseded log rows and prunes past the retention window. Returns what it removed. */
 	readonly compact: (
 		effectId: EffectId,
@@ -211,27 +533,8 @@ export type Interface = Readonly<{
 		{ readonly collapsed: number; readonly pruned: number },
 		Database.FacilityError | SyncDecodeError
 	>;
-	readonly schema: () => { readonly cursor: 'xid-sequence'; readonly version: 1 };
-	/** Fails with whatever the underlying collection write fails with: refusal, conflict, or a held approval. */
-	readonly mutate: (
-		effectId: EffectId,
-		subject: Identity.Subject,
-		changes: ReadonlyArray<SyncChange>
-	) => Effect.Effect<
-		void,
-		| Database.FacilityError
-		| AccessControl.AccessDenied
-		| Workspace.WorkspaceLookupError
-		| ApprovalConflict
-		| PendingApproval
-		// A client mutation is an ordinary collection write, so it can be refused by an authored
-		// rule or stopped by the hook-recursion bound exactly as any other write can. Declared
-		// rather than inferred so a caller that handles this union exhaustively has to decide what
-		// a refused sync change means for the replica that sent it — which is a real decision, and
-		// a different one from "the write failed".
-		| AuthoredRefusal
-		| InvocationBudget.NestingLimitExceeded
-	>;
+	/** Immutable release facts. The host alone adds its durable tenant schema generation. */
+	readonly schema: () => SyncSchemaFacts;
 	readonly wakeHint: (cursor: SyncCursor) => {
 		readonly topic: string;
 		readonly cursor: SyncCursor;
@@ -246,6 +549,7 @@ export const layer = Layer.effect(
 		const database = yield* Database.Service;
 		const access = yield* AccessControl.Service;
 		const workspace = yield* Workspace.Service;
+		const tenant = yield* TenantScope.Service;
 		/**
 		 * Applies column masking to a record on its way out of the sync engine.
 		 *
@@ -270,162 +574,669 @@ export const layer = Layer.effect(
 				logical as Readonly<Record<string, Schema.Json>>
 			) as Schema.Json;
 		};
-		const collections = yield* Collections.Service;
-		// Named rather than returned inline so `diff` can be exactly `scan` projected, instead of a
-		// second query that has to be kept in step with it.
-		const service: Interface = {
-			head: Effect.fn('Sync.head')(function* (effectId) {
-				// Bounded by the same horizon `diff` serves under. A head taken from `max(xid)` would name a
-				// position `diff` refuses to reach while any transaction below it is still open, so a client
-				// that stored it would sit one poll behind forever and a client comparing its cursor against
-				// it would conclude it had fallen off history.
-				const result = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({
-							xid: aliased(coalesce(max(syncOutbox.xid), 0), 'xid'),
-							sequence: aliased(coalesce(max(syncOutbox.sequence), 0), 'sequence')
-						})
-						.from(syncOutbox)
-						.where(lt(syncOutbox.xid, COMMIT_HORIZON))
+		const provisioningSteps = replicaProvisioningSteps(workspace.definition);
+		const schemaFingerprint = workspace.definition.mutationCompatibility?.currentSchemaFingerprint;
+		if (schemaFingerprint === undefined)
+			throw new TypeError(
+				'Compiled workspace is missing its mutation compatibility fingerprint.'
+			);
+		const schemaFacts = SyncSchemaFacts.make({
+			cursor: 'xid-sequence',
+			version: 1,
+			fingerprint: schemaFingerprint,
+			minimumProtocolVersion: PROTOCOL_VERSION,
+			migrationDigest: digestSchemaSteps(provisioningSteps),
+			// A release cannot know which previous release a particular tenant is leaving, so the only
+			// conservatively correct affected set is every collection this release can materialize.
+			affectedCollections: [
+				...new Set(
+					workspace.definition.collections
+						.filter(({ sync }) => sync !== false)
+						.map(({ name }) => name)
+				)
+			].toSorted((left, right) => left.localeCompare(right))
+		});
+		const readHead = Effect.fn('Sync.readHead')(function* (effectId: EffectId) {
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({
+						xid: aliased(coalesce(max(syncOutbox.xid), 0), 'xid'),
+						sequence: aliased(coalesce(max(syncOutbox.sequence), 0), 'sequence')
+					})
+					.from(syncOutbox)
+					.where(lt(syncOutbox.xid, COMMIT_HORIZON))
+			);
+			return yield* decodeDatabaseSyncCursor(result.rows[0] ?? { xid: 0, sequence: 0 }).pipe(
+				Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync head row' }))
+			);
+		});
+		const readHorizon = Effect.fn('Sync.readHorizon')(function* (effectId: EffectId) {
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({ xid: syncHorizon.xid, sequence: syncHorizon.sequence })
+					.from(syncHorizon)
+					.where(eq(syncHorizon.singleton, true))
+					.limit(1)
+			);
+			if (result.rows[0] === undefined) return undefined;
+			return yield* decodeDatabaseSyncCursor(result.rows[0]).pipe(
+				Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync horizon row' }))
+			);
+		});
+		const subscriptionPredicates = Effect.fn('Sync.subscriptionPredicates')(function* (
+			subject: Identity.Subject,
+			names: ReadonlyArray<string>
+		) {
+			if (
+				names.length === 0 ||
+				names.length > MAX_SYNC_PARTITION_COLLECTIONS ||
+				new Set(names).size !== names.length
+			) {
+				return yield* new AccessControl.AccessDenied({
+					action: 'read',
+					resource: 'sync.subscription',
+					reason: 'sync subscription unavailable'
+				});
+			}
+			const predicates = new Map<string, AccessControl.RowPredicate>();
+			for (const name of names) {
+				const definition = workspace.definition.collections.find(
+					(collection) => collection.name === name
 				);
-				return yield* decodeDatabaseSyncCursor(result.rows[0] ?? { xid: 0, sequence: 0 }).pipe(
-					Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync head row' }))
-				);
-			}),
-			scan: Effect.fn('Sync.scan')(function* (effectId, subject, cursor, limit) {
-				// Read from the mark retention writes, not from the oldest surviving row. The old test —
-				// "is the cursor behind the first row still in the table" — could never be true, because
-				// nothing ever deleted a row; the reset path was unreachable and a stranded client had no way
-				// to be told. A cursor at the origin is a new replica and is never reset: it is about to be
-				// served the whole log, or a snapshot.
-				const marked = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({ xid: syncHorizon.xid, sequence: syncHorizon.sequence })
-						.from(syncHorizon)
-						.where(eq(syncHorizon.singleton, true))
-						.limit(1)
-				);
-				const incompleteBelow =
-					marked.rows[0] === undefined
-						? undefined
-						: yield* decodeDatabaseSyncCursor(marked.rows[0]).pipe(
-								Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync horizon row' }))
-							);
-				if (
-					incompleteBelow !== undefined &&
-					cursor.xid > 0 &&
-					compareCursors(cursor, incompleteBelow) < 0
-				) {
-					// Not `complete`: the mark is a new starting point rather than the end of the log, so the
-					// caller has to keep reading from it.
-					return {
-						changes: [
-							{
-								cursor: incompleteBelow,
-								collection: '*',
-								recordId: 'reset',
-								operation: 'reset' as const
-							}
-						],
-						scanned: incompleteBelow,
-						complete: false
-					};
+				const predicate = access.predicate(subject, 'read', name);
+				if (definition === undefined || definition.sync === false || !predicate.allowed) {
+					// Unknown, disabled and unauthorized are intentionally indistinguishable. The caller
+					// already supplied the spelling; the response must not confirm whether it exists.
+					return yield* new AccessControl.AccessDenied({
+						action: 'read',
+						resource: 'sync.subscription',
+						reason: 'sync subscription unavailable'
+					});
 				}
-				const readable = workspace.definition.collections.flatMap((collection) => {
-					if (collection.sync === false) return [];
-					const predicate = access.predicate(subject, 'read', collection.name);
-					return predicate.allowed ? [{ name: collection.name, predicate }] : [];
-				});
-				// Nothing to examine rather than nothing found: a subject who may read no collection at all
-				// has no log to walk, so there is no position to advance to.
-				if (readable.length === 0) return { changes: [], scanned: cursor, complete: true };
-				const visibility = readable.map(({ name, predicate }) => {
-					const visibleId = qualified('visible', 'id');
-					const visibleRows = composer
-						.select({ one: one() })
-						.from(dynamicTable(name, 'visible'))
-						.where(
-							and(
-								eq(asText(visibleId), syncOutbox.record_id),
-								AccessControl.predicateExpression(predicate)
-							)
-						);
-					return and(
-						eq(syncOutbox.collection_name, name),
-						or(eq(syncOutbox.operation, 'delete'), exists(visibleRows))
-					);
-				});
-				// `or` is nullable and there is no readable collection left for it to be null on — the
-				// early return above took that case. `nothing()` rather than `always()` all the same: the
-				// fallback for a visibility expression has to be the one that shows nothing.
-				const visible = or(...visibility) ?? nothing();
-				const size = ENumber.clamp({ minimum: 1, maximum: 500 })(limit);
-				// The commit-horizon predicate is what makes the stream lossless. Rows are inserted in
-				// transaction order but become visible in commit order; withholding every transaction at or
-				// above the oldest in-flight xid means no late commit can appear behind a cursor already served.
-				//
-				// Visibility moved out of the `where` and into the projection, and that is the whole of the
-				// scan-cursor fix: the limit now bounds the window this pass reads, so the last row of the
-				// window is a position the caller can advance to whether or not any of it was theirs.
-				const result = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({
-							cursor: aliased(syncCursorJson(syncOutbox.xid, syncOutbox.sequence), 'cursor'),
-							collection: aliased(onlyWhen(visible, syncOutbox.collection_name), 'collection'),
-							recordId: aliased(onlyWhen(visible, syncOutbox.record_id), 'recordId'),
-							operation: aliased(onlyWhen(visible, syncOutbox.operation), 'operation'),
-							record: aliased(onlyWhen(visible, syncOutbox.record), 'record')
-						})
-						.from(syncOutbox)
-						.where(
-							and(
-								or(
-									gt(syncOutbox.xid, cursor.xid),
-									and(eq(syncOutbox.xid, cursor.xid), gt(syncOutbox.sequence, cursor.sequence))
-								),
-								lt(syncOutbox.xid, COMMIT_HORIZON)
+				predicates.set(name, predicate);
+			}
+			return predicates;
+		});
+		const generationState = Effect.fn('Sync.generationState')(function* (
+			effectId: EffectId,
+			names: ReadonlyArray<string>
+		) {
+			const requested = [...new Set([...names, '__authority__'])];
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({
+						collection: aliased(syncGeneration.collection_name, 'collection'),
+						generation: aliased(syncGeneration.generation, 'generation')
+					})
+					.from(syncGeneration)
+					.where(inArray(syncGeneration.collection_name, requested))
+			);
+			const rows = yield* Schema.decodeUnknownEffect(Schema.Array(SyncGenerationRow))(
+				result.rows
+			).pipe(
+				Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync generation rows' }))
+			);
+			const found = new Map(rows.map(({ collection, generation }) => [collection, generation]));
+			return {
+				authorityGeneration: found.get('__authority__') ?? 0,
+				generations: Object.fromEntries(names.map((name) => [name, found.get(name) ?? 0]))
+			};
+		});
+		const partitionIdentity = (
+			subject: Identity.Subject,
+			authorityGeneration: number
+		): SyncPartitionIdentity => {
+			let actorBound = false;
+			const policySurface = workspace.definition.collections
+				.filter(({ sync }) => sync !== false)
+				.map(({ name }) => {
+					const predicate = access.predicate(subject, 'read', name);
+					actorBound ||= predicate.actorBound;
+					return predicate.allowed
+						? [
+								name,
+								predicate.sql,
+								predicate.parameters,
+								[...(predicate.fields ?? [])].toSorted()
+							]
+						: [name, 'denied'];
+				})
+				.toSorted((left, right) => String(left[0]).localeCompare(String(right[0])));
+			const effectivePolicyHolder = actorBound
+				? `actor:${subject.userId}`
+				: subject.admin === true
+					? 'administrator'
+					: subject.policies.length > 0
+						? `static:${[...subject.policies].toSorted().join(',')}`
+						: subject.teamPath[0] === undefined
+							? 'authenticated'
+							: `team:${subject.teamPath[0].toLocaleLowerCase()}`;
+			const impersonationTarget =
+				subject.impersonatedBy === undefined ? null : (subject.teamPath[0] ?? subject.userId);
+			const identity = {
+				tenantId: tenant.tenantId,
+				environment: tenant.environment.trim() === '' ? 'unknown' : tenant.environment,
+				effectivePolicyHolder,
+				impersonationTarget,
+				authorityGeneration,
+				schemaFingerprint: schemaFacts.fingerprint
+			};
+			return {
+				key: `sha256:${sha256Json({ ...identity, policySurface })}`,
+				...identity
+			};
+		};
+		const readPartitionIdentity = Effect.fn('Sync.readPartitionIdentity')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject
+		) {
+			const state = yield* generationState(EffectId.make(`${effectId}:authority-generation`), []);
+			return partitionIdentity(subject, state.authorityGeneration);
+		});
+		const readPositions = Effect.fn('Sync.readPositions')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			names: ReadonlyArray<string>
+		) {
+			yield* subscriptionPredicates(subject, names);
+			const head = yield* readHead(EffectId.make(`${effectId}:head`));
+			const state = yield* generationState(EffectId.make(`${effectId}:generations`), names);
+			return {
+				partition: partitionIdentity(subject, state.authorityGeneration),
+				cursor: head,
+				generations: state.generations
+			};
+		});
+		const evaluatePartition = Effect.fn('Sync.evaluatePartition')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			request: SyncPullRequest,
+			prepared?: PreparedPartitionPull
+		) {
+			const predicates =
+				prepared?.predicates ??
+				(yield* subscriptionPredicates(subject, request.collections));
+			let initialHorizon = prepared?.initialHorizon;
+			let currentHead = prepared?.currentHead;
+			if (currentHead === undefined) {
+				const outboxHead = yield* readHead(EffectId.make(`${effectId}:head`));
+				initialHorizon = yield* readHorizon(EffectId.make(`${effectId}:horizon`));
+				currentHead =
+					initialHorizon !== undefined && compareSyncCursors(initialHorizon, outboxHead) > 0
+						? initialHorizon
+						: outboxHead;
+			}
+			const state =
+				prepared?.state ??
+				(yield* generationState(
+					EffectId.make(`${effectId}:generations`),
+					request.collections
+				));
+			const partition =
+				prepared?.partition ?? partitionIdentity(subject, state.authorityGeneration);
+			const generationMismatch = request.collections.filter(
+				(collection) =>
+					!Object.hasOwn(request.generations, collection) ||
+					request.generations[collection] !== state.generations[collection]
+			);
+			const recoveryCollections =
+				generationMismatch.length === 0 ? request.collections : generationMismatch;
+			const noReplayCost: SyncPullCost = {
+				replayEvents: 0,
+				replayEstimateComplete: true,
+				estimatedBytesPerEvent: 0,
+				estimatedReplayBytes: 0,
+				estimatedRehydrateBytes: null
+			};
+			const recovery = (
+				kind: 'cursorExpired' | 'rehydrateAdvised',
+				affectedCollections: ReadonlyArray<string>,
+				cost: SyncPullCost = noReplayCost
+			): SyncPullResponse => ({
+				partition,
+				kind,
+				deltas: [],
+				cursor: currentHead,
+				headCursor: currentHead,
+				generations: state.generations,
+				affectedCollections: [...new Set(affectedCollections)].toSorted(),
+				refillCollections: [...new Set(affectedCollections)].toSorted(),
+				cost,
+				mutationConfirmations: [],
+				mutationRejections: [],
+				complete: true
+			});
+			const evaluated = (response: SyncPullResponse): PartitionPullEvaluation => ({
+				response,
+				currentGenerations: state.generations,
+				recoveryCollections
+			});
+			if (request.cursor === null) {
+				// No durable position is a bootstrap, not an expired cursor. The client rebuilds its active
+				// windows and commits this head only with that rehydration.
+				return evaluated(recovery('rehydrateAdvised', request.collections));
+			}
+			const requestedCursor = request.cursor;
+			if (
+				requestedCursor.xid === 0 &&
+				requestedCursor.sequence === 0 &&
+				Object.keys(request.generations).length === 0
+			) {
+				return evaluated(recovery('rehydrateAdvised', request.collections));
+			}
+			if (
+				compareSyncCursors(requestedCursor, currentHead) > 0 ||
+				(initialHorizon !== undefined &&
+					compareSyncCursors(requestedCursor, initialHorizon) < 0)
+			) {
+				return evaluated(recovery('cursorExpired', recoveryCollections));
+			}
+
+			const relevant =
+				or(
+					inArray(syncOutbox.collection_name, request.collections),
+					jsonArrayContainsAny(syncOutbox.invalidated_collections, request.collections)
+				) ?? nothing();
+			const afterCursor = or(
+				gt(syncOutbox.xid, requestedCursor.xid),
+				and(
+					eq(syncOutbox.xid, requestedCursor.xid),
+					gt(syncOutbox.sequence, requestedCursor.sequence)
+				)
+			);
+			const estimateResult = yield* executeBuilt(
+				EffectId.make(`${effectId}:cost`),
+				database,
+				composer
+					.select({
+						relevant: aliased(relevant, 'relevant'),
+						eventBytes: aliased(
+							syncReplayEventBytes(
+								syncOutbox.before_record,
+								syncOutbox.after_record,
+								syncOutbox.invalidated_collections
+							),
+							'eventBytes'
+						)
+					})
+					.from(syncOutbox)
+					.where(and(afterCursor, lt(syncOutbox.xid, COMMIT_HORIZON)))
+					.orderBy(asc(syncOutbox.xid), asc(syncOutbox.sequence))
+					.limit(MAX_SYNC_REPLAY_COST_SCAN_EVENTS + 1)
+			);
+			const probe = yield* Schema.decodeUnknownEffect(Schema.Array(SyncReplayProbeRow))(
+				estimateResult.rows
+			).pipe(
+				Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync replay cost row' }))
+			);
+			const replayEstimateComplete = probe.length <= MAX_SYNC_REPLAY_COST_SCAN_EVENTS;
+			const relevantProbe = probe
+				.slice(0, MAX_SYNC_REPLAY_COST_SCAN_EVENTS)
+				.filter(({ relevant: isRelevant }) => isRelevant);
+			const replayEvents = relevantProbe.length;
+			const replayBytes = relevantProbe.reduce(
+				(total, row) => total + Number(row.eventBytes),
+				0
+			);
+			const estimatedBytesPerEvent =
+				replayEvents === 0 ? 0 : Math.ceil(replayBytes / replayEvents);
+			const replayCost: SyncPullCost = {
+				replayEvents,
+				replayEstimateComplete,
+				estimatedBytesPerEvent,
+				// This is N×E over a bounded probe. An incomplete probe forces advice instead of pretending
+				// the lower bound is a complete replay estimate.
+				estimatedReplayBytes: replayEvents * estimatedBytesPerEvent,
+				estimatedRehydrateBytes: null
+			};
+
+			const beforeVisibility =
+				or(
+					...[...predicates].map(([name, predicate], index) =>
+						and(
+							eq(syncOutbox.collection_name, name),
+							isNotNull(syncOutbox.before_record),
+							exists(
+								composer
+									.select({ one: one() })
+									.from(jsonRecord(name, syncOutbox.before_record, `sync_before_${index}`))
+									.where(AccessControl.predicateExpression(predicate))
 							)
 						)
-						.orderBy(asc(syncOutbox.xid), asc(syncOutbox.sequence))
-						.limit(size)
-				);
-				const rows = yield* Schema.decodeUnknownEffect(Schema.Array(SyncScanRow))(result.rows).pipe(
-					Effect.mapError(() => new SyncDecodeError({ message: 'Invalid sync diff rows' }))
-				);
-				// Row visibility is decided in SQL above; *column* visibility is decided here, by the same
-				// `access.mask` a direct read goes through. Without it the outbox's `to_jsonb(r)` hands the
-				// whole row over — a field-restricted policy would be enforced on every server read and then
-				// quietly undone by the replica, which persists what it receives in the browser.
-				const changes = rows.flatMap((row) =>
-					row.collection === null || row.recordId === null || row.operation === null
-						? []
-						: [
-								{
-									cursor: row.cursor,
-									collection: row.collection,
-									recordId: row.recordId,
-									operation: row.operation,
-									record:
-										row.record == null
-											? row.record
-											: maskRecord(subject, row.collection, row.record)
-								}
-							]
-				);
-				return {
-					changes,
-					scanned: rows[rows.length - 1]?.cursor ?? cursor,
-					complete: rows.length < size
-				};
-			}),
-			diff: Effect.fn('Sync.diff')(function* (effectId, subject, cursor, limit) {
-				return (yield* service.scan(effectId, subject, cursor, limit)).changes;
+					)
+				) ?? nothing();
+			const afterVisibility =
+				or(
+					...[...predicates].map(([name, predicate], index) =>
+						and(
+							eq(syncOutbox.collection_name, name),
+							isNotNull(syncOutbox.after_record),
+							exists(
+								composer
+									.select({ one: one() })
+									.from(jsonRecord(name, syncOutbox.after_record, `sync_after_${index}`))
+									.where(AccessControl.predicateExpression(predicate))
+							)
+						)
+					)
+				) ?? nothing();
+			const size = ENumber.clamp({ minimum: 1, maximum: 500 })(
+				request.limit ?? DEFAULT_SYNC_PULL_LIMIT
+			);
+			const budget = ENumber.clamp({ minimum: 1, maximum: MAX_SYNC_PULL_MAX_BYTES })(
+				request.maxBytes ?? DEFAULT_SYNC_PULL_MAX_BYTES
+			);
+			const result = yield* executeBuilt(
+				EffectId.make(`${effectId}:rows`),
+				database,
+				composer
+					.select({
+						cursor: aliased(syncCursorJson(syncOutbox.xid, syncOutbox.sequence), 'cursor'),
+						collection: aliased(syncOutbox.collection_name, 'collection'),
+						recordId: aliased(
+							onlyWhen(or(beforeVisibility, afterVisibility) ?? nothing(), syncOutbox.record_id),
+							'recordId'
+						),
+						beforeVisible: aliased(beforeVisibility, 'beforeVisible'),
+						afterVisible: aliased(afterVisibility, 'afterVisible'),
+						beforeRecord: aliased(
+							onlyWhen(beforeVisibility, syncOutbox.before_record),
+							'beforeRecord'
+						),
+						afterRecord: aliased(
+							onlyWhen(afterVisibility, syncOutbox.after_record),
+							'afterRecord'
+						),
+						invalidatedCollections: aliased(
+							syncOutbox.invalidated_collections,
+							'invalidatedCollections'
+						),
+						mutationId: aliased(syncOutbox.mutation_id, 'mutationId')
+					})
+					.from(syncOutbox)
+					.where(and(afterCursor, relevant, lt(syncOutbox.xid, COMMIT_HORIZON)))
+					.orderBy(asc(syncOutbox.xid), asc(syncOutbox.sequence))
+					.limit(size)
+			);
+			const rows = yield* Schema.decodeUnknownEffect(Schema.Array(SyncPullRow))(result.rows).pipe(
+				Effect.mapError(() => new SyncDecodeError({ message: 'Invalid partition delta rows' }))
+			);
+			const afterReadHorizon = yield* readHorizon(
+				EffectId.make(`${effectId}:horizon-after`)
+			);
+			if (
+				afterReadHorizon !== undefined &&
+				compareSyncCursors(afterReadHorizon, requestedCursor) > 0 &&
+				(initialHorizon === undefined || compareSyncCursors(afterReadHorizon, initialHorizon) > 0)
+			) {
+				return evaluated(recovery('cursorExpired', recoveryCollections, replayCost));
+			}
+
+			const subscribed = new Set(request.collections);
+			// Broad activity and mandatory proof withdrawal are separate facts. A direct jobs row can be
+			// applied with M1 while a job_assignments row in the same batch still requires M2 for jobs.
+			const affected = new Set(generationMismatch);
+			const refill = new Set<string>();
+			const deltas: Array<SyncPartitionDelta> = [];
+			let cursor = requestedCursor;
+			let examined = 0;
+			let weight = 0;
+			for (const row of rows) {
+				let delta: SyncPartitionDelta | undefined;
+				if (subscribed.has(row.collection) && row.afterVisible) {
+					if (row.recordId === null || !isJsonObject(row.afterRecord)) {
+						return yield* new SyncDecodeError({ message: 'Visible sync upsert has no full row' });
+					}
+					const rowVersion = Number(row.afterRecord['row_version']);
+					if (!Number.isSafeInteger(rowVersion) || rowVersion < 1) {
+						return yield* new SyncDecodeError({ message: 'Visible sync upsert has no row version' });
+					}
+					const masked = maskRecord(subject, row.collection, row.afterRecord);
+					if (!isJsonObject(masked)) {
+						return yield* new SyncDecodeError({ message: 'Visible sync upsert is not an object' });
+					}
+					delta = {
+						cursor: row.cursor,
+						collection: row.collection,
+						op: 'upsert',
+						recordId: row.recordId,
+						rowVersion,
+						mutationId: row.mutationId,
+						row: masked
+					};
+				} else if (subscribed.has(row.collection) && row.beforeVisible) {
+					if (row.recordId === null || !isJsonObject(row.beforeRecord)) {
+						return yield* new SyncDecodeError({ message: 'Visible sync removal has no prior row' });
+					}
+					const previousVersion = Number(row.beforeRecord['row_version']);
+					if (
+						!Number.isSafeInteger(previousVersion) ||
+						previousVersion < 1 ||
+						previousVersion >= Number.MAX_SAFE_INTEGER
+					) {
+						return yield* new SyncDecodeError({ message: 'Visible sync removal has no row version' });
+					}
+					delta = {
+						cursor: row.cursor,
+						collection: row.collection,
+						op: 'remove',
+						recordId: row.recordId,
+						rowVersion: previousVersion + 1,
+						mutationId: row.mutationId
+					};
+				}
+				const deltaWeight = delta === undefined ? 0 : JSON.stringify(delta).length;
+				if (deltas.length > 0 && weight + deltaWeight > budget) break;
+				for (const invalidated of row.invalidatedCollections) {
+					if (!subscribed.has(invalidated)) continue;
+					affected.add(invalidated);
+					refill.add(invalidated);
+				}
+				if (delta !== undefined) affected.add(delta.collection);
+				examined += 1;
+				cursor = row.cursor;
+				if (delta !== undefined) deltas.push(delta);
+				weight += deltaWeight;
+				if (weight >= budget) break;
+			}
+			const complete = examined === rows.length && rows.length < size;
+			if (complete) cursor = currentHead;
+			if (complete && replayEvents === 0) {
+				for (const collection of generationMismatch) refill.add(collection);
+			}
+			return evaluated({
+				partition,
+				kind: 'delta' as const,
+				deltas,
+				cursor,
+				headCursor: currentHead,
+				generations: complete
+					? state.generations
+					: Object.fromEntries(
+							request.collections.map((collection) => [
+								collection,
+								request.generations[collection] ?? 0
+							])
+						),
+				affectedCollections: [...affected].toSorted(),
+				refillCollections: [...refill].toSorted(),
+				cost: replayCost,
+				mutationConfirmations: [],
+				mutationRejections: [],
+				complete
+			});
+		});
+		const pullPartition = Effect.fn('Sync.pullPartition')(function* (
+			effectId: EffectId,
+			subject: Identity.Subject,
+			request: SyncPullRequest
+		) {
+			return adviseRehydration(
+				yield* evaluatePartition(effectId, subject, request),
+				request.rehydration
+			);
+		});
+		const service: Interface = {
+			head: readHead,
+			partition: readPartitionIdentity,
+			positions: readPositions,
+			pull: pullPartition,
+			distribute: Effect.fn('Sync.distribute')(function* (
+				effectId: EffectId,
+				entries: ReadonlyArray<SyncDistributionServiceEntry>
+			) {
+				if (entries.length === 0)
+					return [] as ReadonlyArray<SyncDistributionServiceResult>;
+				const denied = new Map<number, AccessControl.AccessDenied>();
+				type AdmissionGroup = Readonly<{
+					subject: Identity.Subject;
+					subjectKey: string;
+					collections: ReadonlyArray<string>;
+					collectionKey: string;
+					members: Array<number>;
+				}>;
+				type AdmittedGroup = AdmissionGroup &
+					Readonly<{ predicates: ReadonlyMap<string, AccessControl.RowPredicate> }>;
+				type Bucket = Readonly<{
+					subject: Identity.Subject;
+					pull: SyncPullRequest;
+					members: Array<number>;
+					prepared: PreparedPartitionPull;
+				}>;
+				// Authentication has already happened in dispatch. Exact subject coordinates and the same
+				// dependency set have exactly the same subscription decision; grouping on the complete
+				// minted subject preserves actor/impersonation isolation while avoiding duplicate policy work.
+				const admissionGroups = new Map<string, AdmissionGroup>();
+				for (const [index, entry] of entries.entries()) {
+					const collections = [...entry.pull.collections].toSorted();
+					const collectionKey = sha256Json(collections);
+					const subjectKey = sha256Json(entry.subject);
+					const key = sha256Json({ subjectKey, collections });
+					const held = admissionGroups.get(key);
+					if (held === undefined) {
+						admissionGroups.set(key, {
+							subject: entry.subject,
+							subjectKey,
+							collections,
+							collectionKey,
+							members: [index]
+						});
+					} else held.members.push(index);
+				}
+				const admittedGroups: Array<AdmittedGroup> = [];
+				for (const group of admissionGroups.values()) {
+					const admitted = yield* Effect.result(
+						subscriptionPredicates(group.subject, group.collections)
+					);
+					if (Result.isFailure(admitted)) {
+						for (const index of group.members) denied.set(index, admitted.failure);
+						continue;
+					}
+					admittedGroups.push({ ...group, predicates: admitted.success });
+				}
+				const buckets = new Map<string, Bucket>();
+				if (admittedGroups.length > 0) {
+					// Head/horizon are tenant-global. Sampling once before generation state preserves pull's
+					// head-before-generations ordering while giving every bucket one coherent batch horizon.
+					const outboxHead = yield* readHead(EffectId.make(`${effectId}:shared-head`));
+					const initialHorizon = yield* readHorizon(
+						EffectId.make(`${effectId}:shared-horizon`)
+					);
+					const currentHead =
+						initialHorizon !== undefined && compareSyncCursors(initialHorizon, outboxHead) > 0
+							? initialHorizon
+							: outboxHead;
+					const states = new Map<string, PartitionGenerationState>();
+					const partitions = new Map<string, SyncPartitionIdentity>();
+					let stateIndex = 0;
+					for (const group of admittedGroups) {
+						let state = states.get(group.collectionKey);
+						if (state === undefined) {
+							state = yield* generationState(
+								EffectId.make(`${effectId}:generations:${(stateIndex += 1)}`),
+								group.collections
+							);
+							states.set(group.collectionKey, state);
+						}
+						const partitionKey = `${group.subjectKey}\u0000${state.authorityGeneration}`;
+						const partition =
+							partitions.get(partitionKey) ??
+							partitionIdentity(group.subject, state.authorityGeneration);
+						partitions.set(partitionKey, partition);
+						const prepared: PreparedPartitionPull = {
+							predicates: group.predicates,
+							state,
+							partition,
+							currentHead,
+							initialHorizon
+						};
+						for (const index of group.members) {
+							const entry = entries[index];
+							if (entry === undefined)
+								throw new Error('Sync distribution lost an admitted member');
+							const key = sha256Json({
+								partition: partition.key,
+								collections: group.collections,
+								cursor: entry.pull.cursor,
+								generations: entry.pull.generations,
+								limit: entry.pull.limit ?? DEFAULT_SYNC_PULL_LIMIT,
+								maxBytes: entry.pull.maxBytes ?? DEFAULT_SYNC_PULL_MAX_BYTES
+							});
+							const bucket = buckets.get(key);
+							if (bucket === undefined) {
+								buckets.set(key, {
+									subject: entry.subject,
+									pull: entry.pull,
+									members: [index],
+									prepared
+								});
+							} else bucket.members.push(index);
+						}
+					}
+				}
+				const completed = new Map<number, SyncPullResponse>();
+				for (const [bucketIndex, bucket] of [...buckets.values()].entries()) {
+					const outcome = yield* Effect.result(
+							evaluatePartition(
+								EffectId.make(`${effectId}:partition-pull:${bucketIndex}`),
+								bucket.subject,
+								bucket.pull,
+								bucket.prepared
+							)
+					);
+					if (Result.isFailure(outcome)) {
+						if (outcome.failure instanceof AccessControl.AccessDenied) {
+							for (const index of bucket.members) denied.set(index, outcome.failure);
+							continue;
+						}
+						return yield* outcome.failure;
+					}
+					for (const index of bucket.members) {
+						const member = entries[index];
+						if (member === undefined) {
+							throw new Error('Sync distribution lost a partition cost member');
+						}
+						completed.set(
+							index,
+							adviseRehydration(outcome.success, member.pull.rehydration)
+						);
+					}
+				}
+				return entries.map((entry, index): SyncDistributionServiceResult => {
+					const error = denied.get(index);
+					if (error !== undefined) return { requestId: entry.requestId, error };
+					const response = completed.get(index);
+					if (response === undefined) {
+						throw new Error('Sync distribution lost an admitted partition member');
+					}
+					return { requestId: entry.requestId, response };
+				});
 			}),
 			shape: Effect.fn('Sync.shape')(function* (subject) {
 				return workspace.definition.collections
@@ -437,64 +1248,6 @@ export const layer = Layer.effect(
 								: []
 					)
 					.toSorted();
-			}),
-			snapshot: Effect.fn('Sync.snapshot')(function* (effectId, subject, collection, after, limit) {
-				const predicate = access.predicate(subject, 'read', collection);
-				if (!predicate.allowed) {
-					return yield* new AccessControl.AccessDenied({
-						action: 'read',
-						resource: collection,
-						reason: 'the subject may not read this collection'
-					});
-				}
-				const size = ENumber.clamp({ minimum: 1, maximum: 500 })(limit);
-				// Keyset paging on the primary key, not offset: a snapshot of a live table is paged while it
-				// is being written, and `offset` re-reads shifted rows — skipping some and repeating others.
-				// Ordering by `id` also makes `after` a position rather than a count.
-				const snapshotId = qualified('snapshot_row', 'id');
-				// The horizon is read in the same statement as the rows, so it names the state these rows are
-				// consistent with rather than a moment before or after them.
-				const result = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({
-							snapshotXid: aliased(coalesce(COMMIT_HORIZON, 0), 'snapshotXid'),
-							record: aliased(rowJson('snapshot_row'), 'record'),
-							id: aliased(asText(snapshotId), 'id')
-						})
-						.from(dynamicTable(collection, 'snapshot_row'))
-						.where(
-							and(
-								after === undefined ? undefined : uuidAfter(snapshotId, after),
-								AccessControl.predicateExpression(predicate)
-							)
-						)
-						.orderBy(snapshotId)
-						.limit(size + 1)
-				);
-				const rows = result.rows.slice(0, size);
-				const read = (row: Schema.Json, key: string): unknown =>
-					row !== null && typeof row === 'object' && !Array.isArray(row)
-						? Reflect.get(row, key)
-						: undefined;
-				const snapshotXid = Number(read(result.rows[0] ?? null, 'snapshotXid') ?? 0);
-				const lastId = read(rows[rows.length - 1] ?? null, 'id');
-				return {
-					collection,
-					// Masked for the same reason the diff is: a snapshot is the bulk half of the same
-					// delivery, and a column the subject may not read must not reach the browser through
-					// either half.
-					rows: rows.map((row) => {
-						const record = read(row, 'record');
-						return maskRecord(subject, collection, isJson(record) ? record : null);
-					}),
-					// `sequence: 0` with the horizon's xid: the client streams from strictly below the first
-					// transaction that could still have been open, so nothing committed after this read is
-					// assumed to be already present.
-					cursor: { xid: Number.isFinite(snapshotXid) ? snapshotXid : 0, sequence: 0 },
-					nextAfter: result.rows.length > size && typeof lastId === 'string' ? lastId : null
-				};
 			}),
 			compact: Effect.fn('Sync.compact')(function* (effectId, retentionDays) {
 				const days = Math.max(1, Math.trunc(retentionDays));
@@ -521,35 +1274,7 @@ export const layer = Layer.effect(
 				);
 				return { collapsed: collapsed.rows.length, pruned: pruned.rows.length };
 			}),
-			schema: () => ({ cursor: 'xid-sequence', version: 1 }),
-			mutate: Effect.fn('Sync.mutate')(function* (effectId, subject, changes) {
-				// A client mutation is an ordinary collection write. Routing it through Collections is
-				// what makes it real: access predicates, approval interception, history, and the sync
-				// outbox all live there, so the caller's own replica learns of it like any other write.
-				// It used to be appended to `bolt_sync_inbox`, a table nothing ever read.
-				for (const change of changes) {
-					if (change.operation === 'reset') continue;
-					const values = Schema.is(JsonObject)(change.record) ? change.record : {};
-					const id = EffectId.make(
-						`${effectId}:${change.collection}:${change.recordId}:${change.operation}`
-					);
-					if (change.operation === 'create') {
-						yield* collections.create(id, subject, {
-							collection: change.collection,
-							id: change.recordId,
-							values
-						});
-					} else if (change.operation === 'update') {
-						yield* collections.update(id, subject, {
-							collection: change.collection,
-							id: change.recordId,
-							values
-						});
-					} else {
-						yield* collections.delete(id, subject, change.collection, change.recordId);
-					}
-				}
-			}),
+			schema: () => schemaFacts,
 			wakeHint: (cursor) => ({ topic: 'bolt.sync', cursor })
 		};
 		return Service.of(service);

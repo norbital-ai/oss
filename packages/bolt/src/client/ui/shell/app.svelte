@@ -4,9 +4,11 @@
 	import { Toaster } from '@norbital-ai/ui/sonner';
 	import type { WorkspaceImpersonation } from '@norbital-ai/ui/workspace-shell';
 	import Shell from './shell.svelte';
+	import SyncStatus from './sync-status.svelte';
 	import type { TenantMessageCatalogs } from '#lib/client/ui/agent/i18n.js';
 	import type { HostPlugin } from '#lib/client/ui/shell/workspace-navigation.js';
 	import type { Effect } from 'effect';
+	import type { WorkspaceSyncStatus } from '#lib/client/runtime.js';
 
 	let {
 		title = 'Bolt',
@@ -23,6 +25,7 @@
 		plugins,
 		isAdmin = true,
 		deferredQueriesReady = false,
+		syncStatus,
 		impersonation = null,
 		onImpersonate,
 		onStopImpersonating,
@@ -90,6 +93,8 @@
 		isAdmin?: boolean;
 		/** Non-critical shell reads start only after the first interaction with a painted workspace. */
 		deferredQueriesReady?: boolean;
+		/** Engine-owned data freshness and mutation settlement facts; absent is explicitly unverified. */
+		syncStatus?: WorkspaceSyncStatus | undefined;
 		/**
 		 * Admin team preview, forwarded verbatim to the shell.
 		 *
@@ -139,6 +144,10 @@
 
 <Toaster />
 
+<!-- Overlays render outside <Shell> so `fixed` resolves against the viewport rather than
+     whichever piece of shell chrome happens to establish a containing block. -->
+<SyncStatus status={syncStatus} />
+
 <Shell
 	app={title}
 	headerTitle={activeAppTitle}
@@ -158,6 +167,7 @@
 	{plugins}
 	{isAdmin}
 	{deferredQueriesReady}
+	{syncStatus}
 	{impersonation}
 	{onImpersonate}
 	{onStopImpersonating}

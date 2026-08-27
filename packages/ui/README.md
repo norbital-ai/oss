@@ -17,9 +17,9 @@ Import components through their public subpaths:
 Import `@norbital-ai/ui/base.css` once at the application root. Bolt's generated client entry imports
 it automatically, so tenant apps do not add a second base stylesheet or Tailwind integration.
 
-The wildcard export exposes one subpath per component directory. Additional stable subpaths cover
-`collection-table/navigation`, `feature-colors`, JavaScript utilities, editor themes, the logo, and
-favicons. Do not import from `build/` or `src/` directly.
+The wildcard export exposes one subpath per component directory, including shared
+`collection-navigation`. Additional stable subpaths cover `feature-colors`, JavaScript utilities,
+editor themes, the logo, and favicons. Do not import from `build/` or `src/` directly.
 
 ## Development
 

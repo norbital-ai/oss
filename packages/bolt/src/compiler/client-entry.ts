@@ -27,22 +27,25 @@ export const BOLT_TENANT_REQUEST_PREFIX = `${BOLT_TENANT_PUBLIC_PREFIX}/request`
 /**
  * Where a compiled artifact is written, and what its sidecar files are called.
  *
- * The three file names come from `@norbital-ai/bolt-protocol` and are re-exported rather than
+ * The four file names come from `@norbital-ai/bolt-protocol` and are re-exported rather than
  * respelled: `bolt-server` and Colony resolve blobs beside a bundle they were handed and are
  * forbidden from importing this package, so the release layout has to be stated somewhere both
  * halves can read. This module is the compiler's single door onto it.
  *
  * ```text
  * <workspace>/.norbital/artifact/
- * ├── bundle.mjs          the code graph, and only the code graph
- * ├── asset-index.json    { browser: AssetIndexEntry[], server: AssetIndexEntry[] }
- * └── assets/<sha256>     one flat file per distinct digest, extensionless
+ * ├── bundle.mjs          materialized ESM graph entry for local/self-hosted use
+ * ├── code/*.mjs          materialized runtime, dependency, and tenant modules
+ * ├── release.json        host-readable manifest and verified ESM graph
+ * ├── asset-index.json    compatibility projection of the two asset indexes
+ * └── assets/<sha256>     one flat code, asset, or provenance object per digest
  * ```
  */
 export {
 	ARTIFACT_ASSET_DIRECTORY,
 	ARTIFACT_ASSET_INDEX_FILE,
-	ARTIFACT_BUNDLE_FILE
+	ARTIFACT_BUNDLE_FILE,
+	ARTIFACT_RELEASE_FILE
 } from '@norbital-ai/bolt-protocol';
 export const ARTIFACT_DIRECTORY = '.norbital/artifact';
 

@@ -1,15 +1,25 @@
 import { Clock, Effect, Number as ENumber, Result, Schema } from 'effect';
 import {
-	CollectionWriteValues,
+	CollectionMutateRequest,
+	CollectionGroupedQueryRequestFields,
+	CollectionQueryRequestFields,
+	type CollectionMutationBaseVersion,
+	type CollectionMutationGraph,
 	EffectId,
+	makeWireError,
 	PluginTrustedContext,
 	StoredRecord,
 	type DispatchResponse,
 	type Invocation
 } from '@norbital-ai/bolt-protocol';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
+import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
 import { WEB_AGENT_NAME, type WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import { AutomationProgression } from '#lib/authoring/automations-schema.js';
+import {
+	reconcileMutationSchema,
+	replicaProvisioningSteps
+} from '#lib/compiler/schema-plan.js';
 import * as SystemPrincipal from '#lib/runtime/access/system-principal.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
 import { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
@@ -31,6 +41,13 @@ import {
 } from '#lib/runtime/identity/static-identity.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
 import { resolveWritableManyRelation } from '#lib/runtime/collections/collections.js';
+import {
+	canonicalizeCollectionQuery,
+	normalizeCollectionHydration,
+	projectCollectionQueryRecord,
+	withoutCollectionQueryProjection,
+	workspaceCollectionQueryMetadata
+} from '#lib/runtime/collections/canonical-query.js';
 import { compileOrderTerms, makeWhereContext } from '#lib/runtime/collections/where.js';
 import * as Integrations from '#lib/runtime/integrations/integrations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
@@ -52,9 +69,10 @@ import {
 import * as SyncCompaction from '#lib/runtime/sync/compaction.js';
 import * as Sync from '#lib/runtime/sync/sync.js';
 import { SyncCursor } from '#lib/runtime/sync/sync.js';
+import * as TenantScope from '#lib/runtime/tenant.js';
 import {
 	AuthoredRuntimeService,
-	guardAuthoredCollectionOps,
+	guardAuthoringOps,
 	makeAutomationApi,
 	makeAuthoringApi,
 	makeBoundAuthoringOps,
@@ -106,8 +124,23 @@ const ApprovalDecideInput = Schema.Struct({
 	decision: Schema.Literals(['approve', 'reject', 'request_changes', 'supersede']),
 	reason: Schema.optionalKey(Schema.String)
 });
-/** `sync.scan` and `sync.diff` ask the same question; they differ only in how much of it comes back. */
-const SyncDiffInput = Schema.Struct({ subject: Subject, cursor: SyncCursor, limit: Schema.Number });
+/**
+ * The authenticated wire shape for a partition-oriented pull.
+ *
+ * The exported request schema deliberately has no subject: callers cannot choose authority. This
+ * boundary adds the subject minted from the credential before decoding and invoking the service.
+ */
+const SyncPullInput = Schema.Struct({
+	subject: Subject,
+	actor: Subject,
+	impersonatedTeam: Schema.NullOr(Schema.String),
+	...Sync.SyncPullRequest.fields
+});
+/** The host signature mints the outer system subject; each opaque credential is resolved in-guest. */
+const SyncDistributeInput = Schema.Struct({
+	subject: Subject,
+	...Sync.SyncDistributeRequest.fields
+});
 const AgentEnqueueInput = Schema.Struct({
 	subject: Subject,
 	agent: Schema.NonEmptyString,
@@ -133,14 +166,11 @@ const AgentDocumentInput = Schema.Struct({
 const AgentTitleInput = Schema.Struct({ conversationId: Schema.NonEmptyString });
 const CollectionFindInput = Schema.Struct({
 	subject: Subject,
-	collection: Schema.NonEmptyString,
-	limit: Schema.optionalKey(Schema.Number),
-	where: Schema.optionalKey(Schema.Json),
-	orderBy: Schema.optionalKey(Schema.Json),
-	with: Schema.optionalKey(Schema.Json),
-	search: Schema.optionalKey(Schema.String),
-	after: Schema.optionalKey(Schema.String),
-	columns: Schema.optionalKey(Schema.Json)
+	...CollectionQueryRequestFields
+});
+const CollectionGroupedInput = Schema.Struct({
+	subject: Subject,
+	...CollectionGroupedQueryRequestFields
 });
 const SecretsWriteInput = Schema.Struct({
 	subject: Subject,
@@ -183,10 +213,14 @@ const decodeJsonObject = Schema.decodeUnknownResult(JsonObject);
  * than widens — `AccessControl.impersonate` still has to authorize the authenticated actor for it.
  */
 /** The protocol mutation body plus the subject minted from the authenticated credential. */
-const CollectionMutateInput = Schema.Struct({
+const AuthenticatedCollectionMutation = Schema.Struct({
 	subject: Subject,
-	collection: Schema.NonEmptyString,
-	values: CollectionWriteValues
+	actor: Subject,
+	impersonatedTeam: Schema.NullOr(Schema.String)
+});
+const AuthenticatedSyncPartitionStatus = Schema.Struct({
+	...AuthenticatedCollectionMutation.fields,
+	...Sync.SyncPartitionStatusRequest.fields
 });
 const CollectionMutation = Schema.Struct({
 	collection: Schema.NonEmptyString,
@@ -312,12 +346,6 @@ const ApprovalStatusInput = Schema.Struct({
 const ApprovalRequestIdInput = Schema.Struct({ requestId: Schema.NonEmptyString });
 const ApprovalWithdrawInput = Schema.Struct({ subject: Subject, state: ApprovalState });
 const SyncShapeInput = Schema.Struct({ subject: Subject });
-const SyncSnapshotInput = Schema.Struct({
-	subject: Subject,
-	collection: Schema.NonEmptyString,
-	after: Schema.optional(Schema.String),
-	limit: Schema.optional(Schema.Number)
-});
 /**
  * A `subject` on a command that acts on no subject's data, and that is exactly why it is here.
  *
@@ -328,18 +356,6 @@ const SyncSnapshotInput = Schema.Struct({
 const SyncCompactInput = Schema.Struct({
 	subject: Subject,
 	retentionDays: Schema.optional(Schema.Number)
-});
-const SyncMutateInput = Schema.Struct({
-	subject: Subject,
-	changes: Schema.Array(
-		Schema.Struct({
-			cursor: SyncCursor,
-			collection: Schema.NonEmptyString,
-			recordId: Schema.NonEmptyString,
-			operation: Schema.Literals(['create', 'update', 'delete']),
-			record: Schema.optionalKey(Schema.Json)
-		})
-	)
 });
 const EnvoyNameInput = Schema.Struct({ envoy: Schema.NonEmptyString });
 const EnvoyReplyInput = Schema.Struct({
@@ -536,16 +552,15 @@ const DispatchValues = {
 	collectionQuery: (input: typeof CollectionFindInput.Type) => ({
 		collection: input.collection,
 		limit: ENumber.clamp({ minimum: 1, maximum: 500 })(input.limit ?? 100),
-		where: input.where,
-		orderBy: input.orderBy,
-		with: input.with,
-		search: input.search,
-		after: input.after
-		// `columns` is accepted on the wire but deliberately not forwarded: Bolt's read path has no
-		// projection, it selects the whole row. Honouring it would mean rewriting the select list *and*
-		// re-adding every ordering column the cursor is cut from plus every relation key `with` joins
-		// on, then stripping them back out — so it stays unimplemented rather than half-wired into a
-		// query that returns fewer columns than the cursor and the prefetch both need.
+		...(input.where === undefined ? {} : { where: input.where }),
+		...(input.userFilter === undefined ? {} : { userFilter: input.userFilter }),
+		...(input.orderBy === undefined ? {} : { orderBy: input.orderBy }),
+		...(input.with === undefined ? {} : { with: input.with }),
+		...(input.search === undefined ? {} : { search: input.search }),
+		...(input.after === undefined ? {} : { after: input.after })
+		// Root `columns` is a read-time projection and therefore is not part of the service query.
+		// Nested projections remain authored here; the authoritative page path removes them only from
+		// its hydration read so the base store never receives a partial related row.
 	}),
 	/**
 	 * The team this invocation asks to be viewed as, or `undefined`.
@@ -686,6 +701,28 @@ const checkWrittenGraph = Effect.fn('Bolt.checkWrittenGraph')(function* (
 				new DispatchError({
 					code: 'invalid_input',
 					message: `The id of a ${node.collection} mutation must be a non-empty string.`
+				})
+			);
+		if (typeof id === 'string' && !MUTATION_RECORD_ID.test(id))
+			yield* Effect.fail(
+				new DispatchError({
+					code: 'invalid_input',
+					message: `The id of a ${node.collection} mutation must be a UUID.`
+				})
+			);
+		const collectionDefinition = yield* workspace.collection(node.collection);
+		const unknown = Object.keys(node.values).find(
+			(key) =>
+				key !== 'id' &&
+				!SYSTEM_COLUMN_NAMES.includes(key) &&
+				!(key in collectionDefinition.fields) &&
+				resolveWritableManyRelation(workspace.definition, node.collection, key) === undefined
+		);
+		if (unknown !== undefined)
+			yield* Effect.fail(
+				new DispatchError({
+					code: 'invalid_input',
+					message: `${node.collection} has no writable field or many relationship named "${unknown}".`
 				})
 			);
 		yield* checkWrittenValues(node.collection, node.values);
@@ -839,7 +876,9 @@ const SYSTEM_ONLY_COMMANDS: ReadonlySet<string> = new Set([
 	 * safe to run — after a seed, or on the maintenance tick, which now carries a bounded pass of the
 	 * same work without coming through this boundary at all.
 	 */
-	'sync.compact'
+	'sync.compact',
+	/** One host-authenticated admission fans many independently authenticated pulls into one read. */
+	'sync.distribute'
 ]);
 
 /** The prefix a spent founder claim is filed under, so it cannot collide with a sign-in code's row. */
@@ -938,6 +977,9 @@ const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set([
 	'agents.continue',
 	'collections.resume',
 	'collections.discard',
+	// Better Auth persists a sign-in challenge, then posts this private courier task. It carries no
+	// caller identity and can only deliver the exact code/address pair the runtime stored in the row.
+	Identity.DELIVER_CODE_COMMAND,
 	// The tick itself, which is the only command a host's timer ever sends. It takes no input and
 	// carries no identity, and everything it goes on to run is checked against the derived set below.
 	TICK_COMMAND
@@ -1071,12 +1113,55 @@ const collectionPage = Effect.fn('Bolt.collectionPage')(function* (
 	const workspace = yield* Workspace.Service;
 	const definition = yield* workspace.collection(input.collection);
 	const collections = yield* Collections.Service;
+	const described = canonicalizeCollectionQuery(
+		'findMany',
+		input,
+		workspaceCollectionQueryMetadata(workspace.definition),
+		{ pinnedCollation: true, localRelationships: true, localSearch: true }
+	);
+	if (described === undefined) {
+		return yield* new DispatchError({
+			code: 'invalid_input',
+			message: 'Collection query could not be canonicalized'
+		});
+	}
+	/**
+	 * The proof position is sampled before the page query, never after it.
+	 *
+	 * A row committed after this head may be present in the page, but it will also be replayed by the
+	 * later pull and applied idempotently. The reverse ordering is unsafe: a post-read head could name
+	 * a commit the page did not observe and let CoverageLedger claim a page current past an unseen row.
+	 * The suffix is distinct because database facilities deduplicate by effect id.
+	 */
+	const position = yield* (yield* Sync.Service).positions(
+		EffectId.make(`${effectId}:page-position`),
+		input.subject,
+		described.dependencies
+	);
+	// One visible page of lookahead keeps a mutated boundary filled without unbounded hydration.
+	const retainedLimit = query.limit * 2;
 	const rows = yield* collections.findMany(effectId, input.subject, {
 		...query,
-		limit: query.limit + 1
+		...(input.with === undefined
+			? {}
+			: { with: withoutCollectionQueryProjection(input.with) }),
+		limit: retainedLimit + 1
 	});
-	const page = rows.slice(0, query.limit);
-	const last = page[page.length - 1];
+	const retained = rows.slice(0, retainedLimit);
+	const hydration = normalizeCollectionHydration(
+		workspace.definition,
+		input.collection,
+		retained
+	);
+	if (Result.isFailure(hydration)) {
+		return yield* new DispatchError({
+			code: 'invalid_stored_record',
+			message: hydration.failure.message
+		});
+	}
+	const visible = retained.slice(0, query.limit);
+	const visibleLast = visible[visible.length - 1];
+	const last = retained[retained.length - 1];
 	// Compiled the same way the seek predicate was, so the tuple the cursor carries is the tuple the
 	// next page's seek compares against — including the primary key `compileOrderTerms` appends.
 	const ordering = compileOrderTerms(
@@ -1084,11 +1169,23 @@ const collectionPage = Effect.fn('Bolt.collectionPage')(function* (
 		makeWhereContext(input.collection, definition.fields, workspace.definition)
 	);
 	return json({
-		rows: page,
+		rows: retained,
+		baseRows: hydration.success.baseRows,
+		relationshipRefs: hydration.success.relationshipRefs,
+		pageCursor:
+			rows.length > query.limit && visibleLast !== undefined
+				? Collections.encodeCollectionCursor(ordering, visibleLast)
+				: null,
 		nextCursor:
-			rows.length > query.limit && last !== undefined
+			rows.length > retainedLimit && last !== undefined
 				? Collections.encodeCollectionCursor(ordering, last)
-				: null
+				: null,
+		lookahead: Math.max(0, retained.length - query.limit),
+		readCursor: position.cursor,
+		partitionKey: position.partition.key,
+		confirmedDependencies: Object.keys(position.generations).toSorted(),
+		dependencyGenerations: position.generations,
+		reproducibility: described.reproducibility
 	});
 });
 
@@ -1159,6 +1256,7 @@ type DispatchServices =
 	| SecretsInterface
 	| Sync.Interface
 	| TaskQueue.Interface
+	| TenantScope.Interface
 	| Workspace.Interface
 	| WorkspaceSchema.Interface;
 
@@ -1632,6 +1730,54 @@ const rateLimitAddress = (payload: unknown): string | undefined => {
 	return value === undefined || value.trim() === '' ? undefined : value;
 };
 
+/** Canonical JSON for a request digest; object insertion order must not change mutation identity. */
+const canonicalJson = (value: Schema.Json): string => {
+	if (value === null || typeof value !== 'object') return JSON.stringify(value);
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+	return `{${Object.entries(value)
+		.toSorted(([left], [right]) => left.localeCompare(right))
+		.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+		.join(',')}}`;
+};
+
+/** Uses WebCrypto because bundle code runs in isolates and must not import `node:crypto`. */
+const sha256Hex = Effect.fn('Bolt.sha256Hex')((value: string) =>
+	Effect.promise(async () => {
+		const digest = await globalThis.crypto.subtle.digest(
+			'SHA-256',
+			new TextEncoder().encode(value)
+		);
+		return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+	})
+);
+
+const MUTATION_RECORD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/**
+ * The stable actor/effective-subject binding for dedup and delivery.
+ *
+ * Team paths, administrator flags and compiled authority generations intentionally stay out. A
+ * journaled mutation is retried under current policy after those facts change, but it must still
+ * resolve the original ledger row rather than acquiring a second idempotency scope.
+ */
+const browserMutationScopeFor = (
+	tenantId: string,
+	environment: string,
+	actor: Subject,
+	subject: Subject,
+	impersonatedTeam: string | null
+): Collections.BrowserMutationScope => ({
+	tenantId,
+	environment,
+	principalId: actor.userId,
+	authorityId: canonicalJson({
+		effectiveSubjectId: subject.userId,
+		impersonationBinding:
+			impersonatedTeam === null ? 'operator' : `team:${impersonatedTeam}`
+	}),
+	command: 'collections.mutate'
+});
+
 /**
  * Everything a command does once its identity is settled, which is why it is a function.
  *
@@ -1990,6 +2136,12 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			// into an account-enumeration oracle for anyone who can reach the endpoint.
 			return json({ sent: true });
 		}
+		case Identity.DELIVER_CODE_COMMAND: {
+			const delivery = yield* decode(Identity.CodeDelivery, commandInput);
+			return json({
+				delivered: yield* (yield* Identity.Service).deliverCode(effectId, delivery)
+			});
+		}
 		case 'identity.verifyCode': {
 			const input = yield* decode(IdentityVerifyCodeInput, commandInput);
 			return json({
@@ -2126,11 +2278,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		}
 		case 'approvals.capabilities': {
 			const input = yield* decode(ApprovalStatusInput, commandInput);
-			const visible = yield* (yield* Collections.Service).approvalFindFirst(
-				effectId,
-				input.subject,
-				{ where: { id: { eq: input.requestId } } }
-			);
+			const visible = yield* (yield* Collections.Service).findFirst(effectId, input.subject, {
+				collection: 'approval_request',
+				where: { id: { eq: input.requestId } }
+			});
 			// Visibility is the first capability. Returning no record keeps an unreadable request
 			// indistinguishable from one that does not exist, just like `approvals.status` below.
 			if (visible === undefined || typeof visible !== 'object' || visible === null) return json([]);
@@ -2145,25 +2296,19 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		}
 		case 'approvals.status': {
 			const input = yield* decode(ApprovalStatusInput, commandInput);
-			const visible = yield* (yield* Collections.Service).approvalFindFirst(
-				effectId,
-				input.subject,
-				{
-					where: { id: { eq: input.requestId } }
-				}
-			);
+			const visible = yield* (yield* Collections.Service).findFirst(effectId, input.subject, {
+				collection: 'approval_request',
+				where: { id: { eq: input.requestId } }
+			});
 			if (visible === undefined) return json(null);
 			return json((yield* (yield* Approvals.Service).status(effectId, input.requestId)) ?? null);
 		}
 		case 'approvals.timeline': {
 			const input = yield* decode(ApprovalStatusInput, commandInput);
-			const visible = yield* (yield* Collections.Service).approvalFindFirst(
-				effectId,
-				input.subject,
-				{
-					where: { id: { eq: input.requestId } }
-				}
-			);
+			const visible = yield* (yield* Collections.Service).findFirst(effectId, input.subject, {
+				collection: 'approval_request',
+				where: { id: { eq: input.requestId } }
+			});
 			if (visible === undefined) return json([]);
 			return json(yield* (yield* Approvals.Service).timeline(effectId, input.requestId));
 		}
@@ -2171,41 +2316,220 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const sync = yield* Sync.Service;
 			return json(yield* sync.head(effectId));
 		}
-		case 'sync.diff': {
-			const input = yield* decode(SyncDiffInput, commandInput);
-			const sync = yield* Sync.Service;
-			return json(yield* sync.diff(effectId, input.subject, input.cursor, input.limit));
+		/**
+		 * The public pull half of poke/pull.
+		 *
+		 * The caller names only dependency collections and its one durable partition position. The guest
+		 * derives the security partition, validates every subscription without an existence oracle, and
+		 * returns full-row transitions or one explicit recovery move.
+		 */
+		case 'sync.pull': {
+			const input = yield* decode(SyncPullInput, commandInput);
+			const response = yield* (yield* Sync.Service).pull(effectId, input.subject, {
+				collections: input.collections,
+				cursor: input.cursor,
+				generations: input.generations,
+				...(input.rehydration === undefined ? {} : { rehydration: input.rehydration }),
+				...(input.pendingMutationIds === undefined
+					? {}
+					: { pendingMutationIds: input.pendingMutationIds }),
+				...(input.limit === undefined ? {} : { limit: input.limit }),
+				...(input.maxBytes === undefined ? {} : { maxBytes: input.maxBytes })
+			});
+			const pendingMutationIds = input.pendingMutationIds ?? [];
+			const tenant = yield* TenantScope.Service;
+			const delivery = yield* (yield* Collections.Service).browserMutationDelivery(
+				EffectId.make(`${effectId}:mutation-delivery`),
+				browserMutationScopeFor(
+					tenant.tenantId,
+					tenant.environment,
+					input.actor,
+					input.subject,
+					input.impersonatedTeam
+				),
+				pendingMutationIds,
+				response.cursor
+			);
+			const ownedMutationIds = new Set(delivery.ownedMutationIds);
+			return json({
+				...response,
+				deltas: response.deltas.map((delta) => ({
+					...delta,
+					mutationId:
+						delta.mutationId !== null && ownedMutationIds.has(delta.mutationId)
+							? delta.mutationId
+							: null
+				})),
+				mutationConfirmations:
+					response.kind === 'delta' ? delivery.confirmations : [],
+				mutationRejections: delivery.rejections
+			});
 		}
 		/**
-		 * The same read as `sync.diff`, answering with the scan position as well as the changes.
+		 * The host-only aggregation half of pull.
 		 *
-		 * A distribution service reading one tenant's log on behalf of every browser watching it needs
-		 * to know where it got to, not merely what it found — an outbox page holding nothing this
-		 * subject may see is not the end of the log, and a caller told only "no changes" rescans that
-		 * page forever. `sync.diff` stays because what a *replica* stores is an apply cursor: `scanned`
-		 * runs ahead of rows the subject cannot see today and might be able to see tomorrow, so it
-		 * belongs to the connection reading the log and never to the client's durable position.
+		 * Credentials remain opaque host-to-guest forwards. Each is authenticated against the tenant's
+		 * live session rows here, so revocation and team changes cannot be bypassed by a cached host
+		 * projection. Authentication and access failures are values scoped to that original request;
+		 * shared database/decode failures still fail the batch because there is no unaffected read.
 		 */
-		case 'sync.scan': {
-			const input = yield* decode(SyncDiffInput, commandInput);
-			const sync = yield* Sync.Service;
-			return json(yield* sync.scan(effectId, input.subject, input.cursor, input.limit));
+		case 'sync.distribute': {
+			const input = yield* decode(SyncDistributeInput, commandInput);
+			const identity = yield* Identity.Service;
+			const access = yield* AccessControl.Service;
+			type Admitted = Readonly<{
+				index: number;
+				requestId: string;
+				actor: Subject;
+				subject: Subject;
+				impersonatedTeam: string | null;
+				pull: Sync.SyncPullRequest;
+			}>;
+			const admitted: Array<Admitted> = [];
+			const settled = new Map<number, Sync.SyncDistributeResult>();
+			for (const [index, entry] of input.entries.entries()) {
+				const authenticated = yield* Effect.result(
+					identity.authenticate(
+						EffectId.make(`${effectId}:authenticate:${index}`),
+						entry.credential
+					)
+				);
+				if (Result.isFailure(authenticated)) {
+					if (!(authenticated.failure instanceof Identity.AuthenticationError)) {
+						return yield* authenticated.failure;
+					}
+					settled.set(index, {
+						requestId: entry.requestId,
+						status: 401,
+						error: makeWireError('unauthorized', 'Credential is invalid or expired', {
+							httpStatus: 401
+						})
+					});
+					continue;
+				}
+				const actor = authenticated.success;
+				if (actor.tenantId !== input.subject.tenantId) {
+					settled.set(index, {
+						requestId: entry.requestId,
+						status: 403,
+						error: makeWireError(
+							'forbidden',
+							'Authenticated subject is outside the invocation tenant',
+							{ httpStatus: 403 }
+						)
+					});
+					continue;
+				}
+				let subject = actor;
+				if (entry.impersonatedTeam !== undefined) {
+					const previewed = yield* Effect.result(
+						access.subjectAsTeam(actor, entry.impersonatedTeam)
+					);
+					if (Result.isFailure(previewed)) {
+						if (!(previewed.failure instanceof AccessControl.AccessDenied)) {
+							return yield* previewed.failure;
+						}
+						settled.set(index, {
+							requestId: entry.requestId,
+							status: 403,
+							error: makeWireError(
+								'forbidden',
+								previewed.failure.message.trim() === ''
+									? 'Access refused'
+									: previewed.failure.message,
+								{ httpStatus: 403 }
+							)
+						});
+						continue;
+					}
+					subject = previewed.success;
+				}
+				admitted.push({
+					index,
+					requestId: entry.requestId,
+					actor,
+					subject,
+					impersonatedTeam: entry.impersonatedTeam ?? null,
+					pull: entry.pull
+				});
+			}
+
+			if (admitted.length > 0) {
+				const tenant = yield* TenantScope.Service;
+				const collections = yield* Collections.Service;
+				const distributed = yield* (yield* Sync.Service).distribute(
+					EffectId.make(`${effectId}:outbox`),
+					admitted.map(({ requestId, subject, pull }) => ({ requestId, subject, pull }))
+				);
+				for (const [admittedIndex, result] of distributed.entries()) {
+					const source = admitted[admittedIndex];
+					if (source === undefined) {
+						return yield* new DispatchError({
+							code: 'dispatch_failed',
+							message: 'Sync distribution returned an uncorrelated result'
+						});
+					}
+					if ('error' in result) {
+						settled.set(source.index, {
+							requestId: source.requestId,
+							status: 403,
+							error: makeWireError(
+								'forbidden',
+								result.error.message.trim() === '' ? 'Access refused' : result.error.message,
+								{ httpStatus: 403 }
+							)
+						});
+					} else {
+						const delivery = yield* collections.browserMutationDelivery(
+							EffectId.make(`${effectId}:mutation-delivery:${source.index}`),
+							browserMutationScopeFor(
+								tenant.tenantId,
+								tenant.environment,
+								source.actor,
+								source.subject,
+								source.impersonatedTeam
+							),
+							source.pull.pendingMutationIds ?? [],
+							result.response.cursor
+						);
+						const ownedMutationIds = new Set(delivery.ownedMutationIds);
+						settled.set(source.index, {
+							requestId: source.requestId,
+							status: 200,
+							value: {
+								...result.response,
+								deltas: result.response.deltas.map((delta) => ({
+									...delta,
+									mutationId:
+										delta.mutationId !== null && ownedMutationIds.has(delta.mutationId)
+											? delta.mutationId
+											: null
+								})),
+								mutationConfirmations:
+									result.response.kind === 'delta' ? delivery.confirmations : [],
+								mutationRejections: delivery.rejections
+							}
+						});
+					}
+				}
+			}
+
+			const results: Array<Sync.SyncDistributeResult> = [];
+			for (const [index] of input.entries.entries()) {
+				const result = settled.get(index);
+				if (result === undefined) {
+					return yield* new DispatchError({
+						code: 'dispatch_failed',
+						message: 'Sync distribution lost an original request'
+					});
+				}
+				results.push(result);
+			}
+			return json({ results });
 		}
 		case 'sync.shape': {
 			const input = yield* decode(SyncShapeInput, commandInput);
 			return json(yield* (yield* Sync.Service).shape(input.subject));
-		}
-		case 'sync.snapshot': {
-			const input = yield* decode(SyncSnapshotInput, commandInput);
-			return json(
-				yield* (yield* Sync.Service).snapshot(
-					effectId,
-					input.subject,
-					input.collection,
-					input.after,
-					input.limit ?? 500
-				)
-			);
 		}
 		case 'sync.compact': {
 			const input = yield* decode(SyncCompactInput, commandInput);
@@ -2218,14 +2542,58 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		}
 		case 'sync.schema':
 			return json((yield* Sync.Service).schema());
+		/**
+		 * Issues the exact physical O2 identity and settles actor-owned write-only mutations.
+		 *
+		 * No collection name is accepted or revealed. The optional bounded mutation ids are opaque
+		 * ledger keys, and the authenticated actor/effective-subject binding scopes every answer.
+		 */
+		case 'sync.partition': {
+			const authority = yield* decode(AuthenticatedSyncPartitionStatus, commandInput);
+			const tenant = yield* TenantScope.Service;
+			const sync = yield* Sync.Service;
+			const identity = yield* sync.partition(
+				EffectId.make(`${effectId}:partition-identity`),
+				authority.subject
+			);
+			const collections = yield* Collections.Service;
+			const registered = yield* collections.registerBrowserMutationPartition(
+				EffectId.make(`${effectId}:partition-register`),
+				{
+					tenantId: tenant.tenantId,
+					environment: tenant.environment,
+					actorId: authority.actor.userId,
+					effectiveSubjectId: authority.subject.userId,
+					impersonationBinding:
+						authority.impersonatedTeam === null
+							? 'operator'
+							: `team:${authority.impersonatedTeam}`
+				},
+				identity
+			);
+			const pendingMutationIds = authority.pendingMutationIds ?? [];
+			const through = yield* sync.head(EffectId.make(`${effectId}:partition-status-head`));
+			const delivery = yield* collections.browserMutationDelivery(
+				EffectId.make(`${effectId}:partition-status-delivery`),
+				browserMutationScopeFor(
+					tenant.tenantId,
+					tenant.environment,
+					authority.actor,
+					authority.subject,
+					authority.impersonatedTeam
+				),
+				pendingMutationIds,
+				through
+			);
+			return json({
+				partition: registered,
+				mutationConfirmations: delivery.confirmations,
+				mutationRejections: delivery.rejections
+			});
+		}
 		case 'sync.wakeHint': {
 			const input = yield* decode(SyncCursor, commandInput);
 			return json((yield* Sync.Service).wakeHint(input));
-		}
-		case 'sync.mutate': {
-			const input = yield* decode(SyncMutateInput, commandInput);
-			yield* (yield* Sync.Service).mutate(effectId, input.subject, input.changes);
-			return json({ mutated: input.changes.length });
 		}
 		case 'agents.enqueue': {
 			const input = yield* decode(AgentEnqueueInput, commandInput);
@@ -2498,24 +2866,119 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const input = yield* decode(CollectionFindInput, commandInput);
 			return yield* collectionPage(effectId, input);
 		}
+		case 'collections.findGrouped': {
+			const input = yield* decode(CollectionGroupedInput, commandInput);
+			const workspace = yield* Workspace.Service;
+			const definition = yield* workspace.collection(input.collection);
+			if (
+				(!SYSTEM_COLUMN_NAMES.includes(input.group.by) &&
+					!Object.hasOwn(definition.fields, input.group.by)) ||
+				definition.fields[input.group.by]?.reference !== undefined ||
+				definition.fields[input.group.by]?.type === 'json' ||
+				input.group.by === 'sys_period'
+			) {
+				return yield* new DispatchError({
+					code: 'invalid_input',
+					message: 'Grouped queries require one persisted scalar column.'
+				});
+			}
+			const described = canonicalizeCollectionQuery(
+				'findGrouped',
+				input,
+				workspaceCollectionQueryMetadata(workspace.definition),
+				{ pinnedCollation: true, localRelationships: true, localSearch: true }
+			);
+			if (described === undefined) {
+				return yield* new DispatchError({
+					code: 'invalid_input',
+					message: 'Grouped collection query could not be canonicalized'
+				});
+			}
+			const position = yield* (yield* Sync.Service).positions(
+				EffectId.make(`${effectId}:grouped-position`),
+				input.subject,
+				described.dependencies
+			);
+			const groups = yield* (yield* Collections.Service).findGrouped(
+				effectId,
+				input.subject,
+				{
+					collection: input.collection,
+					where: input.where,
+					userFilter: input.userFilter,
+					orderBy: input.orderBy,
+					with: withoutCollectionQueryProjection(input.with),
+					search: input.search,
+					groupBy: input.group.by,
+					lanes: input.group.lanes ?? []
+				}
+			);
+			const hydration = normalizeCollectionHydration(
+				workspace.definition,
+				input.collection,
+				Object.values(groups).flat()
+			);
+			if (Result.isFailure(hydration)) {
+				return yield* new DispatchError({
+					code: 'invalid_stored_record',
+					message: hydration.failure.message
+				});
+			}
+			return json({
+				groups,
+				baseRows: hydration.success.baseRows,
+				relationshipRefs: hydration.success.relationshipRefs,
+				readCursor: position.cursor,
+				partitionKey: position.partition.key,
+				confirmedDependencies: Object.keys(position.generations).toSorted(),
+				dependencyGenerations: position.generations,
+				reproducibility: described.reproducibility
+			});
+		}
 		case 'collections.findFirst': {
 			const input = yield* decode(CollectionFindInput, commandInput);
-			return json(
-				(yield* (yield* Collections.Service).findFirst(
+			const row = yield* (yield* Collections.Service).findFirst(
 					effectId,
 					input.subject,
 					collectionQuery(input)
-				)) ?? null
+				);
+			return json(
+				row === undefined
+					? null
+					: projectCollectionQueryRecord(row, input.columns, input.with)
 			);
 		}
 		case 'collections.count': {
 			const input = yield* decode(CollectionFindInput, commandInput);
+			const workspace = yield* Workspace.Service;
+			const described = canonicalizeCollectionQuery(
+				'count',
+				input,
+				workspaceCollectionQueryMetadata(workspace.definition),
+				{ pinnedCollation: true, localRelationships: true, localSearch: true }
+			);
+			if (described === undefined) {
+				return yield* new DispatchError({
+					code: 'invalid_input',
+					message: 'Collection count could not be canonicalized'
+				});
+			}
+			const position = yield* (yield* Sync.Service).positions(
+				EffectId.make(`${effectId}:count-position`),
+				input.subject,
+				described.dependencies
+			);
 			return json({
 				count: yield* (yield* Collections.Service).count(
 					effectId,
 					input.subject,
 					collectionQuery(input)
-				)
+				),
+				readCursor: position.cursor,
+				partitionKey: position.partition.key,
+				confirmedDependencies: Object.keys(position.generations).toSorted(),
+				dependencyGenerations: position.generations,
+				reproducibility: described.reproducibility
 			});
 		}
 		case 'collections.history': {
@@ -2531,18 +2994,348 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		}
 		/** The browser's one declarative write: a root and every relationship it explicitly owns. */
 		case 'collections.mutate': {
-			const input = yield* decode(CollectionMutateInput, commandInput);
-			yield* checkWrittenGraph(input.collection, input.values);
+			const authority = yield* decode(AuthenticatedCollectionMutation, commandInput);
+			const input = yield* decode(CollectionMutateRequest, commandInput);
+			const tenant = yield* TenantScope.Service;
 			const collections = yield* Collections.Service;
-			const written = yield* collections.mutate(
-				effectId,
-				input.subject,
-				input.collection,
-				[input.values],
-				false,
-				0,
-				{ declarative: true }
+			const submittedGraph: CollectionMutationGraph = input.graph;
+			const submittedBaseVersions: ReadonlyArray<CollectionMutationBaseVersion> =
+				input.baseVersions;
+			const scope = browserMutationScopeFor(
+				tenant.tenantId,
+				tenant.environment,
+				authority.actor,
+				authority.subject,
+				authority.impersonatedTeam
 			);
+			const registeredPartition = yield* collections.browserMutationPartition(
+				EffectId.make(`${effectId}:browser-mutation:partition`),
+				{
+					tenantId: tenant.tenantId,
+					environment: tenant.environment,
+					actorId: authority.actor.userId,
+					effectiveSubjectId: authority.subject.userId,
+					impersonationBinding:
+						authority.impersonatedTeam === null
+							? 'operator'
+							: `team:${authority.impersonatedTeam}`
+				},
+				input.partitionKey
+			);
+			if (
+				registeredPartition === undefined ||
+				registeredPartition.schemaFingerprint !== input.schemaFingerprint
+			)
+				return yield* new AccessControl.AccessDenied({
+					action: 'mutate',
+					resource: submittedGraph.collection,
+					reason:
+						'The mutation journal partition is not a server-issued partition for this authenticated identity and schema.'
+				});
+			const requestDigest = yield* sha256Hex(canonicalJson(input));
+			const scopeDigest = yield* sha256Hex(
+				canonicalJson({ ...scope, idempotencyKey: input.idempotencyKey })
+			);
+			const mutationEffectId = EffectId.make(`browser-mutation:${scopeDigest}`);
+			const replayOutcome = Effect.fn('Bolt.replayBrowserMutation')(function* (
+				outcome: Collections.BrowserMutationOutcome
+			) {
+				if (outcome._tag === 'PendingApproval') {
+					return json({
+						resolution: 'accepted',
+						mutationId: input.idempotencyKey,
+						deviceSequence: input.deviceSequence,
+						schemaFingerprint: outcome.schemaFingerprint,
+						records: [],
+						pendingApproval: {
+							requestId: outcome.requestId,
+							collection: outcome.collection,
+							id: outcome.id,
+							action: outcome.action
+						}
+					});
+				}
+				if (outcome._tag === 'VersionConflict') {
+					return json({
+						resolution: 'rejected',
+						mutationId: input.idempotencyKey,
+						deviceSequence: input.deviceSequence,
+						code: 'conflict',
+						message:
+							outcome.currentVersion === null
+								? `${outcome.collection} ${outcome.id} no longer exists at row version ${outcome.baseVersion}.`
+								: `${outcome.collection} ${outcome.id} changed from row version ${outcome.baseVersion} to ${outcome.currentVersion}.`,
+						schemaFingerprint: outcome.schemaFingerprint
+					});
+				}
+				if (outcome._tag === 'Quarantined')
+					return json({
+						resolution: 'quarantined',
+						mutationId: outcome.idempotencyKey,
+						deviceSequence: outcome.deviceSequence,
+						schemaFingerprint: outcome.schemaFingerprint,
+						reason: outcome.reason
+					});
+				if (outcome._tag === 'Rejected') {
+					return json({
+						resolution: 'rejected',
+						mutationId: input.idempotencyKey,
+						deviceSequence: input.deviceSequence,
+						code: outcome.code,
+						message: outcome.message,
+						schemaFingerprint: outcome.schemaFingerprint
+					});
+				}
+				const records =
+					outcome.action === 'delete'
+						? []
+						: yield* collections
+								.findMany(EffectId.make(`${mutationEffectId}:readback`), authority.subject, {
+									collection: outcome.collection,
+									where: { id: { in: [outcome.id] } },
+									limit: 1
+								})
+								.pipe(Effect.catch(() => Effect.succeed([])));
+				return outcome.resolution === 'accepted'
+					? json({
+							resolution: 'accepted',
+							mutationId: input.idempotencyKey,
+							deviceSequence: outcome.deviceSequence,
+							schemaFingerprint: outcome.toSchemaFingerprint,
+							records
+						})
+					: json({
+							resolution: 'rebased',
+							mutationId: input.idempotencyKey,
+							deviceSequence: outcome.deviceSequence,
+							fromSchemaFingerprint: outcome.fromSchemaFingerprint,
+							toSchemaFingerprint: outcome.toSchemaFingerprint,
+							records
+						});
+			});
+			const replay = yield* collections.browserMutationOutcome(
+				EffectId.make(`${effectId}:browser-mutation:lookup`),
+				scope,
+				input.idempotencyKey,
+				requestDigest
+			);
+			if (replay !== undefined) return yield* replayOutcome(replay);
+
+			const nowEpochMs = yield* Clock.currentTimeMillis;
+			if (input.issuedAtEpochMs > nowEpochMs + 5 * 60 * 1000)
+				return yield* new Collections.MutationRetryExpired({
+					issuedAtEpochMs: input.issuedAtEpochMs
+				});
+
+			const currentSchemaFingerprint = (yield* Sync.Service).schema().fingerprint;
+			const workspace = yield* Workspace.Service;
+			const reconciliation = reconcileMutationSchema(workspace.definition, {
+				fromSchemaFingerprint: input.schemaFingerprint,
+				toSchemaFingerprint: currentSchemaFingerprint,
+				ageMillis: Math.max(0, nowEpochMs - input.issuedAtEpochMs),
+				graph: submittedGraph,
+				baseVersions: submittedBaseVersions
+			});
+			const graph = reconciliation.resolution === 'quarantined' ? submittedGraph : reconciliation.graph;
+			const baseVersions =
+				reconciliation.resolution === 'quarantined'
+					? submittedBaseVersions
+					: reconciliation.baseVersions;
+			let quarantineReason =
+				reconciliation.resolution === 'quarantined' ? reconciliation.reason : undefined;
+			if (quarantineReason === undefined) {
+				const seenBaseRows = new Set<string>();
+				for (const entry of baseVersions) {
+					const coordinate = canonicalJson(entry.row);
+					if (seenBaseRows.has(coordinate)) {
+						quarantineReason = `The mutation graph carries more than one base version for ${entry.row.collection} ${entry.row.recordId}.`;
+						break;
+					}
+					seenBaseRows.add(coordinate);
+				}
+			}
+			const submittedId = graph.action === 'delete' ? graph.id : graph.values['id'];
+			if (
+				quarantineReason === undefined &&
+				(typeof submittedId !== 'string' || !MUTATION_RECORD_ID.test(submittedId))
+			)
+				quarantineReason = `${graph.action} mutation ${graph.collection} must carry a valid client-minted UUID.`;
+			if (reconciliation.resolution !== 'quarantined' && graph.action !== 'delete') {
+				const checked = yield* Effect.result(checkWrittenGraph(graph.collection, graph.values));
+				if (Result.isFailure(checked)) {
+					quarantineReason =
+						reconciliation.resolution === 'rebased'
+							? `The retained compatibility adapter cannot produce a valid current-schema graph: ${describeCause(checked.failure)}`
+							: `The journaled graph is not safe to apply to the current schema: ${describeCause(checked.failure)}`;
+				}
+			}
+			const rootId = String(submittedId);
+			const committed: Collections.BrowserMutationOutcome = {
+				_tag: 'Committed',
+				collection: graph.collection,
+				id: rootId,
+				action: graph.action,
+				resolution: reconciliation.resolution === 'rebased' ? 'rebased' : 'accepted',
+				deviceSequence: input.deviceSequence,
+				fromSchemaFingerprint: input.schemaFingerprint,
+				toSchemaFingerprint: currentSchemaFingerprint
+			};
+			const rootBaseVersion = baseVersions.find(
+				(entry) => entry.row.collection === graph.collection && entry.row.recordId === rootId
+			)?.rowVersion;
+			if (graph.action === 'create' && rootBaseVersion !== undefined)
+				quarantineReason = `The create graph carries a base version for its new root ${graph.collection} ${rootId}.`;
+			const quarantined: Collections.BrowserMutationOutcome | undefined =
+				quarantineReason !== undefined
+					? {
+							_tag: 'Quarantined',
+							idempotencyKey: input.idempotencyKey,
+							deviceSequence: input.deviceSequence,
+							schemaFingerprint: input.schemaFingerprint,
+							reason: quarantineReason
+						}
+					: undefined;
+			const fence: Collections.BrowserMutationFence = {
+				scope,
+				idempotencyKey: input.idempotencyKey,
+				requestDigest,
+				issuedAtEpochMs: input.issuedAtEpochMs,
+				deviceSequence: input.deviceSequence,
+				partitionKey: input.partitionKey,
+				schemaFingerprint: input.schemaFingerprint,
+				currentSchemaFingerprint,
+				baseVersions,
+				outcome: quarantined ?? committed
+			};
+			const beginning = yield* collections.beginBrowserMutation(
+				EffectId.make(`${effectId}:browser-mutation:begin`),
+				fence
+			);
+			if (beginning._tag === 'Replay') return yield* replayOutcome(beginning.outcome);
+			if (beginning._tag === 'InProgress')
+				return yield* new Collections.MutationInProgress({
+					retryAfterSeconds: beginning.retryAfterSeconds
+				});
+			const persistTerminalFailure = Effect.fn('Bolt.persistTerminalMutationFailure')(function* (
+				fence: Collections.BrowserMutationFence,
+				cause: unknown
+			) {
+				const error = Collections.unwrapMutationPhase(cause);
+				const refusal = refusalOf(error);
+				const outcome: Collections.BrowserMutationOutcome | undefined =
+					refusal !== undefined
+						? {
+								_tag: 'Rejected',
+								code: 'refused',
+								message: refusal.message,
+								schemaFingerprint: fence.currentSchemaFingerprint,
+								...(refusal.collection === undefined ? {} : { collection: refusal.collection }),
+								...(refusal.action === undefined ? {} : { action: refusal.action })
+							}
+						: error instanceof AccessControl.AccessDenied
+							? {
+									_tag: 'Rejected',
+									code: 'forbidden',
+									message: error.reason,
+									schemaFingerprint: fence.currentSchemaFingerprint,
+									collection: error.resource,
+									...(error.action === 'create' ||
+									error.action === 'update' ||
+									error.action === 'delete'
+										? { action: error.action }
+										: {})
+								}
+							: error instanceof Collections.MutationVersionConflict
+								? {
+										_tag: 'VersionConflict',
+										collection: error.collection,
+										id: error.id,
+										baseVersion: error.baseVersion,
+										currentVersion: error.currentVersion,
+										schemaFingerprint: fence.currentSchemaFingerprint
+									}
+								: error instanceof Collections.PendingApproval
+									? {
+											_tag: 'PendingApproval',
+											requestId: error.requestId,
+											collection: error.collection,
+											id: error.id,
+											action: error.action,
+											schemaFingerprint: fence.currentSchemaFingerprint
+										}
+									: undefined;
+				if (outcome === undefined) return undefined;
+				return yield* collections.rememberBrowserMutationOutcome(
+					EffectId.make(`${effectId}:browser-mutation:terminal-error`),
+					fence,
+					outcome
+				);
+			});
+			if (quarantined !== undefined) {
+				const durable = yield* collections.rememberBrowserMutationOutcome(
+					EffectId.make(`${effectId}:browser-mutation:quarantine`),
+					fence,
+					quarantined
+				);
+				return yield* replayOutcome(durable ?? quarantined);
+			}
+
+			if (graph.action === 'delete') {
+				const deletion = yield* Effect.result(
+					collections.delete(mutationEffectId, authority.subject, graph.collection, graph.id, {
+						...(rootBaseVersion === undefined || rootBaseVersion === null
+							? {}
+							: { baseVersion: rootBaseVersion }),
+						browserMutation: fence
+					})
+				);
+				if (Result.isFailure(deletion)) {
+					const terminal = Collections.unwrapMutationPhase(deletion.failure);
+					if (terminal instanceof Collections.MutationQuarantined)
+						return yield* replayOutcome({
+							_tag: 'Quarantined',
+							idempotencyKey: terminal.idempotencyKey,
+							deviceSequence: terminal.deviceSequence,
+							schemaFingerprint: terminal.schemaFingerprint,
+							reason: terminal.reason
+						});
+					const durable = yield* persistTerminalFailure(fence, deletion.failure);
+					if (durable !== undefined) return yield* replayOutcome(durable);
+					return yield* Effect.fail(deletion.failure);
+				}
+				return yield* replayOutcome(committed);
+			}
+
+			const mutation = yield* Effect.result(
+				collections.mutate(
+					mutationEffectId,
+					authority.subject,
+					graph.collection,
+					[graph.values],
+					false,
+					0,
+					{
+						declarative: true,
+						root: { id: rootId, action: graph.action },
+						browserMutation: fence
+					}
+				)
+			);
+			if (Result.isFailure(mutation)) {
+				const terminal = Collections.unwrapMutationPhase(mutation.failure);
+				if (terminal instanceof Collections.MutationQuarantined)
+					return yield* replayOutcome({
+						_tag: 'Quarantined',
+						idempotencyKey: terminal.idempotencyKey,
+						deviceSequence: terminal.deviceSequence,
+						schemaFingerprint: terminal.schemaFingerprint,
+						reason: terminal.reason
+					});
+				const durable = yield* persistTerminalFailure(fence, mutation.failure);
+				if (durable !== undefined) return yield* replayOutcome(durable);
+				return yield* Effect.fail(mutation.failure);
+			}
+			const written = mutation.success;
 			const stored = written[0];
 			const id = stored?.['id'];
 			// Mutation success is independent of read entitlement. Querying through the ordinary subject
@@ -2552,13 +3345,24 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				typeof id !== 'string'
 					? []
 					: yield* collections
-							.findMany(effectId, input.subject, {
-								collection: input.collection,
+							.findMany(EffectId.make(`${mutationEffectId}:readback`), authority.subject, {
+								collection: graph.collection,
 								where: { id: { in: [id] } },
 								limit: 1
 							})
 							.pipe(Effect.catch(() => Effect.succeed([])));
-			return json({ records });
+			return json({
+				resolution: reconciliation.resolution,
+				mutationId: input.idempotencyKey,
+				deviceSequence: input.deviceSequence,
+				...(reconciliation.resolution === 'rebased'
+					? {
+							fromSchemaFingerprint: input.schemaFingerprint,
+							toSchemaFingerprint: currentSchemaFingerprint
+						}
+					: { schemaFingerprint: currentSchemaFingerprint }),
+				records
+			});
 		}
 		case 'collections.resume': {
 			const input = yield* decode(ApprovalRequestIdInput, commandInput);
@@ -2598,28 +3402,23 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		 */
 		case 'sync.provisioning': {
 			const input = yield* decode(SyncShapeInput, commandInput);
-			const plan = (yield* WorkspaceSchema.Service).plan();
 			const workspace = yield* Workspace.Service;
 			const access = yield* AccessControl.Service;
-			const steps = [
-				...plan.steps
-					.filter(({ id }) => id.startsWith('bolt:'))
-					.map(({ id, sql }) => ({ id, sql })),
-				...[...(workspace.definition.migrations ?? [])]
-					.toSorted((left, right) => left.tag.localeCompare(right.tag))
-					.flatMap((entry) =>
-						entry.statements.map((sql, index) => ({ id: `lineage:${entry.tag}:${index}`, sql }))
-					),
-				...plan.steps
-					.filter(({ id }) => !id.startsWith('bolt:'))
-					.map(({ id, sql }) => ({ id, sql }))
-			];
+			const steps = replicaProvisioningSteps(workspace.definition);
+			const schemaFingerprint =
+				workspace.definition.mutationCompatibility?.currentSchemaFingerprint;
+			if (schemaFingerprint === undefined)
+				throw new TypeError(
+					'Compiled workspace is missing its mutation compatibility fingerprint.'
+				);
 			// The projection is JSON by construction — every value is a string, an array of strings or
 			// a decoded declaration — so the wire value is the same object after serialisation, and a
 			// decode of the serialised form is the boundary check that keeps that claim honest.
 			const provisioning = {
 				steps,
-				fingerprint: WorkspaceSchema.fingerprintSchemaSteps(steps),
+				// O2 namespace identity and M4 compatibility use the compiler-owned logical SHA-256.
+				// `migrationDigest` on sync.schema separately authenticates these exact ordered DDL bytes.
+				fingerprint: schemaFingerprint,
 				/**
 				 * The metadata the replica needs to compile a query the way the server would.
 				 *
@@ -2820,7 +3619,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					const files = yield* Files.Service;
 					const automations = yield* Automations.Service;
 					const guard = Automations.stoppageGuard(automations, effectId, input.bolt_task_id);
-					const ops = guardAuthoredCollectionOps(
+					const ops = guardAuthoringOps(
 						makeBoundAuthoringOps(effectId, input.bolt_run_as, collections, ai, files, automations),
 						guard
 					);

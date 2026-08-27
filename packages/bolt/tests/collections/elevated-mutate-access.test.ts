@@ -76,18 +76,16 @@ const authored = {
 												string,
 												{
 													readonly mutate: (
-														rows: ReadonlyArray<Readonly<Record<string, unknown>>>
-													) => Effect.Effect<unknown>;
+														values: Readonly<Record<string, unknown>>
+													) => Effect.Effect<void>;
 												}
 											>
 										>;
 									}
 								).db['outputs'];
 								if (outputs === undefined) return yield* Effect.die('outputs api missing');
-								yield* outputs.mutate([
-									{ run_id: runId, amount: 10 },
-									{ run_id: runId, amount: 20 }
-								]);
+								yield* outputs.mutate({ run_id: runId, amount: 10 });
+								yield* outputs.mutate({ run_id: runId, amount: 20 });
 							})
 					}
 				}
@@ -102,7 +100,7 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-describe('an elevated after-hook batch', () => {
+describe('an elevated after-hook mutation', () => {
 	it('writes derived rows under the authorized root without granting direct child creation', async () => {
 		harness = await makeBoltTestRuntime(definition, { authored });
 		const collections = await harness.runtime.runPromise(Collections.Service);

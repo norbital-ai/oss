@@ -114,9 +114,8 @@ norbital/apps/colony/tests/architecture/dependencies.test.ts:13
 	 the file count first turns a stale root into a red test instead of a silent no-op."
 ```
 
-`scanned(files, atLeast)` (`:18`) asserts a minimum before filtering. Compare
-`oss/packages/bolt-server/tests/architecture/dependencies.test.ts:28`, which runs the same class of
-check with no floor: move or rename `src` there and the test goes green forever.
+`scanned(files, atLeast)` (`:18`) asserts a minimum before filtering. A scan with no floor — walk a
+directory, assert nothing matched — goes green forever if the root moves.
 
 The non-test version of this mistake is the same mistake. A negative was once concluded from
 grepping logs for `created neon project` when the code emits `Creating Neon project`; five projects

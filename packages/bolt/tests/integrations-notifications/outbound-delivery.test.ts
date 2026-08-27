@@ -234,6 +234,11 @@ const definitionFor = (integrations: WorkspaceDefinition['integrations']): Works
 		skills: [],
 		envoys: [],
 		requiredFacilities: ['database', 'connector'],
+		mutationCompatibility: {
+			offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
+			currentSchemaFingerprint: 'sha256:outbound-delivery-fixture',
+			adapters: []
+		},
 		environment: { variables: { PARTNER_TOKEN: { label: 'Partner API token', secret: true } } }
 	});
 

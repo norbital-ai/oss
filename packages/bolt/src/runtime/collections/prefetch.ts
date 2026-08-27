@@ -1,5 +1,9 @@
 import { Effect, Schema } from 'effect';
 import type { RelationDefinition, WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
+import {
+	RelationshipPrefetchLimitExceeded,
+	type QueryRow
+} from '#lib/runtime/collections/collections.contract.js';
 
 /**
  * Resolves a query's `with` clause: the related records a surface needs to show a label instead of
@@ -19,19 +23,21 @@ import type { RelationDefinition, WorkspaceDefinition } from '#lib/authoring/wor
 /** What a caller asked to load: `true`, or a nested spec that may narrow columns and recurse. */
 type WithSpec = Readonly<Record<string, unknown>>;
 
-type PrefetchRead = (
+type PrefetchRead<E> = (
 	collection: string,
 	column: string,
 	values: ReadonlyArray<Schema.Json>
-) => Effect.Effect<ReadonlyArray<Schema.Json>, never>;
+) => Effect.Effect<ReadonlyArray<QueryRow>, E>;
+
+/**
+ * Maximum exact relationship membership one prefetch may hydrate.
+ *
+ * Authoritative readers request one sentinel row beyond this limit. `attachRelations` then rejects
+ * that sentinel instead of installing a prefix as though it were the complete relationship.
+ */
+export const PREFETCH_LIMIT = 5000;
 
 const isObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
-
-/** Decodes a `Json` value as the readonly row arm, in one pass. */
-const isRow = Schema.is(Schema.JsonObject);
-
-const asRow = (value: Schema.Json): Readonly<Record<string, Schema.Json>> | undefined =>
-	isRow(value) ? value : undefined;
 
 /**
  * Reads which side of a relation holds the foreign key.
@@ -92,19 +98,46 @@ export const requestedRelations = (spec: unknown): ReadonlyArray<string> =>
 		: [];
 
 /**
+ * Reads one relationship batch and proves that the bounded result is complete.
+ *
+ * The caller must request `PREFETCH_LIMIT + 1` rows. Seeing that sentinel is an explicit query
+ * failure; underlying authorization, workspace, and database failures also remain in the channel.
+ */
+const readComplete = <E>(
+	sourceCollection: string,
+	relation: string,
+	targetCollection: string,
+	column: string,
+	values: ReadonlyArray<Schema.Json>,
+	read: PrefetchRead<E>
+): Effect.Effect<ReadonlyArray<QueryRow>, E | RelationshipPrefetchLimitExceeded> =>
+	Effect.gen(function* () {
+		const rows = yield* read(targetCollection, column, values);
+		if (rows.length > PREFETCH_LIMIT) {
+			return yield* new RelationshipPrefetchLimitExceeded({
+				sourceCollection,
+				relation,
+				targetCollection,
+				limit: PREFETCH_LIMIT
+			});
+		}
+		return rows;
+	});
+
+/**
  * Attaches every relation named in `spec` to `rows`, recursing into nested `with` clauses.
  *
  * A relation that cannot be resolved — unknown name, or endpoints the declaration never gave — is
  * left off rather than guessed at. A surface then renders its own fallback, which is a better
  * outcome than attaching a wrong record.
  */
-export const attachRelations = (
+export const attachRelations = <E>(
 	definition: WorkspaceDefinition,
 	collection: string,
-	rows: ReadonlyArray<Schema.Json>,
+	rows: ReadonlyArray<QueryRow>,
 	spec: unknown,
-	read: PrefetchRead
-): Effect.Effect<ReadonlyArray<Schema.Json>, never> =>
+	read: PrefetchRead<E>
+): Effect.Effect<ReadonlyArray<QueryRow>, E | RelationshipPrefetchLimitExceeded> =>
 	Effect.gen(function* () {
 		const names = requestedRelations(spec);
 		if (names.length === 0 || rows.length === 0) return rows;
@@ -113,9 +146,7 @@ export const attachRelations = (
 		// batched reads rather than N copies of the whole page.
 		const attached: Array<Record<string, Schema.Json>> = [];
 		for (const row of rows) {
-			const record = asRow(row);
-			if (record === undefined) return rows;
-			attached.push({ ...record });
+			attached.push({ ...row });
 		}
 
 		for (const name of names) {
@@ -141,8 +172,15 @@ export const attachRelations = (
 								)
 							];
 							if (ids.length === 0) return;
-							const targetSpec = isObject(entry) ? entry[target.tag] : entry;
-							const related = yield* read(target.collection, 'id', ids);
+							const targetSpec = isObject(entry) ? (entry[target.tag] ?? entry) : entry;
+							const related = yield* readComplete(
+								collection,
+								name,
+								target.collection,
+								'id',
+								ids,
+								read
+							);
 							const deeper = nestedWith(targetSpec);
 							const resolved =
 								deeper === undefined
@@ -150,9 +188,8 @@ export const attachRelations = (
 									: yield* attachRelations(definition, target.collection, related, deeper, read);
 							const columns = requestedColumns(targetSpec);
 							const byId = new Map<string, Readonly<Record<string, Schema.Json>>>();
-							for (const value of resolved) {
-								const record = asRow(value);
-								if (record !== undefined && typeof record['id'] === 'string')
+							for (const record of resolved) {
+								if (typeof record['id'] === 'string')
 									byId.set(record['id'], project(record, columns));
 							}
 							for (const row of attached) {
@@ -191,7 +228,14 @@ export const attachRelations = (
 			];
 			if (keys.length === 0) continue;
 
-			const related = yield* read(relation.target, sides.targetColumn, keys);
+			const related = yield* readComplete(
+				collection,
+				name,
+				relation.target,
+				sides.targetColumn,
+				keys,
+				read
+			);
 			const entry = isObject(spec) ? spec[name] : undefined;
 			const columns = requestedColumns(entry);
 			const deeper = nestedWith(entry);
@@ -202,9 +246,7 @@ export const attachRelations = (
 
 			// Grouped by the key each related row joins on, so attaching is a lookup per parent row.
 			const byKey = new Map<string, Array<Readonly<Record<string, Schema.Json>>>>();
-			for (const value of resolved) {
-				const record = asRow(value);
-				if (record === undefined) continue;
+			for (const record of resolved) {
 				const key = JSON.stringify(record[sides.targetColumn] ?? null);
 				const bucket = byKey.get(key);
 				if (bucket === undefined) byKey.set(key, [project(record, columns)]);

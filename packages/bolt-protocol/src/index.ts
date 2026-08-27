@@ -1,11 +1,29 @@
 export {
+	CollectionBaseRowVersion,
+	CollectionCountWindow,
+	CollectionGroup,
+	CollectionGroupedQueryRequest,
+	CollectionGroupedQueryRequestFields,
+	CollectionGroupedWindow,
+	CollectionHydrationRow,
+	CollectionMutationBaseVersion,
+	CollectionMutationDeviceSequence,
+	CollectionMutationGraph,
+	CollectionMutationPush,
+	CollectionMutationSettlement,
+	COLLECTION_MUTATION_RETRY_HORIZON_MILLIS,
+	COLLECTION_MUTATION_SCHEMA_COMPATIBILITY_HORIZON_MILLIS,
 	CollectionMutateRequest,
-	CollectionPendingApproval,
-	CollectionWriteResult,
+	CollectionMutationIdempotencyKey,
+	CollectionQueryPage,
+	CollectionQueryReproducibility,
+	CollectionQueryRequest,
+	CollectionQueryRequestFields,
+	CollectionQuerySemantics,
+	CollectionReadCursor,
+	CollectionRelationshipMembership,
 	CollectionWriteValues,
-	pendingApprovalOf,
-	StoredRecord,
-	storedRecordsOf
+	StoredRecord
 } from './collections.js';
 
 export {
@@ -13,11 +31,22 @@ export {
 	ARTIFACT_ASSET_DIRECTORY,
 	ARTIFACT_ASSET_INDEX_FILE,
 	ARTIFACT_BUNDLE_FILE,
+	ARTIFACT_RELEASE_FILE,
 	ArtifactAssetIndex,
+	artifactCodeGraphRefusals,
+	ArtifactCodeChunk,
+	ArtifactCodeGraph,
+	ArtifactCodeImport,
+	ArtifactMigration,
+	ArtifactMigrationLineage,
+	ArtifactObjectReference,
+	ArtifactProvenance,
 	AssetIndexEntry,
 	BundleManifest,
 	BundleModuleError,
 	BundleResult,
+	canonicalArtifactCodeGraphIndexEncoding,
+	canonicalTenantReleaseEncoding,
 	decodeBoltBundleModule,
 	DispatchResponse,
 	ManifestIntegration,
@@ -27,8 +56,14 @@ export {
 	ManifestSchemaPlan,
 	ManifestSchemaStep,
 	missingFacilities,
+	ReplicaSchemaBarrier,
+	ReplicaSchemaMaintenance,
+	ReplicaSchemaMaintenanceClear,
 	RealtimeOutput,
-	Registration
+	Registration,
+	SyncSchemaFacts,
+	TenantRelease,
+	tenantReleaseObjects
 } from './bundle.js';
 export type { BoltBundle } from './bundle.js';
 

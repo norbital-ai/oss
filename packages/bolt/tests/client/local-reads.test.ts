@@ -1,559 +1,502 @@
-import { createHash } from 'node:crypto';
 import { Effect, Schema } from 'effect';
-import { afterEach, describe, expect, it } from 'vitest';
-import { PGlite } from '@electric-sql/pglite';
-import { btree_gist } from '@electric-sql/pglite/contrib/btree_gist';
-import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
-import { vector } from '@electric-sql/pglite-pgvector';
-import * as Collections from '../../src/runtime/collections/collections.js';
-import * as Sync from '../../src/runtime/sync/sync.js';
-import * as WorkspaceSchema from '../../src/runtime/schema/workspace-schema.js';
-import * as Workspace from '../../src/runtime/workspace.js';
-import { openLocalDatabase, type BootstrapTransport } from '../../src/client/replica/bootstrap.js';
-import { createLocalReader } from '../../src/client/replica/local-reads.js';
-import { adaptPGlite } from '../../src/client/replica/pglite-loader.js';
-import type { LocalReplicaStore } from '../../src/client/replica/pglite-sql.js';
+import { describe, expect, it } from 'vitest';
+import type {
+	QueryWindowProof,
+	RecomputedWindow,
+	WindowLedger
+} from '../../src/client/replica/coverage.js';
 import {
-	adminSubject,
-	makeBoltTestRuntime,
-	type BoltTestRuntime
-} from '../support/bolt-test-layer.js';
+	createLocalReader,
+	createLocalWindowRecomputer,
+	type LocalWindowRead,
+	type ReplicaShape
+} from '../../src/client/replica/local-reads.js';
+import type {
+	LocalReplicaStore,
+	ReplicaRead
+} from '../../src/client/replica/pglite-sql.js';
 
-/**
- * The claim the local read path rests on: it answers what the server would have answered.
- *
- * Every case here asks the same question twice — once of the real Collections service over the real
- * server database, once of the replica — and compares. A local read that is merely close is worse
- * than a remote read that is correct, because the difference shows up as a page that changes
- * depending on whether the replica happened to be warm.
- */
-
-const rid = (name: string): string => {
-	const digest = createHash('sha1').update(name).digest('hex').slice(0, 32);
-	return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+const identity = {
+	protocolVersion: 6,
+	schemaFingerprint: 'sha256:local-read-tests',
+	partitionKey: 'partition-a'
 };
 
-let harness: BoltTestRuntime | undefined;
-const databases: Array<PGlite> = [];
-afterEach(async () => {
-	for (const database of databases.splice(0)) await database.close();
-	await harness?.dispose();
-	harness = undefined;
-});
-
-const transportFor = (runtime: BoltTestRuntime): BootstrapTransport => ({
-	command: (command, input) => {
-		const record =
-			input !== null && typeof input === 'object' && !Array.isArray(input) ? input : {};
-		return Effect.tryPromise(() =>
-			runtime.runtime.runPromise(
-				Effect.gen(function* () {
-					const sync = yield* Sync.Service;
-					switch (command) {
-						case 'sync.provisioning': {
-							const plan = (yield* WorkspaceSchema.Service).plan();
-							const workspace = yield* Workspace.Service;
-							const steps = [
-								...plan.steps
-									.filter(({ id }) => id.startsWith('bolt:'))
-									.map(({ id, sql }) => ({ id, sql })),
-								...[...(workspace.definition.migrations ?? [])]
-									.toSorted((left, right) => left.tag.localeCompare(right.tag))
-									.flatMap((entry) =>
-										entry.statements.map((sql, index) => ({
-											id: `lineage:${entry.tag}:${index}`,
-											sql
-										}))
-									),
-								...plan.steps
-									.filter(({ id }) => !id.startsWith('bolt:'))
-									.map(({ id, sql }) => ({ id, sql }))
-							];
-							const provisioning = {
-								steps,
-								fingerprint: WorkspaceSchema.fingerprintSchemaSteps(steps),
-								collections: workspace.definition.collections.map(({ name, fields }) => ({
-									name,
-									fields,
-									readableFields: null
-								})),
-								relations: workspace.definition.relations ?? []
-							};
-							return Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(
-								JSON.stringify(provisioning)
-							);
-						}
-						case 'sync.shape':
-							return (yield* sync.shape(adminSubject)) as unknown as Schema.Json;
-						case 'sync.snapshot':
-							return (yield* sync.snapshot(
-								runtime.effectId(
-									`snapshot:${String(Reflect.get(record, 'collection'))}:${String(Reflect.get(record, 'after') ?? 'first')}`
-								),
-								adminSubject,
-								String(Reflect.get(record, 'collection')),
-								typeof Reflect.get(record, 'after') === 'string'
-									? String(Reflect.get(record, 'after'))
-									: undefined,
-								Number(Reflect.get(record, 'limit') ?? 500)
-							)) as unknown as Schema.Json;
-						default:
-							throw new Error(`unexpected command ${command}`);
-					}
-				})
-			)
-		);
-	}
-});
-
-const openReplica = async (runtime: BoltTestRuntime) =>
-	Effect.runPromise(
-		openLocalDatabase(transportFor(runtime), () =>
-			Effect.tryPromise(() =>
-				PGlite.create('memory://', {
-					extensions: { pg_trgm, btree_gist, vector }
-				})
-			).pipe(
-				Effect.tap((database) => Effect.sync(() => databases.push(database))),
-				Effect.map(adaptPGlite)
-			)
-		)
-	);
-
-/** Rows as the server would return them, through the real Collections service. */
-const serverRows = (runtime: BoltTestRuntime, input: Record<string, unknown>) =>
-	runtime.runtime.runPromise(
-		Effect.gen(function* () {
-			return yield* (yield* Collections.Service).findMany(
-				runtime.effectId(`read:${JSON.stringify(input)}`),
-				adminSubject,
-				input as never
-			);
-		})
-	);
-
-const seed = async (runtime: BoltTestRuntime) => {
-	await runtime.runtime.runPromise(
-		Effect.gen(function* () {
-			const collections = yield* Collections.Service;
-			for (const [index, person] of [
-				{ name: 'Ada', team: 'core' },
-				{ name: 'Grace', team: 'flight' },
-				{ name: 'Katherine', team: 'flight' },
-				{ name: 'Annie', team: 'core' }
-			].entries()) {
-				yield* collections.create(runtime.effectId(`create:${index}`), adminSubject, {
-					collection: 'people',
-					id: rid(`p${index}`),
-					values: person
-				});
-			}
-		})
-	);
-};
-
-const seedPaginatedCollection = async (runtime: BoltTestRuntime) => {
-	await runtime.runtime.runPromise(
-		Effect.gen(function* () {
-			const collections = yield* Collections.Service;
-			yield* collections.mutate(
-				runtime.effectId('create:paginated'),
-				adminSubject,
-				'people',
-				Array.from({ length: 40 }, (_, index) => ({
-					name: `Person ${String(index).padStart(2, '0')}`,
-					...(index % 10 === 0 ? {} : { team: index % 2 === 0 ? 'core' : 'flight' })
-				}))
-			);
-		})
-	);
-};
-
-describe('reads answered by the replica', () => {
-	it('declines masked nullable orderings before they can mint a dishonest cursor', async () => {
-		let reads = 0;
-		const rows = [
-			{ id: rid('masked-order:1'), name: 'Zulu', rank: null },
-			{ id: rid('masked-order:2'), name: 'Alpha', rank: null }
-		];
-		const store: LocalReplicaStore = {
-			findMany: ({ limit }) =>
-				Effect.sync(() => {
-					reads += 1;
-					return rows.slice(0, limit);
-				}),
-			count: () => Effect.succeed(rows.length),
-			applySnapshot: () => Effect.succeed(0),
-			applyChange: () => Effect.void,
-			reset: () => Effect.void
-		};
-		const reader = createLocalReader(
-			store,
-			{
-				collections: [
-					{
-						name: 'people',
-						fields: {
-							name: { type: 'string', required: true, indexed: false },
-							rank: { type: 'number', required: false, indexed: false }
-						},
-						readableFields: ['id', 'name']
-					}
-				],
-				relations: []
+const shape: ReplicaShape = {
+	collections: [
+		{
+			name: 'people',
+			fields: {
+				name: { type: 'string', required: true, indexed: false },
+				team: { type: 'string', required: false, indexed: false },
+				rank: { type: 'number', required: false, indexed: false }
 			},
-			new Set(['people'])
-		);
+			readableFields: ['id', 'name', 'team']
+		}
+	],
+	relations: []
+};
 
-		const DefaultPage = Schema.Struct({
+const rows = [
+	{ id: '00000000-0000-5000-8000-000000000001', name: 'Ada', team: 'core', rank: 2, row_version: 3 },
+	{ id: '00000000-0000-5000-8000-000000000002', name: 'Grace', team: 'flight', rank: 1, row_version: 4 },
+	{ id: '00000000-0000-5000-8000-000000000003', name: 'Aaron', team: 'other', rank: 0, row_version: 1 }
+] as const;
+
+const proofOf = (
+	queryKey: string,
+	orderedRowIds: ReadonlyArray<string>,
+	overrides: Partial<QueryWindowProof> = {}
+): QueryWindowProof => ({
+	queryKey,
+	canonical: {},
+	collection: 'people',
+	dependencies: ['people'],
+	proofOwner: 'local',
+	locallyReproducible: true,
+	valid: true,
+	dirty: false,
+	readCursor: { xid: 3, sequence: 2 },
+	dependencyGenerations: { people: 4 },
+	orderedRowIds,
+	relationshipRefs: [],
+	nextCursor: null,
+	lookaheadCount: 0,
+	leaseCount: 1,
+	...overrides
+});
+
+const windowsWith = (
+	orderedRowIds: ReadonlyArray<string> | undefined,
+	queryKeys: Array<string> = [],
+	overrides: Partial<QueryWindowProof> = {}
+): WindowLedger =>
+	({
+		readWindow: <Value>(
+			queryKey: string,
+			use: (proof: QueryWindowProof) => Effect.Effect<Value, unknown>
+		) => {
+			queryKeys.push(queryKey);
+			return orderedRowIds === undefined
+				? Effect.succeed(undefined)
+				: use(proofOf(queryKey, orderedRowIds, overrides));
+		}
+	}) as unknown as WindowLedger;
+
+const storeWith = (
+	values: ReadonlyArray<Readonly<Record<string, Schema.Json>>>,
+	reads: Array<ReplicaRead> = []
+): LocalReplicaStore => ({
+	findMany: (input) => {
+		reads.push(input);
+		const requested = new Set(input.recordIds ?? []);
+		// Deliberately return the physical rows in reverse order. Window membership, not the table
+		// scan or an IN-list implementation detail, owns the order exposed by the reader.
+		return Effect.succeed(
+			values.filter((row) => requested.has(String(row['id']))).toReversed()
+		);
+	},
+	baseRows: () => Effect.succeed(values.flatMap((row) =>
+		typeof row['id'] === 'string' && typeof row['row_version'] === 'number'
+			? [{ recordId: row['id'], rowVersion: row['row_version'], row }]
+			: []
+	)),
+	applyAuthoritativeRow: () => Effect.succeed({ applied: true, present: true }),
+	removeAuthoritativeRow: () => Effect.succeed({ applied: true, present: false }),
+	deleteRecords: () => Effect.succeed(0),
+	recordIds: () => Effect.succeed(values.flatMap((row) =>
+		typeof row['id'] === 'string' ? [row['id']] : []
+	)),
+	hasRecord: (_collection, recordId) => Effect.succeed(
+		values.some((row) => row['id'] === recordId)
+	),
+	clearNamespace: () => Effect.void
+});
+
+const readerWith = (
+	store: LocalReplicaStore,
+	windows: WindowLedger,
+	replicaShape: ReplicaShape = shape
+) => createLocalReader(
+	store,
+	replicaShape,
+	new Set(['people']),
+	windows,
+	identity,
+	{ pinnedCollation: true }
+);
+
+const pageOf = (answer: LocalWindowRead | undefined) => {
+	if (answer === undefined) throw new Error('expected a retained query window');
+	return Schema.decodeUnknownSync(
+		Schema.Struct({
 			rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
 			nextCursor: Schema.NullOr(Schema.String)
-		});
-		const byId = Schema.decodeUnknownSync(DefaultPage)(
-			await Effect.runPromise(
-				reader.answer('collections.findMany', { collection: 'people', limit: 1 })
-			)
-		);
-		expect(byId.nextCursor).toEqual(expect.any(String));
-		const byVisibleName = Schema.decodeUnknownSync(DefaultPage)(
-			await Effect.runPromise(
-				reader.answer('collections.findMany', {
-					collection: 'people',
-					orderBy: { name: 'asc' },
-					limit: 1
-				})
-			)
-		);
-		expect(byVisibleName.nextCursor).toEqual(expect.any(String));
+		})
+	)(answer.value);
+};
 
-		// This is the token the old local path could cut from the replica's rehydrated SQL null. The
-		// server orders by the real rank, masks rank from its answer, and therefore cannot issue it.
-		const dishonest = Collections.encodeCollectionCursor(
-			[
-				{ column: 'rank', direction: 'asc' },
-				{ column: 'id', direction: 'asc' }
-			],
-			rows[0] as never
+describe('reads answered by authoritative query windows', () => {
+	it('serves a retained authoritative count without reading or iterating base rows', async () => {
+		const reads: Array<ReplicaRead> = [];
+		const reader = readerWith(
+			storeWith(rows, reads),
+			windowsWith([], [], {
+				proofOwner: 'server',
+				locallyReproducible: false,
+				valid: false,
+				serverResult: { kind: 'count', value: 335 }
+			})
 		);
-		expect(dishonest).toEqual(expect.any(String));
-		if (dishonest === null) throw new Error('expected the old local cursor candidate');
-		expect(
-			await Effect.runPromise(
-				reader.answer('collections.findMany', {
-					collection: 'people',
-					orderBy: { rank: 'asc' },
-					limit: 1
-				})
-			)
-		).toBeUndefined();
-		expect(
-			await Effect.runPromise(
-				reader.answer('collections.findMany', {
-					collection: 'people',
-					orderBy: { rank: 'asc' },
-					after: dishonest,
-					limit: 1
-				})
-			)
-		).toBeUndefined();
-
-		const olderShapeReader = createLocalReader(
-			store,
-			{
-				collections: [
-					{
-						name: 'people',
-						fields: {
-							name: { type: 'string', required: true, indexed: false },
-							rank: { type: 'number', required: false, indexed: false }
-						}
-					}
-				],
-				relations: []
-			},
-			new Set(['people'])
+		const answer = await Effect.runPromise(
+			reader.answer('collections.count', { collection: 'people', where: { team: { eq: 'core' } } })
 		);
+		expect(answer?.status).toBe('stale');
 		expect(
-			await Effect.runPromise(
-				olderShapeReader.answer('collections.findMany', { collection: 'people', limit: 1 })
-			)
-		).toBeUndefined();
-		// The masked query is declined before either ordering or cursor data reaches PGlite.
-		expect(reads).toBe(2);
+			Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Number }))(answer?.value).count
+		).toBe(335);
+		expect(reads).toEqual([]);
 	});
 
-	it('matches the wire page ceiling and safely falls back from a scalar orderBy', async () => {
-		let requestedLimit: number | undefined;
-		const rows = Array.from({ length: 501 }, (_, index) => ({
-			id: rid(`bounded:${index}`),
-			name: `Person ${index}`
-		}));
-		const store: LocalReplicaStore = {
-			findMany: (input) =>
-				Effect.sync(() => {
-					requestedLimit = input.limit;
-					return rows.slice(0, input.limit);
-				}),
-			count: () => Effect.succeed(rows.length),
-			applySnapshot: () => Effect.succeed(0),
-			applyChange: () => Effect.void,
-			reset: () => Effect.void
-		};
+	it('rebuilds retained authoritative groups from group ids instead of regrouping a bounded page', async () => {
+		const reads: Array<ReplicaRead> = [];
+		const reader = readerWith(
+			storeWith(rows, reads),
+			windowsWith([rows[0].id, rows[1].id], [], {
+				proofOwner: 'server',
+				locallyReproducible: false,
+				serverResult: {
+					kind: 'findGrouped',
+					groups: { core: [rows[0].id], flight: [rows[1].id], empty: [] }
+				}
+			})
+		);
+		const answer = await Effect.runPromise(
+			reader.answer('collections.findGrouped', {
+				collection: 'people',
+				group: { by: 'team', lanes: ['core', 'flight', 'empty'] }
+			})
+		);
+		const grouped = Schema.decodeUnknownSync(
+			Schema.Struct({ groups: Schema.Record(Schema.String, Schema.Array(Schema.Json)) })
+		)(answer?.value).groups;
+		expect(grouped.core?.map((row) => (row as Record<string, Schema.Json>).name)).toEqual(['Ada']);
+		expect(grouped.flight?.map((row) => (row as Record<string, Schema.Json>).name)).toEqual(['Grace']);
+		expect(grouped.empty).toEqual([]);
+		expect(reads).toHaveLength(1);
+	});
+
+	it('renders a retained search result as stale without re-evaluating search locally', async () => {
+		const reader = readerWith(
+			storeWith(rows),
+			windowsWith([rows[0].id], [], {
+				proofOwner: 'server',
+				locallyReproducible: false,
+				valid: false
+			})
+		);
+		const answer = await Effect.runPromise(
+			reader.answer('collections.findMany', { collection: 'people', search: 'not locally run' })
+		);
+		expect(answer?.status).toBe('stale');
+		expect(pageOf(answer).rows.map((row) => row.name)).toEqual(['Ada']);
+	});
+
+	it('keeps pending overlays out of retained ServerProof rows', async () => {
+		const reads: Array<ReplicaRead> = [];
 		const reader = createLocalReader(
-			store,
+			storeWith(rows, reads),
+			shape,
+			new Set(['people']),
+			windowsWith([rows[0].id], [], {
+				proofOwner: 'server',
+				locallyReproducible: false,
+				valid: false
+			}),
+			identity,
 			{
-				collections: [
-					{
-						name: 'people',
-						fields: { name: { type: 'string', required: true, indexed: false } },
-						readableFields: null
-					}
-				],
-				relations: []
-			},
-			new Set(['people'])
+				pinnedCollation: true,
+				localActorBinding: 'actor-a',
+				overlay: {
+					snapshot: async () => [{
+						partitionKey: identity.partitionKey,
+						localActorBinding: 'actor-a',
+						issuedAtEpochMs: 1,
+						idempotencyKey: 'pending-delete',
+						deviceSequence: 1,
+						active: true,
+						operations: [{
+							kind: 'remove',
+							row: { collection: 'people', recordId: rows[0].id }
+						}]
+					}]
+				}
+			}
 		);
 
 		const answer = await Effect.runPromise(
-			reader.answer('collections.findMany', {
-				collection: 'people',
-				limit: 900,
-				// The authoritative compiler treats a scalar orderBy as the default `id asc` order.
-				orderBy: 'name'
-			})
+			reader.answer('collections.findMany', { collection: 'people' })
 		);
-		const page = Schema.decodeUnknownSync(
-			Schema.Struct({
-				rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-				nextCursor: Schema.NullOr(Schema.String)
-			})
-		)(answer);
-		expect(requestedLimit).toBe(501);
-		expect(page.rows).toHaveLength(500);
-		expect(page.nextCursor).toEqual(expect.any(String));
+		expect(pageOf(answer).rows.map((row) => row.name)).toEqual(['Ada']);
+		expect(reads).toHaveLength(1);
+		expect(reads[0]?.overlay).toBeUndefined();
+	});
 
-		rows.pop();
-		const terminal = Schema.decodeUnknownSync(
-			Schema.Struct({
-				rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-				nextCursor: Schema.NullOr(Schema.String)
-			})
-		)(
+	it('reconstructs retained relationships from normalized edges instead of nested row copies', async () => {
+		const peopleFields = shape.collections[0]?.fields;
+		if (peopleFields === undefined) throw new TypeError('people fixture is missing');
+		const relatedShape: ReplicaShape = {
+			collections: [{
+				name: 'people',
+				fields: {
+					...peopleFields,
+					manager: {
+						type: 'reference', required: false, indexed: false,
+						reference: {
+							targets: [{
+								tag: 'person', collection: 'people', storageColumn: 'manager_person_id'
+							}],
+							onDelete: 'set null'
+						}
+					}
+				},
+				readableFields: ['id', 'name', 'team', 'manager']
+			}],
+			relations: []
+		};
+		const source = { ...rows[0], manager: { kind: 'person', id: rows[1].id } };
+		const reader = readerWith(
+			storeWith([source, rows[1]]),
+			windowsWith([source.id], [], {
+				proofOwner: 'server',
+				locallyReproducible: false,
+				relationshipRefs: [{
+					sourceCollection: 'people', sourceRecordId: source.id, relation: 'manager',
+					targetCollection: 'people', targetRecordId: rows[1].id
+				}]
+			}),
+			relatedShape
+		);
+		const retained = await Effect.runPromise(reader.answer('collections.findMany', {
+			collection: 'people', with: { manager: { person: true } }
+		}));
+		expect(retained?.relationDependency).toBe(true);
+		const answer = pageOf(retained);
+		const manager = (answer.rows[0] as Record<string, Schema.Json>).manager as Record<string, Schema.Json>;
+		expect(manager.record).toMatchObject({ id: rows[1].id, name: 'Grace' });
+	});
+
+	it('does not scan retained base rows when the canonical query has no window proof', async () => {
+		const reads: Array<ReplicaRead> = [];
+		const reader = readerWith(storeWith(rows, reads), windowsWith(undefined));
+
+		expect(
 			await Effect.runPromise(
-				reader.answer('collections.findMany', { collection: 'people', limit: 900 })
+				reader.answer('collections.findMany', { collection: 'people' })
 			)
-		);
-		expect(requestedLimit).toBe(501);
-		expect(terminal.rows).toHaveLength(500);
-		expect(terminal.nextCursor).toBeNull();
+		).toBeUndefined();
+		expect(reads).toEqual([]);
 	});
 
-	it('returns what the server returns, for a filter and an ordering', async () => {
-		harness = await makeBoltTestRuntime();
-		await seed(harness);
-		const replica = await openReplica(harness);
-		const reader = createLocalReader(replica.store, replica.shape, replica.readable);
-
-		const query = {
-			collection: 'people',
-			where: { team: { eq: 'flight' } },
-			orderBy: { name: 'asc' }
-		};
-		const local = await Effect.runPromise(reader.answer('collections.findMany', query as never));
-		const server = await serverRows(harness, query);
-
-		expect(local).toBeDefined();
-		const localRows = Schema.decodeUnknownSync(
-			Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)) })
-		)(local).rows;
-		// The same rows, in the same order — the point of reusing the server's own compiler.
-		expect(localRows.map((row) => row['name'])).toEqual(
-			server.map((row) => Reflect.get(row as object, 'name'))
-		);
-		expect(localRows.map((row) => row['name'])).toEqual(['Grace', 'Katherine']);
-	});
-
-	it('counts what the server counts', async () => {
-		harness = await makeBoltTestRuntime();
-		await seed(harness);
-		const replica = await openReplica(harness);
-		const reader = createLocalReader(replica.store, replica.shape, replica.readable);
-
-		const counted = await Effect.runPromise(
-			reader.answer('collections.count', {
-				collection: 'people',
-				where: { team: { eq: 'core' } }
-			} as never)
-		);
-		expect(counted).toBe(2);
-	});
-
-	it('serves cold paginated slices locally with a server-compatible keyset cursor', async () => {
-		harness = await makeBoltTestRuntime();
-		await seedPaginatedCollection(harness);
-		const replica = await openReplica(harness);
-		const reader = createLocalReader(replica.store, replica.shape, replica.readable);
-
-		// This is the first query for this slice and calls the replica reader directly: no query-cache
-		// entry exists to make the result look fast after an earlier transport fetch.
-		const startedAt = performance.now();
-		const localFirst = await Effect.runPromise(
-			reader.answer('collections.findMany', {
-				collection: 'people',
-				limit: 25,
-				columns: { name: true }
-			} as never)
-		);
-		const localReadMilliseconds = performance.now() - startedAt;
-		const first = Schema.decodeUnknownSync(
-			Schema.Struct({
-				rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-				nextCursor: Schema.NullOr(Schema.String)
-			})
-		)(localFirst);
-		expect(first.rows).toHaveLength(25);
-		expect(first.nextCursor).toEqual(expect.any(String));
-		expect(localReadMilliseconds).toBeLessThan(100);
-
-		if (first.nextCursor === null) throw new Error('expected a local successor cursor');
-		const nextQuery = { collection: 'people', limit: 25, after: first.nextCursor };
-		const second = Schema.decodeUnknownSync(
-			Schema.Struct({
-				rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-				nextCursor: Schema.NullOr(Schema.String)
-			})
-		)(await Effect.runPromise(reader.answer('collections.findMany', nextQuery as never)));
-		const authoritative = await serverRows(harness, nextQuery);
-		expect(second.rows.map((row) => row['id'])).toEqual(
-			authoritative.map((row) => Reflect.get(row as object, 'id'))
-		);
-		expect(second.nextCursor).toBeNull();
-
-		const filtered = {
-			collection: 'people',
-			where: { team: { eq: 'flight' } },
-			orderBy: { name: 'asc' },
-			limit: 7
-		};
-		const filteredFirst = Schema.decodeUnknownSync(
-			Schema.Struct({
-				rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-				nextCursor: Schema.NullOr(Schema.String)
-			})
-		)(await Effect.runPromise(reader.answer('collections.findMany', filtered as never)));
-		if (filteredFirst.nextCursor === null) throw new Error('expected a filtered successor cursor');
-		const filteredNext = { ...filtered, after: filteredFirst.nextCursor };
-		const filteredSecond = Schema.decodeUnknownSync(
-			Schema.Struct({
-				rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-				nextCursor: Schema.NullOr(Schema.String)
-			})
-		)(await Effect.runPromise(reader.answer('collections.findMany', filteredNext as never)));
-		const authoritativeFilteredSecond = await serverRows(harness, filteredNext);
-		expect(filteredSecond.rows.map((row) => row['id'])).toEqual(
-			authoritativeFilteredSecond.map((row) => Reflect.get(row as object, 'id'))
+	it('serves only ordered window members and projects the shared full rows at read time', async () => {
+		const reads: Array<ReplicaRead> = [];
+		const queryKeys: Array<string> = [];
+		const members = [rows[0].id, rows[1].id];
+		const reader = readerWith(
+			storeWith(rows, reads),
+			windowsWith(members, queryKeys)
 		);
 
-		const compound = {
-			collection: 'people',
-			orderBy: { team: 'desc', name: 'asc' },
-			limit: 6
-		};
-		const walked: Array<unknown> = [];
-		let after: string | undefined;
-		for (let pageIndex = 0; pageIndex < 10; pageIndex += 1) {
-			const query = { ...compound, ...(after === undefined ? {} : { after }) };
-			const localPage = Schema.decodeUnknownSync(
-				Schema.Struct({
-					rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-					nextCursor: Schema.NullOr(Schema.String)
-				})
-			)(await Effect.runPromise(reader.answer('collections.findMany', query as never)));
-			const authoritativePage = await serverRows(harness, query);
-			expect(localPage.rows.map((row) => row['id'])).toEqual(
-				authoritativePage.map((row) => Reflect.get(row as object, 'id'))
-			);
-			walked.push(...localPage.rows.map((row) => row['id']));
-			if (localPage.nextCursor === null) break;
-			after = localPage.nextCursor;
-		}
-		const authoritativeCompound = await serverRows(harness, { ...compound, limit: 100 });
-		expect(walked).toEqual(authoritativeCompound.map((row) => Reflect.get(row as object, 'id')));
-
-		const malformed = await Effect.runPromise(
-			reader
-				.answer('collections.findMany', {
+		const projected = pageOf(
+			await Effect.runPromise(
+				reader.answer('collections.findMany', {
 					collection: 'people',
 					orderBy: { name: 'asc' },
-					after: 'not-a-cursor'
+					columns: { name: true }
 				})
-				.pipe(Effect.result)
+			)
 		);
-		expect(malformed._tag).toBe('Failure');
-		const mismatched = await Effect.runPromise(
-			reader
-				.answer('collections.findMany', {
+		expect(projected.rows).toEqual([{ name: 'Ada' }, { name: 'Grace' }]);
+
+		const full = pageOf(
+			await Effect.runPromise(
+				reader.answer('collections.findMany', {
 					collection: 'people',
-					orderBy: { name: 'desc' },
-					after: first.nextCursor
+					orderBy: { name: 'asc' }
 				})
-				.pipe(Effect.result)
+			)
 		);
-		expect(mismatched._tag).toBe('Failure');
+		expect(full.rows).toEqual([
+			{ id: rows[0].id, name: 'Ada', team: 'core' },
+			{ id: rows[1].id, name: 'Grace', team: 'flight' }
+		]);
+		// Projection is not part of O5 identity, so both reads consume the same canonical window.
+		expect(new Set(queryKeys).size).toBe(1);
+		expect(reads).toHaveLength(2);
+		expect(reads.every((read) => read.recordIds?.join(',') === members.join(','))).toBe(true);
+		// Aaron exists in O3 but is not a member of this O5 window and therefore never leaks.
+		expect(full.rows.some((row) => row['name'] === 'Aaron')).toBe(false);
 	});
 
-	it('declines a query carrying a key it does not implement', async () => {
-		harness = await makeBoltTestRuntime();
-		await seed(harness);
-		const replica = await openReplica(harness);
-		const reader = createLocalReader(replica.store, replica.shape, replica.readable);
+	it('walks continuations inside the same growing window', async () => {
+		const queryKeys: Array<string> = [];
+		const reader = readerWith(
+			storeWith(rows),
+			windowsWith([rows[0].id, rows[1].id], queryKeys)
+		);
 
-		// `with` expands relationships, which lives in the Collections service. Ignoring the key would
-		// answer a different question while looking successful.
+		const first = pageOf(
+			await Effect.runPromise(
+				reader.answer('collections.findMany', {
+					collection: 'people',
+					orderBy: { name: 'asc' },
+					limit: 1
+				})
+			)
+		);
+		expect(first.rows.map((row) => row['name'])).toEqual(['Ada']);
+		if (first.nextCursor === null) throw new Error('expected a successor inside the retained window');
+
+		const second = pageOf(
+			await Effect.runPromise(
+				reader.answer('collections.findMany', {
+					collection: 'people',
+					orderBy: { name: 'asc' },
+					limit: 1,
+					after: first.nextCursor
+				})
+			)
+		);
+		expect(second.rows.map((row) => row['name'])).toEqual(['Grace']);
+		expect(second.nextCursor).toBeNull();
+		expect(queryKeys[0]).toBe(queryKeys[1]);
+	});
+
+	it('marks a continuation stale after it consumes the retained boundary row', async () => {
+		const reader = readerWith(
+			storeWith(rows),
+			windowsWith(
+				[rows[0].id, rows[1].id],
+				[],
+				{ nextCursor: 'hydrate:more', lookaheadCount: 1 }
+			)
+		);
+		const first = await Effect.runPromise(reader.answer('collections.findMany', {
+			collection: 'people', orderBy: { name: 'asc' }, limit: 1
+		}));
+		expect(first?.status).toBe('fresh');
+		const firstPage = pageOf(first);
+		if (firstPage.nextCursor === null) throw new Error('expected retained boundary cursor');
+
+		const continuation = await Effect.runPromise(reader.answer('collections.findMany', {
+			collection: 'people', orderBy: { name: 'asc' }, limit: 1, after: firstPage.nextCursor
+		}));
+		expect(continuation?.status).toBe('stale');
+		expect(pageOf(continuation).rows.map((row) => row['name'])).toEqual(['Grace']);
+	});
+
+	it('declines an ordering whose values are not permitted in the local base row', async () => {
+		const reads: Array<ReplicaRead> = [];
+		const reader = readerWith(
+			storeWith(rows, reads),
+			windowsWith([rows[0].id, rows[1].id])
+		);
+
 		expect(
 			await Effect.runPromise(
 				reader.answer('collections.findMany', {
 					collection: 'people',
-					with: { team: true }
-				} as never)
+					orderBy: { rank: 'asc' }
+				})
 			)
 		).toBeUndefined();
-		expect(
-			await Effect.runPromise(
-				reader.answer('collections.findMany', { collection: 'people', search: 'ada' } as never)
-			)
-		).toBeUndefined();
+		expect(reads).toEqual([]);
 	});
 
-	it('declines a collection the subject may not read', async () => {
-		harness = await makeBoltTestRuntime();
-		await seed(harness);
-		const replica = await openReplica(harness);
-		const reader = createLocalReader(replica.store, replica.shape, new Set<string>());
+	it('recomputes a plain-with LocalExact window through a root-only optimistic create', async () => {
+		const optimistic = {
+			id: '00000000-0000-5000-8000-000000000004',
+			name: 'Lin',
+			team: 'core',
+			row_version: 0
+		} as const;
+		const base = storeWith(rows);
+		const store: LocalReplicaStore = {
+			...base,
+			baseRows: (_collection, recordIds) => {
+				const requested = recordIds === undefined ? undefined : new Set(recordIds);
+				return Effect.succeed(rows.flatMap((row) =>
+					(requested === undefined || requested.has(row.id))
+						? [{ recordId: row.id, rowVersion: row.row_version, row }]
+						: []
+				));
+			},
+			findMany: (input) => {
+				const affected = new Set(input.overlay?.affectedRecordIds ?? []);
+				return Effect.succeed([
+					...rows.filter((row) => !affected.has(row.id)),
+					...(input.overlay?.rows ?? [])
+				]);
+			}
+		};
+		const recomputed: Array<RecomputedWindow> = [];
+		const proof = proofOf('window:plain-with', rows.map(({ id }) => id), {
+			canonical: {
+				kind: 'findMany',
+				collection: 'people',
+				authoredWhere: null,
+				userFilter: null,
+				search: null,
+				relationships: { manager: true },
+				orderBy: [{ field: 'name', direction: 'asc' }]
+			},
+			dirty: true,
+			valid: false
+		});
+		const windows = {
+			readWindow: <Value>(
+				_queryKey: string,
+				use: (value: QueryWindowProof) => Effect.Effect<Value, unknown>
+			) => use(proof),
+			transaction: <Value>(body: Effect.Effect<Value, unknown>) => body,
+			position: () => Effect.succeed({
+				cursor: proof.readCursor,
+				generations: proof.dependencyGenerations
+			}),
+			recomputeWindow: (input: RecomputedWindow) => Effect.sync(() => {
+				recomputed.push(input);
+				return true;
+			}),
+			pruneBaseRows: () => Effect.succeed(0)
+		} as unknown as WindowLedger;
+		const recomputer = createLocalWindowRecomputer(
+			store,
+			shape,
+			windows,
+			identity.partitionKey,
+			{
+				localActorBinding: 'actor-a',
+				overlay: {
+					snapshot: async () => [{
+						partitionKey: identity.partitionKey,
+						localActorBinding: 'actor-a',
+						issuedAtEpochMs: 1,
+						idempotencyKey: 'root-create',
+						deviceSequence: 1,
+						active: true,
+						operations: [{
+							kind: 'replace',
+							row: { collection: 'people', recordId: optimistic.id },
+							values: optimistic
+						}]
+					}]
+				}
+			}
+		);
 
-		// The replica holds only permitted rows, but a collection outside the reported shape must never
-		// be served from it regardless.
-		expect(
-			await Effect.runPromise(
-				reader.answer('collections.findMany', { collection: 'people' } as never)
-			)
-		).toBeUndefined();
-	});
-
-	it('declines commands that are not reads at all', async () => {
-		harness = await makeBoltTestRuntime();
-		const replica = await openReplica(harness);
-		const reader = createLocalReader(replica.store, replica.shape, replica.readable);
-
-		expect(
-			await Effect.runPromise(
-				reader.answer('collections.create', { collection: 'people' } as never)
-			)
-		).toBeUndefined();
-		expect(
-			await Effect.runPromise(
-				reader.answer('collections.history', { collection: 'people' } as never)
-			)
-		).toBeUndefined();
+		expect(await Effect.runPromise(recomputer.recompute(proof.queryKey))).toBe(true);
+		expect(recomputed).toHaveLength(1);
+		expect(recomputed[0]?.orderedRowIds).toContain(optimistic.id);
+		expect(recomputed[0]?.optimisticRowIds).toEqual([optimistic.id]);
 	});
 });

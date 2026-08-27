@@ -68,6 +68,50 @@ test('UI17 still reports a system id rendered to a person', (context) => {
 	assert.equal(rulesFor(root).includes('UI17'), true);
 });
 
+test('UI17 rejects framework fields declared in collection surface composition', (context) => {
+	const root = component(
+		'ui17-system-composition',
+		`<CollectionTable>
+	{#snippet columns({ Column })}
+		<Column
+			name="id"
+		/>
+	{/snippet}
+</CollectionTable>
+`
+	);
+	context.after(() => rmSync(root, { recursive: true, force: true }));
+	assert.equal(rulesFor(root).includes('UI17'), true);
+});
+
+test('UI17 rejects an explicitly hidden framework field in a form', (context) => {
+	const root = component(
+		'ui17-hidden-system-field',
+		`<CollectionForm>
+	{#snippet children({ Field })}
+		<Field name="id" hidden />
+	{/snippet}
+</CollectionForm>
+`
+	);
+	context.after(() => rmSync(root, { recursive: true, force: true }));
+	assert.equal(rulesFor(root).includes('UI17'), true);
+});
+
+test('UI17 rejects a framework field supplied as a static Svelte expression', (context) => {
+	const root = component(
+		'ui17-expression-system-field',
+		`<CollectionTable>
+	{#snippet columns({ Column })}
+		<Column name={'id'} />
+	{/snippet}
+</CollectionTable>
+`
+	);
+	context.after(() => rmSync(root, { recursive: true, force: true }));
+	assert.equal(rulesFor(root).includes('UI17'), true);
+});
+
 test('UI6 reports a raw flex container in markup', (context) => {
 	const root = component(
 		'ui6',

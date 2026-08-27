@@ -100,7 +100,7 @@ const InvocationLayers = {
 		// with a holder — a person's budget, an envoy's — is declared on the policies that hold it and
 		// resolved per subject; this layer carries only the rules that apply before there is one.
 		const rateLimits = RateLimits.layer(workspace.rateLimits);
-		const tenantScope = TenantScope.layer(context.tenantId);
+		const tenantScope = TenantScope.layer(context.tenantId, context.environment);
 		const database = Database.layer(facilities.database, context);
 		const files = Files.layer(facilities.files, context);
 		const ai = AI.layer(facilities.ai, context);
@@ -114,16 +114,6 @@ const InvocationLayers = {
 		const authoredLayer = Layer.succeed(AuthoredRuntimeService, authored);
 		const access = AccessControl.layer.pipe(
 			Layer.provide(Layer.mergeAll(workspaceLayer, database))
-		);
-		// Whether a sign-in code is random or the fixed development one follows the environment the host
-		// scoped this invocation to — the mode — and not whether a mailer happens to be bound. A mailer
-		// is expected in every environment, development included, so its absence is a misconfiguration
-		// to surface rather than a signal to reinterpret.
-		//
-		// Anything that is not exactly `development` is treated as real. An environment this bundle has
-		// not heard of gets random codes, which is the safe direction for an unknown to fail in.
-		const identity = Identity.layerWith(context.environment !== 'development').pipe(
-			Layer.provide(Layer.mergeAll(database, communication, identityHooks))
 		);
 		/**
 		 * The task queue, over the database facility and the host's timer.
@@ -139,6 +129,17 @@ const InvocationLayers = {
 		const syncWake = SyncWake.layer.pipe(Layer.provide(transport));
 		const taskQueue = TaskQueue.layer(context).pipe(
 			Layer.provide(Layer.mergeAll(database, tasks, syncWake))
+		);
+		// Whether a sign-in code is random or the fixed development one follows the environment the host
+		// scoped this invocation to — the mode — and not whether a mailer happens to be bound. A mailer
+		// is expected in every environment, development included, so its absence is a misconfiguration
+		// to surface rather than a signal to reinterpret.
+		//
+		// Anything that is not exactly `development` is treated as real. An environment this bundle has
+		// not heard of gets random codes, which is the safe direction for an unknown to fail in. Delivery
+		// is queued only after Better Auth persists the challenge, so identity also owns the task queue.
+		const identity = Identity.layerWith(context.environment !== 'development').pipe(
+			Layer.provide(Layer.mergeAll(database, communication, identityHooks, taskQueue))
 		);
 		const approvals = Approvals.layer.pipe(
 			Layer.provide(Layer.mergeAll(workspaceLayer, access, database, taskQueue, syncWake))
@@ -178,7 +179,7 @@ const InvocationLayers = {
 			)
 		);
 		const sync = Sync.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, access, collections, database))
+			Layer.provide(Layer.mergeAll(workspaceLayer, tenantScope, access, collections, database))
 		);
 		const remotes = remoteRegistryLayer(handlers).pipe(
 			// `automations`, because a remote receives the same authored api a hook does, and that api now
@@ -717,6 +718,38 @@ const BundleDispatch = {
 							_tag: 'Failure',
 							error: makeWireError('invalid_input', error.message, { httpStatus: 400 })
 						};
+					if (error instanceof Collections.MutationVersionConflict)
+						return {
+							_tag: 'Failure',
+							error: makeWireError('mutation_conflict', error.message, {
+								httpStatus: 409,
+								details: {
+									collection: error.collection,
+									id: error.id,
+									baseVersion: error.baseVersion,
+									currentVersion: error.currentVersion
+								}
+							})
+						};
+					if (error instanceof Collections.MutationIdempotencyConflict)
+						return {
+							_tag: 'Failure',
+							error: makeWireError('idempotency_conflict', error.message, { httpStatus: 409 })
+						};
+					if (error instanceof Collections.MutationRetryExpired)
+						return {
+							_tag: 'Failure',
+							error: makeWireError('mutation_retry_expired', error.message, { httpStatus: 409 })
+						};
+					if (error instanceof Collections.MutationInProgress)
+						return {
+							_tag: 'Failure',
+							error: makeWireError('mutation_in_progress', error.message, {
+								httpStatus: 425,
+								retryable: true,
+								details: { retryAfterSeconds: error.retryAfterSeconds }
+							})
+						};
 					// Asking for a name `+env.ts` does not declare is the caller getting the name wrong, which
 					// is the same class of mistake as any other malformed input.
 					if (error instanceof Secrets.SecretNotDeclared)
@@ -800,6 +833,18 @@ const BundleDispatch = {
 								{ httpStatus: 504, retryable: true }
 							)
 						};
+					if (error instanceof Collections.MutationQuarantined)
+						return {
+							_tag: 'Failure',
+							error: makeWireError('mutation_quarantined', error.message, {
+								httpStatus: 409,
+								details: {
+									idempotencyKey: error.idempotencyKey,
+									deviceSequence: error.deviceSequence,
+									schemaFingerprint: error.schemaFingerprint
+								}
+							})
+						};
 					if (error instanceof AuthoredRefusal) {
 						const details: Record<string, Schema.Json> = {};
 						if (error.collection !== undefined) details.collection = error.collection;
@@ -872,9 +917,12 @@ const Bundles = {
 		authored: AuthoredRuntimeInput = emptyAuthoredRuntime
 	): BoltBundle => {
 		const schemaPlan = buildSchemaPlan(workspace);
+		const schemaFingerprint = workspace.mutationCompatibility?.currentSchemaFingerprint;
+		if (schemaFingerprint === undefined)
+			throw new TypeError('Compiled workspace is missing its mutation compatibility fingerprint.');
 		const exactManifest = BundleManifest.make({
 			...manifest,
-			schemaFingerprint: schemaPlan.fingerprint,
+			schemaFingerprint,
 			schemaPlan
 		});
 		const policyFunctions = policyRuntimeFunctionsFor(workspace.policies);

@@ -62,7 +62,12 @@ const definition = workspace({
 	tools: [],
 	skills: [],
 	envoys: [],
-	requiredFacilities: ['database', 'tasks']
+	requiredFacilities: ['database', 'tasks'],
+	mutationCompatibility: {
+		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
+		currentSchemaFingerprint: 'sha256:approval-submission-fixture',
+		adapters: []
+	}
 });
 
 const policyFunctions = policyRuntimeFunctionsFor([reviewedWriter]);
@@ -84,9 +89,9 @@ const authored = {
 				const records = Reflect.get(database, 'records');
 				if (typeof records !== 'object' || records === null)
 					throw new Error('records collection is unavailable');
-				const create = Reflect.get(records, 'create');
-				if (typeof create !== 'function') throw new Error('records.create is unavailable');
-				return create({ title: 'Held for review' });
+				const mutate = Reflect.get(records, 'mutate');
+				if (typeof mutate !== 'function') throw new Error('records.mutate is unavailable');
+				return mutate({ title: 'Held for review' });
 			}
 		}
 	}

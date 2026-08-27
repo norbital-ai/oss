@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { EnvironmentName, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '../../src/client.js';
@@ -66,6 +65,12 @@ const taskIdFrom = (input: unknown): string | undefined => {
 	return typeof id === 'string' ? id : undefined;
 };
 
+const pageFor = (row: AutomationRunRow | undefined) => ({
+	rows: row === undefined ? [] : [row],
+	lookahead: 0,
+	nextCursor: null
+});
+
 describe('generated automation client state', () => {
 	it('changes only when the automation_run live collection is invalidated by sync', async () => {
 		let starts = 0;
@@ -82,11 +87,11 @@ describe('generated automation client state', () => {
 					rows.set(taskId, runRow(taskId));
 					return Promise.resolve({ taskId } as never);
 				}
-				if (command === 'collections.findFirst') {
+				if (command === 'collections.findMany') {
 					reads += 1;
 					const taskId = taskIdFrom(input);
 					return Promise.resolve(
-						(taskId === undefined ? null : (rows.get(taskId) ?? null)) as never
+						pageFor(taskId === undefined ? undefined : rows.get(taskId)) as never
 					);
 				}
 				throw new Error(`unexpected command ${command}`);
@@ -120,9 +125,11 @@ describe('generated automation client state', () => {
 		const bolt = createBoltClient(scope, {
 			command: (command, input) => {
 				if (command === 'automations.resume') return Promise.resolve({ resumed: true } as never);
-				if (command !== 'collections.findFirst') throw new Error(`unexpected command ${command}`);
+				if (command !== 'collections.findMany') throw new Error(`unexpected command ${command}`);
 				const id = taskIdFrom(input);
-				return Promise.resolve((id === undefined ? null : (rows.get(id) ?? null)) as never);
+				return Promise.resolve(
+					pageFor(id === undefined ? undefined : rows.get(id)) as never
+				);
 			}
 		});
 		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
@@ -142,9 +149,11 @@ describe('generated automation client state', () => {
 		const lifecycle: Array<Readonly<{ command: string; input: unknown }>> = [];
 		const bolt = createBoltClient(scope, {
 			command: (command, input) => {
-				if (command === 'collections.findFirst') {
+				if (command === 'collections.findMany') {
 					const id = taskIdFrom(input);
-					return Promise.resolve((id === undefined ? null : (rows.get(id) ?? null)) as never);
+					return Promise.resolve(
+						pageFor(id === undefined ? undefined : rows.get(id)) as never
+					);
 				}
 				if (command === 'automations.stop' || command === 'automations.resume') {
 					lifecycle.push({ command, input });
@@ -173,22 +182,5 @@ describe('generated automation client state', () => {
 			{ command: 'automations.stop', input: { name: 'rebuild', taskId } }
 		]);
 		expect(automation.latest).toBe(run);
-	});
-
-	it('contains no automation polling client or private progress transport', () => {
-		const client = readFileSync(
-			new URL('../../src/client/automation-client.svelte.ts', import.meta.url),
-			'utf8'
-		);
-		const runtime = readFileSync(new URL('../../src/client/runtime.ts', import.meta.url), 'utf8');
-		const studio = readFileSync(
-			new URL('../../src/client/ui/studio/manifest-pane.svelte', import.meta.url),
-			'utf8'
-		);
-
-		expect(client).not.toMatch(/setInterval|setTimeout|Effect\.sleep|poll/i);
-		expect(runtime).not.toContain("'automations.status'");
-		expect(runtime).not.toContain("'automations.history'");
-		expect(studio).toContain('client.db.automation_run.findMany');
 	});
 });

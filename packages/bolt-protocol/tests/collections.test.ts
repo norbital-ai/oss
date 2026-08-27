@@ -1,95 +1,100 @@
 import { describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
-import {
-	CollectionMutateRequest,
-	CollectionPendingApproval,
-	CollectionWriteResult,
-	pendingApprovalOf,
-	storedRecordsOf
-} from '../src/index.js';
+import { CollectionMutateRequest } from '../src/index.js';
 
-/**
- * The two halves of the collection write contract, held against the shape both ends are written to.
- *
- * `storedRecordsOf` is the one that earns a test on its own. The client fails when it returns
- * `undefined`, so the difference between "unrecognised" and "empty" is load bearing: a reader that
- * answered `[]` for a shape it did not understand would turn a protocol mismatch into a successful
- * write that returned no record, which is indistinguishable from a legitimate result and is
- * therefore never investigated.
- */
+/** The sole local-first collection mutation request accepted by both protocol endpoints. */
 describe('the declarative mutation request', () => {
-	it('accepts a new root with no id, because the server assigns it', () => {
-		expect(
-			Schema.is(CollectionMutateRequest)({
-				collection: 'orders',
-				values: { reference: 'ORD-1' }
-			})
-		).toBe(true);
-	});
+	const common = {
+		protocolVersion: 2,
+		idempotencyKey: 'mutation-1',
+		issuedAtEpochMs: 1_700_000_000_000,
+		deviceSequence: 1,
+		partitionKey: 'sha256:partition',
+		schemaFingerprint: 'sha256:schema',
+		baseVersions: []
+	} as const;
 
-	it('accepts identities at every graph level so present rows can be synchronized', () => {
+	it('accepts a local-first journal push with client identities at every graph level', () => {
 		expect(
 			Schema.is(CollectionMutateRequest)({
-				collection: 'orders',
-				values: {
-					id: 'order-1',
-					reference: 'ORD-1',
-					order_line_order: [
-						{ id: 'line-1', sku: 'a-1' },
-						{ sku: 'a-2', components: [{ id: 'component-1', part: 'p-1' }] }
-					]
+				...common,
+				graph: {
+					action: 'create',
+					collection: 'orders',
+					values: {
+						id: '0191f0d1-d3a4-7d5d-8a3a-7ef87be42310',
+						reference: 'ORD-1',
+						order_line_order: [
+							{ id: '0191f0d1-d3a4-7d5d-8a3a-7ef87be42311', sku: 'a-1' }
+						]
+					}
 				}
 			})
 		).toBe(true);
 	});
 
-	it('still requires the collection', () => {
-		expect(Schema.is(CollectionMutateRequest)({ values: { reference: 'ORD-1' } })).toBe(false);
-		expect(Schema.is(CollectionMutateRequest)({ collection: '', values: {} })).toBe(false);
+	it('accepts a whole-row base vector for every existing row touched by the graph', () => {
+		expect(
+			Schema.is(CollectionMutateRequest)({
+				...common,
+				deviceSequence: 2,
+				graph: {
+					action: 'update',
+					collection: 'orders',
+					values: { id: 'order-1', reference: 'ORD-2' }
+				},
+				baseVersions: [
+					{ row: { collection: 'orders', recordId: 'order-1' }, rowVersion: 4 },
+					{ row: { collection: 'order_lines', recordId: 'line-new' }, rowVersion: null }
+				]
+			})
+		).toBe(true);
 	});
 
-	it('uses the exact stored-record response envelope', () => {
-		expect(Schema.is(CollectionWriteResult)({ records: [{ id: 'order-1' }] })).toBe(true);
-		expect(Schema.is(CollectionWriteResult)({ record: { id: 'order-1' } })).toBe(false);
-		expect(Schema.is(CollectionWriteResult)({ records: { id: 'order-1' } })).toBe(false);
+	it('rejects the removed pre-v2 request shape', () => {
+		expect(
+			Schema.is(CollectionMutateRequest)({
+				action: 'create',
+				collection: 'orders',
+				idempotencyKey: 'mutation-3',
+				issuedAtEpochMs: 1_700_000_000_000,
+				baseVersion: null,
+				values: { reference: 'ORD-1' }
+			})
+		).toBe(false);
 	});
 
-	it('recognizes an HTTP 202 approval outcome as a distinct successful response', () => {
-		const pending = {
-			pending: true,
-			requestId: 'approval-1',
-			collection: 'orders',
-			id: 'order-1',
-			action: 'update'
+	it('requires the version, durable ordering, physical partition and schema identity', () => {
+		const create = {
+			...common,
+			graph: { action: 'create', collection: 'orders', values: { id: 'order-1' } }
 		} as const;
-		expect(Schema.is(CollectionPendingApproval)(pending)).toBe(true);
-		expect(pendingApprovalOf(pending)).toEqual(pending);
-		expect(pendingApprovalOf({ records: [{ id: 'order-1' }] })).toBeUndefined();
-	});
-});
-
-describe('storedRecordsOf', () => {
-	it('reads the rows out of a write response', () => {
-		expect(storedRecordsOf({ created: true, records: [{ id: 'a' }] })).toEqual([{ id: 'a' }]);
-	});
-
-	it('reads an empty result as empty, not as unrecognised', () => {
-		expect(storedRecordsOf({ updated: true, records: [] })).toEqual([]);
+		expect(Schema.is(CollectionMutateRequest)({ ...create, protocolVersion: 1 })).toBe(false);
+		expect(Schema.is(CollectionMutateRequest)({ ...create, deviceSequence: 0 })).toBe(false);
+		expect(Schema.is(CollectionMutateRequest)({ ...create, partitionKey: '' })).toBe(false);
+		expect(Schema.is(CollectionMutateRequest)({ ...create, schemaFingerprint: '' })).toBe(false);
+		expect(
+			Schema.is(CollectionMutateRequest)({
+				...create,
+				graph: { ...create.graph, collection: '' }
+			})
+		).toBe(false);
 	});
 
-	it('returns undefined for a response that carries no records at all', () => {
-		expect(storedRecordsOf({ created: true, id: 'a' })).toBeUndefined();
-	});
-
-	it('returns undefined rather than guessing at a shape it does not recognise', () => {
-		expect(storedRecordsOf(null)).toBeUndefined();
-		expect(storedRecordsOf('records')).toBeUndefined();
-		expect(storedRecordsOf([{ id: 'a' }])).toBeUndefined();
-		expect(storedRecordsOf({ records: {} })).toBeUndefined();
-		// A list of things that are not rows is the case worth naming: it is the shape closest to
-		// correct, so it is the one a lenient reader would let through as data.
-		expect(storedRecordsOf({ records: ['a'] })).toBeUndefined();
-		expect(storedRecordsOf({ records: [null] })).toBeUndefined();
-		expect(storedRecordsOf({ records: [['a']] })).toBeUndefined();
+	it('bounds the attacker-controlled idempotency key', () => {
+		expect(
+			Schema.is(CollectionMutateRequest)({
+				...common,
+				idempotencyKey: 'x'.repeat(257),
+				graph: { action: 'create', collection: 'orders', values: {} }
+			})
+		).toBe(false);
+		expect(
+			Schema.is(CollectionMutateRequest)({
+				...common,
+				idempotencyKey: 'mutation\u0000injected',
+				graph: { action: 'create', collection: 'orders', values: {} }
+			})
+		).toBe(false);
 	});
 });

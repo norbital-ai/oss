@@ -3,6 +3,11 @@ import { Schema } from 'effect';
 /**
  * The wire both hosts and every bundle agree on, as a single literal a mismatch is refused against.
  *
+ * Bumped to 5 when browser collection mutations became server-authoritative exactly-once commands:
+ * every request now carries an explicit action, durable idempotency key, issue time, and a base row
+ * version for update/delete. A version-4 client can send an unversioned write the version-5 runtime
+ * must refuse, while a version-4 runtime would ignore none of the new safety contract reliably.
+ *
  * Bumped to 4 when the artifact stopped carrying its own bytes. `staticAssets`, whose every entry
  * held a `Uint8Array` decoded from base64 in the bundle's own source, is replaced by `browserAssets`
  * and `serverAssets` — indexes of digests, with the bytes in flat sidecar files beside the bundle.
@@ -22,7 +27,7 @@ import { Schema } from 'effect';
  * means a version mismatch is a refusal at the door rather than a capability discovered halfway
  * through an invocation.
  */
-export const PROTOCOL_VERSION = 4 as const;
+export const PROTOCOL_VERSION = 5 as const;
 
 export const ProtocolVersion = Schema.Literal(PROTOCOL_VERSION);
 export type ProtocolVersion = typeof ProtocolVersion.Type;

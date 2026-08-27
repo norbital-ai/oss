@@ -2,14 +2,19 @@ import type {
 	CollectionDbClient,
 	CollectionField,
 	CollectionFieldName,
-	CollectionMutationInput,
 	CollectionRelationOptions,
 	CollectionRegistry,
-	CollectionRow
+	CollectionRow,
+	SystemCollectionFieldName
 } from '@norbital-ai/std/collection';
 import { Effect, Schema } from 'effect';
 import type { StandardSchemaOf } from '#lib/form/standard_schema_form_errors';
 import type { CollectionRecordMetadata } from '#lib/collection-record-metadata';
+import type {
+	FieldRendererCallerProps,
+	FieldRendererProps,
+	FieldRendererPropsOf
+} from '#lib/data-renderer';
 import type {
 	Component,
 	ComponentConstructorOptions,
@@ -40,41 +45,13 @@ export interface CollectionFormValidation {
 	) => Effect.Effect<readonly CollectionFormValidationIssue[] | void, unknown>;
 }
 
-const collectionFormInjectedRendererKeySchema = Schema.Literals([
-	'value',
-	'field',
-	'row',
-	'onValueChange'
-]);
-/** Props CollectionFormField always injects; callers supply the rest via `rendererProps`. */
-export type CollectionFormInjectedRendererKey = typeof collectionFormInjectedRendererKeySchema.Type;
-
-export type CollectionFormCallerRendererProps<TRendererProps> = Omit<
-	TRendererProps,
-	CollectionFormInjectedRendererKey
->;
-
-export interface CollectionFormRendererOptions {
-	readonly?: boolean;
-	disabled?: boolean;
-	placeholder?: string;
-	relationOptions?: CollectionRelationOptions;
-}
-
-export interface CollectionFormRendererProps extends CollectionFormRendererOptions {
+export interface CollectionFormRendererProps extends FieldRendererProps {
 	value: unknown;
 	field: CollectionField;
 	/** Current form record, including unsaved sibling-field values. */
 	row: Record<string, unknown>;
 	onValueChange: (value: unknown) => void;
 }
-
-type RendererProps<TRenderer> =
-	TRenderer extends Component<infer TProps>
-		? TProps extends never
-			? CollectionFormRendererProps
-			: TProps
-		: CollectionFormRendererProps;
 
 export interface CollectionFormFieldProps<
 	TFieldName extends string = string,
@@ -83,8 +60,17 @@ export interface CollectionFormFieldProps<
 	name: TFieldName;
 	label?: string;
 	class?: string;
+	/** Registered without a visual control; custom composition or a collection hook owns the value. */
+	hidden?: boolean;
+	readonly?: boolean;
+	disabled?: boolean;
+	placeholder?: string;
+	/** Contextual option-set configuration for the automatic relationship renderer. */
+	relationOptions?: CollectionRelationOptions;
 	renderer?: TRenderer;
-	rendererProps?: CollectionFormCallerRendererProps<RendererProps<TRenderer>>;
+	rendererProps?: FieldRendererCallerProps<
+		FieldRendererPropsOf<TRenderer, CollectionFormRendererProps>
+	>;
 }
 
 /**
@@ -120,7 +106,9 @@ export interface CollectionFormComposition<
 	TCollections extends CollectionRegistry,
 	TName extends CollectionFormName<TCollections>
 > {
-	Field: CollectionFormFieldComponent<CollectionFieldName<TCollections[TName]>>;
+	Field: CollectionFormFieldComponent<
+		Exclude<CollectionFieldName<TCollections[TName]>, SystemCollectionFieldName>
+	>;
 	form: CollectionFormController;
 }
 
@@ -139,9 +127,7 @@ export interface CollectionFormProps<
 	 * threaded it back by hand. An optional override would be an escape hatch that silently
 	 * re-legalises reaching into framework-owned fields from authored source.
 	 */
-	defaultValues?:
-		| Partial<CollectionRow<TCollections[TName]>>
-		| Partial<CollectionMutationInput<TCollections[TName]>>;
+	defaultValues?: Partial<CollectionRow<TCollections[TName]>>;
 	submitLabel?: string;
 	validation?: CollectionFormValidation;
 	onSubmit?: (values: CollectionFormValidationValues) => Effect.Effect<void, unknown>;
@@ -153,14 +139,6 @@ export interface CollectionFormProps<
 	skeletonRows?: number;
 	class?: string;
 	onAfterSubmit?: () => void | Effect.Effect<void, unknown>;
-	/**
-	 * Ordered field-name pick for the auto-emitted form (RFC V.4b). Wins over auto field emission;
-	 * ignored when a `children` composition is provided.
-	 */
-	fields?: readonly CollectionFieldName<TCollections[TName]>[];
-	/**
-	 * Field composition. Omit to auto-emit a `Field` per writable field in declaration order and
-	 * laid out with the intrinsic `Grid` (RFC V.4a).
-	 */
-	children?: Snippet<[CollectionFormComposition<TCollections, TName>]>;
+	/** Every writable collection field must be declared exactly once; use `hidden` to conceal one. */
+	children: Snippet<[CollectionFormComposition<TCollections, TName>]>;
 }

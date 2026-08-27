@@ -93,6 +93,15 @@ const DELEGATED_EXAMPLES = { bad: [''], good: [''] } as const;
 const SKIPPED =
 	/(^|\/)(node_modules|\.yalc|\.git|build|dist|coverage|generated|\.generated|\.svelte-check|\.svelte-kit|\.tmp|\.norbital|\.turbo|\.agents)(\/|$)/;
 
+/** Authored doctor extensions live here; the rest of `.norbital` is generated output. */
+function isDoctorConfigTree(local: string): boolean {
+	return (
+		local === '.norbital' ||
+		local === '.norbital/config' ||
+		local.startsWith('.norbital/config/')
+	);
+}
+
 function detailOf(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
@@ -193,7 +202,7 @@ function repositoryFiles(root: string): ReadonlyArray<string> {
 			const absolute = join(directory, entry.name);
 			const local = relative(root, absolute).split(sep).join('/');
 			if (entry.isDirectory()) {
-				if (!SKIPPED.test(`${local}/`)) visit(absolute);
+				if (isDoctorConfigTree(local) || !SKIPPED.test(`${local}/`)) visit(absolute);
 			} else if (entry.isFile()) files.push(local);
 		}
 	};
@@ -220,7 +229,7 @@ function expandPatterns(
 		const matched = candidates.filter((file) => RULE_FILE.test(file) && regExp.test(file));
 		if (matched.length === 0 && !implicit)
 			throw new Error(
-				`norbital-doctor: pattern "${pattern}" matched no rule files (.yml) under ${root}`
+				`norbital-doctor: pattern "${pattern}" matched no rule files (.yaml/.yml) under ${root}`
 			);
 		for (const file of matched) {
 			if (seen.has(file)) continue;
@@ -350,8 +359,8 @@ function loadFile(
 
 type PatternLoadOptions = Readonly<{
 	/**
-	 * The caller supplied no patterns of its own, so the conventional `dr` tree default is
-	 * being probed. A repository without any rule files is normal under that default — silence
+	 * The caller supplied no patterns of its own, so `.norbital/config/doctor/` is being
+	 * probed. A repository without any rule files is normal under that default — silence
 	 * there is absence of rules, not a typo — while an explicitly configured glob keeps the
 	 * strict no-match error.
 	 */

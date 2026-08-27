@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import type { BeforeApi } from './contracts-schema.js';
+import type { Api } from './contracts-schema.js';
 
 /**
  * One workspace-agent tool, with the Effect schema the author declares for its input.
@@ -11,10 +11,7 @@ type AgentToolDefinition<
 > = {
 	readonly description: string;
 	readonly input: S;
-	run(
-		api: BeforeApi,
-		input: Schema.Schema.Type<S>
-	): Effect.Effect<unknown, unknown, never> | unknown;
+	run(api: Api, input: Schema.Schema.Type<S>): Effect.Effect<unknown, unknown, never> | unknown;
 };
 
 type DefinedAgentTool<S extends Schema.Codec<unknown, unknown>> = AgentToolDefinition<S>;

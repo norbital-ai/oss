@@ -1,6 +1,10 @@
 import { Effect, Schema } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { decodeDatabaseSyncCursor, SyncChange, SyncCursor } from '../../src/runtime/sync/sync.js';
+import {
+	decodeDatabaseSyncCursor,
+	SyncCursor,
+	SyncPartitionDelta
+} from '../../src/runtime/sync/sync.js';
 
 describe('Sync owner', () => {
 	it('decodes ordered xid/sequence cursors', () =>
@@ -10,11 +14,11 @@ describe('Sync owner', () => {
 		}));
 	it('rejects malformed replication changes', () =>
 		expect(() =>
-			Schema.decodeUnknownSync(SyncChange)({
+			Schema.decodeUnknownSync(SyncPartitionDelta)({
 				cursor: {},
 				collection: '',
 				recordId: '',
-				operation: 'oops'
+				op: 'oops'
 			})
 		).toThrow());
 	it('normalizes PostgreSQL bigint cursor fields without widening the wire schema', async () => {

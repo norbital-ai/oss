@@ -1,9 +1,21 @@
 import { Effect, Schema } from 'effect';
 import type { InvocationScope } from '@norbital-ai/bolt-protocol';
-import { SyncChange, SyncCursor } from '#lib/runtime/sync/sync.js';
+import { SyncCursor } from '#lib/runtime/sync/sync.js';
 import type { BoltClient, BoltTransport } from '#lib/client/contracts.js';
 
-export type { BoltClient, BoltTransport } from '#lib/client/contracts.js';
+export type {
+	BoltClient,
+	BoltTransport,
+	LocallyDurableMutationResult,
+	MutationSettlement,
+	MutationSettlementHandle,
+	MutationSettlementStatus
+} from '#lib/client/contracts.js';
+export type {
+	SyncIssue,
+	WorkspaceSyncStatus,
+	WorkspaceSyncStatusSignal
+} from '#lib/client/replica/sync-status.js';
 
 /** One page of a keyset read, built once rather than per call. */
 const CollectionPage = Schema.Struct({ rows: Schema.Array(Schema.Json) });
@@ -39,9 +51,7 @@ const ClientFactories = {
 	remote: (client: BoltClient, command: string) => (input: Schema.Json, signal?: AbortSignal) =>
 		client.command(command, input, Schema.Json, signal),
 	sync: (client: BoltClient) => ({
-		head: (signal?: AbortSignal) => client.command('sync.head', null, SyncCursor, signal),
-		diff: (cursor: SyncCursor, limit = 500, signal?: AbortSignal) =>
-			client.command('sync.diff', { cursor, limit }, Schema.Array(SyncChange), signal)
+		head: (signal?: AbortSignal) => client.command('sync.head', null, SyncCursor, signal)
 	})
 };
 

@@ -5,6 +5,7 @@ import type {
 	CollectionRelationOptions
 } from '@norbital-ai/std/collection';
 import type { Component, Snippet } from 'svelte';
+import type { FieldRendererProps } from '../data-renderer.types.js';
 
 export interface MatrixRow {
 	readonly id?: string;
@@ -12,14 +13,15 @@ export interface MatrixRow {
 
 type MatrixRowKey<TRow extends MatrixRow> = Extract<keyof TRow, string>;
 
-export interface MatrixCellRendererProps<TRow extends MatrixRow = MatrixRow> {
+export type MatrixCellRendererProps<TRow extends MatrixRow = MatrixRow> = Omit<
+	FieldRendererProps,
+	'row' | 'disabled' | 'onValueChange' | 'onRowChange'
+> & {
 	row: TRow;
-	value: unknown;
-	field: CollectionField;
 	disabled: boolean;
 	onValueChange: (value: unknown) => void;
 	onRowChange: (patch: Record<string, unknown>) => void;
-}
+};
 
 export interface MatrixColumn<TRow extends MatrixRow> {
 	key: MatrixRowKey<TRow>;

@@ -31,6 +31,7 @@ failure, and owns:
 
 ```text
 .norbital/
+├── config/doctor/              # committed: doctor.config.mts + YAML extensions
 ├── diagnosis/                  # ignored
 ├── dist/                       # ignored client build (workspace.js + assets/)
 ├── artifact/                   # ignored portable server artifact (bundle.mjs, bundle-entry.mjs)
@@ -41,7 +42,7 @@ failure, and owns:
 ```
 
 Never edit generated output. Ignore generated paths individually; never ignore `.norbital/` as a
-whole because migrations are committed. The authored `tsconfig.json` extends
+whole because migrations and doctor configuration are committed. The authored `tsconfig.json` extends
 `.norbital/tsconfig.json`.
 
 ## Local package propagation

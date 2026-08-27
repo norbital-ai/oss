@@ -1,7 +1,7 @@
 // repository-health:allow SEM_PARALLEL -- the runtime workspace-schema consumes the compiler
 // schema-plan build/plan/identify names over the #lib alias, so the pair is linked, not parallel.
 import { Array, Context, Effect, Layer, Result, Schema } from 'effect';
-import { count, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { pgSchema, pgTable, text } from 'drizzle-orm/pg-core';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
 import { buildSchemaPlan, planTableNames, type SchemaPlan } from '#lib/compiler/schema-plan.js';
@@ -20,8 +20,8 @@ import * as Workspace from '#lib/runtime/workspace.js';
 import { withSystemCollections } from '#lib/runtime/schema/system-collections.js';
 
 const { bolt_schema_state: schemaState } = SYSTEM_MODEL_TABLES;
-// The lineage ledger predates system-row columns in existing tenants. Keep its runtime descriptor
-// to the one column this service owns so a migration can still record itself in that legacy shape.
+// `__drizzle_migrations` is drizzle's ledger, not Bolt's. The runtime descriptor names only the one
+// column this service reads and writes.
 const migrationLedger = pgTable('__drizzle_migrations', {
 	tag: text().notNull().unique()
 });
@@ -178,7 +178,7 @@ export const layer = Layer.effect(
 		/**
 		 * The lineage tags this database has already been brought through.
 		 *
-		 * Read from `__drizzle_migrations`, the ledger `applyLineage` and `baselineLineage` below write,
+		 * Read from `__drizzle_migrations`, the ledger `applyLineage` below writes,
 		 * so a database is recognised as being however many entries in that it actually is. Reading it
 		 * rather than assuming is what makes "pending" mean pending.
 		 */
@@ -224,86 +224,12 @@ export const layer = Layer.effect(
 				{ concurrency: 1 }
 			);
 		});
-		/**
-		 * Records the whole lineage as reached, without running any of it.
-		 *
-		 * Only ever used when the plan has just provisioned every collection from nothing. The plan renders
-		 * the *current* authored shape, which is where the lineage ends, so a database it has just built is
-		 * already at the head of the lineage; replaying entries that describe how earlier shapes became this
-		 * one would fail on the first `CREATE TABLE`.
-		 *
-		 * This is not a licence to skip. The alternative is not "apply them anyway", it is a database whose
-		 * position in the lineage is unrecorded — so the next entry `bolt migrate` appends would queue up
-		 * behind every entry that came before it and never run. And `verify` still runs afterwards and is
-		 * the arbiter: if baselining were ever the wrong answer, the divergence it names fails the migration.
-		 *
-		 * Re-baselining a workspace onto Bolt's own lineage does not retire this, and every lineage in the
-		 * realm is now Bolt's own. The plan is what provisions, and its `create table if not exists` runs
-		 * before the lineage does, so even a lineage whose first entry is a complete Bolt baseline meets
-		 * tables that already exist and fails on its own `CREATE TABLE "companies"`. Retiring this means
-		 * the lineage provisioning instead of the plan — see the note on `migrate` below.
-		 */
-		const baselineLineage = Effect.fn('WorkspaceSchema.baselineLineage')(function* (
-			effectId: EffectId
-		) {
-			if (lineage.length === 0) return;
-			yield* transactionBuilt(
-				effectId,
-				database,
-				lineage.map((entry) =>
-					composer
-						.insert(migrationLedger)
-						.values({ tag: entry.tag })
-						.onConflictDoNothing({ target: migrationLedger.tag })
-				)
-			);
-		});
 		return Service.of({
 			plan: () => schemaPlan,
 			validate,
 			fingerprint: () => schemaPlan.fingerprint,
 			migrate: Effect.fn('WorkspaceSchema.migrate')(function* (effectId) {
 				yield* validate();
-				// Taken before the plan runs, because the plan is about to create whatever is missing and
-				// afterwards nothing distinguishes a database provisioned a second ago from one that was
-				// already carrying every table. That distinction is the whole of the baseline decision
-				// below, so it has to be read while it is still observable.
-				const absent = new Set(
-					(yield* verify(effectId)).flatMap((divergence) => {
-						const missing = /^(?<table>.+): table is missing$/.exec(divergence)?.groups?.['table'];
-						return missing === undefined ? [] : [missing];
-					})
-				);
-				const allAuthoredTablesPresent = workspace.definition.collections.every(
-					({ name }) => !absent.has(name)
-				);
-				/**
-				 * Whether this database was built by the older plan, which rendered collection tables itself.
-				 *
-				 * "Has tables but no lineage tags" is not enough to say so: a database provisioned from the
-				 * lineage a moment ago also has tables and no tags yet. The discriminator is a plan fingerprint
-				 * written by a *previous* migrate — read before this run writes its own — which only a database
-				 * the old plan provisioned can have.
-				 */
-				// Two statements rather than one guarded by `case`: PostgreSQL resolves every relation a query
-				// names at parse time, whichever branch would run, so a `case` guarding the count still fails
-				// with `relation "bolt_schema_state" does not exist` on the database this exists to recognise.
-				const readField = (row: Schema.Json | undefined, key: string): unknown =>
-					typeof row === 'object' && row !== null && !Array.isArray(row)
-						? Reflect.get(row, key)
-						: undefined;
-				const planned = !absent.has('bolt_schema_state')
-					? Number(
-							readField(
-								(yield* executeBuilt(
-									effectId,
-									database,
-									composer.select({ count: count() }).from(schemaState)
-								)).rows[0],
-								'count'
-							) ?? 0
-						)
-					: 0;
 				/**
 				 * An EXCLUDE constraint has to wait for the lineage that builds the table it constrains.
 				 *
@@ -334,8 +260,7 @@ export const layer = Layer.effect(
 				// This fork is why two definitions of every collection table exist — the plan's
 				// `create table if not exists` and the lineage's `CREATE TABLE`. The intended end state is
 				// that the lineage owns collection DDL and the plan owns only extensions, functions and
-				// `bolt_*` tables, which would delete `baselineLineage` and one of the two definitions with
-				// it. Three things block it, and none is a legacy accommodation:
+				// `bolt_*` tables. Three things block it:
 				//
 				//   - `system-collections.ts` declares `approval_request` and `requestor` as
 				//     `CollectionDefinition`s, not Drizzle models. They are Bolt's, not any workspace's, so
@@ -348,23 +273,7 @@ export const layer = Layer.effect(
 				// Closing it means giving system collections and tests a generated lineage — a mechanism
 				// that does not exist. What keeps the two halves honest meanwhile is that they render the
 				// same types from the same declaration; `tests/compiler/schema-migrations.test.ts` pins that.
-				// Inverted when the plan stopped rendering collection DDL. A virgin database used to arrive
-				// here with every table already built by the plan, so the lineage was *recorded* as reached;
-				// replaying it would have failed on its own first `CREATE TABLE`. The lineage now owns those
-				// tables, so on a virgin database it is the only thing that creates them and it has to run.
-				//
-				// Baselining survives for exactly one case: a database provisioned by the older plan, which
-				// therefore has the tables but has never recorded a lineage tag. Running the lineage there
-				// would fail on `CREATE TABLE "companies"`, and skipping the record would leave its position
-				// unknown so the next authored entry would queue behind entries that can never run.
-				const recorded = yield* appliedTags(effectId);
-				// A previous plan can only have provisioned the workspace when every authored table is
-				// present. "Not wholly virgin" is weaker: a failed first lineage can leave Bolt's own tables
-				// and a plan fingerprint behind while its transactional CREATE TABLE statements roll back.
-				// Baselining that partial database records schema DDL that never committed, after which every
-				// retry skips the only statements capable of creating the missing tables.
-				const legacy = allAuthoredTablesPresent && recorded.size === 0 && planned > 0;
-				yield* legacy ? baselineLineage(effectId) : applyLineage(effectId);
+				yield* applyLineage(effectId);
 				// Now that the collections exist, whichever half created them.
 				if (postLineageSteps.length > 0) {
 					yield* transactionBuilt(

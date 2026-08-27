@@ -1,11 +1,18 @@
 /** Framework-owned fields added to every collection by the shared model compiler. */
-export const SYSTEM_COLLECTION_FIELD_NAMES: ReadonlyArray<string> = Object.freeze([
+const SYSTEM_COLLECTION_FIELD_NAME_VALUES = [
 	'id',
 	'created_at',
 	'updated_at',
 	'sys_period',
 	'row_version',
 	'approval_id'
+] as const;
+
+export type SystemCollectionFieldName = (typeof SYSTEM_COLLECTION_FIELD_NAME_VALUES)[number];
+
+/** Public runtime list stays string-wide so callers may test an arbitrary field name with includes. */
+export const SYSTEM_COLLECTION_FIELD_NAMES: ReadonlyArray<string> = Object.freeze([
+	...SYSTEM_COLLECTION_FIELD_NAME_VALUES
 ]);
 
 const SYSTEM_COLLECTION_FIELDS: ReadonlySet<string> = new Set(SYSTEM_COLLECTION_FIELD_NAMES);

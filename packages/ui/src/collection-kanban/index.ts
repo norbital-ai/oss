@@ -8,6 +8,11 @@ export type {
 	CollectionRecordRestrictionMetadata
 } from '../collection-record-metadata/index.js';
 export type {
+	CollectionKanbanCardRole,
+	CollectionKanbanField,
+	CollectionKanbanFieldComponent,
+	CollectionKanbanFieldPrimitiveProps,
+	CollectionKanbanFieldsComposition,
 	CollectionKanbanMove,
 	CollectionKanbanName,
 	CollectionKanbanProps

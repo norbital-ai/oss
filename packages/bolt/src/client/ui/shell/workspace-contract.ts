@@ -1,9 +1,10 @@
 import type { WorkspaceSession } from '#lib/client/session.js';
 import type { TenantMessageCatalogs } from '#lib/client/ui/agent/i18n.js';
 import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
+import type { WorkspaceClientRuntime } from '#lib/client/contracts.js';
 import type { Component } from 'svelte';
 import type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';
-import type { CustomTypeRendererMap } from '@norbital-ai/ui/data-renderer';
+import type { CustomTypeRenderer } from '@norbital-ai/ui/data-renderer';
 
 /**
  * The whole of what a host says across the boundary, in three parts.
@@ -51,6 +52,43 @@ export type WorkspaceView = {
 	readonly search: string;
 };
 
+/** The three user-facing stages a host may report while it prepares an offline workspace. */
+export type WorkspaceBootstrapPhase = 'preparing' | 'loading' | 'applying';
+
+/** Optional measured progress. A missing total remains indeterminate rather than inventing one. */
+export type WorkspaceBootstrapProgress = Readonly<{
+	readonly phase: WorkspaceBootstrapPhase;
+	readonly completed?: number;
+	readonly total?: number;
+	readonly unit?: 'rows' | 'bytes';
+}>;
+
+/** Whether the partition already contains a replica the current runtime can safely resume. */
+export type WorkspaceReplicaCompatibility = 'compatible' | 'missing' | 'incompatible';
+
+/** The smallest lifetime handle the host needs after replica startup completes. */
+export type WorkspaceReplicaHandle = Readonly<{ readonly stop: () => void }>;
+
+/**
+ * Bolt's replica capability, registered with the host that owns when and how it starts.
+ *
+ * Only `start` exists in every implementation. The optional members are facts an evolving sync
+ * engine may be able to prove; their absence tells the host to use an indeterminate loader and its
+ * hard online fallback. In particular, `clearAndRebuild` both classifies a startup failure and
+ * returns the recovery action. Returning `undefined` means the failure is not verified local
+ * corruption, so destructive recovery must not be offered.
+ */
+export type WorkspaceBootstrapController = Readonly<{
+	readonly start: () => Promise<WorkspaceReplicaHandle>; // repository-health:allow EFF2 -- The generated browser runtime exposes a Promise boundary and the host owns its lifecycle.
+	readonly inspectCompatibility?: () => Promise<WorkspaceReplicaCompatibility>; // repository-health:allow EFF2 -- Inspection crosses the separately compiled workspace/host boundary.
+	readonly subscribeProgress?: (
+		listener: (progress: WorkspaceBootstrapProgress) => void
+	) => () => void;
+	readonly initialCatchUpReady?: () => Promise<void>; // repository-health:allow EFF2 -- Initial catch-up readiness crosses the separately compiled workspace/host boundary.
+	readonly continueOnline?: () => void;
+	readonly clearAndRebuild?: (cause: unknown) => undefined | (() => Promise<void>); // repository-health:allow EFF2 -- Corruption recovery crosses the separately compiled workspace/host boundary.
+}>;
+
 /**
  * What the workspace asks the host to do, because only the host can do it.
  *
@@ -78,6 +116,14 @@ export type WorkspaceHostActions = {
 	 */
 	readonly impersonate: (teamId: string) => void;
 	readonly stopImpersonating: () => void;
+	/**
+	 * Gives the root host a replica starter without starting it inside the generated workspace.
+	 *
+	 * Optional for one release boundary: an older host can still mount a newer workspace over the
+	 * network, while a current host owns bootstrap, its five-second escape and teardown. The returned
+	 * callback unregisters exactly this authority scope.
+	 */
+	readonly registerBootstrap?: (controller: WorkspaceBootstrapController) => () => void;
 };
 
 export type AppGroup = Readonly<{
@@ -113,12 +159,14 @@ export type CompiledWorkspace = Readonly<{
 		Record<string, () => Promise<NonNullable<CollectionSurface['representation']>>> // repository-health:allow EFF2 -- Vite dynamic imports are native Promises and workspace.svelte adapts every loader into Effect.tryPromise immediately.
 	>;
 	readonly customTypeRendererLoaders: Readonly<
-		Record<string, () => Promise<CustomTypeRendererMap[string]>> // repository-health:allow EFF2 -- Vite dynamic imports are native Promises and workspace.svelte adapts every loader into Effect.tryPromise immediately.
+		Record<string, () => Promise<CustomTypeRenderer>> // repository-health:allow EFF2 -- Vite dynamic imports are native Promises and workspace.svelte adapts every loader into Effect.tryPromise immediately.
 	>;
 	readonly policyNames: ReadonlyArray<string>;
 	readonly tenantMessages: TenantMessageCatalogs;
 	/** The workspace's own collection client, for Studio's Data tab. */
 	readonly client: WorkspaceClient;
+	/** Internal runtime used only to build the host-owned replica bootstrap capability. */
+	readonly runtime?: WorkspaceClientRuntime;
 	/** Withdraws browser data from the previous policy scope before reactive reads resume. */
 	readonly changeAccessScope: (accessScope: string) => void;
 	/** Boots the local PGlite replica against the same runtime `client` reads through. */

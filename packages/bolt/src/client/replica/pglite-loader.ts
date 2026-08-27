@@ -1,8 +1,19 @@
 // repository-health:allow SEM_PARALLEL -- pglite-loader adapts the engine to the replica store's
 // PGliteLike port over the #lib alias, so the pair is linked, not parallel.
 import type { PGliteLike, ProvisioningStep } from '#lib/client/replica/pglite-sql.js';
+import {
+	type ReplicaPartitionIdentity,
+	type ReplicationLeadership
+} from '#lib/client/replica/leader.js';
+import {
+	selectReplicaStorage,
+	type ReplicaStorageDecision
+} from '#lib/client/replica/budget.js';
 import { Effect } from 'effect';
 import type { PGliteInterface } from '@electric-sql/pglite';
+import { replicaLocation } from '#lib/client/replica/physical-storage.js';
+
+export { replicaLocation } from '#lib/client/replica/physical-storage.js';
 
 /**
  * Loading the local database engine, on Bolt's side of the boundary.
@@ -20,9 +31,10 @@ import type { PGliteInterface } from '@electric-sql/pglite';
  *
  * The database lives in a worker that every tab shares, rather than in the page. Three tabs on one
  * workspace used to mean three engines, three copies of the rows, and three sync loops fetching the
- * same diffs — and three writers to a single persisted IndexedDB database, which risks corrupting it
- * rather than merely wasting the work. PGlite elects a leader across tabs through the Web Locks API;
- * only the leader holds the database and the rest proxy to it, so they all read the same rows.
+ * same diffs — and three writers to a single persisted database, which risks corrupting it rather
+ * than merely wasting the work. PGlite's election chooses the worker that executes SQL; Bolt's
+ * explicit partition Web Lock separately chooses the one document allowed to bootstrap, replicate
+ * and migrate. Followers proxy SQL to the shared worker and never perform network sync.
  */
 
 type SharedPGlite = PGliteInterface & {
@@ -31,13 +43,20 @@ type SharedPGlite = PGliteInterface & {
 };
 
 /** The one adapter from PGlite's Promise API into the replica's Effect-native database port. */
-export const adaptPGlite = (database: SharedPGlite): PGliteLike => ({
+export const adaptPGlite = (database: SharedPGlite, afterClose?: () => void): PGliteLike => ({
 	query: <T>(sql: string, parameters?: ReadonlyArray<unknown>) =>
 		Effect.tryPromise(() =>
 			database.query<T>(sql, parameters === undefined ? undefined : [...parameters])
 		).pipe(Effect.map((result) => ({ rows: result.rows }))),
 	exec: (sql) => Effect.tryPromise(() => database.exec(sql)),
-	close: () => Effect.tryPromise(() => database.close()),
+	close: () =>
+		Effect.tryPromise(async () => {
+			try {
+				await database.close();
+			} finally {
+				afterClose?.();
+			}
+		}),
 	get isLeader() {
 		return database.isLeader ?? true;
 	},
@@ -49,21 +68,50 @@ export const adaptPGlite = (database: SharedPGlite): PGliteLike => ({
 });
 
 /**
- * Where the replica persists, scoped to the workspace it mirrors.
- *
- * Unscoped, one browser signed into two workspaces pointed both at `idb://bolt-replica`. The rebuild
- * check would usually paper over it — a different schema means a different fingerprint means a
- * rebuild — but two workspaces built from the *same template* have the same fingerprint, and there
- * the second one would silently inherit the first one's rows and believe them.
+ * Makes Bolt's explicit replication lock, rather than PGlite's engine-owner election, visible to the
+ * bootstrap and sync layers. Queries still proxy through PGlite's actual worker owner; this adapter
+ * decides only which document is allowed to perform replication network work and schema migration.
  */
-export const replicaLocation = (scope: string): string =>
-	`idb://bolt-replica::${scope.replaceAll(/[^a-zA-Z0-9:_-]/g, '_')}`;
+export const withReplicationLeadership = (
+	database: PGliteLike,
+	leadership: ReplicationLeadership
+): PGliteLike => ({
+	query: <T>(sql: string, parameters?: ReadonlyArray<unknown>) =>
+		database.query<T>(sql, parameters),
+	exec: (sql) => database.exec(sql),
+	close: () => database.close(),
+	get isLeader() {
+		return leadership.leader();
+	},
+	listen: (channel, callback) => database.listen(channel, callback),
+	onLeaderChange: (callback) => leadership.onChange(() => callback())
+});
+
+export class ReplicaServerOnly extends Error {
+  readonly tier = 'server-only' as const;
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(`Local replica unavailable: ${reason}`);
+    this.reason = reason;
+    this.name = 'ReplicaServerOnly';
+  }
+}
+
+export type OpenPGliteOptions = Readonly<{
+	readonly storage?: ReplicaStorageDecision;
+	readonly leadership?: ReplicationLeadership;
+}>;
 
 export const openPGlite = Effect.fn('Replica.openPGlite')(function* (
 	_steps: ReadonlyArray<ProvisioningStep>,
-	scope: string = 'local'
+	scope: string | ReplicaPartitionIdentity = 'local',
+	options: OpenPGliteOptions = {}
 ): Effect.fn.Return<PGliteLike, unknown> {
-	const dataDir = replicaLocation(scope);
+	const storage =
+		options.storage ?? (yield* Effect.tryPromise(() => selectReplicaStorage()));
+	if (storage.tier === 'server-only') return yield* Effect.fail(new ReplicaServerOnly(storage.reason));
+	const dataDir = replicaLocation(scope, storage.tier);
 	/**
 	 * `new URL(..., import.meta.url)` rather than a bare specifier, because this has to survive being
 	 * a dependency: the bundler rewrites this form into an emitted worker chunk, while a plain string
@@ -77,10 +125,18 @@ export const openPGlite = Effect.fn('Replica.openPGlite')(function* (
 	// called later; importing it here makes startup, not module evaluation, the first point that can
 	// fetch or evaluate PGlite.
 	const { PGliteWorker } = yield* Effect.tryPromise(() => import('@electric-sql/pglite/worker'));
-	// `id` is the leader-election key. Scoping it to the workspace keeps two open workspaces from
-	// electing one leader between them and proxying one's queries into the other's database.
-	const database = yield* Effect.tryPromise(() =>
-		PGliteWorker.create(engine, { dataDir, id: dataDir })
-	);
-	return adaptPGlite(database);
+	// PGlite's internal worker-owner election shares the same physical partition key. It is intentionally
+	// separate from Bolt's replication lock, but neither may ever cross a partition boundary.
+	const database = yield* Effect.tryPromise(async () => {
+		try {
+			return await PGliteWorker.create(engine, { dataDir, id: dataDir });
+		} catch (cause) {
+			engine.terminate();
+			throw cause;
+		}
+	});
+	const adapted = adaptPGlite(database, () => engine.terminate());
+	return options.leadership === undefined
+		? adapted
+		: withReplicationLeadership(adapted, options.leadership);
 });

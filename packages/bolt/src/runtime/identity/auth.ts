@@ -1,5 +1,5 @@
-import { betterAuth } from 'better-auth';
-import { emailOTP } from 'better-auth/plugins';
+import { betterAuth } from 'better-auth/minimal';
+import { emailOTP } from 'better-auth/plugins/email-otp';
 import { Effect } from 'effect';
 import { AUTH_MODELS } from '#lib/authoring/system-models.js';
 import { makeAuthStore, type ExecuteQuery } from '#lib/runtime/identity/auth-store.js';
@@ -30,7 +30,17 @@ const PLATFORM_TIMESTAMP_FIELDS = {
 export const DEVELOPMENT_SIGN_IN_CODE = '123456';
 
 /**
- * How bolt asks its host to deliver a code. Never called in development, where nothing is sent.
+ * How long a sign-in code is redeemable.
+ *
+ * Exported because the durable delivery task must stop attempting once the challenge it carries can
+ * no longer be redeemed. Keeping the lifetime beside Better Auth's configuration prevents the
+ * persisted challenge and its courier from drifting to different clocks.
+ */
+export const SIGN_IN_CODE_EXPIRES_SECONDS = 600;
+
+/**
+ * What Bolt does with a code after Better Auth persists it. In the runtime this durably enqueues
+ * provider delivery; a focused auth test may bind a direct courier. Never called in development.
  *
  * The purposes are Better Auth's own, taken from its type rather than restated: a narrower union
  * here would compile until the day a plugin sends a purpose this bolt never listed, and then fail at
@@ -105,7 +115,7 @@ export const makeAuth = (
 		plugins: [
 			emailOTP({
 				otpLength: 6,
-				expiresIn: 600,
+				expiresIn: SIGN_IN_CODE_EXPIRES_SECONDS,
 				// Three tries per code. Enough for a typo, few enough that guessing a six-digit code is
 				// not a matter of patience.
 				allowedAttempts: 3,

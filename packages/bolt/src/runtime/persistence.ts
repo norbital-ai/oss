@@ -161,6 +161,27 @@ export const qualified = (tableAlias: string, column: string): SQL =>
 export const dynamicTable = (table: string, tableAlias: string): SQL =>
 	expression([sql.identifier(table), fixed(' as '), sql.identifier(tableAlias)]);
 
+/**
+ * Rehydrates one captured JSON row as its declared PostgreSQL composite type.
+ *
+ * Sync uses this as a one-row FROM source so the exact compiled access predicate can be evaluated
+ * independently against an outbox row's before and after images. Both table and alias are
+ * builder-escaped identifiers; the image remains an expression supplied by the typed outbox table.
+ */
+export const jsonRecord = (
+	table: string,
+	image: SQLWrapper,
+	tableAlias: string
+): SQL =>
+	expression([
+		fixed('jsonb_populate_record(null::'),
+		sql.identifier(table),
+		fixed(', '),
+		image,
+		fixed(') as '),
+		sql.identifier(tableAlias)
+	]);
+
 /** Compares a UUID primary key after an optional snapshot cursor. */
 export const uuidAfter = (column: SQLWrapper, value: string): SQL<boolean> =>
 	expression([column, fixed(' > '), sql.param(value), fixed('::uuid')]);
@@ -172,7 +193,14 @@ export const asText = (value: SQLWrapper): SQL<string> => expression([value, fix
 export const rowJson = (tableAlias: string): SQL<Schema.Json> =>
 	expression([fixed('to_jsonb('), sql.identifier(tableAlias), fixed(')')]);
 
-/** One pgvector distance expression over a bound vector literal. */
+/**
+ * The pgvector distance between a vector column and a probe, as an orderable expression.
+ *
+ * The probe is bound as one parameter and cast, never interpolated: a driver binds a JavaScript
+ * array as a Postgres *array*, which `vector` is not, so the literal text form cast to `::vector`
+ * is what pgvector parses. Ordering by this expression is what lets an HNSW index answer the
+ * query — a distance computed in the client cannot use the index at all.
+ */
 export const vectorDistance = (
 	column: SQLWrapper,
 	operator: '<->' | '<#>' | '<=>',
@@ -197,6 +225,44 @@ export const jsonTextEquals = (column: SQLWrapper, key: string, value: string): 
 /** Binds already-encoded JSON text as a JSONB expression. */
 export const jsonb = (value: Schema.Json): SQL<Schema.Json> =>
 	expression([sql.param(JSON.stringify(value)), fixed('::jsonb')]);
+
+/** Whether a JSONB string array contains at least one member of a closed caller-supplied set. */
+export const jsonArrayContainsAny = (
+	column: SQLWrapper,
+	values: ReadonlyArray<string>
+): SQL<boolean> =>
+	values.length === 0
+		? nothing()
+		: expression([
+				column,
+				fixed(' ?| array['),
+				sql.join(values.map((value) => sql.param(value)), fixed(', ')),
+				fixed(']::text[]')
+			]);
+
+/** Approximate uncompressed bytes one retained sync event would cost to replay over the wire. */
+export const syncReplayEventBytes = (
+	before: SQLWrapper,
+	after: SQLWrapper,
+	invalidatedCollections: SQLWrapper
+): SQL<number> =>
+	expression([
+		// `pg_column_size(jsonb)` measures PostgreSQL's stored/TOAST representation. The client compares
+		// this value with uncompressed replica bytes, so using the stored size systematically favours
+		// replay. Text length is the comparable bounded wire-size estimate for all three JSON values.
+		fixed('(coalesce(octet_length(cast('),
+		before,
+		fixed(' as text)), 0) + coalesce(octet_length(cast('),
+		after,
+		fixed(' as text)), 0) + coalesce(octet_length(cast('),
+		invalidatedCollections,
+		// Cursor, operation, collection, record id, row version and JSON envelope overhead.
+		fixed(' as text)), 0) + 192)')
+	]);
+
+/** Sums an integer cost expression, returning zero rather than null for an empty history range. */
+export const sumInteger = (value: SQLWrapper): SQL<number> =>
+	expression([fixed('coalesce(sum('), value, fixed('), 0)::bigint')]);
 
 /** Lexicographically keeps the largest durable cursor value. */
 export const greatest = <T>(left: SQLWrapper<T>, right: SQLWrapper): SQL<T> =>

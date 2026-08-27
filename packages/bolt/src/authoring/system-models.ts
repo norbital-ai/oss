@@ -688,7 +688,16 @@ const syncOutboxModel = defineModel(
 		collection_name: text().notNull(),
 		record_id: text().notNull(),
 		operation: text().notNull(),
-		record: jsonb()
+		/** Original v2 journal identity, stamped transaction-locally for exact overlay retirement. */
+		mutation_id: text(),
+		/** Complete authoritative row immediately before the write, including `row_version`. */
+		before_record: jsonb(),
+		/** Complete authoritative row immediately after the write, including `row_version`. */
+		after_record: jsonb(),
+		/** Dependent collections whose visibility proof this write invalidated. */
+		invalidated_collections: jsonb()
+			.notNull()
+			.default(sql`'[]'::jsonb`)
 	},
 	{
 		history: false,
@@ -701,6 +710,22 @@ const syncOutboxModel = defineModel(
 			}
 		]
 	}
+);
+
+/**
+ * Monotonic proof counters for streamed collection visibility.
+ *
+ * `__authority__` is the one reserved key. It advances when a subject/holder collection changes and
+ * is folded into the server-derived partition identity; every other key names a synced collection.
+ */
+const syncGenerationModel = defineModel(
+	{
+		collection_name: text().notNull().unique(),
+		generation: bigint({ mode: 'number' }).notNull().default(0),
+		/** The transaction that last advanced this collection; repeated rows in it count once. */
+		last_xid: bigint({ mode: 'number' }).notNull().default(0)
+	},
+	{ history: false, sync: false }
 );
 
 const syncHorizonModel = defineModel(
@@ -754,6 +779,103 @@ const workspaceIdentitySettingsModel = defineModel(
 	{ history: false, sync: false }
 );
 
+/**
+ * The tenant-database authority for browser mutation replay.
+ *
+ * Scope columns are all host/authentication facts. None is accepted from the command payload. The
+ * request digest detects a client that reuses a key for different work, while `outcome` is the
+ * compact, typed result needed to answer a retry without running authored hooks again.
+ */
+const browserMutationModel = defineModel(
+	{
+		tenant_id: text().notNull(),
+		environment: text().notNull(),
+		principal_id: text().notNull(),
+		authority_id: text().notNull(),
+		command: text().notNull(),
+		idempotency_key: text().notNull(),
+		device_sequence: bigint({ mode: 'number' }).notNull(),
+		partition_key: text().notNull(),
+		schema_fingerprint: text().notNull(),
+		request_digest: text().notNull(),
+		status: text().notNull(),
+		outcome: jsonb(),
+		/** Last outbox coordinate produced by the committed graph; both null until commit. */
+		confirmed_xid: bigint({ mode: 'number' }),
+		confirmed_sequence: bigint({ mode: 'number' }),
+		issued_at: instant().notNull(),
+		lease_expires_at: instant(),
+		expires_at: instant().notNull()
+	},
+	{
+		history: false,
+		sync: false,
+		indexes: [
+			{
+				name: 'bolt_browser_mutation_scope_key',
+				columns: [
+					'tenant_id',
+					'environment',
+					'principal_id',
+					'authority_id',
+					'command',
+					'idempotency_key'
+				],
+				unique: true
+			},
+			{
+				name: 'bolt_browser_mutation_device_order',
+				columns: ['tenant_id', 'environment', 'principal_id', 'authority_id', 'device_sequence']
+			},
+			{ name: 'bolt_browser_mutation_expiry', columns: ['expires_at'] }
+		]
+	}
+);
+
+/**
+ * Server-issued physical O2 identities accepted from offline mutation journals.
+ *
+ * The key itself is opaque. The remaining columns bind it to the authenticated actor/effective
+ * subject/impersonation tuple that received it, while the full identity preserves the schema and
+ * authority generation the old replica actually used.
+ */
+const syncPartitionRegistryModel = defineModel(
+	{
+		partition_key: text().notNull(),
+		tenant_id: text().notNull(),
+		environment: text().notNull(),
+		actor_id: text().notNull(),
+		effective_subject_id: text().notNull(),
+		impersonation_binding: text().notNull().default('operator'),
+		schema_fingerprint: text().notNull(),
+		authority_generation: integer().notNull(),
+		identity: jsonb().notNull(),
+		issued_at: instant().notNull().defaultNow(),
+		last_seen_at: instant().notNull().defaultNow(),
+		expires_at: instant().notNull()
+	},
+	{
+		history: false,
+		sync: false,
+		indexes: [
+			{
+				name: 'bolt_sync_partition_registry_member',
+				columns: [
+					'partition_key',
+					'tenant_id',
+					'environment',
+					'actor_id',
+					'effective_subject_id',
+					'impersonation_binding'
+				],
+				unique: true
+			},
+			{ name: 'bolt_sync_partition_registry_partition', columns: ['partition_key'] },
+			{ name: 'bolt_sync_partition_registry_expiry', columns: ['expires_at'] }
+		]
+	}
+);
+
 export const SYSTEM_COLLECTION_MODELS = Object.freeze({
 	approval_request: approvalRequestModel,
 	requestor: requestorModel,
@@ -788,9 +910,12 @@ export const INTERNAL_SYSTEM_MODELS = Object.freeze({
 	__drizzle_migrations: schemaMigrationModel,
 	bolt_sync_outbox: syncOutboxModel,
 	bolt_sync_horizon: syncHorizonModel,
+	bolt_sync_generation: syncGenerationModel,
 	bolt_secrets: secretModel,
 	bolt_personal_secrets: personalSecretModel,
 	bolt_workspace_identity_settings: workspaceIdentitySettingsModel,
+	bolt_browser_mutation: browserMutationModel,
+	bolt_sync_partition_registry: syncPartitionRegistryModel,
 	bolt_schedule: scheduleModel,
 	bolt_task: taskModel
 });

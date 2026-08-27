@@ -1,41 +1,17 @@
 <script lang="ts">
-	import { Effect } from 'effect';
-	import GeolocationPicker from './geolocation/geolocation.input.svelte';
-	import {
-		parseGeolocationPickerValues,
-		type TGeolocationPickerValue
-	} from '#lib/data-renderer/geolocation/geolocation.utils';
-	import { StructuredValue } from '#lib/structured-value';
-	import { readFileRef } from '#lib/data-renderer/file/file.types';
+	import type { CollectionRecord, CollectionRelationOptions } from '@norbital-ai/std/collection';
+	import { resolveRecordLabel } from '@norbital-ai/std/collection';
+	import { humanize } from '@norbital-ai/std/string';
+	import type { Component } from 'svelte';
+	import { getOptionalCollectionClientContext } from '#lib/collection-runtime';
 	import { useI18n } from '#lib/i18n';
-	import { cn } from '#lib/utils';
-	import DataRendererEditor from './data-renderer-editor.svelte';
-	import { getDataRendererRuntimeContext } from '#lib/data-renderer/data-renderer-runtime';
-	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
-	import { formatDataValue } from '#lib/data-renderer/data-renderer.utils';
-	import NumericRenderer from './numeric/numeric.renderer.svelte';
+	import DataRendererBuiltin from './data-renderer-builtin.svelte';
+	import DataRendererControl from './data-renderer-control.svelte';
+	import { getDataRendererRuntimeContext } from './data-renderer-runtime.js';
+	import type { DataRendererProps, FieldRendererProps } from './data-renderer.types.js';
+	import RelationshipRenderer from './relationship/relationship.renderer.svelte';
 
 	const { t } = useI18n();
-
-	const BUILTIN_DISPLAY_KINDS = new Set([
-		'boolean',
-		'enum',
-		'file',
-		'geolocation',
-		'integer',
-		'instant',
-		'instant_range',
-		'money',
-		'numeric',
-		'number',
-		'phone',
-		'string',
-		'text',
-		'uuid'
-	]);
-
-	const NUMERIC_KINDS = new Set(['numeric', 'number', 'integer']);
-
 	let {
 		field,
 		value,
@@ -47,146 +23,119 @@
 		row,
 		onRowChange,
 		locale,
-		class: className
+		class: className,
+		renderer,
+		rendererProps = {},
+		relationOptions
 	}: DataRendererProps = $props();
 	const localeEffective = $derived(locale ?? useI18n().intlLocale);
+	const effectiveDisabled = $derived(disabled || mode === 'display');
 	const rendererRuntime = getDataRendererRuntimeContext();
-	const autocompleteGeolocation =
-		rendererRuntime?.autocompleteGeolocation ?? (() => Effect.succeed([]));
-	const customRenderer = $derived(rendererRuntime?.customTypeRenderers[field.kind]);
-
-	/**
-	 * A `file()` value displayed: its name, linking to its bytes.
-	 *
-	 * This used to route through `RelationshipRenderer` at `document_asset`, which was the only
-	 * renderer able to turn an id into a label — a file column held a uuid and the name lived on
-	 * another row. It fetched per record to show a filename, and it showed nothing at all, because
-	 * the upload path never wrote the row it was fetching. The value now carries the name, so there
-	 * is no target, no fetch, and no id to resolve.
-	 *
-	 * A relation field is still a uuid and still renders as exactly that: text. Showing it as a
-	 * labelled record is an explicit choice, made by passing `RelationshipRenderer` yourself with
-	 * the option set you want (a table column's `render`, a form field's `renderer`). Nothing about
-	 * the relation is inferred, and no surface fetches on your behalf.
-	 */
-	const displayedFiles = $derived.by(
-		(): ReadonlyArray<{ id: string; name: string; url: string | null }> => {
-			if (field.kind !== 'file' || field.relation) return [];
-			const candidates = Array.isArray(value) ? value : value == null ? [] : [value];
-			return candidates.flatMap((candidate) => {
-				const ref = readFileRef(candidate);
-				if (ref === null) return [];
-				return [
-					{
-						id: ref.storage_key,
-						name: ref.file_name,
-						url: rendererRuntime?.fileUrl(ref.storage_key) ?? null
-					}
-				];
-			});
-		}
+	const customRendererState = $derived(rendererRuntime?.customTypeRenderer(field.kind));
+	const explicitRenderer = $derived(
+		renderer as Component<FieldRendererProps & Record<string, unknown>> | undefined
 	);
-	const isFileDisplay = $derived(field.kind === 'file' && !field.relation && mode !== 'edit');
-	const geolocationValue = $derived.by(
-		(): TGeolocationPickerValue | TGeolocationPickerValue[] | null =>
-			parseGeolocationPickerValues(value, field.array ?? false)
+	const collectionClient = getOptionalCollectionClientContext();
+	const relationTarget = $derived(field.relation?.target);
+	const relationDefinition = $derived(
+		relationTarget ? collectionClient?.collections[relationTarget] : undefined
 	);
-	const geolocationValues = $derived(Array.isArray(geolocationValue) ? geolocationValue : []);
-	const geolocationSingle = $derived(
-		geolocationValue && !Array.isArray(geolocationValue) ? geolocationValue : null
-	);
-	const usesStructuredDisplay = $derived(
-		field.kind === 'json' ||
-			(value != null && typeof value === 'object' && !BUILTIN_DISPLAY_KINDS.has(field.kind))
-	);
+	const automaticRelationOptions = $derived.by((): CollectionRelationOptions | undefined => {
+		if (!relationTarget) return undefined;
+		return {
+			label: (record: CollectionRecord) =>
+				resolveRecordLabel(relationDefinition?.recordLabel ?? null, record) ??
+				humanize(relationTarget)
+		};
+	});
+	const automaticRelationLabel = $derived.by((): string | string[] | null => {
+		if (!field.relation || !row) return null;
+		const related = Reflect.get(row, field.relation.name);
+		const records = Array.isArray(related) ? related : related == null ? [] : [related];
+		const labels = records.flatMap((record) => {
+			if (record == null || typeof record !== 'object' || Array.isArray(record)) return [];
+			const label = (relationOptions ?? automaticRelationOptions)?.label(record);
+			return label ? [label] : [];
+		});
+		if (labels.length === 0) return null;
+		return field.array ? labels : (labels[0] ?? null);
+	});
 </script>
 
-{#if customRenderer}
-	{@const CustomRenderer = customRenderer}
-	<CustomRenderer
-		{field}
-		{value}
-		{id}
-		{mode}
-		{disabled}
-		{placeholder}
-		{onValueChange}
-		{row}
-		{onRowChange}
-		locale={localeEffective}
-		class={className}
-	/>
-{:else if field.kind === 'geolocation' && mode === 'display' && field.array}
-	<GeolocationPicker
-		value={geolocationValues}
-		multiple={true}
-		autocomplete={autocompleteGeolocation}
-		readonly
-		class={className}
-	/>
-{:else if field.kind === 'geolocation' && mode === 'display'}
-	<GeolocationPicker
-		value={geolocationSingle}
-		multiple={false}
-		autocomplete={autocompleteGeolocation}
-		readonly
-		class={className}
-	/>
-{:else if NUMERIC_KINDS.has(field.kind) && mode === 'display'}
-	<NumericRenderer
-		{field}
-		{value}
-		mode="display"
-		placeholder={t('dataRenderer.null')}
-		locale={localeEffective}
-		class={className}
-	/>
-{:else if field.kind === 'file' && mode === 'edit'}
-	<DataRendererEditor
-		{field}
-		{value}
-		{id}
-		{disabled}
-		{placeholder}
-		{onValueChange}
-		locale={localeEffective}
-		class={className}
-	/>
-{:else if isFileDisplay}
-	{#if displayedFiles.length === 0}
-		<span class={cn('text-muted-foreground', className)}>{placeholder}</span>
-	{:else}
-		<span class={cn('inline-flex flex-wrap gap-x-2 gap-y-1', className)}>
-			{#each displayedFiles as file (file.id)}
-				{#if file.url === null}
-					<span class="truncate">{file.name}</span>
-				{:else}
-					<a
-						href={file.url}
-						target="_blank"
-						rel="noreferrer"
-						class="truncate underline underline-offset-2"
-					>
-						{file.name}
-					</a>
-				{/if}
-			{/each}
-		</span>
-	{/if}
-{:else if mode === 'edit'}
-	<DataRendererEditor
-		{field}
-		{value}
-		{id}
-		{disabled}
-		{placeholder}
-		{onValueChange}
-		locale={localeEffective}
-		class={className}
-	/>
-{:else if usesStructuredDisplay}
-	<StructuredValue {value} class={className} />
-{:else}
-	{@const displayValue = formatDataValue(field, value, localeEffective, t)}
-	<span class={cn('block truncate', className)} title={displayValue}>{displayValue}</span>
-{/if}
+<DataRendererControl {mode} class={className}>
+	{#snippet children()}
+		{#if explicitRenderer}
+			{@const ExplicitRenderer = explicitRenderer}
+			<ExplicitRenderer
+				{...rendererProps}
+				{field}
+				{value}
+				{id}
+				{mode}
+				disabled={effectiveDisabled}
+				{placeholder}
+				{onValueChange}
+				{row}
+				{onRowChange}
+				locale={localeEffective}
+				class="min-w-0 w-full"
+			/>
+		{:else if field.relation}
+			<RelationshipRenderer
+				{field}
+				{value}
+				{id}
+				{mode}
+				disabled={effectiveDisabled}
+				{placeholder}
+				{onValueChange}
+				{row}
+				locale={localeEffective}
+				options={relationOptions ?? automaticRelationOptions}
+				label={automaticRelationLabel}
+				class="min-w-0 w-full"
+			/>
+		{:else if customRendererState?.status === 'ready'}
+			{@const CustomRenderer = customRendererState.renderer}
+			<CustomRenderer
+				{field}
+				{value}
+				{id}
+				{mode}
+				disabled={effectiveDisabled}
+				{placeholder}
+				{onValueChange}
+				{row}
+				{onRowChange}
+				locale={localeEffective}
+				class="min-w-0 w-full"
+			/>
+		{:else if customRendererState?.status === 'loading'}
+			<span class="block min-w-0 truncate text-muted-foreground" role="status">
+				{t('dataRenderer.rendererLoading')}
+			</span>
+		{:else if customRendererState?.status === 'failed'}
+			<span
+				class="block min-w-0 truncate text-destructive"
+				role="alert"
+				title={customRendererState.error.message}
+			>
+				{t('dataRenderer.rendererFailed')}
+			</span>
+		{:else}
+			<DataRendererBuiltin
+				{field}
+				{value}
+				{id}
+				{mode}
+				disabled={effectiveDisabled}
+				{placeholder}
+				{onValueChange}
+				{row}
+				{onRowChange}
+				locale={localeEffective}
+				class="min-w-0 w-full"
+			/>
+		{/if}
+	{/snippet}
+</DataRendererControl>

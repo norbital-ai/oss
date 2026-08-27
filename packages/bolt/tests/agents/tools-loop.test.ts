@@ -86,7 +86,12 @@ const definition = workspace({
 		})
 	],
 	skills: [{ name: 'payroll', body: '# Payroll\n\nUse the approved workflow.' }],
-	requiredFacilities: ['database', 'ai', 'tasks', 'hostTools']
+	requiredFacilities: ['database', 'ai', 'tasks', 'hostTools'],
+	mutationCompatibility: {
+		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
+		currentSchemaFingerprint: 'sha256:tools-loop-fixture',
+		adapters: []
+	}
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-tools' });
 const bundle = makeBundle(definition, manifest, {});

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { EnvironmentName, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '../../src/client.js';
@@ -34,6 +34,18 @@ describe('the sync engine read cache', () => {
 		expect(cacheKeyFor('collections.findMany', { collection: 'people', limit: 20 })).not.toBe(
 			cacheKeyFor('collections.findMany', { collection: 'people', limit: 21 })
 		);
+		// Unlike the input object's own spelling, term order changes the SQL ordering and its cursor.
+		expect(
+			cacheKeyFor('collections.findMany', {
+				collection: 'people',
+				orderBy: { name: 'asc', created_at: 'desc' }
+			})
+		).not.toBe(
+			cacheKeyFor('collections.findMany', {
+				collection: 'people',
+				orderBy: { created_at: 'desc', name: 'asc' }
+			})
+		);
 	});
 
 	it('names the collections an answer depends on, and admits when it cannot know', () => {
@@ -65,7 +77,7 @@ describe('the sync engine read cache', () => {
 		expect(await Effect.runPromise(cache.read('a'))).toBeUndefined();
 	});
 
-	it('paints the previous answer before the wire replies, then stops once the change lands', async () => {
+	it('never paints persisted answers before a fresh wire or coverage proof replies', async () => {
 		const cache = createQueryCache('tenant::test');
 		const queries = createLiveQueryRegistry();
 		let held = deferred();
@@ -84,10 +96,12 @@ describe('the sync engine read cache', () => {
 		held.resolve({ rows: [{ id: 'e1', name: 'Ada' }], nextCursor: null });
 		expect(await (cold as unknown as PromiseLike<unknown>)).toEqual([{ id: 'e1', name: 'Ada' }]);
 
-		// Second read of the same question, with the wire held open: the cache is what paints.
+		// A second read of the same question remains unpainted while the wire is held open. QueryCache is
+		// bookkeeping only; without a durable coverage proof its old value is not authoritative.
 		held = deferred();
 		const warm = employees.findMany({ limit: 20 });
-		await vi.waitFor(() => expect(warm.current).toEqual([{ id: 'e1', name: 'Ada' }]));
+		await new Promise((settle) => setTimeout(settle, 10));
+		expect(warm.current).toBeUndefined();
 
 		// A write to that collection falsifies it, so the next read is cold again.
 		cache.invalidate(['employees']);
@@ -110,7 +124,8 @@ describe('the sync engine read cache', () => {
 		const proxy = createWorkspaceApiProxy({ bolt, db: {}, cache, queries });
 
 		const plan = proxy.system.schema.plan({});
-		await vi.waitFor(() => expect(plan.current?.fingerprint).toBe('cached'));
+		await new Promise((settle) => setTimeout(settle, 10));
+		expect(plan.current).toBeUndefined();
 		expect(plan.loading).toBe(true);
 
 		held.resolve({ fingerprint: 'fresh', steps: [{ id: 'fresh-step', sql: 'select 2' }] });

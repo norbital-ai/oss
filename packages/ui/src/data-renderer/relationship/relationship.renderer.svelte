@@ -6,15 +6,12 @@
 	import { Cluster } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { getCollectionClientContext } from '#lib/collection-runtime';
+	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 
-	interface Props {
-		target: string;
-		value: string | string[] | null;
-		multiple?: boolean;
+	interface Props extends DataRendererProps {
 		/**
-		 * The option set: how an option reads, and which records are offered. Declared inline by
-		 * the caller because it is contextual — the stored value is only the key that picks one out.
-		 * Without it there is nothing to show but the id.
+		 * An explicit contextual option set. Automatic routing supplies the target collection's
+		 * record-label strategy when this is omitted.
 		 */
 		options?: CollectionRelationOptions;
 		/**
@@ -25,29 +22,30 @@
 		 */
 		label?: string | string[] | null;
 		placeholder?: string;
-		disabled?: boolean;
-		readonly?: boolean;
-		displayOnly?: boolean;
-		class?: string;
-		onValueChange?: (value: string | string[] | null) => void;
 	}
 
 	const { t } = useI18n<UiKeys>();
 
 	let {
-		target,
+		field,
 		value,
-		multiple = false,
+		mode = 'display',
 		options: relationOptions,
 		label = null,
 		placeholder = t('dataRenderer.selectRecord'),
 		disabled = false,
-		readonly = false,
-		displayOnly = false,
 		class: className,
 		onValueChange
 	}: Props = $props();
 	const records = getCollectionClientContext().records;
+	const target = $derived.by(() => {
+		if (!field.relation) {
+			throw new Error(`RelationshipRenderer requires relation metadata for field "${field.name}".`);
+		}
+		return field.relation.target;
+	});
+	const multiple = $derived(field.array ?? false);
+	const readonly = $derived(mode === 'display');
 
 	const selectedIds = $derived(
 		(Array.isArray(value) ? value : value ? [value] : []).filter((id) => id.length > 0)
@@ -57,7 +55,7 @@
 
 	/** The option set, scoped by the caller's declaration plus whatever the picker has narrowed to. */
 	const optionsQueryInput = $derived.by(() => {
-		if (displayOnly) return null;
+		if (readonly) return null;
 		const declaredWhere = relationOptions?.where ?? {};
 		const narrowed = Object.entries(activeFilters).filter(([, v]) => v !== '');
 		return {
@@ -80,8 +78,9 @@
 	);
 
 	/**
-	 * Resolve the current value only when nobody resolved it for us. This is the lone-field case;
-	 * a table hands labels down instead, so its cells never reach here.
+	 * Resolve the current value only when nobody resolved it for us. Tables and boards join their
+	 * declared relationship fields and hand labels down; a lone form/filter field performs one
+	 * focused lookup for its current selection.
 	 */
 	const valueQueryInput = $derived.by(() => {
 		if (label != null || selectedIds.length === 0 || !relationOptions) return null;
@@ -97,7 +96,7 @@
 			: null
 	);
 
-	/** Label per selected id: the caller's, else one we resolved, else the id itself. */
+	/** Label per selected id: the caller's, else one resolved from the target record. */
 	const labelById = $derived.by(() => {
 		const byId = new Map<string, string>();
 		const supplied = Array.isArray(label) ? label : label == null ? [] : [label];
@@ -118,8 +117,11 @@
 			if (typeof id !== 'string') continue;
 			byId.set(id, relationOptions ? relationOptions.label(record) : id);
 		}
-		// Keep the current selection visible even when it falls outside the option query.
-		for (const id of selectedIds) if (!byId.has(id)) byId.set(id, labelById.get(id) ?? id);
+		// Keep a labelled current selection visible even when it falls outside the option query.
+		for (const id of selectedIds) {
+			const selectedLabel = labelById.get(id);
+			if (!byId.has(id) && selectedLabel) byId.set(id, selectedLabel);
+		}
 		return [...byId].map(([optionValue, text]) => ({ value: optionValue, label: text }));
 	});
 
@@ -135,11 +137,13 @@
 	const error = $derived(optionsQuery?.error?.message ?? valueQuery?.error?.message ?? null);
 
 	/**
-	 * With no declared option set there is nothing honest to show but the id — inventing a label
-	 * from whatever field looks name-ish is how a column silently renders the wrong thing.
+	 * A missing label never degrades to the stored id. Identity is useful to the query layer and
+	 * meaningless to an operator.
 	 */
 	const displayLabel = $derived(
-		selectedIds.length === 0 ? '—' : selectedIds.map((id) => labelById.get(id) ?? id).join(', ')
+		selectedIds.length === 0
+			? '—'
+			: selectedIds.flatMap((id) => labelById.get(id) ?? []).join(', ') || '—'
 	);
 </script>
 
@@ -159,8 +163,7 @@
 	{/if}
 {/snippet}
 
-{#if displayOnly}
-	<!-- No loading state: the label arrives with the row, so there is nothing to wait for. -->
+{#if readonly}
 	<span class={cn('block truncate', className)} title={displayLabel}>
 		{displayLabel}
 	</span>

@@ -7,10 +7,6 @@ export type {
 	CollectionToolbarActionVariant,
 	CollectionToolbarComposition,
 	CollectionToolbarFeatures,
-	CollectionToolbarFilterComponent,
-	CollectionToolbarFilterDeclaration,
-	CollectionToolbarFilterOption,
-	CollectionToolbarFilterProps,
 	CollectionToolbarName,
 	CollectionToolbarOperations
 } from './collection-toolbar.types.js';

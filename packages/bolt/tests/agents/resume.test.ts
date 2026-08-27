@@ -49,7 +49,12 @@ const definition = workspace({
 	prompt: 'Coordinate the delegated work.',
 	tools: [],
 	skills: [],
-	requiredFacilities: ['database', 'ai', 'tasks']
+	requiredFacilities: ['database', 'ai', 'tasks'],
+	mutationCompatibility: {
+		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
+		currentSchemaFingerprint: 'sha256:resume-fixture',
+		adapters: []
+	}
 });
 
 const bundle = makeBundle(definition, buildManifest(definition, { artifactId: 'resume-test' }), {});

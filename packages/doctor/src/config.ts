@@ -1,20 +1,22 @@
 /**
  * Configuration discovery and loading.
  *
- * A repository configures norbital-doctor with a `doctor.config.ts` at its root. The surface is
- * deliberately small: curated `packs` by name, YAML `patterns` by glob, and the semantic tier's
- * provider settings. Everything else — the neutral baseline of graph, type-aware and metric
+ * A repository configures norbital-doctor under `.norbital/config/doctor/`. The surface is
+ * deliberately small: curated `packs` by name, YAML extensions beside the config, and the semantic
+ * tier's provider settings. Everything else — the neutral baseline of graph, type-aware and metric
  * analysis — runs whether or not a config exists, so the easiest config to write is no config.
  *
  * ```ts
- * // doctor.config.ts
+ * // .norbital/config/doctor/doctor.config.ts
  * import { defineConfig } from '@norbital-ai/doctor';
  *
  * export default defineConfig({
- *   packs: ['norbital'],        // registered name; or './dr/packs/house.ts'
- *   patterns: 'dr/rules.yml',  // any repository-relative glob over .yml files
+ *   packs: ['norbital'],
  * });
  * ```
+ *
+ * YAML extensions in the same directory join automatically. A root-level `doctor.config.*` is
+ * still found so fixture tests and older checkouts keep loading.
  */
 import { Effect } from 'effect';
 import * as Result from 'effect/Result';
@@ -30,8 +32,14 @@ import { definePack, type Pack, type Rule } from './rules.js';
 
 export type { OverlapBinding } from './overlaps.js';
 
-/** The glob probed when a repository states no patterns of its own. */
-const DEFAULT_PATTERN_GLOB = 'dr/**/*.yml';
+/** Authored doctor extensions for any Norbital workspace or repository. */
+export const DOCTOR_CONFIG_DIRECTORY = '.norbital/config/doctor';
+
+/** Globs probed when a repository states no patterns of its own. */
+const DEFAULT_PATTERN_GLOBS: ReadonlyArray<string> = [
+	`${DOCTOR_CONFIG_DIRECTORY}/**/*.yaml`,
+	`${DOCTOR_CONFIG_DIRECTORY}/**/*.yml`
+];
 
 /**
  * The semantic tier's configuration.
@@ -63,7 +71,7 @@ export type ProbeConfig = Readonly<{
 	 * pack. Registered names always win over same-named local files.
 	 */
 	readonly packs?: ReadonlyArray<Pack | string> | undefined;
-	/** YAML rule files, repository-relative globs. Defaults to the conventional `dr` tree. */
+	/** YAML rule files, repository-relative globs. Defaults to every `.yaml` file under `.norbital/config/doctor`. */
 	readonly patterns?: string | ReadonlyArray<string> | undefined;
 	/** Rules authored inline or imported directly — the pack-maintainer surface, not the public one. */
 	readonly rules?: ReadonlyArray<Rule> | undefined;
@@ -87,9 +95,12 @@ const CONFIG_NAMES = [
 
 /** The config file a root uses, if it has one. */
 export function findConfig(root: string): string | undefined {
-	for (const name of CONFIG_NAMES) {
-		const candidate = join(root, name);
-		if (existsSync(candidate)) return candidate;
+	const directories = [join(root, DOCTOR_CONFIG_DIRECTORY), root];
+	for (const directory of directories) {
+		for (const name of CONFIG_NAMES) {
+			const candidate = join(directory, name);
+			if (existsSync(candidate)) return candidate;
+		}
 	}
 	return undefined;
 }
@@ -163,9 +174,9 @@ export type LoadedConfig = Readonly<{
 export async function loadConfig(root: string): Promise<LoadedConfig> {
 	const configPath = findConfig(root);
 	if (configPath === undefined) {
-		// No config: the neutral baseline is the whole audit. Rule files under the conventional
-		// `dr/` directory join implicitly when present; their absence is normal, not a typo.
-		const patterns = await loadPatternFiles(root, DEFAULT_PATTERN_GLOB, { implicit: true });
+		// No config: the neutral baseline is the whole audit. YAML extensions under
+		// `.norbital/config/doctor/` join implicitly when present; their absence is normal, not a typo.
+		const patterns = await loadPatternFiles(root, DEFAULT_PATTERN_GLOBS, { implicit: true });
 		return {
 			configPath: undefined,
 			rules: patterns.rules,
@@ -235,7 +246,7 @@ export async function loadConfig(root: string): Promise<LoadedConfig> {
 	const implicitPatterns = config.patterns === undefined;
 	const patterns = await loadPatternFiles(
 		root,
-		config.patterns ?? DEFAULT_PATTERN_GLOB,
+		config.patterns ?? DEFAULT_PATTERN_GLOBS,
 		{ implicit: implicitPatterns }
 	);
 	rules.push(...patterns.rules);

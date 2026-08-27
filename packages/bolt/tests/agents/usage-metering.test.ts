@@ -49,7 +49,12 @@ const definition = workspace({
 	tools: [],
 	skills: [],
 	envoys: [],
-	requiredFacilities: ['database', 'ai', 'tasks']
+	requiredFacilities: ['database', 'ai', 'tasks'],
+	mutationCompatibility: {
+		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
+		currentSchemaFingerprint: 'sha256:usage-metering-fixture',
+		adapters: []
+	}
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-usage' });
 const bundle = makeBundle(definition, manifest, {});

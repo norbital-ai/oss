@@ -86,7 +86,12 @@ const definition = workspace({
 	prompt: 'You are a narrowly scoped field operations assistant.',
 	tools: [],
 	skills: [],
-	requiredFacilities: ['database', 'ai', 'tasks', 'hostTools']
+	requiredFacilities: ['database', 'ai', 'tasks', 'hostTools'],
+	mutationCompatibility: {
+		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
+		currentSchemaFingerprint: 'sha256:collection-discovery-fixture',
+		adapters: []
+	}
 });
 
 describe('agent collection discovery', () => {

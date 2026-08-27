@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { collectionAppliedFilterConditions } from '../../packages/ui/src/collection-table/collection-table-applied-filters.ts';
+import { collectionAppliedFilterConditions } from '../../packages/ui/src/collection-filter/collection-applied-filters.ts';
 
 const companies = {
 	name: 'companies',

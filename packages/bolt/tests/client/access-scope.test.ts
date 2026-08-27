@@ -13,6 +13,7 @@ beforeEach(() => {
 		tenantId: 'scope-test',
 		environment: 'development',
 		releaseId: 'local',
+		principal: 'operator-1',
 		accessScope: 'operator',
 		credential: 'test-credential',
 		transport: { command: async () => null },

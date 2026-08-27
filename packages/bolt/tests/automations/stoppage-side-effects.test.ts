@@ -4,34 +4,29 @@ import { EffectId } from '@norbital-ai/bolt-protocol';
 import { automation } from '../../src/authoring/automations-schema.js';
 import {
 	emptyAuthoredRuntime,
-	guardAuthoredCollectionOps,
+	guardAuthoringOps,
 	makeAuthoringApi,
 	makeBoundAuthoringOps,
-	type AuthoredCollectionOps
+	type AuthoringOps
 } from '../../src/runtime/collections/authored.js';
 import * as Automations from '../../src/runtime/automations/automations.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { AI, Files } from '../../src/runtime/facilities/services.js';
 import { makeBoltTestRuntime, recordId, testWorkspace } from '../support/bolt-test-layer.js';
 
-const guardedOperations = (calls: Array<string>, guards: Array<string>): AuthoredCollectionOps => {
+const guardedOperations = (calls: Array<string>, guards: Array<string>): AuthoringOps => {
 	const record = <A>(operation: string, result: A) =>
 		Effect.sync(() => {
 			calls.push(operation);
 			return result;
 		});
-	const ops: AuthoredCollectionOps = {
+	const ops: AuthoringOps = {
 		findMany: () => record('findMany', []),
 		findFirst: () => record('findFirst', undefined),
 		count: () => record('count', 0),
-		findNearest: () => record('findNearest', []),
-		create: () => record('create', {}),
-		update: () => record('update', {}),
-		delete: () => record('delete', undefined),
-		mutate: () => record('mutate', []),
+		findNearest: () => Effect.succeed([]),
+		mutate: () => record('mutate', undefined),
 		runAutomation: () => record('runAutomation', { taskId: 'child' }),
-		approvalFindMany: () => record('approvalFindMany', []),
-		approvalFindFirst: () => record('approvalFindFirst', undefined),
 		infer: () => record('infer', {}),
 		readFileAsset: () =>
 			record('readFileAsset', {
@@ -42,7 +37,7 @@ const guardedOperations = (calls: Array<string>, guards: Array<string>): Authore
 				bytes: new Uint8Array()
 			})
 	};
-	return guardAuthoredCollectionOps(ops, (operation) => {
+	return guardAuthoringOps(ops, (operation) => {
 		guards.push(operation);
 		return Effect.fail(Automations.AutomationStopped.before('stopped-run', operation));
 	});
@@ -54,10 +49,7 @@ describe('automation stoppage facility guard', () => {
 		const guards: Array<string> = [];
 		const ops = guardedOperations(calls, guards);
 		const attempts = [
-			ops.create('people', recordId('create'), { name: 'create' }),
-			ops.update('people', recordId('update'), { name: 'update' }),
-			ops.delete('people', recordId('delete')),
-			ops.mutate('people', [{ id: recordId('mutate'), name: 'mutate' }]),
+			ops.mutate('people', { id: recordId('mutate'), name: 'mutate' }),
 			ops.infer({ schema: Schema.Struct({}), prompt: 'infer' }),
 			ops.readFileAsset({
 				storage_key: 'file',
@@ -77,15 +69,7 @@ describe('automation stoppage facility guard', () => {
 		}
 
 		expect(calls).toEqual([]);
-		expect(guards).toEqual([
-			'db.people.create',
-			'db.people.update',
-			'db.people.delete',
-			'db.people.mutate',
-			'ai.infer',
-			'files.read',
-			'automations.child.run'
-		]);
+		expect(guards).toEqual(['db.people.mutate', 'ai.infer', 'files.read', 'automations.child.run']);
 	});
 
 	it('observes a stop between progress and the next authored write', async () => {
@@ -93,7 +77,7 @@ describe('automation stoppage facility guard', () => {
 		type TestAuthoringApi = Readonly<{
 			db: Readonly<{
 				people: Readonly<{
-					create: (values: Readonly<Record<string, unknown>>) => Effect.Effect<unknown>;
+					mutate: (values: Readonly<Record<string, unknown>>) => Effect.Effect<void>;
 				}>;
 			}>;
 		}>;
@@ -140,7 +124,7 @@ describe('automation stoppage facility guard', () => {
 					const collections = yield* Collections.Service;
 					const ai = yield* AI.Service;
 					const files = yield* Files.Service;
-					const ops = guardAuthoredCollectionOps(
+					const ops = guardAuthoringOps(
 						makeBoundAuthoringOps(
 							EffectId.make('stopped-rebuild:1'),
 							{
@@ -159,7 +143,7 @@ describe('automation stoppage facility guard', () => {
 					);
 					const api = makeAuthoringApi(ops) as TestAuthoringApi;
 					return yield* Effect.result(
-						api.db.people.create({ id: personId, name: 'must not exist' })
+						api.db.people.mutate({ id: personId, name: 'must not exist' })
 					);
 				})
 			);

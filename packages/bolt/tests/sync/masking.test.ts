@@ -29,8 +29,8 @@ import { seedSession } from '../support/fixture-identity.js';
  * page never displayed the column, which is exactly what made it invisible — the data was in
  * IndexedDB and in the response either way.
  *
- * Both halves of delivery are checked, because they are separate code paths: `snapshot` is the bulk
- * load a fresh replica starts from, and `diff` is the stream that follows.
+ * The one partition pull path is checked directly: its full-row delta must already be the complete
+ * permitted field set for that partition before anything reaches the browser base store.
  */
 
 const rid = (name: string): string => {
@@ -123,88 +123,29 @@ describe('what the sync engine hands a field-restricted subject', () => {
 		expect(people).toMatchObject({ readableFields: ['id', 'name'] });
 	});
 
-	it('omits masked columns from a snapshot', async () => {
+	it('emits each partition\'s complete permitted row through the one pull path', async () => {
 		harness = await makeBoltTestRuntime(restrictedWorkspace());
 		const { runtime, effectId } = harness;
-
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				yield* (yield* Collections.Service).create(effectId('create'), adminSubject, {
-					collection: 'people',
-					id: rid('p1'),
-					values: { name: 'Ada', team: 'core', salary: '100000' }
-				});
-			})
-		);
-
-		const page = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).snapshot(
-					effectId('snapshot'),
-					viewerSubject,
-					'people',
-					undefined,
-					100
-				);
-			})
-		);
-
-		expect(page.rows).toHaveLength(1);
-		const row = page.rows[0] as Record<string, unknown>;
-		expect(row['name']).toBe('Ada');
-		// The whole point: these are in the table and must not be in the browser.
-		expect(row).not.toHaveProperty('team');
-		expect(row).not.toHaveProperty('salary');
-	});
-
-	it('omits masked columns from the streamed diff', async () => {
-		harness = await makeBoltTestRuntime(restrictedWorkspace());
-		const { runtime, effectId } = harness;
-
-		await runtime.runPromise(
-			Effect.gen(function* () {
-				yield* (yield* Collections.Service).create(effectId('create'), adminSubject, {
-					collection: 'people',
-					id: rid('p1'),
-					values: { name: 'Grace', team: 'flight', salary: '120000' }
-				});
-			})
-		);
-
-		const changes = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).diff(
-					effectId('diff'),
-					viewerSubject,
-					{ xid: 0, sequence: 0 },
-					100
-				);
-			})
-		);
-
-		expect(changes.length).toBeGreaterThan(0);
-		for (const change of changes) {
-			if (change.record === null || typeof change.record !== 'object') continue;
-			const record = change.record as Record<string, unknown>;
-			expect(record).not.toHaveProperty('team');
-			expect(record).not.toHaveProperty('salary');
-		}
-		// And the column it may read still arrives — masking that removed everything would "pass" this
-		// test while making the replica useless.
-		expect(
-			changes.some(
-				(change) =>
-					change.record !== null &&
-					typeof change.record === 'object' &&
-					(change.record as Record<string, unknown>)['name'] === 'Grace'
+		const [viewerPosition, adminPosition] = await Promise.all([
+			runtime.runPromise(
+				Effect.gen(function* () {
+					return yield* (yield* Sync.Service).positions(
+						effectId('viewer-position'),
+						viewerSubject,
+						['people']
+					);
+				})
+			),
+			runtime.runPromise(
+				Effect.gen(function* () {
+					return yield* (yield* Sync.Service).positions(
+						effectId('admin-position'),
+						adminSubject,
+						['people']
+					);
+				})
 			)
-		).toBe(true);
-	});
-
-	it('still gives an unrestricted subject the whole row', async () => {
-		harness = await makeBoltTestRuntime(restrictedWorkspace());
-		const { runtime, effectId } = harness;
-
+		]);
 		await runtime.runPromise(
 			Effect.gen(function* () {
 				yield* (yield* Collections.Service).create(effectId('create'), adminSubject, {
@@ -214,22 +155,29 @@ describe('what the sync engine hands a field-restricted subject', () => {
 				});
 			})
 		);
-
-		const page = await runtime.runPromise(
-			Effect.gen(function* () {
-				return yield* (yield* Sync.Service).snapshot(
-					effectId('snapshot'),
-					adminSubject,
-					'people',
-					undefined,
-					100
-				);
-			})
-		);
-
-		const row = page.rows[0] as Record<string, unknown>;
-		// Masking must be the policy's doing, not something the sync path applies to everyone.
-		expect(row['team']).toBe('core');
-		expect(row['salary']).toBe('100000');
+		const pull = (name: string, subject: Identity.Subject, position: Sync.SyncPartitionPosition) =>
+			runtime.runPromise(
+				Effect.gen(function* () {
+					return yield* (yield* Sync.Service).pull(effectId(name), subject, {
+						collections: ['people'],
+						cursor: position.cursor,
+						generations: position.generations
+					});
+				})
+			);
+		const [viewer, admin] = await Promise.all([
+			pull('viewer-pull', viewerSubject, viewerPosition),
+			pull('admin-pull', adminSubject, adminPosition)
+		]);
+		const viewerDelta = viewer.deltas[0];
+		const adminDelta = admin.deltas[0];
+		if (viewerDelta?.op !== 'upsert' || adminDelta?.op !== 'upsert') {
+			throw new Error('expected full-row partition upserts');
+		}
+		expect(viewerDelta.row).toMatchObject({ id: rid('p1'), name: 'Ada' });
+		expect(viewerDelta.row).not.toHaveProperty('team');
+		expect(viewerDelta.row).not.toHaveProperty('salary');
+		expect(adminDelta.row).toMatchObject({ team: 'core', salary: '100000' });
 	});
+
 });

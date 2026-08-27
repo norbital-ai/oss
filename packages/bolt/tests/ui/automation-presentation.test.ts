@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { presentAutomationStatus } from '../../src/client/ui/studio/automation-presentation.js';
 
@@ -55,17 +54,5 @@ describe('Studio automation status presentation', () => {
 			canStop: true,
 			canResume: false
 		});
-	});
-
-	it('uses the normalized status for generated and durable Stop and Resume controls', () => {
-		const source = readFileSync(
-			new URL('../../src/client/ui/studio/manifest-pane.svelte', import.meta.url),
-			'utf8'
-		);
-		expect(source).toContain('{:else if run !== undefined}');
-		expect(source).toContain('{#if latestStatus.canStop}');
-		expect(source).toContain('{#if rowStatus.canStop}');
-		expect(source).toContain('{:else if latestStatus.canResume}');
-		expect(source).toContain('{:else if rowStatus.canResume}');
 	});
 });

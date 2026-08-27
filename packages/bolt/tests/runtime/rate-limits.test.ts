@@ -31,7 +31,7 @@ const spec = anonymousLimits({
 /** A holder's own budget, as `AccessControl.limits` resolves it from the policies they hold. */
 const held = resolvePolicyLimits({
 	'collections.*': { window: '1 min', limit: 3 },
-	'collections.create': { window: '1 min', limit: 1 },
+	'collections.mutate': { window: '1 min', limit: 1 },
 	// One command, two buckets keyed differently: each outside sender gets their own, and the envoy
 	// as a whole gets one. Both apply, because being inside one of two ceilings is not admission.
 	'envoys.receive': [
@@ -103,7 +103,7 @@ describe('the workspace rate limiter', () => {
 	});
 
 	it('lets the most specific rule win, so one command can be tightened without restating its class', () => {
-		expect(rateLimitFor({ rules: held }, 'collections.create')[0]?.limit).toBe(1);
+		expect(rateLimitFor({ rules: held }, 'collections.mutate')[0]?.limit).toBe(1);
 		expect(rateLimitFor({ rules: held }, 'collections.findMany')[0]?.limit).toBe(3);
 	});
 
@@ -163,11 +163,11 @@ describe('the workspace rate limiter', () => {
 
 	it('says how long to wait, in whole seconds, rather than only that it refused', async () => {
 		const admit = makeAdmit();
-		await admit('collections.create', { tenantId: 'a', userId: 'u' });
-		const refused = refusal(await admit('collections.create', { tenantId: 'a', userId: 'u' }));
+		await admit('collections.mutate', { tenantId: 'a', userId: 'u' });
+		const refused = refusal(await admit('collections.mutate', { tenantId: 'a', userId: 'u' }));
 		expect(refused?.retryAfterSeconds).toBeGreaterThan(0);
 		expect(refused?.retryAfterSeconds).toBeLessThanOrEqual(60);
-		expect(refused?.message).toContain('collections.create');
+		expect(refused?.message).toContain('collections.mutate');
 	});
 
 	it('refuses a declaration whose window or limit cannot be read, at build time', () => {

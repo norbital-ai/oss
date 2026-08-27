@@ -19,7 +19,14 @@ export {
 	ValidationResultSchema
 } from './definition.js';
 
-export { hashDefinition, sha256Json, sha256Text } from './hash.js';
+export {
+	canonicalSchemaStepEncoding,
+	digestSchemaSteps,
+	hashDefinition,
+	sha256Json,
+	sha256Text
+} from './hash.js';
+export type { DigestibleSchemaStep } from './hash.js';
 
 // Synchronous computation runtime entry points; hashing stays portable for tenant bundles.
 export { createEnvironment, validateDefinition } from './cel.server.js';

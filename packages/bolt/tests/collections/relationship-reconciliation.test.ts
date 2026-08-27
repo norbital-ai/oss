@@ -548,14 +548,14 @@ describe('declarative relationship reconciliation', () => {
 												readonly api: {
 													readonly db: {
 														readonly mutation_audit: {
-															readonly create: (
+															readonly mutate: (
 																input: Readonly<Record<string, unknown>>
-															) => Effect.Effect<unknown>;
+															) => Effect.Effect<void>;
 														};
 													};
 												};
 											};
-											yield* typed.api.db.mutation_audit.create({ body: 'must roll back' });
+											yield* typed.api.db.mutation_audit.mutate({ body: 'must roll back' });
 											return yield* Effect.fail(new Error('parent preparation failed'));
 										})
 								}
@@ -741,10 +741,13 @@ describe('declarative relationship reconciliation', () => {
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
 				const approvals = yield* Approvals.Service;
-				const request = yield* collections.approvalFindFirst(
+				const request = yield* collections.findFirst(
 					EffectId.make('generic-approval-inbox-read'),
 					reviewerSubject,
-					{ where: { id: { eq: pending.requestId } } }
+					{
+						collection: 'approval_request',
+						where: { id: { eq: pending.requestId } }
+					}
 				);
 				expect(request).toMatchObject({
 					id: pending.requestId,

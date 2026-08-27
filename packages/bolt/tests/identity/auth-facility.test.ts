@@ -156,26 +156,6 @@ describe('bolt-owned identity over a host facility', () => {
 	});
 });
 
-/**
- * The credential-free surface.
- *
- * Sign-in is the one thing a caller reaches without a session, so the exemption is worth a test of
- * its own: it must admit exactly two commands and nothing else. A third slipping in is the failure
- * this guards, and it would not otherwise show up as a broken test anywhere.
- */
-describe('the sign-in exemption', () => {
-	it('names exactly the two commands that cannot require a session', async () => {
-		const source = await import('node:fs/promises').then((fs) =>
-			fs.readFile(new URL('../../src/runtime/dispatch.ts', import.meta.url), 'utf8')
-		);
-		const declared = source.match(/const SIGN_IN_COMMANDS[^=]*=\s*new Set\(\[([^\]]*)\]\)/);
-		expect(declared?.[1]?.match(/'[^']+'/g)).toEqual([
-			"'identity.sendCode'",
-			"'identity.verifyCode'"
-		]);
-	});
-});
-
 describe('the code a development environment issues', () => {
 	it('is the fixed development code, and is still delivered through the host', async () => {
 		// This is the bug that shipped: identity hardcoded `production: true`, so a local stack

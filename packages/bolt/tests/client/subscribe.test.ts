@@ -1,197 +1,199 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { subscribeToChanges, type EventSourceLike } from '../../src/client/replica/subscribe.js';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { setWorkspaceSession } from '../../src/client/session.js';
-import type { SyncChange, SyncCursor } from '../../src/runtime/sync/sync.js';
+import {
+	subscribeToPartition,
+	type EventSourceLike
+} from '../../src/client/replica/subscribe.js';
 
-/** The browser receives typed outbox deltas, not wake hints followed by a browser diff request. */
-
-const STREAM_URL = 'https://host.invalid/tenant/abc/_bolt/sync/stream';
-const cursor: SyncCursor = { xid: 7, sequence: 3 };
-const change: SyncChange = {
-	cursor: { xid: 7, sequence: 4 },
-	collection: 'leave_requests',
-	recordId: 'leave-1',
-	operation: 'update',
-	record: { status: 'approved' }
-};
-
-const declareSession = (): void => {
+const session = () =>
 	setWorkspaceSession({
-		tenantId: 'test-tenant',
+		tenantId: 'tenant',
 		environment: 'development',
-		releaseId: 'local',
+		releaseId: 'release',
+		principal: 'principal',
 		accessScope: 'operator',
-		credential: 'test-credential',
+		credential: 'credential',
 		transport: { command: async () => null },
-		syncStreamUrl: STREAM_URL,
-		files: {
-			store: async () => '',
-			remove: async () => undefined,
-			urlFor: (key: string) => key
-		},
+		syncStreamUrl: '/api/bolt/sync/stream',
+		files: { store: async () => '', remove: async () => undefined, urlFor: (key) => key },
 		chatDocuments: {
 			store: async (_conversation, key, file) => ({
 				storage_key: key,
 				file_name: file.name,
 				file_size: file.size,
-				mime_type: file.type || 'application/octet-stream'
+				mime_type: file.type
 			}),
 			remove: async () => undefined,
 			urlFor: (_conversation, key) => key
 		},
 		operations: { read: async () => null, run: async () => null }
 	});
-};
 
-const stubSource = () => {
-	const listeners = new Map<string, (event: { data?: string; lastEventId?: string }) => void>();
-	let closed = false;
-	const source: EventSourceLike = {
+const source = () => {
+	const listeners = new Map<string, (event: { data?: string }) => void>();
+	let closed = 0;
+	const value: EventSourceLike = {
 		addEventListener: (type, listener) => listeners.set(type, listener),
 		close: () => {
-			closed = true;
+			closed += 1;
 		},
 		onerror: null
 	};
 	return {
-		source,
-		emit: (type: string, data?: string, lastEventId?: string) =>
-			listeners.get(type)?.({
-				...(data === undefined ? {} : { data }),
-				...(lastEventId === undefined ? {} : { lastEventId })
-			}),
-		fail: (cause: unknown) => source.onerror?.(cause),
-		isClosed: () => closed
+		value,
+		emit: (type: string, data?: string) =>
+			listeners.get(type)?.(data === undefined ? {} : { data }),
+		closed: () => closed
 	};
 };
 
-describe('subscribing to database changes', () => {
-	beforeEach(declareSession);
+beforeEach(session);
 
-	it('passes the persisted cursor and delivers typed SyncChange batches directly', () => {
-		const stub = stubSource();
+describe('partition dependency subscription', () => {
+	it('opens one stream for the distinct dependency union and replaces it on change', () => {
+		const first = source();
+		const second = source();
+		const opened = [first, second];
 		const urls: Array<string> = [];
-		const seen: Array<ReadonlyArray<SyncChange>> = [];
-		subscribeToChanges({
-			cursor: () => cursor,
-			onChange: (changes) => seen.push(changes),
+		const subscription = subscribeToPartition({
+			collections: ['teams', 'jobs', 'jobs'],
+			position: { cursor: { xid: 1, sequence: 2 }, generations: { jobs: 3 } },
+			pendingMutationIds: ['mutation-2', 'mutation-1'],
+			rehydration: { activeWindows: 1, rowsPerWindow: 20, estimatedBytesPerRow: 128 },
 			source: (url) => {
 				urls.push(url);
-				return stub.source;
-			}
-		});
-
-		stub.emit('sync', JSON.stringify([change]), JSON.stringify(change.cursor));
-		expect(seen).toEqual([[change]]);
-		expect(new URL(urls[0] ?? '').origin + new URL(urls[0] ?? '').pathname).toBe(STREAM_URL);
-		expect(JSON.parse(new URL(urls[0] ?? '').searchParams.get('cursor') ?? '')).toEqual(cursor);
-	});
-
-	it('keeps the native EventSource open after a network error so it can resume with Last-Event-ID', () => {
-		const stub = stubSource();
-		const seen: Array<ReadonlyArray<SyncChange>> = [];
-		const causes: Array<unknown> = [];
-		subscribeToChanges({
-			cursor: () => cursor,
-			onChange: (changes) => seen.push(changes),
-			onError: (cause) => causes.push(cause),
-			source: () => stub.source
-		});
-
-		stub.fail(new Error('network blip'));
-		expect(causes).toHaveLength(1);
-		expect(stub.isClosed()).toBe(false);
-		stub.emit('sync', JSON.stringify([change]));
-		expect(seen).toEqual([[change]]);
-	});
-
-	it('reopens an unreadable stream frame from the durable cursor instead of advancing past it', () => {
-		const first = stubSource();
-		const second = stubSource();
-		const sources = [first, second];
-		const urls: Array<string> = [];
-		const causes: Array<unknown> = [];
-		let durable = cursor;
-		subscribeToChanges({
-			cursor: () => durable,
-			onChange: (changes) => {
-				durable = changes[changes.length - 1]?.cursor ?? durable;
+				return opened.shift()?.value ?? second.value;
 			},
-			onError: (cause) => causes.push(cause),
-			source: (url) => {
-				urls.push(url);
-				const next = sources.shift();
-				if (next === undefined) throw new Error('unexpected third stream');
-				return next.source;
-			}
+			onDeltas: () => undefined,
+			onRecovery: () => undefined
 		});
+		expect(new URL(urls[0] ?? '', 'https://bolt.local').searchParams.getAll('collection')).toEqual([
+			'jobs',
+			'teams'
+		]);
+		expect(
+			new URL(urls[0] ?? '', 'https://bolt.local').searchParams.getAll('pendingMutationId')
+		).toEqual(['mutation-1', 'mutation-2']);
 
-		first.emit('sync', 'not json');
-		expect(first.isClosed()).toBe(true);
-		expect(causes).toHaveLength(1);
+		subscription.update(
+			['jobs'],
+			{ cursor: { xid: 1, sequence: 4 }, generations: { jobs: 4 } },
+			['mutation-2'],
+			{ activeWindows: 1, rowsPerWindow: 20, estimatedBytesPerRow: 128 }
+		);
+		expect(first.closed()).toBe(1);
 		expect(urls).toHaveLength(2);
-		expect(JSON.parse(new URL(urls[1] ?? '').searchParams.get('cursor') ?? '')).toEqual(cursor);
-		second.emit('sync', JSON.stringify([change]));
-		expect(durable).toEqual(change.cursor);
-	});
-
-	it('reports readiness only after the host has caught up and closes when stopped', () => {
-		const stub = stubSource();
-		let opened = 0;
-		const subscription = subscribeToChanges({
-			cursor: () => cursor,
-			onChange: () => undefined,
-			onOpen: () => (opened += 1),
-			source: () => stub.source
-		});
-		stub.emit('ready', JSON.stringify({ connectionId: 'tenant:abc' }));
-		expect(opened).toBe(1);
+		expect(new URL(urls[1] ?? '', 'https://bolt.local').searchParams.getAll('collection')).toEqual([
+			'jobs'
+		]);
 		subscription.stop();
-		expect(stub.isClosed()).toBe(true);
 	});
 
-	it('degrades to no subscription where EventSource does not exist', () => {
-		const causes: Array<unknown> = [];
-		const subscription = subscribeToChanges({
-			cursor: () => cursor,
-			onChange: () => undefined,
-			onError: (cause) => causes.push(cause),
-			source: () => {
-				throw new Error('EventSource is not defined');
-			}
+	it('decodes full-row batches and M3 recovery advice without inventing progress', () => {
+		const partition = {
+			key: 'partition',
+			tenantId: 'tenant',
+			environment: 'development',
+			effectivePolicyHolder: 'principal',
+			impersonationTarget: null,
+			authorityGeneration: 1,
+			schemaFingerprint: 'schema-v1'
+		};
+		const opened = source();
+		const cost = {
+			replayEvents: 1,
+			replayEstimateComplete: true,
+			estimatedBytesPerEvent: 128,
+			estimatedReplayBytes: 128,
+			estimatedRehydrateBytes: 256
+		};
+		const batches: Array<unknown> = [];
+		const recovery: Array<unknown> = [];
+		const ready: Array<unknown> = [];
+		subscribeToPartition({
+			collections: ['jobs'],
+			position: { cursor: { xid: 1, sequence: 1 }, generations: { jobs: 1 } },
+			source: () => opened.value,
+			onDeltas: (batch) => batches.push(batch),
+			onRecovery: (advice) => recovery.push(advice),
+			onReady: (value) => ready.push(value)
 		});
-		expect(causes).toHaveLength(1);
-		expect(() => subscription.stop()).not.toThrow();
-	});
+		opened.emit(
+			'ready',
+			JSON.stringify({
+				connectionId: 'connection',
+				partition,
+				cursor: { xid: 1, sequence: 1 },
+				generations: { jobs: 1 }
+			})
+		);
+		opened.emit(
+			'deltas',
+			JSON.stringify({
+				partition,
+				kind: 'delta',
+				deltas: [
+					{
+						cursor: { xid: 1, sequence: 2 },
+						collection: 'jobs',
+						op: 'upsert',
+						recordId: 'job-1',
+						rowVersion: 2,
+						mutationId: null,
+						row: { id: 'job-1', row_version: 2 }
+					}
+				],
+				headCursor: { xid: 1, sequence: 2 },
+				cursor: { xid: 1, sequence: 2 },
+				generations: { jobs: 2 },
+				affectedCollections: ['jobs'],
+				refillCollections: [],
+				cost,
+				mutationConfirmations: [],
+				mutationRejections: [],
+				complete: true
+			})
+		);
+		opened.emit(
+			'cursor-expired',
+			JSON.stringify({
+				partition,
+				kind: 'cursorExpired',
+				deltas: [],
+				headCursor: { xid: 2, sequence: 0 },
+				cursor: { xid: 2, sequence: 0 },
+				generations: { jobs: 7 },
+				affectedCollections: ['jobs'],
+				refillCollections: ['jobs'],
+				cost,
+				mutationConfirmations: [],
+				mutationRejections: [],
+				complete: true
+			})
+		);
 
-	it('retries a failed stream construction instead of silencing the leader forever', async () => {
-		// EventSource owns reconnection only once it exists. A throw before it exists — a session
-		// field not yet populated during boot, a transient constructor rejection — used to leave a
-		// healthy database leader with no feed and no visible error: the workspace simply never
-		// updated until a reload. The failed open must schedule another attempt.
-		vi.useFakeTimers();
-		try {
-			const stub = stubSource();
-			let attempts = 0;
-			const received: Array<ReadonlyArray<SyncChange>> = [];
-			const subscription = subscribeToChanges({
-				cursor: () => cursor,
-				onChange: (changes) => received.push(changes),
-				onError: () => undefined,
-				source: () => {
-					attempts += 1;
-					if (attempts === 1) throw new Error('session not ready');
-					return stub.source;
-				}
-			});
-			expect(attempts).toBe(1);
-			await vi.advanceTimersByTimeAsync(2_500);
-			expect(attempts).toBe(2);
-			stub.emit('sync', JSON.stringify([change]));
-			expect(received).toEqual([[change]]);
-			subscription.stop();
-		} finally {
-			vi.useRealTimers();
-		}
+		expect(ready).toHaveLength(1);
+		expect(batches).toMatchObject([
+			{
+				kind: 'delta',
+				deltas: [{ op: 'upsert', rowVersion: 2 }]
+			}
+		]);
+		expect(recovery).toEqual([
+			{
+				kind: 'cursorExpired',
+				partition,
+				deltas: [],
+				cursor: { xid: 2, sequence: 0 },
+				headCursor: { xid: 2, sequence: 0 },
+				generations: { jobs: 7 },
+				affectedCollections: ['jobs'],
+				refillCollections: ['jobs'],
+				cost,
+				mutationConfirmations: [],
+				mutationRejections: [],
+				complete: true
+			}
+		]);
 	});
 });

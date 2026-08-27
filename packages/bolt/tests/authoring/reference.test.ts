@@ -39,7 +39,6 @@ type Tables = TablesForModels<typeof models>;
 type TestSchema = {
 	readonly tables: Tables;
 	readonly relations: Readonly<Record<string, never>>;
-	readonly inputs: Readonly<Record<string, { readonly create: unknown; readonly update: unknown }>>;
 };
 
 describe('polymorphic reference authoring', () => {

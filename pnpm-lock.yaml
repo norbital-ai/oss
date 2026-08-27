@@ -208,6 +208,9 @@ importers:
 
   packages/doctor:
     dependencies:
+      '@norbital-ai/std':
+        specifier: workspace:*
+        version: link:../std
       effect:
         specifier: 4.0.0-rc.111
         version: 4.0.0-rc.111

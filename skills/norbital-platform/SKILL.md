@@ -44,7 +44,8 @@ mode: an agent invents an admin console that does not exist, and the user goes l
 | Reachable transport agents                                                           | `src/envoys/+<name>.ts`                    |
 | Query/command functions                                                              | `src/functions/+<name>.ts`                 |
 
-Compiled output lands in `.norbital/` and is never hand-edited.
+Compiled output lands in `.norbital/` and is never hand-edited, except authored
+`.norbital/config/` (doctor extensions) and committed `.norbital/migrations`.
 
 Runtime data — users, teams, team membership, records — lives in the database and is edited in the
 app. The line between the two matters, and it runs straight through the middle of "teams": _which

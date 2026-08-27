@@ -1,4 +1,10 @@
 import { Result, Schema } from 'effect';
+import {
+	ReplicaSchemaMaintenance,
+	type ReplicaSchemaMaintenance as ReplicaSchemaMaintenanceType,
+	ReplicaSchemaMaintenanceClear,
+	type ReplicaSchemaMaintenanceClear as ReplicaSchemaMaintenanceClearType
+} from '@norbital-ai/bolt-protocol';
 
 /** The small browser-message surface used to fan replica invalidation out to sibling tabs. */
 export type ReplicaInvalidationChannel = {
@@ -9,12 +15,20 @@ export type ReplicaInvalidationChannel = {
 
 type OpenReplicaInvalidationChannel = (name: string) => ReplicaInvalidationChannel | undefined;
 
-type ReplicaInvalidationBus = Readonly<{
+export type ReplicaSchemaControl =
+	| Readonly<{ readonly _tag: 'maintenance'; readonly value: ReplicaSchemaMaintenanceType }>
+	| Readonly<{ readonly _tag: 'maintenance-clear'; readonly value: ReplicaSchemaMaintenanceClearType }>;
+
+export type ReplicaInvalidationBus = Readonly<{
 	announce: (collections: ReadonlyArray<string>) => void;
+	announceMaintenance: (maintenance: ReplicaSchemaMaintenanceType) => void;
+	announceMaintenanceClear: (clear: ReplicaSchemaMaintenanceClearType) => void;
 	close: () => void;
 }>;
 
 const InvalidationMessage = Schema.Struct({ collections: Schema.Array(Schema.String) });
+const MaintenanceMessage = Schema.Struct({ maintenance: ReplicaSchemaMaintenance });
+const MaintenanceClearMessage = Schema.Struct({ maintenanceClear: ReplicaSchemaMaintenanceClear });
 const ANY_COLLECTION = '*';
 
 /**
@@ -51,21 +65,48 @@ export const openReplicaInvalidationBus = (
 				listener = next;
 			}
 		};
-	}
+	},
+	onSchemaControl?: (control: ReplicaSchemaControl) => void
 ): ReplicaInvalidationBus => {
 	// Storage policies and partially implemented browser globals can throw while constructing the
 	// channel. Cross-tab freshness may degrade, but the replica itself must still start and serve reads.
 	const opened = Result.try(() => open(`bolt-replica-changed:${scope}`));
 	const channel = Result.isSuccess(opened) ? opened.success : undefined;
-	if (channel === undefined) return { announce: () => undefined, close: () => undefined };
+	if (channel === undefined)
+		return {
+			announce: () => undefined,
+			announceMaintenance: () => undefined,
+			announceMaintenanceClear: () => undefined,
+			close: () => undefined
+		};
 	channel.onmessage = (event) => {
 		const decoded = Schema.decodeUnknownResult(InvalidationMessage)(event.data);
-		onInvalidate(Result.isSuccess(decoded) ? decoded.success.collections : [ANY_COLLECTION]);
+		if (Result.isSuccess(decoded)) {
+			onInvalidate(decoded.success.collections);
+			return;
+		}
+		const maintenance = Schema.decodeUnknownResult(MaintenanceMessage)(event.data);
+		if (Result.isSuccess(maintenance)) {
+			onSchemaControl?.({ _tag: 'maintenance', value: maintenance.success.maintenance });
+			return;
+		}
+		const cleared = Schema.decodeUnknownResult(MaintenanceClearMessage)(event.data);
+		if (Result.isSuccess(cleared)) {
+			onSchemaControl?.({ _tag: 'maintenance-clear', value: cleared.success.maintenanceClear });
+			return;
+		}
+		onInvalidate([ANY_COLLECTION]);
 	};
 	return {
 		announce: (collections) => {
 			if (collections.length > 0)
 				void Result.try(() => channel.postMessage({ collections: [...collections] }));
+		},
+		announceMaintenance: (maintenance) => {
+			void Result.try(() => channel.postMessage({ maintenance }));
+		},
+		announceMaintenanceClear: (maintenanceClear) => {
+			void Result.try(() => channel.postMessage({ maintenanceClear }));
 		},
 		close: () => {
 			channel.onmessage = null;

@@ -198,7 +198,7 @@ test('globs discover nested files and refuse to match nothing', async (context) 
 
 	await assert.rejects(
 		() => loadPatternFiles(root, 'patterns/*.miss.yml'),
-		/norbital-doctor: pattern "patterns\/\*\.miss\.yml" matched no rule files/
+		/norbital-doctor: pattern "patterns\/\*\.miss\.yml" matched no rule files \(\.yaml\/\.yml\)/
 	);
 });
 

@@ -8,7 +8,8 @@ const { positionals, values: options } = parseArgs({
 		root: { type: 'string' },
 		name: { type: 'string' },
 		json: { type: 'boolean' },
-		watch: { type: 'boolean' }
+		watch: { type: 'boolean' },
+		'no-semantic': { type: 'boolean' }
 	},
 	allowPositionals: true,
 	strict: true
@@ -19,6 +20,18 @@ const workspaceRoot = resolve(rootValue ?? process.cwd());
 const nameValue = options.name;
 const json = options.json ?? false;
 const watch = options.watch ?? false;
+/**
+ * Declines the audit's semantic tier for this run.
+ *
+ * The tier embeds source through a model provider, so it needs a credential and a network. Absent
+ * either, it fails loudly on purpose — a semantic pass that quietly did nothing would be a green
+ * audit that proved less than it claimed. But a caller can *know* the tier is unreachable: the
+ * authoring sandbox runs with no host environment and no network at all, by construction. Saying so
+ * is what this flag is for. It states the decline where the capability is missing, which is neither
+ * weakening the audit everywhere by disabling the tier in a committed config, nor handing a
+ * credential to a sandbox built to have none.
+ */
+const noSemantic = options['no-semantic'] ?? false;
 
 const report = (commandName: string, result: SyncResult): void => {
 	if (json) {
@@ -75,6 +88,7 @@ const run = (): Promise<void> => {
 				'  --name <name>  migration name (defaults to "auto")',
 				'  --json         emit the result as JSON',
 				'  --watch        rerun sync when authored source changes',
+				'  --no-semantic  decline the audit\'s semantic tier (no credential, no network)',
 				''
 			].join('\n')
 		);
@@ -114,7 +128,12 @@ const run = (): Promise<void> => {
 				process.exitCode = 1;
 				return;
 			}
-			const result = yield* Effect.promise(() => probe.audit({ root: workspaceRoot }));
+			const result = yield* Effect.promise(() =>
+				probe.audit({
+					root: workspaceRoot,
+					...(noSemantic ? { semantic: { disabled: true } } : {})
+				})
+			);
 			if (json) {
 				process.stdout.write(`${JSON.stringify(result)}\n`);
 			} else {
@@ -147,23 +166,34 @@ const run = (): Promise<void> => {
 		// that is then applied to real databases. Folding it into the command a dev server runs on every
 		// save is what forced the legacy path to carry a fingerprint cache to suppress its own output.
 		const program = Effect.gen(function* () {
-			// Imported here rather than at the top: the diff engine is a large module only this command
-			// needs, and `sync` runs on every save.
+			// Imported here rather than at process startup: both migrate and sync use the diff engine, but
+			// commands that only inspect CLI metadata should not pay to load drizzle-kit.
 			const { generateWorkspaceMigration } = yield* Effect.promise(
 				() => import('./schema-migrations.js')
 			);
 			const result = yield* generateWorkspaceMigration(workspaceRoot, nameValue);
 			if (json) {
 				process.stdout.write(`${JSON.stringify(result)}\n`);
-			} else if (result.tag === undefined) {
+			} else if (result.tag === undefined && !result.compatibilityLedgerWritten) {
 				process.stdout.write(
 					'Bolt migrate: the authored models and the migration lineage already agree; nothing written.\n'
+				);
+			} else if (result.tag === undefined) {
+				process.stdout.write(
+					[
+						'Bolt migrate wrote mutation compatibility lineage (no SQL migration was required)',
+						`Lineage: ${result.migrationsRoot}`,
+						''
+					].join('\n')
 				);
 			} else {
 				process.stdout.write(
 					[
 						`Bolt migrate wrote ${result.tag} (${result.statements.length} statements)`,
 						`Lineage: ${result.migrationsRoot}`,
+						...(result.compatibilityLedgerWritten
+							? ['Mutation compatibility lineage: updated']
+							: []),
 						...result.statements.map((statement) => `  ${statement}`),
 						''
 					].join('\n')

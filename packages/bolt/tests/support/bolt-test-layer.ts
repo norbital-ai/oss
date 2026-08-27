@@ -500,9 +500,18 @@ export const makeBoltTestRuntime = async (
 	 * present, lineage at its head, any test-supplied entries still pending.
 	 */
 	const baseline = { tag: '00000000000000_baseline', statements: migration?.statements ?? [] };
+	const testSchemaFingerprint = `sha256:${createHash('sha256')
+		.update(JSON.stringify({ collections: definition.collections, relations: definition.relations }))
+		.digest('hex')}`;
 	const provisioned: WorkspaceDefinition = {
 		...definition,
-		migrations: [baseline, ...(definition.migrations ?? [])]
+		migrations: [baseline, ...(definition.migrations ?? [])],
+		mutationCompatibility:
+			definition.mutationCompatibility ?? {
+				offlineHorizonMillis: 14 * 24 * 60 * 60 * 1000,
+				currentSchemaFingerprint: testSchemaFingerprint,
+				adapters: []
+			}
 	};
 	// Recorded, because it has just been run. Without this a `migrate` in a test would find the
 	// baseline pending and replay `CREATE TABLE` against tables that already exist.
@@ -541,15 +550,15 @@ export const makeBoltTestRuntime = async (
 			...suppliedAuthored.approvalFlows
 		}
 	});
-	const foundation = Layer.provideMerge(
-		Layer.mergeAll(Identity.layer, AccessControl.layer),
-		Layer.merge(workspaceLayer, facilities)
-	);
 	// The task queue, over the database facility and the host's timer. Everything that used to enqueue
 	// through the tasks facility — automations, approvals, integrations, agents — writes a `bolt_task`
 	// row through this instead, and wakes the host through the facility bound above.
 	const wake = Layer.provideMerge(SyncWake.layer, facilities);
 	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.merge(facilities, wake)));
+	const foundation = Layer.provideMerge(
+		Layer.mergeAll(Identity.layer, AccessControl.layer),
+		Layer.mergeAll(workspaceLayer, facilities, taskQueue)
+	);
 	// The budget an invocation carries. Zero depth, because a test drives the runtime directly rather
 	// than through a task the runtime itself enqueued — which is the only thing that produces a
 	// non-zero one. Provided rather than defaulted so a service that starts consulting it fails here
@@ -563,7 +572,7 @@ export const makeBoltTestRuntime = async (
 	// Which tenant this runtime is for. It is provided rather than defaulted because a *static*
 	// identity — an envoy, an automation — is minted with a tenant and has no row to read one off, so
 	// a service that reached for it and found nothing would mint a subject scoped to nowhere.
-	const tenantScope = TenantScope.layer(context.tenantId);
+	const tenantScope = TenantScope.layer(context.tenantId, context.environment);
 	// Automations sits above Collections rather than below it: starting one is a declaration check, a
 	// nesting check, and a row on the queue, and the authored api Collections hands a hook carries
 	// `automations.run`, so Collections is the consumer.

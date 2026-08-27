@@ -256,15 +256,16 @@ describe('a batch the subject may write only part of', () => {
 /**
  * The same lie, in the authoring API, where it must be refused rather than dropped.
  *
- * `api.db.create` used to end `row ?? { id: id, ...values }` exactly as the batch path did.
+ * The authored mutation create path used to end `row ?? { id: id, ...values }` exactly as the
+ * batch path did.
  * The batch path now omits a refused row and proceeds, because a batch legitimately has others; here
  * an authored hook asked for one record and the very next line it runs will use what comes back, so
  * answering `undefined` would only move the fabrication into the workspace's own code. It refuses.
  *
- * Driven through a hook rather than through the service, because `api.db.create` is the authoring
- * surface and a hook is the only place it exists. The quota is already full by the time the inner
- * create runs, so the predicate declines the insert and nothing is stored — which is the way this is
- * actually reached, not a fault injected to reach it.
+ * Driven through a hook rather than through the service, because `api.db.notes.mutate` is the
+ * authoring surface. An input without an id is its canonical create form. The quota is already full
+ * by the time the inner mutation runs, so the predicate declines the insert and nothing is stored —
+ * which is the way this is actually reached, not a fault injected to reach it.
  */
 describe('an authored create the predicate refused', () => {
 	it('refuses rather than answering the values it was handed', async () => {
@@ -276,14 +277,17 @@ describe('an authored create the predicate refused', () => {
 					create: {
 						perRecord: {
 							before: {
-								description: 'creates a second note through the authoring api',
+								description: 'creates a second note through the authored mutation api',
 								handler: (context: unknown, api: unknown) =>
 									Effect.gen(function* () {
 										const input = (context as { readonly input: Record<string, unknown> }).input;
 										const notes = (api as { readonly db: Record<string, Record<string, Function>> })
 											.db['notes'];
+										const mutate = notes?.['mutate'];
+										if (typeof mutate !== 'function')
+											return yield* Effect.die('notes.mutate is unavailable');
 										innerAnswer = yield* (
-											notes?.['create'] as (v: unknown) => Effect.Effect<unknown>
+											mutate as (v: unknown) => Effect.Effect<unknown>
 										)({ body: 'inner' }).pipe(Effect.result);
 										return input;
 									})
@@ -368,11 +372,11 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 
 		// The sync log. A row here for a refused record is a `create` every replica applies.
 		const sync = await harness.database.query(
-			'select record_id, record from bolt_sync_outbox where collection_name = $1',
+			'select record_id, after_record from bolt_sync_outbox where collection_name = $1',
 			['notes']
 		);
 		expect(sync.map((row) => String(row['record_id'])).toSorted()).toEqual(storedIds);
-		expect(bodiesOf(sync.map((row) => row['record'] as Record<string, unknown>))).toEqual([
+		expect(bodiesOf(sync.map((row) => row['after_record'] as Record<string, unknown>))).toEqual([
 			'note 0',
 			'note 1'
 		]);
@@ -421,10 +425,10 @@ describe('what a refused row must leave in the bookkeeping tables', () => {
 			'note 1'
 		]);
 		const sync = await harness.database.query(
-			'select record from bolt_sync_outbox where collection_name = $1',
+			'select after_record from bolt_sync_outbox where collection_name = $1',
 			['notes']
 		);
-		expect(bodiesOf(sync.map((row) => row['record'] as Record<string, unknown>))).toEqual([
+		expect(bodiesOf(sync.map((row) => row['after_record'] as Record<string, unknown>))).toEqual([
 			'note 0',
 			'note 1'
 		]);

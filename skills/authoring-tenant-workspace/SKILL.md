@@ -74,7 +74,10 @@ the `norbital-platform` skill for policy behavior, and the code-quality skill af
 **Template authoring defaults:** inline duplicated UI to keep the file count small; DRY only for
 substantially big components; describe UI with `$derived` (queries are already reactive — no
 `$effect` / `watch`); paint useful human information only; prefer nested/`with` queries over N+1
-or gratuitous parallel fetches; never show system UUIDs, including on relationships.
+or gratuitous parallel fetches; never show system UUIDs, including on relationships. Collection
+tables and Kanban cards declare visible fields explicitly, forms declare every mutable field exactly
+once (`hidden` means retained but not painted), filters are schema-derived through relationship depth
+two, and omitted renderer props always select the automatic datatype strategy.
 
 ## Authored filesystem
 
@@ -157,8 +160,9 @@ Two consequences worth stating, because the compiler will not state them for you
   apply to every authored file, `+`-prefixed or not.
 
 `bolt sync` owns `.norbital/generated/{models,registry,apps,workspace,client}.ts`, `types`, `diagnosis`,
-`dist`, and `tsconfig.json`. `.norbital/migrations` is generated but committed; other `.norbital` output is
-ignored. The authored root `tsconfig.json` only extends `.norbital/tsconfig.json`.
+`dist`, and `tsconfig.json`. `.norbital/migrations` is generated but committed. `.norbital/config/` is
+authored (doctor extensions) and committed. Other `.norbital` output is ignored. The authored root
+`tsconfig.json` only extends `.norbital/tsconfig.json`.
 
 ## Models and datatypes
 
@@ -224,16 +228,16 @@ Queries own their reactive `current`, `loading`, and `error` state. `mutate(valu
 The collection's numeric `pending` property is the count of writes still in flight. Do not duplicate
 query or mutation state in a component. Use opaque `after` cursors, never offset pagination. Use
 `findGrouped` and `aggregate` only for queryable reporting; do not load wide datasets and regroup them
-in memory. Server roles keep their Effect-native `api.db` collection operations; do not invent a
-top-level `client.mutate(...)` wrapper or transplant the browser surface into server roles.
+in memory. Server roles use the same direct `api.db.<collection>` surface and singular
+`mutate(recordOrGraph)` vocabulary, with Effects instead of browser Promises. Use the generated
+collection methods directly.
 
 `mutate` accepts the precisely generated nested graph. An included relationship is its complete
 desired state: present rows are inserted or updated, stored rows absent from the submitted relationship
 are deleted, and explicitly included relationships synchronize recursively. An omitted relationship is
 untouched. The root and every included relationship reconcile atomically, so submit a relationship only
-when replacement semantics are intended. The browser contract does not define a top-level record-delete
-encoding. Authorization, approvals, hooks, history, sync invalidation, and events all run through this
-one canonical mutation pipeline.
+when replacement semantics are intended. Authorization, approvals, hooks, history, sync invalidation,
+and events all run through this one canonical mutation pipeline.
 
 **How it works under the hood:** every `findMany`/`findFirst` executes against the local replica —
 no network for data this device has already seen. When a mutation lands (yours or

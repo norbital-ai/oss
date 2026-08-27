@@ -74,6 +74,14 @@ export type WorkspaceSession = Readonly<{
 	readonly environment: string;
 	readonly releaseId: string;
 	/**
+	 * The host-proven, stable identity of the signed-in principal.
+	 *
+	 * Opaque to Bolt and never an email address, bearer credential, team, role or client assertion.
+	 * Replica partitions fingerprint this value so rotating a credential can reopen the same local
+	 * database, while another person can never inherit it merely by receiving the old credential.
+	 */
+	readonly principal: string;
+	/**
 	 * The authority-shaped browser scope this document is currently rendering.
 	 *
 	 * It is not an authorization input — every command is still checked by the runtime. It keeps

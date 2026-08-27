@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import type { AnySchema, BeforeApi, DefaultWorkspaceSchema } from './contracts-schema.js';
+import type { AnySchema, Api, DefaultWorkspaceSchema } from './contracts-schema.js';
 
 interface HandlerDefinition<
 	S extends Schema.Codec<unknown, unknown>,
@@ -12,7 +12,7 @@ interface HandlerDefinition<
 	readonly schema: S;
 	readonly handler: (
 		payload: Schema.Schema.Type<S>,
-		api: BeforeApi<Workspace>
+		api: Api<Workspace>
 	) => Effect.Effect<Output, unknown, never> | Output;
 }
 
@@ -25,7 +25,7 @@ type AuthoredHandler<
 	readonly schema: S;
 	readonly handler: (
 		payload: Schema.Schema.Type<S>,
-		api: BeforeApi<Workspace>
+		api: Api<Workspace>
 	) => Effect.Effect<Output, unknown, never> | Output;
 };
 

@@ -13,15 +13,16 @@
 	import { Button } from '#lib/button';
 	import { FormState, maybeAsync, type FormSchema } from '#lib/form';
 	import { useI18n } from '#lib/i18n';
-	import { Cluster, Cover, Grid, Scroll, Stack } from '#lib/layout';
+	import { Cluster, Cover, Scroll, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { onDestroy } from 'svelte';
+	import { optionalCollectionRecordId } from '#lib/collection-surface';
 	import {
-		deriveFormFieldNames,
-		optionalCollectionRecordId,
-		pickFieldNames
-	} from '#lib/collection-table/collection-card-derivation';
-	import { pickWritableFormValues } from './collection-form-values';
+		assertCollectionFormFieldRegistration,
+		collectionFormMutationFieldNames,
+		pickCollectionFormValues,
+		pickWritableFormValues
+	} from './collection-form-values';
 	import CollectionFormField, {
 		setCollectionFormFieldContext
 	} from './collection-form-field.svelte';
@@ -33,6 +34,7 @@
 	} from '#lib/collection-record-metadata';
 	import type {
 		CollectionFormFieldComponent,
+		CollectionFormComposition,
 		CollectionFormName,
 		CollectionFormProps,
 		CollectionFormValidation,
@@ -192,20 +194,16 @@
 		skeletonRows = 4,
 		class: className,
 		onAfterSubmit,
-		fields,
 		children
 	}: CollectionFormProps<TCollections, TName> = $props();
 	// svelte-ignore state_referenced_locally -- a mounted collection surface keeps one generated client.
 	const workspaceClient = getCollectionClientForSurface(client, 'CollectionForm');
 	setCollectionClientContext(() => workspaceClient);
 	const definition = $derived(workspaceClient.collections[String(collection)]);
-	// Field kinds whose form control spans the full intrinsic grid width (RFC IV.2 / V.4).
-	const FULL_WIDTH_FORM_KINDS: ReadonlySet<string> = new Set(['text', 'json', 'matrix', 'file']);
-
 	const { t } = useI18n();
 
 	// svelte-ignore state_referenced_locally
-	const initialValues: Record<string, unknown> = pickWritableFormValues(
+	const initialValues: Record<string, unknown> = pickCollectionFormValues(
 		definition.fields,
 		defaultValues ?? {}
 	);
@@ -229,24 +227,14 @@
 	const deleteRestriction = $derived(
 		recordId ? collectionRecordRestriction(resolvedRecordMetadata, 'delete') : null
 	);
-	// Auto field emission (RFC V.4): a `fields` pick wins over the model-ordered writable set; both
-	// are ignored when a `children` composition is provided.
-	const autoFieldNames = $derived(
-		fields && fields.length > 0
-			? pickFieldNames(definition.fields, fields as readonly string[])
-			: deriveFormFieldNames(definition.fields)
-	);
 	// One field lookup per definition, so validation never re-searches the field list per row.
 	const fieldByName = $derived(
 		new Map(definition.fields.map((field) => [field.name, field] as const))
 	);
-	const autoFields = $derived(
-		autoFieldNames
-			.map((name) => fieldByName.get(name))
-			.filter((field): field is CollectionField => field != null)
-	);
 	const operations = $derived(client.db[collection]);
-	const registeredFields = new Set<string>();
+	const registeredFields = new Map<string, number>();
+	const hiddenFields = new Set<string>();
+	const mutationFieldNames = $derived(collectionFormMutationFieldNames(definition.fields));
 	let historyRequested = $state(false);
 	const historyQuery = $derived.by(() => {
 		const currentRecordId = optionalCollectionRecordId(defaultValues);
@@ -262,7 +250,13 @@
 			}
 
 			let candidate = Object.fromEntries(Object.entries(data));
-			const issues = validateRegisteredFields(fieldByName, registeredFields, candidate);
+			// Hidden declarations prove composition completeness but mount no operator control. They
+			// therefore leave value derivation to the caller or collection hook and do not run the
+			// interactive required-value check that belongs to a visible input.
+			const visibleMutationFields = new Set(
+				mutationFieldNames.filter((fieldName) => !hiddenFields.has(fieldName))
+			);
+			const issues = validateRegisteredFields(fieldByName, visibleMutationFields, candidate);
 			candidate = yield* applySchemaValidation(candidate, validation, issues);
 			yield* applySemanticValidation(candidate, validation, issues);
 
@@ -313,9 +307,15 @@
 		value: (name) => Reflect.get(form.getData(), name),
 		// Field values are schema-typed at FormState; collection fields pass unknown at the boundary.
 		setValue: (name, value) => form.setValue(name, value as never),
-		register: (name) => {
-			registeredFields.add(name);
-			return () => registeredFields.delete(name);
+		register: (name, hidden) => {
+			registeredFields.set(name, (registeredFields.get(name) ?? 0) + 1);
+			if (hidden) hiddenFields.add(name);
+			return () => {
+				const count = registeredFields.get(name) ?? 0;
+				if (count <= 1) registeredFields.delete(name);
+				else registeredFields.set(name, count - 1);
+				if (hidden) hiddenFields.delete(name);
+			};
 		},
 		dirty: (name) => form.hasChangesForPath(name),
 		errors: (name) => form.getFieldErrors(name),
@@ -329,6 +329,7 @@
 
 	function submit(event: SubmitEvent): void {
 		event.preventDefault();
+		assertCollectionFormFieldRegistration(String(collection), definition.fields, registeredFields);
 		Effect.runFork(
 			form
 				.submit()
@@ -359,6 +360,10 @@
 		);
 	}
 
+	$effect(() => {
+		if (loading) return;
+		assertCollectionFormFieldRegistration(String(collection), definition.fields, registeredFields);
+	});
 	onDestroy(() => form.destroy());
 </script>
 
@@ -437,12 +442,12 @@
 				<Stack gap="md" aria-label={t('form.loadingForm')}>
 					<CollectionFormSkeleton rows={skeletonRows} />
 				</Stack>
-			{:else if children}
+			{:else}
 				{@render children({
-					// Runtime Field is TFieldName-only; composition exposes a per-usage renderer generic.
-					Field: CollectionFormField as CollectionFormFieldComponent<
-						CollectionFieldName<TCollections[TName]>
-					>,
+					Field: CollectionFormField as unknown as CollectionFormComposition<
+						TCollections,
+						TName
+					>['Field'],
 					form: {
 						values: () => Object.fromEntries(Object.entries(form.getData())),
 						setValues: (values) => {
@@ -452,15 +457,6 @@
 						}
 					}
 				})}
-			{:else}
-				<!-- Auto field emission (RFC V.4a): intrinsic Grid, full-width spans per field kind. -->
-				<Grid minimum="card">
-					{#each autoFields as field (field.name)}
-						<div class={FULL_WIDTH_FORM_KINDS.has(field.kind) ? 'col-span-full' : ''}>
-							<CollectionFormField name={field.name} />
-						</div>
-					{/each}
-				</Grid>
 			{/if}
 		</div>
 	</Scroll>

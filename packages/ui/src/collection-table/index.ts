@@ -35,28 +35,13 @@ export {
 	collectionTableRowMatchesSearch,
 	collectionTableRowMatchesWhere
 } from './collection-table-row-query.js';
-export { default as CollectionTableNavigationSurface } from './collection-table-navigation-surface.svelte';
-export {
-	CollectionTableUrlNavigation,
-	createCollectionTableRouteKey,
-	getCollectionTableNavigationContext,
-	resolveCollectionTableRecordId,
-	setCollectionTableNavigationContext,
-	type CollectionTableNavigation,
-	type CollectionTableNavigationTarget
-} from './collection-table-navigation.svelte.js';
 export type {
 	CollectionName,
 	CollectionTableColumn,
 	CollectionTableColumnPrimitiveProps,
 	CollectionTableColumnsComposition,
-	CollectionTableIntegrationState,
-	CollectionTableIntegrationStatus,
 	CollectionTableFeatures,
-	CollectionTableInitialFilter,
 	CollectionTableProps,
-	CollectionTablePipeline,
-	CollectionTablePipelineContext,
 	CollectionTableRow,
 	CollectionTableRowActionContext
 } from './collection-table.types.js';

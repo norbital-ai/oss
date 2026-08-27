@@ -126,7 +126,12 @@ const definition = workspace({
 	tools: [],
 	skills: [],
 	envoys: [],
-	requiredFacilities: ['database', 'connector']
+	requiredFacilities: ['database', 'connector'],
+	mutationCompatibility: {
+		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
+		currentSchemaFingerprint: 'sha256:scheduled-pull-fixture',
+		adapters: []
+	}
 });
 
 const manifest = buildManifest(definition, { artifactId: 'scheduled-pull' });
@@ -222,7 +227,13 @@ describe('a host can read an integration out of the manifest', () => {
 			assetIndex: { browser: [], server: [] },
 			customTypeDefinitions: [],
 			environmentFile: undefined,
-			migrations: []
+			migrations: [],
+			mutationCompatibility: {
+				offlineHorizonMillis: 14 * 24 * 60 * 60 * 1000,
+				currentSchemaFingerprint: 'sha256:fixture',
+				adapters: []
+			},
+			schemaFingerprint: 'sha256:fixture'
 		});
 		const start = artifact.indexOf('const manifestValue = ');
 		const end = artifact.indexOf('\nconst remoteHandlers', start);

@@ -78,14 +78,29 @@ const definition = workspace({
 	tools: [],
 	skills: [],
 	envoys: [],
-	requiredFacilities: ['database', 'ai', 'tasks']
+	requiredFacilities: ['database', 'ai', 'tasks'],
+	mutationCompatibility: {
+		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
+		currentSchemaFingerprint: 'sha256:vertical-slice-fixture',
+		adapters: []
+	}
 });
 const manifest = buildManifest(definition, { artifactId: 'hr-fixture' });
 const bundle = makeBundle(definition, manifest, {
 	echo: (input) => Promise.resolve({ input, source: 'authored-remote' })
 });
 
+const employeeRecordId = '00000000-0000-5000-8000-000000000001';
 let chatMessageId = 0;
+let browserMutationApplied = false;
+type BrowserMutationLedgerRow = Readonly<{
+	request_digest: Schema.Json;
+	status: 'running' | 'terminal';
+	outcome: Schema.Json | null;
+}>;
+const browserMutationLedger = new Map<string, BrowserMutationLedgerRow>();
+const browserMutationLedgerKey = (parameters: ReadonlyArray<Schema.Json>): string =>
+	JSON.stringify(parameters.slice(0, 6));
 const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 	call: (_metadata, request) => {
 		// Authentication reads Better Auth's session joined to its user table. The Drizzle query
@@ -209,14 +224,91 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 		}
 		if (
 			request._tag === 'Query' &&
-			request.sql.startsWith('select "id", "created_at"') &&
-			request.sql.includes('from "employees"') &&
-			request.parameters.includes('employee-1')
+			request.sql.startsWith('update bolt_sync_partition_registry')
 		) {
 			return Promise.resolve({
 				_tag: 'Success',
 				value: {
-					rows: [{ id: 'employee-1', name: 'Grace', row_version: 2 }],
+					rows: [
+						{
+							identity: {
+								key: 'sha256:vertical-slice-partition',
+								tenantId: scope.tenantId,
+								environment: scope.environment,
+								effectivePolicyHolder: 'administrator',
+								impersonationTarget: null,
+								authorityGeneration: 0,
+								schemaFingerprint: 'sha256:vertical-slice-fixture'
+							},
+							schema_fingerprint: 'sha256:vertical-slice-fixture',
+							authority_generation: 0
+						}
+					],
+					affectedRows: 1
+				}
+			});
+		}
+		if (
+			request._tag === 'Query' &&
+			request.sql.startsWith('select request_digest, status, outcome') &&
+			request.sql.includes('from bolt_browser_mutation')
+		) {
+			const row = browserMutationLedger.get(browserMutationLedgerKey(request.parameters));
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows:
+						row === undefined
+							? []
+							: [
+									{
+										...row,
+										...(request.sql.includes('retry_after_seconds')
+											? { retry_after_seconds: 30 }
+											: {})
+									}
+								],
+					affectedRows: 0
+				}
+			});
+		}
+		if (
+			request._tag === 'Query' &&
+			request.sql.startsWith('with cleaned as') &&
+			request.sql.includes('insert into bolt_browser_mutation')
+		) {
+			const key = browserMutationLedgerKey(request.parameters);
+			if (browserMutationLedger.has(key))
+				return Promise.resolve({
+					_tag: 'Success',
+					value: { rows: [], affectedRows: 0 }
+				});
+			browserMutationLedger.set(key, {
+				// Claim parameters are the six-part scope, device sequence, partition, schema,
+				// then request digest. Storing the device sequence here made the terminal update miss.
+				request_digest: request.parameters[9] ?? null,
+				status: 'running',
+				outcome: null
+			});
+			return Promise.resolve({
+				_tag: 'Success',
+				value: { rows: [{ id: 'browser-mutation-1' }], affectedRows: 1 }
+			});
+		}
+		if (
+			request._tag === 'Query' &&
+			request.sql.includes('from "employees"') &&
+			!request.sql.includes('to_jsonb') &&
+			request.parameters.includes(employeeRecordId)
+		) {
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [
+						browserMutationApplied
+							? { id: employeeRecordId, name: 'Grace', row_version: 2 }
+							: { id: employeeRecordId, name: 'Ada', row_version: 1 }
+					],
 					affectedRows: 0
 				}
 			});
@@ -240,7 +332,7 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 				{
 					cursor: { xid: 3, sequence: 5 },
 					collection: 'employees',
-					recordId: 'employee-1',
+					recordId: employeeRecordId,
 					operation: 'update',
 					record: { name: 'Ada' }
 				}
@@ -254,7 +346,7 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			});
 		}
 		if (request._tag === 'Query' && request.sql.includes('to_jsonb("record")')) {
-			const record = { id: 'employee-1', name: 'Grace', row_version: 2 };
+			const record = { id: employeeRecordId, name: 'Ada', row_version: 1 };
 			return Promise.resolve({
 				_tag: 'Success',
 				value: {
@@ -320,6 +412,25 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			request._tag === 'Transaction' &&
 			request.statements.some((statement) => statement.sql.includes('__bolt_graph_record'))
 		) {
+			browserMutationApplied = true;
+			const completion = request.statements.find((statement) =>
+				statement.sql.includes('update bolt_browser_mutation set status = \'terminal\'')
+			);
+			if (completion !== undefined) {
+				const key = browserMutationLedgerKey(completion.parameters);
+				const claimed = browserMutationLedger.get(key);
+				if (
+					claimed !== undefined &&
+					claimed.status === 'running' &&
+					claimed.request_digest === completion.parameters[6]
+				) {
+					browserMutationLedger.set(key, {
+						request_digest: claimed.request_digest,
+						status: 'terminal',
+						outcome: completion.parameters[7] ?? null
+					});
+				}
+			}
 			return Promise.resolve({
 				_tag: 'Success',
 				value: {
@@ -327,8 +438,8 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 						{
 							__bolt_graph_ordinal: 0,
 							__bolt_graph_collection: 'employees',
-							__bolt_graph_id: 'employee-1',
-							__bolt_graph_record: { id: 'employee-1', name: 'Grace', row_version: 2 }
+							__bolt_graph_id: employeeRecordId,
+							__bolt_graph_record: { id: employeeRecordId, name: 'Grace', row_version: 2 }
 						}
 					],
 					affectedRows: 1
@@ -538,22 +649,6 @@ describe('runnable Bolt vertical slice', () => {
 		});
 	});
 
-	it('reads the sync head and ordered diff through the database facility', async () => {
-		expect(await invoke('sync.head', null)).toMatchObject({
-			_tag: 'Success',
-			response: { value: { xid: 3, sequence: 4 } }
-		});
-		const diff = await invoke('sync.diff', {
-			subject,
-			cursor: { xid: 3, sequence: 4 },
-			limit: 100
-		});
-		expect(diff, JSON.stringify(diff)).toMatchObject({
-			_tag: 'Success',
-			response: { value: [{ recordId: 'employee-1' }] }
-		});
-	});
-
 	it('atomically admits an agent message before executing the persisted turn', async () => {
 		expect(
 			await invoke('agents.enqueue', {
@@ -661,14 +756,36 @@ describe('runnable Bolt vertical slice', () => {
 	});
 
 	it('dispatches the declarative mutation command emitted by the browser collection proxy', async () => {
+		// This facility is module-scoped, unlike a real per-test database. Do not let an interrupted or
+		// repeated invocation inherit a claimed key from an earlier execution in the same worker.
+		browserMutationLedger.clear();
+		browserMutationApplied = false;
 		const mutation = await invoke('collections.mutate', {
-			subject,
-			collection: 'employees',
-			values: { id: 'employee-1', name: 'Grace' }
+			protocolVersion: 2,
+			idempotencyKey: 'vertical-slice-update-employee',
+			issuedAtEpochMs: Date.now(),
+			deviceSequence: 1,
+			partitionKey: 'sha256:vertical-slice-partition',
+			schemaFingerprint: 'sha256:vertical-slice-fixture',
+			graph: {
+				action: 'update',
+				collection: 'employees',
+				values: { id: employeeRecordId, name: 'Grace' }
+			},
+			baseVersions: [
+				{ row: { collection: 'employees', recordId: employeeRecordId }, rowVersion: 1 }
+			]
 		});
 		expect(mutation, JSON.stringify(mutation)).toMatchObject({
 			_tag: 'Success',
-			response: { value: { records: [{ id: 'employee-1', name: 'Grace', row_version: 2 }] } }
+			response: {
+				value: {
+					resolution: 'accepted',
+					mutationId: 'vertical-slice-update-employee',
+					deviceSequence: 1,
+					records: [{ id: employeeRecordId, name: 'Grace', row_version: 2 }]
+				}
+			}
 		});
 	});
 

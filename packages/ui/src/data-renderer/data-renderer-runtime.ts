@@ -5,7 +5,11 @@ import { getContext, setContext, type Component } from 'svelte';
 import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 import type { Effect } from 'effect';
 
-export type CustomTypeRendererMap = Readonly<Record<string, Component<DataRendererProps>>>;
+export type CustomTypeRenderer = Component<DataRendererProps>;
+export type CustomTypeRendererState =
+	| Readonly<{ status: 'loading' }>
+	| Readonly<{ status: 'ready'; renderer: CustomTypeRenderer }>
+	| Readonly<{ status: 'failed'; error: Error }>;
 
 export interface DataRendererRuntime {
 	autocompleteGeolocation(query: string): Effect.Effect<TGeolocationPickerValue[], unknown>;
@@ -13,7 +17,8 @@ export interface DataRendererRuntime {
 	/** Resolves a persisted storage key through the host that mounted the workspace. */
 	fileUrl(key: string): string;
 	renderStaticMap(input: StaticMapRequest): Effect.Effect<StaticMapImage, unknown>;
-	readonly customTypeRenderers: CustomTypeRendererMap;
+	/** Resolve a tenant datatype without conflating loading, failure, and absence. */
+	customTypeRenderer(kind: string): CustomTypeRendererState | undefined;
 }
 
 const DATA_RENDERER_RUNTIME = Symbol.for('@norbital-ai/ui/data-renderer-runtime');

@@ -4,16 +4,25 @@ import {
 	ARTIFACT_ASSET_DIRECTORY,
 	ARTIFACT_ASSET_INDEX_FILE,
 	ARTIFACT_BUNDLE_FILE,
+	ARTIFACT_RELEASE_FILE,
 	ArtifactAssetIndex,
+	artifactCodeGraphRefusals,
+	ArtifactCodeGraph,
 	AssetIndexEntry,
 	BundleManifest,
+	canonicalTenantReleaseEncoding,
 	decodeBoltBundleModule,
 	missingFacilities,
 	PROTOCOL_VERSION,
+	tenantReleaseObjects,
+	TenantRelease,
 	type FacilityBindings
 } from '../src/index.js';
 
-const schemaPlan = { fingerprint: 'fnv1a32:test', steps: [] } as const;
+const schemaPlan = {
+	fingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+	steps: []
+} as const;
 
 describe('facility contract', () => {
 	it('reports required facility bindings deterministically', () => {
@@ -21,7 +30,7 @@ describe('facility contract', () => {
 			protocolVersion: PROTOCOL_VERSION,
 			artifactId: 'fixture',
 			artifactVersion: '1',
-			schemaFingerprint: 'sha256:test',
+			schemaFingerprint: schemaPlan.fingerprint,
 			schemaPlan,
 			requiredFacilities: ['database', 'ai', 'transport'],
 			browserAssets: [],
@@ -141,9 +150,111 @@ describe('artifact asset index', () => {
 		expect(ARTIFACT_BUNDLE_FILE).toBe('bundle.mjs');
 		expect(ARTIFACT_ASSET_DIRECTORY).toBe('assets');
 		expect(ARTIFACT_ASSET_INDEX_FILE).toBe('asset-index.json');
+		expect(ARTIFACT_RELEASE_FILE).toBe('release.json');
 		expect(Schema.decodeUnknownSync(ArtifactAssetIndex)({ browser: [entry], server: [] })).toEqual({
 			browser: [entry],
 			server: []
 		});
+	});
+
+	it('describes an independently verifiable ESM module graph', () => {
+		const graph = Schema.decodeUnknownSync(ArtifactCodeGraph)({
+			format: 'esm-v1',
+			entrypoint: 'bundle.mjs',
+			sha256: 'b'.repeat(64),
+			byteLength: 9,
+			chunks: [
+				{
+					path: 'bundle.mjs',
+					role: 'tenant',
+					sha256: 'c'.repeat(64),
+					byteLength: 9,
+					imports: [],
+					dynamicImports: []
+				}
+			]
+		});
+		expect(graph.chunks.map(({ sha256 }) => sha256)).toEqual(['c'.repeat(64)]);
+		expect(artifactCodeGraphRefusals(graph)).toEqual([]);
+		const entryChunk = graph.chunks[0];
+		if (entryChunk === undefined) throw new Error('fixture graph has no entry chunk');
+		expect(
+			artifactCodeGraphRefusals({
+				...graph,
+				chunks: [
+					{
+						...entryChunk,
+						dynamicImports: [{ specifier: './lazy.mjs', target: 'lazy.mjs' }]
+					}
+				]
+			})
+		).toContain('dynamic imports are unsupported: bundle.mjs');
+	});
+
+	it('validates a complete release without importing its executable', () => {
+		const decoded = Schema.decodeUnknownSync(TenantRelease)({
+			formatVersion: 1,
+			protocolVersion: PROTOCOL_VERSION,
+			artifactId: 'fixture',
+			artifactVersion: '1',
+			requiredFacilities: [],
+			code: {
+				format: 'esm-v1',
+				entrypoint: 'bundle.mjs',
+				sha256: 'b'.repeat(64),
+				byteLength: 9,
+				chunks: [
+					{
+						path: 'bundle.mjs',
+						role: 'tenant',
+						sha256: 'c'.repeat(64),
+						byteLength: 9,
+						imports: [],
+						dynamicImports: []
+					}
+				]
+			},
+			assets: { browser: [entry], server: [] },
+			schema: {
+				fingerprint: schemaPlan.fingerprint,
+				description: {
+					path: 'schema.json',
+					role: 'schema',
+					sha256: 'e'.repeat(64),
+					byteLength: 20
+				},
+				migrations: {
+					path: 'migrations.json',
+					role: 'migration-lineage',
+					sha256: 'f'.repeat(64),
+					byteLength: 3
+				}
+			},
+			provenance: {
+				lockfile: {
+					path: 'pnpm-lock.yaml',
+					role: 'lockfile',
+					sha256: 'd'.repeat(64),
+					byteLength: 4
+				},
+				toolchain: { bolt: '0.0.5', node: '26.0.0', protocol: '4' }
+			}
+		});
+		expect(decoded.schema.description.role).toBe('schema');
+		expect(decoded.provenance.lockfile?.path).toBe('pnpm-lock.yaml');
+		expect(tenantReleaseObjects(decoded).map(({ role }) => role)).toEqual([
+			'tenant',
+			'browser-asset',
+			'schema',
+			'migration-lineage',
+			'lockfile'
+		]);
+		const changed = TenantRelease.make({
+			...decoded,
+			assets: { ...decoded.assets, browser: [{ ...entry, sha256: '9'.repeat(64) }] }
+		});
+		expect(canonicalTenantReleaseEncoding(changed)).not.toBe(
+			canonicalTenantReleaseEncoding(decoded)
+		);
 	});
 });

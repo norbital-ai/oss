@@ -1,5 +1,5 @@
 // repository-health:allow SEM_PARALLEL -- authored facade consumes the collections contract leaf; the pair is linked through collections.contract, not parallel.
-import { Context, Duration, Effect, Option, Result, Schema, SchemaIssue } from 'effect';
+import { Context, Duration, Effect, Option, Result, Schema } from 'effect';
 import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
 import type { AutomationProgression } from '#lib/authoring/automations-schema.js';
@@ -109,22 +109,6 @@ export const emptyAuthoredRuntime: AuthoredRuntime = {
 	integrations: {}
 };
 
-/** The rows a collections read answers with, decoded once per read as the record-array the ops surface declares. */
-const JsonObjectRows = Schema.Array(Schema.JsonObject);
-
-/**
- * Carries a read's rows across the Json-typed collections boundary as plain records.
- *
- * A database row is always an object; the collections interface types rows as JSON, which admits
- * primitives. This single decode is what makes handing them to an authored handler honest: a JSON
- * value that is not an object is refused here rather than arriving down there as a "row" that is a
- * number.
- */
-export const objectRowsOf = (
-	rows: ReadonlyArray<Schema.Json>
-): Effect.Effect<ReadonlyArray<Readonly<Record<string, Schema.Json>>>, Schema.SchemaError> =>
-	Schema.decodeUnknownEffect(JsonObjectRows)(rows);
-
 /** Identifies the authored-runtime carrier in Effect's context so wiring remains explicit and type checked. */
 export const AuthoredRuntimeService = Context.Service<AuthoredRuntime>(
 	'@norbital-ai/bolt/AuthoredRuntime'
@@ -182,8 +166,7 @@ export const runAuthoredHandler = <A>(
 		const attempted = Result.try(handler);
 		if (Result.isFailure(attempted)) return raise<A>(attempted.failure);
 		const produced = attempted.success;
-		if (Effect.isEffect(produced))
-			return produced.pipe(Effect.catchDefect(raise<A>));
+		if (Effect.isEffect(produced)) return produced.pipe(Effect.catchDefect(raise<A>));
 		if (isPromiseLike(produced))
 			return Effect.tryPromise({
 				try: () => produced,
@@ -192,8 +175,8 @@ export const runAuthoredHandler = <A>(
 		return Effect.succeed(produced);
 	});
 
-/** The collection operations an authored api can reach, bound by the runtime to the current invocation. */
-export type AuthoredCollectionOps = Readonly<{
+/** Read operations shared by authored handlers and policy decisions. */
+export type AuthoringReadOps = Readonly<{
 	readonly findMany: (
 		collection: string,
 		input: Readonly<Record<string, unknown>>
@@ -206,58 +189,52 @@ export type AuthoredCollectionOps = Readonly<{
 		collection: string,
 		input: Readonly<Record<string, unknown>>
 	) => Effect.Effect<number, unknown, never>;
+	/**
+	 * Rows nearest a probe vector, closest first, each carrying the measured `distance`.
+	 *
+	 * A read like any other — same authorization, same row visibility, same field masking — which is
+	 * why it sits with the reads rather than beside `mutate`. The ordering is the part that cannot be
+	 * done anywhere else: only the database can answer it from the vector index.
+	 */
 	readonly findNearest: (
 		collection: string,
 		input: Readonly<Record<string, unknown>>
 	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, unknown, never>;
-	readonly create: (
-		collection: string,
-		id: string,
-		values: Readonly<Record<string, Schema.Json>>
-	) => Effect.Effect<Readonly<Record<string, unknown>>, unknown, never>;
-	readonly update: (
-		collection: string,
-		id: string,
-		values: Readonly<Record<string, Schema.Json>>
-	) => Effect.Effect<Readonly<Record<string, unknown>>, unknown, never>;
-	readonly delete: (collection: string, id: string) => Effect.Effect<void, unknown, never>;
-	readonly mutate: (
-		collection: string,
-		payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
-		options?: { readonly batchSize?: number }
-	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, unknown, never>;
-	/**
-	 * Starts a declared automation in the background.
-	 *
-	 * The third door an author has, beside `{ schedule }` and `{ trigger }`, and the only one that
-	 * says "from code, later, with retry". It is deliberately not a task API: a task is not a thing an
-	 * author has, and a second way to start background work would compete with the automations the
-	 * workspace already declares.
-	 */
-	readonly runAutomation: (
-		name: string,
-		input: Schema.Json,
-		options: Readonly<{ readonly after?: string | number }> | undefined
-	) => Effect.Effect<{ readonly taskId: string }, unknown, never>;
-	readonly approvalFindMany: (
-		input: Readonly<Record<string, unknown>>
-	) => Effect.Effect<ReadonlyArray<Readonly<Record<string, unknown>>>, unknown, never>;
-	readonly approvalFindFirst: (
-		input: Readonly<Record<string, unknown>>
-	) => Effect.Effect<Readonly<Record<string, unknown>> | undefined, unknown, never>;
-	readonly infer: (input: InferenceRequest) => Effect.Effect<unknown, unknown, never>;
-	readonly readFileAsset: (file: FileRef) => Effect.Effect<
-		{
-			readonly id: string;
-			readonly name: string;
-			readonly mimeType: string | null;
-			readonly size: number;
-			readonly bytes: Uint8Array;
-		},
-		unknown,
-		never
-	>;
 }>;
+
+/** Every operation an ordinary authored handler can reach, bound to the current invocation. */
+export type AuthoringOps = AuthoringReadOps &
+	Readonly<{
+		readonly mutate: (
+			collection: string,
+			values: Readonly<Record<string, unknown>>
+		) => Effect.Effect<void, unknown, never>;
+		/**
+		 * Starts a declared automation in the background.
+		 *
+		 * The third door an author has, beside `{ schedule }` and `{ trigger }`, and the only one that
+		 * says "from code, later, with retry". It is deliberately not a task API: a task is not a thing an
+		 * author has, and a second way to start background work would compete with the automations the
+		 * workspace already declares.
+		 */
+		readonly runAutomation: (
+			name: string,
+			input: Schema.Json,
+			options: Readonly<{ readonly after?: string | number }> | undefined
+		) => Effect.Effect<{ readonly taskId: string }, unknown, never>;
+		readonly infer: (input: InferenceRequest) => Effect.Effect<unknown, unknown, never>;
+		readonly readFileAsset: (file: FileRef) => Effect.Effect<
+			{
+				readonly id: string;
+				readonly name: string;
+				readonly mimeType: string | null;
+				readonly size: number;
+				readonly bytes: Uint8Array;
+			},
+			unknown,
+			never
+		>;
+	}>;
 
 /** A preflight the runtime may place in front of an authored operation. */
 type AuthoredOperationGuard = (operation: string) => Effect.Effect<void, unknown, never>;
@@ -269,10 +246,10 @@ type AuthoredOperationGuard = (operation: string) => Effect.Effect<void, unknown
  * those bindings but do not belong to a cancellable automation task. Only automation dispatch wraps
  * its bound operations with this function.
  */
-export const guardAuthoredCollectionOps = (
-	ops: AuthoredCollectionOps,
+export const guardAuthoringOps = (
+	ops: AuthoringOps,
 	guard: AuthoredOperationGuard
-): AuthoredCollectionOps => ({
+): AuthoringOps => ({
 	findMany: (collection, input) =>
 		guard(`db.${collection}.findMany`).pipe(Effect.andThen(ops.findMany(collection, input))),
 	findFirst: (collection, input) =>
@@ -281,22 +258,10 @@ export const guardAuthoredCollectionOps = (
 		guard(`db.${collection}.count`).pipe(Effect.andThen(ops.count(collection, input))),
 	findNearest: (collection, input) =>
 		guard(`db.${collection}.findNearest`).pipe(Effect.andThen(ops.findNearest(collection, input))),
-	create: (collection, id, values) =>
-		guard(`db.${collection}.create`).pipe(Effect.andThen(ops.create(collection, id, values))),
-	update: (collection, id, values) =>
-		guard(`db.${collection}.update`).pipe(Effect.andThen(ops.update(collection, id, values))),
-	delete: (collection, id) =>
-		guard(`db.${collection}.delete`).pipe(Effect.andThen(ops.delete(collection, id))),
-	mutate: (collection, payloads, options) =>
-		guard(`db.${collection}.mutate`).pipe(
-			Effect.andThen(ops.mutate(collection, payloads, options))
-		),
+	mutate: (collection, values) =>
+		guard(`db.${collection}.mutate`).pipe(Effect.andThen(ops.mutate(collection, values))),
 	runAutomation: (name, input, options) =>
 		guard(`automations.${name}.run`).pipe(Effect.andThen(ops.runAutomation(name, input, options))),
-	approvalFindMany: (input) =>
-		guard('db.approval_request.findMany').pipe(Effect.andThen(ops.approvalFindMany(input))),
-	approvalFindFirst: (input) =>
-		guard('db.approval_request.findFirst').pipe(Effect.andThen(ops.approvalFindFirst(input))),
 	infer: (input) => guard('ai.infer').pipe(Effect.andThen(ops.infer(input))),
 	readFileAsset: (file) => guard('files.read').pipe(Effect.andThen(ops.readFileAsset(file)))
 });
@@ -333,7 +298,7 @@ type AuthoredInferenceWebSearch = Readonly<{
  * One authored inference as the ops surface carries it: the schema the answer must decode to, and
  * the picture words to judge against.
  *
- * Named rather than inline because `AuthoredCollectionOps.infer` and the object literal behind the
+ * Named rather than inline because `AuthoringOps.infer` and the object literal behind the
  * authored `api.infer` must carry the same shape, and that shape is the contract between the
  * authoring surface and the AI facility.
  */
@@ -474,25 +439,18 @@ export const afterMillisOf = (after: string | number | undefined): number | unde
 	return Option.isSome(decoded) ? Duration.toMillis(decoded.value) : undefined;
 };
 
-const asQueryInput = (
-	input: Readonly<Record<string, unknown>>
-): Readonly<Record<string, unknown>> => input;
-
 /** The one field the grounding pass reads back off a research turn. Built once, not per turn. */
 const decodeResearchText = Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }));
 
 /**
  * The `runAutomation` member of the authoring api, owned in one place.
  *
- * Two builders hand out `AuthoredCollectionOps`: the invocation-bound one below, and the one the
+ * Two builders hand out `AuthoringOps`: the invocation-bound one below, and the one the
  * collections layer assembles from its own internals. Both offer the same behaviour here, down to
  * the refusal an author reads when the delay does not parse, so it is written once.
  */
 export const runAutomationOp =
-	(
-		effectId: EffectIdType,
-		automations: Automations.Interface
-	): AuthoredCollectionOps['runAutomation'] =>
+	(effectId: EffectIdType, automations: Automations.Interface): AuthoringOps['runAutomation'] =>
 	(name, input, options) =>
 		Effect.gen(function* () {
 			const after = options?.after;
@@ -519,7 +477,7 @@ export const inferOp =
 		effectId: EffectIdType,
 		ai: AIInterface,
 		readAsset: (file: FileRef) => Effect.Effect<AuthoredFileAsset, Database.FacilityError>
-	): AuthoredCollectionOps['infer'] =>
+	): AuthoringOps['infer'] =>
 	(input) =>
 		Effect.gen(function* () {
 			const content = yield* inferenceTurnContent(input.prompt, input.images, readAsset);
@@ -567,90 +525,32 @@ export const inferOp =
  * Every method returns an Effect bound to the invocation's effect id and subject, so authored
  * business logic composes with `Effect.gen` — the same shape the authoring types declare.
  */
-export const makeAuthoringApi = (
-	ops: AuthoredCollectionOps,
-	options: { readonly elevated?: boolean } = {},
-	/** Minted for a create whose payload carries no id; the platform RNG unless a host injects one. */
-	randomId: () => string = () => globalThis.crypto.randomUUID()
-): RuntimeAuthoringApi => {
-	const collectionApi = (collection: string): Readonly<Record<string, unknown>> => ({
-		findMany: (input: Readonly<Record<string, unknown>> = {}) =>
-			ops.findMany(collection, asQueryInput(input)),
-		findFirst: (input: Readonly<Record<string, unknown>> = {}) =>
-			ops.findFirst(collection, asQueryInput(input)),
-		count: (input: Readonly<Record<string, unknown>> = {}) =>
-			ops.count(collection, asQueryInput(input)),
-		findNearest: (input: Readonly<Record<string, unknown>>) =>
-			ops.findNearest(collection, asQueryInput(input)),
-		create: (input: Readonly<Record<string, unknown>>) => {
-			const identifier = typeof input['id'] === 'string' ? input['id'] : randomId();
-			return ops.create(collection, identifier, input as Readonly<Record<string, Schema.Json>>);
-		},
-		update: (id: string, input: Readonly<Record<string, unknown>>) =>
-			ops.update(collection, id, input as Readonly<Record<string, Schema.Json>>),
-		/**
-		 * The elevated writes, on the collection like everything else that reaches one.
-		 *
-		 * They were also declared on `db` itself, taking the collection as a first argument — two ways
-		 * to say one thing, and the db-level pair was never implemented: this proxy answers any string
-		 * with `collectionApi(property)`, so `api.db.mutate` was an object named `mutate` and
-		 * `yield* api.db.mutate('payslips', rows)` raised `is not iterable` while typechecking
-		 * cleanly. hr-payroll's whole PERSIST phase was written that way, so every payroll run
-		 * computed through seven phases and threw on its first write.
-		 *
-		 * Elevated only: these bypass the row predicate, and a hook running as an ordinary subject
-		 * must not.
-		 */
-		...(options.elevated === true
-			? {
-					mutate: (
-						payloads: ReadonlyArray<Readonly<Record<string, unknown>>>,
-						options?: { readonly batchSize?: number }
-					) => ops.mutate(collection, payloads, options),
-					delete: (identifiers: ReadonlyArray<string>) => deleteAll(collection, identifiers)
-				}
-			: {})
-	});
-	const query = new Proxy<Readonly<Record<string, unknown>>>(
-		{},
-		{
-			get: (_target, property) =>
-				property === 'approval_request'
-					? {
-							findMany: (input: Readonly<Record<string, unknown>> = {}) =>
-								ops.approvalFindMany(asQueryInput(input)),
-							findFirst: (input: Readonly<Record<string, unknown>> = {}) =>
-								ops.approvalFindFirst(asQueryInput(input))
-						}
-					: typeof property === 'string'
-						? collectionApi(property)
-						: undefined
-		}
-	);
-	/**
-	 * Every identifier, not the first one.
-	 *
-	 * `ops.delete` takes a single id, and the array form used to hand it `identifiers[0]`. That is a
-	 * silent wrong answer rather than a failure: `clearRunResults` exists to remove every payslip of
-	 * a run before recomputing it, and removing one turned a recalculation into a partial wipe that
-	 * reported success.
-	 */
-	const deleteAll = (collection: string, identifiers: ReadonlyArray<string>) =>
-		Effect.forEach(identifiers, (identifier) => ops.delete(collection, identifier), {
-			discard: true
-		});
+const collectionReadApi = (
+	ops: AuthoringReadOps,
+	collection: string
+): Readonly<Record<string, unknown>> => ({
+	findMany: (input: Readonly<Record<string, unknown>> = {}) => ops.findMany(collection, input),
+	findFirst: (input: Readonly<Record<string, unknown>> = {}) => ops.findFirst(collection, input),
+	count: (input: Readonly<Record<string, unknown>> = {}) => ops.count(collection, input),
+	findNearest: (input: Readonly<Record<string, unknown>>) => ops.findNearest(collection, input)
+});
 
-	const database = new Proxy<RuntimeAuthoringApi['db']>(
-		{ query },
-		{
-			get: (_target, property) =>
-				property === 'query'
-					? query
-					: typeof property === 'string'
-						? collectionApi(property)
-						: undefined
-		}
-	);
+const databaseApi = (collection: (name: string) => Readonly<Record<string, unknown>>): object =>
+	new Proxy(Object.create(null) as object, {
+		get: (_target, property) => (typeof property === 'string' ? collection(property) : undefined)
+	});
+
+export const makeAuthoringApi = (ops: AuthoringOps): RuntimeAuthoringApi => {
+	const database = databaseApi((collection) => {
+		const reads = collectionReadApi(ops, collection);
+		return collection === 'approval_request'
+			? Object.freeze(reads)
+			: Object.freeze({
+					...reads,
+					mutate: (values: Readonly<Record<string, unknown>>) => ops.mutate(collection, values)
+				});
+	});
+
 	return {
 		db: database,
 		automations: {
@@ -665,32 +565,26 @@ export const makeAuthoringApi = (
 	};
 };
 
+/** Builds the smaller, read-only capability object supplied to policy decisions. */
+export const makePolicyDecisionApi = (ops: AuthoringReadOps, subject: Subject): unknown =>
+	Object.freeze({
+		db: databaseApi((collection) => Object.freeze(collectionReadApi(ops, collection))),
+		requestor: Object.freeze({
+			id: subject.userId,
+			userId: subject.userId,
+			tenantId: subject.tenantId,
+			...(subject.email === undefined ? {} : { email: subject.email }),
+			...(subject.teamPath[0] === undefined ? {} : { team: subject.teamPath[0] }),
+			teamPath: Object.freeze([...subject.teamPath]),
+			admin: subject.admin === true
+		})
+	});
+
 /** Adds the current durable run's progression capability without widening the ordinary API. */
 export const makeAutomationApi = (
 	api: RuntimeAuthoringApi,
 	progress: RuntimeAutomationApi['progress']
 ): RuntimeAutomationApi => ({ ...api, progress });
-
-/**
- * The nearest-neighbour spelling, named field by field so the required ones are *present*.
- *
- * Every operand is unknown by design — authored code, and the place that compiles the SQL owns
- * what a vector search may be given — but `findNearest` needs them to exist: the fields were
- * previously spread into an ordinary `findMany`, which knows no `column`, no `probe` and no
- * `metric`, and dropped the whole configuration on the floor.
- */
-export const nearestInputOf = (
-	collection: string,
-	input: Readonly<Record<string, unknown>>
-): Parameters<CollectionsInterface['findNearest']>[2] => ({
-	collection,
-	column: input['column'],
-	probe: input['probe'],
-	metric: input['metric'],
-	limit: input['limit'],
-	...(input.maxDistance === undefined ? {} : { maxDistance: input.maxDistance }),
-	...(input.excludeIds === undefined ? {} : { excludeIds: input.excludeIds })
-});
 
 /** Binds the invocation-scoped authoring ops to the runtime services, for callers outside the collections layer. */
 export const makeBoundAuthoringOps = (
@@ -699,14 +593,35 @@ export const makeBoundAuthoringOps = (
 	collections: CollectionsInterface,
 	ai: AIInterface,
 	files: FilesInterface,
-	automations: Automations.Interface,
-	randomId: () => string = () => globalThis.crypto.randomUUID()
-): AuthoredCollectionOps => {
+	automations: Automations.Interface
+): AuthoringOps => {
 	type QueryInput = Parameters<CollectionsInterface['findMany']>[2];
+	type NearestQueryInput = Parameters<CollectionsInterface['findNearest']>[2];
 	const query = (collection: string, input: Readonly<Record<string, unknown>>): QueryInput => ({
 		collection,
 		...input
 	});
+	/**
+	 * A nearest-neighbour read's input, with the two fields the compiler cannot leave open.
+	 *
+	 * `column` and `probe` are what makes this a vector query rather than an ordinary one, and the
+	 * runtime refuses either if it arrives wrong. They are read off the authored config here rather
+	 * than spread blindly so that a handler that omits one fails with the runtime's own refusal
+	 * naming the field, not with an `undefined` reaching the SQL builder.
+	 */
+	const nearestQuery = (
+		collection: string,
+		input: Readonly<Record<string, unknown>>
+	): NearestQueryInput => {
+		const { column, probe, metric, ...rest } = input;
+		return {
+			collection,
+			...rest,
+			column: typeof column === 'string' ? column : '',
+			probe: Array.isArray(probe) ? (probe as ReadonlyArray<number>) : [],
+			metric: metric === 'cosine' || metric === 'ip' ? metric : 'l2'
+		};
+	};
 	/**
 	 * The bytes and description behind a `file()` column's value.
 	 *
@@ -739,70 +654,18 @@ export const makeBoundAuthoringOps = (
 				bytes
 			};
 		});
-	/**
-	 * One authored write is one declarative graph, even when its visible root has no relationships.
-	 *
-	 * This is load-bearing for before-hook writes. The graph planner stages every write a hook makes,
-	 * authorizes each exact prepared record, and either commits all of them or stores all of them as
-	 * one approval review. Calling the flat `create`/`update` paths here let a hook mutate a sibling
-	 * before the root reached its approval gate, leaving half of a business transition applied.
-	 *
-	 * The graph returns its authoritative stored root without requiring read entitlement. Falling back
-	 * is only defensive for a fixture or future implementation that returns no root; the runtime graph
-	 * always returns one on success.
-	 */
-	const synchronized = (
-		action: 'create' | 'update',
-		collection: string,
-		id: string,
-		values: Readonly<Record<string, unknown>>
-	): Effect.Effect<Readonly<Record<string, unknown>>, unknown> =>
-		collections
-			.mutate(effectId, subject, collection, [{ ...values, id }], false, 0, {
-				declarative: true,
-				root: { id, action }
-			})
-			.pipe(
-				Effect.map((rows) => rows[0] ?? ({ id, ...values } as Readonly<Record<string, unknown>>))
-			);
 	return {
 		findMany: (collection, input) =>
-			collections
-				.findMany(effectId, subject, query(collection, input))
-				.pipe(Effect.flatMap(objectRowsOf)),
+			collections.findMany(effectId, subject, query(collection, input)),
 		findFirst: (collection, input) =>
-			collections
-				.findFirst(effectId, subject, query(collection, input))
-				.pipe(Effect.map((row) => row as Readonly<Record<string, unknown>> | undefined)),
+			collections.findFirst(effectId, subject, query(collection, input)),
 		count: (collection, input) => collections.count(effectId, subject, query(collection, input)),
 		findNearest: (collection, input) =>
+			collections.findNearest(effectId, subject, nearestQuery(collection, input)),
+		mutate: (collection, values) =>
 			collections
-				.findNearest(effectId, subject, nearestInputOf(collection, input))
-				.pipe(Effect.flatMap(objectRowsOf)),
-		create: (collection, id, values) => synchronized('create', collection, id, values),
-		update: (collection, id, values) => synchronized('update', collection, id, values),
-		delete: (collection, id) => collections.delete(effectId, subject, collection, id),
-		mutate: (collection, payloads) =>
-			Effect.all(
-				payloads.map((payload) =>
-					Effect.gen(function* () {
-						const identifier = typeof payload['id'] === 'string' ? payload['id'] : randomId();
-						yield* collections.create(effectId, subject, {
-							collection,
-							id: identifier,
-							values: payload as Readonly<Record<string, Schema.Json>>
-						});
-						const row = yield* collections.findFirst(effectId, subject, {
-							collection,
-							where: { id: { eq: identifier } }
-						});
-						return row === undefined
-							? ({ id: identifier, ...payload } as Readonly<Record<string, unknown>>)
-							: (row as Readonly<Record<string, unknown>>);
-					})
-				),
-				{ concurrency: 'unbounded' }
-			),
+				.mutate(effectId, subject, collection, [values], false, 0, { declarative: true })
+				.pipe(Effect.asVoid),
 		/**
 		 * Runs a declared automation later, under the subject this handler is already running as.
 		 *
@@ -816,14 +679,6 @@ export const makeBoundAuthoringOps = (
 		 * that has always owned them.
 		 */
 		runAutomation: runAutomationOp(effectId, automations),
-		approvalFindMany: (input) =>
-			collections
-				.findMany(effectId, subject, { collection: 'approval_request', ...input })
-				.pipe(Effect.flatMap(objectRowsOf)),
-		approvalFindFirst: (input) =>
-			collections
-				.findFirst(effectId, subject, { collection: 'approval_request', ...input })
-				.pipe(Effect.map((row) => row as Readonly<Record<string, unknown>> | undefined)),
 		infer: inferOp(effectId, ai, readAsset),
 		readFileAsset: readAsset
 	};

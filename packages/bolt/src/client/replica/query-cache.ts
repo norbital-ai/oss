@@ -31,7 +31,7 @@ type CachedAnswer = Readonly<{
  * are the same query and would otherwise be two cache entries — which is not a correctness bug but
  * halves the hit rate on exactly the queries a page re-issues on every mount.
  */
-const stableStringify = (value: unknown): string => {
+export const stableStringify = (value: unknown): string => {
 	if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
 	if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
 	const entries = Object.entries(value)
@@ -40,8 +40,30 @@ const stableStringify = (value: unknown): string => {
 	return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`).join(',')}}`;
 };
 
+const isJsonObject = (value: unknown): value is Readonly<Record<string, Schema.Json>> =>
+	typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const collectionCacheInput = (input: Schema.Json): Schema.Json => {
+	if (!isJsonObject(input)) return input;
+	const orderBy = input['orderBy'];
+	if (!isJsonObject(orderBy)) return input;
+	return { ...input, orderBy: Object.entries(orderBy) };
+};
+
+/**
+ * Collection inputs are canonicalized, while arbitrary handlers remain insertion-sensitive.
+ *
+ * `orderBy` is the exception to ordinary JSON-object equivalence: its insertion order is SQL term
+ * order, so it becomes an entry array before recursive key sorting. An `invoke.*` handler is arbitrary
+ * JavaScript and may itself inspect key order; preserving its wire spelling prevents two observably
+ * different calls from ever sharing an answer.
+ */
 export const cacheKeyFor = (command: string, input: Schema.Json): string =>
-	`${command}::${stableStringify(input)}`;
+	`${command}::${
+		command.startsWith('collections.')
+			? stableStringify(collectionCacheInput(input))
+			: (JSON.stringify(input) ?? 'null')
+	}`;
 
 /**
  * Which collections an answer depends on.

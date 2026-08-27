@@ -12,10 +12,17 @@
 import { defineRule } from '../pattern.js';
 import { definePack, type Pack, type Rule } from '../rules.js';
 import { svelteMarkup } from '../runner.js';
+import { SYSTEM_COLLECTION_FIELD_NAMES } from '@norbital-ai/std/collection';
 
 const COMPONENT = ['**/*.svelte'];
 /** Runes live in components and in `.svelte.ts` modules alike. */
 const COMPONENT_OR_RUNE = ['**/*.svelte', '**/*.svelte.ts'];
+const SYSTEM_COLLECTION_FIELD_PATTERN = SYSTEM_COLLECTION_FIELD_NAMES.map((name) =>
+	name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+).join('|');
+const SYSTEM_COLLECTION_COMPOSITION_PATTERN = new RegExp(
+	`<(?:Column|Field)\\b(?:(?!\\/>|>)[\\s\\S])*?\\bname\\s*=\\s*(?:["'](?:${SYSTEM_COLLECTION_FIELD_PATTERN})["']|\\{\\s*["'](?:${SYSTEM_COLLECTION_FIELD_PATTERN})["']\\s*\\})`
+);
 
 const effectAsLastResort = defineRule({
 	id: 'V1',
@@ -195,6 +202,8 @@ type LayoutRule = Readonly<{
 	summary: string;
 	dominates?: ReadonlyArray<string>;
 	pattern: RegExp;
+	/** Optional component-source shape that may span attribute lines. */
+	sourcePattern?: RegExp;
 	prefer: string;
 }>;
 
@@ -248,6 +257,7 @@ const LAYOUT: ReadonlyArray<LayoutRule> = [
 		// `tenantId={record.id}`. Neither is text a person reads — one is a string being built, the
 		// other is a value being handed to a component.
 		pattern: /(?<![$=])\{\s*[A-Za-z_$][\w$.]*\.(?:id|uuid|_id)\s*\}/,
+		sourcePattern: SYSTEM_COLLECTION_COMPOSITION_PATTERN,
 		prefer: 'recordLabel'
 	},
 	{
@@ -272,7 +282,18 @@ function layoutRule(rule: LayoutRule): Rule {
 		check(node, context) {
 			void node;
 			// Markup only. `files: COMPONENT` already restricts this to `.svelte`.
-			for (const [index, line] of svelteMarkup(context.source).split('\n').entries()) {
+			const markup = svelteMarkup(context.source);
+			if (rule.sourcePattern) {
+				const match = rule.sourcePattern.exec(markup);
+				if (match?.index != null) {
+					context.reportAt(
+						markup.slice(0, match.index).split('\n').length,
+						`prefer=${rule.prefer}`
+					);
+					return;
+				}
+			}
+			for (const [index, line] of markup.split('\n').entries()) {
 				if (!rule.pattern.test(line)) continue;
 				// One finding per file: the contract is broken here, and a component repeating the same
 				// class on twenty elements is one edit, not twenty.

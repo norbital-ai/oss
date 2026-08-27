@@ -20,7 +20,7 @@ type PolicyAction = (typeof ACTIONS)[number];
 const READ_ACTIONS = new Set<PolicyAction>(['read', 'history']);
 const POLICY_KEYS = new Set(['description', 'grants', 'capabilities', 'limits']);
 const ACTION_KEYS = new Set<string>(ACTIONS);
-const READ_GRANT_KEYS = new Set(['where', 'fields']);
+const READ_GRANT_KEYS = new Set(['where', 'fields', 'dependencies']);
 const DELETE_GRANT_KEYS = new Set(['authorize', 'approval']);
 const WRITE_GRANT_KEYS = new Set(['fields', 'authorize', 'approval']);
 const APPROVAL_KEYS = new Set(['flow', 'superceded_by']);
@@ -28,6 +28,7 @@ const APPROVAL_KEYS = new Set(['flow', 'superceded_by']);
 const AuthoredActionGrant = Schema.Struct({
 	where: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
 	fields: Schema.optionalKey(Schema.Array(Schema.String)),
+	dependencies: Schema.optionalKey(Schema.Array(Schema.String)),
 	authorize: Schema.optionalKey(Schema.Unknown),
 	approval: Schema.optionalKey(Schema.Unknown)
 });
@@ -109,6 +110,21 @@ const validateGrantFields = (grant: Record<string, unknown>, location: string): 
 	}
 };
 
+const validateGrantDependencies = (grant: Record<string, unknown>, location: string): void => {
+	if (!('dependencies' in grant)) return;
+	if (
+		!Array.isArray(grant.dependencies) ||
+		grant.dependencies.some(
+			(dependency) => typeof dependency !== 'string' || dependency.trim() === ''
+		)
+	) {
+		throw new TypeError(`${location}.dependencies must be an array of collection names.`);
+	}
+	if (new Set(grant.dependencies).size !== grant.dependencies.length) {
+		throw new TypeError(`${location}.dependencies cannot repeat a collection.`);
+	}
+};
+
 const validateGrantApproval = (grant: Record<string, unknown>, location: string): void => {
 	if (!('approval' in grant)) return;
 	requireExactKeys(grant.approval, APPROVAL_KEYS, `${location}.approval`);
@@ -139,6 +155,9 @@ const validateGrantShape = (
 		throw new TypeError(`${location}.authorize must be a function.`);
 	}
 	validateGrantFields(grant, location);
+	if (READ_ACTIONS.has(typedAction)) {
+		validateGrantDependencies(grant, location);
+	}
 	validateGrantApproval(grant, location);
 };
 
@@ -190,7 +209,10 @@ const describeGrant = (
 		...(grant.where === undefined
 			? {}
 			: { where: grant.where as Readonly<Record<string, unknown>> }),
-		...(grant.fields === undefined ? {} : { fields: grant.fields as ReadonlyArray<string> })
+		...(grant.fields === undefined ? {} : { fields: grant.fields as ReadonlyArray<string> }),
+		...(grant.dependencies === undefined
+			? {}
+			: { dependencies: grant.dependencies as ReadonlyArray<string> })
 	};
 	if (typeof grant.authorize === 'function') {
 		const id = policyAuthorizationId(policyName, collection, action);

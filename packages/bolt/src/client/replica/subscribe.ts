@@ -1,126 +1,309 @@
-// repository-health:allow SEM_PARALLEL -- subscribe consumes sync-client's change decoder over the
-// #lib alias, so the pair is linked, not parallel.
-import { Result } from 'effect';
+import { Result, Schema } from 'effect';
 import { workspaceSession } from '#lib/client/session.js';
-import type { SyncChange, SyncCursor } from '#lib/runtime/sync/sync.js';
-import { decodeChanges } from '#lib/client/replica/sync-client.js';
+import {
+	SyncCursor,
+	SyncPartitionIdentity,
+	SyncPullResponse,
+	type SyncCollectionGenerations,
+	type SyncMutationConfirmation,
+	type SyncMutationRejection,
+	type SyncPartitionDelta,
+	type SyncPartitionIdentity as SyncPartitionIdentityType,
+	type SyncPullCost,
+	type SyncRehydrationCost
+} from '#lib/runtime/sync/sync.js';
+import {
+	ReplicaSchemaBarrier,
+	type ReplicaSchemaBarrier as ReplicaSchemaBarrierType,
+	ReplicaSchemaMaintenance,
+	type ReplicaSchemaMaintenance as ReplicaSchemaMaintenanceType,
+	ReplicaSchemaMaintenanceClear,
+	type ReplicaSchemaMaintenanceClear as ReplicaSchemaMaintenanceClearType
+} from '@norbital-ai/bolt-protocol';
 
-/**
- * The browser's one ordered change stream.
- *
- * The host reads the database outbox through the same authenticated `sync.diff` runtime command and
- * puts those permission-filtered `SyncChange` batches on SSE. The browser never asks for a diff and
- * never polls: it applies each frame directly. EventSource owns network backoff and Last-Event-ID;
- * the cursor query is the persisted replica's starting point on the first connection.
- */
-
-type SubscribeOptions = Readonly<{
-	/** The cursor durably reflected by the replica right now. */
-	readonly cursor: () => SyncCursor;
-	readonly onChange: (changes: ReadonlyArray<SyncChange>) => void;
-	/** Called when initial/reconnect catch-up has reached the stream's live edge. */
-	readonly onOpen?: () => void;
-	readonly onError?: ((cause: unknown) => void) | undefined;
-	/** Overridable so a test can supply a stub; the browser's own `EventSource` otherwise. */
-	readonly source?: (url: string) => EventSourceLike;
-}>;
-
-/** The slice of `EventSource` this uses, so a test needs no DOM. */
 export type EventSourceLike = {
-	addEventListener: (
-		type: string,
-		listener: (event: { data?: string; lastEventId?: string }) => void
-	) => void;
+	addEventListener: (type: string, listener: (event: { data?: string }) => void) => void;
 	close: () => void;
 	onerror: ((event: unknown) => void) | null;
 };
 
 export type Subscription = Readonly<{ readonly stop: () => void }>;
 
-/** How long after a failed stream construction to try again. */
+export type CollectionGenerations = SyncCollectionGenerations;
+
+/** A full permitted row transition computed once for an authority partition. */
+export type PartitionDelta = SyncPartitionDelta;
+
+export type PartitionDeltaBatch = Readonly<{
+	readonly partition: SyncPartitionIdentityType;
+	readonly kind: 'delta';
+	readonly deltas: ReadonlyArray<PartitionDelta>;
+	readonly cursor: SyncCursor;
+	readonly headCursor: SyncCursor;
+	readonly generations: CollectionGenerations;
+	readonly affectedCollections: ReadonlyArray<string>;
+	readonly refillCollections: ReadonlyArray<string>;
+	readonly cost: SyncPullCost;
+	readonly mutationConfirmations: ReadonlyArray<SyncMutationConfirmation>;
+	readonly mutationRejections: ReadonlyArray<SyncMutationRejection>;
+	readonly complete: boolean;
+}>;
+
+export type PartitionRecoveryAdvice = Readonly<{
+	readonly partition: SyncPartitionIdentityType;
+	readonly kind: 'cursorExpired' | 'rehydrateAdvised';
+	readonly cursor: SyncCursor;
+	readonly headCursor: SyncCursor;
+	readonly generations: CollectionGenerations;
+	readonly affectedCollections: ReadonlyArray<string>;
+	readonly refillCollections: ReadonlyArray<string>;
+	readonly cost: SyncPullCost;
+	readonly mutationConfirmations: ReadonlyArray<SyncMutationConfirmation>;
+	readonly mutationRejections: ReadonlyArray<SyncMutationRejection>;
+	readonly complete: boolean;
+}>;
+
+export type PartitionStreamReady = Readonly<{
+	readonly connectionId: string;
+	readonly partition: SyncPartitionIdentityType;
+	readonly cursor: SyncCursor;
+	readonly generations: CollectionGenerations;
+}>;
+
+export type PartitionStreamPosition = Readonly<{
+	readonly cursor: SyncCursor;
+	readonly generations: CollectionGenerations;
+}>;
+
+type PartitionSubscribeOptions = Readonly<{
+	readonly collections: ReadonlyArray<string>;
+	readonly position: PartitionStreamPosition;
+	readonly pendingMutationIds?: ReadonlyArray<string>;
+	readonly rehydration?: SyncRehydrationCost;
+	readonly onDeltas: (batch: PartitionDeltaBatch) => void;
+	readonly onRecovery: (advice: PartitionRecoveryAdvice) => void;
+	readonly onPartitionChanged?: (partition: SyncPartitionIdentityType) => void;
+	readonly onReady?: (ready: PartitionStreamReady) => void;
+	readonly onBarrier?: (barrier: ReplicaSchemaBarrierType) => void;
+	readonly onMaintenance?: (maintenance: ReplicaSchemaMaintenanceType) => void;
+	readonly onMaintenanceClear?: (clear: ReplicaSchemaMaintenanceClearType) => void;
+	readonly onConnecting?: () => void;
+	readonly onError?: ((cause: unknown) => void) | undefined;
+	readonly source?: (url: string) => EventSourceLike;
+}>;
+
+export type PartitionSubscription = Subscription &
+	Readonly<{
+		/** Reopens the one leader-owned stream only when its dependency set changes. */
+	readonly update: (
+		collections: ReadonlyArray<string>,
+		position: PartitionStreamPosition,
+		pendingMutationIds?: ReadonlyArray<string>,
+		rehydration?: SyncRehydrationCost
+	) => void;
+}>;
+
+const Generations = Schema.Record(Schema.String, Schema.Number);
+const PartitionReadyWire = Schema.Struct({
+	connectionId: Schema.NonEmptyString,
+	partition: SyncPartitionIdentity,
+	cursor: SyncCursor,
+	generations: Generations
+});
 const RETRY_OPEN_MILLIS = 2_000;
 
-const withCursor = (url: string, cursor: SyncCursor): string => {
-	const hashAt = url.indexOf('#');
-	const base = hashAt < 0 ? url : url.slice(0, hashAt);
-	const hash = hashAt < 0 ? '' : url.slice(hashAt);
-	const separator = base.includes('?') ? '&' : '?';
-	return `${base}${separator}cursor=${encodeURIComponent(JSON.stringify(cursor))}${hash}`;
+const parseBarrier = (data: string | undefined) =>
+	Result.try(() => Schema.decodeUnknownSync(ReplicaSchemaBarrier)(JSON.parse(data ?? '')));
+const parseMaintenance = (data: string | undefined) =>
+	Result.try(() => Schema.decodeUnknownSync(ReplicaSchemaMaintenance)(JSON.parse(data ?? '')));
+const parseMaintenanceClear = (data: string | undefined) =>
+	Result.try(() => Schema.decodeUnknownSync(ReplicaSchemaMaintenanceClear)(JSON.parse(data ?? '')));
+const parseDeltaBatch = (data: string | undefined) =>
+	Result.try(() => Schema.decodeUnknownSync(SyncPullResponse)(JSON.parse(data ?? '')));
+const parsePartition = (data: string | undefined) =>
+	Result.try(() => {
+		const parsed = JSON.parse(data ?? '') as unknown;
+		const partition =
+			parsed !== null && typeof parsed === 'object' ? Reflect.get(parsed, 'partition') : undefined;
+		return Schema.decodeUnknownSync(SyncPartitionIdentity)(partition);
+	});
+const parseReady = (data: string | undefined) =>
+	Result.try(() => Schema.decodeUnknownSync(PartitionReadyWire)(JSON.parse(data ?? '')));
+const eventSourceFactory = (url: string): EventSourceLike => {
+	const source = new EventSource(url, { withCredentials: true });
+	return {
+		addEventListener: (type, listener) =>
+			source.addEventListener(type, (event) =>
+				listener(event instanceof MessageEvent ? { data: String(event.data) } : {})
+			),
+		close: () => source.close(),
+		set onerror(listener: ((event: unknown) => void) | null) {
+			source.onerror = listener;
+		}
+	};
 };
 
-const parseChanges = (
-	data: string | undefined
-): Result.Result<ReadonlyArray<SyncChange>, unknown> =>
-	Result.try(() => decodeChanges(JSON.parse(data ?? '')));
+const normalizeCollections = (collections: ReadonlyArray<string>): ReadonlyArray<string> =>
+	[...new Set(collections.map((name) => name.trim()).filter((name) => name.length > 0))].sort();
 
-/** Opens the stream and reports its typed database deltas. */
-export const subscribeToChanges = (options: SubscribeOptions): Subscription => {
-	const create =
-		options.source ??
-		((url: string): EventSourceLike => {
-			const source = new EventSource(url, { withCredentials: true });
-			return {
-				addEventListener: (type, listener) =>
-					source.addEventListener(type, (event) => {
-						listener(
-							event instanceof MessageEvent
-								? { data: String(event.data), lastEventId: event.lastEventId }
-								: {}
-						);
-					}),
-				close: () => source.close(),
-				set onerror(listener: ((event: unknown) => void) | null) {
-					source.onerror = listener;
-				}
-			};
-		});
+const normalizeMutationIds = (ids: ReadonlyArray<string> = []): ReadonlyArray<string> => {
+	const normalized = [...new Set(ids.filter((id) => id.length > 0))].sort();
+	if (normalized.length > 256 || normalized.some((id) => id.length > 256))
+		throw new TypeError('A partition stream accepts at most 256 mutation ids of at most 256 characters.');
+	return normalized;
+};
 
+const partitionStreamUrl = (
+	base: string,
+	collections: ReadonlyArray<string>,
+	position: PartitionStreamPosition,
+	pendingMutationIds: ReadonlyArray<string>,
+	rehydration?: SyncRehydrationCost
+): string => {
+	const query = new URLSearchParams();
+	for (const collection of normalizeCollections(collections)) query.append('collection', collection);
+	for (const mutationId of normalizeMutationIds(pendingMutationIds))
+		query.append('pendingMutationId', mutationId);
+	query.set('cursor', JSON.stringify(position.cursor));
+	query.set('generations', JSON.stringify(position.generations));
+	if (rehydration !== undefined) query.set('rehydration', JSON.stringify(rehydration));
+	return `${base}${base.includes('?') ? '&' : '?'}${query.toString()}`;
+};
+
+/**
+ * Opens the single leader-owned dependency stream for a partition.
+ *
+ * Collection names are only subscription requests. The authenticated host re-derives the partition
+ * and validates every requested dependency, so this URL conveys no authority. Updating the mounted
+ * dependency union replaces this connection; it never creates one stream per query/page.
+ */
+export const subscribeToPartition = (
+	options: PartitionSubscribeOptions
+): PartitionSubscription => {
+	const create = options.source ?? eventSourceFactory;
 	let stopped = false;
 	let current: EventSourceLike | undefined;
 	let retry: ReturnType<typeof setTimeout> | undefined;
+	let collections = normalizeCollections(options.collections);
+	let position = options.position;
+	let pendingMutationIds = normalizeMutationIds(options.pendingMutationIds);
+	let rehydration = options.rehydration;
+	let signature = '';
+
+	const reportAndReopen = (cause: unknown, source?: EventSourceLike): void => {
+		options.onError?.(cause);
+		source?.close();
+		if (current === source) current = undefined;
+		if (retry === undefined && !stopped) {
+			retry = setTimeout(() => {
+				retry = undefined;
+				open();
+			}, RETRY_OPEN_MILLIS);
+		}
+	};
+	const decode = <Value>(
+		source: EventSourceLike,
+		parsed: Result.Result<Value, unknown>,
+		accept: (value: Value) => void
+	): void => {
+		if (Result.isSuccess(parsed)) {
+			accept(parsed.success);
+			return;
+		}
+		reportAndReopen(parsed.failure, source);
+	};
 	const open = (): void => {
-		if (stopped) return;
+		if (stopped || current !== undefined || collections.length === 0) return;
+		options.onConnecting?.();
+		const nextSignature = JSON.stringify(collections);
 		const opened = Result.try(() =>
-			create(withCursor(workspaceSession().syncStreamUrl, options.cursor()))
+			create(
+				partitionStreamUrl(
+					workspaceSession().syncStreamUrl,
+					collections,
+					position,
+					pendingMutationIds,
+					rehydration
+				)
+			)
 		);
 		if (Result.isFailure(opened)) {
-			options.onError?.(opened.failure);
-			// One failed construction must not permanently silence the stream: EventSource owns its own
-			// reconnection only once it exists, so a throw before it exists — a session field not yet
-			// populated, a constructor rejection — used to leave a healthy leader with no feed and no
-			// error anyone could see. The workspace then simply never updated until a reload.
-			retry = setTimeout(open, RETRY_OPEN_MILLIS);
+			reportAndReopen(opened.failure);
 			return;
 		}
 		const source = opened.success;
 		current = source;
-		source.addEventListener('sync', (event) => {
-			const decoded = parseChanges(event.data);
-			if (Result.isSuccess(decoded)) {
-				options.onChange(decoded.success);
-				return;
-			}
-			// An unreadable frame must not advance past data the replica never applied. Reopen from the
-			// durable cursor in the URL; the server replays the ordered batch from that exact point.
-			options.onError?.(decoded.failure);
-			source.close();
-			if (current === source) current = undefined;
-			open();
-		});
-		source.addEventListener('ready', () => options.onOpen?.());
-		// Native EventSource reconnects this same object with Last-Event-ID and browser backoff. Do not
-		// close it on an ordinary network error or the browser would never resume it.
-		source.onerror = (event) => options.onError?.(event);
+		signature = nextSignature;
+		source.addEventListener('ready', (event) =>
+			decode(source, parseReady(event.data), (ready) => options.onReady?.(ready))
+		);
+		source.addEventListener('deltas', (event) =>
+			decode(source, parseDeltaBatch(event.data), (batch) => {
+				if (batch.kind !== 'delta') return reportAndReopen(new Error('Delta event carried a recovery frame'), source);
+				options.onDeltas(batch as PartitionDeltaBatch);
+			})
+		);
+		source.addEventListener('cursor-expired', (event) =>
+			decode(source, parseDeltaBatch(event.data), (advice) => {
+				if (advice.kind !== 'cursorExpired') return reportAndReopen(new Error('Cursor-expired event carried another frame'), source);
+				options.onRecovery(advice as PartitionRecoveryAdvice);
+			})
+		);
+		source.addEventListener('rehydrate-advised', (event) =>
+			decode(source, parseDeltaBatch(event.data), (advice) => {
+				if (advice.kind !== 'rehydrateAdvised') return reportAndReopen(new Error('Rehydrate event carried another frame'), source);
+				options.onRecovery(advice as PartitionRecoveryAdvice);
+			})
+		);
+		source.addEventListener('generation', (event) =>
+			decode(source, parseDeltaBatch(event.data), (batch) => {
+				if (batch.kind !== 'delta')
+					return reportAndReopen(new Error('Generation event carried a recovery frame'), source);
+				options.onDeltas(batch as PartitionDeltaBatch);
+			})
+		);
+		source.addEventListener('partition-changed', (event) =>
+			decode(source, parsePartition(event.data), (partition) => options.onPartitionChanged?.(partition))
+		);
+		source.addEventListener('schema-barrier', (event) =>
+			decode(source, parseBarrier(event.data), (barrier) => options.onBarrier?.(barrier))
+		);
+		source.addEventListener('schema-maintenance', (event) =>
+			decode(source, parseMaintenance(event.data), (notice) => options.onMaintenance?.(notice))
+		);
+		source.addEventListener('schema-maintenance-clear', (event) =>
+			decode(source, parseMaintenanceClear(event.data), (clear) =>
+				options.onMaintenanceClear?.(clear)
+			)
+		);
+		source.onerror = (event) => reportAndReopen(event, source);
 	};
-	open();
 
+	open();
 	return {
+		update: (nextCollections, nextPosition, nextPendingMutationIds, nextRehydration) => {
+			if (stopped) return;
+			collections = normalizeCollections(nextCollections);
+			position = nextPosition;
+			pendingMutationIds = normalizeMutationIds(nextPendingMutationIds);
+			rehydration = nextRehydration;
+			// Cursor, mutation-status and cost facts advance on the live connection itself. Retain their
+			// newest values for a later reconnect, but never churn E1 unless the dependency set changed.
+			const nextSignature = JSON.stringify(collections);
+			if (nextSignature === signature && current !== undefined) return;
+			if (retry !== undefined) clearTimeout(retry);
+			retry = undefined;
+			current?.close();
+			current = undefined;
+			signature = '';
+			open();
+		},
 		stop: () => {
 			stopped = true;
 			if (retry !== undefined) clearTimeout(retry);
-			const source = current;
+			retry = undefined;
+			current?.close();
 			current = undefined;
-			if (source !== undefined) void Result.try(() => source.close());
 		}
 	};
 };

@@ -19,6 +19,7 @@ const CursorPayloadFromJson = Schema.fromJsonString(
 			Schema.Struct({
 				column: Schema.String,
 				direction: Schema.String,
+				collation: Schema.optionalKey(Schema.Literal('C')),
 				value: CursorValueSchema
 			})
 		)
@@ -82,7 +83,11 @@ const CollectionCursor = {
 			const entry = order[index];
 			if (term === undefined || entry === undefined)
 				return refuse('Pagination cursor does not match the active sort.');
-			if (entry.column !== term.column || entry.direction !== term.direction)
+			if (
+				entry.column !== term.column ||
+				entry.direction !== term.direction ||
+				entry.collation !== term.collation
+			)
 				return refuse('Pagination cursor does not match the active sort.');
 			values.push(entry.value);
 		}
@@ -111,12 +116,12 @@ const CollectionCursor = {
 				const priorTerm = terms[prior];
 				if (priorTerm === undefined) continue;
 				const priorValue = values[prior] ?? null;
-				const priorColumn = quoteIdentifier(priorTerm.column);
+				const priorColumn = `${quoteIdentifier(priorTerm.column)}${priorTerm.collation === undefined ? '' : ` collate "${priorTerm.collation}"`}`;
 				clauses.push(
 					priorValue === null ? `${priorColumn} is null` : `${priorColumn} = ${bind(priorValue)}`
 				);
 			}
-			const column = quoteIdentifier(term.column);
+			const column = `${quoteIdentifier(term.column)}${term.collation === undefined ? '' : ` collate "${term.collation}"`}`;
 			clauses.push(
 				term.direction === 'asc'
 					? `(${column} > ${bind(value)} or ${column} is null)`

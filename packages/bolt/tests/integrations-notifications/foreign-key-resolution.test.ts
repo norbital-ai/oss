@@ -90,7 +90,7 @@ const jobsModule = {
 				resolve: ({ records, api }) =>
 					Effect.gen(function* () {
 						const wanted = new Set(records.map((job) => job.site_code));
-						const sites = yield* api.db.query.sites!.findMany();
+						const sites = yield* api.db.sites!.findMany();
 						const byCode = new Map<string, string>();
 						for (const site of sites) {
 							const code = columnOf(site, 'site_code');

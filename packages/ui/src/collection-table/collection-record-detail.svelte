@@ -2,7 +2,6 @@
 	import type {
 		CollectionApprovalRequest,
 		CollectionDefinition,
-		CollectionField,
 		CollectionOperations,
 		CollectionQuery,
 		CollectionRecord,
@@ -11,7 +10,7 @@
 	import { resolveRecordLabel } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
-	import { Array as Array_, Effect, Result } from 'effect';
+	import { Effect } from 'effect';
 	import type { Snippet } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '#lib/button';
@@ -19,12 +18,9 @@
 	import { Textarea } from '#lib/textarea';
 	import { cn } from '#lib/utils';
 	import { useI18n } from '#lib/i18n';
-	import { Cluster, Grid, Inline, Stack } from '#lib/layout';
-	import { DataRenderer, formatDataValue } from '#lib/data-renderer';
-	import { CollectionForm } from '#lib/collection-form';
+	import { Cluster, Inline, Stack } from '#lib/layout';
 	import CollectionRecordDetailTabs from './collection-record-detail-tabs.svelte';
 	import CollectionRecordDetailEmpty from './collection-record-detail-empty.svelte';
-	import { isSystemField } from '#lib/collection-table/collection-card-derivation';
 	import {
 		getOptionalCollectionClientGetter,
 		getCollectionSurfaceRuntime,
@@ -33,7 +29,7 @@
 	import { approvalRequestIdForRecord } from './approval-anchor.js';
 	import { approvalActionsFor } from './approval-actions.js';
 
-	type ErasedCollection = CollectionType<CollectionRecord, object, object>;
+	type ErasedCollection = CollectionType<CollectionRecord, object>;
 
 	type ApprovalActionState =
 		| { status: 'idle' }
@@ -82,7 +78,9 @@
 			? {
 					operations,
 					query: {
-						where: { [recordIdField]: { eq: recordId } } as CollectionQuery<CollectionRecord>['where'], // stupidity: boundary-cast — the record key is a runtime string on an erased row.
+						where: {
+							[recordIdField]: { eq: recordId }
+						} as CollectionQuery<CollectionRecord>['where'], // stupidity: boundary-cast — the record key is a runtime string on an erased row.
 						limit: 1
 					}
 				}
@@ -101,18 +99,6 @@
 	});
 	const recordLoading = $derived(Boolean(recordQuery?.loading));
 	const recordError = $derived(recordQuery?.error?.message);
-
-	/**
-	 * Split the definition's fields once rather than filtering it twice — both the raw and the
-	 * system group are the same slice of the same list.
-	 */
-	const rawFieldGroups = $derived(
-		Array_.partition(definition?.fields ?? [], (field) =>
-			isSystemField(field.name) ? Result.fail(field) : Result.succeed(field)
-		)
-	);
-	const rawRecordFields = $derived(rawFieldGroups[1]);
-	const rawSystemFields = $derived(rawFieldGroups[0]);
 
 	let approvalActionState = $state<ApprovalActionState>({ status: 'idle' });
 	let changeRequestOpen = $state(false);
@@ -163,21 +149,7 @@
 		}
 		const label = resolveRecordLabel(declared, row);
 		if (label) return label;
-		const fallbackField = definition.fields.find(
-			(field) => !isSystemField(field.name) && field.kind !== 'uuid' && !field.name.endsWith('_id')
-		);
-		const fallback = fallbackField
-			? formatDataValue(fallbackField, Reflect.get(row, fallbackField.name), undefined, t)
-			: '';
-		return fallback && fallback !== '—' ? fallback : humanize(collectionName);
-	}
-
-	function formatRawStructuredValue(value: unknown): string {
-		if (value == null) return '—';
-		return Result.getOrElse(
-			Result.try(() => JSON.stringify(value, null, 2) ?? String(value)),
-			() => String(value)
-		);
+		return humanize(collectionName);
 	}
 
 	function approvalActionSuccessMessage(
@@ -313,10 +285,11 @@
 			<Representation {record} close={onClose} />
 		{/key}
 	{:else if record && client}
-		<!-- Default detail surface (RFC V.2/V.6): a schema-derived form bound to the record. -->
-		{#key recordId}
-			<CollectionForm {client} collection={collectionName} defaultValues={record} />
-		{/key}
+		<CollectionRecordDetailEmpty
+			icon="lucide:file-warning"
+			title={t('table.noCustomView')}
+			description={t('table.noCustomViewDesc')}
+		/>
 	{:else}
 		<CollectionRecordDetailEmpty
 			icon="lucide:panel-top-dashed"
@@ -432,79 +405,6 @@
 	</Stack>
 {/snippet}
 
-{#snippet rawFieldGrid({
-	record,
-	fields,
-	className
-}: {
-	record: CollectionRecord;
-	fields: readonly CollectionField[];
-	className?: string;
-})}
-	<Grid as="dl" minimum="compact" gap="md" class={className}>
-		{#each fields as field (field.name)}
-			<div class="min-w-0">
-				<dt class="text-xs font-medium leading-4 text-muted-foreground">
-					{field.label ?? humanize(field.name)}
-				</dt>
-				<dd class="mt-0.5 min-w-0 break-words text-sm leading-5">
-					{#if field.kind === 'json'}
-						<pre
-							class="whitespace-pre-wrap break-words font-mono text-xs leading-5">{formatRawStructuredValue(
-								Reflect.get(record, field.name)
-							)}</pre>
-					{:else}
-						<DataRenderer {field} value={Reflect.get(record, field.name)} mode="display" />
-					{/if}
-				</dd>
-			</div>
-		{/each}
-	</Grid>
-{/snippet}
-
-{#snippet rawDetails()}
-	{#if record}
-		<Stack gap="md">
-			{#if rawRecordFields.length > 0}
-				{@render rawFieldGrid({
-					record,
-					fields: rawRecordFields,
-					className: 'rounded-lg border bg-card p-3'
-				})}
-			{/if}
-			{#if rawSystemFields.length > 0}
-				<details class="group rounded-lg border bg-muted/15">
-					<summary
-						class="cursor-pointer list-none rounded-lg px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-					>
-						<Inline gap="sm" justify="between">
-							<Inline gap="sm">
-								<Icon
-									icon="lucide:database"
-									class="size-3.5 text-muted-foreground"
-									aria-hidden="true"
-								/>
-								<span class="text-sm font-medium">{t('table.systemFields')}</span>
-								<span class="text-meta">{rawSystemFields.length}</span>
-							</Inline>
-							<Icon
-								icon="lucide:chevron-down"
-								class="size-4 text-muted-foreground transition-transform group-open:rotate-180"
-								aria-hidden="true"
-							/>
-						</Inline>
-					</summary>
-					{@render rawFieldGrid({
-						record,
-						fields: rawSystemFields,
-						className: 'border-t p-3'
-					})}
-				</details>
-			{/if}
-		</Stack>
-	{/if}
-{/snippet}
-
 {#if client && definition}
 	<CollectionRecordDetailTabs
 		title={record ? recordTitle(record) : humanize(collectionName)}
@@ -516,7 +416,6 @@
 		banner={collectionSurface?.banner ?? null}
 		ui={uiDetails}
 		approval={approvalDetails}
-		raw={rawDetails}
 	/>
 {:else}
 	<!--

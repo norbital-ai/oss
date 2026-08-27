@@ -1,7 +1,7 @@
 import { Effect, Schema } from 'effect';
 import type {
 	AnySchema,
-	BeforeApi,
+	Api,
 	PolicyName,
 	DefaultWorkspaceSchema,
 	SchemaRow,
@@ -72,7 +72,7 @@ export type AutomationProgression = Schema.Schema.Type<typeof AutomationProgress
  * a hook is part of somebody else's atomic write and must never acquire an I/O checkpoint API that
  * can outlive or partially report that write.
  */
-export type AutomationApi<S extends AnySchema = DefaultWorkspaceSchema> = BeforeApi<S> & {
+export type AutomationApi<S extends AnySchema = DefaultWorkspaceSchema> = Api<S> & {
 	/** Replaces this run's current progress snapshot and advances its monotonic sequence. */
 	readonly progress: (value: AutomationProgression) => Effect.Effect<void>;
 };

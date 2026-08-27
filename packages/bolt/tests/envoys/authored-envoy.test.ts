@@ -66,7 +66,13 @@ const renderInput = (envoyFiles: ReadonlyArray<string>) =>
 		assetIndex: { browser: [], server: [] },
 		customTypeDefinitions: [],
 		environmentFile: undefined,
-		migrations: []
+		migrations: [],
+		mutationCompatibility: {
+			offlineHorizonMillis: 14 * 24 * 60 * 60 * 1000,
+			currentSchemaFingerprint: 'sha256:fixture',
+			adapters: []
+		},
+		schemaFingerprint: 'sha256:fixture'
 	}) satisfies Parameters<typeof renderArtifact>[0];
 
 /**

@@ -5,24 +5,21 @@
 	import type {
 		CollectionDefinition,
 		CollectionField,
-		CollectionFieldName,
 		CollectionOperations,
 		CollectionQuery,
 		CollectionRegistry,
-		CollectionType,
-		CollectionRecord
+		CollectionType
 	} from '@norbital-ai/std/collection';
-	import { resolveRecordLabel } from '@norbital-ai/std/collection';
+	import { isSystemCollectionField, labelTermText } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import Icon from '@iconify/svelte';
 	import { Number as Number_ } from 'effect';
 	import { onDestroy, onMount } from 'svelte';
 	import * as Popover from '#lib/popover';
 	import * as Sheet from '#lib/sheet';
-	import { cn, renderSnippet, RenderComponentConfig, RenderSnippetConfig } from '#lib/utils';
+	import { cn, renderSnippet } from '#lib/utils';
 	import { useI18n } from '#lib/i18n';
-	import { DataRenderer } from '#lib/data-renderer';
-	import { formatDataValue } from '#lib/data-renderer';
+	import { DataRenderer, formatDataValue, type FieldRendererComponent } from '#lib/data-renderer';
 	import { Cover, Inline, Stack, Bound } from '#lib/layout';
 	import { CollectionQueryState } from '#lib/collection-query';
 	import {
@@ -30,21 +27,16 @@
 		CollectionPagination,
 		type CollectionToolbarComposition
 	} from '#lib/collection-toolbar';
-	import { CollectionForm } from '#lib/collection-form';
 	import {
 		collectionRecordMetadataDescription,
 		type ResolvedCollectionRecordMetadata
 	} from '#lib/collection-record-metadata';
 	import {
-		createActionLabel,
+		createCollectionActionLabel,
 		deriveAutoCard,
-		formatAutoCardBadge,
-		formatAutoCardField,
-		formatAutoCardSubtitle,
-		isSystemField,
-		resolvedRecordMetadataFor,
+		resolvedCollectionRecordMetadata,
 		type AutoCardModel
-	} from '#lib/collection-table/collection-card-derivation';
+	} from '#lib/collection-surface';
 	import { toast } from 'svelte-sonner';
 	import { watch } from 'runed';
 	import CollectionTablePart, {
@@ -52,11 +44,11 @@
 	} from './collection-table-part.svelte';
 	import CollectionGrid from './internal/collection-grid.svelte';
 	import CollectionTableList from './collection-table-list.svelte';
-	import CollectionTableAppliedFilters from './collection-table-applied-filters.svelte';
+	import { CollectionAppliedFilters } from '#lib/collection-filter';
 	import {
-		createCollectionTableRouteKey,
-		getCollectionTableNavigationContext
-	} from './collection-table-navigation.svelte.js';
+		createCollectionRouteKey,
+		getCollectionNavigationContext
+	} from '#lib/collection-navigation/collection-navigation.svelte';
 	import {
 		ColumnAPI,
 		RowAPI,
@@ -67,12 +59,12 @@
 	import type {
 		CollectionName,
 		CollectionTableColumn,
+		CollectionTableColumnsComposition,
 		CollectionTableProps,
 		CollectionTableRow,
 		CollectionTableRowActionContext
 	} from '#lib/collection-table/collection-table.types';
 	import { collectionTableColumnCanSort } from '#lib/collection-table/collection-table.types';
-	import { badgeColorClass } from '#lib/collection-table/collection-card-colors';
 
 	const COLUMN_WIDTH_BOUNDS: Readonly<Record<string, readonly [number, number]>> = {
 		boolean: [72, 112],
@@ -155,11 +147,11 @@
 
 	const definition = $derived(
 		workspaceClient.collections[String(collection)] as CollectionDefinition<
-			CollectionType<TRow, object, object>
+			CollectionType<TRow, object>
 		> // stupidity: boundary-cast — the generated client and runtime manifest share collection keys.
 	);
 	const operations = $derived(
-		client.db[collection] as CollectionOperations<CollectionType<TRow, object, object>> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row.
+		client.db[collection] as CollectionOperations<CollectionType<TRow, object>> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row.
 	);
 	const recordIdField = 'id';
 	const recordScope = getCollectionRecordScope();
@@ -171,12 +163,12 @@
 		)
 	);
 	const resolvedDetailRouteKey = $derived(
-		createCollectionTableRouteKey({
+		createCollectionRouteKey({
 			view: resolvedView
 		})
 	);
 	onMount(() => surfaceRuntime?.claimView(resolvedView));
-	const detailNavigation = getCollectionTableNavigationContext();
+	const detailNavigation = getCollectionNavigationContext();
 	// svelte-ignore state_referenced_locally -- this table's route identity is fixed for its mount.
 	const releaseDetailClient = detailNavigation?.registerDetailClient(
 		resolvedDetailRouteKey,
@@ -208,7 +200,7 @@
 	});
 
 	function resolvedRecordMetadata(record: TRow): readonly ResolvedCollectionRecordMetadata[] {
-		return resolvedRecordMetadataFor(record, recordMetadata, t);
+		return resolvedCollectionRecordMetadata(record, recordMetadata, t);
 	}
 	/**
 	 * The one search + filter + page model this table runs on.
@@ -247,28 +239,22 @@
 	);
 
 	function metadataFor(column: ColumnConfig): CollectionField<Extract<keyof TRow, string>> {
-		return (
-			definition.fields.find((field) => field.name === column.key) ?? {
-				name: column.key,
-				kind: 'unknown',
-				nullable: true
-			}
-		);
-	}
-
-	function normalizeCellRender(output: unknown) {
-		if (output instanceof RenderComponentConfig || output instanceof RenderSnippetConfig) {
-			return output;
+		const field = definition.fields.find((candidate) => candidate.name === column.key);
+		if (!field) {
+			throw new Error(
+				`CollectionTable "${String(collection)}" declares unknown column "${String(column.key)}".`
+			);
 		}
-		if (output == null) return '';
-		return String(output);
+		if (isSystemCollectionField(field.name)) {
+			throw new Error(
+				`CollectionTable "${String(collection)}" cannot declare framework field "${field.name}".`
+			);
+		}
+		return field;
 	}
 
 	function renderCell(column: ColumnConfig, row: TRow) {
 		const value = Reflect.get(row, column.key);
-		if (column.render) {
-			return normalizeCellRender(column.render({ row, field: metadataFor(column), value }));
-		}
 		return renderSnippet(defaultCell, { column, row, value });
 	}
 
@@ -339,7 +325,7 @@
 		deriveAutoCard(
 			definition.fields,
 			registeredColumns.map((column) => String(column.key)),
-			{ roles: cardRoles, hasRecordLabel: Boolean(definition.recordLabel) }
+			{ roles: cardRoles }
 		)
 	);
 
@@ -347,35 +333,16 @@
 	const operationsEnabled = $derived(
 		exportPipelines.length > 0 || importPipelines.length > 0 || integrations.length > 0
 	);
-	const createLabel = $derived(createActionLabel(String(collection), undefined, t));
+	const createLabel = $derived(createCollectionActionLabel(String(collection), t));
 
-	/**
-	 * One card line, resolved the way the wide grid resolves the same cell.
-	 *
-	 * A card role names a column, and on a relation column only that column's authored `render`
-	 * knows how to read the row — `leave_type_id` is a uuid until `render` reaches through the
-	 * joined `leave_request_type`. Asking `renderCell` is what keeps the narrow list and the wide
-	 * grid saying the same thing about the same record; formatting the raw field instead is how the
-	 * list came to show operators raw uuids on any surface under 48rem.
-	 *
-	 * Only text answers are taken. A column may render a component or a snippet, and a card line is
-	 * a single truncating row with nowhere to mount one — and a column with no `render` at all
-	 * resolves to the default cell snippet, which is exactly the case the schema formatter covers.
-	 */
-	function cardText(name: string, record: TRow): string {
-		const column = registeredColumns.find((candidate) => String(candidate.key) === name);
-		const rendered = column ? renderCell(column, record) : undefined;
-		if (typeof rendered === 'string' && rendered !== '') return rendered;
-		return formatAutoCardField(definition.fields, name, record, t);
-	}
-
-	function autoCardTitle(record: TRow): string {
-		if (autoCard.title.kind === 'field') {
-			const text = cardText(autoCard.title.name, record);
-			if (text && text !== '—') return text;
-		}
-		return recordTitle(record);
-	}
+	const automaticRelationshipWith = $derived.by(() =>
+		Object.fromEntries(
+			registeredColumns.flatMap((column) => {
+				const relation = metadataFor(column).relation;
+				return relation ? [[relation.name, true] as const] : [];
+			})
+		)
+	);
 
 	/**
 	 * Every cursor past the first belongs to the query that produced it. A new search, filter set,
@@ -400,6 +367,7 @@
 			operations,
 			query: {
 				...query,
+				with: { ...automaticRelationshipWith, ...(query?.with ?? {}) },
 				search: queryState.search || undefined,
 				orderBy: orderBy ?? defaultOrderBy,
 				limit: queryState.pageSize,
@@ -488,13 +456,9 @@
 				columns.map((column) => {
 					const field = metadataFor(column);
 					const header = column.label ?? field.label ?? humanize(column.key);
-					const values = rows.map((row) => {
-						const value = Reflect.get(row, column.key);
-						const rendered = column.render?.({ row, field, value });
-						return typeof rendered === 'string' || typeof rendered === 'number'
-							? String(rendered)
-							: formatDataValue(field, value, undefined, t);
-					});
+					const values = rows.map((row) =>
+						formatDataValue(field, Reflect.get(row, column.key), undefined, t)
+					);
 					return [
 						String(column.key),
 						column.width ?? fitCollectionColumnWidth(field, values, header, measurement.measure)
@@ -603,39 +567,8 @@
 	}
 
 	function recordTitle(record: TRow): string {
-		// Bolt declares `recordLabel` as a plain column name — `recordLabel: 'summary'`. The CEL
-		// resolver evaluates it as an expression and returns null for a bare identifier, so the title
-		// fell through to the first non-uuid column, which on a leave request is the raw event JSON.
-		// A bare name is read as what it is; anything else is still an expression.
-		const declared = definition.recordLabel ?? null;
-		if (declared && /^[A-Za-z_][A-Za-z0-9_]*$/.test(declared)) {
-			const value = Reflect.get(record, declared);
-			if (typeof value === 'string' && value.trim() !== '') return value;
-		}
-		const label = resolveRecordLabel(declared, record);
-		if (label) return label;
-		const fallbackField = definition.fields.find(
-			(field) => !isSystemField(field.name) && field.kind !== 'uuid' && !field.name.endsWith('_id')
-		);
-		const fallback = fallbackField
-			? formatDataValue(fallbackField, Reflect.get(record, fallbackField.name), undefined, t)
-			: '';
-		return fallback && fallback !== '—' ? fallback : humanize(String(collection));
-	}
-
-	function autoListDescription(record: TRow): string {
-		const titleField = autoCard.title.kind === 'field' ? autoCard.title.name : null;
-		const fallback = definition.fields
-			.filter(
-				(field) =>
-					!isSystemField(field.name) &&
-					field.name !== titleField &&
-					field.kind !== 'uuid' &&
-					!field.name.endsWith('_id')
-			)
-			.map((field) => formatDataValue(field, Reflect.get(record, field.name), undefined, t))
-			.find((value) => value && value !== '—');
-		return fallback ?? t('table.recordDescription', { name: humanize(String(collection)) });
+		if (autoCard.title.kind !== 'field') return humanize(String(collection));
+		return labelTermText(Reflect.get(record, autoCard.title.name)) ?? humanize(String(collection));
 	}
 
 	const listRows = $derived(
@@ -649,13 +582,14 @@
 </script>
 
 {#snippet defaultCell({ column, row, value }: { column: ColumnConfig; row: TRow; value: unknown })}
-	<!-- A relation is a uuid and renders as text. To show it as a labelled record, give the column a
-	     `render` that mounts RelationshipRenderer with the option set you want. -->
 	<DataRenderer
 		field={metadataFor(column)}
 		{value}
 		row={row as Record<string, unknown>}
 		mode="display"
+		renderer={column.renderer as FieldRendererComponent | undefined}
+		rendererProps={column.rendererProps as Readonly<Record<string, unknown>> | undefined}
+		relationOptions={column.relationOptions}
 	/>
 {/snippet}
 
@@ -711,7 +645,7 @@
 
 {#snippet toolbar()}
 	{#snippet appliedFilters()}
-		<CollectionTableAppliedFilters
+		<CollectionAppliedFilters
 			where={query?.where}
 			{definition}
 			collections={workspaceClient.collections}
@@ -753,28 +687,45 @@
 {/snippet}
 
 {#snippet autoListCard(record: TRow)}
-	{@const subtitle = formatAutoCardSubtitle(autoCard, (name) => cardText(name, record))}
-	{@const badge = formatAutoCardBadge(autoCard, record, (name) => cardText(name, record))}
-	<Inline align="start" justify="between" gap="md">
-		<Stack gap="xs">
-			<p class="min-w-0 truncate font-medium">{autoCardTitle(record)}</p>
-			<p class="min-w-0 truncate text-sm text-muted-foreground">
-				{subtitle || autoListDescription(record)}
-			</p>
-		</Stack>
-		{#if badge}
-			<span
-				class={cn(
-					'inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-full border px-2 py-0.5 text-xs font-medium',
-					badgeColorClass()
-				)}>{badge.label}</span
-			>
+	<Stack gap="xs">
+		{@const titleName = autoCard.title.kind === 'field' ? autoCard.title.name : null}
+		{#if titleName}
+			{@const titleColumn = registeredColumns.find((column) => String(column.key) === titleName)}
+			{#if titleColumn}
+				<DataRenderer
+					field={metadataFor(titleColumn)}
+					value={Reflect.get(record, titleColumn.key)}
+					row={record as Record<string, unknown>}
+					mode="display"
+					renderer={titleColumn.renderer as FieldRendererComponent | undefined}
+					rendererProps={titleColumn.rendererProps as Readonly<Record<string, unknown>> | undefined}
+					relationOptions={titleColumn.relationOptions}
+				/>
+			{/if}
+		{:else}
+			<p class="flex min-h-9 items-center text-sm font-medium">{humanize(String(collection))}</p>
 		{/if}
-	</Inline>
+		{#each [...autoCard.subtitles, ...(autoCard.badge ? [autoCard.badge] : [])] as name (name)}
+			{@const cardColumn = registeredColumns.find((column) => String(column.key) === name)}
+			{#if cardColumn && (autoCard.title.kind !== 'field' || name !== autoCard.title.name)}
+				<DataRenderer
+					field={metadataFor(cardColumn)}
+					value={Reflect.get(record, cardColumn.key)}
+					row={record as Record<string, unknown>}
+					mode="display"
+					renderer={cardColumn.renderer as FieldRendererComponent | undefined}
+					rendererProps={cardColumn.rendererProps as Readonly<Record<string, unknown>> | undefined}
+					relationOptions={cardColumn.relationOptions}
+				/>
+			{/if}
+		{/each}
+	</Stack>
 {/snippet}
 
 <div class="hidden" aria-hidden="true">
-	{@render columns({ Column: CollectionTablePart })}
+	{@render columns({
+		Column: CollectionTablePart as unknown as CollectionTableColumnsComposition<TRow>['Column']
+	})}
 </div>
 
 <Bound
@@ -854,13 +805,9 @@
 					}}
 				/>
 			{:else}
-				<CollectionForm
-					{client}
-					{collection}
-					onAfterSubmit={() => {
-						createOpen = false;
-					}}
-				/>
+				<p class="text-sm text-destructive" role="alert">
+					Collection "{String(collection)}" requires an explicit representation to create records.
+				</p>
 			{/if}
 		</div>
 	</Sheet.Content>

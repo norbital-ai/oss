@@ -3,83 +3,19 @@ import type {
 	CollectionRegistry,
 	CollectionRow
 } from '@norbital-ai/std/collection';
-import type { Component, ComponentInternals, Snippet } from 'svelte';
+import type { Component, Snippet } from 'svelte';
 import type { CollectionQueryState } from '#lib/collection-query';
 import type {
-	CollectionTableInitialFilter,
-	CollectionTableIntegrationStatus,
-	CollectionTablePipeline
-} from '#lib/collection-table/collection-table.types';
+	CollectionInitialFilter,
+	CollectionIntegrationStatus,
+	CollectionPipeline
+} from '#lib/collection-surface';
 import type { Effect } from 'effect';
 
 export type CollectionToolbarName<TCollections extends CollectionRegistry> = Extract<
 	keyof TCollections,
 	string
 >;
-
-export interface CollectionToolbarFilterOption<TValue extends string = string> {
-	readonly value: TValue;
-	readonly label: string;
-	readonly description?: string;
-	/** Extra text a searchable control matches on, beyond the label. */
-	readonly search_term?: string;
-}
-
-/**
- * A filter control for a predicate the collection has no field for.
- *
- * The schema filter builder can only address what the collection stores. A surface that derives its
- * own facts — "this person has a day rostered on shift N", "this month is still drafted" — has
- * nothing for the builder to point at, and every such surface has so far grown its own popover, its
- * own active-count badge and its own "clear all". Declaring the control instead puts it in the same
- * popover, under the same count, cleared by the same button, and resets the page on change like
- * every other narrowing does.
- *
- * `TValue` is inferred from `options`, so `onValueChange` receives the surface's own union rather
- * than a bare `string` it has to re-narrow.
- */
-export interface CollectionToolbarFilterProps<TValue extends string = string> {
-	/** Stable identity for the control, used to key it and to label its combobox. */
-	id: string;
-	label: string;
-	options: readonly CollectionToolbarFilterOption<TValue>[];
-	value: TValue | null;
-	/** Shown when nothing is selected; reads as the unfiltered case ("Any status"). */
-	placeholder?: string;
-	searchPlaceholder?: string;
-	searchable?: boolean;
-	onValueChange: (value: TValue | null) => void;
-}
-
-/**
- * `Filter` as handed to the toolbar's filter composition. Callable (the Svelte 5 component shape) so
- * svelte-check accepts it as a component; the generic lets each usage instantiate `TValue` from
- * `options` so `value` and `onValueChange` stay tied to the same union.
- */
-export interface CollectionToolbarFilterComponent {
-	<TValue extends string = string>(
-		this: void,
-		internals: ComponentInternals,
-		props: CollectionToolbarFilterProps<TValue>
-	): {
-		$on?(type: string, callback: (e: unknown) => void): () => void;
-		$set?(props: Partial<CollectionToolbarFilterProps<TValue>>): void;
-	};
-	element?: typeof HTMLElement;
-	z_$$bindings?: string;
-}
-
-/** A registered `Filter`, with its authored props kept live by getters. */
-export interface CollectionToolbarFilterDeclaration {
-	readonly id: string;
-	readonly label: string;
-	readonly options: readonly CollectionToolbarFilterOption[];
-	readonly value: string | null;
-	readonly placeholder?: string;
-	readonly searchPlaceholder?: string;
-	readonly searchable?: boolean;
-	change(value: string | null): void;
-}
 
 export type CollectionToolbarActionVariant = 'default' | 'outline' | 'ghost' | 'destructive';
 
@@ -111,9 +47,9 @@ export interface CollectionToolbarActionProps {
  * the field list from the same definition the filter builder does.
  */
 export interface CollectionToolbarOperations<TRow extends object> {
-	readonly exportPipelines?: readonly CollectionTablePipeline<TRow>[];
-	readonly importPipelines?: readonly CollectionTablePipeline<TRow>[];
-	readonly integrations?: readonly CollectionTableIntegrationStatus[];
+	readonly exportPipelines?: readonly CollectionPipeline<TRow>[];
+	readonly importPipelines?: readonly CollectionPipeline<TRow>[];
+	readonly integrations?: readonly CollectionIntegrationStatus[];
 	readonly selectedRows?: readonly TRow[];
 	readonly selectionControls?: {
 		readonly totalRows: number;
@@ -136,15 +72,11 @@ export interface CollectionToolbarAbout {
 export interface CollectionToolbarFeatures {
 	/** Free-text search over the collection's text fields. */
 	readonly search?: boolean;
-	/**
-	 * The schema-derived filter builder. Declared `Filter` controls are unaffected — a surface whose
-	 * conditions are all derived turns the builder off and still gets the filter popover.
-	 */
+	/** The schema-derived filter builder. */
 	readonly filter?: boolean;
 }
 
 export interface CollectionToolbarComposition<TRow extends object> {
-	Filter: CollectionToolbarFilterComponent;
 	Action: Component<CollectionToolbarActionProps>;
 	/** The one search + filter + page model this toolbar drives. */
 	query: CollectionQueryState<TRow>;
@@ -174,12 +106,10 @@ export interface CollectionActionToolbarProps<
 	disabled?: boolean;
 	features?: CollectionToolbarFeatures;
 	/** Conditions the view opens with, seeded into the builder as removable rows. */
-	initialFilters?: readonly CollectionTableInitialFilter[];
+	initialFilters?: readonly CollectionInitialFilter[];
 	/** View key a cleared seed is remembered against. */
 	filterPersistenceKey?: string;
 	operations?: CollectionToolbarOperations<NoInfer<TRow>>;
-	/** Derived-predicate controls, placed in the filter popover above the builder. */
-	filters?: Snippet<[CollectionToolbarComposition<NoInfer<TRow>>]>;
 	/** Mutating actions, placed at the trailing edge. */
 	actions?: Snippet<[CollectionToolbarComposition<NoInfer<TRow>>]>;
 }

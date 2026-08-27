@@ -147,7 +147,12 @@ const fieldOpsWorkspace = workspace({
 	tools: [],
 	skills: [],
 	envoys: [],
-	requiredFacilities: []
+	requiredFacilities: [],
+	mutationCompatibility: {
+		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
+		currentSchemaFingerprint: 'sha256:system-collection-reads-fixture',
+		adapters: []
+	}
 });
 
 /** A seeded non-admin in the controller team — `foo_suan_wood@bca.gov.sg`'s standing in the seed. */
@@ -256,6 +261,24 @@ const readAs = (runtime: BoltTestRuntime, credential: string, collectionName: st
 		).pipe(Effect.result)
 	);
 
+/** The server-issued O2 identity a browser must bind every durable mutation to. */
+const mutationPartition = async (runtime: BoltTestRuntime, credential: string) => {
+	const schema = await runtime.runtime.runPromise(
+		dispatchInvocation(command('sync.schema', credential, {}))
+	);
+	const fingerprint = Reflect.get(schema.value as object, 'fingerprint');
+	if (typeof fingerprint !== 'string') throw new TypeError('sync.schema returned no fingerprint');
+	const opened = await runtime.runtime.runPromise(
+		dispatchInvocation(command('sync.partition', credential, {}))
+	);
+	const partition = Reflect.get(opened.value as object, 'partition');
+	if (typeof partition !== 'object' || partition === null)
+		throw new TypeError('sync.partition returned no partition');
+	const partitionKey = Reflect.get(partition, 'key');
+	if (typeof partitionKey !== 'string') throw new TypeError('sync.partition returned no key');
+	return { fingerprint, partitionKey };
+};
+
 /** The runtime's own collections that `SYSTEM_READ_POLICY` grants `read` on. */
 const RUNTIME_OWNED = [
 	'approval_request',
@@ -316,7 +339,8 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 
 	/**
 	 * The mask is the other half of the directory grant, and it has to survive whatever admits the
-	 * read: `user` holds an address, and the grant allows `id` and `name` only.
+	 * read: `user` holds an address, and the grant allows `id` and `name` only. `row_version` is the
+	 * one framework field retained so a locally read row can carry its whole-row mutation fence.
 	 */
 	it.each(['user', 'team'])(
 		'masks the %s directory down to id and name for a member',
@@ -331,7 +355,7 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 			expect(Array.isArray(rows)).toBe(true);
 			expect((rows as ReadonlyArray<object>).length).toBeGreaterThan(0);
 			for (const row of rows as ReadonlyArray<Record<string, unknown>>) {
-				expect(Object.keys(row).toSorted()).toEqual(['id', 'name']);
+				expect(Object.keys(row).toSorted()).toEqual(['id', 'name', 'row_version']);
 			}
 		}
 	);
@@ -368,8 +392,8 @@ describe('notifications are live system collections scoped to their recipient', 
 		harness = await makeBoltTestRuntime(fieldOpsWorkspace);
 		await seedController(harness);
 		await seedBystander(harness);
-		const ownId = '019f6f10-0004-7000-8000-000000000001';
-		const otherId = '019f6f10-0004-7000-8000-000000000002';
+		const ownId = '00000000-0000-5000-8000-000000000001';
+		const otherId = '00000000-0000-5000-8000-000000000002';
 		await harness.database.query(
 			'insert into bolt_notifications (id, recipient, payload, read) values ($1, $2, $3::jsonb, false), ($4, $5, $6::jsonb, false)',
 			[
@@ -383,35 +407,68 @@ describe('notifications are live system collections scoped to their recipient', 
 		);
 
 		expect(await readIds(harness, 'controller-token', 'bolt_notifications')).toEqual([ownId]);
+		const mutation = await mutationPartition(harness, 'controller-token');
+		const updateNotification = (
+			idempotencyKey: string,
+			deviceSequence: number,
+			id: string,
+			baseVersion: number,
+			values: Readonly<Record<string, unknown>>
+		) => ({
+			protocolVersion: 2,
+			idempotencyKey,
+			issuedAtEpochMs: Date.now(),
+			deviceSequence,
+			partitionKey: mutation.partitionKey,
+			schemaFingerprint: mutation.fingerprint,
+			graph: { action: 'update', collection: 'bolt_notifications', values: { id, ...values } },
+			baseVersions: [
+				{ row: { collection: 'bolt_notifications', recordId: id }, rowVersion: baseVersion }
+			]
+		});
 
 		const markOwn = await harness.runtime.runPromise(
 			dispatchInvocation(
-				command('collections.mutate', 'controller-token', {
-					collection: 'bolt_notifications',
-					values: { id: ownId, read: true }
-				})
+				command(
+					'collections.mutate',
+					'controller-token',
+					updateNotification('mark-own-notification-read', 1, ownId, 1, { read: true })
+				)
 			).pipe(Effect.result)
 		);
-		expect(markOwn._tag).toBe('Success');
+		expect(markOwn, JSON.stringify(markOwn)).toMatchObject({
+			_tag: 'Success',
+			success: { value: { resolution: 'accepted', mutationId: 'mark-own-notification-read' } }
+		});
 
 		const markOther = await harness.runtime.runPromise(
 			dispatchInvocation(
-				command('collections.mutate', 'controller-token', {
-					collection: 'bolt_notifications',
-					values: { id: otherId, read: true }
-				})
+				command(
+					'collections.mutate',
+					'controller-token',
+					updateNotification('mark-other-notification-read', 2, otherId, 1, { read: true })
+				)
 			).pipe(Effect.result)
 		);
-		expect(markOther._tag).toBe('Failure');
+		expect(markOther).toMatchObject({
+			_tag: 'Success',
+			success: { value: { resolution: 'rejected', mutationId: 'mark-other-notification-read' } }
+		});
 		const refusedField = await harness.runtime.runPromise(
 			dispatchInvocation(
-				command('collections.mutate', 'controller-token', {
-					collection: 'bolt_notifications',
-					values: { id: ownId, payload: { text: 'Rewritten' } }
-				})
+				command(
+					'collections.mutate',
+					'controller-token',
+					updateNotification('rewrite-own-notification-payload', 3, ownId, 2, {
+						payload: { text: 'Rewritten' }
+					})
+				)
 			).pipe(Effect.result)
 		);
-		expect(refusedField._tag).toBe('Failure');
+		expect(refusedField).toMatchObject({
+			_tag: 'Success',
+			success: { value: { resolution: 'rejected', mutationId: 'rewrite-own-notification-payload' } }
+		});
 
 		expect(
 			await harness.database.query('select id, payload, read from bolt_notifications order by id')

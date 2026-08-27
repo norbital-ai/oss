@@ -233,7 +233,6 @@ describe('The schema plan builds the canonical greenfield schema', () => {
 
 	it('creates envoy tables without compatibility steps', () => {
 		const ids = buildSchemaPlan(envoyWorkspace()).steps.map(({ id }) => id);
-		expect(ids.some((id) => id.includes('rename-from-channel'))).toBe(false);
 		for (const created of [
 			'collection:bolt_envoy_registrations',
 			'collection:bolt_envoy_receipts',

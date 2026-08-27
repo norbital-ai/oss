@@ -10,7 +10,13 @@ import {
 import { getErrorMessage } from '../src/error/index.ts';
 import { currencyFractionDigits, ISO_CURRENCY, MoneyValueSchema } from '../src/finance/currency.ts';
 import { safeParse } from '../src/json/index.ts';
-import { hashDefinition, sha256Json, sha256Text } from '../src/reckon/hash.ts';
+import {
+	canonicalSchemaStepEncoding,
+	digestSchemaSteps,
+	hashDefinition,
+	sha256Json,
+	sha256Text
+} from '../src/reckon/hash.ts';
 import { humanize, textSearchMatches } from '../src/string/index.ts';
 import { treeFind, treeFlatten } from '../src/tree/index.ts';
 
@@ -104,5 +110,18 @@ describe('retained core utilities', () => {
 			}),
 			'82c5f4246ab6421aaf99a9c90c79302b073f2976f96907ec82e4efc1d4c24cf1'
 		);
+	});
+
+	it('pins browser-safe schema migration digest bytes', () => {
+		const steps = [
+			{ id: 'lineage:1:0', sql: 'alter table "café" add column "名" text' },
+			{ id: 'sync-trigger:café', sql: 'create trigger t after insert on "café"' }
+		];
+		assert.equal(
+			canonicalSchemaStepEncoding(steps),
+			'[{"id":"lineage:1:0","sql":"alter table \\"café\\" add column \\"名\\" text"},{"id":"sync-trigger:café","sql":"create trigger t after insert on \\"café\\""}]'
+		);
+		assert.match(digestSchemaSteps(steps), /^sha256:[0-9a-f]{64}$/);
+		assert.notEqual(digestSchemaSteps(steps), digestSchemaSteps([...steps].reverse()));
 	});
 });

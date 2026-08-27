@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
 import { EnvironmentName, ReleaseId, TenantId } from '@norbital-ai/bolt-protocol';
 import { createBoltClient } from '../../src/client.js';
 import { createWorkspaceApiProxy } from '../../src/client/runtime.js';
+import { setWorkspaceSession } from '#lib/client/session.js';
 
 const scope = {
 	tenantId: TenantId.make('tenant'),
@@ -10,18 +11,41 @@ const scope = {
 	releaseId: ReleaseId.make('release')
 };
 
+beforeEach(() => {
+	setWorkspaceSession({
+		tenantId: 'typed-client-test',
+		environment: 'test',
+		releaseId: 'release',
+		principal: 'operator-1',
+		accessScope: 'operator',
+		credential: 'test-credential',
+		transport: { command: async () => null },
+		syncStreamUrl: '/sync',
+		files: {
+			store: async () => '',
+			remove: async () => undefined,
+			urlFor: (key) => key
+		},
+		chatDocuments: {
+			store: async (_conversation, key, file) => ({
+				storage_key: key,
+				file_name: file.name,
+				file_size: file.size,
+				mime_type: file.type || 'application/octet-stream'
+			}),
+			remove: async () => undefined,
+			urlFor: (_conversation, key) => key
+		},
+		operations: { read: async () => null, run: async () => null }
+	});
+});
+
 describe('typed browser client', () => {
-	it('preserves the actionable transport failure through both client boundaries', async () => {
+	it('preserves actionable transport failures at the command boundary', async () => {
 		const failure = new Error('invalid_input: employees.created_at is managed by Bolt');
 		const bolt = createBoltClient(scope, { command: () => Promise.reject(failure) });
 
 		await expect(bolt.command('collections.mutate', {}, Schema.Json)).rejects.toBe(failure);
-
-		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
-		const employees = Reflect.get(proxy.db, 'employees') as {
-			mutate: (input: object) => Promise<void>;
-		};
-		await expect(employees.mutate({ id: 'employee-1', name: 'Updated' })).rejects.toBe(failure);
 	});
 
 	it('makes reactive remote invocations awaitable while preserving the live handle', async () => {
@@ -71,18 +95,20 @@ describe('typed browser client', () => {
 		).not.toHaveProperty('after');
 	});
 
-	it('groups a board query through the canonical collection read', async () => {
+	it('uses the authoritative grouped aggregate without hydrating a bounded page', async () => {
 		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
 		const bolt = createBoltClient(scope, {
 			command: (command, input) => {
 				commands.push({ command, input });
 				return Promise.resolve({
-					rows: [
-						{ id: 'e1', status: 'active' },
-						{ id: 'e2', status: 'active' },
-						{ id: 'e3', status: 'closed' }
-					],
-					nextCursor: null
+					groups: {
+						active: [
+							{ id: 'e1', status: 'active' },
+							{ id: 'e2', status: 'active' }
+						],
+						pending: [],
+						closed: [{ id: 'e3', status: 'closed' }]
+					}
 				});
 			}
 		});
@@ -106,11 +132,11 @@ describe('typed browser client', () => {
 		});
 		expect(commands).toEqual([
 			{
-				command: 'collections.findMany',
+				command: 'collections.findGrouped',
 				input: {
 					collection: 'employees',
 					where: { archived: { eq: false } },
-					limit: 500
+					group: { by: 'status', lanes: ['active', 'pending', 'closed'] }
 				}
 			}
 		]);

@@ -85,7 +85,7 @@ describe('Bolt compiler owners', () => {
 		expect(first.steps.find(({ id }) => id === 'collection:bolt_sync_horizon')?.sql).toContain(
 			'"singleton" boolean default true not null unique'
 		);
-		expect(first.fingerprint).toMatch(/^fnv1a32:/);
+		expect(first.fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
 	});
 
 	it('fingerprints the exact provisioning lineage as well as its identifiers', () => {

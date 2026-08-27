@@ -137,7 +137,6 @@ export type TablesForModels<M extends Readonly<Record<string, ModelDeclaration>>
 export interface AnySchema {
 	readonly tables: Readonly<Record<string, TableShape<object, object, object>>>;
 	readonly relations: Readonly<Record<string, unknown>>;
-	readonly inputs: Readonly<Record<string, { readonly create: unknown; readonly update: unknown }>>;
 }
 
 export type DefaultWorkspaceSchema = WorkspaceAuthoringTypes extends {
@@ -361,40 +360,149 @@ export type SchemaQueryRow<
 > = Omit<SelectColumns<SchemaRow<S, N>, Config>, keyof WithRows<S, N, Config>> &
 	WithRows<S, N, Config>;
 
-export type MutationInsertFor<
+type MutationInsertFor<
 	S extends AnySchema,
 	N extends TableName<S>
 > = S['tables'][N]['$inferInsert'];
-export type MutationUpdateFor<S extends AnySchema, N extends TableName<S>> = Partial<
+type MutationUpdateFor<S extends AnySchema, N extends TableName<S>> = Partial<
 	S['tables'][N]['$inferSelect']
 >;
-export type InputValuesForTables<T extends Readonly<Record<string, TableShape<unknown, unknown>>>> =
-	{
-		readonly [K in keyof T]: {
-			readonly create: T[K]['$inferInsert'];
-			readonly update: Partial<T[K]['$inferSelect']>;
-		};
-	};
+
+/** Runtime-owned fields never accepted from a declarative collection mutation. */
+type SystemMutationKey =
+	'id' | 'created_at' | 'updated_at' | 'sys_period' | 'row_version' | 'approval_id';
+type MutationTableName<S extends AnySchema> = keyof S['tables'] & string;
+type MutationRow<
+	S extends AnySchema,
+	N extends MutationTableName<S>
+> = S['tables'][N]['$inferSelect'];
+type MutationInsert<
+	S extends AnySchema,
+	N extends MutationTableName<S>
+> = S['tables'][N]['$inferInsert'];
+type AuthoredMutationInsert<S extends AnySchema, N extends MutationTableName<S>> = Omit<
+	MutationInsert<S, N>,
+	SystemMutationKey
+>;
+type MutationIdentity<S extends AnySchema, N extends MutationTableName<S>> =
+	MutationRow<S, N> extends {
+		readonly id: infer Identity;
+	}
+		? Identity
+		: string;
+type MutationRelationsFor<
+	S extends AnySchema,
+	N extends MutationTableName<S>
+> = N extends keyof S['relations'] ? S['relations'][N] : never;
+type MutationManyRelation<S extends AnySchema, N extends MutationTableName<S>> = {
+	readonly [K in keyof MutationRelationsFor<S, N>]: MutationRelationsFor<S, N>[K] extends {
+		readonly cardinality: 'many';
+		readonly target: MutationTableName<S>;
+		readonly column: infer Column;
+		readonly parentColumn: infer ParentColumn;
+	}
+		? [Column] extends [never]
+			? never
+			: [ParentColumn] extends [never]
+				? never
+				: Column extends PropertyKey
+					? [ParentColumn] extends ['id']
+						? K
+						: never
+					: never
+		: never;
+}[keyof MutationRelationsFor<S, N>];
+type MutationRelationTarget<
+	S extends AnySchema,
+	N extends MutationTableName<S>,
+	K extends MutationManyRelation<S, N>
+> = MutationRelationsFor<S, N>[K] extends {
+	readonly target: infer Target extends MutationTableName<S>;
+}
+	? Target
+	: never;
+type MutationRelationColumn<
+	S extends AnySchema,
+	N extends MutationTableName<S>,
+	K extends MutationManyRelation<S, N>
+> = MutationRelationsFor<S, N>[K] extends { readonly column: infer Column extends PropertyKey }
+	? Column
+	: never;
+type WithoutMutationKey<Value, Key extends PropertyKey> = Value extends unknown
+	? Omit<Value, Extract<Key, keyof Value>>
+	: never;
+type MutationRecord<S extends AnySchema, N extends MutationTableName<S>> =
+	| AuthoredMutationInsert<S, N>
+	| (Readonly<{ id: MutationIdentity<S, N> }> & Partial<AuthoredMutationInsert<S, N>>);
+type MutationChildren<S extends AnySchema, N extends MutationTableName<S>> = {
+	readonly [K in MutationManyRelation<S, N>]?: ReadonlyArray<
+		WithoutMutationKey<
+			CollectionMutationValues<S, MutationRelationTarget<S, N, K>>,
+			MutationRelationColumn<S, N, K>
+		>
+	>;
+};
 
 /**
- * One nearest-neighbour read, answered by pgvector against the declared HNSW index.
+ * The one declarative write accepted by browser clients and every authored server context.
  *
- * Every field here was ignored for a long time: both implementations spread this config into an
- * ordinary `findMany`, which knows no `column`, `probe` or `metric` — so the query returned the
- * collection's first rows in insertion order with no `distance` on them at all, and a caller doing
- * duplicate detection found every record a near-duplicate of every other.
- *
- * `metric` picks the pgvector operator: `cosine` is `<=>`, `l2` is `<->`, and `ip` is `<#>` — the
- * *negative* inner product, which is what makes ascending order mean "most similar" for all three,
- * so an `ip` `maxDistance` is compared against a negative number.
+ * A value without an id creates its root; a value with an id updates it. Included `many`
+ * relationships are their complete desired state and reconcile recursively, while omitted
+ * relationships remain untouched. This is the collection write shape in every authored context.
  */
-interface NearestQueryConfig<Row> {
-	readonly column: keyof Row & string;
-	readonly probe: ReadonlyArray<number>;
-	readonly metric: 'cosine' | 'l2' | 'ip';
+export type CollectionMutationValues<
+	S extends AnySchema,
+	N extends MutationTableName<S>
+> = MutationRecord<S, N> & MutationChildren<S, N>;
+
+/** The distances pgvector can measure: Euclidean, cosine, and negative inner product. */
+export type NearestMetric = 'l2' | 'cosine' | 'ip';
+
+/**
+ * The collection's vector columns, and only those.
+ *
+ * `column` used to be a `string`, so a typo, a text column, or a column of another collection all
+ * compiled and were refused at run time by a workspace that had already done the query's work. The
+ * match is bidirectional on purpose: a column is a vector column when its type is exactly an array
+ * of numbers, so a tuple or a narrower array — which pgvector cannot measure — does not qualify.
+ * `.array()` is unavailable on the authoring surface, so this is the only way a column reaches that
+ * type.
+ */
+export type VectorColumnName<S extends AnySchema, N extends TableName<S>> = {
+	readonly [K in keyof SchemaRow<S, N>]-?: NonNullable<SchemaRow<S, N>[K]> extends ReadonlyArray<number>
+		? Array<number> extends NonNullable<SchemaRow<S, N>[K]>
+			? K
+			: never
+		: never;
+}[keyof SchemaRow<S, N>];
+
+/**
+ * A nearest-neighbour read: an ordinary query config, plus what to measure against.
+ *
+ * `orderBy` is absent because the ordering *is* the query — the distance decides it, and offering a
+ * second ordering would be offering to throw the answer away. Everything else is the config
+ * `findMany` already takes, so narrowing a vector search is the same `where` clause as narrowing
+ * any other read; the predecessor's bespoke `excludeIds` could exclude by id and by nothing else.
+ */
+export interface SchemaNearestConfig<
+	S extends AnySchema,
+	N extends TableName<S>,
+	Col extends VectorColumnName<S, N>
+> extends Omit<SchemaQueryConfig<S, N>, 'orderBy'> {
+	/**
+	 * Stated as `never` rather than merely omitted.
+	 *
+	 * A generic `Config extends SchemaNearestConfig` admits extra properties, so leaving `orderBy`
+	 * out would let one through silently — accepted by the compiler, ignored by the runtime, and
+	 * read by whoever wrote it as an ordering that applies.
+	 */
+	readonly orderBy?: never;
+	readonly column: Col;
+	/** The vector to measure against, typed as the column that stores it. */
+	readonly probe: NonNullable<SchemaRow<S, N>[Col]>;
+	readonly metric?: NearestMetric;
+	/** Rows further than this are not returned at all, so a caller never filters after the fact. */
 	readonly maxDistance?: number;
-	readonly limit: number;
-	readonly excludeIds?: ReadonlyArray<string>;
 }
 
 interface CollectionQuery<S extends AnySchema, N extends TableName<S>> {
@@ -407,9 +515,20 @@ interface CollectionQuery<S extends AnySchema, N extends TableName<S>> {
 		config: Config
 	): Effect.Effect<(SchemaQueryRow<S, N, Config> & Readonly<Record<string, unknown>>) | undefined>;
 	readonly count: (config?: Pick<SchemaQueryConfig<S, N>, 'where'>) => Effect.Effect<number>;
-	readonly findNearest: (
-		config: NearestQueryConfig<SchemaRow<S, N>>
-	) => Effect.Effect<Array<SchemaRow<S, N> & { readonly distance: number }>>;
+	/**
+	 * The rows nearest a probe vector, closest first, each carrying its measured `distance`.
+	 *
+	 * Answered by the collection's vector index, so this stays exact and bounded as the collection
+	 * grows: the same comparison done after reading rows would have to read all of them.
+	 */
+	findNearest<
+		const Col extends VectorColumnName<S, N>,
+		const Config extends SchemaNearestConfig<S, N, Col>
+	>(
+		config: Config & { readonly column: Col }
+	): Effect.Effect<
+		Array<SchemaQueryRow<S, N, Config> & Readonly<{ readonly distance: number }>>
+	>;
 }
 interface ApprovalRequestRow extends SystemRow {
 	readonly collection_name: string;
@@ -470,20 +589,18 @@ interface StructuredInferenceInput<Output> {
 	}>;
 }
 
-export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
-	readonly db: {
-		readonly query: { readonly [N in TableName<S>]: CollectionQuery<S, N> } & {
-			readonly approval_request: ApprovalRequestQuery;
-		};
-	} & {
-		readonly [N in TableName<S>]: CollectionQuery<S, N> & {
-			readonly create: (input: MutationInsertFor<S, N>) => Effect.Effect<SchemaRow<S, N>>;
-			readonly update: (
-				id: string,
-				input: MutationUpdateFor<S, N>
-			) => Effect.Effect<SchemaRow<S, N>>;
-		};
+type AuthoredReadDatabase<S extends AnySchema> = {
+	readonly [N in TableName<S>]: CollectionQuery<S, N>;
+} & { readonly approval_request: ApprovalRequestQuery };
+type AuthoredDatabase<S extends AnySchema> = {
+	readonly [N in TableName<S>]: CollectionQuery<S, N> & {
+		/** The same singular declarative record-or-graph mutation the browser client accepts. */
+		readonly mutate: (values: CollectionMutationValues<S, N>) => Effect.Effect<void>;
 	};
+} & { readonly approval_request: ApprovalRequestQuery };
+
+export type Api<S extends AnySchema = DefaultWorkspaceSchema> = {
+	readonly db: AuthoredDatabase<S>;
 	/**
 	 * Manually run a declared automation from code, in the background, with retry.
 	 *
@@ -517,52 +634,6 @@ export type BeforeApi<S extends AnySchema = DefaultWorkspaceSchema> = {
 		readonly bytes: Uint8Array;
 	}>;
 };
-export type HookApi<S extends AnySchema = DefaultWorkspaceSchema> = BeforeApi<S>;
-type ElevatedMutationPayload<S extends AnySchema, N extends TableName<S>> =
-	MutationInsertFor<S, N> | ({ readonly id: string } & MutationUpdateFor<S, N>);
-/**
- * How a batched write wants to be cut up.
- *
- * `batchSize` is an atomicity frontier and a progress boundary: each batch is one transaction, so a
- * failure loses at most one batch and never a row that a later batch would have written. Absent, the
- * whole call is one transaction — which is the right default and the reason there is a ceiling on it
- * rather than a silent split.
- *
- * There is deliberately no concurrency knob. There is one thread in the isolate, so a number there
- * would only ever describe how many facility calls may be outstanding at once, which is the
- * runtime's business and not a decision an author has the information to make.
- */
-type MutateOptions = { readonly batchSize?: number };
-/**
- * The elevated writes, on the collection — one shape for reaching a collection, not two.
- *
- * These were declared on `db` itself, taking the collection as a first argument, while everything
- * else in this contract reaches a collection as a property: `db.query.<name>.findMany`,
- * `db.<name>.create`, `db.<name>.update`. Two ways to say one thing is one too many, and the
- * db-level pair was additionally never implemented — the proxy behind `db` answered any string with
- * a per-collection object, so `api.db.mutate` was an object named `mutate` and
- * `yield* api.db.mutate('payslips', rows)` raised `is not iterable` while typechecking cleanly.
- */
-export type AfterHookApi<S extends AnySchema = DefaultWorkspaceSchema> = Omit<
-	BeforeApi<S>,
-	'db'
-> & {
-	readonly db: { readonly query: BeforeApi<S>['db']['query'] } & {
-		readonly [N in TableName<S>]: CollectionQuery<S, N> & {
-			readonly create: (input: MutationInsertFor<S, N>) => Effect.Effect<SchemaRow<S, N>>;
-			readonly update: (
-				id: string,
-				input: MutationUpdateFor<S, N>
-			) => Effect.Effect<SchemaRow<S, N>>;
-			readonly mutate: (
-				payloads: ReadonlyArray<ElevatedMutationPayload<S, N>>,
-				options?: MutateOptions
-			) => Effect.Effect<Array<SchemaRow<S, N> & Readonly<Record<string, unknown>>>>;
-			readonly delete: (identifiers: ReadonlyArray<string>) => Effect.Effect<void>;
-		};
-	};
-};
-
 /**
  * A hook, and the only shape a hook has.
  *
@@ -681,11 +752,11 @@ type CreateBefore<S extends AnySchema, N extends TableName<S>, Prepared> = (cont
 	 * four-thousand-row import.
 	 */
 	readonly prepared: Prepared;
-	readonly api: HookApi<S>;
+	readonly api: Api<S>;
 }) => Effect.Effect<CreateGraph<S, N>, unknown, never> | CreateGraph<S, N>;
 type CreateAfter<S extends AnySchema, N extends TableName<S>> = (context: {
 	readonly record: SchemaRow<S, N>;
-	readonly api: AfterHookApi<S>;
+	readonly api: Api<S>;
 }) => Effect.Effect<void, unknown, never> | void;
 type UpdateAfterContext<S extends AnySchema, N extends TableName<S>> = Readonly<{
 	/** The stored row immediately before this update. */
@@ -694,7 +765,7 @@ type UpdateAfterContext<S extends AnySchema, N extends TableName<S>> = Readonly<
 	readonly changes: MutationUpdateFor<S, N>;
 	/** The exact row committed by this update. */
 	readonly record: SchemaRow<S, N>;
-	readonly api: AfterHookApi<S>;
+	readonly api: Api<S>;
 }>;
 type UpdateAfter<S extends AnySchema, N extends TableName<S>> = (
 	context: UpdateAfterContext<S, N>
@@ -724,7 +795,7 @@ type UpdateAfter<S extends AnySchema, N extends TableName<S>> = (
  */
 type CreatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
 	readonly inputs: ReadonlyArray<CreateInput<S, N>>;
-	readonly api: HookApi<S>;
+	readonly api: Api<S>;
 }) => Effect.Effect<Prepared, unknown, never> | Prepared;
 
 /**
@@ -768,7 +839,7 @@ export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepare
 				(context: {
 					readonly input: MutationUpdateFor<S, N>;
 					readonly existing: SchemaRow<S, N>;
-					readonly api: HookApi<S>;
+					readonly api: Api<S>;
 				}) => Effect.Effect<MutationUpdateFor<S, N>, unknown, never> | MutationUpdateFor<S, N>
 			>;
 			/** Runs only after the update is settled; an approval hold defers it until approval. */
@@ -780,13 +851,13 @@ export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepare
 			readonly before?: DescribedHook<
 				(context: {
 					readonly existing: SchemaRow<S, N>;
-					readonly api: HookApi<S>;
+					readonly api: Api<S>;
 				}) => Effect.Effect<void, unknown, never> | void
 			>;
 			readonly after?: DescribedHook<
 				(context: {
 					readonly record: SchemaRow<S, N>;
-					readonly api: AfterHookApi<S>;
+					readonly api: Api<S>;
 				}) => Effect.Effect<void, unknown, never> | void
 			>;
 		};
@@ -798,7 +869,7 @@ export type CollectionPipelines<S extends AnySchema, N extends TableName<S>> = {
 		readonly description: string;
 		readonly handler: (
 			context: { readonly records: ReadonlyArray<SchemaRow<S, N>> },
-			api: BeforeApi<S>
+			api: Api<S>
 		) => Effect.Effect<TExportManifest, unknown, never> | TExportManifest;
 	};
 	readonly import?: {
@@ -806,7 +877,7 @@ export type CollectionPipelines<S extends AnySchema, N extends TableName<S>> = {
 		readonly input: Schema.Codec<unknown, unknown>;
 		readonly handler: (
 			context: { readonly input: unknown },
-			api: BeforeApi<S>
+			api: Api<S>
 		) =>
 			| Effect.Effect<ReadonlyArray<MutationInsertFor<S, N>>, unknown, never>
 			| ReadonlyArray<MutationInsertFor<S, N>>;
@@ -1079,7 +1150,7 @@ type CollectionInboundBinding<S extends AnySchema, N extends TableName<S>> = {
 	 */
 	readonly resolve?: (context: {
 		readonly records: ReadonlyArray<never>;
-		readonly api: BeforeApi<S>;
+		readonly api: Api<S>;
 	}) => unknown;
 	readonly map?: (record: never, resolved: never) => MutationInsertFor<S, N>;
 };
@@ -1193,13 +1264,13 @@ type PolicyApproval<
 };
 
 /**
- * What write authorization and approval-flow functions may reach: reads, and nothing else.
+ * What write authorization and approval-flow functions may reach: collection reads.
  *
- * Deciding whether a write may proceed or who must sign it must not itself write. The read surface
- * is the same `db.query` a hook gets, without the mutation half of that hook API.
+ * Deciding whether a write may proceed or who must sign it is evaluated through the direct
+ * `db.<collection>` route.
  */
 export type PolicyDecisionApi<S extends AnySchema = DefaultWorkspaceSchema> = Readonly<{
-	readonly db: Readonly<{ readonly query: BeforeApi<S>['db']['query'] }>;
+	readonly db: AuthoredReadDatabase<S>;
 	readonly requestor: Readonly<{
 		readonly id: string;
 		readonly userId: string;
@@ -1277,6 +1348,16 @@ type PolicyGrantFields<S extends AnySchema, N extends TableName<S>> = ReadonlyAr
 type PolicyReadGrant<S extends AnySchema, N extends TableName<S>> = {
 	readonly where?: SchemaWhere<SchemaRow<S, N>>;
 	readonly fields?: PolicyGrantFields<S, N>;
+	/**
+	 * Additional collections whose rows can change this grant's visible row set.
+	 *
+	 * This metadata is additive: the compiler also derives every relationship traversal it can see,
+	 * and this list cannot remove those edges. A write to any resulting linking collection advances
+	 * this collection's visibility generation even though no row in this collection was written.
+	 * Opaque `$sql` predicates conservatively depend on every synced collection because a declaration
+	 * cannot prove which tables arbitrary SQL does not read.
+	 */
+	readonly dependencies?: ReadonlyArray<TableName<S>>;
 };
 
 /**

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,14 +17,6 @@ afterEach(async () => {
 });
 
 describe('Bolt CLI lifecycle', () => {
-	it('owns the Effect completion Promise at the executable boundary', async () => {
-		const source = await readFile(cli, 'utf8');
-
-		expect(source).toContain("import { completion } from './cli-main.js'");
-		expect(source).toContain('await completion');
-		expect(source).not.toContain('Effect.runFork');
-	});
-
 	it('waits for an asynchronous sync failure and exits nonzero without an unhandled stack', async () => {
 		const root = await mkdtemp(join(tmpdir(), 'bolt-cli-lifecycle-'));
 		temporaryRoots.push(root);

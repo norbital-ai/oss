@@ -11,7 +11,7 @@
 </script>
 
 <script lang="ts" generics="TRow extends object">
-	import { onMount } from 'svelte';
+	import { onDestroy } from 'svelte';
 	import type { CollectionTableColumnPrimitiveProps } from '#lib/collection-table/collection-table.types';
 
 	type Props = CollectionTableColumnPrimitiveProps<TRow>;
@@ -53,13 +53,17 @@
 		get card() {
 			return props.card;
 		},
-		get render() {
-			return props.render;
+		get renderer() {
+			return props.renderer;
+		},
+		get rendererProps() {
+			return props.rendererProps;
+		},
+		get relationOptions() {
+			return props.relationOptions;
 		}
 	};
 
-	onMount(() => {
-		context.setColumn(token, column);
-		return () => context.removeColumn(token);
-	});
+	context.setColumn(token, column);
+	onDestroy(() => context.removeColumn(token));
 </script>

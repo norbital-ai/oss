@@ -2,7 +2,7 @@ import type { FacilityName } from '@norbital-ai/bolt-protocol';
 import { Schema, type Effect } from 'effect';
 import type { AutomationDeclaration } from './automations-schema.js';
 import type {
-	BeforeApi,
+	Api,
 	EnvoyDefinition,
 	PullCursorSpec,
 	PullPagesSpec,
@@ -586,7 +586,7 @@ interface InboundBinding<Record_, Encoded, Row, Resolved> {
 	readonly identity: { readonly column: string; readonly value: (record: Record_) => string };
 	readonly resolve?: (context: {
 		readonly records: ReadonlyArray<Record_>;
-		readonly api: BeforeApi;
+		readonly api: Api;
 	}) => InboundResolution<Resolved>;
 	readonly map?: (record: Record_, resolved: NoInfer<Resolved>) => Row;
 }
@@ -836,6 +836,8 @@ export interface RuntimePolicyGrant {
 	readonly action: 'read' | 'create' | 'update' | 'delete' | 'history';
 	readonly where?: Readonly<Record<string, unknown>>;
 	readonly fields?: ReadonlyArray<string>;
+	/** Additional linking collections; compiler-derived predicate edges remain authoritative. */
+	readonly dependencies?: ReadonlyArray<string>;
 	readonly authorization?: unknown;
 	readonly approval?: unknown;
 }
@@ -956,6 +958,36 @@ export interface WorkspaceMigrationEntry {
 }
 
 /**
+ * Compiler-owned forward adapter for mutations journaled under one retired schema fingerprint.
+ *
+ * This is artifact metadata, not tenant authoring. The migration compiler derives it from a schema
+ * diff and retains it for the platform's offline horizon. Only lossless collection/field renames
+ * are expressible here; a removed or type-incompatible field has no mapping and is quarantined.
+ */
+export interface MutationCompatibilityAdapter {
+	readonly fromSchemaFingerprint: string;
+	readonly collectionRenames?: Readonly<Record<string, string>>;
+	readonly fieldRenames?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+	/** Old fields whose current meaning/type is not losslessly compatible. Any use quarantines. */
+	readonly incompatibleFields?: Readonly<Record<string, ReadonlyArray<string>>>;
+	/**
+	 * Old verbs whose omitted values may have changed meaning (for example, a changed default on
+	 * `create`). Field incompatibility is conditional on the graph using that field; this is the
+	 * conservative collection-wide fence for changes that cannot be decided from a present value.
+	 */
+	readonly incompatibleActions?: Readonly<
+		Record<string, ReadonlyArray<'create' | 'update' | 'delete'>>
+	>;
+}
+
+export interface MutationCompatibilityDefinition {
+	readonly offlineHorizonMillis: number;
+	/** The compiler-owned logical fingerprint shared by partitioning and M4 reconciliation. */
+	readonly currentSchemaFingerprint: string;
+	readonly adapters: ReadonlyArray<MutationCompatibilityAdapter>;
+}
+
+/**
  * A team's authority: the policies its members hold, keyed by the team's name.
  *
  * Names are matched case-insensitively against `team.name` — one rule, everywhere. Today
@@ -1048,6 +1080,8 @@ export interface WorkspaceDefinition {
 	 * read by `WorkspaceSchema.migrate`, which already holds the definition.
 	 */
 	readonly migrations?: ReadonlyArray<WorkspaceMigrationEntry>;
+	/** Generated compatibility metadata; never authored in a workspace source module. */
+	readonly mutationCompatibility?: MutationCompatibilityDefinition;
 }
 
 /** Accepts an authored workspace before `relations` is normalized to an array. */

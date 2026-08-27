@@ -4,18 +4,12 @@
 	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 	import DateView from './views/date.view.svelte';
 
-	/** Canonical range shape; `lower`/`upper` under the same keys is tstzrange's legacy wire form. */
+	/** The picker's own range shape; the database sends a tstzrange literal instead. */
 	const rangeValueSchema = Schema.Struct({
 		start: Schema.optionalKey(Schema.String),
 		end: Schema.optionalKey(Schema.String)
 	});
 	const decodeCanonicalRange = Schema.decodeUnknownResult(rangeValueSchema);
-	const decodeLegacyRange = Schema.decodeUnknownResult(
-		Schema.Struct({
-			lower: Schema.optionalKey(Schema.String),
-			upper: Schema.optionalKey(Schema.String)
-		})
-	);
 	type RangeValue = typeof rangeValueSchema.Type;
 
 	const { t } = useI18n<UiKeys>();
@@ -34,11 +28,7 @@
 	function parseRange(item: unknown): RangeValue {
 		if (item != null && typeof item === 'object') {
 			const canonical = decodeCanonicalRange(item);
-			if (canonical._tag === 'Success') return canonical.success;
-			const legacy = decodeLegacyRange(item);
-			return legacy._tag === 'Success'
-				? { start: legacy.success.lower, end: legacy.success.upper }
-				: {};
+			return canonical._tag === 'Success' ? canonical.success : {};
 		}
 		// PostgreSQL's own tstzrange literal grammar (a bound pair in brackets), not a data shape.
 		if (typeof item !== 'string' || item === 'empty') return {};

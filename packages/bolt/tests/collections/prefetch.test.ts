@@ -4,6 +4,7 @@ import type {
 	RelationDefinition,
 	WorkspaceDefinition
 } from '../../src/authoring/workspace-schema.js';
+import type { QueryRow } from '../../src/runtime/collections/collections.contract.js';
 import { attachRelations, requestedRelations } from '../../src/runtime/collections/prefetch.js';
 
 /**
@@ -107,14 +108,14 @@ const reader = (visible: (collection: string) => boolean = () => true) => {
 		calls.push({ collection, column, values });
 		if (!visible(collection)) return Effect.succeed([]);
 		const rows = (tables[collection] ?? []).filter((row) => values.includes(row[column] ?? null));
-		return Effect.succeed(rows as ReadonlyArray<Schema.Json>);
+		return Effect.succeed(rows);
 	};
 	return { calls, read };
 };
 
 const run = (
 	collection: string,
-	rows: ReadonlyArray<Schema.Json>,
+	rows: ReadonlyArray<QueryRow>,
 	spec: unknown,
 	read: ReturnType<typeof reader>['read']
 ) => Effect.runSync(attachRelations(definition, collection, rows, spec, read));

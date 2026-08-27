@@ -9,12 +9,12 @@ const PendingApprovalSignalSchema = Schema.Struct({
 	action: Schema.Literals(['create', 'update', 'delete'])
 });
 
-type CollectionMutation = CollectionOperations<CollectionType<object, object, object>>['mutate'];
+type CollectionMutation = CollectionOperations<CollectionType<object, object>>['mutate'];
 
 /**
  * Recognizes Bolt's approval acquisition outcome without coupling the UI package to Bolt's client
- * runtime. Collection clients expose Promise<void>, so this accepted command is delivered through
- * their rejection channel as a structured signal rather than a conventional mutation failure.
+ * runtime. This remains the compatibility path for a server-first client: local-first clients
+ * resolve with their durable result and surface a later refusal through the platform sync issue.
  */
 export const isPendingApprovalSignal = Schema.is(PendingApprovalSignalSchema);
 
@@ -23,6 +23,7 @@ export function submitCollectionMutation(
 	mutation: () => ReturnType<CollectionMutation>
 ): Effect.Effect<void, unknown> {
 	return Effect.tryPromise({ try: mutation, catch: (cause) => cause }).pipe(
+		Effect.asVoid,
 		Effect.catch((cause) => (isPendingApprovalSignal(cause) ? Effect.void : Effect.fail(cause)))
 	);
 }

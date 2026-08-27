@@ -69,8 +69,19 @@ export const platformToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'read_collection',
-		description: 'Read records from a collection the subject can access.',
-		command: 'platform:read_collection'
+		description:
+			'Read records from a collection the subject can access. Pass collection, an optional limit from 1 to 50, and the cursor returned by a previous read.',
+		command: 'platform:read_collection',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				collection: { type: 'string', minLength: 1 },
+				limit: { type: 'integer', minimum: 1, maximum: 50 },
+				cursor: { type: 'string', minLength: 1 }
+			},
+			required: ['collection'],
+			additionalProperties: false
+		}
 	},
 	{
 		name: 'write_collection',
@@ -82,7 +93,14 @@ export const platformToolSpecs: ReadonlyArray<ToolDeclaration> = [
 const SkillNameInput = Schema.Struct({ name: Schema.NonEmptyString });
 const CollectionReadInput = Schema.Struct({
 	collection: Schema.NonEmptyString,
-	limit: Schema.optionalKey(Schema.Number)
+	limit: Schema.optionalKey(
+		Schema.Number.check(
+			Schema.isInt(),
+			Schema.isGreaterThanOrEqualTo(1),
+			Schema.isLessThanOrEqualTo(50)
+		)
+	),
+	cursor: Schema.optionalKey(Schema.NonEmptyString)
 });
 const CollectionWriteInput = Schema.Struct({
 	collection: Schema.NonEmptyString,
@@ -163,6 +181,99 @@ const instant = (value: string | undefined): string | undefined => {
 	if (value === undefined) return undefined;
 	const epoch = Date.parse(value);
 	return Number.isFinite(epoch) ? new Date(epoch).toISOString() : undefined;
+};
+
+/**
+ * A fresh collection read is prompt evidence immediately, before the older-output pruning window
+ * can act on it. Keeping its encoded result below 16 KiB prevents one wide row set from adding the
+ * 38–64 KiB seen in ordinary agent histories while still leaving room for several useful rows.
+ */
+export const READ_COLLECTION_RESULT_BYTE_LIMIT = 16 * 1024;
+
+const serializedBytes = (value: Schema.Json): number =>
+	new TextEncoder().encode(JSON.stringify(value)).byteLength;
+
+const defaultCollectionCursor = (row: Schema.Json | undefined): string | null =>
+	row === undefined
+		? null
+		: Collections.encodeCollectionCursor([{ column: 'id', direction: 'asc' }], row);
+
+/**
+ * Gives the model the largest complete row prefix whose serialized envelope fits the hard byte
+ * ceiling. A cursor is cut after the last returned row, so truncation never asks the next read to
+ * repeat evidence or silently skip a row. If one row alone is too large, no dishonest cursor is
+ * emitted: the diagnostic says why zero complete rows could be returned.
+ */
+export const boundedCollectionReadResult = (
+	fetchedRows: ReadonlyArray<Schema.Json>,
+	requestedRows: number
+): Schema.Json => {
+	const pageRows = fetchedRows.slice(0, requestedRows);
+	const providerHasMore = fetchedRows.length > requestedRows;
+	const encodedRowBytes = pageRows.map(serializedBytes);
+	const rowPrefixBytes: Array<number> = [0];
+	for (const bytes of encodedRowBytes)
+		rowPrefixBytes.push((rowPrefixBytes.at(-1) ?? 0) + bytes);
+
+	const metadata = (returnedRows: number, originalBytes: number | null) => {
+		const omittedRows = pageRows.length - returnedRows;
+		const hasMore = providerHasMore || omittedRows > 0;
+		const next =
+			hasMore && returnedRows > 0
+				? defaultCollectionCursor(pageRows[returnedRows - 1])
+				: null;
+		return {
+			truncated: omittedRows > 0,
+			rowCount: {
+				requested: requestedRows,
+				fetched: fetchedRows.length,
+				page: pageRows.length,
+				returned: returnedRows,
+				omitted: omittedRows
+			},
+			cursor: { hasMore, next },
+			diagnostic:
+				originalBytes === null
+					? null
+					: {
+							code: 'read_collection_result_truncated',
+							reason:
+								returnedRows === 0
+									? 'first-row-exceeds-serialized-byte-limit'
+									: 'complete-row-prefix',
+							byteLimit: READ_COLLECTION_RESULT_BYTE_LIMIT,
+							originalBytes
+						}
+		};
+	};
+	const envelope = (returnedRows: number, originalBytes: number | null): Schema.Json => ({
+		rows: pageRows.slice(0, returnedRows),
+		...metadata(returnedRows, originalBytes)
+	});
+	const envelopeBytes = (returnedRows: number, originalBytes: number | null): number => {
+		// Measure each row once. Re-serializing every shrinking prefix makes a pathological 50-row
+		// result quadratic in its already-large payload; only the small metadata changes per candidate.
+		const emptyRowsEnvelopeBytes = serializedBytes({
+			rows: [],
+			...metadata(returnedRows, originalBytes)
+		});
+		const rowsBytes =
+			returnedRows === 0
+				? 2
+				: 2 + (rowPrefixBytes[returnedRows] ?? 0) + (returnedRows - 1);
+		return emptyRowsEnvelopeBytes - 2 + rowsBytes;
+	};
+
+	const originalBytes = envelopeBytes(pageRows.length, null);
+	if (originalBytes <= READ_COLLECTION_RESULT_BYTE_LIMIT) return envelope(pageRows.length, null);
+
+	for (let count = pageRows.length - 1; count >= 0; count -= 1) {
+		if (envelopeBytes(count, originalBytes) <= READ_COLLECTION_RESULT_BYTE_LIMIT)
+			return envelope(count, originalBytes);
+	}
+
+	// The zero-row envelope is fixed-size and therefore always fits the 16 KiB limit.
+	return envelope(0, originalBytes);
 };
 
 /** Reads from the already policy-filtered compiled Skill registry. */
@@ -325,14 +436,19 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 		}
 		case 'read_collection': {
 			const parsed = yield* decode(CollectionReadInput, input);
-			// No second ceiling. `src/+agent.ts` could name a `collections` allowlist that sat under the
-			// policy and duplicated it, so a workspace had two places to say what an agent may reach and
-			// two ways for them to disagree. `findMany` applies the subject's grants, which is the one
-			// answer — a collection no policy grants returns nothing whether or not a list named it.
-			return yield* context.collections.findMany(context.effectId, context.subject, {
+			// No second authorization ceiling. `src/+agent.ts` could name a `collections` allowlist that
+			// sat under the policy and duplicated it, so a workspace had two places to say what an agent
+			// may reach and two ways for them to disagree. `findMany` applies the subject's grants, which
+			// is the one answer — a collection no policy grants returns nothing whether or not a list
+			// named it.
+			const limit = parsed.limit ?? 50;
+			const rows = yield* context.collections.findMany(context.effectId, context.subject, {
 				collection: parsed.collection,
-				limit: parsed.limit ?? 50
+				// One look-ahead row makes `cursor.hasMore` truthful even when the requested page is full.
+				limit: limit + 1,
+				after: parsed.cursor
 			});
+			return boundedCollectionReadResult(rows, limit);
 		}
 		case 'write_collection': {
 			const parsed = yield* decode(CollectionWriteInput, input);

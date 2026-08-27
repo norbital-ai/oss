@@ -8,16 +8,13 @@ export type {
 	CollectionRecordRestrictionMetadata
 } from '../collection-record-metadata/index.js';
 export type {
-	CollectionFormCallerRendererProps,
 	CollectionFormComposition,
 	CollectionFormController,
 	CollectionFormDeleteAction,
 	CollectionFormFieldComponent,
 	CollectionFormFieldProps,
-	CollectionFormInjectedRendererKey,
 	CollectionFormName,
 	CollectionFormProps,
-	CollectionFormRendererOptions,
 	CollectionFormRendererProps,
 	CollectionFormValidation,
 	CollectionFormValidationIssue,

@@ -8,14 +8,20 @@ import {
 	getColumns,
 	inArray,
 	isNotNull,
-	notInArray,
 	sql,
 	type SQL,
 	type SQLChunk
 } from 'drizzle-orm';
 import { alias as tableAlias, pgTable, text, type AnyPgColumn } from 'drizzle-orm/pg-core';
-import { Cause, Clock, Context, Effect, Layer, Number as ENumber, Result, Schema } from 'effect';
-import { EffectId } from '@norbital-ai/bolt-protocol';
+import { Cause, Clock, Context, Effect, Layer, Result, Schema } from 'effect';
+import {
+	CollectionMutationBaseVersion,
+	CollectionMutationDeviceSequence,
+	CollectionMutationIdempotencyKey,
+	COLLECTION_MUTATION_RETRY_HORIZON_MILLIS,
+	COLLECTION_MUTATION_SCHEMA_COMPATIBILITY_HORIZON_MILLIS,
+	EffectId
+} from '@norbital-ai/bolt-protocol';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import * as Approvals from '#lib/runtime/approvals/approvals.js';
 import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
@@ -29,7 +35,6 @@ import { Subject } from '#lib/runtime/identity/identity.js';
 import { automationSubject } from '#lib/runtime/identity/static-identity.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
 import * as Workspace from '#lib/runtime/workspace.js';
-import { searchableColumns } from '#lib/authoring/model-introspection.js';
 import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import type {
@@ -47,6 +52,7 @@ import {
 } from '#lib/runtime/integrations/outbox.js';
 import {
 	compileOrderTerms,
+	compileSearch,
 	compileWhere,
 	makeWhereContext,
 	whereExpression,
@@ -63,18 +69,42 @@ import {
 	mutationPhaseFailure,
 	Predicate,
 	type BatchMutationError,
+	type BrowserMutationFence,
+	type BrowserMutationConfirmation,
+	type BrowserMutationDelivery,
+	type BrowserMutationRejection,
+	type BrowserMutationPartitionBinding,
+	type BrowserMutationPartitionIdentity,
+	BrowserMutationBegin,
+	BrowserMutationOutcome,
+	type BrowserMutationScope,
 	type CollectionHistorySnapshot,
 	type Interface,
+	MutationIdempotencyConflict,
+	MutationInProgress,
 	type MutationError,
 	type MutationInput,
 	type MutationPhase,
-	type NearestInput,
+	MutationRetryExpired,
+	MutationQuarantined,
+	MutationVersionConflict,
+	RelationshipPrefetchLimitExceeded,
 	type QueryError,
+	type NearestQueryInput,
 	type QueryInput,
+	type QueryRow,
 	type ResumeError
 } from './collections.contract.js';
 export {
+	BrowserMutationOutcome,
+	BrowserMutationBegin,
 	MutationPhaseFailure,
+	MutationIdempotencyConflict,
+	MutationInProgress,
+	MutationRetryExpired,
+	MutationQuarantined,
+	MutationVersionConflict,
+	RelationshipPrefetchLimitExceeded,
 	PendingApproval,
 	Service,
 	mutationPhaseFailure
@@ -82,12 +112,19 @@ export {
 export type {
 	Interface,
 	BatchMutationError,
+	BrowserMutationFence,
+	BrowserMutationConfirmation,
+	BrowserMutationDelivery,
+	BrowserMutationRejection,
+	BrowserMutationScope,
+	BrowserMutationPartitionBinding,
+	BrowserMutationPartitionIdentity,
 	CollectionHistorySnapshot,
 	MutationError,
 	QueryError,
 	ResumeError
 } from './collections.contract.js';
-import { attachRelations } from '#lib/runtime/collections/prefetch.js';
+import { attachRelations, PREFETCH_LIMIT } from '#lib/runtime/collections/prefetch.js';
 import {
 	decodeReferenceRow,
 	encodeReferenceValues,
@@ -98,13 +135,13 @@ import {
 	AuthoredRuntimeService,
 	inferOp,
 	makeAuthoringApi,
+	makePolicyDecisionApi,
 	MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
-	nearestInputOf,
-	objectRowsOf,
 	runAuthoredHandler,
 	runAutomationOp,
 	inferenceTurnContent,
-	type AuthoredCollectionOps,
+	type AuthoringOps,
+	type AuthoringReadOps,
 	type AuthoredCollectionHookModule,
 	type RuntimeAuthoringApi
 } from '#lib/runtime/collections/authored.js';
@@ -127,6 +164,48 @@ const {
 	bolt_collection_history: collectionHistoryTable,
 	bolt_integration_outbox: integrationOutboxTable
 } = SYSTEM_MODEL_TABLES;
+
+/** The pgvector operator each accepted metric measures with. */
+const NEAREST_OPERATORS = { cosine: '<=>', l2: '<->', ip: '<#>' } as const;
+
+/** Browser mutation dedup is private runtime bookkeeping and is never a queryable collection. */
+const BROWSER_MUTATION_TABLE = 'bolt_browser_mutation';
+const BROWSER_PARTITION_REGISTRY_TABLE = 'bolt_sync_partition_registry';
+/** Keep answers past the 14-day offline compatibility horizon so cleanup cannot reopen a key. */
+export const BROWSER_MUTATION_RETENTION_MILLIS = 21 * 24 * 60 * 60 * 1000;
+/** Opportunistic bounded cleanup; mutation latency can never grow with the ledger. */
+const BROWSER_MUTATION_CLEANUP_LIMIT = 256;
+/** Physical partitions outlive every schema adapter that may still refer to them. */
+const BROWSER_PARTITION_RETENTION_MILLIS = 21 * 24 * 60 * 60 * 1000;
+const BROWSER_PARTITION_CLEANUP_LIMIT = 128;
+/**
+ * The evaluator lease outlives every request the server can still accept for this key.
+ *
+ * Taking a running claim over inside the retry horizon would evaluate authored hooks twice after a
+ * slow or partitioned first invocation. Five minutes of accepted future clock skew is included so
+ * even a key minted just ahead of the server expires as a request before its evaluator lease does.
+ * A crashed evaluator therefore resolves as explicit expiry, never as a second evaluation.
+ */
+const BROWSER_MUTATION_LEASE_SECONDS =
+	(Math.max(
+		COLLECTION_MUTATION_RETRY_HORIZON_MILLIS,
+		COLLECTION_MUTATION_SCHEMA_COMPATIBILITY_HORIZON_MILLIS
+	) +
+		5 * 60 * 1000) /
+	1000;
+
+/** Internal control signal when another invocation won the same durable key concurrently. */
+class BrowserMutationReplay extends Error {
+	readonly outcome: BrowserMutationOutcome;
+
+	constructor(outcome: BrowserMutationOutcome) {
+		super('Browser mutation already has a durable outcome.');
+		this.outcome = outcome;
+	}
+}
+
+const isBrowserMutationReplay = (cause: unknown): cause is BrowserMutationReplay =>
+	cause instanceof BrowserMutationReplay;
 
 /**
  * A query-only Drizzle descriptor for one runtime collection.
@@ -190,48 +269,6 @@ const ResolvedApprovalConfiguration = Schema.Struct({
 	superceded_by: Schema.Array(Schema.NonEmptyString)
 });
 const isResolvedApprovalConfiguration = Schema.is(ResolvedApprovalConfiguration);
-const APPROVAL_READ_METHODS = ['findMany', 'findFirst', 'count', 'findNearest'] as const;
-
-/**
- * Removes every mutation method from the live authoring api before an approval predicate receives it.
- *
- * The generated type already exposes only `db.query`; this is its runtime twin. Reusing the query
- * proxy directly would be insufficient because it deliberately points at the same collection object
- * hooks use, including `create` and `update`. Each collection wrapper below is frozen and copies only
- * the four read operations, so untyped authored JavaScript cannot turn a policy decision into a write.
- */
-const policyDecisionApi = (api: RuntimeAuthoringApi, subject: Identity.Subject): unknown => {
-	const query = Reflect.get(api.db, 'query');
-	const readOnlyTarget: Record<string, unknown> = Object.create(null);
-	const readOnlyQuery = new Proxy(readOnlyTarget, {
-		get: (_target, collection) => {
-			if (typeof collection !== 'string' || typeof query !== 'object' || query === null)
-				return undefined;
-			const collectionApi = Reflect.get(query, collection);
-			if (typeof collectionApi !== 'object' || collectionApi === null) return undefined;
-			return Object.freeze(
-				Object.fromEntries(
-					APPROVAL_READ_METHODS.flatMap((method) => {
-						const operation = Reflect.get(collectionApi, method);
-						return typeof operation === 'function' ? [[method, operation] as const] : [];
-					})
-				)
-			);
-		}
-	});
-	return Object.freeze({
-		db: Object.freeze({ query: readOnlyQuery }),
-		requestor: Object.freeze({
-			id: subject.userId,
-			userId: subject.userId,
-			tenantId: subject.tenantId,
-			...(subject.email === undefined ? {} : { email: subject.email }),
-			...(subject.teamPath[0] === undefined ? {} : { team: subject.teamPath[0] }),
-			teamPath: Object.freeze([...subject.teamPath]),
-			admin: subject.admin === true
-		})
-	});
-};
 const PersistedCollectionHistoryRow = Schema.Struct({
 	sequence: Schema.Number,
 	created_at: Schema.String,
@@ -240,6 +277,21 @@ const PersistedCollectionHistoryRow = Schema.Struct({
 type PersistedCollectionHistoryRow = typeof PersistedCollectionHistoryRow.Type;
 /** The `JsonObject` predicate, built once: it is consulted for every row the facility hands back. */
 const isJsonObject = Schema.is(JsonObject);
+const queryRowOf = Schema.decodeUnknownSync(JsonObject);
+const queryRowsOf = (value: unknown): ReadonlyArray<QueryRow> => {
+	const parsed =
+		typeof value === 'string'
+			? Result.try(() => JSON.parse(value) as unknown)
+			: Result.succeed(value);
+	if (Result.isFailure(parsed)) {
+		throw new TypeError('Grouped collection aggregate did not return valid JSON.');
+	}
+	const rows = Schema.decodeUnknownResult(Schema.Array(JsonObject))(parsed.success);
+	if (Result.isFailure(rows)) {
+		throw new TypeError('Grouped collection aggregate did not return a JSON row array.');
+	}
+	return rows.success;
+};
 
 /**
  * Drizzle's connectionless `toSQL()` does not run a JSONB column's driver encoder.
@@ -301,14 +353,8 @@ const approvalRouteFingerprint = (value: Schema.Json | undefined): string => {
 	});
 };
 
-/**
- * How many related rows one prefetch may load.
- *
- * A page of parents fans out to at most this many children per relation. It is deliberately far
- * above a page size and still bounded — an unbounded prefetch would let one screen pull a whole
- * collection into memory.
- */
-const PREFETCH_LIMIT = 5000;
+/** Maximum exact grouped membership; the SQL query fails closed instead of truncating past it. */
+const GROUPED_RESULT_LIMIT = 5000;
 const DeclarativeReviewRow = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	id: Schema.NonEmptyString,
@@ -331,6 +377,35 @@ const DeclarativeReview = Schema.Struct({
 	policyFingerprint: Schema.String
 });
 type DeclarativeReview = typeof DeclarativeReview.Type;
+/**
+ * Immutable browser provenance retained by an approval operation.
+ *
+ * Approval may outlive the invocation that acquired it. Keeping the complete fence beside the
+ * reviewed operation lets resume close the original ledger row and attribute its authoritative
+ * outbox entries to the original browser mutation rather than inventing a replacement identity.
+ */
+const StoredBrowserMutationFence = Schema.Struct({
+	scope: Schema.Struct({
+		tenantId: Schema.NonEmptyString,
+		environment: Schema.NonEmptyString,
+		principalId: Schema.NonEmptyString,
+		authorityId: Schema.NonEmptyString,
+		command: Schema.Literal('collections.mutate')
+	}),
+	idempotencyKey: CollectionMutationIdempotencyKey,
+	requestDigest: Schema.NonEmptyString,
+	issuedAtEpochMs: Schema.Number.check(
+		Schema.isInt(),
+		Schema.isGreaterThan(0),
+		Schema.isFinite()
+	),
+	deviceSequence: CollectionMutationDeviceSequence,
+	partitionKey: Schema.NonEmptyString,
+	schemaFingerprint: Schema.NonEmptyString,
+	currentSchemaFingerprint: Schema.NonEmptyString,
+	baseVersions: Schema.Array(CollectionMutationBaseVersion),
+	outcome: BrowserMutationOutcome
+});
 const CollectionOperation = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	id: Schema.NonEmptyString,
@@ -338,7 +413,8 @@ const CollectionOperation = Schema.Struct({
 	action: CollectionAction,
 	subject: Subject,
 	mode: Schema.optionalKey(Schema.Literal('declarative')),
-	review: Schema.optionalKey(DeclarativeReview)
+	review: Schema.optionalKey(DeclarativeReview),
+	browserMutation: Schema.optionalKey(StoredBrowserMutationFence)
 });
 
 /** Internal preparation signal: the whole root graph must be stored as one approval operation. */
@@ -687,24 +763,6 @@ const hasDeclaredManyRelationship = (
 };
 
 /**
- * One nearest-neighbour read against a pgvector column.
- *
- * The operands stay `unknown` for the reason `QueryInput.where` does: they arrive from authored
- * code, and the one place that decides what a vector search may be given is the place that renders
- * the SQL for it. Everything here was previously spread into an ordinary `findMany`, which knows no
- * `column`, no `probe` and no `metric` — so the whole config was dropped on the floor and the caller
- * received the collection's first hundred rows as its "nearest" neighbours.
- */
-/**
- * The pgvector distance operator each declared metric measures with.
- *
- * `<#>` is the *negative* inner product, which is what makes `order by` ascending mean "most
- * similar" for all three; a caller comparing `ip` distances against a threshold is comparing
- * negatives, and the authoring contract says so.
- */
-const NEAREST_OPERATORS = { cosine: '<=>', l2: '<->', ip: '<#>' } as const;
-
-/**
  * How many levels of hook-caused writes one originating write may set off.
  *
  * Separate from `InvocationBudget`'s limit even though the number matches, because they bound
@@ -776,43 +834,22 @@ const compiledFilter = (
 	input: QueryInput,
 	context: WhereContext
 ): Effect.Effect<SQL, WhereCompileError> => {
-	if (input.where === undefined) {
-		return Effect.succeed(
-			queryFragment(
-				input.predicate === undefined
-					? { sql: 'true', parameters: [] }
-					: compilePredicate(input.predicate)
-			)
-		);
-	}
-	const compiled = compileWhere(input.where, context);
-	return Result.isFailure(compiled)
-		? Effect.fail(compiled.failure)
-		: Effect.succeed(whereExpression(compiled.success));
-};
-
-/**
- * Matches free text against the columns a collection declared searchable.
- *
- * Case-insensitive containment across every opted-in column, which is what a person means by typing
- * into a search box. A collection with no searchable column yields `true` — the caller decides
- * whether to offer a search box at all, and a term that reached here anyway must not silently widen
- * into a full scan.
- */
-const searchClause = (
-	fields: Readonly<Record<string, FieldDefinition>>,
-	term: string | undefined
-): CompiledQuery => {
-	const trimmed = term?.trim() ?? '';
-	// The same reader the trigram indexes are emitted from, so the columns searched and the columns
-	// indexed cannot come apart.
-	const searchable = searchableColumns(fields);
-	if (trimmed === '') return { sql: 'true', parameters: [] };
-	// A term against a collection that opted no column in matches nothing. Returning `true` here would
-	// hand back every row, which is how a search box comes to look like it does nothing at all.
-	if (searchable.length === 0) return { sql: 'false', parameters: [] };
-	const clauses = searchable.map((name) => `${quoteIdentifier(name)}::text ilike $1`);
-	return { sql: clauses.join(' or '), parameters: [`%${trimmed}%`] };
+	const authored =
+		input.where === undefined
+			? Result.succeed(
+					queryFragment(
+						input.predicate === undefined
+							? { sql: 'true', parameters: [] }
+							: compilePredicate(input.predicate)
+					)
+				)
+			: Result.map(compileWhere(input.where, context), whereExpression);
+	if (Result.isFailure(authored)) return Effect.fail(authored.failure);
+	if (input.userFilter === undefined) return Effect.succeed(authored.success);
+	const narrowed = compileWhere(input.userFilter, context);
+	return Result.isFailure(narrowed)
+		? Effect.fail(narrowed.failure)
+		: Effect.succeed(and(authored.success, whereExpression(narrowed.success)) ?? authored.success);
 };
 
 /**
@@ -845,6 +882,599 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			const queue = yield* TaskQueue.Service;
 			const automations = yield* Automations.Service;
 			const authored = yield* AuthoredRuntimeService;
+			/** The authenticated composite key, in the same order as the unique database index. */
+			const browserMutationScopeParameters = (
+				scope: BrowserMutationScope,
+				idempotencyKey: BrowserMutationFence['idempotencyKey']
+			): ReadonlyArray<Schema.Json> => [
+				scope.tenantId,
+				scope.environment,
+				scope.principalId,
+				scope.authorityId,
+				scope.command,
+				idempotencyKey
+			];
+			const invalidBrowserMutationLedger = (message: string) =>
+				new Database.FacilityError({
+					operation: 'browser-mutation-ledger',
+					code: 'invalid_mutation_ledger',
+					message,
+					retryable: false,
+					outcome: 'known'
+				});
+			const browserPartitionBindingParameters = (
+				binding: BrowserMutationPartitionBinding
+			): ReadonlyArray<Schema.Json> => [
+				binding.tenantId,
+				binding.environment,
+				binding.actorId,
+				binding.effectiveSubjectId,
+				binding.impersonationBinding
+			];
+			const browserPartitionIdentityOf = (
+				value: unknown
+			): BrowserMutationPartitionIdentity | undefined => {
+				if (!isJsonObject(value)) return undefined;
+				const key = value['key'];
+				const tenantId = value['tenantId'];
+				const environment = value['environment'];
+				const effectivePolicyHolder = value['effectivePolicyHolder'];
+				const impersonationTarget = value['impersonationTarget'];
+				const authorityGeneration = value['authorityGeneration'];
+				const schemaFingerprint = value['schemaFingerprint'];
+				if (
+					typeof key !== 'string' ||
+					key.length === 0 ||
+					typeof tenantId !== 'string' ||
+					tenantId.length === 0 ||
+					typeof environment !== 'string' ||
+					environment.length === 0 ||
+					typeof effectivePolicyHolder !== 'string' ||
+					effectivePolicyHolder.length === 0 ||
+					(impersonationTarget !== null &&
+						(typeof impersonationTarget !== 'string' || impersonationTarget.length === 0)) ||
+					typeof authorityGeneration !== 'number' ||
+					!Number.isSafeInteger(authorityGeneration) ||
+					authorityGeneration < 0 ||
+					typeof schemaFingerprint !== 'string' ||
+					schemaFingerprint.length === 0
+				)
+					return undefined;
+				return {
+					key,
+					tenantId,
+					environment,
+					effectivePolicyHolder,
+					impersonationTarget,
+					authorityGeneration,
+					schemaFingerprint
+				};
+			};
+			const registerBrowserMutationPartition = Effect.fn(
+				'Collections.registerBrowserMutationPartition'
+			)(function* (
+				effectId: EffectId,
+				binding: BrowserMutationPartitionBinding,
+				identity: BrowserMutationPartitionIdentity
+			) {
+				if (
+					identity.tenantId !== binding.tenantId ||
+					identity.environment !== binding.environment
+				)
+					return yield* invalidBrowserMutationLedger(
+						'The physical sync partition identity does not match its tenant/environment binding.'
+					);
+				const retentionSeconds = BROWSER_PARTITION_RETENTION_MILLIS / 1000;
+				const parameters: ReadonlyArray<Schema.Json> = [
+					identity.key,
+					...browserPartitionBindingParameters(binding),
+					identity.schemaFingerprint,
+					identity.authorityGeneration,
+					identity as Schema.Json,
+					retentionSeconds,
+					BROWSER_PARTITION_CLEANUP_LIMIT
+				];
+				const result = yield* database.execute(effectId, {
+					_tag: 'Query',
+					// repository-health:allow SQL1 -- fixed private tables; identity values are bound.
+					sql: `with cleaned as (delete from ${BROWSER_PARTITION_REGISTRY_TABLE} as registry where registry.ctid in (select candidate.ctid from ${BROWSER_PARTITION_REGISTRY_TABLE} as candidate where candidate.expires_at < now() and not exists (select 1 from ${BROWSER_MUTATION_TABLE} as mutation where mutation.partition_key = candidate.partition_key and mutation.status = 'terminal' and mutation.outcome->>'_tag' = 'Quarantined') order by candidate.expires_at limit $11)), issued as (insert into ${BROWSER_PARTITION_REGISTRY_TABLE} (partition_key, tenant_id, environment, actor_id, effective_subject_id, impersonation_binding, schema_fingerprint, authority_generation, identity, issued_at, last_seen_at, expires_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, now(), now(), now() + make_interval(secs => $10)) on conflict (partition_key, tenant_id, environment, actor_id, effective_subject_id, impersonation_binding) do update set last_seen_at = now(), expires_at = greatest(${BROWSER_PARTITION_REGISTRY_TABLE}.expires_at, excluded.expires_at) where ${BROWSER_PARTITION_REGISTRY_TABLE}.identity = excluded.identity returning partition_key) select partition_key from issued`,
+					parameters
+				});
+				if (result.rows.length === 0)
+					return yield* invalidBrowserMutationLedger(
+						'The physical sync partition key is already registered to different authenticated facts.'
+					);
+				return identity;
+			});
+			const browserMutationPartition = Effect.fn('Collections.browserMutationPartition')(
+				function* (
+					effectId: EffectId,
+					binding: BrowserMutationPartitionBinding,
+					partitionKey: string
+				) {
+					const result = yield* database.execute(effectId, {
+						_tag: 'Query',
+						// repository-health:allow SQL1 -- fixed private table; every lookup value is bound.
+						sql: `update ${BROWSER_PARTITION_REGISTRY_TABLE} set last_seen_at = now() where partition_key = $1 and tenant_id = $2 and environment = $3 and actor_id = $4 and effective_subject_id = $5 and impersonation_binding = $6 returning identity, schema_fingerprint, authority_generation`,
+						parameters: [partitionKey, ...browserPartitionBindingParameters(binding)]
+					});
+					const row = result.rows[0];
+					if (row === undefined) return undefined;
+					if (!isJsonObject(row))
+						return yield* invalidBrowserMutationLedger(
+							'The physical sync partition registry returned a non-object row.'
+						);
+					const identity = browserPartitionIdentityOf(row['identity']);
+					if (
+						identity === undefined ||
+						identity.key !== partitionKey ||
+						identity.tenantId !== binding.tenantId ||
+						identity.environment !== binding.environment ||
+						identity.schemaFingerprint !== row['schema_fingerprint'] ||
+						identity.authorityGeneration !== row['authority_generation']
+					)
+						return yield* invalidBrowserMutationLedger(
+							'The physical sync partition registry contains an invalid identity.'
+						);
+					return identity;
+				}
+			);
+			const browserMutationDelivery = Effect.fn(
+				'Collections.browserMutationDelivery'
+			)(function* (
+				effectId: EffectId,
+				scope: BrowserMutationScope,
+				idempotencyKeys: ReadonlyArray<string>,
+				through: Readonly<{ readonly xid: number; readonly sequence: number }>
+			) {
+				if (idempotencyKeys.length === 0)
+					return {
+						ownedMutationIds: [],
+						confirmations: [],
+						rejections: []
+					} satisfies BrowserMutationDelivery;
+				const unique = [...new Set(idempotencyKeys)];
+				const keyPlaceholders = unique.map((_, index) => `$${index + 6}`).join(', ');
+				const result = yield* database.execute(effectId, {
+					_tag: 'Query',
+					// repository-health:allow SQL1 -- fixed private table; the bounded IN list contains placeholders only.
+					sql: `select idempotency_key, status, outcome, confirmed_xid, confirmed_sequence from ${BROWSER_MUTATION_TABLE} where tenant_id = $1 and environment = $2 and principal_id = $3 and authority_id = $4 and command = $5 and idempotency_key in (${keyPlaceholders}) order by idempotency_key`,
+					parameters: [
+						scope.tenantId,
+						scope.environment,
+						scope.principalId,
+						scope.authorityId,
+						scope.command,
+						...unique
+					]
+				});
+				const ownedMutationIds: Array<string> = [];
+				const confirmations: Array<BrowserMutationConfirmation> = [];
+				const rejections: Array<BrowserMutationRejection> = [];
+				for (const row of result.rows) {
+					if (!isJsonObject(row))
+						return yield* invalidBrowserMutationLedger(
+							'The browser mutation confirmation query returned a non-object row.'
+						);
+					const mutationId = row['idempotency_key'];
+					if (typeof mutationId !== 'string' || mutationId.length === 0)
+						return yield* invalidBrowserMutationLedger(
+							'The browser mutation delivery query returned an invalid identity.'
+						);
+					ownedMutationIds.push(mutationId);
+					if (row['status'] === 'running') continue;
+					if (row['status'] !== 'terminal')
+						return yield* invalidBrowserMutationLedger(
+							'The browser mutation delivery query returned an unknown status.'
+						);
+					const outcome = yield* Schema.decodeUnknownEffect(BrowserMutationOutcome)(
+						row['outcome']
+					).pipe(
+						Effect.mapError(() =>
+							invalidBrowserMutationLedger(
+								'The browser mutation delivery query returned an invalid durable outcome.'
+							)
+						)
+					);
+					if (outcome._tag === 'Rejected') {
+						rejections.push({
+							mutationId,
+							code: outcome.code,
+							message: outcome.message
+						});
+						continue;
+					}
+					if (outcome._tag !== 'Committed') continue;
+					if (row['confirmed_xid'] == null || row['confirmed_sequence'] == null) continue;
+					const xid =
+						typeof row['confirmed_xid'] === 'number'
+							? row['confirmed_xid']
+							: Number(row['confirmed_xid']);
+					const sequence =
+						typeof row['confirmed_sequence'] === 'number'
+							? row['confirmed_sequence']
+							: Number(row['confirmed_sequence']);
+					if (
+						!Number.isSafeInteger(xid) ||
+						xid < 0 ||
+						!Number.isSafeInteger(sequence) ||
+						sequence < 0
+					)
+						return yield* invalidBrowserMutationLedger(
+							'The browser mutation confirmation query returned an invalid cursor.'
+						);
+					if (xid < through.xid || (xid === through.xid && sequence <= through.sequence))
+						confirmations.push({ mutationId, cursor: { xid, sequence } });
+				}
+				return {
+					ownedMutationIds,
+					confirmations,
+					rejections
+				} satisfies BrowserMutationDelivery;
+			});
+			/**
+			 * Reads a previously committed answer before authored code runs.
+			 *
+			 * The key is useful only with the canonical request digest. Reusing it for a changed body is a
+			 * conflict, not a cache miss: treating it as new would turn an idempotency control into an
+			 * attacker-selected alias for unrelated writes.
+			 */
+			const browserMutationOutcome = Effect.fn('Collections.browserMutationOutcome')(function* (
+				effectId: EffectId,
+				scope: BrowserMutationScope,
+				idempotencyKey: BrowserMutationFence['idempotencyKey'],
+				requestDigest: string
+			) {
+				// repository-health:allow SQL1 -- fixed private table; every scope value remains bound.
+				const result = yield* database.execute(effectId, {
+					_tag: 'Query',
+					sql: `select request_digest, status, outcome from ${BROWSER_MUTATION_TABLE} where tenant_id = $1 and environment = $2 and principal_id = $3 and authority_id = $4 and command = $5 and idempotency_key = $6 limit 1`,
+					parameters: browserMutationScopeParameters(scope, idempotencyKey)
+				});
+				const row = result.rows[0];
+				if (row === undefined) return undefined;
+				if (!isJsonObject(row))
+					return yield* invalidBrowserMutationLedger(
+						'The browser mutation ledger returned a non-object row.'
+					);
+				if (row['request_digest'] !== requestDigest)
+					return yield* new MutationIdempotencyConflict({ idempotencyKey });
+				if (row['status'] === 'running') return undefined;
+				if (row['status'] !== 'terminal')
+					return yield* invalidBrowserMutationLedger(
+						'The browser mutation ledger contains an unknown status.'
+					);
+				return yield* Schema.decodeUnknownEffect(BrowserMutationOutcome)(row['outcome']).pipe(
+					Effect.mapError(() =>
+						invalidBrowserMutationLedger(
+							'The browser mutation ledger contains an invalid durable outcome.'
+						)
+					)
+				);
+			});
+			const beginBrowserMutation = Effect.fn('Collections.beginBrowserMutation')(function* (
+				effectId: EffectId,
+				fence: BrowserMutationFence
+			) {
+				const insertParameters: ReadonlyArray<Schema.Json> = [
+					...browserMutationScopeParameters(fence.scope, fence.idempotencyKey),
+					fence.deviceSequence,
+					fence.partitionKey,
+					fence.schemaFingerprint,
+					fence.requestDigest,
+					fence.issuedAtEpochMs,
+					BROWSER_MUTATION_RETENTION_MILLIS,
+					BROWSER_MUTATION_LEASE_SECONDS,
+					BROWSER_MUTATION_CLEANUP_LIMIT
+				];
+				// repository-health:allow SQL1 -- fixed private table; cleanup and claim are one bounded statement.
+				const inserted = yield* database.execute(effectId, {
+					_tag: 'Query',
+					sql: `with cleaned as (delete from ${BROWSER_MUTATION_TABLE} where ctid in (select ctid from ${BROWSER_MUTATION_TABLE} where expires_at < now() order by expires_at limit $14)), claimed as (insert into ${BROWSER_MUTATION_TABLE} (tenant_id, environment, principal_id, authority_id, command, idempotency_key, device_sequence, partition_key, schema_fingerprint, request_digest, status, issued_at, lease_expires_at, expires_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'running', to_timestamp($11 / 1000.0), now() + make_interval(secs => $13), to_timestamp(($11 + $12) / 1000.0)) on conflict (tenant_id, environment, principal_id, authority_id, command, idempotency_key) do nothing returning id) select id from claimed`,
+					parameters: insertParameters
+				});
+				if (inserted.rows.length > 0) return { _tag: 'Acquired' } as const;
+
+				// repository-health:allow SQL1 -- fixed private table; every scope value remains bound.
+				const current = yield* database.execute(EffectId.make(`${effectId}:current`), {
+					_tag: 'Query',
+					sql: `select request_digest, status, outcome, greatest(1, ceil(extract(epoch from (lease_expires_at - now()))))::integer as retry_after_seconds from ${BROWSER_MUTATION_TABLE} where tenant_id = $1 and environment = $2 and principal_id = $3 and authority_id = $4 and command = $5 and idempotency_key = $6 limit 1`,
+					parameters: browserMutationScopeParameters(fence.scope, fence.idempotencyKey)
+				});
+				const row = current.rows[0];
+				if (!isJsonObject(row))
+					return yield* invalidBrowserMutationLedger(
+						'The browser mutation claim disappeared before it could be observed.'
+					);
+				if (row['request_digest'] !== fence.requestDigest)
+					return yield* new MutationIdempotencyConflict({
+						idempotencyKey: fence.idempotencyKey
+					});
+				if (row['status'] === 'terminal') {
+					const outcome = yield* Schema.decodeUnknownEffect(BrowserMutationOutcome)(
+						row['outcome']
+					).pipe(
+						Effect.mapError(() =>
+							invalidBrowserMutationLedger(
+								'The browser mutation ledger contains an invalid durable outcome.'
+							)
+						)
+					);
+					return BrowserMutationBegin.cases.Replay.make({ outcome });
+				}
+				if (row['status'] !== 'running')
+					return yield* invalidBrowserMutationLedger(
+						'The browser mutation ledger contains an unknown status.'
+					);
+
+				// Defensive recovery for a clock correction or manually repaired timestamp. In normal
+				// operation dispatch rejects the request as expired before this lease can be taken over.
+				const takeover = yield* database.execute(EffectId.make(`${effectId}:takeover`), {
+					_tag: 'Query',
+					// repository-health:allow SQL1 -- fixed private table; the authenticated key remains bound.
+					sql: `update ${BROWSER_MUTATION_TABLE} set lease_expires_at = now() + make_interval(secs => $7) where tenant_id = $1 and environment = $2 and principal_id = $3 and authority_id = $4 and command = $5 and idempotency_key = $6 and request_digest = $8 and status = 'running' and lease_expires_at <= now() returning id`,
+					parameters: [
+						...browserMutationScopeParameters(fence.scope, fence.idempotencyKey),
+						BROWSER_MUTATION_LEASE_SECONDS,
+						fence.requestDigest
+					]
+				});
+				if (takeover.rows.length > 0) return { _tag: 'Acquired' } as const;
+				const retryAfter = row['retry_after_seconds'];
+				return BrowserMutationBegin.cases.InProgress.make({
+					retryAfterSeconds:
+						typeof retryAfter === 'number' && Number.isInteger(retryAfter) && retryAfter > 0
+							? retryAfter
+							: 1
+				});
+			});
+
+			/** Persists a no-write terminal answer (approval acquisition or an explicit conflict). */
+			const rememberBrowserMutationOutcome = Effect.fn(
+				'Collections.rememberBrowserMutationOutcome'
+			)(function* (
+				effectId: EffectId,
+				fence: BrowserMutationFence,
+				outcome: BrowserMutationOutcome
+			) {
+				const parameters: ReadonlyArray<Schema.Json> = [
+					...browserMutationScopeParameters(fence.scope, fence.idempotencyKey),
+					fence.requestDigest,
+					outcome
+				];
+				// repository-health:allow SQL1 -- completes only the live authenticated claim.
+				yield* database.execute(effectId, {
+					_tag: 'Query',
+					sql: `update ${BROWSER_MUTATION_TABLE} set status = 'terminal', outcome = $8::jsonb, lease_expires_at = null where tenant_id = $1 and environment = $2 and principal_id = $3 and authority_id = $4 and command = $5 and idempotency_key = $6 and request_digest = $7 and status = 'running'`,
+					parameters
+				});
+				return yield* browserMutationOutcome(
+					EffectId.make(`${effectId}:verify`),
+					fence.scope,
+					fence.idempotencyKey,
+					fence.requestDigest
+				);
+			});
+			const replayBrowserMutationOutcome = (
+				outcome: BrowserMutationOutcome
+			): Effect.Effect<
+				never,
+				| PendingApproval
+				| MutationVersionConflict
+				| BrowserMutationReplay
+				| MutationQuarantined
+				| AuthoredRefusal
+				| AccessControl.AccessDenied
+			> => {
+				switch (outcome._tag) {
+					case 'Committed':
+						return Effect.fail(new BrowserMutationReplay(outcome));
+					case 'PendingApproval':
+						return Effect.fail(
+							new PendingApproval({
+								requestId: outcome.requestId,
+								collection: outcome.collection,
+								id: outcome.id,
+								action: outcome.action
+							})
+						);
+					case 'VersionConflict':
+						return Effect.fail(
+							new MutationVersionConflict({
+								collection: outcome.collection,
+								id: outcome.id,
+								baseVersion: outcome.baseVersion,
+								currentVersion: outcome.currentVersion
+							})
+						);
+					case 'Rejected':
+						return outcome.code === 'refused'
+							? Effect.fail(
+									new AuthoredRefusal({
+										message: outcome.message,
+										...(outcome.collection === undefined ? {} : { collection: outcome.collection }),
+										...(outcome.action === undefined ? {} : { action: outcome.action })
+									})
+								)
+							: Effect.fail(
+									new AccessControl.AccessDenied({
+										action: outcome.action ?? 'mutate',
+										resource: outcome.collection ?? 'collection',
+										reason: outcome.message
+									})
+								);
+					case 'Quarantined':
+						return Effect.fail(
+							new MutationQuarantined({
+								idempotencyKey: outcome.idempotencyKey,
+								deviceSequence: outcome.deviceSequence,
+								schemaFingerprint: outcome.schemaFingerprint,
+								reason: outcome.reason
+							})
+						);
+				}
+			};
+			const assertBrowserBaseVersion = Effect.fn('Collections.assertBrowserBaseVersion')(function* (
+				effectId: EffectId,
+				fence: BrowserMutationFence,
+				collection: string,
+				id: string,
+				previous: Readonly<Record<string, unknown>> | undefined
+			) {
+				const declared = fence.baseVersions.find(
+					(entry) => entry.row.collection === collection && entry.row.recordId === id
+				)?.rowVersion;
+				const expected = declared ?? null;
+				if (expected === null) {
+					const quarantined: BrowserMutationOutcome = {
+						_tag: 'Quarantined',
+						idempotencyKey: fence.idempotencyKey,
+						deviceSequence: fence.deviceSequence,
+						schemaFingerprint: fence.schemaFingerprint,
+						reason: `The mutation graph did not carry the whole-row base version for ${collection} ${id}.`
+					};
+					const persisted = yield* rememberBrowserMutationOutcome(
+						EffectId.make(`${effectId}:missing-base-version`),
+						fence,
+						quarantined
+					);
+					return yield* replayBrowserMutationOutcome(persisted ?? quarantined);
+				}
+				const storedVersion = previous?.['row_version'];
+				const currentVersion = previous === undefined ? null : storedVersion;
+				if (currentVersion === expected) return;
+				if (
+					currentVersion !== null &&
+					(typeof currentVersion !== 'number' ||
+						!Number.isInteger(currentVersion) ||
+						currentVersion < 1)
+				)
+					return yield* invalidBrowserMutationLedger(
+						`The authoritative ${collection} ${id} has no valid row_version.`
+					);
+				const conflict: BrowserMutationOutcome = {
+					_tag: 'VersionConflict',
+					collection,
+					id,
+					baseVersion: expected,
+					currentVersion,
+					schemaFingerprint: fence.currentSchemaFingerprint
+				};
+				const persisted = yield* rememberBrowserMutationOutcome(
+					EffectId.make(`${effectId}:version-conflict`),
+					fence,
+					conflict
+				);
+				return yield* replayBrowserMutationOutcome(persisted ?? conflict);
+			});
+
+			/** Completes the pre-hook claim in the exact transaction that makes the row mutation visible. */
+			const browserMutationClaimStatement = (
+				fence: BrowserMutationFence
+			): Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
+				const parameters: Array<Schema.Json> = [
+					...browserMutationScopeParameters(fence.scope, fence.idempotencyKey),
+					fence.requestDigest,
+					fence.outcome
+				];
+				const messageIndex = parameters.push(
+					'The browser mutation key was already committed by another invocation.'
+				);
+				// repository-health:allow SQL1 -- fixed private table and function; every request value is bound.
+				return transactionSql(
+					`with completed as (update ${BROWSER_MUTATION_TABLE} set status = 'terminal', outcome = $8::jsonb, confirmed_xid = pg_current_xact_id()::text::bigint, confirmed_sequence = (select max(sequence) from bolt_sync_outbox where xid = pg_current_xact_id()::text::bigint and mutation_id = $6), lease_expires_at = null where tenant_id = $1 and environment = $2 and principal_id = $3 and authority_id = $4 and command = $5 and idempotency_key = $6 and request_digest = $7 and status = 'running' returning id) select bolt_assert(exists(select 1 from completed), $${messageIndex})`,
+					parameters
+				);
+			};
+			/** Makes every sync trigger in the surrounding transaction carry the original journal key. */
+			const browserMutationStampStatement = (
+				fence: BrowserMutationFence
+			): Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> =>
+				transactionSql(`select set_config('bolt.mutation_id', $1, true)`, [fence.idempotencyKey]);
+			const pendingApprovalIdentity = (
+				requestId: string,
+				collection: string,
+				id: string,
+				action: typeof CollectionAction.Type
+			): Schema.Json => ({
+				_tag: 'PendingApproval',
+				requestId,
+				collection,
+				id,
+				action
+			});
+			/** Locks the original terminal approval outcome before a resumed graph touches domain rows. */
+			const browserMutationApprovalGuardStatement = (
+				fence: BrowserMutationFence,
+				requestId: string,
+				collection: string,
+				id: string,
+				action: typeof CollectionAction.Type
+			): Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
+				const parameters: Array<Schema.Json> = [
+					...browserMutationScopeParameters(fence.scope, fence.idempotencyKey),
+					fence.requestDigest,
+					JSON.stringify(pendingApprovalIdentity(requestId, collection, id, action))
+				];
+				const messageIndex = parameters.push(
+					'The pending browser mutation approval was already settled by another invocation.'
+				);
+				// repository-health:allow SQL1 -- fixed private table and function; every identity value is bound.
+				return transactionSql(
+					`select bolt_assert((select count(*) = 1 from (select id from ${BROWSER_MUTATION_TABLE} where tenant_id = $1 and environment = $2 and principal_id = $3 and authority_id = $4 and command = $5 and idempotency_key = $6 and request_digest = $7 and status = 'terminal' and outcome @> $8::jsonb for update) as pending_browser_mutation), $${messageIndex})`,
+					parameters
+				);
+			};
+			/**
+			 * Converts the durable PendingApproval answer to its original Committed answer after every row
+			 * and trigger has run. The ledger coordinate and the mutation are therefore one database fact.
+			 */
+			const browserMutationApprovalSettlementStatement = (
+				fence: BrowserMutationFence,
+				requestId: string,
+				collection: string,
+				id: string,
+				action: typeof CollectionAction.Type
+			): Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
+				const parameters: Array<Schema.Json> = [
+					...browserMutationScopeParameters(fence.scope, fence.idempotencyKey),
+					fence.requestDigest,
+					fence.outcome,
+					JSON.stringify(pendingApprovalIdentity(requestId, collection, id, action))
+				];
+				const messageIndex = parameters.push(
+					'The pending browser mutation approval was already settled by another invocation.'
+				);
+				// repository-health:allow SQL1 -- fixed private tables and function; every identity value is bound.
+				return transactionSql(
+					`with completed as (update ${BROWSER_MUTATION_TABLE} set status = 'terminal', outcome = $8::jsonb, confirmed_xid = pg_current_xact_id()::text::bigint, confirmed_sequence = (select max(sequence) from bolt_sync_outbox where xid = pg_current_xact_id()::text::bigint and mutation_id = $6), lease_expires_at = null where tenant_id = $1 and environment = $2 and principal_id = $3 and authority_id = $4 and command = $5 and idempotency_key = $6 and request_digest = $7 and status = 'terminal' and outcome @> $9::jsonb returning id) select bolt_assert(exists(select 1 from completed), $${messageIndex})`,
+					parameters
+				);
+			};
+			/** Closes a rejected approval without attaching an authoritative mutation confirmation. */
+			const browserMutationApprovalRejectionStatement = (
+				fence: BrowserMutationFence,
+				requestId: string,
+				collection: string,
+				id: string,
+				action: typeof CollectionAction.Type,
+				outcome: BrowserMutationOutcome
+			): Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> => {
+				const parameters: Array<Schema.Json> = [
+					...browserMutationScopeParameters(fence.scope, fence.idempotencyKey),
+					fence.requestDigest,
+					outcome,
+					JSON.stringify(pendingApprovalIdentity(requestId, collection, id, action))
+				];
+				const messageIndex = parameters.push(
+					'The pending browser mutation approval was already settled by another invocation.'
+				);
+				// repository-health:allow SQL1 -- fixed private table and function; every identity value is bound.
+				return transactionSql(
+					`with rejected as (update ${BROWSER_MUTATION_TABLE} set status = 'terminal', outcome = $8::jsonb, confirmed_xid = null, confirmed_sequence = null, lease_expires_at = null where tenant_id = $1 and environment = $2 and principal_id = $3 and authority_id = $4 and command = $5 and idempotency_key = $6 and request_digest = $7 and status = 'terminal' and outcome @> $9::jsonb returning id) select bolt_assert(exists(select 1 from rejected), $${messageIndex})`,
+					parameters
+				);
+			};
 			const queryTables = new Map<string, ReturnType<typeof collectionQueryTable>>();
 			const queryTableFor = (
 				name: string,
@@ -858,7 +1488,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			};
 			// Announced from here rather than from the command boundary, because this is the only place
 			// every write actually passes through: a command, an agent tool, an import, an automation and a
-			// replica's own `sync.mutate` all land on these three functions. Announcing at `dispatch` would
+			// browser mutation all land on these three functions. Announcing at `dispatch` would
 			// have missed every write that did not arrive as a command.
 			const wake = yield* SyncWake.Service;
 			/**
@@ -1056,6 +1686,47 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					: undefined;
 			});
 			/**
+			 * Turns a browser write outside its row predicate into a typed, durable refusal before hooks run.
+			 *
+			 * The identical predicate remains on the transactional mutation guard below: this read explains
+			 * the authority that exists now, while the guard closes the race if authority changes before
+			 * commit. A database assertion alone reaches dispatch as an infrastructure failure and cannot be
+			 * recorded as the browser journal's terminal `forbidden` settlement.
+			 */
+			const authorizeBrowserMutationRow = Effect.fn('Collections.authorizeBrowserMutationRow')(
+				function* (
+					effectId: EffectId,
+					collection: string,
+					id: string,
+					action: 'update' | 'delete',
+					visibility: AccessControl.RowPredicate
+				) {
+					const definition = yield* workspace.collection(collection);
+					const table = queryTableFor(collection, definition.fields);
+					const columns = columnsOf(table);
+					const result = yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.select({ id: columns['id']! })
+							.from(table)
+							.where(
+								and(
+									eq(columns['id']!, id),
+									AccessControl.predicateExpression(visibility)
+								)
+							)
+							.limit(1)
+					);
+					if (result.rows.length > 0) return;
+					return yield* new AccessControl.AccessDenied({
+						action,
+						resource: collection,
+						reason: `${collection} ${id} is outside the matching policy grant`
+					});
+				}
+			);
+			/**
 			 * The bytes behind a `file()` value.
 			 *
 			 * A `file()` column holds the file — `{storage_key, file_name, file_size, mime_type}` — so this
@@ -1150,12 +1821,28 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			/**
 			 * Builds the invocation-bound authoring api from this layer's internals.
 			 *
-			 * The elevated form backs the after-hook `db.mutate`/`db.delete` surface: those write through
-			 * the same statement paths but with no row-visibility predicate, which is the point of an
-			 * after hook — the record already passed authorization, so its own follow-ups must not fail
-			 * on a row filter the writer itself could not see past.
+			 * After hooks use the same singular `db.<collection>.mutate` surface as every other context.
+			 * Their bound operation is elevated because the record already passed authorization; authority
+			 * changes, while vocabulary does not.
 			 */
-			type HookWriteOps = Pick<AuthoredCollectionOps, 'create' | 'update' | 'delete' | 'mutate'>;
+			type HookWriteOps = Pick<AuthoringOps, 'mutate'>;
+			const buildReadOps = (effectId: EffectId, subject: Identity.Subject): AuthoringReadOps => ({
+				findMany: (collection, input) => findMany(effectId, subject, { collection, ...input }),
+				findFirst: (collection, input) =>
+					findMany(effectId, subject, { collection, ...input, limit: 1 }).pipe(
+						Effect.map((rows) => rows[0])
+					),
+				count: (collection, input) => count(effectId, subject, { collection, ...input }),
+				findNearest: (collection, input) =>
+					findNearest(effectId, subject, {
+						collection,
+						...input,
+						column: typeof input['column'] === 'string' ? input['column'] : '',
+						probe: Array.isArray(input['probe']) ? (input['probe'] as ReadonlyArray<number>) : [],
+						metric:
+							input['metric'] === 'cosine' || input['metric'] === 'ip' ? input['metric'] : 'l2'
+					})
+			});
 			const buildOps = (
 				effectId: EffectId,
 				subject: Identity.Subject,
@@ -1171,74 +1858,16 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				 */
 				depth = 0,
 				staged?: HookWriteOps
-			): AuthoredCollectionOps => {
+			): AuthoringOps => {
 				return {
-					findMany: (collection, input) =>
-						findMany(effectId, subject, { collection, ...input }).pipe(
-							Effect.flatMap(objectRowsOf)
-						),
-					findFirst: (collection, input) =>
-						findMany(effectId, subject, { collection, ...input, limit: 1 }).pipe(
-							Effect.map((rows) => rows[0] as Readonly<Record<string, unknown>> | undefined)
-						),
-					count: (collection, input) =>
-						findMany(effectId, subject, { collection, ...input }).pipe(
-							Effect.map((rows) => rows.length)
-						),
-					findNearest: (collection, input) =>
-						findNearest(effectId, subject, nearestInputOf(collection, input)).pipe(
-							Effect.flatMap(objectRowsOf)
-						),
+					...buildReadOps(effectId, subject),
 					runAutomation: runAutomationOp(effectId, automations),
-					/**
-					 * Answers with the row the database holds, and refuses when it holds none.
-					 *
-					 * These two used to end `row ?? { id: id, ...values }` — the caller's own payload
-					 * handed back as though it had been stored. `readBack` did the same thing on the batch path
-					 * and this was the other half of it.
-					 *
-					 * Refusing rather than answering `undefined`, which is the opposite of what the batch path
-					 * does, and deliberately: there a refused row is one of many and the batch legitimately
-					 * proceeds without it, while here an authored hook asked for one record and the next line it
-					 * runs will use what comes back. A hook that silently continued on an invented record would
-					 * write the consequences of a create that never happened. The access predicate refusing the
-					 * insert is the way this is reached, so the refusal says that rather than reporting a fault.
-					 */
-					create:
-						staged?.create ??
-						((collection, id, values) =>
-							Effect.gen(function* () {
-								yield* create(effectId, subject, { collection, id, values }, depth);
-								const row = yield* readRowElevated(effectId, collection, id);
-								if (row === undefined) return yield* storedNothing('create', collection, id);
-								return row;
-							})),
-					update:
-						staged?.update ??
-						((collection, id, values) =>
-							Effect.gen(function* () {
-								yield* update(effectId, subject, { collection, id, values }, depth);
-								const row = yield* readRowElevated(effectId, collection, id);
-								if (row === undefined) return yield* storedNothing('update', collection, id);
-								return row;
-							})),
-					delete:
-						staged?.delete ??
-						((collection, id) => deleteRecord(effectId, subject, collection, id, depth)),
 					mutate:
 						staged?.mutate ??
-						((collection, payloads, options) =>
-							mutate(effectId, subject, collection, payloads, elevated, depth, options)),
-					approvalFindMany: (input) =>
-						findMany(effectId, subject, { collection: 'approval_request', ...input }).pipe(
-							Effect.map((rows) => rows as ReadonlyArray<Readonly<Record<string, unknown>>>)
-						),
-					approvalFindFirst: (input) =>
-						findMany(effectId, subject, {
-							collection: 'approval_request',
-							...input,
-							limit: 1
-						}).pipe(Effect.map((rows) => rows[0] as Readonly<Record<string, unknown>> | undefined)),
+						((collection, values) =>
+							mutate(effectId, subject, collection, [values], elevated, depth, {
+								declarative: true
+							}).pipe(Effect.asVoid)),
 					infer: inferOp(effectId, ai, (file) => readAsset(effectId, file)),
 					readFileAsset: (file) => readAsset(effectId, file)
 				};
@@ -1250,11 +1879,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				depth = 0,
 				staged?: HookWriteOps
 			): RuntimeAuthoringApi =>
-				makeAuthoringApi(
-					buildOps(effectId, subject, elevated, depth, staged),
-					{ elevated },
-					randomId
-				);
+				makeAuthoringApi(buildOps(effectId, subject, elevated, depth, staged));
 			/**
 			 * Enqueues the change-triggered automations a write just satisfied.
 			 *
@@ -1449,16 +2074,19 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				yield* access.authorize(subject, 'read', input.collection);
 				const context = makeWhereContext(input.collection, definition.fields, workspace.definition);
 				const compiled = yield* compiledFilter(input, context);
-				const searched = searchClause(definition.fields, input.search);
+				const searched = compileSearch(definition.fields, input.search, input.collection);
 				const visibility = access.predicate(subject, 'read', input.collection);
 				const limit = Math.max(1, input.limit ?? 100);
 				const ordering = compileOrderTerms(input.orderBy, context);
 				const seek = yield* compileCollectionCursorSeek(input.after, ordering, input.collection);
 				const table = queryTableFor(input.collection, definition.fields);
 				const columns = columnsOf(table);
-				const orderedColumns = ordering.map((term) =>
-					term.direction === 'asc' ? asc(columns[term.column]!) : desc(columns[term.column]!)
-				);
+				const orderedColumns = ordering.map((term) => {
+					const column = columns[term.column]!;
+					const expression =
+						term.collation === undefined ? column : sql`${column} collate "C"`;
+					return term.direction === 'asc' ? asc(expression) : desc(expression);
+				});
 				const result = yield* executeBuilt(
 					effectId,
 					database,
@@ -1476,16 +2104,15 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						.orderBy(...orderedColumns)
 						.limit(limit)
 				);
-				const rows = result.rows.map((row) =>
-					isJsonObject(row)
-						? access.mask(
-								subject,
-								'read',
-								input.collection,
-								decodeReferenceRow(row, definition.fields) as Readonly<Record<string, Schema.Json>>
-							)
-						: row
-				);
+				const rows: ReadonlyArray<QueryRow> = result.rows.map((value) => {
+					const row = queryRowOf(value);
+					return access.mask(
+						subject,
+						'read',
+						input.collection,
+						decodeReferenceRow(row, definition.fields)
+					);
+				});
 				// Related records are read through `findMany` itself, so each one passes the same
 				// authorization, row visibility and masking as a direct query would. `with` cannot
 				// become a way to read what the subject is not allowed to see.
@@ -1498,120 +2125,102 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						findMany(effectId, subject, {
 							collection,
 							where: { [column]: { in: values } },
-							limit: PREFETCH_LIMIT
-						}).pipe(Effect.orElseSucceed(() => []))
+							limit: PREFETCH_LIMIT + 1
+						})
 				);
 			});
 			/**
-			 * Nearest neighbours, measured in the database by the index that was declared for them.
+			 * The rows nearest a probe vector, closest first.
 			 *
-			 * The distance operator is applied to the column itself rather than to an expression over it,
-			 * because that is the only form pgvector's HNSW index can answer: `order by "col" <-> $1` uses
-			 * the index, and any wrapping of `"col"` degrades it into a sequential scan over every row.
-			 * The same expression is projected as `distance`, so a caller comparing against a threshold and
-			 * the planner choosing an access path are reading one number.
+			 * Ordering by the pgvector distance expression is the whole point: an HNSW index can answer
+			 * `ORDER BY column <-> probe`, and the same measurement taken after the rows are read cannot
+			 * — it would have to read the collection to sort it.
 			 *
-			 * Row visibility is the read predicate every other read goes through, and `access.mask` runs on
-			 * the record before `distance` is put back on it — a field-restricted policy must not be
-			 * undone by a search, and `distance` is not a column of the collection for it to strip.
+			 * Narrowing is the ordinary `where` compiler. The version this replaces carried its own
+			 * `excludeIds`, which was a second filtering vocabulary that only this one call understood:
+			 * it could exclude by id and by nothing else, while `where` already excludes by anything the
+			 * collection has. Excluding the probe's own row is `{ id: { ne: record.id } }`.
+			 *
+			 * `distance` is attached beside the record rather than merged into it, because it describes
+			 * the comparison and not the row — and a collection is free to have a column of that name.
 			 */
-			const findNearest: Interface['findNearest'] = Effect.fn('Collections.findNearest')(function* (
-				effectId: EffectId,
-				subject: Identity.Subject,
-				input: NearestInput
-			) {
-				const definition = yield* workspace.collection(input.collection);
-				yield* access.authorize(subject, 'read', input.collection);
-				const refuse = (field: string, message: string) =>
-					new WhereCompileError({ collection: input.collection, field, message });
-				const column = input.column;
-				if (typeof column !== 'string' || !Object.hasOwn(definition.fields, column)) {
-					return yield* refuse(
-						typeof column === 'string' ? column : 'column',
-						`'${String(column)}' is not a column of ${input.collection}; findNearest needs the vector column to measure against.`
+			const findNearest: Interface['findNearest'] = Effect.fn('Collections.findNearest')(
+				function* (effectId: EffectId, subject: Identity.Subject, input: NearestQueryInput) {
+					const definition = yield* workspace.collection(input.collection);
+					yield* access.authorize(subject, 'read', input.collection);
+					const refuse = (field: string, message: string) =>
+						new WhereCompileError({ collection: input.collection, field, message });
+					const column = input.column;
+					if (!Object.hasOwn(definition.fields, column)) {
+						return yield* refuse(
+							'column',
+							`'${column}' is not a column of ${input.collection}; findNearest needs the vector column to measure against.`
+						);
+					}
+					const operator = NEAREST_OPERATORS[input.metric];
+					if (operator === undefined) {
+						return yield* refuse(
+							'metric',
+							`No distance metric '${String(input.metric)}'. Accepted metrics: ${Object.keys(NEAREST_OPERATORS).join(', ')}.`
+						);
+					}
+					if (
+						input.probe.length === 0 ||
+						!input.probe.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
+					) {
+						return yield* refuse(
+							'probe',
+							"probe must be a non-empty array of finite numbers with the column's dimension."
+						);
+					}
+					if (input.maxDistance !== undefined && !Number.isFinite(input.maxDistance)) {
+						return yield* refuse('maxDistance', 'maxDistance must be a finite number.');
+					}
+					const context = makeWhereContext(
+						input.collection,
+						definition.fields,
+						workspace.definition
 					);
-				}
-				const metric = input.metric;
-				if (typeof metric !== 'string' || !Object.hasOwn(NEAREST_OPERATORS, metric)) {
-					return yield* refuse(
-						'metric',
-						`No distance metric '${String(metric)}'. Accepted metrics: ${Object.keys(NEAREST_OPERATORS).join(', ')}.`
-					);
-				}
-				const probe = input.probe;
-				if (
-					!Array.isArray(probe) ||
-					probe.length === 0 ||
-					!probe.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
-				) {
-					return yield* refuse(
-						'probe',
-						"probe must be a non-empty array of finite numbers with the column's dimension."
-					);
-				}
-				const excludeIds = input.excludeIds ?? [];
-				if (!Array.isArray(excludeIds) || !excludeIds.every((entry) => typeof entry === 'string')) {
-					return yield* refuse('excludeIds', 'excludeIds must be an array of record identifiers.');
-				}
-				if (
-					input.maxDistance !== undefined &&
-					(typeof input.maxDistance !== 'number' || !Number.isFinite(input.maxDistance))
-				) {
-					return yield* refuse('maxDistance', 'maxDistance must be a finite number.');
-				}
-				const limit = ENumber.clamp({ minimum: 1, maximum: 500 })(
-					typeof input.limit === 'number' && Number.isFinite(input.limit)
-						? Math.trunc(input.limit)
-						: 100
-				);
-				// A driver binds a JavaScript array to a Postgres *array*, and `vector` is not one. The
-				// literal text form cast to `::vector` is what pgvector parses.
-				const table = queryTableFor(input.collection, definition.fields);
-				const columns = columnsOf(table);
-				const vectorColumn = columns[column]!;
-				const distance = vectorDistance(
-					vectorColumn,
-					NEAREST_OPERATORS[metric as keyof typeof NEAREST_OPERATORS],
-					probe
-				);
-				const visibility = access.predicate(subject, 'read', input.collection);
-				const result = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({ ...columns, distance: aliased(distance, 'distance') })
-						.from(table)
-						.where(
-							and(
-								isNotNull(vectorColumn),
-								AccessControl.predicateExpression(visibility),
-								excludeIds.length === 0 ? undefined : notInArray(columns['id']!, excludeIds),
-								input.maxDistance === undefined
-									? undefined
-									: lessThanOrEqual(distance, input.maxDistance)
+					const compiled = yield* compiledFilter(input, context);
+					const visibility = access.predicate(subject, 'read', input.collection);
+					const limit = Math.min(500, Math.max(1, Math.trunc(input.limit ?? 100)));
+					const table = queryTableFor(input.collection, definition.fields);
+					const columns = columnsOf(table);
+					const vectorColumn = columns[column]!;
+					const distance = vectorDistance(vectorColumn, operator, input.probe);
+					const result = yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.select({ ...columns, distance: aliased(distance, 'distance') })
+							.from(table)
+							.where(
+								and(
+									isNotNull(vectorColumn),
+									compiled,
+									AccessControl.predicateExpression(visibility),
+									input.maxDistance === undefined
+										? undefined
+										: lessThanOrEqual(distance, input.maxDistance)
+								)
 							)
-						)
-						.orderBy(distance)
-						.limit(limit)
-				);
-				return result.rows.map((row) => {
-					if (!isJsonObject(row)) return row;
-					const record = Object.fromEntries(
-						Object.entries(row).filter(([field]) => field !== 'distance')
+							.orderBy(distance)
+							.limit(limit)
 					);
-					const distance = row['distance'];
-					const measured = typeof distance === 'number' ? distance : Number(distance ?? Number.NaN);
-					return {
-						...access.mask(
-							subject,
-							'read',
-							input.collection,
-							decodeReferenceRow(record, definition.fields) as Readonly<Record<string, Schema.Json>>
-						),
-						distance: measured
-					};
-				});
-			});
+					return result.rows.map((value) => {
+						const { distance: measured, ...record } = queryRowOf(value);
+						return {
+							...access.mask(
+								subject,
+								'read',
+								input.collection,
+								decodeReferenceRow(record, definition.fields)
+							),
+							distance: typeof measured === 'number' ? measured : Number(measured ?? Number.NaN)
+						};
+					});
+				}
+			);
 			/**
 			 * A column value as a parameter, and the placeholder that receives it.
 			 *
@@ -2037,20 +2646,45 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				definition: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
 				elevated = false,
 				/** The row before this delete, when an outbound binding on this collection needs one. */
-				previous: Readonly<Record<string, unknown>> | undefined = undefined
+				previous: Readonly<Record<string, unknown>> | undefined = undefined,
+				browserMutation?: BrowserMutationFence,
+				approvalRequestId?: string
 			) {
 				const visibility = elevated
 					? AccessControl.unrestricted
 					: access.predicate(subject, 'delete', collection);
-				const statements = deleteStatements(
-					effectId,
-					subject,
-					collection,
-					id,
-					definition,
-					visibility,
-					previous
-				);
+				const statements = [
+					...(browserMutation === undefined
+						? []
+						: [
+								...(approvalRequestId === undefined
+									? []
+									: [
+											browserMutationApprovalGuardStatement(
+												browserMutation,
+												approvalRequestId,
+												collection,
+												id,
+												'delete'
+											)
+										]),
+								browserMutationStampStatement(browserMutation)
+							]),
+					...deleteStatements(effectId, subject, collection, id, definition, visibility, previous),
+					...(browserMutation === undefined
+						? []
+						: [
+								approvalRequestId === undefined
+									? browserMutationClaimStatement(browserMutation)
+									: browserMutationApprovalSettlementStatement(
+											browserMutation,
+											approvalRequestId,
+											collection,
+											id,
+											'delete'
+										)
+							])
+				];
 				yield* announceFlush(effectId, collection, 'delete');
 				yield* database.execute(effectId, { _tag: 'Transaction', statements });
 				yield* wake.announce(effectId, [collection]);
@@ -2111,6 +2745,15 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						.announce(EffectId.make(`${effectId}:approval-release-wake`), [collection])
 						.pipe(Effect.timeout(250), Effect.ignore);
 			});
+			const approvalReleaseStatement = (
+				collection: string,
+				id: string,
+				requestId: string
+			): Readonly<{ readonly sql: string; readonly parameters: ReadonlyArray<Schema.Json> }> =>
+				transactionSql(
+					`update ${quoteIdentifier(collection)} set approval_id = null where approval_id = $1 and id = $2`,
+					[requestId, id]
+				);
 			const holdForApproval = Effect.fn('Collections.holdForApproval')(function* (
 				effectId: EffectId,
 				subject: Identity.Subject,
@@ -2118,7 +2761,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				action: typeof CollectionAction.Type,
 				approval?: Schema.Json,
 				mode?: 'declarative',
-				review?: DeclarativeReview
+				review?: DeclarativeReview,
+				browserMutation?: BrowserMutationFence
 			) {
 				const pending = yield* approvals.pendingForRecord(effectId, input.collection, input.id);
 				if (pending !== undefined) {
@@ -2179,7 +2823,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						subject,
 						...(approval === undefined ? {} : { approval }),
 						...(mode === undefined ? {} : { mode }),
-						...(durableReview === undefined ? {} : { review: durableReview })
+						...(durableReview === undefined ? {} : { review: durableReview }),
+						...(browserMutation === undefined ? {} : { browserMutation })
 					},
 					mode === 'declarative' && action === 'create'
 						? undefined
@@ -2239,7 +2884,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						collection,
 						`write authorization ${marker.id} has no live implementation`
 					);
-				const api = policyDecisionApi(buildApi(effectId, subject), subject);
+				const api = makePolicyDecisionApi(buildReadOps(effectId, subject), subject);
 				const answer = yield* runAuthoredHandler(() => authorize(context, api)).pipe(
 					Effect.catchCause((cause) =>
 						Cause.hasInterruptsOnly(cause)
@@ -2285,7 +2930,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						collection,
 						`approval flow ${marker.id} has no live implementation`
 					);
-				const api = policyDecisionApi(buildApi(effectId, subject), subject);
+				const api = makePolicyDecisionApi(buildReadOps(effectId, subject), subject);
 				const value = yield* runAuthoredHandler(() => route(context, api)).pipe(
 					Effect.catchCause((cause) =>
 						Cause.hasInterruptsOnly(cause)
@@ -2795,12 +3440,14 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 */
 			type DeclarativePreparationOptions = Readonly<{
 				readonly approved: boolean;
+				readonly elevated: boolean;
 				readonly runHooks: boolean;
 				readonly rootId: string;
 				readonly rootAction: 'create' | 'update';
 				readonly clearRootLock: boolean;
 				readonly approvalRequestId?: string;
 				readonly expectedPolicyFingerprint?: string;
+				readonly browserMutation?: BrowserMutationFence;
 			}>;
 
 			const prepareDeclarativeGraph = Effect.fn('Collections.prepareDeclarativeGraph')(function* (
@@ -2902,16 +3549,28 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const prepareDelete: (
 					collection: string,
 					row: Readonly<Record<string, unknown>>,
-					depth: number
+					depth: number,
+					/** False for server-derived cascades and authored-hook writes. */
+					requiresBrowserBaseVersion: boolean
 				) => Effect.Effect<
 					void,
 					| Workspace.WorkspaceLookupError
 					| AccessControl.AccessDenied
 					| Database.FacilityError
 					| ApprovalConflict
+					| PendingApproval
+					| MutationIdempotencyConflict
+					| MutationVersionConflict
+					| MutationQuarantined
+					| BrowserMutationReplay
 					| AuthoredRefusal
 					| InvocationBudget.NestingLimitExceeded
-				> = Effect.fn('Collections.prepareGraphDelete')(function* (collection, row, depth) {
+				> = Effect.fn('Collections.prepareGraphDelete')(function* (
+					collection,
+					row,
+					depth,
+					requiresBrowserBaseVersion
+				) {
 					const operationPosition = operations.length;
 					const id = row['id'];
 					if (typeof id !== 'string' || id.length === 0)
@@ -2931,9 +3590,19 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					preparedDeletes.add(identity);
 					const definition = yield* workspace.collection(collection);
 					const snapshot = yield* recordSnapshot(collection, id);
+					if (options.browserMutation !== undefined && requiresBrowserBaseVersion)
+						yield* assertBrowserBaseVersion(
+							EffectId.make(`${effectId}:base-version:${collection}:${id}`),
+							options.browserMutation,
+							collection,
+							id,
+							row
+						);
 					yield* ensureGraphRowUnlocked(collection, id);
-					yield* access.authorize(subject, 'delete', collection);
-					const visibility = access.predicate(subject, 'delete', collection);
+					if (!options.elevated) yield* access.authorize(subject, 'delete', collection);
+					const visibility = options.elevated
+						? AccessControl.unrestricted
+						: access.predicate(subject, 'delete', collection);
 					registerExecutionInvariant(collection, 'delete', visibility);
 					const module = authored.hooks[collection];
 					if (options.runHooks && module?.delete?.perRecord?.before !== undefined) {
@@ -2981,7 +3650,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						const related = yield* relatedRows(scope(), edge, id);
 						registerRelationshipSnapshot(edge, id, related.json);
 						for (const child of related.rows)
-							yield* prepareDelete(edge.childCollection, child, depth + 1);
+							yield* prepareDelete(edge.childCollection, child, depth + 1, false);
 					}
 					operations.splice(operationPosition, 0, {
 						action: 'delete',
@@ -3007,19 +3676,33 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						readonly id: string;
 						readonly action: 'create' | 'update';
 						readonly clearLock: boolean;
-					}>
+					}>,
+					/** False when trusted authored code, rather than the browser graph, introduced this node. */
+					requiresBrowserBaseVersion?: boolean
 				) => Effect.Effect<
 					string,
 					| Workspace.WorkspaceLookupError
 					| AccessControl.AccessDenied
 					| Database.FacilityError
 					| ApprovalConflict
+					| PendingApproval
+					| MutationIdempotencyConflict
+					| MutationVersionConflict
+					| MutationQuarantined
+					| BrowserMutationReplay
 					| AuthoredRefusal
 					| GraphApprovalRequired
 					| InvocationBudget.NestingLimitExceeded
 				> = Effect.fn('Collections.prepareGraphNode')(
 					// repository-health:allow COMPLEX1 -- This recursive graph planner is the single policy/hook/relationship owner; guard clauses bound every branch and splitting it would duplicate the shared atomic plan state.
-					function* (collection, payload, depth, ownership, identity) {
+					function* (
+						collection,
+						payload,
+						depth,
+						ownership,
+						identity,
+						requiresBrowserBaseVersion = true
+					) {
 						const operationPosition = operations.length;
 						if (depth > GRAPH_DEPTH_LIMIT)
 							return yield* graphRefusal(
@@ -3043,12 +3726,34 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						const definition = yield* workspace.collection(collection);
 						const module = authored.hooks[collection];
 						const submitted = yield* splitGraphPayload(collection, payload, action);
+						// A before hook may add a relationship graph the browser never observed. Those rows are
+						// trusted server-derived work and cannot honestly be required to carry client base versions.
+						const browserRelationshipNames = new Set(
+							requiresBrowserBaseVersion
+								? submitted.included.map((entry) => entry.edge.name)
+								: []
+						);
 						let own: Readonly<Record<string, Schema.Json>> = submitted.own;
 						let included = submitted.included;
 						let previous: Readonly<Record<string, unknown>> | undefined;
 						let snapshot: string | undefined;
-						yield* access.authorize(subject, action, collection);
-						const visibility = access.predicate(subject, action, collection);
+						if (!options.elevated) yield* access.authorize(subject, action, collection);
+						if (action === 'create' && typeof submittedId === 'string') {
+							const collision = yield* readRowElevated(
+								EffectId.make(`${effectId}:create-identity:${collection}:${id}`),
+								collection,
+								id
+							);
+							if (collision !== undefined)
+								return yield* graphRefusal(
+									collection,
+									'create',
+									`The requested ${collection} identity is already in use.`
+								);
+						}
+						const visibility = options.elevated
+							? AccessControl.unrestricted
+							: access.predicate(subject, action, collection);
 						registerExecutionInvariant(collection, action, visibility);
 						if (action === 'update') yield* ensureGraphRowUnlocked(collection, id);
 						// A field mask constrains the submitted patch, not fields trusted workspace code
@@ -3096,6 +3801,26 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							}
 						} else {
 							previous = yield* readRowElevated(effectId, collection, id);
+							if (
+								options.browserMutation !== undefined &&
+								!options.elevated &&
+								previous !== undefined
+							)
+								yield* authorizeBrowserMutationRow(
+									EffectId.make(`${effectId}:row-authorization:${collection}:${id}`),
+									collection,
+									id,
+									'update',
+									visibility
+								);
+							if (options.browserMutation !== undefined && requiresBrowserBaseVersion)
+								yield* assertBrowserBaseVersion(
+									EffectId.make(`${effectId}:base-version:${collection}:${id}`),
+									options.browserMutation,
+									collection,
+									id,
+									previous
+								);
 							snapshot = yield* recordSnapshot(collection, id);
 							if (module?.update?.input !== undefined) {
 								own = (yield* Schema.decodeUnknownEffect(module.update.input)(own).pipe(
@@ -3199,6 +3924,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						});
 
 						for (const relation of included) {
+							const relationshipRequiresBrowserBaseVersion =
+								requiresBrowserBaseVersion && browserRelationshipNames.has(relation.edge.name);
 							const related =
 								action === 'create' ? undefined : yield* relatedRows(scope(), relation.edge, id);
 							if (related !== undefined)
@@ -3212,6 +3939,13 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							const desiredIds = new Set<string>();
 							for (const child of relation.rows) {
 								const childId = child['id'];
+								let childIdentity:
+									| Readonly<{
+											readonly id: string;
+											readonly action: 'create' | 'update';
+											readonly clearLock: boolean;
+									  }>
+									| undefined;
 								if (childId !== undefined && (typeof childId !== 'string' || childId.length === 0))
 									return yield* graphRefusal(
 										relation.edge.childCollection,
@@ -3225,22 +3959,50 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 											'update',
 											`The desired ${relation.edge.name} relationship contains ${childId} more than once.`
 										);
-									if (!byId.has(childId))
+									if (byId.has(childId)) {
+										childIdentity = { id: childId, action: 'update', clearLock: false };
+									} else if (relationshipRequiresBrowserBaseVersion) {
+										const declaredExisting = options.browserMutation?.baseVersions.some(
+											(entry) =>
+												entry.row.collection === relation.edge.childCollection &&
+												entry.row.recordId === childId
+										);
+										if (declaredExisting === true)
+											return yield* graphRefusal(
+												relation.edge.childCollection,
+												'update',
+												`${childId} is not currently owned by ${collection} ${id}, so this relationship mutation cannot move or overwrite it.`
+											);
+										childIdentity = { id: childId, action: 'create', clearLock: false };
+									} else {
 										return yield* graphRefusal(
 											relation.edge.childCollection,
 											'update',
 											`${childId} is not currently owned by ${collection} ${id}, so this relationship mutation cannot move or overwrite it.`
 										);
+									}
 									desiredIds.add(childId);
 								}
-								yield* prepareNode(relation.edge.childCollection, child, depth + 1, {
-									column: relation.edge.childColumn,
-									parentId: id
-								});
+								yield* prepareNode(
+									relation.edge.childCollection,
+									child,
+									depth + 1,
+									{
+										column: relation.edge.childColumn,
+										parentId: id
+									},
+									childIdentity,
+									relationshipRequiresBrowserBaseVersion
+								);
 							}
 							for (const [childId, row] of byId) {
 								if (!desiredIds.has(childId))
-									yield* prepareDelete(relation.edge.childCollection, row, depth + 1);
+									yield* prepareDelete(
+										relation.edge.childCollection,
+										row,
+										depth + 1,
+										relationshipRequiresBrowserBaseVersion
+									);
 							}
 						}
 						return id;
@@ -3251,67 +4013,28 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				 * Before-hook writes are planned into this graph instead of reaching the database while the
 				 * graph is still being validated. Their hooks and authorization still run canonically, but
 				 * every resulting statement joins the parent/relationship transaction and therefore rolls
-				 * back with it. The record returned to the hook is explicitly the staged desired row.
+				 * back with it.
 				 */
 				let stagedWriteCalls = 0;
-				const stagedRecord = (
-					collection: string,
-					id: string,
-					action: 'create' | 'update'
-				): Effect.Effect<Readonly<Record<string, unknown>>, AuthoredRefusal> => {
-					const planned = operations.findLast(
-						(operation) => operation.collection === collection && operation.id === id
-					);
-					return planned === undefined
-						? storedNothing(action, collection, id)
-						: Effect.succeed({ ...(planned.previous ?? {}), id, ...planned.values });
-				};
 				const stageHookWrites: HookWriteOps = {
-					create: (collection, id, values) =>
-						Effect.gen(function* () {
-							yield* refuseRunawayHooks('staged create', collection, ++stagedWriteCalls);
-							const own = Object.fromEntries(
-								Object.entries(values).filter(([name]) => name !== 'id')
-							);
-							yield* prepareNode(collection, { ...own, id }, 0, undefined, {
-								id,
-								action: 'create',
-								clearLock: false
-							});
-							return yield* stagedRecord(collection, id, 'create');
-						}),
-					update: (collection, id, values) =>
-						Effect.gen(function* () {
-							yield* refuseRunawayHooks('staged update', collection, ++stagedWriteCalls);
-							yield* prepareNode(collection, { ...values, id }, 0, undefined, {
-								id,
-								action: 'update',
-								clearLock: false
-							});
-							return yield* stagedRecord(collection, id, 'update');
-						}),
-					delete: (collection, id) =>
-						Effect.gen(function* () {
-							yield* refuseRunawayHooks('staged delete', collection, ++stagedWriteCalls);
-							const existing = yield* readRowElevated(scope(), collection, id);
-							if (existing !== undefined) yield* prepareDelete(collection, existing, 0);
-						}),
-					mutate: (collection, payloads) =>
+					mutate: (collection, values) =>
 						Effect.gen(function* () {
 							yield* refuseRunawayHooks('staged mutate', collection, ++stagedWriteCalls);
-							const records: Array<Readonly<Record<string, unknown>>> = [];
-							for (const payload of payloads) {
-								const submittedId = payload['id'];
-								const id = typeof submittedId === 'string' ? submittedId : randomId();
-								const action = typeof submittedId === 'string' ? 'update' : 'create';
-								yield* prepareNode(collection, { ...payload, id }, 0, undefined, {
+							const submittedId = values['id'];
+							const id = typeof submittedId === 'string' ? submittedId : randomId();
+							const action = typeof submittedId === 'string' ? 'update' : 'create';
+							yield* prepareNode(
+								collection,
+								{ ...values, id },
+								0,
+								undefined,
+								{
 									id,
 									action,
 									clearLock: false
-								});
-								records.push(yield* stagedRecord(collection, id, action));
-							}
-							return records;
+								},
+								false
+							);
 						})
 				};
 
@@ -3403,7 +4126,14 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				operations: ReadonlyArray<PreparedGraphOperation>,
 				relationshipSnapshots: ReadonlyArray<RelationshipSnapshot>,
 				elevated: boolean,
-				review?: DeclarativeReview
+				review?: DeclarativeReview,
+				browserMutation?: BrowserMutationFence,
+				approvalRequestId?: string,
+				approvalRoot?: Readonly<{
+					readonly collection: string;
+					readonly id: string;
+					readonly action: typeof CollectionAction.Type;
+				}>
 			) {
 				const creates = operations.filter((operation) => operation.action === 'create');
 				const existingOperations = operations.filter(
@@ -3525,6 +4255,22 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					captureParameters
 				);
 				const statements = [
+					...(browserMutation === undefined
+						? []
+						: [
+								...(approvalRequestId === undefined || approvalRoot === undefined
+									? []
+									: [
+											browserMutationApprovalGuardStatement(
+												browserMutation,
+												approvalRequestId,
+												approvalRoot.collection,
+												approvalRoot.id,
+												approvalRoot.action
+											)
+										]),
+								browserMutationStampStatement(browserMutation)
+							]),
 					...tableLocks,
 					...guards,
 					...recordAssertions,
@@ -3557,6 +4303,19 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					),
 					...createStatements(effectId, subject, plannedCreates),
 					...createGuards,
+					...(browserMutation === undefined
+						? []
+						: [
+								approvalRequestId === undefined || approvalRoot === undefined
+									? browserMutationClaimStatement(browserMutation)
+									: browserMutationApprovalSettlementStatement(
+											browserMutation,
+											approvalRequestId,
+											approvalRoot.collection,
+											approvalRoot.id,
+											approvalRoot.action
+										)
+							]),
 					captureStatement
 				];
 				const result = yield* database.execute(effectId, { _tag: 'Transaction', statements });
@@ -3691,6 +4450,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				readonly clearRootLock?: boolean;
 				readonly approvalRequestId?: string;
 				readonly review?: DeclarativeReview;
+				readonly browserMutation?: BrowserMutationFence;
 			}>;
 
 			const synchronizeGraph = Effect.fn('Collections.synchronizeGraph')(function* (
@@ -3726,6 +4486,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				) =>
 					prepareDeclarativeGraph(effectId, subject, collection, payload, depth, {
 						approved,
+						elevated,
 						runHooks,
 						rootId,
 						rootAction,
@@ -3733,14 +4494,17 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						...(approval.approvalRequestId === undefined
 							? {}
 							: { approvalRequestId: approval.approvalRequestId }),
-						...(expectedPolicyFingerprint === undefined ? {} : { expectedPolicyFingerprint })
+						...(expectedPolicyFingerprint === undefined ? {} : { expectedPolicyFingerprint }),
+						...(approval.browserMutation === undefined
+							? {}
+							: { browserMutation: approval.browserMutation })
 					});
 				const phasePrepare = <A, E>(effect: Effect.Effect<A, E>) =>
 					effect.pipe(
 						Effect.catchCause((cause) => {
 							const failure = Cause.squash(cause);
 							return Effect.fail(
-								failure instanceof GraphApprovalRequired
+								failure instanceof GraphApprovalRequired || failure instanceof BrowserMutationReplay
 									? failure
 									: mutationPhaseFailure('prepare', collection, [], failure)
 							);
@@ -3765,7 +4529,27 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							rootAction,
 							cause.approval,
 							'declarative',
-							cause.review
+							cause.review,
+							approval.browserMutation
+						).pipe(
+							Effect.catchTag('Bolt.Collections.PendingApproval', (pending) => {
+								if (approval.browserMutation === undefined) return Effect.fail(pending);
+								const outcome: BrowserMutationOutcome = {
+									_tag: 'PendingApproval',
+									requestId: pending.requestId,
+									collection: pending.collection,
+									id: pending.id,
+									action: pending.action,
+									schemaFingerprint: approval.browserMutation.currentSchemaFingerprint
+								};
+								return rememberBrowserMutationOutcome(
+									EffectId.make(`${effectId}:pending-approval`),
+									approval.browserMutation,
+									outcome
+								).pipe(
+									Effect.flatMap((persisted) => replayBrowserMutationOutcome(persisted ?? outcome))
+								);
+							})
 						);
 					});
 				let prepared;
@@ -3816,11 +4600,37 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					prepared.operations,
 					prepared.relationshipSnapshots,
 					elevated,
-					approval.review
+					approval.review,
+					approval.browserMutation,
+					approval.approvalRequestId,
+					approval.approvalRequestId === undefined
+						? undefined
+						: { collection, id: rootId, action: rootAction }
 				).pipe(
 					Effect.catchCause((cause) =>
 						Effect.gen(function* () {
 							const failure = Cause.squash(cause);
+							if (
+								approval.browserMutation !== undefined &&
+								!approval.approved &&
+								!Cause.hasInterruptsOnly(cause)
+							) {
+								const replay = yield* browserMutationOutcome(
+									EffectId.make(`${effectId}:concurrent-replay`),
+									approval.browserMutation.scope,
+									approval.browserMutation.idempotencyKey,
+									approval.browserMutation.requestDigest
+								).pipe(
+									Effect.catchTag(
+										'Bolt.Collections.MutationIdempotencyConflict',
+										(conflict) =>
+											Effect.fail(
+												mutationPhaseFailure('commit', collection, [], conflict)
+											)
+									)
+								);
+								if (replay !== undefined) return yield* replayBrowserMutationOutcome(replay);
+							}
 							if (
 								approval.approved &&
 								approval.approvalRequestId !== undefined &&
@@ -4007,6 +4817,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					readonly batchSize?: number;
 					readonly declarative?: boolean;
 					readonly root?: Readonly<{ readonly id: string; readonly action: 'create' | 'update' }>;
+					readonly browserMutation?: BrowserMutationFence;
 				}
 			) {
 				yield* refuseRunawayHooks('mutate', collection, depth);
@@ -4041,8 +4852,17 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						approved: false,
 						...(explicitRoot === undefined
 							? {}
-							: { rootId: explicitRoot.id, rootAction: explicitRoot.action })
-					});
+							: { rootId: explicitRoot.id, rootAction: explicitRoot.action }),
+						...(options.browserMutation === undefined
+							? {}
+							: { browserMutation: options.browserMutation })
+					}).pipe(
+						Effect.catchIf(isBrowserMutationReplay, (cause) =>
+							cause.outcome._tag === 'Committed'
+								? Effect.succeed([{ id: explicitRoot?.id ?? cause.outcome.id }])
+								: Effect.fail(mutationPhaseFailure('commit', collection, [], cause))
+						)
+					);
 				}
 				const declaresRelationship =
 					payloads.length === 1 &&
@@ -4209,7 +5029,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const compiled = yield* compiledFilter(input, context);
 				// The same search the rows are read through. A count that ignored it reported the whole
 				// collection under a filtered page — "1 of 335" beside three rows.
-				const searched = searchClause(definition.fields, input.search);
+				const searched = compileSearch(definition.fields, input.search, input.collection);
 				const visibility = access.predicate(subject, 'read', input.collection);
 				// `after` is deliberately absent here. A count answers how large the filtered set is, which
 				// is what a "1 of 335" reads from; counting only the rows past the cursor would shrink that
@@ -4230,6 +5050,168 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					typeof row === 'object' && row !== null ? Reflect.get(row, 'count') : undefined;
 				return typeof value === 'number' ? value : Number(value ?? 0);
 			});
+			const findGrouped: Interface['findGrouped'] = Effect.fn('Collections.findGrouped')(
+				function* (effectId, subject, input) {
+					const definition = yield* workspace.collection(input.collection);
+					yield* access.authorize(subject, 'read', input.collection);
+					if (input.lanes.length > GROUPED_RESULT_LIMIT) {
+						return yield* new WhereCompileError({
+							collection: input.collection,
+							field: input.groupBy,
+							message: `Grouped query exceeds the ${GROUPED_RESULT_LIMIT}-lane request limit.`
+						});
+					}
+					const context = makeWhereContext(
+						input.collection,
+						definition.fields,
+						workspace.definition
+					);
+					const compiled = yield* compiledFilter(input, context);
+					const searched = compileSearch(definition.fields, input.search, input.collection);
+					const visibility = access.predicate(subject, 'read', input.collection);
+					const table = queryTableFor(input.collection, definition.fields);
+					const columns = columnsOf(table);
+					const groupColumn = columns[input.groupBy];
+					if (
+						groupColumn === undefined ||
+						definition.fields[input.groupBy]?.reference !== undefined ||
+						definition.fields[input.groupBy]?.type === 'json' ||
+						input.groupBy === 'sys_period'
+					) {
+						return yield* new WhereCompileError({
+							collection: input.collection,
+							field: input.groupBy,
+							message: 'Grouped queries require one persisted scalar column.'
+						});
+					}
+					const groupExpression =
+						definition.fields[input.groupBy]?.type === 'string'
+							? sql`${groupColumn} collate "C"`
+							: sql`${groupColumn}`;
+					const ordering = compileOrderTerms(input.orderBy, context);
+					const orderedColumns = ordering.map((term) => {
+						const column = columns[term.column]!;
+						const expression =
+							term.collation === undefined ? column : sql`${column} collate "C"`;
+						return term.direction === 'asc' ? asc(expression) : desc(expression);
+					});
+					const aggregateOrder = sql.join(
+						ordering.map((term) => {
+							const column = columns[term.column]!;
+							const expression =
+								term.collation === undefined ? sql`${column}` : sql`${column} collate "C"`;
+							return sql`${expression} ${sql.raw(term.direction)}`;
+						}),
+						sql`, `
+					);
+					// The inner query admits at most one overflow sentinel beyond the durable result cap.
+					// `count(*) over ()` still proves whether the complete authorized set exceeded that cap,
+					// while the outer JSON aggregate can never accumulate an unbounded collection.
+					const bounded = composer
+						.select({
+							lane: aliased(groupExpression, 'lane'),
+							record: aliased(sql<unknown>`to_jsonb(${table})`, 'record'),
+							ordinal: aliased(
+								sql<number>`row_number() over (order by ${aggregateOrder})`,
+								'ordinal'
+							),
+							matched: aliased(sql<number>`count(*) over ()`, 'matched')
+						})
+						.from(table)
+						.where(
+							and(
+								compiled,
+								queryFragment(searched),
+								AccessControl.predicateExpression(visibility)
+							)
+						)
+						.orderBy(...orderedColumns)
+						.limit(GROUPED_RESULT_LIMIT + 1)
+						.as('bolt_grouped_rows');
+					const laneOrder =
+						definition.fields[input.groupBy]?.type === 'string'
+							? sql`${bounded.lane} collate "C"`
+							: sql`${bounded.lane}`;
+					const result = yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.select({
+								lane: bounded.lane,
+								// Facility execution returns raw driver rows rather than Drizzle-mapped field
+								// objects, so computed columns need SQL aliases of their own. Casting the
+								// bounded JSON aggregate to text also gives PGlite and remote Postgres one
+								// identical decode boundary instead of depending on their JSON codecs.
+								records: aliased(
+									sql<string>`(jsonb_agg(${bounded.record} order by ${bounded.ordinal}))::text`,
+									'records'
+								),
+								matched: aliased(sql<number>`max(${bounded.matched})`, 'matched')
+							})
+							.from(bounded)
+							.groupBy(bounded.lane)
+							.orderBy(asc(laneOrder))
+					);
+
+					const grouped = new Map<string, Array<QueryRow>>(
+						input.lanes.map((lane) => [String(lane), []])
+					);
+					for (const value of result.rows) {
+						const matched =
+							value !== null && typeof value === 'object'
+								? Number(Reflect.get(value, 'matched') ?? 0)
+								: 0;
+						if (matched > GROUPED_RESULT_LIMIT) {
+							return yield* new WhereCompileError({
+								collection: input.collection,
+								field: input.groupBy,
+								message: `Grouped query exceeds the exact ${GROUPED_RESULT_LIMIT}-row result limit.`
+							});
+						}
+						const lane = String(
+							value !== null && typeof value === 'object' ? Reflect.get(value, 'lane') ?? '' : ''
+						);
+						const records = queryRowsOf(
+							value !== null && typeof value === 'object'
+								? Reflect.get(value, 'records')
+								: undefined
+						);
+						const bucket = grouped.get(lane) ?? [];
+						for (const row of records) {
+							bucket.push(
+								access.mask(
+									subject,
+									'read',
+									input.collection,
+									decodeReferenceRow(row, definition.fields)
+								)
+							);
+						}
+						grouped.set(lane, bucket);
+					}
+					const entries = [...grouped.entries()];
+					const attached = yield* attachRelations(
+						workspace.definition,
+						input.collection,
+						entries.flatMap(([, rows]) => rows),
+						input.with,
+						(collection, column, values) =>
+							findMany(effectId, subject, {
+								collection,
+								where: { [column]: { in: values } },
+								limit: PREFETCH_LIMIT + 1
+							})
+					);
+					let offset = 0;
+					return Object.fromEntries(
+						entries.map(([lane, rows]) => {
+							const group = attached.slice(offset, offset + rows.length);
+							offset += rows.length;
+							return [lane, group];
+						})
+					);
+				}
+			);
 			const update = Effect.fn('Collections.update')(function* (
 				effectId,
 				subject,
@@ -4352,7 +5334,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				subject,
 				collection,
 				id,
-				depth = 0
+				depth = 0,
+				options?: Readonly<{
+					readonly baseVersion?: number;
+					readonly browserMutation?: BrowserMutationFence;
+				}>
 			) {
 				yield* refuseRunawayHooks('delete', collection, depth);
 				const definition = yield* workspace.collection(collection);
@@ -4365,13 +5351,22 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					module?.delete?.perRecord?.before !== undefined ||
 					needsPreviousRow(collection, 'delete') ||
 					visibility.authorization !== undefined ||
-					visibility.approval !== undefined
+					visibility.approval !== undefined ||
+					options?.browserMutation !== undefined
 				) {
 					// An outbound delete binding needs this read for a reason no hook has: after the statement
 					// runs there is no row left to describe, so a delivery that did not capture it first can
 					// only say that *something* with this id is gone.
 					existing = yield* readRowElevated(effectId, collection, id);
 				}
+				if (options?.browserMutation !== undefined)
+					yield* assertBrowserBaseVersion(
+						EffectId.make(`${effectId}:base-version`),
+						options.browserMutation,
+						collection,
+						id,
+						existing
+					);
 				if (module?.delete?.perRecord?.before !== undefined) {
 					yield* runHook(module.delete.perRecord.before, { existing, api }, api, {
 						collection,
@@ -4401,14 +5396,66 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						subject,
 						{ collection, id, values: {} },
 						'delete',
-						approval
+						approval,
+						undefined,
+						undefined,
+						options?.browserMutation
+					).pipe(
+						Effect.catchTag('Bolt.Collections.PendingApproval', (pending) => {
+							if (options?.browserMutation === undefined) return Effect.fail(pending);
+							const outcome: BrowserMutationOutcome = {
+								_tag: 'PendingApproval',
+								requestId: pending.requestId,
+								collection: pending.collection,
+								id: pending.id,
+								action: pending.action,
+								schemaFingerprint: options.browserMutation.currentSchemaFingerprint
+							};
+							return rememberBrowserMutationOutcome(
+								EffectId.make(`${effectId}:pending-approval`),
+								options.browserMutation,
+								outcome
+							).pipe(
+								Effect.flatMap((persisted) => replayBrowserMutationOutcome(persisted ?? outcome))
+							);
+						})
 					);
 				}
 				const record =
 					module?.delete?.perRecord?.after !== undefined
 						? (existing ?? (yield* readRowElevated(effectId, collection, id)))
 						: undefined;
-				yield* applyDelete(effectId, subject, collection, id, definition, false, existing);
+				const replayed = yield* applyDelete(
+					effectId,
+					subject,
+					collection,
+					id,
+					definition,
+					false,
+					existing,
+					options?.browserMutation
+				).pipe(
+					Effect.as(false),
+					Effect.catchCause((cause) => {
+						if (options?.browserMutation === undefined || Cause.hasInterruptsOnly(cause))
+							return Effect.failCause(cause);
+						return browserMutationOutcome(
+							EffectId.make(`${effectId}:concurrent-replay`),
+							options.browserMutation.scope,
+							options.browserMutation.idempotencyKey,
+							options.browserMutation.requestDigest
+						).pipe(
+							Effect.flatMap((outcome) =>
+								Effect.gen(function* () {
+									if (outcome === undefined) return yield* Effect.failCause(cause);
+									if (outcome._tag === 'Committed') return true;
+									return yield* replayBrowserMutationOutcome(outcome);
+								})
+							)
+						);
+					})
+				);
+				if (replayed) return;
 				if (module?.delete?.perRecord?.after !== undefined) {
 					const afterApi = buildApi(effectId, subject, true, depth + 1);
 					yield* runHook(module.delete.perRecord.after, { record, api: afterApi }, afterApi, {
@@ -4438,6 +5485,25 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					Effect.mapError(
 						() =>
 							new ApprovalConflict({ requestId, reason: 'stored approval operation is malformed' })
+					)
+					);
+			});
+			const approvalBrowserMutationOutcome = Effect.fn(
+				'Collections.approvalBrowserMutationOutcome'
+			)(function* (effectId: EffectId, requestId: string, fence: BrowserMutationFence) {
+				return yield* browserMutationOutcome(
+					effectId,
+					fence.scope,
+					fence.idempotencyKey,
+					fence.requestDigest
+				).pipe(
+					Effect.catchTag('Bolt.Collections.MutationIdempotencyConflict', () =>
+						Effect.fail(
+							new ApprovalConflict({
+								requestId,
+								reason: 'stored browser mutation approval provenance has a conflicting request digest'
+							})
+						)
 					)
 				);
 			});
@@ -4470,6 +5536,81 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					return yield* new ApprovalConflict({ requestId, reason: 'approval was not refused' });
 				}
 				const operation = yield* storedOperation(requestId, state.operation);
+				const browserMutation = operation.browserMutation;
+				if (browserMutation !== undefined) {
+					if (browserMutation.outcome._tag !== 'Committed')
+						return yield* new ApprovalConflict({
+							requestId,
+							reason: 'stored browser mutation approval provenance has no committed outcome'
+						});
+					if (operation.action === 'create' && operation.mode !== 'declarative')
+						return yield* new ApprovalConflict({
+							requestId,
+							reason: 'stored browser mutation approval provenance requires declarative create cleanup'
+						});
+					const message =
+						state._tag === 'Rejected'
+							? 'The approval request was rejected.'
+							: state._tag === 'ChangesRequested'
+								? 'Changes were requested for the approval request.'
+								: 'The approval request was withdrawn.';
+					const rejected: BrowserMutationOutcome = {
+						_tag: 'Rejected',
+						code: 'refused',
+						message,
+						schemaFingerprint: browserMutation.currentSchemaFingerprint,
+						collection: operation.collection,
+						action: operation.action
+					};
+					const durable = yield* approvalBrowserMutationOutcome(
+						EffectId.make(`${effectId}:browser-mutation-approval-state`),
+						requestId,
+						browserMutation
+					);
+					if (
+						durable?._tag === 'Rejected' &&
+						Schema.toEquivalence(BrowserMutationOutcome)(durable, rejected)
+					)
+						return;
+					if (
+						durable?._tag !== 'PendingApproval' ||
+						durable.requestId !== requestId ||
+						durable.collection !== operation.collection ||
+						durable.id !== operation.id ||
+						durable.action !== operation.action
+					)
+						return yield* new ApprovalConflict({
+							requestId,
+							reason: 'stored browser mutation approval provenance does not match its ledger outcome'
+						});
+					const releasesRecord = operation.action !== 'create';
+					const statements = [
+						browserMutationApprovalGuardStatement(
+							browserMutation,
+							requestId,
+							operation.collection,
+							operation.id,
+							operation.action
+						),
+						...(releasesRecord
+							? [approvalReleaseStatement(operation.collection, operation.id, requestId)]
+							: []),
+						browserMutationApprovalRejectionStatement(
+							browserMutation,
+							requestId,
+							operation.collection,
+							operation.id,
+							operation.action,
+							rejected
+						)
+					];
+					yield* database.execute(effectId, { _tag: 'Transaction', statements });
+					if (releasesRecord)
+						yield* wake
+							.announce(EffectId.make(`${effectId}:approval-release-wake`), [operation.collection])
+							.pipe(Effect.timeout(250), Effect.ignore);
+					return;
+				}
 				const definition = yield* workspace.collection(operation.collection);
 				if (operation.action === 'create') {
 					// A declarative graph is held before any part of it is written. Rejecting it is
@@ -4500,6 +5641,35 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					});
 				yield* approvals.authorizeResume(state);
 				const operation = yield* storedOperation(requestId, state.operation);
+				const browserMutation = operation.browserMutation;
+				if (browserMutation !== undefined) {
+					if (browserMutation.outcome._tag !== 'Committed')
+						return yield* new ApprovalConflict({
+							requestId,
+							reason: 'stored browser mutation approval provenance has no committed outcome'
+						});
+					const durable = yield* approvalBrowserMutationOutcome(
+						EffectId.make(`${effectId}:browser-mutation-approval-state`),
+						requestId,
+						browserMutation
+					);
+					if (
+						durable?._tag === 'Committed' &&
+						Schema.toEquivalence(BrowserMutationOutcome)(durable, browserMutation.outcome)
+					)
+						return;
+					if (
+						durable?._tag !== 'PendingApproval' ||
+						durable.requestId !== requestId ||
+						durable.collection !== operation.collection ||
+						durable.id !== operation.id ||
+						durable.action !== operation.action
+					)
+						return yield* new ApprovalConflict({
+							requestId,
+							reason: 'stored browser mutation approval provenance does not match its ledger outcome'
+						});
+				}
 				const definition = yield* workspace.collection(operation.collection);
 				if (
 					(operation.action === 'create' || operation.action === 'update') &&
@@ -4522,7 +5692,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							rootAction: operation.action,
 							clearRootLock: operation.action === 'update',
 							approvalRequestId: requestId,
-							...(operation.review === undefined ? {} : { review: operation.review })
+							...(operation.review === undefined ? {} : { review: operation.review }),
+							...(browserMutation === undefined ? {} : { browserMutation })
 						}
 					).pipe(
 						Effect.catchTag('Bolt.Collections.PendingApproval', (pending) =>
@@ -4535,6 +5706,21 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						),
 						Effect.catchCause((cause) =>
 							Effect.gen(function* () {
+								if (browserMutation !== undefined && !Cause.hasInterruptsOnly(cause)) {
+									const durable = yield* approvalBrowserMutationOutcome(
+										EffectId.make(`${effectId}:browser-mutation-approval-replay`),
+										requestId,
+										browserMutation
+									);
+									if (
+										durable?._tag === 'Committed' &&
+										Schema.toEquivalence(BrowserMutationOutcome)(
+											durable,
+											browserMutation.outcome
+										)
+									)
+										return;
+								}
 								if (!Cause.hasInterruptsOnly(cause)) {
 									yield* approvals
 										.conflict(
@@ -4546,10 +5732,24 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								}
 								return yield* Effect.failCause(cause);
 							})
+						),
+						Effect.catchTag('Bolt.Collections.MutationIdempotencyConflict', (failure) =>
+							Effect.fail(mutationPhaseFailure('commit', operation.collection, [], failure))
+						),
+						Effect.catchTag('Bolt.Collections.MutationVersionConflict', (failure) =>
+							Effect.fail(mutationPhaseFailure('commit', operation.collection, [], failure))
+						),
+						Effect.catchTag('Bolt.Collections.MutationQuarantined', (failure) =>
+							Effect.fail(mutationPhaseFailure('commit', operation.collection, [], failure))
 						)
 					);
 					return;
 				}
+				if (browserMutation !== undefined && operation.action !== 'delete')
+					return yield* new ApprovalConflict({
+						requestId,
+						reason: 'stored browser mutation approval provenance requires declarative resume'
+					});
 				switch (operation.action) {
 					case 'create': {
 						// The row was written when the create was intercepted, so approving it releases the
@@ -4601,15 +5801,39 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					}
 					case 'delete': {
 						const record = yield* readRowElevated(effectId, operation.collection, operation.id);
-						yield* applyDelete(
+						const replayed = yield* applyDelete(
 							effectId,
 							operation.subject,
 							operation.collection,
 							operation.id,
 							definition,
 							false,
-							record
+							record,
+							browserMutation,
+							requestId
+						).pipe(
+							Effect.as(false),
+							Effect.catchCause((cause) => {
+								if (browserMutation === undefined || Cause.hasInterruptsOnly(cause))
+									return Effect.failCause(cause);
+								return approvalBrowserMutationOutcome(
+									EffectId.make(`${effectId}:browser-mutation-approval-replay`),
+									requestId,
+									browserMutation
+								).pipe(
+									Effect.flatMap((outcome) =>
+										outcome?._tag === 'Committed' &&
+										Schema.toEquivalence(BrowserMutationOutcome)(
+											outcome,
+											browserMutation.outcome
+										)
+											? Effect.succeed(true)
+											: Effect.failCause(cause)
+									)
+								);
+							})
 						);
+						if (replayed) return;
 						const deletedModule = authored.hooks[operation.collection];
 						if (deletedModule?.delete?.perRecord?.after !== undefined) {
 							const api = buildApi(effectId, operation.subject, true);
@@ -4632,24 +5856,38 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			});
 			return Service.of({
 				findMany,
-				approvalFindFirst: (effectId, subject, input) =>
-					findMany(effectId, subject, {
-						collection: 'approval_request',
-						...input,
-						limit: 1
-					}).pipe(Effect.map((rows) => rows[0])),
 				findFirst: Effect.fn('Collections.findFirst')(function* (effectId, subject, input) {
 					return (yield* findMany(effectId, subject, { ...input, limit: 1 }))[0];
 				}),
-				findNearest,
 				count,
+				findNearest,
+				findGrouped,
 				create,
 				createMany,
 				mutate: (effectId, subject, collection, payloads, elevated = false, depth = 0, options) =>
-					mutate(effectId, subject, collection, payloads, elevated, depth, options),
+					mutate(effectId, subject, collection, payloads, elevated, depth, options).pipe(
+						Effect.catchIf(isBrowserMutationReplay, (cause) =>
+							cause.outcome._tag === 'Committed'
+								? Effect.succeed([{ id: cause.outcome.id }])
+								: Effect.fail(mutationPhaseFailure('commit', collection, [], cause))
+						)
+					),
 				update,
-				delete: deleteRecord,
-				resume,
+				delete: (effectId, subject, collection, id, options) =>
+					deleteRecord(effectId, subject, collection, id, 0, options).pipe(
+						Effect.catchIf(isBrowserMutationReplay, () => Effect.void)
+					),
+				browserMutationOutcome,
+				registerBrowserMutationPartition,
+				browserMutationPartition,
+				browserMutationDelivery,
+				beginBrowserMutation,
+				rememberBrowserMutationOutcome,
+				resume: (effectId, requestId) =>
+					resume(effectId, requestId).pipe(
+						Effect.catchIf(isBrowserMutationReplay, () => Effect.void),
+						Effect.asVoid
+					),
 				discard,
 				import: Effect.fn('Collections.import')(function* (effectId, subject, inputs) {
 					const pipeline = authored.pipelines[inputs[0]?.collection ?? ''];

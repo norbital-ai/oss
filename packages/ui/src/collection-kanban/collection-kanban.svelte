@@ -4,12 +4,13 @@
 >
 	import type {
 		CollectionDefinition,
+		CollectionField,
 		CollectionGroupedResult,
 		CollectionRegistry,
 		CollectionRow,
 		RemoteQuery
 	} from '@norbital-ai/std/collection';
-	import { resolveRecordLabel } from '@norbital-ai/std/collection';
+	import { isSystemCollectionField } from '@norbital-ai/std/collection';
 	import { humanize } from '@norbital-ai/std/string';
 	import { watch } from 'runed';
 	import { Cover, Grid, Inline, Scroll, Stack } from '#lib/layout';
@@ -24,25 +25,26 @@
 		resolveCollectionViewKey,
 		setCollectionClientContext
 	} from '#lib/collection-runtime';
-	import { badgeColorClass } from '#lib/collection-table/collection-card-colors';
 	import {
-		createCollectionTableRouteKey,
-		getCollectionTableNavigationContext
-	} from '../collection-table/collection-table-navigation.svelte.js';
+		createCollectionRouteKey,
+		getCollectionNavigationContext
+	} from '#lib/collection-navigation/collection-navigation.svelte';
 	import {
 		deriveAutoCard,
-		deriveColumnFieldNames,
-		deriveLanes,
-		formatAutoCardBadge,
-		formatAutoCardField,
-		formatAutoCardSubtitle,
-		mergeAuthoredLanes,
-		parseAuthoredLaneValues,
-		resolvedRecordMetadataFor,
+		resolvedCollectionRecordMetadata,
 		type AutoCardModel
-	} from '#lib/collection-table/collection-card-derivation';
+	} from '#lib/collection-surface';
+	import {
+		deriveLanes,
+		mergeAuthoredLanes,
+		parseAuthoredLaneValues
+	} from './collection-kanban-lanes.js';
+	import { DataRenderer, type FieldRendererComponent } from '#lib/data-renderer';
 	import CollectionKanbanSkeleton from './collection-kanban-skeleton.svelte';
 	import CollectionKanbanLane from './collection-kanban-lane.svelte';
+	import CollectionKanbanPart, {
+		setCollectionKanbanPartContext
+	} from './collection-kanban-part.svelte';
 	import { CollectionQueryState } from '#lib/collection-query';
 	import { CollectionActionToolbar } from '#lib/collection-toolbar';
 	import {
@@ -51,6 +53,8 @@
 		type ResolvedCollectionRecordMetadata
 	} from '#lib/collection-record-metadata';
 	import type {
+		CollectionKanbanField,
+		CollectionKanbanFieldsComposition,
 		CollectionKanbanName,
 		CollectionKanbanProps
 	} from '#lib/collection-kanban/collection-kanban.types';
@@ -76,6 +80,7 @@
 	}
 
 	type Row = CollectionRow<TCollections[TName]>;
+	type FieldConfig = CollectionKanbanField<Row>;
 	interface BoardResultState {
 		result: CollectionGroupedResult<Row>;
 		hasLoaded: boolean;
@@ -96,6 +101,7 @@
 		exportPipelines = [],
 		importPipelines = [],
 		integrations = [],
+		fields,
 		Card,
 		onCardMove,
 		class: className
@@ -125,11 +131,43 @@
 			importPipelines.some((pipeline) => pipeline.requiresSelection)
 	);
 	const resolvedDetailRouteKey = $derived(
-		createCollectionTableRouteKey({
+		createCollectionRouteKey({
 			view: resolvedView
 		})
 	);
-	const detailNavigation = getCollectionTableNavigationContext();
+	const detailNavigation = getCollectionNavigationContext();
+	const configuredFields = new Map<object, FieldConfig>();
+	let registeredFields: readonly FieldConfig[] = $state([]);
+
+	function syncFields(): void {
+		registeredFields = [...configuredFields.values()];
+	}
+
+	setCollectionKanbanPartContext({
+		setField: (token, field) => {
+			configuredFields.set(token, field as FieldConfig);
+			syncFields();
+		},
+		removeField: (token) => {
+			configuredFields.delete(token);
+			syncFields();
+		}
+	});
+
+	function metadataFor(fieldConfig: FieldConfig): CollectionField {
+		const field = definition.fields.find((candidate) => candidate.name === fieldConfig.key);
+		if (!field) {
+			throw new Error(
+				`CollectionKanban "${String(collection)}" declares unknown field "${String(fieldConfig.key)}".`
+			);
+		}
+		if (isSystemCollectionField(field.name)) {
+			throw new Error(
+				`CollectionKanban "${String(collection)}" cannot declare framework field "${field.name}".`
+			);
+		}
+		return field;
+	}
 
 	// Lane derivation (RFC V.3): authored `lanes` pick/order the subset and override labels/colours;
 	// otherwise lanes come from the groupBy field's enum values in model order.
@@ -150,10 +188,19 @@
 	});
 	// No page size to remember: a board asks for lanes, not pages.
 	const queryState = new CollectionQueryState<Row>();
+	const automaticRelationshipWith = $derived.by(() =>
+		Object.fromEntries(
+			registeredFields.flatMap((fieldConfig) => {
+				const relation = metadataFor(fieldConfig).relation;
+				return relation ? [[relation.name, true] as const] : [];
+			})
+		)
+	);
 	const queryInput = $derived.by(() => ({
 		operations: client.db[collection],
 		query: {
 			...collectionQuery,
+			with: { ...automaticRelationshipWith, ...(collectionQuery?.with ?? {}) },
 			search: queryState.search || collectionQuery?.search,
 			orderBy: collectionQuery?.orderBy,
 			group: {
@@ -197,7 +244,7 @@
 	const metadataById = $derived.by(() => {
 		const metadata = new Map<string, readonly ResolvedCollectionRecordMetadata[]>();
 		for (const [recordId, record] of recordById) {
-			metadata.set(recordId, resolvedRecordMetadataFor(record, recordMetadata, t));
+			metadata.set(recordId, resolvedCollectionRecordMetadata(record, recordMetadata, t));
 		}
 		return metadata;
 	});
@@ -348,12 +395,15 @@
 				Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause))))
 			);
 		}
-		// Default optimistic move: write `toLane` into the groupBy field.
+		// Default local-first move: the generated client durably overlays `toLane`; the temporary lane
+		// override covers only the interval before that local transaction completes.
 		return Effect.gen(function* () {
 			const id = Reflect.get(record, recordIdField);
 			if (id == null)
 				return yield* Effect.fail(new Error(`Cannot move a record without ${recordIdField}.`));
-			yield* Effect.tryPromise(() => operations.mutate({ id: String(id), [groupBy]: toLane }));
+			yield* Effect.tryPromise(() => operations.mutate({ id: String(id), [groupBy]: toLane })).pipe(
+				Effect.asVoid
+			);
 		});
 	}
 
@@ -386,50 +436,55 @@
 		);
 	}
 
-	// Auto card (RFC V.3): identical derivation to the table's mobile card from field structure.
-	const autoCard: AutoCardModel = $derived(
-		deriveAutoCard(definition.fields, deriveColumnFieldNames(definition.fields), {
-			hasRecordLabel: Boolean(definition.recordLabel)
-		})
-	);
-	/**
-	 * The kanban derives its whole card from field structure — there are no authored columns here to
-	 * ask, so the schema formatter is the entire resolution. A caller who needs more supplies the
-	 * `Card` snippet and this path is not taken at all.
-	 */
-	function cardText(name: string, record: Row): string {
-		return formatAutoCardField(definition.fields, name, record, t);
-	}
+	const cardRoles = $derived.by(() => ({
+		title: registeredFields.find((field) => field.card === 'title')?.key,
+		subtitle: registeredFields
+			.filter((field) => field.card === 'subtitle')
+			.map((field) => String(field.key)),
+		badge: registeredFields.find((field) => field.card === 'badge')?.key
+	}));
 
-	function autoCardTitle(record: Row): string {
-		if (autoCard.title.kind === 'field') {
-			const text = cardText(autoCard.title.name, record);
-			if (text && text !== '—') return text;
-		}
-		const label = resolveRecordLabel(definition.recordLabel ?? null, record);
-		if (label) return label;
-		const id = Reflect.get(record, recordIdField);
-		return id == null ? humanize(String(collection)) : String(id);
-	}
+	// The card is inferred only from the explicit field declaration, never by enumerating schema.
+	const autoCard: AutoCardModel = $derived(
+		deriveAutoCard(
+			definition.fields,
+			registeredFields.map((field) => String(field.key)),
+			{ roles: cardRoles }
+		)
+	);
 </script>
 
+{#snippet autoCardField(name: string, record: Row, className?: string)}
+	{@const fieldConfig = registeredFields.find((candidate) => String(candidate.key) === name)}
+	{#if fieldConfig}
+		<DataRenderer
+			field={metadataFor(fieldConfig)}
+			value={Reflect.get(record, fieldConfig.key)}
+			row={record as Record<string, unknown>}
+			mode="display"
+			class={className}
+			renderer={fieldConfig.renderer as FieldRendererComponent | undefined}
+			rendererProps={fieldConfig.rendererProps as Readonly<Record<string, unknown>> | undefined}
+			relationOptions={fieldConfig.relationOptions}
+		/>
+	{/if}
+{/snippet}
+
 {#snippet autoCardSnippet(record: Row)}
-	{@const subtitle = formatAutoCardSubtitle(autoCard, (name) => cardText(name, record))}
-	{@const badge = formatAutoCardBadge(autoCard, record, (name) => cardText(name, record))}
-	<Inline align="start" justify="between" gap="md">
-		<Stack gap="xs">
-			<p class="min-w-0 truncate font-medium">{autoCardTitle(record)}</p>
-			{#if subtitle}<p class="min-w-0 truncate text-sm text-muted-foreground">{subtitle}</p>{/if}
-		</Stack>
-		{#if badge}
-			<span
-				class={cn(
-					'inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded-full border px-2 py-0.5 text-xs font-medium',
-					badgeColorClass()
-				)}>{badge.label}</span
-			>
+	<Stack gap="xs">
+		{#if autoCard.title.kind === 'field'}
+			{@render autoCardField(autoCard.title.name, record, 'font-medium')}
+		{:else}
+			<p class="flex min-h-9 items-center text-sm font-medium">
+				{humanize(String(collection))}
+			</p>
 		{/if}
-	</Inline>
+		{#each [...autoCard.subtitles, ...(autoCard.badge ? [autoCard.badge] : [])] as name (name)}
+			{#if autoCard.title.kind !== 'field' || name !== autoCard.title.name}
+				{@render autoCardField(name, record)}
+			{/if}
+		{/each}
+	</Stack>
 {/snippet}
 
 {#snippet kanbanCard(recordId: string)}
@@ -466,6 +521,12 @@
 		{/if}
 	</Stack>
 {/snippet}
+
+<div class="hidden" aria-hidden="true">
+	{@render fields({
+		Field: CollectionKanbanPart as unknown as CollectionKanbanFieldsComposition<Row>['Field']
+	})}
+</div>
 
 <Cover
 	as="div"

@@ -81,7 +81,12 @@ const definition = workspace({
 	prompt: 'You are the field operations agent.',
 	tools: [],
 	skills: [],
-	requiredFacilities: ['database', 'ai', 'tasks', 'hostTools']
+	requiredFacilities: ['database', 'ai', 'tasks', 'hostTools'],
+	mutationCompatibility: {
+		offlineHorizonMillis: 14 * 24 * 60 * 60 * 1_000,
+		currentSchemaFingerprint: 'sha256:envoy-delegation-fixture',
+		adapters: []
+	}
 });
 const bundle = makeBundle(
 	definition,

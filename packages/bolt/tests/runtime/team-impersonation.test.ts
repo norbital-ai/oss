@@ -199,7 +199,14 @@ describe('team impersonation', () => {
 			command('collections.findMany', 'admin-token', { collection: 'payslips' }, 'Employee')
 		);
 		expect(refused).toBeInstanceOf(AccessControl.AccessDenied);
-		expect(refused).toMatchObject({ action: 'read', resource: 'payslips' });
+		// A page is admitted to its durable sync partition before its row query runs. That admission
+		// deliberately makes an unauthorized dependency indistinguishable from an unknown one, so the
+		// refusal names the subscription boundary rather than confirming the collection's existence.
+		expect(refused).toMatchObject({
+			action: 'read',
+			resource: 'sync.subscription',
+			reason: 'sync subscription unavailable'
+		});
 	});
 
 	/**

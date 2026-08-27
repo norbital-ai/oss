@@ -32,11 +32,14 @@ export const buildManifest = (
 ): BundleManifest => {
 	const requiredFacilities = [...new Set(workspace.requiredFacilities)].sort();
 	const schemaPlan = buildSchemaPlan(workspace);
+	const schemaFingerprint = workspace.mutationCompatibility?.currentSchemaFingerprint;
+	if (schemaFingerprint === undefined)
+		throw new TypeError('Compiled workspace is missing its mutation compatibility fingerprint.');
 	return BundleManifest.make({
 		protocolVersion: PROTOCOL_VERSION,
 		artifactId: input.artifactId,
 		artifactVersion: workspace.version,
-		schemaFingerprint: schemaPlan.fingerprint,
+		schemaFingerprint,
 		schemaPlan,
 		requiredFacilities,
 		// Empty here and filled by `bolt sync`, which is the only party that has seen a build: this

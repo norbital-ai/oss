@@ -79,20 +79,15 @@ describe('generated declarative mutation types', () => {
 	});
 
 	it('carries the exact mutation graph into the declarative collection client', () => {
-		const rendered = renderClientDeclaration([], [], '/workspace');
+		const rendered = renderClientDeclaration([], '/workspace');
 
-		expect(rendered).toContain(
-			"readonly mutation: CollectionMutationValues<S, N & keyof S['tables'] & string>"
-		);
+		expect(rendered).toContain('type TenantCollections = CollectionRegistryFor<WorkspaceSchema>');
 		expect(rendered).toContain("CollectionClient<TenantCollections>['db'][N]");
 		expect(rendered).toContain('export type WorkspaceMutation');
-		expect(rendered).not.toContain('MutableCollectionClient');
-		expect(rendered).not.toContain('WorkspaceCreate');
-		expect(rendered).not.toContain('WorkspaceUpdate');
 	});
 
 	it('carries authored automation schemas into the generated per-name client surface', () => {
-		const rendered = renderClientDeclaration([], [], '/workspace', [
+		const rendered = renderClientDeclaration([], '/workspace', [
 			'/workspace/src/automations/+rebuild.ts'
 		]);
 
@@ -103,12 +98,11 @@ describe('generated declarative mutation types', () => {
 		expect(rendered).toContain('readonly automations: AutomationClientApi<AutomationRegistry>');
 	});
 
-	it('removes the representation refresh facade', () => {
+	it('renders the representation contract', () => {
 		const rendered = renderCollectionTypes('accounts');
 
 		expect(rendered).toContain(
 			'export type RepresentationProps = { readonly record: Row | null; close(): void }'
 		);
-		expect(rendered).not.toContain('refresh():');
 	});
 });

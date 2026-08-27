@@ -72,14 +72,7 @@ describe('instance 2 — every write path that queues a delivery also queues its
 		// A write path is one that puts outbound delivery rows in its transaction. `createStatements`
 		// is the shared builder the create paths use, and it is the one that calls `outboxStatements`,
 		// so a path that calls either is a path that can emit a delivery.
-		const emits = named(blocks, /outboxStatements\(|createStatements\(|deleteStatements\(/u).filter(
-			// `Collections.findNearest` is a read, not a write path, but its block still matches:
-			// `createStatements` is a plain const defined between `findNearest` and the next
-			// `Effect.fn`, so the builder's whole body — which calls `outboxStatements` — lands inside
-			// the read's block. A read has no delivery to announce, so it is dropped before the sets
-			// are compared.
-			(name) => name !== 'Collections.findNearest'
-		);
+		const emits = named(blocks, /outboxStatements\(|createStatements\(|deleteStatements\(/u);
 		const announces = named(blocks, /announceFlush\(/u);
 		// Printed on failure rather than only compared, so a diff says *which* path lost its drain.
 		expect({ emits, announces }).toEqual({ emits, announces: emits });
@@ -121,11 +114,33 @@ describe('instance 3 — every task row written is announced to the host', () =>
 	it('every block that uses the statement-joining path announces in the same block', () => {
 		const offenders = files.flatMap((file) => {
 			const blocks = blocksOf(readFileSync(file, 'utf8'));
-			return named(blocks, /queue\.statements\(|\.statements\(\[/u)
+			return named(blocks, /queue\.statements\(\[task\]/u)
 				.filter((name) => !/announceFlush\(|\.wake\(/u.test(blocks.get(name) ?? ''))
 				.map((name) => `${file.slice(RUNTIME.length + 1)}:${name}`);
 		});
 		expect(offenders).toEqual([]);
+	});
+
+	it('classifies every statement-joining call under an announcement invariant', () => {
+		const uncovered = files.flatMap((file) => {
+			const source = readFileSync(file, 'utf8');
+			const outboxDrainStart = source.indexOf('const outboxDrains =');
+			const outboxDrainEnd = source.indexOf('const outboxStatements =', outboxDrainStart);
+			return [...source.matchAll(/\bqueue\s*\.\s*statements\s*\(/gu)].flatMap((site) => {
+				const offset = site.index;
+				const directJoin = /^queue\.statements\(\[task\]/u.test(source.slice(offset));
+				// The collection outbox joins its drain task through a plain helper rather than an Effect.fn
+				// block. Instance 2 above proves every caller that can include that helper also announces the
+				// drain before executing the containing transaction. Keep that site classified here so a new
+				// statement-joining shape cannot disappear between the two audits.
+				const deliveryDrainJoin =
+					outboxDrainStart >= 0 && offset > outboxDrainStart && offset < outboxDrainEnd;
+				if (directJoin || deliveryDrainJoin) return [];
+				const line = source.slice(0, offset).split('\n').length;
+				return [`${file.slice(RUNTIME.length + 1)}:${line}`];
+			});
+		});
+		expect(uncovered).toEqual([]);
 	});
 
 	it('nothing writes bolt_task except the queue', () => {

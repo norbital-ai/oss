@@ -261,21 +261,21 @@ are `Stack`, `Inline`, `Cluster`, `Grid`, `Columns`, `Split`, `Cover`, `Bound`, 
 must never hand-roll what a primitive owns: sibling rhythm (gap), scroll regions (Bound+Scroll), the app
 inset (tokens), or height contracts (Bound sizes).
 
-| Rule | Level | Confidence | Detects                                                                                                                               | Preferred action                                       |
-| ---- | ----- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| UI5  | error | high       | Raw `overflow-(?:[xy]-)?(?:auto\|scroll)` scroll region on an element                                                                 | Use `Scroll axis=… name=…` (with `Bound` if bounded)   |
-| UI6  | error | high       | Raw `flex`/`grid` container arranging siblings (`gap-`, `space-`, …)                                                                  | Use `Stack`/`Inline`/`Cluster`/`Grid`/`Columns`        |
-| UI7  | error | medium     | Sibling margin: `space-y-*`/`space-x-*` or `mt-2+`/`mb-*`/`ml-*`/`mr-*`                                                               | Parent owns the gap via a primitive `gap`              |
-| UI8  | error | high       | Literal app inset classes (`px-4 py-2 sm:px-6` etc.)                                                                                  | Use the `inset` prop or the exported INSET tokens      |
-| UI9  | error | medium     | Hand-rolled scroll shell: `overflow` + `flex` + `h-full`/`flex-1` chain                                                               | Use an explicit `Bound` + `Scroll` pair                |
-| UI10 | error | high       | Layout classes on a primitive that owns the prop: `items-*`, `justify-*`, `self-*`, `place-*`, `flex-1`, `grow`, `shrink-0`, `h-full` | Compose with `align`/`justify`/`grow`/`fill`/`size`    |
-| UI11 | error | medium     | Redundant wrapper element adding no layout or boundary                                                                                | Remove it, or give it a primitive's job                |
-| UI12 | error | high       | Tailwind arbitrary value interpolated at runtime: `` `[prop:${value}]` ``                                                             | Put the value in `style`, or enumerate literal classes |
-| UI13 | error | high       | Sibling spacing written on a child of a gap-owning primitive                                                                          | Parent owns the gap; never `mb-*`/`space-y-*` on kids  |
-| UI14 | error | high       | Measure centred by hand (`mx-auto` + `max-w-*`)                                                                                       | Use `Center measure=…`                                 |
-| UI15 | error | medium     | Fixed layout dimension on a primitive (`h-[…]`, `h-dvh`, …)                                                                           | Use `Bound size=` or intrinsic height                  |
-| UI16 | error | high       | Nested vertical scrollports: `Scroll` wrapping a form/table/tabs/matrix, or `MatrixRenderer` without explicit `bounded`               | One scroll owner per axis; `bounded={false}` in forms  |
-| UI17 | error | high       | Template exposes uuid/system id (`id`, `… Id` labels, bare `*_id` fields, `?? value` label fallbacks)                                 | Human labels only; miss → `—`                          |
+| Rule | Level | Confidence | Detects                                                                                                                               | Preferred action                                           |
+| ---- | ----- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| UI5  | error | high       | Raw `overflow-(?:[xy]-)?(?:auto\|scroll)` scroll region on an element                                                                 | Use `Scroll axis=… name=…` (with `Bound` if bounded)       |
+| UI6  | error | high       | Raw `flex`/`grid` container arranging siblings (`gap-`, `space-`, …)                                                                  | Use `Stack`/`Inline`/`Cluster`/`Grid`/`Columns`            |
+| UI7  | error | medium     | Sibling margin: `space-y-*`/`space-x-*` or `mt-2+`/`mb-*`/`ml-*`/`mr-*`                                                               | Parent owns the gap via a primitive `gap`                  |
+| UI8  | error | high       | Literal app inset classes (`px-4 py-2 sm:px-6` etc.)                                                                                  | Use the `inset` prop or the exported INSET tokens          |
+| UI9  | error | medium     | Hand-rolled scroll shell: `overflow` + `flex` + `h-full`/`flex-1` chain                                                               | Use an explicit `Bound` + `Scroll` pair                    |
+| UI10 | error | high       | Layout classes on a primitive that owns the prop: `items-*`, `justify-*`, `self-*`, `place-*`, `flex-1`, `grow`, `shrink-0`, `h-full` | Compose with `align`/`justify`/`grow`/`fill`/`size`        |
+| UI11 | error | medium     | Redundant wrapper element adding no layout or boundary                                                                                | Remove it, or give it a primitive's job                    |
+| UI12 | error | high       | Tailwind arbitrary value interpolated at runtime: `` `[prop:${value}]` ``                                                             | Put the value in `style`, or enumerate literal classes     |
+| UI13 | error | high       | Sibling spacing written on a child of a gap-owning primitive                                                                          | Parent owns the gap; never `mb-*`/`space-y-*` on kids      |
+| UI14 | error | high       | Measure centred by hand (`mx-auto` + `max-w-*`)                                                                                       | Use `Center measure=…`                                     |
+| UI15 | error | medium     | Fixed layout dimension on a primitive (`h-[…]`, `h-dvh`, …)                                                                           | Use `Bound size=` or intrinsic height                      |
+| UI16 | error | high       | Nested vertical scrollports: `Scroll` wrapping a form/table/tabs/matrix, or `MatrixRenderer` without explicit `bounded`               | One scroll owner per axis; `bounded={false}` in forms      |
+| UI17 | error | high       | Template renders a uuid/system id or declares a framework field in table/form composition                                             | Automatic relationship labels; never declare system fields |
 
 Three uuid surfaces never appear as a component node, so UI17 cannot see them: they are UI17a
 (collection with no representation), UI17b (custom-type renderer) and UI17c (`recordLabel`), all
@@ -300,8 +300,8 @@ set those styles themselves (Cover rows, Grid tracks).
 
 | Rule  | Level | Confidence | Detects                                                                                                                                                                | Preferred action                                                                             |
 | ----- | ----- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| UI17  | error | high       | Template paints a system uuid: `id` column/field, `label="… Id"` on `*_id`, bare `Field name="*_id"`, or `labels.get(…) ?? value`                                      | Resolve to a human label; miss → `—`, never the raw id                                       |
-| UI17a | error | high       | `src/collections/*/+model.ts` declaring a `uuid()`/`file()` column with no sibling `+representation.svelte`                                                            | Author the representation; use `RelationshipRenderer`                                        |
+| UI17  | error | high       | Template paints a system uuid or declares `<Column>` / `<Field>` for `id`, timestamps, row version, system period, or approval id                                      | Omit framework fields; automatic relationship renderer resolves authored FKs                 |
+| UI17a | error | high       | `src/collections/*/+model.ts` declaring a `uuid()`/`file()` column with no sibling `+representation.svelte`                                                            | Author the representation; configure contextual `relationOptions` only when needed           |
 | UI17b | error | high       | `src/custom-types/*/+renderer.svelte` binding an Effect Schema UUID field to a raw `<Input>`, interpolating it into display text, or editing the whole variant as JSON | Inline a `Combobox` over the target collection                                               |
 | UI17c | error | high       | `recordLabel` naming a `uuid()`/`file()` id, a `custom()`/`json()` object, or a name that is not a column                                                              | Name a column that holds text; never a SQL label column                                      |
 | UI18  | error | high       | Client Svelte feature calls raw `transport.command`/`command`                                                                                                          | Reads use typed reactive db/system collections; imperative work uses generated `api.invoke`. |
@@ -309,11 +309,10 @@ set those styles themselves (Cover rows, Grid tracks).
 UI17 enforces [controller-surfaces.md](../../../../oss/skills/authoring-tenant-workspace/references/controller-surfaces.md)
 rule 2 for authored `.svelte` templates (not `packages/ui` internals).
 
-UI17a–c cover the uuid surfaces that reach an operator without ever appearing as a component node,
-which is all UI17 itself can inspect. A collection with no `+representation.svelte` falls back to the
-auto `CollectionForm`, which paints one editable text box per uuid FK and leaves nothing in source to
-flag. A `custom()` column is one JSONB value, so the ids inside it are typed into hand-rolled controls
-by the custom-type renderer rather than into a `Field`. And `recordLabel` is a string array in
+UI17a–c cover uuid surfaces that reach an operator without appearing as a standard field control.
+Collection create/edit requires an explicit `+representation.svelte`; there is no schema-enumerated
+form fallback. A `custom()` column is one JSONB value, so the ids inside it are typed into hand-rolled
+controls by the custom-type renderer rather than into a `Field`. And `recordLabel` is a string array in
 `+model.ts`: a label whose every term comes back empty falls back to joining every scalar column —
 which is how a record-detail title comes to be a row of uuids. All three are errors because each
 paints an id the operator cannot act on and none can be found by reading the template.

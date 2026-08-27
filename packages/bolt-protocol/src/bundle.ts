@@ -46,14 +46,24 @@ export interface AssetIndexEntry extends Schema.Schema.Type<typeof AssetIndexEnt
  *
  * ```text
  * .norbital/artifact/
- * ├── bundle.mjs          code only, no encoded bytes
- * ├── asset-index.json    { browser: AssetIndexEntry[], server: AssetIndexEntry[] }
- * └── assets/<sha256>     one flat file per distinct digest
+ * ├── bundle.mjs          materialized ESM graph entry for local/self-hosted use
+ * ├── code/*.mjs          materialized runtime, dependency, and tenant modules
+ * ├── release.json        standalone manifest and verified ESM graph
+ * ├── asset-index.json    compatibility projection of the two asset indexes
+ * └── assets/<sha256>     one flat object per distinct code, asset, or provenance digest
  * ```
  */
 export const ARTIFACT_BUNDLE_FILE = 'bundle.mjs';
 export const ARTIFACT_ASSET_DIRECTORY = 'assets';
 export const ARTIFACT_ASSET_INDEX_FILE = 'asset-index.json';
+/**
+ * The host-readable release authority beside a compiled artifact.
+ *
+ * `bundle.mjs` is guest code and therefore cannot be the place a host learns which immutable
+ * objects make up a release. This sidecar is decoded and every digest is verified before any guest
+ * byte is evaluated.
+ */
+export const ARTIFACT_RELEASE_FILE = 'release.json';
 
 /**
  * `asset-index.json`, for a reader that has the release on disk and no reason to evaluate it.
@@ -67,6 +77,134 @@ export const ArtifactAssetIndex = Schema.Struct({
 	server: Schema.Array(AssetIndexEntry)
 }).annotate({ identifier: 'BoltArtifactAssetIndex' });
 export interface ArtifactAssetIndex extends Schema.Schema.Type<typeof ArtifactAssetIndex> {}
+
+/** One immutable object in the artifact's flat digest-addressed object directory. */
+export const ArtifactObjectReference = Schema.Struct({
+	path: Schema.NonEmptyString,
+	role: Schema.Literals([
+		'runtime',
+		'dependency',
+		'tenant',
+		'browser-asset',
+		'server-asset',
+		'schema',
+		'migration-lineage',
+		'lockfile'
+	]),
+	sha256: Schema.NonEmptyString,
+	byteLength: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+}).annotate({ identifier: 'BoltArtifactObjectReference' });
+export interface ArtifactObjectReference
+	extends Schema.Schema.Type<typeof ArtifactObjectReference> {}
+
+/** Exact ESM specifier resolved only to another verified graph node. */
+export const ArtifactCodeImport = Schema.Struct({
+	specifier: Schema.NonEmptyString,
+	target: Schema.NonEmptyString
+}).annotate({ identifier: 'BoltArtifactCodeImport' });
+export interface ArtifactCodeImport extends Schema.Schema.Type<typeof ArtifactCodeImport> {}
+
+/**
+ * One independently executable module in the server code graph.
+ *
+ * `path` is the exact specifier other graph nodes import. The role is assigned from Rollup's module
+ * provenance by the compiler, never inferred by a deployment host from a filename.
+ */
+export const ArtifactCodeChunk = Schema.Struct({
+	path: Schema.NonEmptyString,
+	role: Schema.Literals(['runtime', 'dependency', 'tenant']),
+	sha256: Schema.NonEmptyString,
+	byteLength: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+	imports: Schema.Array(ArtifactCodeImport),
+	dynamicImports: Schema.Array(ArtifactCodeImport)
+}).annotate({ identifier: 'BoltArtifactCodeChunk' });
+export interface ArtifactCodeChunk extends Schema.Schema.Type<typeof ArtifactCodeChunk> {}
+
+/**
+ * The exact deterministic ESM module graph evaluated by an isolate.
+ *
+ * Every import names another chunk path and `entrypoint` names one chunk. `sha256` identifies the
+ * canonical graph index; individual node digests verify executable bytes before compilation.
+ */
+export const ArtifactCodeGraph = Schema.Struct({
+	format: Schema.Literal('esm-v1'),
+	entrypoint: Schema.NonEmptyString,
+	sha256: Schema.NonEmptyString,
+	byteLength: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+	chunks: Schema.Array(ArtifactCodeChunk)
+}).annotate({ identifier: 'BoltArtifactCodeGraph' });
+export interface ArtifactCodeGraph extends Schema.Schema.Type<typeof ArtifactCodeGraph> {}
+
+const canonicalJson = (value: unknown): string => {
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+	if (value !== null && typeof value === 'object') {
+		return `{${Object.entries(value)
+			.toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+			.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+			.join(',')}}`;
+	}
+	return JSON.stringify(value) ?? 'null';
+};
+
+/** Canonical graph-index bytes; its SHA-256 is `ArtifactCodeGraph.sha256`. */
+export const canonicalArtifactCodeGraphIndexEncoding = (
+	graph: Omit<ArtifactCodeGraph, 'sha256'>
+): string => `${canonicalJson(graph)}\n`;
+
+/** Pure structural refusals shared by deployment preflight and the isolate boundary. */
+export const artifactCodeGraphRefusals = (graph: ArtifactCodeGraph): ReadonlyArray<string> => {
+	const refusals: Array<string> = [];
+	const paths = new Set<string>();
+	for (const chunk of graph.chunks) {
+		if (paths.has(chunk.path)) refusals.push(`duplicate chunk path: ${chunk.path}`);
+		paths.add(chunk.path);
+		if (chunk.dynamicImports.length > 0)
+			refusals.push(`dynamic imports are unsupported: ${chunk.path}`);
+		const specifiers = new Set<string>();
+		for (const imported of chunk.imports) {
+			if (specifiers.has(imported.specifier))
+				refusals.push(`duplicate import specifier: ${chunk.path} ${imported.specifier}`);
+			specifiers.add(imported.specifier);
+		}
+	}
+	if (!paths.has(graph.entrypoint)) refusals.push(`missing entrypoint: ${graph.entrypoint}`);
+	for (const chunk of graph.chunks) {
+		for (const imported of chunk.imports) {
+			if (!paths.has(imported.target))
+				refusals.push(`missing import target: ${chunk.path} ${imported.target}`);
+		}
+	}
+	const byteLength = graph.chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+	if (byteLength !== graph.byteLength)
+		refusals.push(`graph byte length mismatch: expected ${graph.byteLength}, described ${byteLength}`);
+	return refusals;
+};
+
+/** One authored migration in its immutable lineage order. */
+export const ArtifactMigration = Schema.Struct({
+	tag: Schema.NonEmptyString,
+	statements: Schema.Array(Schema.NonEmptyString)
+}).annotate({ identifier: 'BoltArtifactMigration' });
+export interface ArtifactMigration extends Schema.Schema.Type<typeof ArtifactMigration> {}
+export const ArtifactMigrationLineage = Schema.Array(ArtifactMigration).annotate({
+	identifier: 'BoltArtifactMigrationLineage'
+});
+export interface ArtifactMigrationLineage
+	extends Schema.Schema.Type<typeof ArtifactMigrationLineage> {}
+
+/** Build input identity which does not belong in executable guest code. */
+export const ArtifactProvenance = Schema.Struct({
+	lockfile: Schema.NullOr(
+		Schema.Struct({
+			path: Schema.NonEmptyString,
+			role: Schema.Literal('lockfile'),
+			sha256: Schema.NonEmptyString,
+			byteLength: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+		})
+	),
+	toolchain: Schema.Record(Schema.String, Schema.NonEmptyString)
+}).annotate({ identifier: 'BoltArtifactProvenance' });
+export interface ArtifactProvenance extends Schema.Schema.Type<typeof ArtifactProvenance> {}
 
 export const RealtimeOutput = Schema.Struct({
 	frames: Schema.Array(
@@ -193,6 +331,64 @@ export const ManifestSchemaPlan = Schema.Struct({
 }).annotate({ identifier: 'BoltManifestSchemaPlan' });
 export interface ManifestSchemaPlan extends Schema.Schema.Type<typeof ManifestSchemaPlan> {}
 
+/**
+ * Immutable schema facts an authored guest can state about its own release.
+ *
+ * There is deliberately no generation here. A generation is a fact about one tenant database's
+ * migration history, not a fact an artifact can know or a browser may propose. The host joins these
+ * release facts to the `TenantMatrix.schemaGeneration` it advanced after a verified migration.
+ */
+export const SyncSchemaFacts = Schema.Struct({
+	cursor: Schema.Literal('xid-sequence'),
+	/** Version of this description shape; independent of the artifact protocol version below. */
+	version: Schema.Literal(1),
+	fingerprint: Schema.NonEmptyString,
+	minimumProtocolVersion: Schema.Number.check(
+		Schema.isInt(),
+		Schema.isGreaterThanOrEqualTo(1)
+	),
+	/** SHA-256 of the canonical UTF-8 provisioning-step encoding documented by Bolt's compiler. */
+	migrationDigest: Schema.NonEmptyString,
+	/** Every materialized collection whose readers must be withdrawn at a schema boundary. */
+	affectedCollections: Schema.Array(Schema.NonEmptyString)
+}).annotate({ identifier: 'BoltSyncSchemaFacts' });
+export interface SyncSchemaFacts extends Schema.Schema.Type<typeof SyncSchemaFacts> {}
+
+/** Ephemeral pre-DDL notice. It withdraws local readers but never advances durable schema state. */
+export const ReplicaSchemaMaintenance = Schema.Struct({
+	generation: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+	affectedCollections: Schema.Array(Schema.NonEmptyString)
+}).annotate({ identifier: 'BoltReplicaSchemaMaintenance' });
+export interface ReplicaSchemaMaintenance extends Schema.Schema.Type<
+	typeof ReplicaSchemaMaintenance
+> {}
+
+/** Explicit proof that an uncommitted maintenance transition was aborted. */
+export const ReplicaSchemaMaintenanceClear = Schema.Struct({
+	generation: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1))
+}).annotate({ identifier: 'BoltReplicaSchemaMaintenanceClear' });
+export interface ReplicaSchemaMaintenanceClear extends Schema.Schema.Type<
+	typeof ReplicaSchemaMaintenanceClear
+> {}
+
+/**
+ * The host-authored schema barrier delivered to a browser replica.
+ *
+ * The host copies every field but `generation` from `sync.schema` and supplies `generation` only
+ * from its durable tenant matrix. This makes a client-provided generation structurally impossible.
+ */
+export const ReplicaSchemaBarrier = Schema.Struct({
+	generation: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+	fingerprint: Schema.NonEmptyString,
+	minimumProtocolVersion: Schema.Number.check(
+		Schema.isInt(),
+		Schema.isGreaterThanOrEqualTo(1)
+	),
+	migrationDigest: Schema.NonEmptyString,
+	affectedCollections: Schema.Array(Schema.NonEmptyString)
+}).annotate({ identifier: 'BoltReplicaSchemaBarrier' });
+export interface ReplicaSchemaBarrier extends Schema.Schema.Type<typeof ReplicaSchemaBarrier> {}
+
 export const BundleManifest = Schema.Struct({
 	protocolVersion: ProtocolVersion,
 	artifactId: Schema.NonEmptyString,
@@ -222,6 +418,86 @@ export const BundleManifest = Schema.Struct({
 	integrations: Schema.Array(ManifestIntegration)
 }).annotate({ identifier: 'BoltBundleManifest' });
 export interface BundleManifest extends Schema.Schema.Type<typeof BundleManifest> {}
+
+/**
+ * Standalone authority for one immutable tenant release.
+ *
+ * A host reads this JSON sidecar before it imports anything. Publication is valid only when every
+ * referenced object hashes to its declared digest and the code graph index is complete and
+ * internally resolvable. Runtime semantic validation remains the isolate's job:
+ * this release authority deliberately contains no value obtained by importing or evaluating guest
+ * code in the compiler or host process.
+ */
+export const TenantRelease = Schema.Struct({
+	formatVersion: Schema.Literal(1),
+	protocolVersion: ProtocolVersion,
+	artifactId: Schema.NonEmptyString,
+	artifactVersion: Schema.NonEmptyString,
+	requiredFacilities: Schema.Array(FacilityName),
+	code: ArtifactCodeGraph,
+	assets: ArtifactAssetIndex,
+	schema: Schema.Struct({
+		fingerprint: Schema.NonEmptyString,
+		description: Schema.Struct({
+			path: Schema.NonEmptyString,
+			role: Schema.Literal('schema'),
+			sha256: Schema.NonEmptyString,
+			byteLength: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+		}),
+		migrations: Schema.Struct({
+			path: Schema.NonEmptyString,
+			role: Schema.Literal('migration-lineage'),
+			sha256: Schema.NonEmptyString,
+			byteLength: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+		})
+	}),
+	provenance: ArtifactProvenance
+}).annotate({ identifier: 'BoltTenantRelease' });
+export interface TenantRelease extends Schema.Schema.Type<typeof TenantRelease> {}
+
+/**
+ * Canonical bytes whose SHA-256 is the release identity.
+ *
+ * The release id is intentionally not a field of `TenantRelease`: including a digest inside the
+ * value it digests is recursive. Object keys are sorted, array order is semantic, and the trailing
+ * newline is part of the encoding. Using the code graph digest alone is invalid because an asset,
+ * schema, migration, or provenance-only release would collide with its predecessor.
+ */
+export const canonicalTenantReleaseEncoding = (release: TenantRelease): string => {
+	return `${canonicalJson(release)}\n`;
+};
+
+/**
+ * Flattens every authorized immutable object into the one preflight/upload vocabulary.
+ *
+ * Duplicate digests are retained here because roles are permissions: a byte may legitimately be
+ * named by two paths, while a deploy can still deduplicate uploads by `sha256` alone.
+ */
+export const tenantReleaseObjects = (
+	release: TenantRelease
+): ReadonlyArray<ArtifactObjectReference> => [
+	...release.code.chunks.map(({ path, role, sha256, byteLength }) => ({
+		path,
+		role,
+		sha256,
+		byteLength
+	})),
+	...release.assets.browser.map(({ path, sha256, byteLength }) => ({
+		path,
+		role: 'browser-asset' as const,
+		sha256,
+		byteLength
+	})),
+	...release.assets.server.map(({ path, sha256, byteLength }) => ({
+		path,
+		role: 'server-asset' as const,
+		sha256,
+		byteLength
+	})),
+	release.schema.description,
+	release.schema.migrations,
+	...(release.provenance.lockfile === null ? [] : [release.provenance.lockfile])
+];
 
 export const DispatchResponse = Schema.Struct({
 	status: Schema.Number.check(Schema.isInt()),
