@@ -1,17 +1,8 @@
 import type { WorkspaceSyncStatus } from '#lib/client/runtime.js';
 
 export type WorkspaceSyncNotice = Readonly<{
-	readonly key:
-		| 'unavailable'
-		| 'unverified'
-		| 'connecting'
-		| 'offline'
-		| 'disconnected'
-		| 'stale'
-		| 'pending'
-		| 'settled'
-		| 'issues';
-	readonly tone: 'neutral' | 'info' | 'success' | 'warning' | 'destructive';
+	readonly key: 'pending' | 'issues';
+	readonly tone: 'neutral' | 'warning' | 'destructive';
 	readonly icon: string;
 	readonly title: string;
 	readonly description: string;
@@ -21,28 +12,23 @@ const plural = (count: number, singular: string, pluralForm = `${singular}s`): s
 	count === 1 ? singular : pluralForm;
 
 /**
- * Turns the engine's factual counters into platform-owned copy.
+ * What the workspace interrupts a reader to say. Connectivity is never one of these.
  *
- * An absent signal is not an all-clear. Older or incomplete runtimes cannot prove freshness or
- * settlement, so the shell says exactly that instead of falling back to “Up to date”. Likewise,
- * offline and server-proof results never acquire exactness from presentation wording.
+ * The engine's own state — connected, syncing, disconnected — belongs in the sidebar, where it is
+ * visible without demanding anything. It used to be a stack of floating cards announcing
+ * "unverified", "connecting", "disconnected", "out of date" and "up to date", none of which a
+ * reader can act on and none of which they can dismiss; on a local workspace they were permanent.
+ *
+ * Two things are worth a toast, because both are the reader's own work rather than the engine's
+ * plumbing: a change that is saved on this device but has not reached the server, and a change the
+ * server refused. Everything else is chrome.
  */
 export const workspaceSyncNotices = (
 	status: WorkspaceSyncStatus | undefined
 ): ReadonlyArray<WorkspaceSyncNotice> => {
-	if (status === undefined) {
-		return [
-			{
-				key: 'unavailable',
-				tone: 'warning',
-				icon: 'lucide:cloud-alert',
-				title: 'Sync status unavailable',
-				description: 'Data freshness and change settlement cannot be verified in this workspace.'
-			}
-		];
-	}
-
+	if (status === undefined) return [];
 	const notices: Array<WorkspaceSyncNotice> = [];
+
 	if (status.issues.length > 0) {
 		const rejected = status.issues.filter(({ kind }) => kind === 'rejected').length;
 		const quarantined = status.issues.length - rejected;
@@ -54,68 +40,8 @@ export const workspaceSyncNotices = (
 			key: 'issues',
 			tone: 'destructive',
 			icon: 'lucide:triangle-alert',
-			title: `${status.issues.length} sync ${plural(status.issues.length, 'issue')} need attention`,
+			title: `${status.issues.length} ${plural(status.issues.length, 'change')} need attention`,
 			description: `${parts.join(' and ')}. Review the details; the platform has not silently discarded this work.`
-		});
-	}
-
-	if (status.connectivity === 'offline') {
-		notices.push({
-			key: 'offline',
-			tone: 'warning',
-			icon: 'lucide:wifi-off',
-			title: 'Offline — downloaded data only',
-			description:
-				'Search and query results may be incomplete. Locally saved changes will be submitted when a connection is available.'
-		});
-	} else if (status.connectivity === 'disconnected') {
-		notices.push({
-			key: 'disconnected',
-			tone: 'warning',
-			icon: 'lucide:cloud-off',
-			title: 'Sync disconnected — downloaded data only',
-			description:
-				'The authoritative change stream is unavailable. Results may be incomplete while it reconnects.'
-		});
-	} else if (status.connectivity === 'connecting') {
-		notices.push({
-			key: 'connecting',
-			tone: 'info',
-			icon: 'lucide:refresh-cw',
-			title: 'Connecting to sync',
-			description:
-				'Downloaded data remains available, but freshness and settlement are unverified until the stream is live.'
-		});
-	} else if (status.connectivity === 'unverified') {
-		notices.push({
-			key: 'unverified',
-			tone: 'warning',
-			icon: 'lucide:cloud-alert',
-			title: 'Sync connection unverified',
-			description:
-				'A network interface is not proof of a live sync stream. Results may be limited to downloaded data.'
-		});
-	} else if (status.offlineRetainedOnly) {
-		// An online stream paired with retained-only reads is internally inconsistent. Keep the UI on
-		// the safe side until the engine publishes a coherent snapshot.
-		notices.push({
-			key: 'unverified',
-			tone: 'warning',
-			icon: 'lucide:cloud-alert',
-			title: 'Data freshness unverified',
-			description: 'Results may be limited to downloaded data until sync restores its proof.'
-		});
-	}
-
-	if (status.staleServerProofWindows > 0) {
-		const count = status.staleServerProofWindows;
-		notices.push({
-			key: 'stale',
-			tone: 'info',
-			icon: 'lucide:history',
-			title: `${count} server-verified ${plural(count, 'result')} may be out of date`,
-			description:
-				'Totals, grouped views, and server-only queries show their last verified value until refreshed.'
 		});
 	}
 
@@ -123,30 +49,39 @@ export const workspaceSyncNotices = (
 		const count = status.pendingMutations;
 		notices.push({
 			key: 'pending',
-			tone: 'neutral',
+			tone: 'warning',
 			icon: 'lucide:cloud-upload',
-			title: `${count} ${plural(count, 'change')} saved on this device`,
-			description: 'Locally durable and visible here; still awaiting server confirmation.'
-		});
-	}
-
-	if (
-		status.connectivity === 'online' &&
-		!status.offlineRetainedOnly &&
-		status.staleServerProofWindows === 0 &&
-		status.pendingMutations === 0 &&
-		status.settledMutations > 0 &&
-		status.issues.length === 0
-	) {
-		const count = status.settledMutations;
-		notices.push({
-			key: 'settled',
-			tone: 'success',
-			icon: 'lucide:cloud-check',
-			title: 'All locally saved changes confirmed',
-			description: `${count} ${plural(count, 'change')} confirmed by the server in this session.`
+			title: `${count} ${plural(count, 'change')} not yet saved to the server`,
+			description:
+				'Durable on this device and visible here. It will be sent when the connection returns.'
 		});
 	}
 
 	return notices;
+};
+
+/** How the sidebar renders the engine's own state, where it costs a reader nothing to ignore. */
+export type WorkspaceSyncIndicator = Readonly<{
+	readonly state: WorkspaceSyncStatus['connectivity'];
+	readonly tone: 'success' | 'neutral' | 'warning';
+	readonly icon: string;
+	readonly label: string;
+}>;
+
+export const workspaceSyncIndicator = (
+	status: WorkspaceSyncStatus | undefined
+): WorkspaceSyncIndicator => {
+	switch (status?.connectivity) {
+		case 'connected':
+			return { state: 'connected', tone: 'success', icon: 'lucide:cloud', label: 'Connected' };
+		case 'syncing':
+			return { state: 'syncing', tone: 'neutral', icon: 'lucide:refresh-cw', label: 'Syncing' };
+		default:
+			return {
+				state: 'disconnected',
+				tone: 'warning',
+				icon: 'lucide:cloud-off',
+				label: 'Disconnected'
+			};
+	}
 };

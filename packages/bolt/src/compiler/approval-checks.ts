@@ -1,4 +1,5 @@
 import type { PolicyDeclaration, WorkspaceDefinition } from '../authoring/workspace-schema.js';
+import { grantScopeProblems } from '../runtime/access/access-control.js';
 
 /**
  * Authority bindings which the compiler can resolve from one complete workspace definition.
@@ -10,7 +11,11 @@ import type { PolicyDeclaration, WorkspaceDefinition } from '../authoring/worksp
  * have one answer.
  */
 type ApprovalDiagnostic = Readonly<{
-	readonly rule: 'undeclared-team-policy' | 'overlapping-policy-grant';
+	readonly rule:
+		| 'undeclared-team-policy'
+		| 'overlapping-policy-grant'
+		| 'approval-without-history'
+		| 'grant-scope-unknown-column';
 	readonly message: string;
 }>;
 
@@ -78,6 +83,46 @@ const overlapDiagnostics = (
 	return diagnostics;
 };
 
+/**
+ * Refuses an approval gate on an update the workspace could never roll back.
+ *
+ * Rejecting an update restores the record as it was before the request opened, and the only source
+ * for that is its history. A collection declared `history: false` keeps none, so a rejection has
+ * nothing to restore and the honest reversal collapses to deleting the row - which for an update
+ * means destroying a record whose only offence was being edited by somebody without authority.
+ *
+ * `create` and `delete` are deliberately not covered. Rejecting a create is a deletion by
+ * definition, and a delete is held rather than applied while it waits, so neither needs a prior
+ * version to return to. Only `update` is unrecoverable without history.
+ */
+const historyDiagnostics = (
+	definition: WorkspaceDefinition
+): ReadonlyArray<ApprovalDiagnostic> => {
+	const withoutHistory = new Set(
+		definition.collections
+			.filter((collection) => collection.history === false)
+			.map((collection) => fold(collection.name))
+	);
+	if (withoutHistory.size === 0) return [];
+	const diagnostics: Array<ApprovalDiagnostic> = [];
+	const seen = new Set<string>();
+	for (const policy of definition.policies) {
+		for (const grant of policy.grants ?? []) {
+			if (grant.action !== 'update') continue;
+			if (!('approval' in grant) || grant.approval === undefined) continue;
+			if (!withoutHistory.has(fold(grant.collection))) continue;
+			const coordinate = `${policy.name}:${grant.collection}`;
+			if (seen.has(coordinate)) continue;
+			seen.add(coordinate);
+			diagnostics.push({
+				rule: 'approval-without-history',
+				message: `policy "${policy.name}" gates update on ${grant.collection}, which declares history: false. A rejected update restores the version from before the request, and a collection that keeps no history has none - so the rejection would delete the record instead of restoring it. Give ${grant.collection} history, or do not gate its updates.`
+			});
+		}
+	}
+	return diagnostics;
+};
+
 export const approvalDiagnostics = (
 	definition: WorkspaceDefinition
 ): ReadonlyArray<ApprovalDiagnostic> => {
@@ -96,6 +141,15 @@ export const approvalDiagnostics = (
 		}
 		diagnostics.push(...overlapDiagnostics(holder, declaredPolicies));
 	}
+	diagnostics.push(...historyDiagnostics(definition));
+	// The rule belongs to `access-control.ts`, which owns what a grant's row scope may say; it is
+	// reported here because this is where a release's authority bindings are refused together, and a
+	// scope that cannot resolve is the same kind of fault as a policy name that cannot.
+	diagnostics.push(
+		...grantScopeProblems(definition).map(
+			({ message }) => ({ rule: 'grant-scope-unknown-column', message }) as const
+		)
+	);
 
 	return diagnostics;
 };

@@ -492,12 +492,55 @@ const restoreGeneratedColumnNotNull = (
 };
 
 /**
+ * The identity drizzle-kit's differ itself uses to pair one DDL entity across two snapshots.
+ *
+ * Reproduced from its `getCompositeKey` — `schema`, `table`, `name`, `entityType` — because the
+ * two-pass split below is sound only if this module partitions entities at least as finely as the
+ * differ does. Drizzle joins those four with `:`, which collides for an identifier containing one;
+ * NUL cannot appear in a PostgreSQL identifier, so this key is strictly finer, and finer is the safe
+ * direction: it can only split a pair the differ would have matched into a drop and an add, never
+ * merge two the differ keeps apart.
+ *
+ * `schema` and `table` do not exist on the kinds that have neither — `schemas` and `roles` — and are
+ * null at runtime for them, so both are normalised away.
+ */
+const ddlEntityKey = (entity: WorkspaceSnapshot['ddl'][number]): string => {
+	const schema = 'schema' in entity ? (entity.schema ?? '') : '';
+	const table = 'table' in entity ? (entity.table ?? '') : '';
+	return `${schema}\u0000${table}\u0000${entity.name}\u0000${entity.entityType}`;
+};
+
+/**
  * Diffs the authored models against the previous snapshot and returns the migration, or `undefined`
  * when the two already agree.
  *
  * An empty diff is the only honest "nothing to do" signal, which is why this carries no fingerprint
  * cache: one would exist only to avoid paying for a subprocess, and a cache that disagrees with the
  * schema is how a changed column reaches the client with no migration behind it.
+ *
+ * The diff runs in two passes, and that is a correctness requirement rather than a structuring
+ * choice. drizzle-kit resolves create-versus-rename through a resolver it asks whenever, for a
+ * single entity kind, one diff both created and deleted something; `generateMigration` constructs
+ * those resolvers with no `HintsHandler`, so reaching that question at all throws
+ * `Internal error: resolver(table) was called without a HintsHandler`. The resolver returns early
+ * when either side is empty, which is why a workspace that only ever grew never hit it, and why the
+ * first restructure that deleted collections while adding others did.
+ *
+ * Splitting the diff removes the question instead of answering it. `intermediate` is `previous`
+ * carrying only the entities whose identity also appears in `snapshot`, so the first pass can only
+ * delete — its target is a subset of its source, taken from the source's own entity objects — and
+ * the second can only create or alter, because its source is a subset of its target. Neither pass
+ * can present both sides for any kind, and that holds for every kind the resolver covers, including
+ * a column dropped from a table that survives, because the subset relation is established over the
+ * whole entity list rather than kind by kind. This also matches what Bolt already promises authors:
+ * a rename is not a supported edit, it is a drop and an add.
+ *
+ * The intermediate is emphatically not the previous-snapshot filter this function used to apply and
+ * that the comment below records. That filter narrowed the *source* of the only diff to what the
+ * current models declare, which hid a deleted collection from the differ entirely and generated no
+ * `DROP TABLE`. This filter narrows the *target* of the first pass, so a deleted collection is
+ * present in that pass's source and absent from its target — it is precisely the drop the old filter
+ * suppressed, and it is now the entire content of the first pass.
  */
 export const planWorkspaceMigration = (
 	input: WorkspaceMigrationPlanInput
@@ -514,10 +557,22 @@ export const planWorkspaceMigration = (
 		// differ exists to fix.
 		const previous = input.previous ?? (yield* Effect.promise(() => generateDrizzleJson({})));
 		const snapshot = yield* Effect.promise(() => generateDrizzleJson(tables, previous.id));
+		const surviving = new Set(snapshot.ddl.map(ddlEntityKey));
+		const intermediate: WorkspaceSnapshot = {
+			...previous,
+			ddl: previous.ddl.filter((entity) => surviving.has(ddlEntityKey(entity)))
+		};
+		// Drops before creates. drizzle-kit orders the statements within each pass, and each pass is a
+		// complete diff, so the only ordering this concatenation decides is between the two halves.
+		// Removals first is the half that can be depended upon: an entity the target schema still
+		// references is by definition present in `snapshot`, so it is in `intermediate` and is never
+		// dropped, while a constraint left over from a dropped table is absent from `snapshot` and so
+		// leaves in the same pass that drops the table it guarded — with drizzle-kit's own ordering
+		// between them. Nothing created in the second pass can reference something the first removed.
+		const removals = yield* Effect.promise(() => generateMigration(previous, intermediate));
+		const additions = yield* Effect.promise(() => generateMigration(intermediate, snapshot));
 		const statements = restoreGeneratedColumnNotNull(
-			orderGeneratedColumnDependencies(
-				yield* Effect.promise(() => generateMigration(previous, snapshot))
-			),
+			orderGeneratedColumnDependencies([...removals, ...additions]),
 			snapshot
 		);
 		if (statements.length === 0) return undefined;

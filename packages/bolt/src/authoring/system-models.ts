@@ -51,7 +51,6 @@ const approvalRequestModel = defineModel(
 		superseder_teams: jsonb()
 			.notNull()
 			.default(sql`'[]'::jsonb`),
-		locked_record_refs: jsonb().notNull(),
 		/** Exact scalar and explicitly included relationship graph the reviewer is deciding on. */
 		proposed_values: jsonb().notNull().default({}),
 		closed_at: instant(),

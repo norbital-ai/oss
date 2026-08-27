@@ -25,10 +25,6 @@
 				return 'border-l-destructive text-destructive';
 			case 'warning':
 				return 'border-l-warning text-warning';
-			case 'info':
-				return 'border-l-info text-info';
-			case 'success':
-				return 'border-l-success text-success';
 			default:
 				return 'border-l-border text-muted-foreground';
 		}

@@ -1593,7 +1593,15 @@ export type StartLocalReplicaOptions = Readonly<{
 	readonly onError?: (cause: unknown) => void;
 	/** Host/runtime hook for the wire-level schema barrier. Not an authoring API. */
 	readonly schemaBarrier?: Omit<SchemaBarrierHooks, 'leader'>;
-	readonly onStorageTier?: (tier: ReplicaStorageTier | 'custom') => void;
+	/**
+	 * Which storage tier the replica ended on, and — when that tier is `server-only` — why.
+	 *
+	 * The reason used to be computed and dropped. `selectReplicaStorage` distinguishes six distinct
+	 * refusals and the election distinguishes three more, and every one of them arrived here as the
+	 * bare word `server-only`, to a callback no caller supplied. A workspace with no browser replica
+	 * at all was therefore indistinguishable from a healthy one except by the wording of a banner.
+	 */
+	readonly onStorageTier?: (tier: ReplicaStorageTier | 'custom', reason?: string) => void;
 	/** Deletes an inactive physical PGlite location selected by the profile-wide eviction planner. */
 	readonly deleteInactiveReplicaPartition?: (
 		candidate: ReplicaProfileEvictionCandidate
@@ -1656,7 +1664,7 @@ export const startLocalReplica = (
 				})
 			);
 			if (partition === undefined) {
-				options.onStorageTier?.('server-only');
+				options.onStorageTier?.('server-only', 'The replica partition identity could not be resolved');
 				return serverOnlyReplica(ephemeralCacheNamespace());
 			}
 			const serverPartitionStatus = yield* commandEffect(runtime, 'sync.partition', {}).pipe(
@@ -1685,7 +1693,7 @@ export const startLocalReplica = (
 					if (open === undefined) {
 						storage = yield* Effect.tryPromise(() => selectReplicaStorage());
 						if (storage.tier === 'server-only') {
-							options.onStorageTier?.('server-only');
+							options.onStorageTier?.('server-only', storage.reason);
 							return serverOnlyReplica(serverPartition.key, partition.principalSource);
 						}
 						profileIndex = yield* Effect.tryPromise(() => openBrowserReplicaProfileIndex()).pipe(
@@ -1695,14 +1703,20 @@ export const startLocalReplica = (
 							})
 						);
 						if (profileIndex === undefined) {
-							options.onStorageTier?.('server-only');
+							options.onStorageTier?.(
+								'server-only',
+								'The browser replica profile index could not be opened'
+							);
 								return serverOnlyReplica(serverPartition.key, partition.principalSource);
 						}
 						const locks = nativeWebLocks();
 						if (locks === undefined) {
 							profileIndex.close();
 							profileIndex = undefined;
-							options.onStorageTier?.('server-only');
+							options.onStorageTier?.(
+								'server-only',
+								'This browser exposes no Web Locks manager'
+							);
 								return serverOnlyReplica(serverPartition.key, partition.principalSource);
 							}
 							const partitionId = replicaProfilePartitionId(serverPartition.key, storage.tier);
@@ -1720,7 +1734,10 @@ export const startLocalReplica = (
 							physicalLease = undefined;
 							profileIndex.close();
 							profileIndex = undefined;
-							options.onStorageTier?.('server-only');
+							options.onStorageTier?.(
+								'server-only',
+								'The replication leadership election was refused by the lock manager'
+							);
 								return serverOnlyReplica(serverPartition.key, partition.principalSource);
 						}
 						options.onStorageTier?.(storage.tier);
@@ -2599,7 +2616,7 @@ const startReplica = (
 		const closeSubscription = (): void => {
 			subscription?.stop();
 			subscription = undefined;
-			accessState?.syncStatus.markStreamDisconnected();
+			accessState?.syncStatus.markDisconnected();
 		};
 		let pendingMutationIds: ReadonlyArray<string> = [];
 		let mutationStatusPolling = false;
@@ -2613,6 +2630,12 @@ const startReplica = (
 		const initialCatchUp = new Promise<void>((resolve) => {
 			resolveCatchUp = resolve;
 		});
+		/**
+		 * The replica is level with the authority: replay is complete and nothing local is queued.
+		 *
+		 * This is the only transition into `connected`, because it is the only moment the client can
+		 * say its rows are the authority's rows.
+		 */
 		const settleCatchUp = (): void => {
 			if (catchUpSettled) return;
 			catchUpSettled = true;
@@ -2907,10 +2930,25 @@ const startReplica = (
 		) => void = () => undefined;
 		let requestMutationStatus: () => void = () => undefined;
 		let publishedDependencySignature: string | undefined;
-		const subscribedCollections = (
-			windowDependencies: ReadonlyArray<string> = []
-		): ReadonlyArray<string> =>
-			[...new Set(windowDependencies)].toSorted();
+		/**
+		 * Every collection this workspace has — never the ones a page happens to have mounted.
+		 *
+		 * The partition stream is opened once per client and stays open, so its subscription cannot
+		 * depend on what is on screen. Deriving it from mounted windows meant navigating between
+		 * surfaces tore the stream down and built a new one, and a surface holding no live query tore
+		 * it down and left nothing to reopen it — which is how a workspace ended up permanently
+		 * reporting a dead stream while every command it sent answered normally.
+		 *
+		 * A workspace's collection set is fixed for the session, so the subscription is too. The
+		 * server accepts 64 (`MAX_SYNC_PARTITION_COLLECTIONS`); the largest template declares 23, so
+		 * the cap is headroom rather than a limit anyone reaches, and truncating is still better than
+		 * a refused stream.
+		 */
+		const SUBSCRIPTION_LIMIT = 64;
+		const subscribedCollections = (): ReadonlyArray<string> =>
+			[...new Set(Object.keys(runtimeStates.access(runtime)?.catalog ?? {}))]
+				.toSorted()
+				.slice(0, SUBSCRIPTION_LIMIT);
 		const rehydrationFacts = async () => {
 			const active = (await Effect.runPromise(coverage.listWindows()))
 				.filter(({ leaseCount }) => leaseCount > 0)
@@ -2992,9 +3030,11 @@ const startReplica = (
 			},
 			refillWindow,
 			rehydrateActive: (queryKeys) => rehydrateActive(queryKeys),
-			onDependenciesChanged: (collections, position) => {
+			onDependenciesChanged: (_collections, position) => {
 				if (!leads() || paused) return;
-				const subscribed = subscribedCollections(collections);
+				// The subscription is the workspace, so a dependency change never re-targets the stream.
+				// What still matters is the cursor and cost facts it carries.
+				const subscribed = subscribedCollections();
 				const dependencySignature = JSON.stringify(subscribed);
 				if (dependencySignature === publishedDependencySignature) return;
 				publishedDependencySignature = dependencySignature;
@@ -3151,7 +3191,7 @@ const startReplica = (
 			)).flat())].toSorted().slice(0, 256);
 			pendingMutationIds = ids;
 			if (!leads() || paused) return;
-			const collections = subscribedCollections(coordinator.dependencies());
+			const collections = subscribedCollections();
 			if (collections.length === 0) {
 				closeSubscription();
 				if (ids.length > 0)
@@ -3568,9 +3608,7 @@ const startReplica = (
 			openingStream = true;
 			void (async () => {
 				try {
-					const collections = subscribedCollections(
-						knownCollections ?? coordinator.dependencies()
-					);
+					const collections = subscribedCollections();
 					const [position, rehydration] = await Promise.all([
 						knownPosition === undefined
 							? Effect.runPromise(coverage.position())
@@ -3579,7 +3617,7 @@ const startReplica = (
 					]);
 					if (!leads() || paused || collections.length === 0) {
 						if (collections.length === 0) {
-							accessState?.syncStatus.markStreamDisconnected();
+							accessState?.syncStatus.markDisconnected();
 							settleCatchUp();
 						}
 						return;
@@ -3589,7 +3627,7 @@ const startReplica = (
 						position,
 						pendingMutationIds,
 						rehydration,
-						onConnecting: () => accessState?.syncStatus.markStreamConnecting(),
+						onConnecting: () => accessState?.syncStatus.markSyncing(),
 				onDeltas: (batch) => {
 					if (schemaBarrierPauses > 0 || maintenance !== undefined) return;
 					if (accessState?.serverPartitionKey !== batch.partition.key) {
@@ -3605,7 +3643,10 @@ const startReplica = (
 					coordinator.acceptDeltas(batch);
 					void coordinator.idle()
 						.then(async () => {
-							if (batch.complete) settleCatchUp();
+							if (batch.complete) {
+								settleCatchUp();
+								accessState?.syncStatus.markConnected();
+							}
 							if (accessState !== undefined)
 								publishReplicaProgress(accessState, { phase: 'applying', completed: 1, total: 1 });
 							if (headRollback) {
@@ -3619,7 +3660,7 @@ const startReplica = (
 							if (subscription !== undefined) {
 								const rehydration = await rehydrationFacts();
 								subscription.update(
-									subscribedCollections(coordinator.dependencies()),
+									subscribedCollections(),
 									{ cursor: batch.cursor, generations: batch.generations },
 									pendingMutationIds,
 									rehydration
@@ -3669,7 +3710,15 @@ const startReplica = (
 							streamIfLeading();
 							return;
 						}
-						accessState?.syncStatus.markStreamReady();
+						/**
+						 * A `ready` frame proves the stream, not that this replica is level with it.
+						 *
+						 * What follows a fresh connection is catch-up — replaying the deltas missed while it
+						 * was down and pushing whatever was queued locally — and that is what `syncing`
+						 * names. Receiving deltas on a replica that is already level is simply `connected`;
+						 * calling that "syncing" would leave a healthy workspace permanently mid-sync.
+						 */
+						accessState?.syncStatus.markSyncing();
 					})().catch((cause) => options.onError?.(cause));
 				},
 				onPartitionChanged: (partition) => {
@@ -3687,12 +3736,12 @@ const startReplica = (
 					void acceptSchemaBarrier(barrier).catch((cause) => options.onError?.(cause));
 				},
 				onError: (cause) => {
-					accessState?.syncStatus.markStreamDisconnected();
+					accessState?.syncStatus.markDisconnected();
 					options.onError?.(cause);
 				}
 					});
 				} catch (cause) {
-					accessState?.syncStatus.markStreamDisconnected();
+					accessState?.syncStatus.markDisconnected();
 					options.onError?.(cause);
 				} finally {
 					openingStream = false;

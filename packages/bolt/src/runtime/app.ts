@@ -874,10 +874,18 @@ const BundleDispatch = {
 							}
 						};
 					}
-					const message =
-						error instanceof Error && error.message.trim() !== ''
-							? error.message
-							: String(error).trim() || 'Dispatch failed';
+					/**
+					 * The last branch is where every unrecognised failure lands, so it is the one that has
+					 * to say the most, not the least.
+					 *
+					 * Reading `error.message` gave a schema failure's generic sentence — "Schema validation
+					 * failed" — and dropped the `issues` that name the field, the expectation and the value.
+					 * A payroll that computed 290 payslips and then refused to persist them reported
+					 * exactly that, with no way to tell which line the engine had built wrong.
+					 * `describeCause` already knows how to render a cause; this branch simply never asked
+					 * it.
+					 */
+					const message = Workspace.describeCause(error);
 					return {
 						_tag: 'Failure',
 						error: makeWireError(

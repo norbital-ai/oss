@@ -35,7 +35,6 @@ export type {
 } from './integration-introspection.js';
 import type {
 	Api,
-	CollectionMutationValues,
 	DefaultWorkspaceSchema,
 	TableName,
 	TablesForModels
@@ -150,10 +149,21 @@ export type PlatformSchema = {
 	readonly tables: PlatformModelTables;
 	readonly relations: Readonly<Record<string, unknown>>;
 };
-export type CollectionRegistryFor<S extends import('./contracts-schema.js').AnySchema> = {
+/**
+ * The browser client's view of a workspace's collections.
+ *
+ * `Inputs` is the same generated map `Api` takes, and it types `client.db.<collection>.mutate` from
+ * the same `export const input` the server's `api.db.<collection>.mutate` reads. One declaration,
+ * both callers — which is the property the old `create.input`/`update.input` pair could not have,
+ * since it was two of them and neither reached the client at all.
+ */
+export type CollectionRegistryFor<
+	S extends import('./contracts-schema.js').AnySchema,
+	Inputs = unknown
+> = {
 	readonly [N in TableName<S>]: {
 		readonly row: import('./contracts-schema.js').SchemaRow<S, N>;
-		readonly mutation: CollectionMutationValues<S, N>;
+		readonly mutation: import('./contracts-schema.js').MutationValuesFor<S, N, Inputs>;
 	};
 };
 export type InvokeClientApi<

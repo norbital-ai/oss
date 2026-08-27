@@ -43,7 +43,7 @@ export type QueryInput = Readonly<{
 	readonly limit?: number | undefined;
 	/**
 	 * Relations to load alongside the rows. Stays `unknown` for the same reason `where` does — the
-	 * prefetch resolver owns what a relation spec may contain.
+	 * relational query planner owns what a relation spec may contain.
 	 */
 	readonly with?: unknown | undefined;
 	/**
@@ -329,27 +329,12 @@ export type ResumeError =
 	| MutationPhaseFailure
 	| NestingLimitExceeded;
 
-/** A requested relationship has more authorized rows than one bounded prefetch may hydrate. */
-export class RelationshipPrefetchLimitExceeded extends Schema.TaggedError<RelationshipPrefetchLimitExceeded>()(
-	'Bolt.Collections.RelationshipPrefetchLimitExceeded',
-	{
-		sourceCollection: Schema.NonEmptyString,
-		relation: Schema.NonEmptyString,
-		targetCollection: Schema.NonEmptyString,
-		limit: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1))
-	}
-) {
-	readonly retryable = false;
-	readonly message = `Relationship ${this.sourceCollection}.${this.relation} has more than ${this.limit} authorized ${this.targetCollection} rows and cannot be hydrated exactly.`;
-}
-
 /** Query paths add the where-compiler failure so an unsupported filter surfaces instead of silently widening the result. */
 export type QueryError =
 	| Workspace.WorkspaceLookupError
 	| AccessControl.AccessDenied
 	| Database.FacilityError
 	| WhereCompileError
-	| RelationshipPrefetchLimitExceeded
 	| AuthoredRefusal
 	| NestingLimitExceeded;
 
@@ -430,7 +415,17 @@ export const mutationPhaseFailure = (
 		? cause
 		: new MutationPhaseFailure({
 				phase,
-				collection,
+				/**
+				 * Never the empty string, because this field would rather throw than hold one.
+				 *
+				 * `collection` is `NonEmptyString`, and a `Schema.TaggedError` whose own field rejects its
+				 * value throws from the constructor — with the message "Schema validation failed", no
+				 * `_tag`, and no properties at all. Every `instanceof` downstream then misses it, it falls
+				 * through to the generic 500, and the failure this was built to *carry* is destroyed by the
+				 * act of wrapping it. A wrapper that can annihilate its own cause is worse than no wrapper,
+				 * and an unnamed collection is a far smaller loss than the reason the write failed.
+				 */
+				collection: collection.trim() === '' ? '(unnamed collection)' : collection,
 				committed,
 				cause,
 				...(step === undefined ? {} : { step })

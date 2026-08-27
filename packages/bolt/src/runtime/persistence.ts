@@ -1,5 +1,12 @@
 import { drizzle } from 'drizzle-orm/pg-proxy';
-import { sql, type SQL, type SQLChunk, type SQLWrapper } from 'drizzle-orm';
+import {
+	sql,
+	type AnyDBQueryConfig,
+	type AnyRelations,
+	type SQL,
+	type SQLChunk,
+	type SQLWrapper
+} from 'drizzle-orm';
 import { Effect, Schema } from 'effect';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
 import type * as Database from '#lib/runtime/facilities/database.js';
@@ -32,13 +39,37 @@ type TransactionStatement = Statement & Readonly<{ readonly [TRANSACTION_STATEME
  * path. Calling a query directly is therefore a defect; callers render it with `toStatement` or
  * hand it to `executeBuilt`.
  */
-export const composer = drizzle(() =>
+const refuseExecution = () =>
 	Effect.runPromise(
 		Effect.die(
 			new Error('bolt persistence: queries are composed here and executed by the facility')
 		)
-	)
-);
+	);
+
+export const composer = drizzle(refuseExecution);
+
+/**
+ * The same composer, told which relationships this workspace has.
+ *
+ * Drizzle's relational query builder is only reachable through an instance that was given a
+ * relations map, and the map is the workspace's — so it cannot be the module-level `composer`.
+ * The driver is the identical refusal: a relational read is still composed here and executed by
+ * the facility, and `db.query.x.findMany(…).toSQL()` renders without touching it.
+ */
+export const relationalComposer = (relations: AnyRelations) =>
+	drizzle(refuseExecution, { relations });
+
+/**
+ * One collection's relational query builder, as the relational composer exposes it.
+ *
+ * Narrowed to the two things a composer can do with it: take a query config, and render. Drizzle's
+ * own builder type is generic over the workspace's relations, which are only known at run time.
+ */
+export type RelationalBuilder = Readonly<{
+	readonly findMany: (config?: AnyDBQueryConfig) => Readonly<{
+		readonly toSQL: () => DrizzleStatement;
+	}>;
+}>;
 
 /** One fixed database expression, assembled only inside this closed persistence vocabulary. */
 const expression = <T>(chunks: ReadonlyArray<SQLChunk>): SQL<T> =>

@@ -158,6 +158,30 @@ export function formatBillingAmountFromMinorUnits(
 	}).format(numericAmount / CURRENCY_MINOR_UNITS_PER_MAJOR_UNIT)}`;
 }
 
+/**
+ * The flat platform fee, per workspace, per month, as a real Stripe price. Checkout subscribes it
+ * as `line_items[0]` with the metered prices after it, so the base is invoiced on the same
+ * subscription as the usage it gates. `amount` is major units, the figure the pricing page reads.
+ */
+export const PLATFORM_FLAT_PRICES = [
+	{
+		id: 'platform-base-monthly',
+		name: 'Workspace base',
+		description: 'SGD 10.00 per workspace per month, flat — unchanged by headcount or usage.',
+		model: 'flat',
+		interval: 'month',
+		checkout: true,
+		stripePriceIds: {
+			sandbox: 'price_1U97ONLvWjJB44nUrKDVveY3',
+			production: null
+		},
+		amount: '10.00'
+	}
+] as const satisfies readonly BillingCataloguePrice[];
+
+/** The flat base fee in major units — the catalogue amount, not a second literal beside it. */
+export const PLATFORM_BASE_SGD_PER_MONTH = Number(PLATFORM_FLAT_PRICES[0].amount);
+
 export const AI_METERED_PRICES = [
 	{
 		id: 'ai-provider-cost-micros-monthly',
@@ -183,6 +207,7 @@ export const LATEST_CATALOGUE_PRODUCTS = [
 		description:
 			'A flat base fee per workspace, plus separately metered compute, disc, files, and AI usage.',
 		prices: [
+			...PLATFORM_FLAT_PRICES,
 			{
 				id: 'compute-second-monthly',
 				name: 'Compute usage',

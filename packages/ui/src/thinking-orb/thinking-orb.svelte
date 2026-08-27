@@ -258,11 +258,22 @@
 	}
 </script>
 
+<!--
+	The box is inline, not only in the stylesheet below.
+
+	Vite assigns a component's scoped CSS to whichever chunk it lands in, and this component's sheet
+	was emitted into a lazily-loaded one (`tabs-*.css`) while the orb itself renders in the sidebar,
+	which is present on every page. Until something happened to load that chunk the orb had no rules
+	at all: a bare `<canvas>` is 300x150 by specification, so it drew scattered dots across half the
+	sidebar and read as a stale or broken icon. The rules below still carry state colour and the
+	accent swatch; what a shell-chrome component cannot afford to inherit from a code-split sheet is
+	its own size.
+-->
 <span
 	class={`norbital-thinking-orb ${className}`}
 	data-state={state}
 	data-compact={size <= 36 ? 'true' : undefined}
-	style={`--orb-size: ${size}px`}
+	style={`--orb-size: ${size}px; width: ${size}px; height: ${size}px; display: grid; place-items: center; position: relative; flex: none`}
 	role={label ? 'img' : undefined}
 	aria-label={label}
 	aria-hidden={label ? undefined : 'true'}
@@ -460,7 +471,7 @@
 		};
 	}}
 >
-	<canvas aria-hidden="true"></canvas>
+	<canvas aria-hidden="true" style="display: block; width: 100%; height: 100%"></canvas>
 	<span class="orb-accent-swatch" aria-hidden="true"></span>
 </span>
 

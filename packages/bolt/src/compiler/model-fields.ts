@@ -1,7 +1,10 @@
-import type {
-	FieldDefinition,
-	FieldType,
-	RelationDefinition
+import { compileModel } from '../authoring/model-introspection.js';
+import { SYSTEM_COLLECTION_MODELS } from '../authoring/system-models.js';
+import {
+	collection,
+	type FieldDefinition,
+	type FieldType,
+	type RelationDefinition
 } from '../authoring/workspace-schema.js';
 
 const builderTypes: Readonly<Record<string, FieldType>> = {
@@ -328,8 +331,8 @@ export const extractRelationships = (source: string): ReadonlyArray<RelationDefi
 	/**
 	 * A parent-side `many` declaration normally omits endpoints because the owning foreign key is
 	 * authored on the child's inverse `one`. Carry that one unambiguous fact onto the compiled edge
-	 * so every artifact consumer — mutation validation, graph reconciliation, prefetch, and generated
-	 * types — receives the same writable orientation. Direction names are deliberately irrelevant:
+	 * so every artifact consumer — mutation validation, graph reconciliation, the relational read, and
+	 * generated types — receives the same writable orientation. Direction names are deliberately irrelevant:
 	 * `account_contacts` and `contact_account` are two UI names for the same reversed collections.
 	 * Endpointless through-relations and multiple possible inverse foreign keys remain unresolved.
 	 */
@@ -359,3 +362,43 @@ export const extractRelationships = (source: string): ReadonlyArray<RelationDefi
 		};
 	});
 };
+
+/**
+ * The platform's own collections, in the shape the client catalog speaks.
+ *
+ * The catalog was built only from authored `+model.ts` files under `src/collections`, so it
+ * described exactly the collections a workspace declares and none the platform declares for it.
+ * The shell's own Approvals surface renders `CollectionTable collection="approval_request"`, and
+ * `WorkspaceApis.create` answers an unknown collection with `{ fields: [] }` rather than failing —
+ * so every column that table declared was reported as unknown and the whole workspace client
+ * refused to load with `declares unknown column "collection_name"`. The column existed; the
+ * collection was never published to the client at all.
+ *
+ * `ScalarType` is coarser than an authored builder name, which is the point: these entries come
+ * from the compiled declaration rather than from scraped source text, so a system model can never
+ * drift from the catalog the way a regex over source can.
+ */
+const systemCatalogKinds: Readonly<Record<FieldType, string>> = {
+	string: 'text',
+	uuid: 'uuid',
+	number: 'number',
+	boolean: 'boolean',
+	instant: 'instant',
+	json: 'json',
+	reference: 'reference'
+};
+
+export const systemCollectionCatalog = (): ReadonlyArray<CollectionCatalogEntry> =>
+	Object.entries(SYSTEM_COLLECTION_MODELS).map(([name, declaration]) => {
+		const compiled = compileModel(collection({ name, fields: {} }), declaration);
+		return {
+			name,
+			fields: Object.entries(compiled.fields).map(([fieldName, field]) => ({
+				name: fieldName,
+				kind: systemCatalogKinds[field.type] ?? 'text',
+				nullable: !field.required,
+				...(field.generated === undefined ? {} : { readOnly: true as const })
+			})),
+			relationships: []
+		};
+	});

@@ -1,16 +1,22 @@
 /**
- * Health of the authoritative sync path, not merely the device network adapter.
+ * Where this client stands against the authority, in the three states it can actually be in.
  *
- * `online` is reserved for an explicit live-stream proof. `navigator.onLine === true` can move the
- * signal only to `unverified`: a browser can have a network interface while DNS, authentication,
- * the host, or the partition stream is unavailable.
+ * - `connected` — the stream is open and this replica is **level**: replay is complete and nothing
+ *   local is queued. Deltas arriving on a level replica are the steady state, not an event.
+ * - `syncing` — the stream is open and this replica is **catching up**: replaying what it missed
+ *   while it was down, or pushing what was queued locally. It is a transient after a connection.
+ * - `disconnected` — no stream. It reconnects on its own.
+ *
+ * The five-state model this replaces (`unverified`, `connecting`, `online`, `offline`,
+ * `disconnected`) existed because the stream was torn down and rebuilt whenever the mounted
+ * dependency set changed, so "not connected" could mean a fault, a surface with nothing subscribed,
+ * or a connection never attempted. The shell reported all three as an unavailable stream while
+ * every command it sent answered normally.
+ *
+ * `navigator.onLine === false` is proof of `disconnected`; `true` proves nothing, so it never moves
+ * the signal on its own.
  */
-export type SyncConnectivity =
-	| 'unverified'
-	| 'connecting'
-	| 'online'
-	| 'offline'
-	| 'disconnected';
+export type SyncConnectivity = 'connected' | 'syncing' | 'disconnected';
 
 export type SyncIssue = Readonly<{
 	readonly mutationId: string;
@@ -38,12 +44,12 @@ export type WorkspaceSyncStatusSignal = Readonly<{
 export type MutableWorkspaceSyncStatusSignal = WorkspaceSyncStatusSignal &
 	Readonly<{
 		readonly patch: (patch: Partial<Omit<WorkspaceSyncStatus, 'revision'>>) => void;
-		/** The leader has begun opening the authoritative partition stream. */
-		readonly markStreamConnecting: () => void;
-		/** A decoded partition `ready` frame proved the stream and authority are live. */
-		readonly markStreamReady: () => void;
-		/** The stream errored or closed and has not yet produced a replacement `ready` frame. */
-		readonly markStreamDisconnected: () => void;
+		/** The stream is open and this replica is catching up — replaying or pushing. */
+		readonly markSyncing: () => void;
+		/** Replay is complete and nothing is queued: this replica is level with the authority. */
+		readonly markConnected: () => void;
+		/** The stream is down. It reconnects on its own; this is the only fault state. */
+		readonly markDisconnected: () => void;
 		readonly close: () => void;
 	}>;
 
@@ -56,7 +62,7 @@ const browserReachable = (): boolean | undefined =>
 export const createWorkspaceSyncStatus = (): MutableWorkspaceSyncStatusSignal => {
 	const initialReachability = browserReachable();
 	let value: WorkspaceSyncStatus = {
-		connectivity: initialReachability === false ? 'offline' : 'unverified',
+		connectivity: initialReachability === false ? 'disconnected' : 'syncing',
 		// Until the sync stream proves itself live, retained rows cannot prove unseen rows are absent.
 		offlineRetainedOnly: true,
 		staleServerProofWindows: 0,
@@ -79,14 +85,23 @@ export const createWorkspaceSyncStatus = (): MutableWorkspaceSyncStatusSignal =>
 			...next,
 			// Updating an unrelated counter must not turn an unverified connection into an exact
 			// replica. Only an explicit stream-ready transition may clear retained-only mode.
+			// Updating an unrelated counter must not turn a catching-up replica into an exact one. Only
+			// an explicit `ready` frame may clear retained-only mode.
 			offlineRetainedOnly:
-				next.connectivity === 'online' ? next.offlineRetainedOnly : true
+				next.connectivity === 'connected' ? next.offlineRetainedOnly : true
 		});
 	};
+	/**
+	 * The adapter can prove absence, never presence.
+	 *
+	 * `navigator.onLine === false` means no request can succeed, so it settles `disconnected`
+	 * immediately rather than waiting for the stream to notice. Coming back only means a request
+	 * could now be attempted — the stream says whether one succeeded — so it reports `syncing` and
+	 * lets a `ready` frame decide.
+	 */
 	const browserConnectivity = (): void => {
-		const reachable = browserReachable();
 		patch({
-			connectivity: reachable === false ? 'offline' : 'unverified',
+			connectivity: browserReachable() === false ? 'disconnected' : 'syncing',
 			offlineRetainedOnly: true
 		});
 	};
@@ -103,11 +118,20 @@ export const createWorkspaceSyncStatus = (): MutableWorkspaceSyncStatusSignal =>
 			return () => listeners.delete(listener);
 		},
 		patch,
-		markStreamConnecting: () =>
-			patch({ connectivity: browserReachable() === false ? 'offline' : 'connecting' }),
-		markStreamReady: () => patch({ connectivity: 'online', offlineRetainedOnly: false }),
-		markStreamDisconnected: () =>
-			patch({ connectivity: 'disconnected', offlineRetainedOnly: true }),
+		markSyncing: () =>
+			patch({ connectivity: browserReachable() === false ? 'disconnected' : 'syncing' }),
+		markConnected: () => patch({ connectivity: 'connected', offlineRetainedOnly: false }),
+		markDisconnected: () => patch({ connectivity: 'disconnected', offlineRetainedOnly: true }),
+		/**
+		 * The stream was closed on purpose, because nothing is subscribed to it.
+		 *
+		 * `disconnected` is a claim that the authoritative stream is *unavailable*, and the shell says
+		 * so. But a partition subscription exists only for the mounted dependency union: navigate from
+		 * a collection table to a view holding no live query and the union empties, which closes the
+		 * stream, cancels the pending retry, and leaves `open()` refusing to reopen. Reporting that as
+		 * a fault told operators their sync was broken while `sync.partition` answered 200 throughout.
+		 * There is no claim to make here, which is what `unverified` means.
+		 */
 		close: () => {
 			if (closed) return;
 			closed = true;

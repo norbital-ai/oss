@@ -213,6 +213,7 @@ export const subscribeToPartition = (
 		reportAndReopen(parsed.failure, source);
 	};
 	const open = (): void => {
+		// An empty subscription is a workspace with no collections, not a reason to stay closed.
 		if (stopped || current !== undefined || collections.length === 0) return;
 		options.onConnecting?.();
 		const nextSignature = JSON.stringify(collections);
@@ -287,15 +288,16 @@ export const subscribeToPartition = (
 			position = nextPosition;
 			pendingMutationIds = normalizeMutationIds(nextPendingMutationIds);
 			rehydration = nextRehydration;
-			// Cursor, mutation-status and cost facts advance on the live connection itself. Retain their
-			// newest values for a later reconnect, but never churn E1 unless the dependency set changed.
+			// Cursor, mutation-status and cost facts advance on the live connection itself; they are
+			// retained here only so a reconnect resumes from the newest values.
 			const nextSignature = JSON.stringify(collections);
-			if (nextSignature === signature && current !== undefined) return;
-			if (retry !== undefined) clearTimeout(retry);
-			retry = undefined;
-			current?.close();
-			current = undefined;
-			signature = '';
+			// The stream is not re-targeted by a dependency change.
+			//
+			// Its subscription is the whole workspace and fixed for the session, so `collections` can no
+			// longer differ between calls; cursor, mutation status and cost facts advance on the live
+			// connection. Closing and reopening here is what made "connected" a property of whichever
+			// surface happened to be mounted.
+			signature = nextSignature;
 			open();
 		},
 		stop: () => {

@@ -1,7 +1,7 @@
 import { deriveRecordId } from '#lib/runtime/derive-record-id.js';
 import { Clock, Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { and, asc, eq, exists, isNull, notExists } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, isNull, notExists } from 'drizzle-orm';
 import { compileModelTable } from '#lib/authoring/model-introspection.js';
 import { defineModel } from '#lib/authoring/models-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
@@ -28,7 +28,8 @@ const {
 	bolt_approvals: approvalStateTable,
 	bolt_audit: auditTable,
 	bolt_notifications: notificationTable,
-	bolt_task: taskTable
+	bolt_task: taskTable,
+	bolt_collection_history: collectionHistoryTable
 } = SYSTEM_MODEL_TABLES;
 
 type ApprovalProjection = Readonly<{
@@ -39,7 +40,6 @@ type ApprovalProjection = Readonly<{
 	readonly steps: Schema.Json;
 	readonly approverTeams: Schema.Json;
 	readonly supersederTeams: Schema.Json;
-	readonly lockedRecordRefs: Schema.Json;
 	readonly proposedValues: Schema.Json;
 	readonly closedAt: string | null;
 	readonly closedBy: string | null;
@@ -489,6 +489,43 @@ export const layer = Layer.effect(
 			}
 			return events;
 		});
+		/**
+		 * The version this record must return to if the request is rejected.
+		 *
+		 * The newest history sequence *strictly before* the request opens - so a rejection lands on the
+		 * state that existed before any of this began, not on whatever the last revision produced. A
+		 * record with no history did not exist, which is why `null` is the honest answer and why
+		 * rejecting a create deletes rather than restores.
+		 *
+		 * Sequence, never a timestamp: writes inside one transaction share `now()`, and the whole point
+		 * is to separate the version before the request from the versions it produced.
+		 */
+		const anchorFor = Effect.fn('Approvals.anchorFor')(function* (
+			effectId: EffectId,
+			collection: string,
+			recordId: string
+		) {
+			const result = yield* executeBuilt(
+				effectId,
+				database,
+				composer
+					.select({ sequence: collectionHistoryTable.sequence })
+					.from(collectionHistoryTable)
+					.where(
+						and(
+							eq(collectionHistoryTable.collection_name, collection),
+							eq(collectionHistoryTable.record_id, recordId)
+						)
+					)
+					.orderBy(desc(collectionHistoryTable.sequence))
+					.limit(1)
+			);
+			const row = result.rows[0];
+			const sequence =
+				typeof row === 'object' && row !== null ? Reflect.get(row, 'sequence') : undefined;
+			return typeof sequence === 'number' ? sequence : null;
+		});
+
 		const projectionOf = Effect.fn('Approvals.projectionOf')(function* (
 			state: ApprovalState,
 			closedBy?: string
@@ -515,10 +552,6 @@ export const layer = Layer.effect(
 					state._tag === 'Pending'
 						? (configuration?.superceded_by ?? []).map((team: string) => team.toLocaleLowerCase())
 						: [],
-				lockedRecordRefs:
-					collectionName === 'unknown'
-						? []
-						: [{ collection_name: collectionName, record_id: recordId }],
 				proposedValues: fields['values'] ?? {},
 				closedAt: state._tag === 'Pending' ? null : instantLabel(nowEpochMs),
 				closedBy: closedBy ?? null
@@ -578,10 +611,6 @@ export const layer = Layer.effect(
 								steps: aliased(jsonb(projection.steps), 'steps'),
 								approver_teams: aliased(jsonb(projection.approverTeams), 'approver_teams'),
 								superseder_teams: aliased(jsonb(projection.supersederTeams), 'superseder_teams'),
-								locked_record_refs: aliased(
-									jsonb(projection.lockedRecordRefs),
-									'locked_record_refs'
-								),
 								proposed_values: aliased(jsonb(projection.proposedValues), 'proposed_values'),
 								closed_at: aliased(bound(projection.closedAt), 'closed_at'),
 								closed_by: aliased(bound(projection.closedBy), 'closed_by')
@@ -721,10 +750,6 @@ export const layer = Layer.effect(
 								steps: aliased(jsonb(projection.steps), 'steps'),
 								approver_teams: aliased(jsonb(projection.approverTeams), 'approver_teams'),
 								superseder_teams: aliased(jsonb(projection.supersederTeams), 'superseder_teams'),
-								locked_record_refs: aliased(
-									jsonb(projection.lockedRecordRefs),
-									'locked_record_refs'
-								),
 								proposed_values: aliased(jsonb(projection.proposedValues), 'proposed_values'),
 								closed_at: aliased(bound(projection.closedAt), 'closed_at'),
 								closed_by: aliased(bound(projection.closedBy), 'closed_by')
@@ -883,10 +908,6 @@ export const layer = Layer.effect(
 										superseder_teams: aliased(
 											jsonb(projection.supersederTeams),
 											'superseder_teams'
-										),
-										locked_record_refs: aliased(
-											jsonb(projection.lockedRecordRefs),
-											'locked_record_refs'
 										),
 										proposed_values: aliased(jsonb(projection.proposedValues), 'proposed_values'),
 										closed_at: aliased(bound(projection.closedAt), 'closed_at'),

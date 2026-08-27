@@ -1098,8 +1098,8 @@ const MINTED_IDENTITY = [
  * Answers one keyset page: the rows, and the cursor its successor should carry.
  *
  * It lives at the boundary that owns the page ceiling, so `findMany` keeps returning plain rows for
- * the callers that want exactly the rows they asked for — the relation prefetch calls it recursively,
- * and `export` reads a whole collection through it.
+ * the callers that want exactly the rows they asked for — `export` reads a whole collection through
+ * it, and an authored handler asks for a page without wanting a cursor back.
  *
  * The read asks for one row past the page because that is the only honest answer to "is there
  * another page?". A cursor emitted from a last page that happened to fill the limit would offer a

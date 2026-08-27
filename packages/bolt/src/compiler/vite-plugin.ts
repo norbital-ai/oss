@@ -200,7 +200,23 @@ const VitePlugins = {
 									`\t\t\t\tclient: workspace.client,`,
 									`\t\t\t\truntime: workspace.runtime,`,
 									`\t\t\t\tchangeAccessScope: workspace.changeAccessScope,`,
-									`\t\t\t\tstartLocalReplica: (accessScope) => workspace.startLocalReplica(workspace.runtime, undefined, { accessScope })`,
+									// The replica reports why it fell back, to somebody.
+									//
+									// `startLocalReplica` returns `serverOnlyReplica` as an ordinary success, so a host
+									// that never opened a browser database looks exactly like one that did. The runtime
+									// distinguishes nine separate refusals and `onStorageTier` was supplied by no caller
+									// anywhere, so every one of them was computed and dropped. A Web Locks defect kept
+									// every document in every browser server-only for weeks, and the only symptom was a
+									// banner reading "Sync connection unverified".
+									`\t\t\tstartLocalReplica: (accessScope) =>`,
+									`\t\t\t\tworkspace.startLocalReplica(workspace.runtime, undefined, {`,
+									`\t\t\t\t\taccessScope,`,
+									`\t\t\t\t\tonStorageTier: (tier, reason) => {`,
+									`\t\t\t\t\t\tif (tier !== 'server-only') return;`,
+									`\t\t\t\t\t\tconsole.warn('[bolt] no browser replica: ' + (reason ?? 'no reason reported') + '. Reads stay server-authoritative.');`,
+									`\t\t\t\t\t},`,
+									`\t\t\t\t\tonError: (cause) => console.warn('[bolt] replica error', cause)`,
+									`\t\t\t\t})`,
 									`\t\t\t\t}))`,
 									`\t\t\t)`,
 									`\t\t)`,

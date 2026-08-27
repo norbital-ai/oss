@@ -529,8 +529,8 @@ export const canonicalizeCollectionQuery = (
 	if (kind === 'count') reasons.push('aggregate');
 	if (kind === 'findGrouped') reasons.push('grouped');
 	// Relationship predicates change root membership and remain server-owned. A plain `with` is a
-	// read-time expansion: once the authoritative prefetch has proved its bounded result complete,
-	// the normalized edge set and target rows reproduce it locally until a dependency moves.
+	// read-time expansion: the normalized edge set and target rows reproduce the authoritative
+	// answer locally until a dependency moves.
 	if (
 		inspection.usesRelationshipPredicates ||
 		(inspection.usesRelationships && options.localRelationships !== true)

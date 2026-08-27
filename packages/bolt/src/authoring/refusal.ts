@@ -73,7 +73,26 @@ export const refusalOf = (cause: unknown): AuthoredRefusal | undefined => {
  * `payroll_runs` row is settled — has already said which collection the rule belongs to, and the
  * outer seam must not relabel it with whichever table the write happened to land on.
  */
-export const refusalAt = (refusal: AuthoredRefusal, site: RefusalSite): AuthoredRefusal => {
+export const refusalAt = <Failure>(
+	refusal: Failure,
+	site: RefusalSite
+): Failure | AuthoredRefusal => {
+	/**
+	 * Only a refusal is re-stamped. Anything else is handed back exactly as it arrived.
+	 *
+	 * This is reached from `Effect.catch` around an authored hook, whose error channel is *typed*
+	 * `AuthoredRefusal` and is not one: `runAuthoredHandler` converts thrown values and defects, but
+	 * an Effect the handler returns keeps its own error channel, and the authoring signatures declare
+	 * that channel `never`. So a nested write that fails — `payslips.mutate` inside a payroll
+	 * `create.after` — arrives here as a tagged collections failure wearing a refusal's type.
+	 *
+	 * Rebuilding it was fatal rather than merely wrong. `message` is `NonEmptyString` and a tagged
+	 * failure has none, so the constructor threw; a `Schema.TaggedError` that throws yields a plain
+	 * `Error` with no `_tag` and no properties, every `instanceof` downstream missed it, and the
+	 * write's real failure was destroyed by the seam that existed only to label it. The payroll
+	 * committed its run, refused to persist 290 payslips, and reported "Schema validation failed".
+	 */
+	if (!(refusal instanceof AuthoredRefusal)) return refusal;
 	const collection = refusal.collection ?? decodeNamed(site.collection);
 	const action = refusal.action ?? decodeNamed(site.action);
 	if (collection === refusal.collection && action === refusal.action) return refusal;

@@ -26,6 +26,15 @@ export type WhereContext = Readonly<{
 	readonly relations: ReadonlyArray<RelationDefinition>;
 	readonly collections: ReadonlyArray<string>;
 	readonly fieldsByCollection: Readonly<Record<string, Readonly<Record<string, FieldDefinition>>>>;
+	/**
+	 * The SQL name this collection's own columns are qualified by.
+	 *
+	 * A compiled predicate names every column `"collection"."field"`, which is exactly right while
+	 * the collection is its own `from` clause. A relational read is not: Drizzle aliases the table it
+	 * selects from, and `"employment"."id"` then names nothing. Absent, the collection qualifies
+	 * itself — so every caller that composes an unaliased select is unchanged.
+	 */
+	readonly qualifier?: string | undefined;
 }>;
 
 /**
@@ -106,6 +115,11 @@ const WhereSql = {
 		SYSTEM_COLUMN_NAMES.includes(key) || Object.hasOwn(context.fields, key),
 	qualify: (collection: string, field: string): string =>
 		`${WhereSql.quoteIdentifier(collection)}.${WhereSql.quoteIdentifier(WhereSql.mapColumn(field))}`,
+	/** The name the collection being compiled answers to in the surrounding query. */
+	self: (context: WhereContext): string => context.qualifier ?? context.collection,
+	/** The same, for a collection named by a relation endpoint rather than by the context. */
+	named: (context: WhereContext, collection: string): string =>
+		collection === context.collection ? WhereSql.self(context) : collection,
 	singular: (collection: string): string =>
 		collection.endsWith('s') ? collection.slice(0, -1) : collection,
 	/**
@@ -120,13 +134,20 @@ const WhereSql = {
 		return Schema.is(Schema.Json)(value) ? value : undefined;
 	},
 	joinPredicate: (
+		context: WhereContext,
 		source: string,
 		target: string,
 		relation: RelationDefinition
 	): string | undefined => {
 		if (relation.from === undefined || relation.to === undefined) return undefined;
-		const fromSql = WhereSql.qualify(relation.from.collection, relation.from.column);
-		const toSql = WhereSql.qualify(relation.to.collection, relation.to.column);
+		const fromSql = WhereSql.qualify(
+			WhereSql.named(context, relation.from.collection),
+			relation.from.column
+		);
+		const toSql = WhereSql.qualify(
+			WhereSql.named(context, relation.to.collection),
+			relation.to.column
+		);
 		const connects =
 			(relation.from.collection === source && relation.to.collection === target) ||
 			(relation.from.collection === target && relation.to.collection === source);
@@ -142,7 +163,7 @@ const WhereSql = {
 		const target = declared?.target;
 		if (target !== undefined) {
 			const join = context.relations
-				.map((relation) => WhereSql.joinPredicate(context.collection, target, relation))
+				.map((relation) => WhereSql.joinPredicate(context, context.collection, target, relation))
 				.find((predicate) => predicate !== undefined);
 			if (join !== undefined) return { target, join };
 		}
@@ -153,7 +174,7 @@ const WhereSql = {
 		if (!context.collections.includes(heuristicTarget)) return undefined;
 		return {
 			target: heuristicTarget,
-			join: `${WhereSql.qualify(heuristicTarget, `${singular}_id`)} = ${WhereSql.qualify(context.collection, 'id')}`
+			join: `${WhereSql.qualify(heuristicTarget, `${singular}_id`)} = ${WhereSql.qualify(WhereSql.self(context), 'id')}`
 		};
 	},
 	relatedContext: (context: WhereContext, collection: string): WhereContext => ({
@@ -189,7 +210,8 @@ const WhereSql = {
 export const makeWhereContext = (
 	collection: string,
 	fields: Readonly<Record<string, FieldDefinition>>,
-	definition: WorkspaceDefinition
+	definition: WorkspaceDefinition,
+	qualifier?: string
 ): WhereContext => ({
 	collection,
 	fields,
@@ -197,7 +219,8 @@ export const makeWhereContext = (
 	collections: definition.collections.map(({ name }) => name),
 	fieldsByCollection: Object.fromEntries(
 		definition.collections.map((entry) => [entry.name, entry.fields])
-	)
+	),
+	qualifier
 });
 
 const failure = (context: WhereContext, field: string, message: string): InternalWhereResult =>
@@ -334,7 +357,7 @@ const referenceHandle = (
 			})
 		);
 	return Result.succeed({
-		column: WhereSql.qualify(context.collection, target.storageColumn),
+		column: WhereSql.qualify(WhereSql.self(context), target.storageColumn),
 		id
 	});
 };
@@ -395,7 +418,7 @@ const compileReferenceOperator = (
 			const target = reference.targets.find((candidate) => candidate.tag === kind);
 			if (target === undefined) return operandFailure(context, field, operator);
 			return Result.succeed({
-				sql: `${WhereSql.qualify(context.collection, target.storageColumn)} is ${comparison === 'eq' ? 'not ' : ''}null`,
+				sql: `${WhereSql.qualify(WhereSql.self(context), target.storageColumn)} is ${comparison === 'eq' ? 'not ' : ''}null`,
 				parameters: []
 			});
 		}
@@ -428,7 +451,7 @@ const compileReferenceCondition = (
 	const reference = context.fields[field]?.reference;
 	if (reference === undefined) return failure(context, field, `'${field}' is not a reference.`);
 	const arms = reference.targets.map((target) =>
-		WhereSql.qualify(context.collection, target.storageColumn)
+		WhereSql.qualify(WhereSql.self(context), target.storageColumn)
 	);
 	const clauses: Array<RenderedQuery> = [];
 	for (const [operator, operand] of Object.entries(condition)) {
@@ -454,7 +477,7 @@ const compileFieldCondition = (
 			field,
 			condition as Readonly<Record<string, unknown>>
 		);
-	const fieldSql = WhereSql.qualify(context.collection, field);
+	const fieldSql = WhereSql.qualify(WhereSql.self(context), field);
 	const textual = context.fields[field]?.type === 'string';
 	const clauses: Array<RenderedQuery> = [];
 	for (const [operator, operand] of Object.entries(condition)) {
@@ -566,16 +589,17 @@ const escapeSearchPattern = (value: string): string =>
 export const compileSearch = (
 	fields: Readonly<Record<string, FieldDefinition>>,
 	term: string | null | undefined,
-	collection?: string
+	/** The name the searched table answers to — its collection, or the alias a read gave it. */
+	qualifier?: string
 ): RenderedQuery => {
 	const trimmed = term?.trim() ?? '';
 	if (trimmed === '') return { sql: 'true', parameters: [] };
 	const searchable = searchableColumns(fields);
 	if (searchable.length === 0) return { sql: 'false', parameters: [] };
 	const columnSql = (name: string): string =>
-		collection === undefined
+		qualifier === undefined
 			? WhereSql.quoteIdentifier(name)
-			: WhereSql.qualify(collection, name);
+			: WhereSql.qualify(qualifier, name);
 	return {
 		sql: searchable
 			.map((name) => `${columnSql(name)}::text collate "C" ilike $1 escape '\\'`)

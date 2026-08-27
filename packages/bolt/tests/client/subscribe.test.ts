@@ -50,7 +50,15 @@ const source = () => {
 beforeEach(session);
 
 describe('partition dependency subscription', () => {
-	it('opens one stream for the distinct dependency union and replaces it on change', () => {
+	/**
+	 * One stream per client, for the life of the session.
+	 *
+	 * It used to be replaced whenever the mounted dependency set changed, which made "connected" a
+	 * property of whichever surface happened to be open — and a surface with no live query closed it
+	 * and left nothing to reopen it. The subscription is now the workspace, so an update carries new
+	 * cursor and cost facts along the connection that is already there.
+	 */
+	it('opens one stream and keeps it across an update', () => {
 		const first = source();
 		const second = source();
 		const opened = [first, second];
@@ -76,17 +84,15 @@ describe('partition dependency subscription', () => {
 		).toEqual(['mutation-1', 'mutation-2']);
 
 		subscription.update(
-			['jobs'],
+			['teams', 'jobs'],
 			{ cursor: { xid: 1, sequence: 4 }, generations: { jobs: 4 } },
 			['mutation-2'],
 			{ activeWindows: 1, rowsPerWindow: 20, estimatedBytesPerRow: 128 }
 		);
-		expect(first.closed()).toBe(1);
-		expect(urls).toHaveLength(2);
-		expect(new URL(urls[1] ?? '', 'https://bolt.local').searchParams.getAll('collection')).toEqual([
-			'jobs'
-		]);
+		expect(first.closed()).toBe(0);
+		expect(urls).toHaveLength(1);
 		subscription.stop();
+		expect(first.closed()).toBe(1);
 	});
 
 	it('decodes full-row batches and M3 recovery advice without inventing progress', () => {

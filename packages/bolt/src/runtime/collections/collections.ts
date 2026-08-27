@@ -3,17 +3,17 @@ import {
 	and,
 	asc,
 	count as countRows,
-	desc,
 	eq,
 	getColumns,
 	inArray,
 	isNotNull,
 	sql,
+	type AnyDBQueryConfig,
 	type SQL,
 	type SQLChunk
 } from 'drizzle-orm';
-import { alias as tableAlias, pgTable, text, type AnyPgColumn } from 'drizzle-orm/pg-core';
-import { Cause, Clock, Context, Effect, Layer, Result, Schema } from 'effect';
+import { alias as tableAlias, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { Cause, Clock, Context, Effect, Layer, Result, Schema, SchemaAST } from 'effect';
 import {
 	CollectionMutationBaseVersion,
 	CollectionMutationDeviceSequence,
@@ -57,6 +57,7 @@ import {
 	makeWhereContext,
 	whereExpression,
 	WhereCompileError,
+	type OrderTerm,
 	type WhereContext
 } from '#lib/runtime/collections/where.js';
 import { compileCollectionCursorSeek } from '#lib/runtime/collections/cursor.js';
@@ -88,7 +89,6 @@ import {
 	MutationRetryExpired,
 	MutationQuarantined,
 	MutationVersionConflict,
-	RelationshipPrefetchLimitExceeded,
 	type QueryError,
 	type NearestQueryInput,
 	type QueryInput,
@@ -104,7 +104,6 @@ export {
 	MutationRetryExpired,
 	MutationQuarantined,
 	MutationVersionConflict,
-	RelationshipPrefetchLimitExceeded,
 	PendingApproval,
 	Service,
 	mutationPhaseFailure
@@ -124,7 +123,15 @@ export type {
 	QueryError,
 	ResumeError
 } from './collections.contract.js';
-import { attachRelations, PREFETCH_LIMIT } from '#lib/runtime/collections/prefetch.js';
+import { collectionQueryTable, relationalSchema } from '#lib/compiler/relational-schema.js';
+import {
+	orderingExpressions,
+	planRelations,
+	readRelationalRows,
+	ROOT_ALIAS,
+	type MaskRow,
+	type PlanContext
+} from '#lib/runtime/collections/relation-query.js';
 import {
 	decodeReferenceRow,
 	encodeReferenceValues,
@@ -151,13 +158,16 @@ import { approvalFlowDescriptor } from '#lib/authoring/approval-flow.js';
 import { approvalStepId } from '#lib/authoring/policy-introspection.js';
 import {
 	aliased,
+	always,
 	composer,
 	executeBuilt,
 	lessThanOrEqual,
+	relationalComposer,
 	rowJson,
 	toStatement,
 	transactionSql,
-	vectorDistance
+	vectorDistance,
+	type RelationalBuilder
 } from '#lib/runtime/persistence.js';
 
 const {
@@ -206,25 +216,6 @@ class BrowserMutationReplay extends Error {
 
 const isBrowserMutationReplay = (cause: unknown): cause is BrowserMutationReplay =>
 	cause instanceof BrowserMutationReplay;
-
-/**
- * A query-only Drizzle descriptor for one runtime collection.
- *
- * `WorkspaceDefinition` deliberately carries portable field metadata rather than Drizzle builders.
- * Reads need column names, not DDL types, so every physical column is described as text here: the
- * descriptor emits quoted identifiers and bound values but never creates or migrates a table.
- * Logical references are omitted and their generated physical UUID arms are included instead.
- */
-const collectionQueryTable = (name: string, fields: Readonly<Record<string, FieldDefinition>>) => {
-	const names = new Set<string>(SYSTEM_COLUMN_NAMES);
-	for (const [field, definition] of Object.entries(fields)) {
-		if (definition.reference === undefined) names.add(field);
-		else for (const target of definition.reference.targets) names.add(target.storageColumn);
-	}
-	const columns = Object.fromEntries([...names].map((column) => [column, text()]));
-	// repository-health:allow DDL1 -- query-only Drizzle descriptor; this call emits no DDL.
-	return pgTable(name, columns);
-};
 
 const columnsOf = (table: ReturnType<typeof collectionQueryTable>) =>
 	getColumns(table) as Readonly<Record<string, AnyPgColumn>>;
@@ -278,21 +269,6 @@ type PersistedCollectionHistoryRow = typeof PersistedCollectionHistoryRow.Type;
 /** The `JsonObject` predicate, built once: it is consulted for every row the facility hands back. */
 const isJsonObject = Schema.is(JsonObject);
 const queryRowOf = Schema.decodeUnknownSync(JsonObject);
-const queryRowsOf = (value: unknown): ReadonlyArray<QueryRow> => {
-	const parsed =
-		typeof value === 'string'
-			? Result.try(() => JSON.parse(value) as unknown)
-			: Result.succeed(value);
-	if (Result.isFailure(parsed)) {
-		throw new TypeError('Grouped collection aggregate did not return valid JSON.');
-	}
-	const rows = Schema.decodeUnknownResult(Schema.Array(JsonObject))(parsed.success);
-	if (Result.isFailure(rows)) {
-		throw new TypeError('Grouped collection aggregate did not return a JSON row array.');
-	}
-	return rows.success;
-};
-
 /**
  * Drizzle's connectionless `toSQL()` does not run a JSONB column's driver encoder.
  *
@@ -747,6 +723,60 @@ export const resolveWritableManyRelation = (
 		return resolved === undefined ? [] : [resolved];
 	});
 	return inverses.length === 1 ? inverses[0] : undefined;
+};
+
+/**
+ * The same declared `input`, with every column optional.
+ *
+ * There is one write and one shape for it, and the shape is stated as a record: `schema('x', {
+ * columns: { … } })` names the columns a caller may send. On a create that record is what a caller
+ * must send, so it decodes as declared. On an update the caller sends a patch — the columns it is
+ * changing and no others — so decoding it against a shape that requires all of them would refuse
+ * every partial write. The declaration does not change; what a patch is checked against is this.
+ *
+ * Effect v4 has no `Schema.partial`, and the runtime holds an erased `Schema.Codec` rather than the
+ * `Struct` an author built, so this rebuilds the struct from the one thing that survives erasure:
+ * the AST's property signatures, each re-wrapped with `optionalKey`. `Suspend` is resolved on the
+ * way, because `schema()` returns one so that a shape declared at module init does not need the
+ * collection registry populated yet.
+ *
+ * A declaration whose AST is not an object is refused rather than ignored. `input` describes a
+ * record; one that describes a string is a mistake in the workspace, and the write that discovers it
+ * should say so instead of quietly writing every column the caller sent.
+ */
+const objectAst = (ast: SchemaAST.AST): SchemaAST.Objects | undefined => {
+	let current = ast;
+	// Bounded rather than recursive: a `Suspend` whose thunk returns another `Suspend` is legal, and
+	// one that returns itself is a workspace that would otherwise hang the isolate here.
+	for (let hop = 0; hop < 8; hop += 1) {
+		if (current._tag === 'Objects') return current;
+		if (current._tag !== 'Suspend') return undefined;
+		current = current.thunk();
+	}
+	return undefined;
+};
+
+const partialInputs = new WeakMap<object, Schema.Codec<unknown, unknown>>();
+
+const partialInput = (
+	collection: string,
+	input: Schema.Codec<unknown, unknown>
+): Schema.Codec<unknown, unknown> => {
+	const cached = partialInputs.get(input);
+	if (cached !== undefined) return cached;
+	const objects = objectAst(input.ast);
+	if (objects === undefined)
+		throw new TypeError(
+			`${collection} declares an \`input\` that is not a record, so a partial write cannot be checked against it. \`export const input\` names the columns a caller may send.`
+		);
+	const fields: Record<PropertyKey, Schema.Top> = {};
+	for (const property of objects.propertySignatures)
+		fields[property.name] = Schema.optionalKey(Schema.make<Schema.Top>(property.type));
+	// The one cast: `Schema.Struct` is exact about the fields it was handed and the runtime carries
+	// every authored schema erased, which is the same erasure `input` itself arrives under.
+	const built = Schema.Struct(fields) as unknown as Schema.Codec<unknown, unknown>;
+	partialInputs.set(input, built);
+	return built;
 };
 
 const hasDeclaredManyRelationship = (
@@ -1291,7 +1321,21 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						return outcome.code === 'refused'
 							? Effect.fail(
 									new AuthoredRefusal({
-										message: outcome.message,
+										/**
+										 * A refusal that arrives with nothing to say still refused.
+										 *
+										 * `message` is `NonEmptyString`, so an empty one makes this constructor
+										 * throw — and a `Schema.TaggedError` that throws yields an object with no
+										 * `_tag` and no properties, whose message is the literal "Schema validation
+										 * failed". Every `instanceof` below then misses it and a refusal becomes a
+										 * generic 500 carrying none of the reason. `refuse()` already guards its own
+										 * sentence for exactly this; an outcome decoded off the wire deserves the
+										 * same, because nothing here can vouch for what the other side sent.
+										 */
+										message:
+											typeof outcome.message === 'string' && outcome.message.trim() !== ''
+												? outcome.message
+												: 'This operation was refused by a workspace rule.',
 										...(outcome.collection === undefined ? {} : { collection: outcome.collection }),
 										...(outcome.action === undefined ? {} : { action: outcome.action })
 									})
@@ -1486,6 +1530,27 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				queryTables.set(name, table);
 				return table;
 			};
+			/**
+			 * The workspace's relationships, as Drizzle's relational query builder needs them.
+			 *
+			 * Built once from the same declaration the schema plan emits foreign keys from, over the same
+			 * table descriptors the ordinary composed selects use, and resolved through the same
+			 * `resolveWritableManyRelation` the graph writer resolves a parent's children by.
+			 */
+			const workspaceRelations = relationalSchema(workspace.definition, {
+				table: (name, fields) => queryTableFor(name, fields),
+				resolveMany: resolveWritableManyRelation
+			});
+			const relational = relationalComposer(workspaceRelations);
+			/**
+			 * The relational query builder for one collection, once the workspace has declared it.
+			 *
+			 * Opaque because the workspace is: Drizzle types `db.query` from a relations map known at
+			 * compile time, and this one is derived from the artifact at layer construction.
+			 */
+			const relationalBuilders = relational.query as unknown as Readonly<
+				Record<string, RelationalBuilder | undefined>
+			>;
 			// Announced from here rather than from the command boundary, because this is the only place
 			// every write actually passes through: a command, an agent tool, an import, an automation and a
 			// browser mutation all land on these three functions. Announcing at `dispatch` would
@@ -1664,8 +1729,6 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			/** Whether this collection has an outbound binding that needs the row as it was before the write. */
 			const needsPreviousRow = (collection: string, operation: 'update' | 'delete'): boolean =>
 				watchesOperation(subscriptionsFor(collection), operation);
-			// Annotated from the interface because the body calls itself to prefetch relations, and a
-			// self-referencing const cannot have its type inferred.
 			/** Reads one row back without row-level visibility or masking — the elevated view hooks and change events see. */
 			const readRowElevated = Effect.fn('Collections.readRowElevated')(function* (
 				effectId: EffectId,
@@ -1984,21 +2047,34 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			/**
 			 * Decodes one payload through the collection's declared input, if it has one.
 			 *
-			 * Lifted out of `runCreateHooks` because `load` sees the batch's inputs and must see them in
-			 * the same shape the handler will: a collection that declares two fields where the table has
+			 * **One decode, because there is one input.** There used to be two — `create.input` and
+			 * `update.input` — describing the same operation and free to drift; `input` is now a binding
+			 * of the collection's own, which is also what lets it type `api.db.x.mutate` and
+			 * `client.db.x.mutate` from the same declaration the runtime enforces.
+			 *
+			 * The action is not a second contract, only which half of one applies: a create must carry
+			 * the record the shape names, an update carries a patch of it. Everything a caller sent that
+			 * the shape does not name is stripped either way, which is the security property this decode
+			 * exists for.
+			 *
+			 * Lifted out of the before hook because `prepare` sees the batch's inputs and must see them in
+			 * the same shape the hook will: a collection that declares two fields where the table has
 			 * twenty would otherwise hand its batch read the raw payload and its handler the decoded one.
 			 */
-			const decodeCreateInput = Effect.fn('Collections.decodeCreateInput')(function* (
+			const decodeMutateInput = Effect.fn('Collections.decodeMutateInput')(function* (
 				collection: string,
 				values: Readonly<Record<string, Schema.Json>>,
-				module: AuthoredCollectionHookModule | undefined
+				module: AuthoredCollectionHookModule | undefined,
+				action: 'create' | 'update'
 			) {
-				if (module?.create?.input === undefined) return values;
-				const decoded = yield* Schema.decodeUnknownEffect(module.create.input)(values).pipe(
+				const declared = module?.input;
+				if (declared === undefined) return values;
+				const shape = action === 'create' ? declared : partialInput(collection, declared);
+				const decoded = yield* Schema.decodeUnknownEffect(shape)(values).pipe(
 					Effect.mapError(
 						() =>
 							new AccessControl.AccessDenied({
-								action: 'create',
+								action,
 								resource: collection,
 								reason: 'hook input validation failed'
 							})
@@ -2021,7 +2097,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 *
 			 * Undeclared, this is `undefined` and costs nothing.
 			 */
-			const runCreatePrepare = Effect.fn('Collections.runCreatePrepare')(function* (
+			const runMutatePrepare = Effect.fn('Collections.runMutatePrepare')(function* (
 				effectId: EffectId,
 				subject: Identity.Subject,
 				collection: string,
@@ -2030,40 +2106,107 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				depth: number,
 				staged?: HookWriteOps
 			) {
-				const prepare = module?.create?.prepare;
+				const prepare = module?.mutate?.prepare;
 				if (prepare === undefined) return undefined;
 				const api = buildApi(effectId, subject, false, depth + 1, staged);
 				return yield* runAuthoredHandler(() => prepare({ inputs, api }, api)).pipe(
-					Effect.mapError((cause) => refusalAt(cause, { collection, action: 'create.prepare' }))
+					Effect.mapError((cause) => refusalAt(cause, { collection, action: 'mutate.prepare' }))
 				);
 			});
-			const runCreateHooks = Effect.fn('Collections.runCreateHooks')(function* (
+			/**
+			 * The one per-record rule, for the one write.
+			 *
+			 * `existing` is what tells a create from an update, and it is the same fact the runtime
+			 * decided the operation from a moment earlier — the stored row this write lands on, or
+			 * `undefined` because there is not one yet. Two hooks used to answer that question by which
+			 * of them was called, which is how their two return types drifted apart while the runtime
+			 * split a graph out of both.
+			 */
+			const runMutateBefore = Effect.fn('Collections.runMutateBefore')(function* (
 				effectId: EffectId,
 				subject: Identity.Subject,
 				input: MutationInput,
+				existing: Readonly<Record<string, unknown>> | undefined,
 				module: AuthoredCollectionHookModule | undefined,
 				depth = 0,
 				prepared: unknown = undefined,
 				staged?: HookWriteOps
 			) {
 				const api = buildApi(effectId, subject, false, depth + 1, staged);
-				// Already decoded by the caller. `load` sees the batch's inputs and the handler sees one of
-				// them, and they must be the same shape — a collection declaring two fields where the table
-				// has twenty would otherwise hand its batch read the raw payload and its handler the
+				// Already decoded by the caller. `prepare` sees the batch's inputs and the handler sees one
+				// of them, and they must be the same shape — a collection declaring two fields where the
+				// table has twenty would otherwise hand its batch read the raw payload and its handler the
 				// decoded one.
 				const values = input.values;
 				const before = yield* runHook(
-					module?.create?.perRecord?.before,
-					{ input: values, prepared, api },
+					module?.mutate?.perRecord?.before,
+					{ input: values, existing, prepared, api },
 					api,
 					{
 						collection: input.collection,
-						action: 'create.before'
+						action: 'mutate.before'
 					}
 				);
-				return before != null && typeof before === 'object'
+				return before != null && typeof before === 'object' && !Array.isArray(before)
 					? (before as Readonly<Record<string, Schema.Json>>)
 					: values;
+			});
+			/** The subject-bound facts a `with` clause is planned against. */
+			const planContextFor = (subject: Identity.Subject): PlanContext => ({
+				definition: workspace.definition,
+				relations: workspaceRelations,
+				authorize: (collection: string) => access.authorize(subject, 'read', collection),
+				predicate: (collection: string) => access.predicate(subject, 'read', collection)
+			});
+			/** A field mask, bound to this subject and applied against each level's own collection. */
+			const maskFor =
+				(subject: Identity.Subject): MaskRow =>
+				(collection, row) =>
+					access.mask(subject, 'read', collection, row);
+			/**
+			 * One relational read: the rows, and every relation the caller asked for, in one statement.
+			 *
+			 * Every level's row-visibility predicate is pushed into that level's own lateral subquery, so
+			 * a related record is filtered by exactly the predicate a direct read of its collection would
+			 * carry. `with` cannot become a way to read rows the subject could not otherwise see, and it
+			 * no longer costs a query per relation per level to say so.
+			 */
+			const readRelational = Effect.fn('Collections.readRelational')(function* (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				collection: string,
+				config: Readonly<{
+					readonly where: SQL;
+					readonly ordering: ReadonlyArray<OrderTerm>;
+					readonly limit: number;
+					readonly with: unknown;
+				}>
+			) {
+				const builder = relationalBuilders[collection];
+				if (builder === undefined) {
+					return yield* new WhereCompileError({
+						collection,
+						field: 'collection',
+						message: `'${collection}' has no relational descriptor in this workspace.`
+					});
+				}
+				const planned = yield* planRelations(planContextFor(subject), collection, config.with);
+				// The same load-bearing cast `relation-query.ts` explains at length: Drizzle's declared
+				// `RelationsFilter` does not model the `RAW` key that `relationsFilterToSQL` reads before
+				// every other, so a bound predicate cannot be handed to a typed filter. The root read
+				// carries the subject's row predicate through exactly that key.
+				const query = builder.findMany({
+					where: { RAW: config.where },
+					orderBy: (table: unknown) => [...orderingExpressions(table, config.ordering)],
+					limit: config.limit,
+					...(planned.with === undefined ? {} : { with: planned.with })
+				} as unknown as AnyDBQueryConfig);
+				const result = yield* executeBuilt(effectId, database, query);
+				// `source` is the same page as `rows`, in the same order, before reference decoding and
+				// masking. Only grouping wants it: a lane is a fact about the stored column, and a field
+				// mask must not be able to merge two lanes by hiding the column they differ on.
+				const source = result.rows as ReadonlyArray<Readonly<Record<string, unknown>>>;
+				return { rows: readRelationalRows(source, planned.level, maskFor(subject)), source };
 			});
 			const findMany: Interface['findMany'] = Effect.fn('Collections.findMany')(function* (
 				effectId: EffectId,
@@ -2072,62 +2215,30 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			) {
 				const definition = yield* workspace.collection(input.collection);
 				yield* access.authorize(subject, 'read', input.collection);
-				const context = makeWhereContext(input.collection, definition.fields, workspace.definition);
+				const context = makeWhereContext(
+					input.collection,
+					definition.fields,
+					workspace.definition,
+					ROOT_ALIAS
+				);
 				const compiled = yield* compiledFilter(input, context);
-				const searched = compileSearch(definition.fields, input.search, input.collection);
+				const searched = compileSearch(definition.fields, input.search, ROOT_ALIAS);
 				const visibility = access.predicate(subject, 'read', input.collection);
-				const limit = Math.max(1, input.limit ?? 100);
 				const ordering = compileOrderTerms(input.orderBy, context);
 				const seek = yield* compileCollectionCursorSeek(input.after, ordering, input.collection);
-				const table = queryTableFor(input.collection, definition.fields);
-				const columns = columnsOf(table);
-				const orderedColumns = ordering.map((term) => {
-					const column = columns[term.column]!;
-					const expression =
-						term.collation === undefined ? column : sql`${column} collate "C"`;
-					return term.direction === 'asc' ? asc(expression) : desc(expression);
+				const read = yield* readRelational(effectId, subject, input.collection, {
+					where:
+						and(
+							compiled,
+							queryFragment(searched),
+							AccessControl.predicateExpression(visibility),
+							queryFragment(seek)
+						) ?? always(),
+					ordering,
+					limit: Math.max(1, input.limit ?? 100),
+					with: input.with
 				});
-				const result = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select(columns)
-						.from(table)
-						.where(
-							and(
-								compiled,
-								queryFragment(searched),
-								AccessControl.predicateExpression(visibility),
-								queryFragment(seek)
-							)
-						)
-						.orderBy(...orderedColumns)
-						.limit(limit)
-				);
-				const rows: ReadonlyArray<QueryRow> = result.rows.map((value) => {
-					const row = queryRowOf(value);
-					return access.mask(
-						subject,
-						'read',
-						input.collection,
-						decodeReferenceRow(row, definition.fields)
-					);
-				});
-				// Related records are read through `findMany` itself, so each one passes the same
-				// authorization, row visibility and masking as a direct query would. `with` cannot
-				// become a way to read what the subject is not allowed to see.
-				return yield* attachRelations(
-					workspace.definition,
-					input.collection,
-					rows,
-					input.with,
-					(collection, column, values) =>
-						findMany(effectId, subject, {
-							collection,
-							where: { [column]: { in: values } },
-							limit: PREFETCH_LIMIT + 1
-						})
-				);
+				return read.rows;
 			});
 			/**
 			 * The rows nearest a probe vector, closest first.
@@ -2499,6 +2610,22 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 * collection mutation. Keeping this separate from execution lets a declarative graph put the
 			 * same operation inside its one transaction instead of recreating a shorter SQL-only path.
 			 */
+			/**
+			 * The request a write belongs to, taken from the record it is changing.
+			 *
+			 * A locked record carries `approval_id`, and a write that reaches a locked record is by
+			 * definition a write under that request - the revision path is the only way past the gate.
+			 * Stamping the history row with it makes the request's record set derivable instead of
+			 * tracked, so a record a revision creates, or one a cascade removes, is in the ledger
+			 * because it wrote history, not because something remembered to add it.
+			 */
+			const governingRequest = (
+				previous: Readonly<Record<string, unknown>> | undefined
+			): string | null => {
+				const held = previous?.['approval_id'];
+				return typeof held === 'string' && held !== '' ? held : null;
+			};
+
 			const updateStatements = (
 				effectId: EffectId,
 				subject: Identity.Subject,
@@ -2536,6 +2663,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 										record_id: input.id,
 										operation: 'update',
 										subject_id: subject.userId,
+										approval_id: governingRequest(previous),
 										snapshot: encodedJsonb(values)
 									})
 									.toSQL()
@@ -2622,7 +2750,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 										collection_name: collection,
 										record_id: id,
 										operation: 'delete',
-										subject_id: subject.userId
+										subject_id: subject.userId,
+										approval_id: governingRequest(previous),
+										// The row as it was, so a rejected delete has something to restore. Serialised
+										// the same way the approval path serialises its snapshot.
+										snapshot: JSON.stringify(previous ?? {})
 									})
 									.toSQL()
 							)
@@ -3049,8 +3181,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				// A create is a batch of one, and takes the batch's path rather than a shorter one of its
 				// own: decode, load, hook. `load` over a single input costs one call and, where a
 				// collection declares none, nothing at all.
-				const decoded = yield* decodeCreateInput(input.collection, input.values, module);
-				const prepared = yield* runCreatePrepare(
+				const decoded = yield* decodeMutateInput(input.collection, input.values, module, 'create');
+				const prepared = yield* runMutatePrepare(
 					effectId,
 					subject,
 					input.collection,
@@ -3058,10 +3190,13 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					module,
 					depth
 				);
-				const values = yield* runCreateHooks(
+				const values = yield* runMutateBefore(
 					effectId,
 					subject,
 					{ ...input, values: decoded },
+					// A create has no stored row, and that absence is the whole discriminator: the hook is
+					// told what the runtime already decided from the missing id, rather than a second flag.
+					undefined,
 					module,
 					depth,
 					prepared
@@ -3103,13 +3238,18 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						approval
 					);
 				}
-				if (module?.create?.perRecord?.after !== undefined) {
+				if (module?.mutate?.perRecord?.after !== undefined) {
 					const api = buildApi(effectId, subject, true, depth + 1);
 					const record = yield* readRowElevated(effectId, input.collection, input.id);
-					yield* runHook(module.create.perRecord.after, { record, api }, api, {
-						collection: input.collection,
-						action: 'create.after'
-					});
+					yield* runHook(
+						module.mutate.perRecord.after,
+						{ previous: undefined, changes: preparedValues, record, api },
+						api,
+						{
+							collection: input.collection,
+							action: 'mutate.after'
+						}
+					);
 				}
 				yield* emitChangeEvents(effectId, input.collection, input.id, 'created');
 			});
@@ -3771,35 +3911,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								reason: 'update includes fields outside the matching policy grant'
 							});
 
-						if (action === 'create') {
-							const decoded = yield* decodeCreateInput(collection, own, module);
-							own = decoded;
-							if (options.runHooks) {
-								const prepared = yield* runCreatePrepare(
-									effectId,
-									subject,
-									collection,
-									[decoded],
-									module,
-									hookDepth + depth,
-									stageHookWrites
-								);
-								const hooked = yield* runCreateHooks(
-									effectId,
-									subject,
-									{ collection, id, values: decoded },
-									module,
-									hookDepth + depth,
-									prepared,
-									stageHookWrites
-								);
-								const returned = yield* splitGraphPayload(collection, hooked, action);
-								own = returned.own;
-								const byName = new Map(included.map((entry) => [entry.edge.name, entry]));
-								for (const entry of returned.included) byName.set(entry.edge.name, entry);
-								included = [...byName.values()];
-							}
-						} else {
+						// Only an update has anything to read first: the row it lands on, the fence the browser
+						// declared against it, and the snapshot the ledger keeps. Everything after this — the
+						// decode, `prepare`, `before`, and the graph split of what `before` returned — is one
+						// path, because it is one write.
+						if (action === 'update') {
 							previous = yield* readRowElevated(effectId, collection, id);
 							if (
 								options.browserMutation !== undefined &&
@@ -3822,44 +3938,37 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									previous
 								);
 							snapshot = yield* recordSnapshot(collection, id);
-							if (module?.update?.input !== undefined) {
-								own = (yield* Schema.decodeUnknownEffect(module.update.input)(own).pipe(
-									Effect.mapError(
-										() =>
-											new AccessControl.AccessDenied({
-												action: 'update',
-												resource: collection,
-												reason: 'hook input validation failed'
-											})
-									)
-								)) as Readonly<Record<string, Schema.Json>>;
-							}
-							if (options.runHooks && module?.update?.perRecord?.before !== undefined) {
-								const api = buildApi(
-									effectId,
-									subject,
-									false,
-									hookDepth + depth + 1,
-									stageHookWrites
-								);
-								const before = yield* runHook(
-									module.update.perRecord.before,
-									{ input: own, existing: previous, api },
-									api,
-									{ collection, action: 'update.before' }
-								);
-								if (before != null && typeof before === 'object' && !Array.isArray(before)) {
-									const returned = yield* splitGraphPayload(
-										collection,
-										before as Readonly<Record<string, unknown>>,
-										action
-									);
-									own = returned.own;
-									const byName = new Map(included.map((entry) => [entry.edge.name, entry]));
-									for (const entry of returned.included) byName.set(entry.edge.name, entry);
-									included = [...byName.values()];
-								}
-							}
+						}
+						own = yield* decodeMutateInput(collection, own, module, action);
+						if (options.runHooks) {
+							// The id rides the input on an update and only there. It is the one thing a
+							// `prepare` can read to tell a recalculation from a first build, because it sees a
+							// batch of inputs and no rows; `before` is told the same fact as `existing`.
+							const hookInput = action === 'update' ? { ...own, id } : own;
+							const prepared = yield* runMutatePrepare(
+								effectId,
+								subject,
+								collection,
+								[hookInput],
+								module,
+								hookDepth + depth,
+								stageHookWrites
+							);
+							const hooked = yield* runMutateBefore(
+								effectId,
+								subject,
+								{ collection, id, values: hookInput },
+								previous,
+								module,
+								hookDepth + depth,
+								prepared,
+								stageHookWrites
+							);
+							const returned = yield* splitGraphPayload(collection, hooked, action);
+							own = returned.own;
+							const byName = new Map(included.map((entry) => [entry.edge.name, entry]));
+							for (const entry of returned.included) byName.set(entry.edge.name, entry);
+							included = [...byName.values()];
 						}
 
 						// Relationship ownership comes from the graph position, never from a writable payload.
@@ -4385,10 +4494,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						operation.clearLock !== true
 					)
 						continue;
-					const hook =
-						operation.action === 'create'
-							? operation.module?.create?.perRecord?.after
-							: operation.module?.update?.perRecord?.after;
+					// One hook for a created row and an updated one, told apart by `previous` — which the
+					// operation already carries as `undefined` for a create, because there was no row to read.
+					const hook = operation.module?.mutate?.perRecord?.after;
 					if (hook === undefined) continue;
 					const record = records.get(`${operation.collection}\u0000${operation.id}`);
 					if (record === undefined) continue;
@@ -4397,13 +4505,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						operation.collection,
 						runHook(
 							hook,
-							operation.action === 'update'
-								? { previous: operation.previous, changes: operation.values, record, api }
-								: { record, api },
+							{ previous: operation.previous, changes: operation.values, record, api },
 							api,
 							{
 								collection: operation.collection,
-								action: `${operation.action}.after`
+								action: 'mutate.after'
 							}
 						)
 					);
@@ -4699,10 +4805,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				 */
 				const preparation = yield* Effect.gen(function* () {
 					const decoded = yield* Effect.all(
-						identified.map((row) => decodeCreateInput(collection, row.values, module)),
+						identified.map((row) => decodeMutateInput(collection, row.values, module, 'create')),
 						{ concurrency: 'unbounded' }
 					);
-					const prepared = yield* runCreatePrepare(
+					const prepared = yield* runMutatePrepare(
 						effectId,
 						subject,
 						collection,
@@ -4712,10 +4818,13 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					);
 					const built = yield* Effect.all(
 						identified.map((row, index) =>
-							runCreateHooks(
+							runMutateBefore(
 								rowId(index),
 								subject,
 								{ collection, id: row.id, values: decoded[index] ?? row.values },
+								// Every row on this path is an insert — the batch was routed here by having no
+								// id — so there is no stored row for any of them.
+								undefined,
 								module,
 								depth,
 								prepared
@@ -4767,16 +4876,36 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					const settled = rows.flatMap((record, index) =>
 						record === undefined ? [] : [{ index, record }]
 					);
-					if (module?.create?.perRecord?.after !== undefined) {
-						const after = module.create.perRecord.after;
+					if (module?.mutate?.perRecord?.after !== undefined) {
+						const after = module.mutate.perRecord.after;
+						// The columns this write committed, taken from the flattened root rather than
+						// re-derived: FLATTEN is where a returned graph became rows, so it is the only place
+						// that knows which of them are this record's own.
+						const committedValues = new Map(
+							nodes.map((node) => [`${node.collection}\u0000${node.id}`, node.values])
+						);
 						yield* Effect.all(
 							settled.map(({ index, record }) =>
 								Effect.suspend(() => {
 									const api = buildApi(rowId(index), subject, true, depth + 1);
-									return runHook(after, { record, api }, api, {
-										collection,
-										action: 'create.after'
-									});
+									const id = built[index]?.id;
+									return runHook(
+										after,
+										{
+											previous: undefined,
+											changes:
+												id === undefined
+													? {}
+													: (committedValues.get(`${collection}\u0000${id}`) ?? {}),
+											record,
+											api
+										},
+										api,
+										{
+											collection,
+											action: 'mutate.after'
+										}
+									);
 								})
 							),
 							{ concurrency: 'unbounded' }
@@ -5050,6 +5179,18 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					typeof row === 'object' && row !== null ? Reflect.get(row, 'count') : undefined;
 				return typeof value === 'number' ? value : Number(value ?? 0);
 			});
+			/**
+			 * One complete authoritative grouping.
+			 *
+			 * The rows are read once, bounded by the durable result cap, and sorted into their lanes
+			 * here rather than by a `jsonb_agg` over a windowed subquery. That aggregate existed because
+			 * the relation prefetch needed a flat row list to hand back afterwards; a relational read
+			 * already returns whole rows in the requested order, so grouping them is a loop and the
+			 * relations arrive with them instead of costing a query per relation afterwards.
+			 *
+			 * The lane is read off the record as the database returned it, before masking: a field mask
+			 * narrows what a caller may see of a row, and it must not silently merge two lanes into one.
+			 */
 			const findGrouped: Interface['findGrouped'] = Effect.fn('Collections.findGrouped')(
 				function* (effectId, subject, input) {
 					const definition = yield* workspace.collection(input.collection);
@@ -5064,16 +5205,15 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					const context = makeWhereContext(
 						input.collection,
 						definition.fields,
-						workspace.definition
+						workspace.definition,
+						ROOT_ALIAS
 					);
 					const compiled = yield* compiledFilter(input, context);
-					const searched = compileSearch(definition.fields, input.search, input.collection);
+					const searched = compileSearch(definition.fields, input.search, ROOT_ALIAS);
 					const visibility = access.predicate(subject, 'read', input.collection);
 					const table = queryTableFor(input.collection, definition.fields);
-					const columns = columnsOf(table);
-					const groupColumn = columns[input.groupBy];
 					if (
-						groupColumn === undefined ||
+						columnsOf(table)[input.groupBy] === undefined ||
 						definition.fields[input.groupBy]?.reference !== undefined ||
 						definition.fields[input.groupBy]?.type === 'json' ||
 						input.groupBy === 'sys_period'
@@ -5084,132 +5224,36 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							message: 'Grouped queries require one persisted scalar column.'
 						});
 					}
-					const groupExpression =
-						definition.fields[input.groupBy]?.type === 'string'
-							? sql`${groupColumn} collate "C"`
-							: sql`${groupColumn}`;
-					const ordering = compileOrderTerms(input.orderBy, context);
-					const orderedColumns = ordering.map((term) => {
-						const column = columns[term.column]!;
-						const expression =
-							term.collation === undefined ? column : sql`${column} collate "C"`;
-						return term.direction === 'asc' ? asc(expression) : desc(expression);
-					});
-					const aggregateOrder = sql.join(
-						ordering.map((term) => {
-							const column = columns[term.column]!;
-							const expression =
-								term.collation === undefined ? sql`${column}` : sql`${column} collate "C"`;
-							return sql`${expression} ${sql.raw(term.direction)}`;
-						}),
-						sql`, `
-					);
-					// The inner query admits at most one overflow sentinel beyond the durable result cap.
-					// `count(*) over ()` still proves whether the complete authorized set exceeded that cap,
-					// while the outer JSON aggregate can never accumulate an unbounded collection.
-					const bounded = composer
-						.select({
-							lane: aliased(groupExpression, 'lane'),
-							record: aliased(sql<unknown>`to_jsonb(${table})`, 'record'),
-							ordinal: aliased(
-								sql<number>`row_number() over (order by ${aggregateOrder})`,
-								'ordinal'
-							),
-							matched: aliased(sql<number>`count(*) over ()`, 'matched')
-						})
-						.from(table)
-						.where(
+					// One sentinel row past the durable cap, so an oversized grouping fails closed instead
+					// of installing a prefix as though it were the complete answer.
+					const read = yield* readRelational(effectId, subject, input.collection, {
+						where:
 							and(
 								compiled,
 								queryFragment(searched),
 								AccessControl.predicateExpression(visibility)
-							)
-						)
-						.orderBy(...orderedColumns)
-						.limit(GROUPED_RESULT_LIMIT + 1)
-						.as('bolt_grouped_rows');
-					const laneOrder =
-						definition.fields[input.groupBy]?.type === 'string'
-							? sql`${bounded.lane} collate "C"`
-							: sql`${bounded.lane}`;
-					const result = yield* executeBuilt(
-						effectId,
-						database,
-						composer
-							.select({
-								lane: bounded.lane,
-								// Facility execution returns raw driver rows rather than Drizzle-mapped field
-								// objects, so computed columns need SQL aliases of their own. Casting the
-								// bounded JSON aggregate to text also gives PGlite and remote Postgres one
-								// identical decode boundary instead of depending on their JSON codecs.
-								records: aliased(
-									sql<string>`(jsonb_agg(${bounded.record} order by ${bounded.ordinal}))::text`,
-									'records'
-								),
-								matched: aliased(sql<number>`max(${bounded.matched})`, 'matched')
-							})
-							.from(bounded)
-							.groupBy(bounded.lane)
-							.orderBy(asc(laneOrder))
-					);
-
+							) ?? always(),
+						ordering: compileOrderTerms(input.orderBy, context),
+						limit: GROUPED_RESULT_LIMIT + 1,
+						with: input.with
+					});
+					if (read.rows.length > GROUPED_RESULT_LIMIT) {
+						return yield* new WhereCompileError({
+							collection: input.collection,
+							field: input.groupBy,
+							message: `Grouped query exceeds the exact ${GROUPED_RESULT_LIMIT}-row result limit.`
+						});
+					}
 					const grouped = new Map<string, Array<QueryRow>>(
 						input.lanes.map((lane) => [String(lane), []])
 					);
-					for (const value of result.rows) {
-						const matched =
-							value !== null && typeof value === 'object'
-								? Number(Reflect.get(value, 'matched') ?? 0)
-								: 0;
-						if (matched > GROUPED_RESULT_LIMIT) {
-							return yield* new WhereCompileError({
-								collection: input.collection,
-								field: input.groupBy,
-								message: `Grouped query exceeds the exact ${GROUPED_RESULT_LIMIT}-row result limit.`
-							});
-						}
-						const lane = String(
-							value !== null && typeof value === 'object' ? Reflect.get(value, 'lane') ?? '' : ''
-						);
-						const records = queryRowsOf(
-							value !== null && typeof value === 'object'
-								? Reflect.get(value, 'records')
-								: undefined
-						);
+					for (const [index, row] of read.rows.entries()) {
+						const lane = String(read.source[index]?.[input.groupBy] ?? '');
 						const bucket = grouped.get(lane) ?? [];
-						for (const row of records) {
-							bucket.push(
-								access.mask(
-									subject,
-									'read',
-									input.collection,
-									decodeReferenceRow(row, definition.fields)
-								)
-							);
-						}
+						bucket.push(row);
 						grouped.set(lane, bucket);
 					}
-					const entries = [...grouped.entries()];
-					const attached = yield* attachRelations(
-						workspace.definition,
-						input.collection,
-						entries.flatMap(([, rows]) => rows),
-						input.with,
-						(collection, column, values) =>
-							findMany(effectId, subject, {
-								collection,
-								where: { [column]: { in: values } },
-								limit: PREFETCH_LIMIT + 1
-							})
-					);
-					let offset = 0;
-					return Object.fromEntries(
-						entries.map(([lane, rows]) => {
-							const group = attached.slice(offset, offset + rows.length);
-							offset += rows.length;
-							return [lane, group];
-						})
-					);
+					return Object.fromEntries(grouped);
 				}
 			);
 			const update = Effect.fn('Collections.update')(function* (
@@ -5237,42 +5281,66 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						reason: 'update includes fields outside the matching policy grant'
 					});
 				}
-				let values = input.values;
-				if (module?.update?.input !== undefined) {
-					values = yield* Schema.decodeUnknownEffect(module.update.input)(values).pipe(
-						Effect.mapError(
-							(cause) =>
-								new AccessControl.AccessDenied({
-									action: 'update',
-									resource: input.collection,
-									reason: 'hook input validation failed'
-								})
-						)
-					) as Effect.Effect<Readonly<Record<string, Schema.Json>>>;
-				}
+				let values = yield* decodeMutateInput(input.collection, input.values, module, 'update');
 				// Read once and used twice where both want it. An outbound binding needs it because a
 				// trigger is asked `previous.status !== record.status` and a patch alone cannot answer that;
-				// the hook needs it because it always has. The read is skipped entirely when neither does,
-				// so a collection with no `update` hook and no outbound binding costs nothing for it.
+				// the hook needs it because it is the fact that tells it this write is an update. The read
+				// is skipped entirely when neither does, so a collection with no `mutate` hook and no
+				// outbound binding costs nothing for it.
 				const wantsPrevious =
-					module?.update?.perRecord?.before !== undefined ||
-					module?.update?.perRecord?.after !== undefined ||
+					module?.mutate?.perRecord?.before !== undefined ||
+					module?.mutate?.perRecord?.after !== undefined ||
 					needsPreviousRow(input.collection, 'update') ||
 					visibility.authorization !== undefined ||
 					visibility.approval !== undefined;
 				const existing = wantsPrevious
 					? yield* readRowElevated(effectId, input.collection, input.id)
 					: undefined;
-				if (module?.update?.perRecord?.before !== undefined) {
-					const before = yield* runHook(
-						module.update.perRecord.before,
-						{ input: values, existing, api },
-						api,
-						{ collection: input.collection, action: 'update.before' }
+				if (
+					module?.mutate?.prepare !== undefined ||
+					module?.mutate?.perRecord?.before !== undefined
+				) {
+					const hookInput = { ...values, id: input.id };
+					const prepared = yield* runMutatePrepare(
+						effectId,
+						subject,
+						input.collection,
+						[hookInput],
+						module,
+						depth
 					);
-					if (before != null && typeof before === 'object') {
-						values = before as Readonly<Record<string, Schema.Json>>;
-					}
+					const before = yield* runMutateBefore(
+						effectId,
+						subject,
+						{ ...input, values: hookInput },
+						existing,
+						module,
+						depth,
+						prepared
+					);
+					/**
+					 * The graph split this path did not have.
+					 *
+					 * A `before` return may carry the records that belong to this one — it is one hook and
+					 * one return type now, and the runtime already split a graph out of the update arm on
+					 * the declarative path. Here it did not: a returned relation key would have been handed
+					 * to `encodeMutationValues` and dropped on the way to an `UPDATE`. So a return that names
+					 * one leaves this path entirely for the graph planner, which is where reconciling a
+					 * parent's children has always lived; the hooks it runs there are these same hooks, over
+					 * the shape they already produced.
+					 */
+					const split = yield* splitGraphPayload(input.collection, before, 'update');
+					if (split.included.length > 0)
+						return yield* synchronizeGraph(
+							effectId,
+							subject,
+							input.collection,
+							{ ...before, id: input.id },
+							false,
+							depth,
+							{ approved: false, rootId: input.id, rootAction: 'update' }
+						).pipe(Effect.asVoid);
+					values = split.own;
 				}
 				values = encodeMutationValues(values, definition.fields);
 				const context = {

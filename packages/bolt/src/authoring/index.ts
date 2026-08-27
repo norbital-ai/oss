@@ -34,6 +34,9 @@ export type {
 	VectorColumnName
 } from './contracts-schema.js';
 
+export { schema, schemaFor } from './schema.js';
+export type { SchemaShape, SchemaShapeConfig, SchemaShapeRow } from './schema.js';
+
 export { defineCommandHandler, defineQueryHandler } from './handlers-schema.js';
 export type { TExportManifest } from './handlers-schema.js';
 

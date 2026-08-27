@@ -17,6 +17,7 @@ import {
 } from 'drizzle-orm';
 import type { PolicyDeclaration, WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
+import { physicalColumnNames } from '#lib/compiler/relational-schema.js';
 import { SYSTEM_COLLECTION_NAMES } from '#lib/runtime/schema/system-collections.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import { composer, executeBuilt, jsonb, toStatement } from '#lib/runtime/persistence.js';
@@ -444,6 +445,103 @@ const isActorBoundWhere = (value: unknown): boolean => {
 	if (Array.isArray(value)) return value.some(isActorBoundWhere);
 	if (value === null || typeof value !== 'object') return false;
 	return Object.values(value).some(isActorBoundWhere);
+};
+
+/**
+ * Every column name one authored row scope names, at any depth.
+ *
+ * Four keys are structure rather than columns, and they are the same four `compileWhereOwner`
+ * reads specially before treating everything else as a column. The two readings have to agree: a
+ * structural key missing here is reported as a column the collection does not have, and one
+ * missing there is a column nothing checks.
+ */
+const grantScopeColumns = (where: unknown, named: Set<string>): void => {
+	if (where === null || typeof where !== 'object' || Array.isArray(where)) return;
+	for (const [key, condition] of Object.entries(where)) {
+		// A `$sql` fragment is opaque on purpose: it is a whole SQL expression that brings its own
+		// tables and aliases — `"team" t`, `me."id"` — so nothing here could tell one of its
+		// identifiers from a column of the collection, and guessing would refuse correct policies.
+		if (key === '$sql') continue;
+		if (key === 'AND' || key === 'OR') {
+			if (Array.isArray(condition))
+				for (const branch of condition) grantScopeColumns(branch, named);
+			continue;
+		}
+		if (key === 'NOT') {
+			grantScopeColumns(condition, named);
+			continue;
+		}
+		named.add(key);
+	}
+};
+
+/** One authored grant whose row scope names something its collection does not have. */
+export type GrantScopeProblem = Readonly<{
+	readonly policy: string;
+	readonly collection: string;
+	readonly action: string;
+	readonly column: string;
+	readonly message: string;
+}>;
+
+/**
+ * Refuses a grant whose row scope names a column the collection does not have.
+ *
+ * A compiled row scope is a **bare** column reference — `"employment_id" = $1` — because the
+ * collection is its own `from` clause and nothing else is in scope. That stopped being true when a
+ * `with` clause became one statement: a related collection is read inside a lateral subquery, where
+ * the row being joined from is also in scope. PostgreSQL resolves an unqualified name innermost
+ * first, so a scope naming a column the *target* has still binds to the target — but one naming a
+ * column it does **not** have silently binds outward and filters the parent row instead of the
+ * related one. That is a grant quietly evaluating against the wrong record, and it is the failure
+ * mode a policy must never have.
+ *
+ * Checked here rather than fixed by qualifying identifiers, because qualifying them is not
+ * something this module can do correctly: `$sql` fragments carry their own tables and aliases, and
+ * rewriting their identifiers would break every policy that uses one. Refusing an unresolvable
+ * column at release restores the loud failure that unqualified SQL used to give for free — a
+ * collection with no such column raised "column does not exist" the moment the query ran.
+ *
+ * Reported rather than thrown: the workspace's other release-time authority checks collect their
+ * diagnostics and refuse activation together, and one policy typo should not hide the next.
+ */
+export const grantScopeProblems = (
+	definition: WorkspaceDefinition
+): ReadonlyArray<GrantScopeProblem> => {
+	const columnsByCollection = new Map(
+		definition.collections.map((collection) => [
+			collection.name,
+			physicalColumnNames(collection.fields)
+		])
+	);
+	const problems: Array<GrantScopeProblem> = [];
+	for (const policy of definition.policies) {
+		for (const grant of policy.grants ?? []) {
+			// A grant on a collection this workspace does not declare is a different fault, and one this
+			// check has nothing true to say about: it has no column list to compare against.
+			const columns = columnsByCollection.get(grant.collection);
+			if (columns === undefined) continue;
+			const named = new Set<string>();
+			grantScopeColumns(grant.where, named);
+			for (const column of [...named].toSorted()) {
+				if (columns.has(column)) continue;
+				problems.push({
+					policy: policy.name,
+					collection: grant.collection,
+					action: grant.action,
+					column,
+					message:
+						`policy "${policy.name}" scopes ${grant.action} on ${grant.collection} by "${column}", ` +
+						`which ${grant.collection} does not have. A row scope compiles to a bare column reference, so inside ` +
+						`the lateral join a \`with\` clause reads this collection through, an unknown name resolves against the ` +
+						`outer row instead of failing — the grant would filter the wrong record rather than refuse. Name a column ` +
+						`${grant.collection} has; a polymorphic reference is scoped by its storage column, not by the field name. ` +
+						`(A \`$sql\` fragment is not checked here: it brings its own tables, so it must qualify every column it names.)`
+				});
+			}
+		}
+	}
+	return problems;
 };
 
 /** Compiles trusted authored row scope into parameterized SQL while binding every identity value separately. */

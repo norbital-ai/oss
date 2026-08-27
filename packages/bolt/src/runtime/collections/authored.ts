@@ -36,14 +36,18 @@ type AuthoredPerRecord = Readonly<{
 }>;
 
 export type AuthoredCollectionHookModule = Readonly<{
-	readonly create?: Readonly<{
-		readonly input?: Schema.Codec<unknown, unknown>;
+	/**
+	 * The collection's declared write shape — `export const input` in its `+hooks.ts`, carried
+	 * beside the default export rather than inside it.
+	 *
+	 * One input for one write. There used to be two, `create.input` and `update.input`, free to
+	 * drift and describing the same operation; and neither could type the caller, because a hook
+	 * property cannot be read without reading the hook. A standalone binding can.
+	 */
+	readonly input?: Schema.Codec<unknown, unknown>;
+	readonly mutate?: Readonly<{
 		/** Runs once for the batch; what it returns reaches every record's hooks as `prepared`. */
 		readonly prepare?: (context: unknown, api: unknown) => unknown;
-		readonly perRecord?: AuthoredPerRecord;
-	}>;
-	readonly update?: Readonly<{
-		readonly input?: Schema.Codec<unknown, unknown>;
 		readonly perRecord?: AuthoredPerRecord;
 	}>;
 	readonly delete?: Readonly<{

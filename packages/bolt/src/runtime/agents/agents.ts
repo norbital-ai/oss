@@ -536,7 +536,6 @@ export type Interface = Readonly<{
 		// refusal here left as something a caller could not name.
 		| AuthoredRefusal
 		| ChatDocuments.ChatDocumentError
-		| Collections.RelationshipPrefetchLimitExceeded
 		| InvocationBudget.NestingLimitExceeded
 	>;
 	readonly bindDocument: (
@@ -583,7 +582,6 @@ export type Interface = Readonly<{
 		| WhereCompileError
 		| Collections.MutationError
 		| AuthoredRefusal
-		| Collections.RelationshipPrefetchLimitExceeded
 		| InvocationBudget.NestingLimitExceeded
 	>;
 	readonly dequeue: (

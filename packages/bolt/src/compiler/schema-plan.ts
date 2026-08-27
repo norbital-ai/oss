@@ -500,6 +500,19 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 		//
 		// No `pgcrypto`: `gen_random_uuid()`, the default on every primary key, has been core since
 		// Postgres 13. Requesting the extension only fails on a build that does not ship it.
+		/**
+		 * `approval_request.locked_record_refs` is gone, so the column goes with it.
+		 *
+		 * It tracked the records a request governed, beside the history that was already recording
+		 * every one of them. Two sources for one fact meant the tracked one drifted: a revision that
+		 * created a record never joined it, and a cascade never appeared at all. The ledger is now
+		 * derived from `bolt_collection_history` by `approval_id`, and a column nothing writes is worse
+		 * than absent - it reads as authoritative.
+		 */
+		{
+			id: 'bolt:drop-approval-locked-record-refs',
+			sql: 'alter table if exists approval_request drop column if exists locked_record_refs'
+		},
 		{ id: 'bolt:extension-btree-gist', sql: 'create extension if not exists btree_gist' },
 		{ id: 'bolt:extension-pg-trgm', sql: 'create extension if not exists pg_trgm' },
 		// `vector`, for the embedding columns two templates declare. Unconditional, like the two above:
@@ -644,14 +657,35 @@ export const replicaProvisioningSteps = (
 	workspace: WorkspaceDefinition
 ): ReadonlyArray<SchemaStep> => {
 	const plan = buildSchemaPlan(workspace);
+	/**
+	 * System tables are created *before* the workspace lineage, not after it.
+	 *
+	 * A workspace migration may reference a system table: `job_assignments.assignee_user_id`
+	 * declares a relation to `user`, and drizzle emits that foreign key inside the workspace
+	 * lineage. A server already holds those tables by the time a lineage is applied, so the order
+	 * never mattered there. A browser replica applies this exact list into an empty database, and
+	 * the constraint ran before anything had created `user` — provisioning died at that step
+	 * (`relation "user" does not exist`) and the workspace fell back to server-only with no replica
+	 * at all. Only the creation steps move; indexes, initialisers and exclusions stay after the
+	 * lineage, where a tenant table they touch already exists.
+	 */
+	const isSystemTableCreation = (id: string): boolean => {
+		const parts = id.split(':');
+		if (parts[0] !== 'collection' || parts[1] === undefined) return false;
+		if (!systemTableNames.has(parts[1])) return false;
+		return parts.length === 2 || parts[2] === 'column';
+	};
+	const systemTables = plan.steps.filter(({ id }) => isSystemTableCreation(id));
+	const remaining = plan.steps.filter(({ id }) => !isSystemTableCreation(id));
 	return [
-		...plan.steps.filter(({ id }) => id.startsWith('bolt:')),
+		...remaining.filter(({ id }) => id.startsWith('bolt:')),
+		...systemTables,
 		...[...(workspace.migrations ?? [])]
 			.toSorted((left, right) => left.tag.localeCompare(right.tag))
 			.flatMap((entry) =>
 				entry.statements.map((sql, index) => ({ id: `lineage:${entry.tag}:${index}`, sql }))
 			),
-		...plan.steps.filter(({ id }) => !id.startsWith('bolt:'))
+		...remaining.filter(({ id }) => !id.startsWith('bolt:'))
 	];
 };
 

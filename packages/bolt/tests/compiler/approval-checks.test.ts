@@ -159,3 +159,57 @@ describe('authority bindings', () => {
 		expect(approvalRefusal(definition)).toContain('2 authority bindings');
 	});
 });
+
+/**
+ * A gate that cannot roll back is refused where it is written, not discovered on a rejection.
+ *
+ * Rejecting an update restores the version from before the request. A collection declaring
+ * `history: false` keeps no such version, so the only honest reversal left is deleting the record -
+ * destroying data whose only offence was being edited by somebody without authority.
+ */
+describe('approval gates that cannot roll back', () => {
+	const gated = (collection: string, action: 'create' | 'update') =>
+		({
+			name: 'payroll',
+			grants: [{ collection, action, approval: { flow: () => undefined, superceded_by: [] } }]
+		}) as unknown as WorkspaceDefinition['policies'][number];
+
+	const withCollections = (
+		policies: WorkspaceDefinition['policies'],
+		collections: WorkspaceDefinition['collections']
+	) => workspace(policies, {}, { collections });
+
+	it('refuses a gated update on a collection that keeps no history', () => {
+		const diagnostics = approvalDiagnostics(
+			withCollections(
+				[gated('audit_notes', 'update')],
+				[{ name: 'audit_notes', fields: {}, history: false }] as WorkspaceDefinition['collections']
+			)
+		);
+		expect(diagnostics.map(({ rule }) => rule)).toContain('approval-without-history');
+		expect(approvalRefusal(withCollections(
+			[gated('audit_notes', 'update')],
+			[{ name: 'audit_notes', fields: {}, history: false }] as WorkspaceDefinition['collections']
+		))).toContain('history: false');
+	});
+
+	it('allows a gated create, because rejecting one is a deletion by definition', () => {
+		const diagnostics = approvalDiagnostics(
+			withCollections(
+				[gated('audit_notes', 'create')],
+				[{ name: 'audit_notes', fields: {}, history: false }] as WorkspaceDefinition['collections']
+			)
+		);
+		expect(diagnostics.map(({ rule }) => rule)).not.toContain('approval-without-history');
+	});
+
+	it('allows a gated update where the collection keeps history', () => {
+		const diagnostics = approvalDiagnostics(
+			withCollections(
+				[gated('payroll_runs', 'update')],
+				[{ name: 'payroll_runs', fields: {} }] as WorkspaceDefinition['collections']
+			)
+		);
+		expect(diagnostics.map(({ rule }) => rule)).not.toContain('approval-without-history');
+	});
+});

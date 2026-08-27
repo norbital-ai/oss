@@ -592,15 +592,68 @@ interface StructuredInferenceInput<Output> {
 type AuthoredReadDatabase<S extends AnySchema> = {
 	readonly [N in TableName<S>]: CollectionQuery<S, N>;
 } & { readonly approval_request: ApprovalRequestQuery };
-type AuthoredDatabase<S extends AnySchema> = {
+/**
+ * One collection's declared write shape, read out of a workspace's inputs map.
+ *
+ * The map is `generated/inputs.ts` — `{ payroll_runs: typeof import('…/+hooks.js').input, … }` —
+ * and it is keyed rather than indexed on purpose: `Inputs extends Record<N, infer Declared>`
+ * resolves the one binding this collection needs and asks nothing about the rest, so a workspace
+ * whose other collections declare no `input` still types this one.
+ *
+ * A collection that declares none yields `never`, which `MutationValuesFor` reads as "the whole
+ * collection is writable".
+ */
+type DeclaredInput<Inputs, N extends PropertyKey> =
+	Inputs extends Readonly<Record<N, infer Declared>>
+		? Schema.Schema.Type<Declared> extends infer Value
+			? Value extends object
+				? Value
+				: never
+			: never
+		: never;
+
+/**
+ * What `db.<collection>.mutate` accepts.
+ *
+ * The two arms are `MutationRecord`'s, with the hook's declared `input` standing in for the
+ * collection's insert: **no id creates**, so every column the shape names is required; **an id
+ * updates**, so every one of them is optional. A column the shape does not name is not merely
+ * stripped at run time any more — it is a type error at the call site, which is the whole reason
+ * `input` is hoisted to a binding of its own.
+ *
+ * Included `many` relationships stay the collection's. A relationship is the parent's complete
+ * desired state, not one of the parent's own columns, so it is not part of what `input` narrows.
+ */
+type DeclaredMutationValues<S extends AnySchema, N extends MutationTableName<S>, Declared> = (
+	| Declared
+	| (Readonly<{ readonly id: MutationIdentity<S, N> }> & Partial<Declared>)
+) &
+	MutationChildren<S, N>;
+
+export type MutationValuesFor<
+	S extends AnySchema,
+	N extends MutationTableName<S>,
+	Inputs
+> = [DeclaredInput<Inputs, N>] extends [never]
+	? CollectionMutationValues<S, N>
+	: DeclaredMutationValues<S, N, DeclaredInput<Inputs, N>>;
+
+type AuthoredDatabase<S extends AnySchema, Inputs> = {
 	readonly [N in TableName<S>]: CollectionQuery<S, N> & {
 		/** The same singular declarative record-or-graph mutation the browser client accepts. */
-		readonly mutate: (values: CollectionMutationValues<S, N>) => Effect.Effect<void>;
+		readonly mutate: (values: MutationValuesFor<S, N, Inputs>) => Effect.Effect<void>;
 	};
 } & { readonly approval_request: ApprovalRequestQuery };
 
-export type Api<S extends AnySchema = DefaultWorkspaceSchema> = {
-	readonly db: AuthoredDatabase<S>;
+/**
+ * `Inputs` is the workspace's map of declared write shapes, and it is the second parameter rather
+ * than a lookup on `S` because `S` is models only. That split is what keeps the type acyclic:
+ * `schema()` resolves against the models half, `input` is a `const` built from it, and the map that
+ * collects those constants is read one binding at a time — never by asking what a `+hooks.ts`
+ * default export is, which is the question that would close the loop.
+ */
+export type Api<S extends AnySchema = DefaultWorkspaceSchema, Inputs = unknown> = {
+	readonly db: AuthoredDatabase<S, Inputs>;
 	/**
 	 * Manually run a declared automation from code, in the background, with retry.
 	 *
@@ -647,7 +700,22 @@ export type Api<S extends AnySchema = DefaultWorkspaceSchema> = {
  * unique index — which is stricter, because it also catches a collision with a row already stored.
  */
 type DescribedHook<Handler> = { readonly description: string; readonly handler: Handler };
-type CreateInput<S extends AnySchema, N extends TableName<S>> = MutationInsertFor<S, N>;
+/**
+ * What a `mutate` hook is handed.
+ *
+ * Partial, because there is one write and it serves both halves of it: a create carries whatever
+ * the caller sent and an update carries a patch, and a single type that claimed every column was
+ * present would be a lie on every update. What guarantees a column *is* there is the collection's
+ * `export const input` — a create that omits one it names is refused before a hook sees it.
+ *
+ * `id` is present exactly when a stored record is being written, which is the same fact `existing`
+ * carries into `before` and the only way `prepare` — which sees a batch and no rows — can tell a
+ * recalculation from a first build.
+ */
+type MutateInput<S extends AnySchema, N extends TableName<S>> = Readonly<{
+	readonly id?: MutationIdentity<S, N>;
+}> &
+	Partial<MutationInsertFor<S, N>>;
 
 /** The relations `+relationship.ts` declared for one collection, as the compiler emits them. */
 type RelationsOf<S extends AnySchema, N extends TableName<S>> = S extends {
@@ -713,62 +781,80 @@ type Prev = [never, 0, 1, 2, 3, 4];
  */
 type ChildrenOf<S extends AnySchema, N extends TableName<S>, D extends Depth> = {
 	readonly [K in ChildRelation<S, N>]?: ReadonlyArray<
-		CreateGraph<S, ChildTable<S, N, K>, Prev[D]> extends infer G
+		MutateGraph<S, ChildTable<S, N, K>, Prev[D]> extends infer G
 			? Omit<G, ChildColumn<S, N, K> & keyof G>
 			: never
 	>;
 };
 
-export type CreateGraph<S extends AnySchema, N extends TableName<S>, D extends Depth = 5> = [
+/**
+ * The collection graph a `before` returns — this record's columns, and the records that belong to
+ * it, five levels deep.
+ *
+ * **Partial, and that is the shape of the change.** There is one write. A root with no id creates
+ * and a root with an id updates, and the same hook returns both — so requiring the collection's
+ * whole insert here would make every recalculation a type error, while the runtime cheerfully split
+ * a graph out of what it returned. The compile-time guarantee that a create is complete is the
+ * column's `not null`, and the one that matters more is still here: a key that is neither a column
+ * nor a declared relation is a type error on a returned object literal, and FLATTEN refuses it at
+ * run time when the handler built its result in a variable — which the payroll engine must,
+ * computing for a second and a half before it has one.
+ *
+ * A child *may* carry `id`, because a nested `many` is the parent's complete desired state: an id
+ * names a row the parent already owns, its absence creates one, and an omission removes one.
+ */
+export type MutateGraph<S extends AnySchema, N extends TableName<S>, D extends Depth = 5> = [
 	D
 ] extends [never]
-	? MutationInsertFor<S, N>
-	: MutationInsertFor<S, N> & ChildrenOf<S, N, D>;
+	? Partial<MutationInsertFor<S, N>>
+	: Partial<MutationInsertFor<S, N>> & ChildrenOf<S, N, D>;
 
 /**
- * What a `create.before` may return: this record, and optionally the records that belong to it.
+ * The one place a rule about a written record lives.
  *
- * It used to return `MutationInsertFor<S, N> | (MutationInsertFor<S, N> & Record<string, unknown>)`,
- * and that second arm is why any key at all was legal — the seam for a nested return already
- * existed, typed as "anything goes" and backed by nothing.
+ * There used to be two, `create.before` and `update.before`, and every asymmetry between them was
+ * an accident of that split rather than a distinction anybody meant: one returned a typed graph and
+ * the other a flat patch, though the runtime split a graph out of both; one could be preceded by
+ * `prepare` and the other could not, so a recalculation could not batch its reads.
  *
- * **Where the check lands.** A handler that returns an object literal directly is checked for excess
- * properties, so a misspelled relation name is a compile error there. A handler that builds its
- * result in a variable — which the payroll engine must, since it computes for a second and a half
- * before it has one — gets no such check from TypeScript, in any formulation: making the return type
- * generic in what was returned cannot work, because the type parameter appears only in return
- * position and there is nothing to infer it from. So the second half of this guarantee is the
- * runtime's: FLATTEN refuses a key that is neither a column of the collection nor one of its
- * declared relations, rather than dropping it on the way to the database. Between them nothing is
- * silently lost, which is the property that actually matters.
+ * **`existing` is the discriminator.** It is `undefined` on a create and the stored row on an
+ * update, which is the same fact the runtime decides the operation from — the presence of an id —
+ * rather than a second flag that could disagree with it.
  */
-type CreateBefore<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
-	readonly input: CreateInput<S, N>;
+type MutateBefore<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
+	readonly input: MutateInput<S, N>;
+	/** The stored row this write lands on, or `undefined` when this write creates it. */
+	readonly existing: SchemaRow<S, N> | undefined;
 	/**
-	 * What this batch's `load` returned, or `undefined` if the collection declares none.
+	 * What this batch's `prepare` returned, or `undefined` if the collection declares none.
 	 *
-	 * Its type is `load`'s return type, so the two cannot drift apart: a `load` that stops returning
-	 * what `handler` reads is a compile error at the `satisfies`, not a runtime surprise on a
-	 * four-thousand-row import.
+	 * Its type is `prepare`'s return type, so the two cannot drift apart: a `prepare` that stops
+	 * returning what `before` reads is a compile error at the `satisfies`, not a runtime surprise on
+	 * a four-thousand-row import.
 	 */
 	readonly prepared: Prepared;
 	readonly api: Api<S>;
-}) => Effect.Effect<CreateGraph<S, N>, unknown, never> | CreateGraph<S, N>;
-type CreateAfter<S extends AnySchema, N extends TableName<S>> = (context: {
-	readonly record: SchemaRow<S, N>;
-	readonly api: Api<S>;
-}) => Effect.Effect<void, unknown, never> | void;
-type UpdateAfterContext<S extends AnySchema, N extends TableName<S>> = Readonly<{
-	/** The stored row immediately before this update. */
-	readonly previous: SchemaRow<S, N>;
-	/** The prepared patch that was committed, including values derived by `update.before`. */
-	readonly changes: MutationUpdateFor<S, N>;
-	/** The exact row committed by this update. */
-	readonly record: SchemaRow<S, N>;
-	readonly api: Api<S>;
-}>;
-type UpdateAfter<S extends AnySchema, N extends TableName<S>> = (
-	context: UpdateAfterContext<S, N>
+}) => Effect.Effect<MutateGraph<S, N>, unknown, never> | MutateGraph<S, N>;
+
+/**
+ * What a settled write may do afterwards, and it returns nothing.
+ *
+ * It used to return a value on the create arm, which nothing read: an `after` runs once the row is
+ * committed, so there is no longer anything for a returned record to change. Saying `void` is how
+ * that stops looking like a seam somebody could use.
+ *
+ * `previous` is `undefined` on a create, the same discriminator `before` carries.
+ */
+type MutateAfter<S extends AnySchema, N extends TableName<S>> = (
+	context: Readonly<{
+		/** The stored row immediately before this write, or `undefined` when this write created it. */
+		readonly previous: SchemaRow<S, N> | undefined;
+		/** The columns this write committed, including values `before` derived. */
+		readonly changes: MutationUpdateFor<S, N>;
+		/** The exact row committed by this write. */
+		readonly record: SchemaRow<S, N>;
+		readonly api: Api<S>;
+	}>
 ) => Effect.Effect<void, unknown, never> | void;
 
 /**
@@ -780,21 +866,24 @@ type UpdateAfter<S extends AnySchema, N extends TableName<S>> = (
  *
  * This is deliberately **not** a second place to write the rule. `batchHandler` was that, and the
  * drift it invites is not hypothetical — one collection had the same assertion written into both of
- * its hooks and five carried batch validation the runtime never called. `load` is not an alternative
- * branch: it runs before `handler`, every time, for a batch of four thousand and for a single
- * `create` alike. Nothing has to decide which one applies.
+ * its hooks and five carried batch validation the runtime never called. `prepare` is not an
+ * alternative branch: it runs before `before`, every time, for a batch of four thousand and for a
+ * single write alike. Nothing has to decide which one applies.
  *
  * What it is *for* is the query a person would write and a resolver cannot derive: four thousand
  * questions of the form "is this employment's day covered by leave" become one query over the window
  * the batch spans. Merging identical queries with different keys is something the runtime can do on
  * its own; reformulating them into a different query is judgement about the domain.
  *
+ * It runs on updates too, which it did not before. An input carries `id` exactly when it names a
+ * stored row, so a recalculation can gather its prior state in one query rather than one per record.
+ *
  * Scoped to the batch, not the call: with `batchSize: 250` over 4 000 rows it runs sixteen times,
  * each seeing its own 250. A batch is the unit of atomicity and of the isolate's span, so it is the
  * unit a read belongs to as well.
  */
-type CreatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
-	readonly inputs: ReadonlyArray<CreateInput<S, N>>;
+type MutatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (context: {
+	readonly inputs: ReadonlyArray<MutateInput<S, N>>;
 	readonly api: Api<S>;
 }) => Effect.Effect<Prepared, unknown, never> | Prepared;
 
@@ -802,8 +891,7 @@ type CreatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (con
  * Everything a collection may say about a write, arranged by how often it runs.
  *
  * ```
- * create: {
- *   input,                 // the shape a caller may send
+ * mutate: {
  *   prepare,               // ONCE for the batch  ─┐
  *   perRecord: {           //                      │  what prepare returns
  *     before,              // ONCE per record  ◄───┤  arrives here as `prepared`
@@ -811,6 +899,16 @@ type CreatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (con
  *   }
  * }
  * ```
+ *
+ * **There is one arm, because there is one write.** `create` and `update` were two names for
+ * `mutate` — no id creates, an id updates, and an included `many` relationship is the parent's
+ * complete desired state — and every difference between the two arms was drift the split permitted
+ * rather than a distinction the write surface has.
+ *
+ * **`input` is not here.** It is `export const input` in the same `+hooks.ts`, a binding of its own,
+ * because it types `api.db.<collection>.mutate` and `client.db.<collection>.mutate` — and a
+ * property of this type could not, since resolving it would mean asking what the default export is
+ * while the default export is being checked against this type.
  *
  * The nesting is the documentation. An earlier shape put a batch-wide function beside a per-record
  * one at the same level — `batchHandler` next to `handler` — and nothing about the declaration said
@@ -823,27 +921,12 @@ type CreatePrepare<S extends AnySchema, N extends TableName<S>, Prepared> = (con
  * four thousand.
  */
 export type CollectionHooks<S extends AnySchema, N extends TableName<S>, Prepared = void> = {
-	readonly create?: {
-		readonly input?: Schema.Codec<unknown, unknown>;
-		readonly prepare?: CreatePrepare<S, N, Prepared>;
+	readonly mutate?: {
+		readonly prepare?: MutatePrepare<S, N, Prepared>;
 		readonly perRecord?: {
-			readonly before?: DescribedHook<CreateBefore<S, N, Prepared>>;
-			/** Runs only after the create is settled; an approval hold defers it until approval. */
-			readonly after?: DescribedHook<CreateAfter<S, N>>;
-		};
-	};
-	readonly update?: {
-		readonly input?: Schema.Codec<unknown, unknown>;
-		readonly perRecord?: {
-			readonly before?: DescribedHook<
-				(context: {
-					readonly input: MutationUpdateFor<S, N>;
-					readonly existing: SchemaRow<S, N>;
-					readonly api: Api<S>;
-				}) => Effect.Effect<MutationUpdateFor<S, N>, unknown, never> | MutationUpdateFor<S, N>
-			>;
-			/** Runs only after the update is settled; an approval hold defers it until approval. */
-			readonly after?: DescribedHook<UpdateAfter<S, N>>;
+			readonly before?: DescribedHook<MutateBefore<S, N, Prepared>>;
+			/** Runs only after the write is settled; an approval hold defers it until approval. */
+			readonly after?: DescribedHook<MutateAfter<S, N>>;
 		};
 	};
 	readonly delete?: {
