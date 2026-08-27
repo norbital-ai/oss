@@ -28,11 +28,17 @@ A tenant page loads an immutable artifact. Template and package source are never
 For local package/template work, stop Colony and run `pnpm --dir norbital dev --ui`; it builds OSS,
 establishes yalc links in every consumer, materializes them with pnpm, stages those builds for tenant
 sandboxes, syncs templates, then starts a fresh Colony bootstrap that publishes and routes the
-artifacts. Use `--template=<directory|handle>` to narrow template linking and sync. `yalc push` alone
-is insufficient.
+artifacts. Use `--template=<directory|handle>` to narrow template linking and sync.
 
-To publish locally without starting Colony, run `pnpm --dir norbital publish:local`. It performs the
-same three steps `dev` does — push, link, stage — and shares their implementation.
+To put every consumer on the local build **without** starting Colony, run
+`pnpm --dir oss yalc:refresh`. It publishes once, runs each consumer repository's own linker, and
+then verifies: every managed package in every workspace must resolve through pnpm's virtual store and
+must actually import. A workspace left stale or orphaned fails the command. There is no standalone
+push — writing `.yalc/<name>` on its own reaches nothing that imports the package, and replaces
+`node_modules/<name>` with a link to a directory carrying no `node_modules`, which orphans that
+package's own dependencies.
+
+`pnpm --dir norbital publish:local` remains the Colony-side equivalent and shares the same linker.
 
 Yalc reaches a tenant build through a mount, not through its lockfile. A tenant compiles inside a
 microVM that installs `--offline --frozen-lockfile` against Colony's package store, so a linked
@@ -47,11 +53,12 @@ only takes effect after `scripts/build-microsandbox-image.sh` is rerun.
 local pin is ever committed, which leaves the tree and the manifest disagreeing on purpose; a later
 `pnpm install` re-resolves the registry pin and drops the local build with no message. The run
 compares each consumer's materialised `yalcSignature` against the one the push left in `.yalc` and
-names any checkout that would compile against the published packages.
+names any checkout that would compile against the published packages. If a run is interrupted during
+its install step, links can be left half-written; `pnpm --dir oss yalc:refresh` repairs them.
 
 Colony source uses its own Vite HMR; restart for `.env`, dependency, bootstrap, or artifact-routing
 changes. Website source uses its own Vite HMR; after an OSS package change, run
-`pnpm --dir norbital yalc:link` and restart the website dev server. Read
+`pnpm --dir oss yalc:refresh` and restart the website dev server. Read
 [generated-and-build.md](references/generated-and-build.md#source-to-runtime-map) before deciding
 whether a local restart, release, deployment, or tenant rebuild is required.
 
