@@ -5,11 +5,23 @@
  * with `--skip-publish`. The linkers finish with `yalc add --pure`, which leaves `node_modules`
  * entirely to pnpm.
  *
- * The final stage verifies rather than assumes: every managed package in every workspace must
- * resolve through pnpm's store — checked on the resolved real path, since a link straight to
- * `.yalc/<name>` reaches a directory with no `node_modules` of its own and orphans the package's
- * dependencies — and must actually import. Resolving and loading are different failures, and only
- * the second catches a package that is present but unusable.
+ * The final stage verifies rather than assumes, and it asks three separate questions because a
+ * package can pass any two of them while being the wrong build:
+ *
+ *   RESOLVES  through pnpm's store, checked on the resolved real path — a link straight to
+ *             `.yalc/<name>` reaches a directory with no `node_modules` of its own and orphans the
+ *             package's dependencies.
+ *   IMPORTS   because resolving and loading are different failures, and only the second catches a
+ *             package that is present but unusable.
+ *   IS FRESH  because the first two are equally true of a stale build. pnpm materialises a `file:`
+ *             dependency into a copy at install time and keeps serving that copy; an override, a
+ *             re-resolved registry pin or a republish at the same version all leave a workspace
+ *             resolving cleanly and importing happily from the *previous* build. `stalePackages`
+ *             compares the `yalcSignature` the push left in `.yalc/<name>` against the one in the
+ *             materialised copy, which is the only question whose answer is the build itself.
+ *
+ * Without the third, this command's success line was a false assurance — the shape of green this
+ * repository has been bitten by before.
  *
  *   --only=bolt,ui   narrow the build and publish to those packages
  */
@@ -18,6 +30,7 @@ import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { managedPackages, stalePackages } from './lib/yalc-consumers.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const realmRoot = path.resolve(repositoryRoot, '..');
@@ -42,19 +55,23 @@ const capture = (command, args, cwd) =>
  */
 const workspacesOf = (repository) => {
 	const root = path.join(realmRoot, repository);
-	const nested = readdirSync(root, { withFileTypes: true })
-		.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules')
-		.map((entry) => path.join(root, entry.name))
-		.filter((directory) => existsSync(path.join(directory, 'node_modules', '@norbital-ai')));
-	const apps = path.join(root, 'apps');
-	const appWorkspaces = existsSync(apps)
-		? readdirSync(apps, { withFileTypes: true })
-				.filter((entry) => entry.isDirectory())
-				.map((entry) => path.join(apps, entry.name))
-				.filter((directory) => existsSync(path.join(directory, 'node_modules', '@norbital-ai')))
-		: [];
-	const self = existsSync(path.join(root, 'node_modules', '@norbital-ai')) ? [root] : [];
-	return [...self, ...nested, ...appWorkspaces];
+	const directoriesUnder = (parent) =>
+		existsSync(parent)
+			? readdirSync(parent, { withFileTypes: true })
+					.filter(
+						(entry) =>
+							entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules'
+					)
+					.map((entry) => path.join(parent, entry.name))
+			: [];
+	// A workspace is one that *declares* a managed package, not one that already has it installed.
+	// Filtering on `node_modules/@norbital-ai` asked whether the install had happened, so the one
+	// workspace whose install failed was the one workspace this never checked — and the run then
+	// reported that every workspace was on the local build.
+	return [root, ...directoriesUnder(root), ...directoriesUnder(path.join(root, 'apps'))].filter(
+		(directory) =>
+			existsSync(path.join(directory, 'package.json')) && managedPackages(directory).length > 0
+	);
 };
 
 /**
@@ -65,17 +82,30 @@ const workspacesOf = (repository) => {
  * having been replaced in place — and only the resolved path tells them apart.
  */
 const verifyWorkspace = (directory) => {
-	const scope = path.join(directory, 'node_modules', '@norbital-ai');
 	const failures = [];
-	for (const name of readdirSync(scope)) {
-		const linked = path.join(scope, name);
-		const resolved = realpathSync(linked);
-		if (!resolved.includes(`${path.sep}.pnpm${path.sep}`) && resolved.includes(`${path.sep}.yalc${path.sep}`)) {
-			failures.push(`@norbital-ai/${name} resolves straight to .yalc, so its dependencies are orphaned`);
+	for (const name of managedPackages(directory)) {
+		const linked = path.join(directory, 'node_modules', ...name.split('/'));
+		if (!existsSync(linked)) {
+			failures.push(`${name} is declared but not installed at ${linked}`);
 			continue;
 		}
-		const entry = path.join(linked, 'package.json');
-		if (!existsSync(entry)) failures.push(`@norbital-ai/${name} has no package.json at ${linked}`);
+		const resolved = realpathSync(linked);
+		if (
+			!resolved.includes(`${path.sep}.pnpm${path.sep}`) &&
+			resolved.includes(`${path.sep}.yalc${path.sep}`)
+		) {
+			failures.push(`${name} resolves straight to .yalc, so its dependencies are orphaned`);
+			continue;
+		}
+		if (!existsSync(path.join(linked, 'package.json')))
+			failures.push(`${name} has no package.json at ${linked}`);
+	}
+	// The freshness question, asked once for the whole workspace because that is the shape the
+	// signature comparison takes.
+	for (const name of stalePackages(directory, managedPackages(directory))) {
+		failures.push(
+			`${name} is installed from an older build than the one just pushed — pnpm is still serving its previous copy`
+		);
 	}
 	return failures;
 };
@@ -83,7 +113,11 @@ const verifyWorkspace = (directory) => {
 const packagesArg = values.only === undefined ? [] : [`--only=${values.only}`];
 
 console.log('\n[1/3] build + publish to the yalc store');
-run('node', [path.join(repositoryRoot, 'scripts', 'yalc-publish.mjs'), ...packagesArg], repositoryRoot);
+run(
+	'node',
+	[path.join(repositoryRoot, 'scripts', 'yalc-publish.mjs'), ...packagesArg],
+	repositoryRoot
+);
 
 console.log('\n[2/3] each consumer pulls from the store through its own linker');
 for (const repository of CONSUMER_REPOSITORIES) {
@@ -93,10 +127,19 @@ for (const repository of CONSUMER_REPOSITORIES) {
 		continue;
 	}
 	console.log(`\n  --- ${repository} ---`);
-	run('pnpm', ['--dir', root, 'yalc:link', '--skip-publish'], realmRoot);
+	// The linker is run directly rather than through `pnpm <script>`, which is not a style choice.
+	// pnpm 11 verifies a project's dependencies before running any script in it, and that
+	// verification re-materialises `node_modules` from the lockfile — undoing the yalc overlay this
+	// command exists to install, while the linker is still writing it. The symptom was an ENOENT on a
+	// different file inside `@norbital-ai/ui` on every run, which reads as a corrupt package rather
+	// than as two processes writing one tree. `norbital` is immune because its `pnpm-workspace.yaml`
+	// sets `verifyDepsBeforeRun: false`; the template repositories have no such file, and `dev.mjs`
+	// never hit this only because it has always invoked the same script directly. Now both do, which
+	// also means there is one code path to keep working instead of two that can drift.
+	run('node', [path.join('scripts', 'yalc-link.mjs'), '--skip-publish'], root);
 }
 
-console.log('\n[3/3] verify every workspace resolves through pnpm and imports');
+console.log('\n[3/3] verify every workspace resolves, imports, and holds the build just pushed');
 let broken = 0;
 for (const repository of CONSUMER_REPOSITORIES) {
 	for (const workspace of workspacesOf(repository)) {
@@ -108,7 +151,10 @@ for (const repository of CONSUMER_REPOSITORIES) {
 			try {
 				capture(
 					'node',
-					['-e', "import('@norbital-ai/bolt/authoring').then(() => process.exit(0)).catch((error) => { console.error(error.code ?? error.message); process.exit(1); })"],
+					[
+						'-e',
+						"import('@norbital-ai/bolt/authoring').then(() => process.exit(0)).catch((error) => { console.error(error.code ?? error.message); process.exit(1); })"
+					],
 					workspace
 				);
 				console.log(`  ok      ${relative}`);
@@ -128,4 +174,6 @@ if (broken > 0) {
 	console.error(`\nyalc:refresh failed — ${broken} workspace(s) are not on the local build.`);
 	process.exit(1);
 }
-console.log('\nyalc:refresh complete — every workspace is on the locally built packages.');
+console.log(
+	"\nyalc:refresh complete — every workspace resolves, imports and matches the build just pushed,\nand the tenant sandbox store was staged from that same build by each repository's linker."
+);
