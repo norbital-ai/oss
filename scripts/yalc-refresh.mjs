@@ -1,23 +1,15 @@
 /**
- * Put every consumer on the locally built packages, in one command.
+ * Put every consumer on the locally built packages.
  *
- * The local loop was four steps across three repositories — build, publish, push, then a linker per
- * consumer — and it had a standalone `yalc:push` sitting in the middle of it. That push is the
- * footgun this command removes. `yalc push` writes `node_modules/<name>` itself, as a plain
- * directory link to `.yalc/<name>`; that directory has no `node_modules` of its own, so every
- * dependency the package imports resolves against the consumer root instead of the copy pnpm
- * installed for it, and the first module to want `drizzle-orm` dies with ERR_MODULE_NOT_FOUND.
- * `pnpm install` then says "Already up to date", because nothing about the lockfile changed.
+ * Publishes each package into the yalc store once, then runs every consumer repository's own linker
+ * with `--skip-publish`. The linkers finish with `yalc add --pure`, which leaves `node_modules`
+ * entirely to pnpm.
  *
- * The linkers already push *and then* run `yalc add --pure`, which hands `node_modules` back to
- * pnpm — so push inside a linker is fine, and push on its own is what leaves a repository broken.
- * There is no longer a way to do only the first half: this publishes once, then runs each
- * consumer's own linker with `--skip-publish`.
- *
- * The last stage is the point: it *verifies* rather than assumes. Every managed package in every
- * workspace must resolve through pnpm's store and actually import, and the command fails loudly if
- * it does not. A refresh that silently leaves one workspace on a stale or orphaned build is the bug
- * this script exists to stop.
+ * The final stage verifies rather than assumes: every managed package in every workspace must
+ * resolve through pnpm's store — checked on the resolved real path, since a link straight to
+ * `.yalc/<name>` reaches a directory with no `node_modules` of its own and orphans the package's
+ * dependencies — and must actually import. Resolving and loading are different failures, and only
+ * the second catches a package that is present but unusable.
  *
  *   --only=bolt,ui   narrow the build and publish to those packages
  */

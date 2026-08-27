@@ -60,12 +60,8 @@ pnpm --dir oss yalc:refresh
    virtual-store copy.
 5. Run `bolt sync`, then restart Colony so its bootstrap publishes and routes the new artifact.
 
-`yalc push` stops at step 3 — and on its own it is worse than incomplete: it replaces
-`node_modules/<name>` with a plain link to a directory that carries no `node_modules`, orphaning the
-package's own dependencies (`ERR_MODULE_NOT_FOUND` on the first `drizzle-orm` import), while
-`pnpm install` reports "Already up to date". There is no standalone push command any more.
 `yalc:refresh` ends by verifying that every workspace resolves through pnpm's store and actually
-imports, so a missed hop fails loudly instead of surfacing later as an edit that did nothing.
+imports, so a missed hop fails the command instead of surfacing later as an edit that did nothing.
 
 The realm command performs all five for Colony and templates and also links OSS packages into the
 website:
