@@ -38,6 +38,26 @@ import { DispatchError, WorkspaceLookupError } from '#lib/runtime/workspace.js';
 import type { ToolDeclaration } from '#lib/authoring/workspace-schema.js';
 import { WEB_AGENT_NAME } from '#lib/authoring/workspace-schema.js';
 import { envoyPrincipalId } from '#lib/runtime/identity/static-identity.js';
+import {
+	AwaitInput,
+	TurnOutput,
+	TurnPart,
+	TurnStatus,
+	StoredTurn,
+	SettledTarget,
+	WaitingAnswer,
+	hardToolOutputCharacters,
+	maxDelegationDepth,
+	maxResumes,
+	maxToolRounds,
+	protectedAssistantTurns,
+	pruneToolOutput,
+	recentPromptRows,
+	replayTurn,
+	softToolOutputCharacters,
+	type TurnSurface
+} from './turn.js';
+export { TurnPart, type TurnSurface } from './turn.js';
 
 /**
  * The agent one turn runs as: the web agent, or one envoy.
@@ -92,6 +112,7 @@ import {
 import {
 	executeSandboxTool,
 	isSandboxTool,
+	PARKS_TOOL_NAMES,
 	sandboxToolSpecs
 } from '#lib/runtime/agents/sandbox-tools.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
@@ -144,120 +165,8 @@ export const resolveTool = AgentTools.resolve;
 export const mcpToolName = AgentTools.mcpName;
 export const parseMcpToolName = AgentTools.parseMcpName;
 
-const ToolCall = Schema.Struct({
-	name: Schema.NonEmptyString,
-	input: Schema.optionalKey(Schema.Json)
-});
-const TurnOutput = Schema.Struct({
-	text: Schema.optionalKey(Schema.String),
-	toolCalls: Schema.optionalKey(Schema.Array(ToolCall))
-});
-const maxToolRounds = 8;
-const recentPromptRows = 64;
-const protectedAssistantTurns = 3;
-const softToolOutputCharacters = 4_000;
-const hardToolOutputCharacters = 50_000;
-
-/** How many tool steps one progress note shows; the rest collapse into a count. */
-const progressVisibleLines = 3;
-
-/**
- * How long one note must rest before it is rewritten, and how long rewrites are tried at all.
- *
- * The interval coalesces a burst of quick tools into a few honest updates instead of a flickering
- * bubble; the window is WhatsApp's own edit horizon with margin, past which a rewrite is refused
- * by the provider and a replacement message would be exactly the noise in-place updates exist
- * to avoid.
- */
-const PROGRESS_EDIT_INTERVAL_MS = 3_500;
-const PROGRESS_WINDOW_MS = 13 * 60_000;
-
-/**
- * The compact body of one progress note, read straight off the turn's own parts.
- *
- * The parts a turn commits are the only record of its tool steps — a note invents none. A part
- * with a matching result is done and carries a check; one still waiting carries a gear; everything
- * older than the newest few collapses into a count, because a turn that ran six tools does not
- * narrate six lines into somebody's chat.
- */
-const renderProgress = (parts: ReadonlyArray<TurnPart>): string => {
-	const done = new Set(parts.flatMap((part) => (part.kind === 'tool-result' ? [part.id] : [])));
-	const steps = parts.flatMap((part) =>
-		part.kind === 'tool' ? [{ name: part.name, state: done.has(part.id) }] : []
-	);
-	const shown = steps
-		.slice(-progressVisibleLines)
-		.map(({ name, state }) => `${state ? '✓' : '⚙︎'} ${name}`);
-	const elided =
-		steps.length > progressVisibleLines ? [`… ${steps.length - progressVisibleLines} earlier`] : [];
-	return ['⚙︎ Working', ...elided, ...shown].join('\n');
-};
-
-/**
- * One step of an agent turn. "Step" and "part" name the same thing: what the turn produced next.
- *
- * A turn is one message, so its steps are parts inside that message rather than messages of their
- * own. The log used to hold one `assistant` row per *round* and one `tool` row per answer, which
- * rendered a single turn as several separate agent blocks — the round is an artefact of how the tool
- * loop is driven, not something the reader asked about.
- */
-const TurnPart = Schema.Union([
-	Schema.Struct({ kind: Schema.Literal('text'), text: Schema.String }),
-	Schema.Struct({
-		kind: Schema.Literal('tool'),
-		id: Schema.NonEmptyString,
-		name: Schema.NonEmptyString,
-		input: Schema.Json
-	}),
-	Schema.Struct({
-		kind: Schema.Literal('tool-result'),
-		id: Schema.NonEmptyString,
-		name: Schema.NonEmptyString,
-		output: Schema.Json
-	})
-]);
-type TurnPart = Schema.Schema.Type<typeof TurnPart>;
-
-const TurnStatus = Schema.Literals([
-	'queued',
-	'running',
-	'paused',
-	'completed',
-	'failed',
-	'interrupted',
-	'dequeued'
-]);
-type TurnStatus = Schema.Schema.Type<typeof TurnStatus>;
-
-/**
- * Everything a parked turn needs in order to continue under the authority that started it.
- *
- * The subject is a snapshot, deliberately. A task invocation carries no credential, and rebuilding a
- * subject from `chat_session.user_id` would be both incomplete (there is no team path there)
- * and wrong for envoys (their policies are static authority, not the linked person's authority).
- */
-const StoredTurn = Schema.Struct({
-	id: Schema.NonEmptyString,
-	status: TurnStatus,
-	parent_agent_id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
-	parts: Schema.Array(TurnPart),
-	resumed: Schema.optionalKey(
-		Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
-	),
-	subject: Schema.optionalKey(Identity.Subject),
-	agent_name: Schema.optionalKey(Schema.NonEmptyString),
-	usage: Schema.optionalKey(AIUsage),
-	usage_unreported: Schema.optionalKey(Schema.Boolean)
-});
-type StoredTurn = Schema.Schema.Type<typeof StoredTurn>;
-
 const StoredTurnMessageRow = Schema.Struct({ id: Schema.String, content: StoredTurn });
 const decodeStoredTurnMessageRow = Schema.decodeUnknownOption(StoredTurnMessageRow);
-const AwaitInput = Schema.Struct({
-	agentId: Schema.NonEmptyString,
-	taskId: Schema.NonEmptyString
-});
-const WaitingAnswer = Schema.Struct({ waiting: Schema.Literal(true) });
 const SandboxSpawnActionInput = Schema.Struct({
 	task: Schema.NonEmptyString,
 	depth: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))
@@ -279,96 +188,8 @@ const SandboxReorderActionInput = Schema.Struct({
 const SandboxAgentActionInput = Schema.Struct({ agentId: Schema.NonEmptyString });
 
 /** A completed delegated turn, returned to the parent as the answer to its await tool call. */
-const SettledTarget = Schema.Struct({
-	id: Schema.NonEmptyString,
-	status: Schema.Literals(['completed', 'failed', 'interrupted', 'dequeued']),
-	parts: Schema.Array(TurnPart)
-});
 const SettledTargetRow = Schema.Struct({ content: SettledTarget });
 
-const maxResumes = 4;
-
-/**
- * Expands one stored turn back into the alternating messages a provider accepts.
- *
- * The store keeps a turn whole because that is what the turn is; a provider instead wants the
- * assistant/tool alternation it emitted. Rebuilding it here is what lets the log hold the reader's
- * model without the prompt losing which answer belongs to which call.
- */
-/**
- * A replay of a stored assistant turn: the text and the tool calls a provider needs, in the order
- * they happened, with either half optional — the one shape a provider actually builds a prompt from.
- */
-const ReplayContent = Schema.Struct({
-	text: Schema.optionalKey(Schema.String),
-	toolCalls: Schema.optionalKey(Schema.Array(Schema.Json))
-});
-type ReplayContent = typeof ReplayContent.Type;
-
-const replayTurn = (parts: ReadonlyArray<TurnPart>): ReadonlyArray<Schema.Json> => {
-	const replayed: Array<Schema.Json> = [];
-	let text: string | undefined;
-	let calls: Array<Schema.Json> = [];
-	const flush = () => {
-		if (text === undefined && calls.length === 0) return;
-		const content: ReplayContent =
-			text === undefined
-				? { toolCalls: calls }
-				: calls.length === 0
-					? { text }
-					: { text, toolCalls: calls };
-		replayed.push({ role: 'assistant', content });
-		text = undefined;
-		calls = [];
-	};
-	for (const part of parts) {
-		if (part.kind === 'text') {
-			flush();
-			text = part.text;
-		} else if (part.kind === 'tool') {
-			calls.push({ name: part.name, input: part.input });
-		} else {
-			flush();
-			replayed.push({ role: 'tool', name: part.name, content: JSON.stringify(part.output) });
-		}
-	}
-	flush();
-	return replayed;
-};
-
-/**
- * Old tool output is evidence, not an entitlement to consume the prompt forever. The recent three
- * assistant turns remain byte-for-byte intact; older output is trimmed at the two age thresholds
- * used by the runtime's fixed replay window.
- */
-const pruneToolOutput = (
-	parts: ReadonlyArray<TurnPart>,
-	ageFraction: number,
-	protectedTurn: boolean
-): ReadonlyArray<TurnPart> => {
-	if (protectedTurn) return parts;
-	return parts.map((part): TurnPart => {
-		if (part.kind !== 'tool-result') return part;
-		const encoded = JSON.stringify(part.output);
-		if (ageFraction >= 0.5 && encoded.length > hardToolOutputCharacters) {
-			return {
-				...part,
-				output: {
-					cleared: true,
-					originalCharacters: encoded.length,
-					reason: 'outside recent prompt window'
-				}
-			};
-		}
-		if (ageFraction >= 0.3 && encoded.length > softToolOutputCharacters) {
-			return {
-				...part,
-				output: `${encoded.slice(0, 1_500)}\n… ${encoded.length - 3_000} characters trimmed …\n${encoded.slice(-1_500)}`
-			};
-		}
-		return part;
-	});
-};
 
 /**
  * What one conversation has cost, counting everything it delegated.
@@ -399,14 +220,6 @@ export const ConversationUsage = Schema.Struct({
 });
 // repository-health:allow EXP1 -- Exported dependent Layer declarations require this cross-module row type during declaration emit.
 export interface ConversationUsage extends Schema.Schema.Type<typeof ConversationUsage> {}
-
-/**
- * How deep the spend roll-up and the transcript walk follow delegation.
- *
- * Delegation is recursive, but bounded. The limit also makes a cycle written into `parent_id`
- * degrade to a truncated walk rather than a recursive query that never returns.
- */
-const maxDelegationDepth = 8;
 
 const NullableString = Schema.Union([Schema.String, Schema.Null]);
 const ConversationVisibility = Schema.Literals(['personal', 'envoy_dm', 'envoy_group']);
@@ -555,12 +368,12 @@ export type Interface = Readonly<{
 		conversationId: string,
 		turnId: string,
 		/**
-		 * Observes each durable turn commit, with the note body rendered from the parts just
-		 * committed and the transport key of the message to rewrite next. Returns the key to hand
-		 * the next observation. Transport envoys keep one message current with this; absent, the
-		 * turn commits and nobody watches.
+		 * The transport surface the turn reflects into, when a transport is watching one. Its
+		 * `observe` is called with the parts after each durable commit — presentation and pacing
+		 * belong to the surface, never to this service. Absent, the web agent's turns: the chat
+		 * itself is the surface.
 		 */
-		observe?: (body: string, updateOf: string | null) => Effect.Effect<string | null>
+		surface?: TurnSurface
 	) => Effect.Effect<
 		TurnResultValue,
 		| Workspace.WorkspaceLookupError
@@ -758,6 +571,20 @@ export const layer = Layer.effect(
 		const publicEnvoys = workspace.definition.envoys
 			.filter(({ audience }) => audience === 'public')
 			.map(({ name }) => name);
+		/**
+		 * The one where-fragment for an administrator's wider inbox. Everything the predicate below
+		 * requires of a row is required here too, expressed against the columns, so the two cannot
+		 * drift apart: an envoy visibility, a currently-public envoy key, and the row's own agent
+		 * naming its envoy — all the invariants `openConversation` writes for that surface.
+		 */
+		const envoyScopeWhere = (subject: Identity.Subject) =>
+			subject.admin === true && publicEnvoys.length > 0
+				? and(
+						inArray(chatSession.visibility, ['envoy_dm', 'envoy_group']),
+						inArray(chatSession.envoy_key, publicEnvoys),
+						eq(chatSession.agent_name, chatSession.envoy_key)
+					)
+				: undefined;
 		const canReadConversation = (
 			subject: Identity.Subject,
 			conversation: Schema.Schema.Type<typeof AuthorizedConversationRow>
@@ -1601,8 +1428,9 @@ export const layer = Layer.effect(
 							content: JSON.stringify(encoded)
 						});
 						const waiting = Schema.decodeUnknownOption(WaitingAnswer)(encoded);
-						// `spawn_agent` starts work; only the explicit exact-task join point parks its caller.
-						if (call.name === 'await_agent' && waiting._tag === 'Some') {
+						// A parking tool starts work but answers no result: its exact task join point
+						// parks the caller until the child settles, and the turn continues later.
+						if (PARKS_TOOL_NAMES.includes(call.name) && waiting._tag === 'Some') {
 							output = encoded;
 							status = 'waiting';
 							parked = true;
@@ -1838,7 +1666,7 @@ export const layer = Layer.effect(
 				effectId,
 				conversationId,
 				turnId,
-				observe
+				surface
 			) {
 				const storedResult = yield* executeBuilt(
 					EffectId.make(`${effectId}:turn:read`),
@@ -1902,14 +1730,8 @@ export const layer = Layer.effect(
 				const parts: Array<TurnPart> = [...stored.parts];
 				let committed = 0;
 				/**
-				 * The one observer of turn beats, when a transport wants them.
-				 *
-				 * The loop already commits after every tool step, and the committed parts are the only
-				 * progress there is — so the note is rendered from `parts` at the commit boundary rather
-				 * than the loop growing a second record of its own steps. Throttled because WhatsApp
-				 * rewrites a sent message, not a stream: three and a half seconds turns a burst of quick
-				 * tools into a few honest updates, and past WhatsApp's edit horizon the observer goes
-				 * quiet rather than replacing the bubble and doubling the messages. Never fails a turn.
+				 * The turn's durable record, kept beside the loop's steps: one commit after every step,
+				 * and each commit is the one beat the transport surface is told about.
 				 */
 				const persistTurn = (status: TurnStatus, usage: AIUsage | undefined, usageUnreported: boolean) =>
 					syncMutation(
@@ -1928,26 +1750,15 @@ export const layer = Layer.effect(
 							.where(eq(chatMessage.id, decoded.value.id)),
 						['chat_message']
 					);
-				let progressKey: string | null = null;
-				let lastBeatAt = 0;
-				const startedAt = Date.now();
 				const commit: CommitTurn =
-					observe === undefined
+					surface === undefined
 						? persistTurn
 						: (status, usage, usageUnreported) =>
 								Effect.gen(function* () {
 									const result = yield* persistTurn(status, usage, usageUnreported);
-									const now = Date.now();
-									if (
-										now - startedAt < PROGRESS_WINDOW_MS &&
-										(progressKey === null || now - lastBeatAt >= PROGRESS_EDIT_INTERVAL_MS)
-									) {
-										lastBeatAt = now;
-										progressKey = yield* Effect.catch(
-											observe(renderProgress(parts), progressKey),
-											() => Effect.succeed(progressKey)
-										);
-									}
+									// Best effort by contract: a surface that cannot post the beat must never
+									// fail the turn, and the surface itself owns throttling and the bubble key.
+									yield* Effect.catch(surface.observe(parts), () => Effect.void);
 									return result;
 								});
 				yield* commit('running', stored.usage, stored.usage_unreported ?? false);
@@ -1988,7 +1799,7 @@ export const layer = Layer.effect(
 									output: settled.output,
 									// The observed bubble rides along so the answer can replace it in place.
 									// A turn nobody observed carries `null`, and the answer is sent fresh.
-									progressKey: progressKey ?? null
+									progressKey: surface?.currentKey() ?? null
 								},
 								effectId: completionId
 							}
@@ -2110,7 +1921,11 @@ export const layer = Layer.effect(
 				let waiting = false;
 				for (let index = parts.length - 1; index >= 0; index -= 1) {
 					const answer = parts[index];
-					if (answer?.kind !== 'tool-result' || answer.name !== 'await_agent') continue;
+					if (
+						answer?.kind !== 'tool-result' ||
+						!PARKS_TOOL_NAMES.includes(answer.name)
+					)
+						continue;
 					const call = parts.find(
 						(part) => part.kind === 'tool' && part.id === answer.id && part.name === answer.name
 					);
@@ -2280,14 +2095,7 @@ export const layer = Layer.effect(
 				// Delegated sessions are excluded: nobody started one and nobody can reply to it, and listing
 				// them put a subagent's task prompt in the conversation picker as though it were a chat the
 				// person had opened. They still reach the reader — inside the turn that spawned them.
-				const publicScope =
-					subject.admin === true && publicEnvoys.length > 0
-						? and(
-								inArray(chatSession.visibility, ['envoy_dm', 'envoy_group']),
-								inArray(chatSession.envoy_key, publicEnvoys),
-								inArray(chatSession.agent_name, publicEnvoys)
-							)
-						: undefined;
+				const publicScope = envoyScopeWhere(subject);
 				const readScope =
 					publicScope === undefined
 						? eq(chatSession.user_id, subject.userId)

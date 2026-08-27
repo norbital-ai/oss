@@ -75,6 +75,7 @@ export {
 	AIWebSearch,
 	CommunicationRequest,
 	CommunicationResponse,
+	ChannelSendPayload,
 	ConnectorRequest,
 	ConnectorResponse,
 	DatabaseRequest,

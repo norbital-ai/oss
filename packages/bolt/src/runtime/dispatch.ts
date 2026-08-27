@@ -150,16 +150,96 @@ const SyncDistributeInput = Schema.Struct({
  * A conversation that is not a transport one (the web agent's) has nothing in flight to post on
  * and answers `null`, which the turn treats as nobody watching.
  */
-type TurnObserver = (body: string, updateOf: string | null) => Effect.Effect<string | null>;
+/** How many tool steps one turn note shows; the rest collapse into a count. */
+const progressVisibleLines = 3;
+
+/**
+ * How long one note must rest before it is rewritten, and how long rewrites are tried at all.
+ *
+ * The interval coalesces a burst of quick tools into a few honest updates instead of a flickering
+ * bubble; the window is WhatsApp's own edit horizon with margin, past which a rewrite is refused
+ * by the provider and a replacement message would be exactly the noise in-place updates exist
+ * to avoid.
+ */
+const PROGRESS_EDIT_INTERVAL_MS = 3_500;
+const PROGRESS_WINDOW_MS = 13 * 60_000;
+
+/**
+ * The compact body of one turn note, read straight off the turn's own parts.
+ *
+ * The parts a turn commits are the only record of its tool steps — a note invents none. A part
+ * with a matching result is done and carries a check; one still waiting carries a gear; everything
+ * older than the newest few collapses into a count, because a turn that ran six tools does not
+ * narrate six lines into somebody's chat.
+ */
+const renderProgress = (parts: ReadonlyArray<Agents.TurnPart>): string => {
+	const done = new Set(parts.flatMap((part) => (part.kind === 'tool-result' ? [part.id] : [])));
+	const steps = parts.flatMap((part) =>
+		part.kind === 'tool' ? [{ name: part.name, state: done.has(part.id) }] : []
+	);
+	const shown = steps
+		.slice(-progressVisibleLines)
+		.map(({ name, state }) => `${state ? '✓' : '⚙︎'} ${name}`);
+	const elided =
+		steps.length > progressVisibleLines ? [`… ${steps.length - progressVisibleLines} earlier`] : [];
+	return ['⚙︎ Working', ...elided, ...shown].join('\n');
+};
+
+/**
+ * Builds the transport surface one turn reflects into — the envoy hop, paced and keyed here so
+ * the agent service knows nothing of WhatsApp. The surface owns the bubble's provider key: the
+ * first beat sends it, later beats rewrite it, and `currentKey` names it for the completion, which
+ * replaces the bubble with the answer. A conversation that is not a transport one (the web
+ * agent's) is learned on the first beat, and the surface goes quiet rather than visiting the
+ * runtime on every commit after that.
+ */
 const observeProgress = (
 	effectId: EffectId,
 	conversationId: string,
 	envoys: Envoys.Interface
-): TurnObserver => (body, updateOf) =>
-	Effect.catch(
-		envoys.progress(EffectId.make(`${effectId}:progress`), conversationId, body, updateOf),
-		() => Effect.succeed(null)
-	);
+): Agents.TurnSurface => {
+	let beat = 0;
+	let key: string | null = null;
+	let lastEditAt = 0;
+	const startedAt = Date.now();
+	let quiet = false;
+	return {
+		currentKey: () => key,
+		observe: (parts) =>
+			Effect.suspend(() => {
+				if (quiet) return Effect.void;
+				const now = Date.now();
+				if (now - startedAt > PROGRESS_WINDOW_MS) {
+					quiet = true;
+					return Effect.void;
+				}
+				if (key !== null && now - lastEditAt < PROGRESS_EDIT_INTERVAL_MS) return Effect.void;
+				lastEditAt = now;
+				return Effect.catch(
+					Effect.map(
+						envoys.progress(
+							EffectId.make(`${effectId}:progress:${(beat += 1)}`),
+							conversationId,
+							renderProgress(parts),
+							key
+						),
+						(next) => {
+							if (next !== null) {
+								key = next;
+							} else if (key !== null) {
+								// The bubble was lost between beats — the transport dropped it or the
+								// session moved on. The next beat sends a fresh note instead of a ghost.
+								key = null;
+							} else {
+								quiet = true;
+							}
+						}
+					),
+					() => Effect.void
+				);
+			})
+	};
+};
 
 const AgentEnqueueInput = Schema.Struct({
 	subject: Subject,

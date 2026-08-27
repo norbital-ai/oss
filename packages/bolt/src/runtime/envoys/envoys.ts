@@ -297,6 +297,16 @@ export const layer = Layer.effect(
 			);
 
 		/**
+		 * The text half of a channel payload: a structured `{ text }` answer keeps its text, anything
+		 * else is stringified — the host reads the same field either way, because the payload is now
+		 * a declared shape, not a shape somebody guesses at.
+		 */
+		const textOf = (value: Schema.Json): string =>
+			value !== null && typeof value === 'object' && typeof Reflect.get(value, 'text') === 'string'
+				? (Reflect.get(value, 'text') as string)
+				: String(value ?? '');
+
+		/**
 		 * Delivers one outbound message and reports what it became on the wire.
 		 *
 		 * The provider key the receipt carries back is what turns a reply into a conversation that
@@ -319,20 +329,18 @@ export const layer = Layer.effect(
 					payload:
 						updateOf === undefined || updateOf === null
 							? payload
-							: {
-									...(payload !== null && typeof payload === 'object'
-										? payload
-										: { text: String(payload) }),
-									updateOf
-								}
+							: { text: textOf(payload), updateOf }
 				})
 				.pipe(Effect.option);
-			yield* recordReceipt(
-				EffectId.make(`${effectId}:receipt`),
-				envoy.name,
-				recipient,
-				'outbound'
-			);
+			// A receipt counts a message, not a delivery attempt: an edit rewrites the same message.
+			if (updateOf === undefined || updateOf === null) {
+				yield* recordReceipt(
+					EffectId.make(`${effectId}:receipt`),
+					envoy.name,
+					recipient,
+					'outbound'
+				);
+			}
 			if (Option.isNone(response)) return { delivered: false as const, key: null };
 			const receipt: unknown = response.value.receipt;
 			const id =
@@ -403,14 +411,9 @@ export const layer = Layer.effect(
 					const text =
 						'This agent is available only to registered members. Ask an administrator to verify this ' +
 						'number on your workspace account, then send your message again.';
-					if (admitted) {
-						yield* communication.execute(effectId, {
-							_tag: 'Send',
-							channel: envoy.transport,
-							recipient: delivery.conversationId,
-							payload: { text }
-						});
-					}
+				if (admitted) {
+					yield* deliver(effectId, envoy, delivery.conversationId, { text });
+				}
 					return {
 						status: 'registration_required' as const,
 						envoy: envoyName,
@@ -781,7 +784,7 @@ export const layer = Layer.effect(
 					effectId,
 					envoy,
 					decoded.value.transport_conversation_id,
-					{ text: body, progress: true },
+					{ text: body },
 					updateOf
 				);
 				if (!outcome.delivered) return null;
@@ -801,41 +804,35 @@ export const layer = Layer.effect(
 						.where(eq(boltEnvoyRegistrations.envoy_name, envoyName))
 						.limit(1)
 				);
-				const receivedRows = yield* executeBuilt(
+				// One pass per call, not two: the counters the status answers with are the
+				// directions of the same row set, so one grouped query reads both.
+				const counts = yield* executeBuilt(
 					effectId,
 					database,
 					composer
-						.select({ count: count() })
+						.select({
+							direction: boltEnvoyReceipts.direction,
+							count: count()
+						})
 						.from(boltEnvoyReceipts)
-						.where(
-							and(
-								eq(boltEnvoyReceipts.envoy_name, envoyName),
-								eq(boltEnvoyReceipts.direction, 'inbound')
-							)
-						)
+						.where(eq(boltEnvoyReceipts.envoy_name, envoyName))
+						.groupBy(boltEnvoyReceipts.direction)
 				);
-				const repliedRows = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({ count: count() })
-						.from(boltEnvoyReceipts)
-						.where(
-							and(
-								eq(boltEnvoyReceipts.envoy_name, envoyName),
-								eq(boltEnvoyReceipts.direction, 'outbound')
-							)
-						)
-				);
+				const DirectionCount = Schema.Struct({
+					direction: Schema.NonEmptyString,
+					count: Schema.Number
+				});
+				const countOf = (direction: string): number => {
+					const row = Schema.decodeUnknownOption(DirectionCount)(
+						counts.rows.find((candidate) => (candidate as { direction?: string }).direction === direction)
+					);
+					return row._tag === 'Some' ? Math.max(0, Math.floor(row.value.count)) : 0;
+				};
 				return {
 					envoy: envoyName,
 					registered: registration.rows.length === 1,
-					received: Number(
-						Reflect.get((receivedRows.rows[0] as object | undefined) ?? {}, 'count') ?? 0
-					),
-					replied: Number(
-						Reflect.get((repliedRows.rows[0] as object | undefined) ?? {}, 'count') ?? 0
-					)
+					received: countOf('inbound'),
+					replied: countOf('outbound')
 				};
 			})
 		});

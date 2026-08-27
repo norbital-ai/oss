@@ -259,6 +259,18 @@ export const CommunicationRequest = Schema.TaggedUnion({
 	Wake: { topic: Schema.NonEmptyString }
 });
 export type CommunicationRequest = typeof CommunicationRequest.Type;
+/**
+ * The payload shape a workspace puts on a *channel* send, so the host reads the same field nobody
+ * has to guess: the text, and the provider key of the message this one rewrites in place.
+ *
+ * Email keeps `Schema.Json` — its rendering is the host mailer's business, and the OTP mail it
+ * re-templates has its own shapes.
+ */
+export const ChannelSendPayload = Schema.Struct({
+	text: Schema.NonEmptyString,
+	updateOf: Schema.optionalKey(Schema.NonEmptyString)
+});
+export type ChannelSendPayload = Schema.Schema.Type<typeof ChannelSendPayload>;
 export const CommunicationResponse = Schema.Struct({ receipt: Schema.optionalKey(Schema.Json) });
 export interface CommunicationResponse extends Schema.Schema.Type<typeof CommunicationResponse> {}
 

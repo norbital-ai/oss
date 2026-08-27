@@ -30,6 +30,13 @@ const sandboxToolNames = [
 const SandboxToolNames = Schema.Literals([...sandboxToolNames]);
 type SandboxToolName = Schema.Schema.Type<typeof SandboxToolNames>;
 
+/**
+ * The one tool that *parks* its caller rather than answering: its exact task join point waits for
+ * a child session, and the turn continues under the parent's authority later. The generic turn
+ * loop asks the platform layer "is this a parking call?" instead of naming tools.
+ */
+export const PARKS_TOOL_NAMES: ReadonlyArray<string> = ['await_agent'];
+
 export const isSandboxTool = Schema.is(SandboxToolNames);
 
 const objectInput = (
