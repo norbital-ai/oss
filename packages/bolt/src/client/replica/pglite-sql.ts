@@ -188,6 +188,32 @@ export const executeBuilt = <Value>(build: () => Promise<Value>): Effect.Effect<
 // repository-health:allow SQL1 -- DDL bootstrap for the disposable local replica's own ledger.
 const REPLICA_LEDGER_STEPS: ReadonlyArray<ProvisioningStep> = [
 	{
+		/**
+		 * The replica's own copy of the one server table it writes but can never be sent.
+		 *
+		 * `bolt_schema_state` is declared `sync: false`, so `replicaProvisioningSteps` filters it out
+		 * of the DDL the browser receives — correctly, because it is not collection data. But
+		 * `markProvisioned` deletes from and inserts into it on the very next line after
+		 * provisioning, and `readReplicaState` reads it to decide whether a namespace already
+		 * matches. Nothing created it, so a first bootstrap always died on
+		 * `relation "bolt_schema_state" does not exist` and every workspace fell back to online-only.
+		 *
+		 * The system columns are spelled out with their SQL-side defaults because Drizzle emits only
+		 * `fingerprint` in the insert and leaves the rest to the database.
+		 */
+		id: 'replica:schema-state',
+		sql: `create table if not exists bolt_schema_state (
+			id uuid primary key default gen_random_uuid(),
+			created_at timestamptz default now(),
+			updated_at timestamptz default now(),
+			sys_period tstzrange not null default tstzrange(CURRENT_TIMESTAMP, NULL, '[)'),
+			row_version integer default 1,
+			approval_id uuid,
+			fingerprint text not null,
+			applied_at timestamptz not null default now()
+		)`
+	},
+	{
 		id: 'replica:base-row',
 			sql: `create table if not exists bolt_replica_base_row (
 			collection text not null,

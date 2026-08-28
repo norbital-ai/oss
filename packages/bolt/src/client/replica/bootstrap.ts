@@ -1,6 +1,7 @@
 import { Effect, Result, Schema } from 'effect';
 import {
 	createPGliteStore,
+	ensureReplicaLedger,
 	markProvisioned,
 	provision,
 	readReplicaState,
@@ -125,6 +126,16 @@ export const openLocalDatabase = Effect.fn('ReplicaBootstrap.openLocalDatabase')
 	// The server already enforced integrity. A replica may receive relationally dependent rows in any
 	// order, so it applies with PostgreSQL's logical-replication semantics.
 	yield* database.exec('set session_replication_role = replica');
+	/**
+	 * The ledger exists before anything reads it, rather than only after a successful provision.
+	 *
+	 * Every step is `if not exists`, so this is idempotent for a resumed namespace. Doing it here
+	 * means the two reads below interrogate empty tables instead of missing ones: an empty
+	 * `bolt_schema_state` still answers `undefined`, so a fresh namespace is detected exactly as it
+	 * was, and the browser console stops filling with caught `relation ... does not exist` errors
+	 * that looked like the failure but never were.
+	 */
+	yield* ensureReplicaLedger(database);
 	const existing = yield* readReplicaState(database);
 	let provisioned: boolean;
 	if (database.isLeader === false) {
