@@ -3553,9 +3553,25 @@ const startReplica = (
 			},
 			switchNamespace: () => switchPhysicalNamespace()
 		};
+		const selectedBarrierHooks = options.schemaBarrier ?? defaultBarrierHooks;
 		const barrierController: SchemaBarrierController = createSchemaBarrierController({
-			...(options.schemaBarrier ?? defaultBarrierHooks),
-			leader: leads
+			...selectedBarrierHooks,
+			leader: leads,
+			// This hook runs only after durable facts prove that the physical namespace must change.
+			// Pausing before `accept` made every repeated, adopted barrier close its own SSE stream.
+			withdrawReaders: (collections) => {
+				pauseIntake();
+				if (accessState !== undefined) {
+					accessState.stopMutationPush?.();
+					accessState.mutationJournalUnsubscribe?.();
+					delete accessState.mutationJournal;
+					delete accessState.mutationJournalUnsubscribe;
+					delete accessState.refreshMutationStatus;
+					delete accessState.refreshOverlaySnapshot;
+					delete accessState.serverPartitionKey;
+				}
+				selectedBarrierHooks.withdrawReaders(collections);
+			}
 		});
 		const acceptSchemaMaintenance = (
 			notice: ReplicaSchemaMaintenance,
@@ -3630,18 +3646,6 @@ const startReplica = (
 		const acceptSchemaBarrier = (barrier: ReplicaSchemaBarrier): Promise<void> => {
 			schemaBarrierPauses += 1;
 			const accepted = schemaBarrierTail.then(async () => {
-				// Stop accepting later-format rows and let every already accepted transaction finish
-				// before the old physical namespace is retired.
-				pauseIntake();
-				if (accessState !== undefined) {
-					accessState.stopMutationPush?.();
-					accessState.mutationJournalUnsubscribe?.();
-					delete accessState.mutationJournal;
-					delete accessState.mutationJournalUnsubscribe;
-					delete accessState.refreshMutationStatus;
-					delete accessState.refreshOverlaySnapshot;
-					delete accessState.serverPartitionKey;
-				}
 				await maintenanceTail;
 				await coordinator.idle();
 				await queryMaterializationTail;
@@ -3702,6 +3706,9 @@ const startReplica = (
 					coordinator.acceptDeltas(batch);
 					void coordinator.idle()
 						.then(async () => {
+							// Status-only confirmations have no readable row. Retire them only after the
+							// authoritative batch has committed to the replica.
+							await confirmMutationDeltas(batch);
 							if (batch.complete) {
 								settleCatchUp();
 								accessState?.syncStatus.markConnected();

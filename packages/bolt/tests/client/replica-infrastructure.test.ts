@@ -171,13 +171,15 @@ describe('schema barriers', () => {
 			}
 		});
 
-		await controller.accept({
+		const barrier = {
 			generation: 2,
 			fingerprint: 'same',
 			minimumProtocolVersion: 1,
 			affectedCollections: ['jobs'],
 			migrationDigest: 'sha256:same'
-		});
+		};
+		await controller.accept(barrier);
+		await controller.accept(barrier);
 		expect(events).toEqual(['adopt:2']);
 		expect(controller.state()).toMatchObject({
 			phase: 'idle',
