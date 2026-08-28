@@ -19,41 +19,53 @@ const diagnosticText = (diagnostic: ts.Diagnostic): string => {
 };
 
 describe('generated authoring unions', () => {
-	it('keeps team names and app group prefixes exact without circular workspace types', async () => {
-		const root = await mkdtemp(join(tmpdir(), 'bolt-authoring-types-'));
-		roots.push(root);
-		await mkdir(join(root, 'src', 'access'), { recursive: true });
-		await mkdir(join(root, '.norbital', 'generated'), { recursive: true });
-		await mkdir(join(root, '.norbital', 'types'), { recursive: true });
+	/**
+	 * A real `ts.createProgram` plus `getPreEmitDiagnostics`, not a string assertion.
+	 *
+	 * That is the point of the test — the generated unions are only proved by type-checking them —
+	 * but it is also a second of compiler work on a developer machine, and vitest's five-second
+	 * default left almost no margin for it. A loaded CI runner crossed that line and failed the
+	 * release with a timeout while all 679 other tests passed. The budget is stated here so the
+	 * next slow runner reports a real regression rather than the scheduler.
+	 */
+	it(
+		'keeps team names and app group prefixes exact without circular workspace types',
+		{ timeout: 30_000 },
+		async () => {
+			const root = await mkdtemp(join(tmpdir(), 'bolt-authoring-types-'));
+			roots.push(root);
+			await mkdir(join(root, 'src', 'access'), { recursive: true });
+			await mkdir(join(root, '.norbital', 'generated'), { recursive: true });
+			await mkdir(join(root, '.norbital', 'types'), { recursive: true });
 
-		await writeFile(
-			join(root, 'src', 'access', '+teams.ts'),
-			`import type { Teams } from '@norbital-ai/bolt/authoring';
+			await writeFile(
+				join(root, 'src', 'access', '+teams.ts'),
+				`import type { Teams } from '@norbital-ai/bolt/authoring';
 export default {
 	Operations: ['operator'],
 	Reviewers: []
 } satisfies Teams;
 `
-		);
-		await writeFile(
-			join(root, '.norbital', 'generated', 'authoring-types.ts'),
-			renderAuthoringTypes({
-				collections: ['records'],
-				apps: ['hr_controller/leave'],
-				policies: ['operator'],
-				functions: [],
-				tools: [],
-				envoys: [],
-				mcpServers: [],
-				skills: [],
-				datatypes: [],
-				automations: [],
-				teamsImport: '../../src/access/+teams.js'
-			})
-		);
-		await writeFile(
-			join(root, '.norbital', 'generated', 'types.ts'),
-			`export type WorkspaceSchema = {
+			);
+			await writeFile(
+				join(root, '.norbital', 'generated', 'authoring-types.ts'),
+				renderAuthoringTypes({
+					collections: ['records'],
+					apps: ['hr_controller/leave'],
+					policies: ['operator'],
+					functions: [],
+					tools: [],
+					envoys: [],
+					mcpServers: [],
+					skills: [],
+					datatypes: [],
+					automations: [],
+					teamsImport: '../../src/access/+teams.js'
+				})
+			);
+			await writeFile(
+				join(root, '.norbital', 'generated', 'types.ts'),
+				`export type WorkspaceSchema = {
 	readonly tables: {
 		readonly records: {
 			readonly $inferSelect: { readonly id: string; readonly visible: string; readonly secret: string; readonly row_version: number };
@@ -64,14 +76,14 @@ export default {
 	readonly relations: Record<never, never>;
 };
 `
-		);
-		await writeFile(
-			join(root, '.norbital', 'types', 'workspace-authoring.d.ts'),
-			renderWorkspaceAuthoring()
-		);
-		await writeFile(
-			join(root, 'src', 'witness.ts'),
-			`import { approveBy, noApproval, type Api, type AppName, type PolicyDefinition, type TeamName } from '@norbital-ai/bolt/authoring';
+			);
+			await writeFile(
+				join(root, '.norbital', 'types', 'workspace-authoring.d.ts'),
+				renderWorkspaceAuthoring()
+			);
+			await writeFile(
+				join(root, 'src', 'witness.ts'),
+				`import { approveBy, noApproval, type Api, type AppName, type PolicyDefinition, type TeamName } from '@norbital-ai/bolt/authoring';
 import type { WorkspaceSchema } from '../.norbital/generated/types.js';
 const valid: TeamName = 'Reviewers';
 // @ts-expect-error -- a generated team union must still reject misspellings.
@@ -140,38 +152,41 @@ void appLeaf;
 void appGroupTypo;
 void invalidFieldPolicy;
 `
-		);
+			);
 
-		const authoringSource = fileURLToPath(new URL('../../src/authoring/index.ts', import.meta.url));
-		const program = ts.createProgram({
-			rootNames: [
-				join(root, 'src', 'access', '+teams.ts'),
-				join(root, 'src', 'witness.ts'),
-				join(root, '.norbital', 'generated', 'authoring-types.ts'),
-				join(root, '.norbital', 'generated', 'types.ts'),
-				join(root, '.norbital', 'types', 'workspace-authoring.d.ts')
-			],
-			options: {
-				allowSyntheticDefaultImports: true,
-				baseUrl: root,
-				esModuleInterop: true,
-				ignoreDeprecations: '6.0',
-				lib: ['lib.es2024.d.ts', 'lib.dom.d.ts'],
-				module: ts.ModuleKind.ESNext,
-				moduleResolution: ts.ModuleResolutionKind.Bundler,
-				noEmit: true,
-				paths: {
-					'@norbital-ai/bolt/authoring': [relative(root, authoringSource)]
-				},
-				skipLibCheck: true,
-				strict: true,
-				target: ts.ScriptTarget.ES2022
-			}
-		});
+			const authoringSource = fileURLToPath(
+				new URL('../../src/authoring/index.ts', import.meta.url)
+			);
+			const program = ts.createProgram({
+				rootNames: [
+					join(root, 'src', 'access', '+teams.ts'),
+					join(root, 'src', 'witness.ts'),
+					join(root, '.norbital', 'generated', 'authoring-types.ts'),
+					join(root, '.norbital', 'generated', 'types.ts'),
+					join(root, '.norbital', 'types', 'workspace-authoring.d.ts')
+				],
+				options: {
+					allowSyntheticDefaultImports: true,
+					baseUrl: root,
+					esModuleInterop: true,
+					ignoreDeprecations: '6.0',
+					lib: ['lib.es2024.d.ts', 'lib.dom.d.ts'],
+					module: ts.ModuleKind.ESNext,
+					moduleResolution: ts.ModuleResolutionKind.Bundler,
+					noEmit: true,
+					paths: {
+						'@norbital-ai/bolt/authoring': [relative(root, authoringSource)]
+					},
+					skipLibCheck: true,
+					strict: true,
+					target: ts.ScriptTarget.ES2022
+				}
+			});
 
-		const workspaceDiagnostics = ts
-			.getPreEmitDiagnostics(program)
-			.filter((diagnostic) => diagnostic.file?.fileName.startsWith(root));
-		expect(workspaceDiagnostics.map(diagnosticText)).toEqual([]);
-	});
+			const workspaceDiagnostics = ts
+				.getPreEmitDiagnostics(program)
+				.filter((diagnostic) => diagnostic.file?.fileName.startsWith(root));
+			expect(workspaceDiagnostics.map(diagnosticText)).toEqual([]);
+		}
+	);
 });
