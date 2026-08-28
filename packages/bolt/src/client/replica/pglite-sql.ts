@@ -1050,6 +1050,14 @@ export const createPGliteStore = (
 				),
 			clearNamespace: () =>
 				Effect.gen(function* () {
+					// Replica sessions run with `session_replication_role = replica`. PostgreSQL therefore
+					// disables the FK triggers which normally cascade a window deletion into its leases,
+					// memberships and relationship evidence. Delete every child explicitly: leaving even
+					// one orphan makes the next M3 hydration collide with the previous window and strands
+					// the durable cursor behind the authority head.
+					yield* database.query('delete from bolt_replica_window_lease');
+					yield* database.query('delete from bolt_replica_window_relationship');
+					yield* database.query('delete from bolt_replica_window_row');
 					yield* database.query('delete from bolt_replica_window');
 					yield* Effect.forEach(
 						collections.values(),

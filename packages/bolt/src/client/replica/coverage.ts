@@ -1179,6 +1179,17 @@ export const createWindowLedger = Effect.fn('ReplicaWindow.create')(function* (
 					).pipe(Effect.map(({ rows }) => rows.length > 0))
 				),
 		releaseWindow: (queryKey, protectedRows) => transaction(Effect.gen(function* () {
+			// Replica sessions disable FK cascade triggers. Remove the reconstructible children
+			// explicitly before their window or they keep base rows artificially reachable.
+			yield* database.query(
+				'delete from bolt_replica_window_lease where query_key = $1', [queryKey]
+			);
+			yield* database.query(
+				'delete from bolt_replica_window_relationship where query_key = $1', [queryKey]
+			);
+			yield* database.query(
+				'delete from bolt_replica_window_row where query_key = $1', [queryKey]
+			);
 			const deleted = yield* database.query<{ readonly query_key: string }>(
 				'delete from bolt_replica_window where query_key = $1 returning query_key', [queryKey]
 			);
@@ -1186,9 +1197,25 @@ export const createWindowLedger = Effect.fn('ReplicaWindow.create')(function* (
 			return yield* prune(protectedRows);
 		})),
 		expireInactiveWindows: (protectedRows) => transaction(Effect.gen(function* () {
+			const candidates = yield* database.query<{ readonly query_key: string }>(
+				`select query_key from bolt_replica_window
+				 where lease_count = 0 and expires_at <= current_timestamp`
+			);
+			const queryKeys = candidates.rows.map(({ query_key }) => query_key);
+			if (queryKeys.length === 0) return [];
+			yield* database.query(
+				'delete from bolt_replica_window_lease where query_key = any($1::text[])', [queryKeys]
+			);
+			yield* database.query(
+				'delete from bolt_replica_window_relationship where query_key = any($1::text[])', [queryKeys]
+			);
+			yield* database.query(
+				'delete from bolt_replica_window_row where query_key = any($1::text[])', [queryKeys]
+			);
 			const expired = yield* database.query<{ readonly query_key: string }>(
-				`delete from bolt_replica_window
-				 where lease_count = 0 and expires_at <= current_timestamp returning query_key`
+				`delete from bolt_replica_window where query_key = any($1::text[])
+				 and lease_count = 0 and expires_at <= current_timestamp returning query_key`,
+				[queryKeys]
 			);
 			if (expired.rows.length > 0) yield* prune(protectedRows);
 			return expired.rows.map(({ query_key }) => query_key);

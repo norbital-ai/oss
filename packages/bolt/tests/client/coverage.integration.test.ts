@@ -36,6 +36,10 @@ const replica = async () => {
 	const engine = adaptPGlite(database);
 	const definition = testWorkspace();
 	await Effect.runPromise(provision(engine, await provisioningStatements(definition)));
+	// Production replicas apply authoritative rows with logical-replication semantics. PostgreSQL
+	// disables foreign-key cascade triggers in this mode, so recovery tests must not rely on a
+	// cascade the browser never receives.
+	await Effect.runPromise(engine.exec('set session_replication_role = replica'));
 	await Effect.runPromise(markProvisioned(engine, 'coverage:test', { xid: 0, sequence: 0 }));
 	const store = await Effect.runPromise(
 		createPGliteStore(
@@ -359,13 +363,25 @@ describe('replica base rows and canonical query windows', () => {
 			)
 		);
 		const row = baseRow('rebuild');
+		const related = baseRow('rebuild-related');
 		await Effect.runPromise(
 			local.windows.installWindow(
-				install(descriptor('window:rebuild'), [row], {
+				install(descriptor('window:rebuild'), [row, related], {
+					orderedRowIds: [row.recordId],
 					readCursor: { xid: 3, sequence: 4 },
-					dependencyGeneration: 2
+					dependencyGeneration: 2,
+					relationshipRefs: [{
+						sourceCollection: 'people',
+						sourceRecordId: row.recordId,
+						relation: 'manager',
+						targetCollection: 'people',
+						targetRecordId: related.recordId
+					}]
 				})
 			)
+		);
+		await Effect.runPromise(
+			local.windows.acquireWindowLease('window:rebuild', 'test:active-window')
 		);
 
 		await Effect.runPromise(local.windows.rebuildNamespace());
@@ -379,11 +395,15 @@ describe('replica base rows and canonical query windows', () => {
 				readonly base_rows: number | string;
 				readonly windows: number | string;
 				readonly memberships: number | string;
+				readonly leases: number | string;
+				readonly relationships: number | string;
 			}>(
 				`select
 				 (select count(*) from bolt_replica_base_row) as base_rows,
 				 (select count(*) from bolt_replica_window) as windows,
-				 (select count(*) from bolt_replica_window_row) as memberships`
+				 (select count(*) from bolt_replica_window_row) as memberships,
+				 (select count(*) from bolt_replica_window_lease) as leases,
+				 (select count(*) from bolt_replica_window_relationship) as relationships`
 			)
 		);
 
@@ -391,8 +411,10 @@ describe('replica base rows and canonical query windows', () => {
 		expect(ledgerCounts.rows.map((counts) => ({
 			baseRows: Number(counts.base_rows),
 			windows: Number(counts.windows),
-			memberships: Number(counts.memberships)
-		}))).toEqual([{ baseRows: 0, windows: 0, memberships: 0 }]);
+			memberships: Number(counts.memberships),
+			leases: Number(counts.leases),
+			relationships: Number(counts.relationships)
+		}))).toEqual([{ baseRows: 0, windows: 0, memberships: 0, leases: 0, relationships: 0 }]);
 		expect(await Effect.runPromise(local.store.recordIds('people'))).toEqual([]);
 		expect(await Effect.runPromise(local.windows.position())).toEqual({
 			cursor: { xid: 0, sequence: 0 },
