@@ -3215,6 +3215,10 @@ const startReplica = (
 						)
 					)).flat())
 				].toSorted().slice(0, 256);
+				// A response may be lost before the journal records whether the authority saw the write.
+				// The exact status probe is also the clock that lets `nextPushable` reclaim that stale
+				// `pushing` owner under the same idempotency key after its 30-second lease.
+				accessState?.scheduleMutationPush?.();
 			} finally {
 				mutationStatusPolling = false;
 			}
@@ -3250,6 +3254,10 @@ const startReplica = (
 			]);
 			if (subscription === undefined) requestStream(collections, position);
 			else subscription.update(collections, position, pendingMutationIds, rehydration);
+			// The live stream can only confirm a mutation the authority received. If the request died
+			// before arrival there is no delta to wake us, so keep probing the exact pending identities
+			// until the stale journal owner is safely retried or a durable outcome retires it.
+			if (ids.length > 0) requestMutationStatus();
 		};
 		const installMutationRuntime = async (): Promise<void> => {
 			if (accessState === undefined || accessState.serverPartitionKey === undefined) return;
