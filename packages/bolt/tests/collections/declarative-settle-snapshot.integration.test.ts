@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId, InvocationId, success, type TransportRequest } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import { automation } from '../../src/authoring/automations-schema.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import {
@@ -34,6 +35,19 @@ const definition = workspace({
 				{ collection: 'notes', action: 'create' },
 				{ collection: 'notes', action: 'update' }
 			]
+		})
+	]
+});
+
+/** The compiled declaration matching the live change handler used only by the settlement race. */
+const definitionWithChangeAutomation = workspace({
+	...definition,
+	automations: [
+		automation({
+			name: 'on_note_updated',
+			trigger: { _tag: 'Change', collection: 'notes', event: 'updated' },
+			command: 'on_note_updated',
+			policies: ['automation-data']
 		})
 	]
 });
@@ -175,7 +189,7 @@ describe('declarative settlement under a later writer', () => {
 			}
 		};
 
-		harness = await makeBoltTestRuntime(definition, {
+		harness = await makeBoltTestRuntime(definitionWithChangeAutomation, {
 			authored,
 			transport: {
 				call: async (_metadata: unknown, request: TransportRequest) => {

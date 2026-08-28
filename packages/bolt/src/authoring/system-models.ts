@@ -328,7 +328,7 @@ const taskModel = defineModel(
 	}
 );
 
-/** One durable agent lane. The task queue owns it; the sync engine makes its state live in clients. */
+/** One durable agent lane. Direct invocations own execution; sync makes its state live in clients. */
 const agentMailboxModel = defineModel(
 	{
 		conversation_id: text().notNull().unique(),
@@ -337,7 +337,7 @@ const agentMailboxModel = defineModel(
 	{ history: false, indexes: [systemIndex('conversation_id'), systemIndex('status')] }
 );
 
-/** Safe, sync-visible lifecycle projection for one private queued agent turn. */
+/** Safe, sync-visible source of truth for one directly executed agent turn. */
 const agentRunModel = defineModel(
 	{
 		task_id: text().notNull().unique(),

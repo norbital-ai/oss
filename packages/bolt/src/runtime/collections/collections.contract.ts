@@ -314,8 +314,8 @@ export type MutationError =
  * What the *batched* path adds, and why it is not a member of `MutationError`.
  *
  * Only the batched `mutate` reports a phase. `update` runs a graph too now, but it unwraps a phase
- * failure to the refusal underneath before returning, so its callers — `agents.execute` among them —
- * keep an error union that says only what they can actually raise. Widening `MutationError` would
+ * failure to the refusal underneath before returning, so its callers keep an error union that says
+ * only what they can actually raise. Widening `MutationError` would
  * have put the phase on `create`, `update`, `delete`, `import` and `resume` alike: a type that says
  * something false about five paths in order to say something true about one.
  */
@@ -432,6 +432,23 @@ export const mutationPhaseFailure = (
 			});
 
 export type Interface = Readonly<{
+	/** Exact tenant-authored collection names plus the one generic system exception. */
+	readonly authoringCollectionNames: ReadonlySet<string>;
+	/**
+	 * Runs an authored automation in the current I/O flow, or admits its explicit delay.
+	 * Kept on the collections runtime because the handler receives this same collection API.
+	 */
+	readonly runAutomation: (
+		effectId: EffectId,
+		name: string,
+		input: Schema.Json,
+		scope?: Readonly<Record<string, Schema.Json>>,
+		options?: Readonly<{
+			readonly after?: string | number;
+			readonly taskId?: string;
+			readonly parentDepth?: number;
+		}>
+	) => Effect.Effect<{ readonly taskId: string }, unknown>;
 	readonly findMany: (
 		effectId: EffectId,
 		subject: Subject,

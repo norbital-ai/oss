@@ -53,6 +53,41 @@ const VitePlugins = {
 		const clientRuntimeId = '\0virtual:bolt/client-runtime';
 		const applicationId = '\0virtual:bolt/application';
 		let workspaceRoot = process.cwd();
+		const authoredClientBoundary = (id: string, importer: string | undefined): void => {
+			if (importer === undefined) return;
+			const importerFile = (importer.split('?')[0] ?? importer).replaceAll('\\', '/');
+			const authoredRoot = `${resolve(workspaceRoot, 'src').replaceAll('\\', '/')}/`;
+			if (!importerFile.startsWith(authoredRoot)) return;
+			const privateGeneratedFiles = new Set(
+				[
+					'framework-client',
+					'framework-client.js',
+					'framework-collections',
+					'framework-collections.js'
+				].map((file) =>
+					resolve(workspaceRoot, '.norbital', 'generated', file).replaceAll('\\', '/')
+				)
+			);
+			const importedFile =
+				id.startsWith('.') || id.startsWith('/')
+					? resolve(dirname(importerFile), id).replaceAll('\\', '/')
+					: undefined;
+			const privateImport =
+				id === 'virtual:bolt/client-runtime' ||
+				id === '$bolt/framework-client' ||
+				id.startsWith('$bolt/framework-client.') ||
+				id === '$bolt/framework-collections' ||
+				id.startsWith('$bolt/framework-collections.') ||
+				id === '@norbital-ai/bolt/client-runtime' ||
+				id.startsWith('@norbital-ai/bolt/client-runtime/') ||
+				id.startsWith('@norbital-ai/bolt/build/client/runtime') ||
+				id.startsWith('@norbital-ai/ui/collection-runtime/relationship-directory') ||
+				(importedFile !== undefined && privateGeneratedFiles.has(importedFile));
+			if (!privateImport) return;
+			throw new Error(
+				`Authored source may import only $bolt/client for browser data access; ${id} is private Bolt runtime wiring (${importerFile}).`
+			);
+		};
 		const compiler: Plugin = {
 			name: '@norbital-ai/bolt',
 			// `pre` so the audit below reads the authored markup rather than the JavaScript
@@ -119,14 +154,16 @@ const VitePlugins = {
 					}
 				};
 			},
-			resolveId: (id) =>
-				id === 'virtual:bolt/client-runtime'
+			resolveId: (id, importer) => {
+				authoredClientBoundary(id, importer);
+				return id === 'virtual:bolt/client-runtime'
 					? clientRuntimeId
 					: id === 'virtual:bolt/application'
 						? applicationId
 						: id === WORKSPACE_ENTRY_STYLESHEET_REFERENCE
 							? WORKSPACE_ENTRY_STYLESHEET_ID
-							: null,
+							: null;
+			},
 			load: (id) => {
 				if (id === WORKSPACE_ENTRY_STYLESHEET_ID)
 					return `.bolt-app { ${WORKSPACE_ENTRY_STYLESHEET_MARKER}: 1; }`;
@@ -184,9 +221,10 @@ const VitePlugins = {
 									`\t\tloadWorkspace: () => Effect.runPromise(`,
 									`\t\t\tEffect.all({`,
 									`\t\t\t\tworkspace: Effect.promise(() => import('$bolt/client')),`,
+									`\t\t\t\tframework: Effect.promise(() => import('$bolt/framework-client.js')),`,
 									`\t\t\t\tmessages: Effect.promise(() => import('$bolt/i18n-messages.js'))`,
 									`\t\t\t}, { concurrency: 'unbounded' }).pipe(`,
-									`\t\t\t\tEffect.map(({ workspace, messages }) => ({`,
+									`\t\t\t\tEffect.map(({ workspace, framework, messages }) => ({`,
 									`\t\t\t\ttitle,`,
 									`\t\t\t\tname: title,`,
 									`\t\t\t\tappLoaders: workspace.appLoaders,`,
@@ -198,25 +236,10 @@ const VitePlugins = {
 									`\t\t\t\tagentNames: workspace.agentNames,`,
 									`\t\t\t\ttenantMessages: messages.tenantMessages,`,
 									`\t\t\t\tclient: workspace.client,`,
-									`\t\t\t\truntime: workspace.runtime,`,
-									`\t\t\t\tchangeAccessScope: workspace.changeAccessScope,`,
-									// The replica reports why it fell back, to somebody.
-									//
-									// `startLocalReplica` returns `serverOnlyReplica` as an ordinary success, so a host
-									// that never opened a browser database looks exactly like one that did. The runtime
-									// distinguishes nine separate refusals and `onStorageTier` was supplied by no caller
-									// anywhere, so every one of them was computed and dropped. A Web Locks defect kept
-									// every document in every browser server-only for weeks, and the only symptom was a
-									// banner reading "Sync connection unverified".
-									`\t\t\tstartLocalReplica: (accessScope) =>`,
-									`\t\t\t\tworkspace.startLocalReplica(workspace.runtime, undefined, {`,
-									`\t\t\t\t\taccessScope,`,
-									`\t\t\t\t\tonStorageTier: (tier, reason) => {`,
-									`\t\t\t\t\t\tif (tier !== 'server-only') return;`,
-									`\t\t\t\t\t\tconsole.warn('[bolt] no browser replica: ' + (reason ?? 'no reason reported') + '. Reads stay server-authoritative.');`,
-									`\t\t\t\t\t},`,
-									`\t\t\t\t\tonError: (cause) => console.warn('[bolt] replica error', cause)`,
-									`\t\t\t\t})`,
+									`\t\t\t\tframeworkClient: framework.frameworkClient,`,
+									`\t\t\t\tsyncStatus: framework.syncStatus,`,
+									`\t\t\t\tcreateBootstrap: framework.createBootstrap,`,
+									`\t\t\t\tchangeAccessScope: framework.changeAccessScope`,
 									`\t\t\t\t}))`,
 									`\t\t\t)`,
 									`\t\t)`,

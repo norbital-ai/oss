@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach } from 'vitest';
 import { Effect } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
 import { app, collection, field, policy, workspace } from '../../src/authoring/workspace-schema.js';
+import { automation } from '../../src/authoring/automations-schema.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import {
@@ -60,7 +61,14 @@ const definition = workspace({
 	apps: [app({ name: 'budget', label: 'Budget' })],
 	// A team name maps to the policy names its members hold; `teamPath` on the subject names teams.
 	teams: { admin: ['admin-data'] },
-	automations: [],
+	automations: [
+		automation({
+			name: 'on_note',
+			trigger: { _tag: 'Change', collection: 'notes', event: 'created' },
+			command: 'on_note',
+			policies: ['automation-data']
+		})
+	],
 	envoys: [],
 	integrations: [],
 	prompt: 'You are the test workspace agent.',

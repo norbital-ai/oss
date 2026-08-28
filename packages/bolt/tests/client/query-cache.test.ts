@@ -63,6 +63,25 @@ describe('the sync engine read cache', () => {
 		expect(collectionsFor('invoke.approval_analytics', { subject: 'LEAVE' })).toEqual([
 			ANY_COLLECTION
 		]);
+		// Release- and host-owned system reads are not falsified by an authored row changing.
+		expect(collectionsFor('workspace.manifest', {})).toEqual([]);
+		expect(collectionsFor('workspace.authoringManifest', {})).toEqual([]);
+		expect(collectionsFor('envoys.status', { envoy: 'whatsapp' })).toEqual([]);
+		// Approval capabilities are the one system query backed by the synced approval projection.
+		expect(collectionsFor('approvals.capabilities', { requestId: 'approval-1' })).toEqual([
+			'approval_request'
+		]);
+	});
+
+	it('reuses one release-owned manifest query across reactive evaluations', () => {
+		const held = deferred();
+		const bolt = createBoltClient(scope, { command: () => held.promise });
+		const proxy = createWorkspaceApiProxy({ bolt, db: {} });
+
+		const first = proxy.system.workspace.manifest({});
+		const second = proxy.system.workspace.manifest({});
+
+		expect(second).toBe(first);
 	});
 
 	it('drops only the answers a change could falsify, and every answer on a wildcard', async () => {

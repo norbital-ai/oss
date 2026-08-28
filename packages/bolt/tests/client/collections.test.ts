@@ -95,6 +95,39 @@ describe('typed browser client', () => {
 		).not.toHaveProperty('after');
 	});
 
+	it('seals private platform collections out of the authored browser proxy', () => {
+		const bolt = createBoltClient(scope, { command: async () => null });
+		const proxy = createWorkspaceApiProxy(
+			{ bolt, db: {} },
+			{
+				employees: { name: 'employees', fields: [], relationships: [] },
+				approval_request: { name: 'approval_request', fields: [], relationships: [] },
+				user: { name: 'user', fields: [], relationships: [] }
+			},
+			{
+				allowedCollections: ['employees', 'approval_request'],
+				readOnlyCollections: ['approval_request'],
+				system: false
+			}
+		);
+
+		expect(Reflect.get(proxy, 'system')).toBeUndefined();
+		expect(Reflect.get(proxy.db, 'user')).toBeUndefined();
+		expect(proxy.collections['user']).toBeUndefined();
+		expect(() => proxy.records.findMany('user')).toThrow(/private to the Bolt runtime/);
+		expect(() => proxy.history.findMany('session', 'session-1')).toThrow(
+			/private to the Bolt runtime/
+		);
+		expect(Reflect.get(proxy.db, 'employees')).toBeDefined();
+		const approval = Reflect.get(proxy.db, 'approval_request');
+		expect(approval).toBeDefined();
+		if (approval === null || typeof approval !== 'object')
+			throw new Error('approval_request did not resolve to a collection surface');
+		expect(Reflect.get(approval, 'findMany')).toBeTypeOf('function');
+		expect(Reflect.get(approval, 'mutate')).toBeUndefined();
+		expect(Reflect.get(approval, 'pending')).toBeUndefined();
+	});
+
 	it('uses the authoritative grouped aggregate without hydrating a bounded page', async () => {
 		const commands: Array<{ readonly command: string; readonly input: unknown }> = [];
 		const bolt = createBoltClient(scope, {

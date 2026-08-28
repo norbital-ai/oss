@@ -87,7 +87,7 @@ export interface CollectionActionToolbarProps<
 	TName extends CollectionToolbarName<TCollections>,
 	TRow extends object = CollectionRow<TCollections[TName]>
 > {
-	client: CollectionDbClient<TCollections>;
+	client: CollectionDbClient<TCollections, TName>;
 	collection: TName;
 	/**
 	 * The query model the search box and the filter popover write to.

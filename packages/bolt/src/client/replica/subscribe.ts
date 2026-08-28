@@ -77,10 +77,13 @@ export type PartitionStreamPosition = Readonly<{
 
 type PartitionSubscribeOptions = Readonly<{
 	readonly collections: ReadonlyArray<string>;
+	/** Fixed Bolt-internal server-only dependencies; the stream carries names, never their rows. */
+	readonly invalidations?: ReadonlyArray<string>;
 	readonly position: PartitionStreamPosition;
 	readonly pendingMutationIds?: ReadonlyArray<string>;
 	readonly rehydration?: SyncRehydrationCost;
 	readonly onDeltas: (batch: PartitionDeltaBatch) => void;
+	readonly onInvalidation?: (collections: ReadonlyArray<string>) => void;
 	readonly onRecovery: (advice: PartitionRecoveryAdvice) => void;
 	readonly onPartitionChanged?: (partition: SyncPartitionIdentityType) => void;
 	readonly onReady?: (ready: PartitionStreamReady) => void;
@@ -95,13 +98,14 @@ type PartitionSubscribeOptions = Readonly<{
 export type PartitionSubscription = Subscription &
 	Readonly<{
 		/** Reopens the one leader-owned stream only when its dependency set changes. */
-	readonly update: (
-		collections: ReadonlyArray<string>,
-		position: PartitionStreamPosition,
-		pendingMutationIds?: ReadonlyArray<string>,
-		rehydration?: SyncRehydrationCost
-	) => void;
-}>;
+		readonly update: (
+			collections: ReadonlyArray<string>,
+			invalidations: ReadonlyArray<string>,
+			position: PartitionStreamPosition,
+			pendingMutationIds?: ReadonlyArray<string>,
+			rehydration?: SyncRehydrationCost
+		) => void;
+	}>;
 
 const Generations = Schema.Record(Schema.String, Schema.Number);
 const PartitionReadyWire = Schema.Struct({
@@ -109,6 +113,9 @@ const PartitionReadyWire = Schema.Struct({
 	partition: SyncPartitionIdentity,
 	cursor: SyncCursor,
 	generations: Generations
+});
+const PrivateInvalidationWire = Schema.Struct({
+	collections: Schema.Array(Schema.NonEmptyString)
 });
 const RETRY_OPEN_MILLIS = 2_000;
 
@@ -129,6 +136,8 @@ const parsePartition = (data: string | undefined) =>
 	});
 const parseReady = (data: string | undefined) =>
 	Result.try(() => Schema.decodeUnknownSync(PartitionReadyWire)(JSON.parse(data ?? '')));
+const parsePrivateInvalidation = (data: string | undefined) =>
+	Result.try(() => Schema.decodeUnknownSync(PrivateInvalidationWire)(JSON.parse(data ?? '')));
 
 /** Reads SSE payloads without assuming the event was constructed in this JavaScript realm. */
 export const partitionEventData = (event: unknown): string | undefined => {
@@ -175,19 +184,25 @@ export const readableSubscriptionCollections = (
 const normalizeMutationIds = (ids: ReadonlyArray<string> = []): ReadonlyArray<string> => {
 	const normalized = [...new Set(ids.filter((id) => id.length > 0))].sort();
 	if (normalized.length > 256 || normalized.some((id) => id.length > 256))
-		throw new TypeError('A partition stream accepts at most 256 mutation ids of at most 256 characters.');
+		throw new TypeError(
+			'A partition stream accepts at most 256 mutation ids of at most 256 characters.'
+		);
 	return normalized;
 };
 
 const partitionStreamUrl = (
 	base: string,
 	collections: ReadonlyArray<string>,
+	invalidations: ReadonlyArray<string>,
 	position: PartitionStreamPosition,
 	pendingMutationIds: ReadonlyArray<string>,
 	rehydration?: SyncRehydrationCost
 ): string => {
 	const query = new URLSearchParams();
-	for (const collection of normalizeCollections(collections)) query.append('collection', collection);
+	for (const collection of normalizeCollections(collections))
+		query.append('collection', collection);
+	for (const collection of normalizeCollections(invalidations))
+		query.append('invalidationCollection', collection);
 	for (const mutationId of normalizeMutationIds(pendingMutationIds))
 		query.append('pendingMutationId', mutationId);
 	query.set('cursor', JSON.stringify(position.cursor));
@@ -203,14 +218,13 @@ const partitionStreamUrl = (
  * and validates every requested dependency, so this URL conveys no authority. Updating the mounted
  * dependency union replaces this connection; it never creates one stream per query/page.
  */
-export const subscribeToPartition = (
-	options: PartitionSubscribeOptions
-): PartitionSubscription => {
+export const subscribeToPartition = (options: PartitionSubscribeOptions): PartitionSubscription => {
 	const create = options.source ?? eventSourceFactory;
 	let stopped = false;
 	let current: EventSourceLike | undefined;
 	let retry: ReturnType<typeof setTimeout> | undefined;
 	let collections = normalizeCollections(options.collections);
+	let invalidations = normalizeCollections(options.invalidations ?? []);
 	let position = options.position;
 	let pendingMutationIds = normalizeMutationIds(options.pendingMutationIds);
 	let rehydration = options.rehydration;
@@ -248,6 +262,7 @@ export const subscribeToPartition = (
 				partitionStreamUrl(
 					workspaceSession().syncStreamUrl,
 					collections,
+					invalidations,
 					position,
 					pendingMutationIds,
 					rehydration
@@ -266,19 +281,27 @@ export const subscribeToPartition = (
 		);
 		source.addEventListener('deltas', (event) =>
 			decode(source, parseDeltaBatch(event.data), (batch) => {
-				if (batch.kind !== 'delta') return reportAndReopen(new Error('Delta event carried a recovery frame'), source);
+				if (batch.kind !== 'delta')
+					return reportAndReopen(new Error('Delta event carried a recovery frame'), source);
 				options.onDeltas(batch as PartitionDeltaBatch);
 			})
 		);
+		source.addEventListener('invalidation', (event) =>
+			decode(source, parsePrivateInvalidation(event.data), ({ collections: changed }) =>
+				options.onInvalidation?.(changed)
+			)
+		);
 		source.addEventListener('cursor-expired', (event) =>
 			decode(source, parseDeltaBatch(event.data), (advice) => {
-				if (advice.kind !== 'cursorExpired') return reportAndReopen(new Error('Cursor-expired event carried another frame'), source);
+				if (advice.kind !== 'cursorExpired')
+					return reportAndReopen(new Error('Cursor-expired event carried another frame'), source);
 				options.onRecovery(advice as PartitionRecoveryAdvice);
 			})
 		);
 		source.addEventListener('rehydrate-advised', (event) =>
 			decode(source, parseDeltaBatch(event.data), (advice) => {
-				if (advice.kind !== 'rehydrateAdvised') return reportAndReopen(new Error('Rehydrate event carried another frame'), source);
+				if (advice.kind !== 'rehydrateAdvised')
+					return reportAndReopen(new Error('Rehydrate event carried another frame'), source);
 				options.onRecovery(advice as PartitionRecoveryAdvice);
 			})
 		);
@@ -290,7 +313,9 @@ export const subscribeToPartition = (
 			})
 		);
 		source.addEventListener('partition-changed', (event) =>
-			decode(source, parsePartition(event.data), (partition) => options.onPartitionChanged?.(partition))
+			decode(source, parsePartition(event.data), (partition) =>
+				options.onPartitionChanged?.(partition)
+			)
 		);
 		source.addEventListener('schema-barrier', (event) =>
 			decode(source, parseBarrier(event.data), (barrier) => options.onBarrier?.(barrier))
@@ -308,9 +333,16 @@ export const subscribeToPartition = (
 
 	open();
 	return {
-		update: (nextCollections, nextPosition, nextPendingMutationIds, nextRehydration) => {
+		update: (
+			nextCollections,
+			nextInvalidations,
+			nextPosition,
+			nextPendingMutationIds,
+			nextRehydration
+		) => {
 			if (stopped) return;
 			collections = normalizeCollections(nextCollections);
+			invalidations = normalizeCollections(nextInvalidations);
 			position = nextPosition;
 			pendingMutationIds = normalizeMutationIds(nextPendingMutationIds);
 			rehydration = nextRehydration;

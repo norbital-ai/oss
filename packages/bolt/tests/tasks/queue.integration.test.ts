@@ -479,11 +479,17 @@ describe('bolt task queue over a host facility', () => {
 			const [row] = await tasks();
 			expect(row?.status).toBe('pending');
 			expect(row?.error).toBe('status 503');
-			const delay = new Date(String(row?.run_at)).getTime() - Date.now();
-			// `min(10s · 2^(attempts-1), 1h)` at attempt 1, under equal jitter — so `[5s, 10s]` — and
-			// nothing at all is held open while it waits.
-			expect(delay).toBeGreaterThan(9_000);
-			expect(delay).toBeLessThanOrEqual(10_500);
+			const [timing] = (
+				await database.query<{ delay_ms: number }>(
+					`select (extract(epoch from (run_at - updated_at)) * 1000)::double precision as delay_ms
+					 from bolt_task where effect_id = $1`,
+					['one']
+				)
+			).rows;
+			// `min(10s · 2^(attempts-1), 1h)` at attempt 1 under equal jitter is `[5s, 10s]`.
+			// Pinned at 1, it is exactly 10s in database time; measuring against the test process's
+			// later Date.now() made an otherwise correct schedule fail under a busy integration batch.
+			expect(Number(timing?.delay_ms)).toBe(10_000);
 		});
 
 		it('gives up when the attempts are spent, and leaves the row as the audit trail', async () => {
@@ -529,15 +535,15 @@ describe('bolt task queue over a host facility', () => {
 		});
 	});
 
-	describe('serial agent lanes', () => {
-		const lane = 'conversation-agent';
-		const command = 'agents.execute';
+	describe('serial task lanes', () => {
+		const lane = 'serial-lane';
+		const command = 'test.serial';
 		const enqueueLane = async (...effectIds: ReadonlyArray<string>) =>
 			runStatements(
 				enqueueStatements(
 					effectIds.map((effectId) => ({
 						command,
-						input: { conversationId: lane, turnId: effectId, agent: 'web' },
+						input: { lane, itemId: effectId },
 						effectId,
 						lane
 					}))

@@ -151,7 +151,7 @@ interface CollectionTableBaseProps<
 	TName extends CollectionName<TCollections>,
 	TRow extends object
 > {
-	client: CollectionDbClient<TCollections>;
+	client: CollectionDbClient<TCollections, TName>;
 	collection: TName;
 	view?: string;
 	query?: CollectionQuery<NoInfer<TRow>>;
@@ -182,6 +182,14 @@ interface CollectionTableBaseProps<
 	 * Drops the grid body's own border so a `rootClass` outline is the table's only line.
 	 */
 	borderless?: boolean;
+	/**
+	 * Whether the table owns a bounded vertical scrollport.
+	 *
+	 * Leave this on for full application surfaces. Set it to false when the table is composed inside
+	 * an already-scrollable record detail or sheet: the table keeps horizontal overflow local while
+	 * its rows contribute to the parent's height, so wheel/touch scrolling has one vertical owner.
+	 */
+	bounded?: boolean;
 	title?: string;
 	description?: string;
 	features?: CollectionTableFeatures;

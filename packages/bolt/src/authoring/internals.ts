@@ -149,6 +149,19 @@ export type PlatformSchema = {
 	readonly tables: PlatformModelTables;
 	readonly relations: Readonly<Record<string, unknown>>;
 };
+
+/**
+ * The one runtime-owned collection intentionally published to authored browser code.
+ *
+ * Every other platform table is implementation state: identity, credentials, conversations,
+ * automation execution and notifications belong to Bolt's own shell and server. Keeping the
+ * authored schema separate from `PlatformSchema` prevents a private table from becoming public just
+ * because the framework adds it to its internal registry.
+ */
+export type PublicPlatformSchema = {
+	readonly tables: Pick<PlatformModelTables, 'approval_request'>;
+	readonly relations: Readonly<Record<string, unknown>>;
+};
 /**
  * The browser client's view of a workspace's collections.
  *

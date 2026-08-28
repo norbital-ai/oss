@@ -411,9 +411,9 @@ export const layer = Layer.effect(
 					const text =
 						'This agent is available only to registered members. Ask an administrator to verify this ' +
 						'number on your workspace account, then send your message again.';
-				if (admitted) {
-					yield* deliver(effectId, envoy, delivery.conversationId, { text });
-				}
+					if (admitted) {
+						yield* deliver(effectId, envoy, delivery.conversationId, { text });
+					}
 					return {
 						status: 'registration_required' as const,
 						envoy: envoyName,
@@ -662,6 +662,17 @@ export const layer = Layer.effect(
 					String(effectId),
 					batch
 				);
+				// Inbound chat is direct execution: admission is durable first, then this same I/O
+				// invocation drains the serial lane. No task row or scheduler wake sits between them.
+				yield* agents.run(EffectId.make(`${effectId}:run`), trigger.subject, conversationId).pipe(
+					Effect.mapError(
+						(failure) =>
+							new EnvoyError({
+								envoy: envoyName,
+								message: `Direct agent execution failed: ${failure.message}`
+							})
+					)
+				);
 				yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
 
 				const remaining = yield* executeBuilt(
@@ -684,65 +695,72 @@ export const layer = Layer.effect(
 					const now = yield* Clock.currentTimeMillis;
 					yield* enqueueDrain(EffectId.make(`${effectId}:requeue`), envoyName, conversationId, now);
 				}
-				return { envoy: envoyName, conversationId, drained: rows.length, status: 'queued' as const };
+				return {
+					envoy: envoyName,
+					conversationId,
+					drained: rows.length,
+					status: 'queued' as const
+				};
 			}),
 
-			complete: Effect.fn('Envoys.complete')(function* (
-				effectId,
-				envoyName,
-				conversationId,
-				output,
-				progressKey
-			) {
-				const envoy = yield* requireEnvoy(envoyName);
-				const processing = yield* executeBuilt(
-					EffectId.make(`${effectId}:processing`),
-					database,
-					composer
-						.select({
-							id: boltEnvoyInbound.id,
-							envoy_name: boltEnvoyInbound.envoy_name,
-							transport_conversation_id: boltEnvoyInbound.transport_conversation_id
-						})
-						.from(boltEnvoyInbound)
-						.where(
-							and(
-								eq(boltEnvoyInbound.conversation_id, conversationId),
-								eq(boltEnvoyInbound.status, 'processing')
+			complete: Effect.fn('Envoys.complete')(
+				function* (effectId, envoyName, conversationId, output, progressKey) {
+					const envoy = yield* requireEnvoy(envoyName);
+					const processing = yield* executeBuilt(
+						EffectId.make(`${effectId}:processing`),
+						database,
+						composer
+							.select({
+								id: boltEnvoyInbound.id,
+								envoy_name: boltEnvoyInbound.envoy_name,
+								transport_conversation_id: boltEnvoyInbound.transport_conversation_id
+							})
+							.from(boltEnvoyInbound)
+							.where(
+								and(
+									eq(boltEnvoyInbound.conversation_id, conversationId),
+									eq(boltEnvoyInbound.status, 'processing')
+								)
 							)
-						)
-						.orderBy(asc(boltEnvoyInbound.sent_at))
-				);
-				const rows = processing.rows.flatMap((row) => {
-					const decoded = Schema.decodeUnknownOption(ProcessingRecipient)(row);
-					return decoded._tag === 'Some' ? [decoded.value] : [];
-				});
-				if (rows.length === 0)
-					return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
-				const recipient = rows.at(-1)?.transport_conversation_id;
-				let answered = false;
-				if (recipient !== undefined) {
-					// The turn's progress bubble is edited into the answer when one is on the wire; when
-					// that edit cannot land — the bubble was never sent, or the transport lost it — the
-					// answer is sent fresh. One bubble per turn is the aim, never at the cost of the answer.
-					if (progressKey !== null) {
-						answered = (yield* deliver(effectId, envoy, recipient, output, progressKey)).delivered;
+							.orderBy(asc(boltEnvoyInbound.sent_at))
+					);
+					const rows = processing.rows.flatMap((row) => {
+						const decoded = Schema.decodeUnknownOption(ProcessingRecipient)(row);
+						return decoded._tag === 'Some' ? [decoded.value] : [];
+					});
+					if (rows.length === 0)
+						return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
+					const recipient = rows.at(-1)?.transport_conversation_id;
+					let answered = false;
+					if (recipient !== undefined) {
+						// The turn's progress bubble is edited into the answer when one is on the wire; when
+						// that edit cannot land — the bubble was never sent, or the transport lost it — the
+						// answer is sent fresh. One bubble per turn is the aim, never at the cost of the answer.
+						if (progressKey !== null) {
+							answered = (yield* deliver(effectId, envoy, recipient, output, progressKey))
+								.delivered;
+						}
+						if (!answered) {
+							answered = (yield* deliver(effectId, envoy, recipient, output)).delivered;
+						}
 					}
-					if (!answered) {
-						answered = (yield* deliver(effectId, envoy, recipient, output)).delivered;
-					}
+					const status = answered ? ('answered' as const) : ('failed' as const);
+					yield* executeBuilt(
+						EffectId.make(`${effectId}:settle`),
+						database,
+						composer
+							.update(boltEnvoyInbound)
+							.set({ status, answered_at: dbNow() })
+							.where(
+								inArray(
+									boltEnvoyInbound.id,
+									rows.map(({ id }) => id)
+								)
+							)
+					);
+					return { envoy: envoyName, conversationId, drained: rows.length, status };
 				}
-				const status = answered ? ('answered' as const) : ('failed' as const);
-				yield* executeBuilt(
-					EffectId.make(`${effectId}:settle`),
-					database,
-					composer
-						.update(boltEnvoyInbound)
-						.set({ status, answered_at: dbNow() })
-						.where(inArray(boltEnvoyInbound.id, rows.map(({ id }) => id)))
-				);
-				return { envoy: envoyName, conversationId, drained: rows.length, status };
-			}),
+			),
 
 			reply: Effect.fn('Envoys.reply')(function* (effectId, envoyName, recipient, payload) {
 				const envoy = yield* requireEnvoy(envoyName);
@@ -817,7 +835,9 @@ export const layer = Layer.effect(
 				});
 				const countOf = (direction: string): number => {
 					const row = Schema.decodeUnknownOption(DirectionCount)(
-						counts.rows.find((candidate) => (candidate as { direction?: string }).direction === direction)
+						counts.rows.find(
+							(candidate) => (candidate as { direction?: string }).direction === direction
+						)
 					);
 					return row._tag === 'Some' ? Math.max(0, Math.floor(row.value.count)) : 0;
 				};

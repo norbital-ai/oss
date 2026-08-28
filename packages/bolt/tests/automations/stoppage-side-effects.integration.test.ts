@@ -21,6 +21,7 @@ const guardedOperations = (calls: Array<string>, guards: Array<string>): Authori
 			return result;
 		});
 	const ops: AuthoringOps = {
+		allowedCollections: new Set(['people', 'approval_request']),
 		findMany: () => record('findMany', []),
 		findFirst: () => record('findFirst', undefined),
 		count: () => record('count', 0),

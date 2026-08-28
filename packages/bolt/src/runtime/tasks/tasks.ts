@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Schema } from 'effect';
+import { Cause, Clock, Context, Effect, Exit, Layer, Schema } from 'effect';
 import {
 	EffectId,
 	type DatabaseRequest,
@@ -10,7 +10,10 @@ import { Tasks } from '#lib/runtime/facilities/services.js';
 import * as SyncWake from '#lib/runtime/sync/wake.js';
 import {
 	cancelStatement,
+	decodeTaskRow,
 	dequeueStatement,
+	directClaimStatement,
+	directSettleStatement,
 	enqueueStatements,
 	interruptLaneStatement,
 	makeQueue,
@@ -44,6 +47,12 @@ import { makeRunner, type Run, type TickReport } from '#lib/runtime/tasks/runner
  */
 
 export type Interface = Readonly<{
+	/** Registers one direct I/O invocation for best-effort interruption; it schedules nothing. */
+	readonly active: (effectId: EffectIdType, taskId: string) => Effect.Effect<void>;
+	/** Releases the host's in-memory interruption handle for a direct invocation. */
+	readonly settled: (effectId: EffectIdType, taskId: string) => Effect.Effect<void>;
+	/** Interrupts a currently active direct invocation, if this host still owns it. */
+	readonly interruptActive: (effectId: EffectIdType, taskId: string) => Effect.Effect<void>;
 	/**
 	 * Statements to append to a caller's own transaction.
 	 *
@@ -63,6 +72,48 @@ export type Interface = Readonly<{
 		effectId: EffectIdType,
 		enqueues: ReadonlyArray<Enqueue>
 	) => Effect.Effect<void, Database.FacilityError>;
+	/** Persists an immediate run without arming or waking the durable scheduler. */
+	readonly admit: (
+		effectId: EffectIdType,
+		enqueues: ReadonlyArray<Enqueue>
+	) => Effect.Effect<void, Database.FacilityError>;
+	/**
+	 * Executes one explicitly named immediate run in this invocation.
+	 *
+	 * Database/model/tool waits remain ordinary I/O waits; only the authored handler's individual
+	 * facility spans consume their own CPU allowance. No scheduler owns or re-enters the body.
+	 */
+	readonly runDirect: <E, R>(
+		effectId: EffectIdType,
+		taskId: string,
+		command: string,
+		run: (
+			task: import('#lib/runtime/tasks/queue.js').TaskRow,
+			attemptEffectId: string
+		) => Effect.Effect<Schema.Json, E, R>
+	) => Effect.Effect<Schema.Json | undefined, E | Database.FacilityError, R>;
+	/**
+	 * Claims, executes and settles an explicitly named set of immediate runs in three batched
+	 * database calls: claim, authored I/O, settle. Each returned exit still belongs to its own task;
+	 * one failed body cannot prevent its siblings from reaching a terminal row.
+	 */
+	readonly runDirectMany: <E, R>(
+		effectId: EffectIdType,
+		runs: ReadonlyArray<Readonly<{ readonly taskId: string; readonly command: string }>>,
+		run: (
+			task: import('#lib/runtime/tasks/queue.js').TaskRow,
+			attemptEffectId: string
+		) => Effect.Effect<Schema.Json, E, R>
+	) => Effect.Effect<
+		ReadonlyArray<
+			Readonly<{
+				readonly task: import('#lib/runtime/tasks/queue.js').TaskRow;
+				readonly exit: Exit.Exit<Schema.Json, E>;
+			}>
+		>,
+		Database.FacilityError,
+		R
+	>;
 	/** Brings `bolt_schedule` into line with what this release declares, and says when next. */
 	readonly declare: (
 		effectId: EffectIdType,
@@ -118,6 +169,12 @@ export type Interface = Readonly<{
 	) => Effect.Effect<void, Database.FacilityError>;
 	/** Resumes the same stopped row; no replacement task or copied input is created. */
 	readonly resume: (
+		effectId: EffectIdType,
+		taskId: string,
+		command: string
+	) => Effect.Effect<void, Database.FacilityError>;
+	/** Moves a stopped immediate run back to `resuming` without emitting a scheduler wake. */
+	readonly resumeDirect: (
 		effectId: EffectIdType,
 		taskId: string,
 		command: string
@@ -249,6 +306,12 @@ export const layer = (context: CallContext) =>
 			});
 
 			return Service.of({
+				active: (effectId, taskId) =>
+					Effect.ignore(tasks.execute(effectId, { _tag: 'Active', taskId })),
+				settled: (effectId, taskId) =>
+					Effect.ignore(tasks.execute(effectId, { _tag: 'Settled', taskId })),
+				interruptActive: (effectId, taskId) =>
+					Effect.ignore(tasks.execute(effectId, { _tag: 'Interrupt', taskId })),
 				statements: enqueueStatements,
 				wake,
 				enqueue: Effect.fn('TaskQueue.enqueue')(function* (effectId, enqueues) {
@@ -267,6 +330,122 @@ export const layer = (context: CallContext) =>
 							: ['automation_run']
 					);
 				}),
+				admit: Effect.fn('TaskQueue.admit')(function* (effectId, enqueues) {
+					if (enqueues.length === 0) return;
+					yield* database.execute(effectId, asRequest(enqueueStatements(enqueues)));
+					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['automation_run']);
+				}),
+				runDirect: (effectId, taskId, command, run) =>
+					Effect.gen(function* () {
+						const claimed = yield* database.execute(
+							EffectId.make(`${effectId}:claim`),
+							asRequest([directClaimStatement(taskId, command)])
+						);
+						const task = decodeTaskRow(claimed.rows[0]);
+						if (task === undefined) return undefined;
+						yield* syncWake.announce(EffectId.make(`${effectId}:claim:sync`), ['automation_run']);
+						const attemptEffectId = `${task.effectId}:${task.attempts}`;
+						const controlled = Effect.acquireUseRelease(
+							Effect.ignore(
+								tasks.execute(EffectId.make(`${attemptEffectId}:active`), {
+									_tag: 'Active',
+									taskId: task.effectId
+								})
+							),
+							() => run(task, attemptEffectId),
+							() =>
+								Effect.ignore(
+									tasks.execute(EffectId.make(`${attemptEffectId}:settled`), {
+										_tag: 'Settled',
+										taskId: task.effectId
+									})
+								)
+						);
+						return yield* Effect.matchCauseEffect(controlled, {
+							onFailure: (cause) =>
+								Effect.gen(function* () {
+									yield* database.execute(
+										EffectId.make(`${effectId}:failed`),
+										asRequest([
+											directSettleStatement(task, {
+												_tag: 'Failed',
+												error: Cause.pretty(cause)
+											})
+										])
+									);
+									yield* syncWake.announce(EffectId.make(`${effectId}:failed:sync`), [
+										'automation_run'
+									]);
+									return yield* Effect.failCause(cause);
+								}),
+							onSuccess: (result) =>
+								Effect.gen(function* () {
+									yield* database.execute(
+										EffectId.make(`${effectId}:done`),
+										asRequest([directSettleStatement(task, { _tag: 'Done', result })])
+									);
+									yield* syncWake.announce(EffectId.make(`${effectId}:done:sync`), [
+										'automation_run'
+									]);
+									return result;
+								})
+						});
+					}),
+				runDirectMany: (effectId, runs, run) =>
+					Effect.gen(function* () {
+						if (runs.length === 0) return [];
+						const claimed = yield* database.execute(
+							EffectId.make(`${effectId}:claim`),
+							asRequest(runs.map(({ taskId, command }) => directClaimStatement(taskId, command)))
+						);
+						// Multiple returning statements are safe here because every row carries both its database id
+						// and effect id. The facility flattens the transaction response, but no positional identity is
+						// needed to associate a result with its task.
+						const claimedTasks = claimed.rows.flatMap((row) => {
+							const task = decodeTaskRow(row);
+							return task === undefined ? [] : [task];
+						});
+						if (claimedTasks.length === 0) return [];
+						yield* syncWake.announce(EffectId.make(`${effectId}:claim:sync`), ['automation_run']);
+						const outcomes = yield* Effect.forEach(
+							claimedTasks,
+							(task) => {
+								const attemptEffectId = `${task.effectId}:${task.attempts}`;
+								return Effect.acquireUseRelease(
+									Effect.ignore(
+										tasks.execute(EffectId.make(`${attemptEffectId}:active`), {
+											_tag: 'Active',
+											taskId: task.effectId
+										})
+									),
+									() => Effect.exit(run(task, attemptEffectId)),
+									() =>
+										Effect.ignore(
+											tasks.execute(EffectId.make(`${attemptEffectId}:settled`), {
+												_tag: 'Settled',
+												taskId: task.effectId
+											})
+										)
+								).pipe(Effect.map((exit) => ({ task, exit })));
+							},
+							{ concurrency: 'unbounded' }
+						);
+						yield* database.execute(
+							EffectId.make(`${effectId}:settle`),
+							asRequest(
+								outcomes.map(({ task, exit }) =>
+									Exit.isSuccess(exit)
+										? directSettleStatement(task, { _tag: 'Done', result: exit.value })
+										: directSettleStatement(task, {
+												_tag: 'Failed',
+												error: Cause.pretty(exit.cause)
+											})
+								)
+							)
+						);
+						yield* syncWake.announce(EffectId.make(`${effectId}:settle:sync`), ['automation_run']);
+						return outcomes;
+					}),
 				declare: Effect.fn('TaskQueue.declare')((effectId, declarations, nowEpochMs) =>
 					queueUnder(effectId, 'declare').declare(declarations, nowEpochMs)
 				),
@@ -330,6 +509,10 @@ export const layer = (context: CallContext) =>
 					// otherwise the same row is immediately due. Only `take` turns the fence into running.
 					const nowEpochMs = yield* Clock.currentTimeMillis;
 					yield* wake(EffectId.make(`${effectId}:wake`), nowEpochMs);
+					yield* database.execute(effectId, asRequest([resumeStatement(taskId, command)]));
+					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['automation_run']);
+				}),
+				resumeDirect: Effect.fn('TaskQueue.resumeDirect')(function* (effectId, taskId, command) {
 					yield* database.execute(effectId, asRequest([resumeStatement(taskId, command)]));
 					yield* syncWake.announce(EffectId.make(`${effectId}:sync`), ['automation_run']);
 				}),

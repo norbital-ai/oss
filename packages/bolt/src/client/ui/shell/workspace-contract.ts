@@ -1,7 +1,7 @@
 import type { WorkspaceSession } from '#lib/client/session.js';
+import type { WorkspaceSyncStatusSignal } from '#lib/client/replica/sync-status.js';
 import type { TenantMessageCatalogs } from '#lib/client/ui/agent/i18n.js';
 import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
-import type { WorkspaceClientRuntime } from '#lib/client/contracts.js';
 import type { Component } from 'svelte';
 import type { CollectionSurface } from '@norbital-ai/ui/collection-runtime';
 import type { CustomTypeRenderer } from '@norbital-ai/ui/data-renderer';
@@ -163,14 +163,16 @@ export type CompiledWorkspace = Readonly<{
 	>;
 	readonly policyNames: ReadonlyArray<string>;
 	readonly tenantMessages: TenantMessageCatalogs;
-	/** The workspace's own collection client, for Studio's Data tab. */
+	/** Public authored client: tenant collections plus the approval-request exception. */
 	readonly client: WorkspaceClient;
-	/** Internal runtime used only to build the host-owned replica bootstrap capability. */
-	readonly runtime?: WorkspaceClientRuntime;
+	/** Full collection/system capability held only by Bolt's own shell and Studio wiring. */
+	readonly frameworkClient: WorkspaceClient;
+	/** Read-only synchronization status without exposing the command/runtime capability. */
+	readonly syncStatus?: WorkspaceSyncStatusSignal;
+	/** Builds the host-owned bootstrap capability without publishing the underlying runtime. */
+	readonly createBootstrap: (accessScope: string) => WorkspaceBootstrapController;
 	/** Withdraws browser data from the previous policy scope before reactive reads resume. */
 	readonly changeAccessScope: (accessScope: string) => void;
-	/** Boots the local PGlite replica against the same runtime `client` reads through. */
-	readonly startLocalReplica: (accessScope: string) => Promise<{ readonly stop: () => void }>; // repository-health:allow EFF2 -- The generated browser runtime publishes a Promise and workspace.svelte immediately owns it with Effect.tryPromise and teardown.
 }>;
 
 /**

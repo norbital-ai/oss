@@ -1,6 +1,15 @@
 import { Effect, Exit, Layer, Option } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { EffectId, type TaskRequest } from '@norbital-ai/bolt-protocol';
+import {
+	EffectId,
+	EnvironmentName,
+	Invocation,
+	InvocationId,
+	PROTOCOL_VERSION,
+	ReleaseId,
+	TenantId,
+	type TaskRequest
+} from '@norbital-ai/bolt-protocol';
 import * as Automations from '../../src/runtime/automations/automations.js';
 import { Tasks, Transport } from '../../src/runtime/facilities/services.js';
 import * as Database from '../../src/runtime/facilities/database.js';
@@ -9,10 +18,57 @@ import * as SyncWake from '../../src/runtime/sync/wake.js';
 import * as Workspace from '../../src/runtime/workspace.js';
 import * as InvocationBudget from '../../src/runtime/budget.js';
 import * as TenantScope from '../../src/runtime/tenant.js';
-import { workspace } from '../../src/authoring/workspace-schema.js';
+import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { automation } from '../../src/authoring/automations-schema.js';
 import { makeBoltTestRuntime, testCallContext } from '../support/bolt-test-layer.js';
-import { afterMillisOf } from '../../src/runtime/collections/authored.js';
+import {
+	afterMillisOf,
+	emptyAuthoredRuntime,
+	type RuntimeAuthoringApi
+} from '../../src/runtime/collections/authored.js';
+import { dispatchInvocation } from '../../src/runtime/dispatch.js';
+import * as Collections from '../../src/runtime/collections/collections.js';
+import { adminSubject } from '../support/bolt-test-layer.js';
+import { seedSession } from '../support/fixture-identity.js';
+
+const scope = {
+	tenantId: TenantId.make('test-tenant'),
+	environment: EnvironmentName.make('development'),
+	releaseId: ReleaseId.make('local')
+};
+
+const manualStart = (id: string, name: string, input: Readonly<Record<string, never>> = {}) =>
+	Invocation.cases.Command.make({
+		protocolVersion: PROTOCOL_VERSION,
+		id: InvocationId.make(id),
+		scope,
+		deadlineEpochMs: Date.now() + 30_000,
+		command: 'automations.start',
+		input: { name, input },
+		headers: { authorization: ['Bearer automation-test-token'] }
+	});
+
+const directDefinition = workspace({
+	name: 'direct-automations',
+	version: '1',
+	collections: [],
+	apps: [],
+	policies: [],
+	automations: ['parent', 'child', 'failure'].map((name) =>
+		automation({
+			name,
+			trigger: { _tag: 'Manual' },
+			command: name,
+			policies: []
+		})
+	),
+	integrations: [],
+	prompt: 'You are the test workspace agent.',
+	tools: [],
+	skills: [],
+	envoys: [],
+	requiredFacilities: []
+});
 
 describe('Automations owner', () => {
 	it('treats an omitted authored delay as immediately due', () => {
@@ -20,7 +76,7 @@ describe('Automations owner', () => {
 		expect(afterMillisOf('not a duration')).toBeUndefined();
 	});
 
-	it('enqueues a stable authored command', async () => {
+	it('admits an immediate command without waking the scheduler and wakes only for a real delay', async () => {
 		const wakes: Array<TaskRequest> = [];
 		const statements: Array<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }> =
 			[];
@@ -93,6 +149,15 @@ describe('Automations owner', () => {
 					project_id: 'project-1',
 					force: false
 				});
+				// Admission persists the lifecycle row, but the current request owns execution. There is
+				// no timer hand-off to wait for and therefore no Wake for the immediate run.
+				expect(wakes).toEqual([]);
+				yield* automations.start(
+					EffectId.make('e2'),
+					'daily',
+					{ project_id: 'project-2', force: true },
+					{ afterMillis: 5_000 }
+				);
 				yield* automations.progress(EffectId.make('e1:progress'), taskId, {
 					progress: 0.5,
 					text: 'Halfway'
@@ -103,8 +168,7 @@ describe('Automations owner', () => {
 		// The id a caller gets back is the task's effect id, which is also its idempotency key — a
 		// replayed start names the row the first one wrote rather than minting a second identity.
 		expect(taskId).toBe('e1:start');
-		// The host is told to come back before the row is committed, so a crash between the two costs
-		// a false alarm rather than a job nobody ever wakes.
+		// A timer is involved only because the second run explicitly asked to wait.
 		expect(wakes).toEqual([{ _tag: 'Wake', notLaterThanEpochMs: expect.any(Number) }]);
 		const insert = statements.find((statement) => statement.sql.includes('bolt_task'));
 		expect(insert).toBeDefined();
@@ -218,6 +282,192 @@ describe('Automations owner', () => {
 		// whole pass exists to stop producing.
 		expect(statements.filter((sql) => sql.includes('bolt_task'))).toHaveLength(0);
 	});
+
+	it('runs a manual automation and its immediate child in the admitting request', async () => {
+		const observedChildContexts: Array<unknown> = [];
+		const authored = {
+			...emptyAuthoredRuntime,
+			automations: {
+				parent: {
+					name: 'parent',
+					policies: [],
+					trigger: { _tag: 'Manual' as const },
+					handler: (api: unknown) =>
+						Effect.gen(function* () {
+							const child = yield* (api as RuntimeAuthoringApi).automations.run('child', {
+								from: 'parent'
+							});
+							return { parent: true, childTaskId: child.taskId };
+						})
+				},
+				child: {
+					name: 'child',
+					policies: [],
+					trigger: { _tag: 'Manual' as const },
+					handler: (_api: unknown, context: unknown) => {
+						observedChildContexts.push(context);
+						return { child: true };
+					}
+				}
+			}
+		};
+		const harness = await makeBoltTestRuntime(directDefinition, { authored });
+		try {
+			await seedSession(harness, {
+				token: 'automation-test-token',
+				user: 'automation-runner'
+			});
+			harness.tasks.forget();
+
+			const response = await harness.runtime.runPromise(
+				dispatchInvocation(manualStart('manual-parent', 'parent'))
+			);
+
+			expect(response.value).toMatchObject({
+				taskId: 'manual-parent:start',
+				result: { parent: true, childTaskId: expect.any(String) }
+			});
+			expect(observedChildContexts).toEqual([{ args: { from: 'parent' }, scope: {} }]);
+			// The request owns both bodies. The host only receives in-memory interruption handles for
+			// them; handing either run to the timer would add a Wake to this sequence.
+			expect(harness.tasks.requests.map((request) => request._tag)).toEqual([
+				'Active',
+				'Active',
+				'Settled',
+				'Settled'
+			]);
+			expect(harness.tasks.requests.some((request) => request._tag === 'Wake')).toBe(false);
+
+			const runs = await harness.database.query(
+				`select command, status, attempts, input, result, error
+				 from bolt_task where command in ('automations.parent', 'automations.child')
+				 order by command`
+			);
+			expect(runs).toHaveLength(2);
+			expect(
+				runs.map((run) => ({
+					command: run['command'],
+					status: run['status'],
+					attempts: run['attempts'],
+					error: run['error'],
+					depth: (run['input'] as { readonly bolt_depth?: unknown }).bolt_depth
+				}))
+			).toEqual([
+				{ command: 'automations.child', status: 'done', attempts: 1, error: null, depth: 2 },
+				{ command: 'automations.parent', status: 'done', attempts: 1, error: null, depth: 1 }
+			]);
+		} finally {
+			await harness.dispose();
+		}
+	}, 60_000);
+
+	it('settles a direct automation failure without retrying or waking a scheduler', async () => {
+		const authored = {
+			...emptyAuthoredRuntime,
+			automations: {
+				failure: {
+					name: 'failure',
+					policies: [],
+					trigger: { _tag: 'Manual' as const },
+					handler: () => Effect.fail(new Error('manual automation failed'))
+				}
+			}
+		};
+		const harness = await makeBoltTestRuntime(directDefinition, { authored });
+		try {
+			await seedSession(harness, {
+				token: 'automation-test-token',
+				user: 'automation-runner'
+			});
+			harness.tasks.forget();
+
+			const outcome = await harness.runtime.runPromise(
+				dispatchInvocation(manualStart('manual-failure', 'failure')).pipe(Effect.result)
+			);
+			expect(outcome._tag).toBe('Failure');
+			expect(harness.tasks.requests.map((request) => request._tag)).toEqual(['Active', 'Settled']);
+			expect(harness.tasks.requests.some((request) => request._tag === 'Wake')).toBe(false);
+
+			const [run] = await harness.database.query(
+				`select status, attempts, error from bolt_task
+				 where command = 'automations.failure'`
+			);
+			expect(run).toMatchObject({ status: 'failed', attempts: 1 });
+			expect(String(run?.['error'])).toContain('manual automation failed');
+		} finally {
+			await harness.dispose();
+		}
+	}, 60_000);
+
+	it('executes a change-triggered automation directly after the triggering write', async () => {
+		const definition = workspace({
+			name: 'change-automation',
+			version: '1',
+			collections: [
+				collection({ name: 'notes', fields: { body: field.string({ required: true }) } })
+			],
+			apps: [],
+			policies: [],
+			automations: [
+				automation({
+					name: 'on_note',
+					trigger: { _tag: 'Change', collection: 'notes', event: 'created' },
+					command: 'on_note',
+					policies: []
+				})
+			],
+			integrations: [],
+			prompt: 'You are the test workspace agent.',
+			tools: [],
+			skills: [],
+			envoys: [],
+			requiredFacilities: []
+		});
+		const observed: Array<unknown> = [];
+		const authored = {
+			...emptyAuthoredRuntime,
+			automations: {
+				on_note: {
+					name: 'on_note',
+					policies: [],
+					trigger: { _tag: 'Change' as const, collection: 'notes', event: 'created' as const },
+					handler: (_api: unknown, context: unknown) => {
+						observed.push(context);
+						return { observed: true };
+					}
+				}
+			}
+		};
+		const harness = await makeBoltTestRuntime(definition, { authored });
+		try {
+			harness.tasks.forget();
+			await harness.runtime.runPromise(
+				Effect.gen(function* () {
+					yield* (yield* Collections.Service).create(EffectId.make('create-note'), adminSubject, {
+						collection: 'notes',
+						id: '10000000-0000-4000-8000-000000000001',
+						values: { body: 'direct trigger' }
+					});
+				})
+			);
+
+			expect(observed).toEqual([
+				{
+					args: {},
+					scope: { incoming_record: expect.objectContaining({ body: 'direct trigger' }) }
+				}
+			]);
+			expect(harness.tasks.requests.map((request) => request._tag)).toEqual(['Active', 'Settled']);
+			expect(harness.tasks.requests.some((request) => request._tag === 'Wake')).toBe(false);
+			expect(
+				await harness.database.query(
+					`select status, attempts from bolt_task where command = 'automations.on_note'`
+				)
+			).toEqual([{ status: 'done', attempts: 1 }]);
+		} finally {
+			await harness.dispose();
+		}
+	}, 60_000);
 
 	it('stops and resumes only the same task owned by the named automation', async () => {
 		const definition = workspace({

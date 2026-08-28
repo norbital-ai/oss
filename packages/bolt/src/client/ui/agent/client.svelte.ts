@@ -114,11 +114,17 @@ function startInteractiveAgent(
 			...(input.documents === undefined ? {} : { documents: input.documents })
 		})
 	).pipe(
-		Effect.map((admitted) => ({
-			runId: conversationId,
-			chatId: conversationId,
-			taskId: admitted.taskId
-		}))
+		Effect.map((admitted) => {
+			// Admission is the interaction boundary: the durable transcript is visible immediately.
+			// Execution is a second direct I/O invocation, deliberately not awaited by the composer and
+			// deliberately not represented by a scheduler task.
+			Effect.runFork(agentRequest('run', active.client.system.agents.run({ conversationId })));
+			return {
+				runId: conversationId,
+				chatId: conversationId,
+				taskId: admitted.taskId
+			};
+		})
 	);
 }
 
@@ -153,7 +159,7 @@ export function createAgentClient(
 					conversationId: input.runId,
 					verifier: { prompt: input.prompt }
 				})
-			).pipe(Effect.as({ accepted: true } as const)),
+			).pipe(Effect.as({ accepted: true } as const))
 	};
 }
 

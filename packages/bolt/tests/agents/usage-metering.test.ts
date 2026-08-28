@@ -134,6 +134,7 @@ const makeDatabase = (
 ): FacilityBinding<DatabaseRequest, DatabaseResponse> => ({
 	call: (() => {
 		let message = 0;
+		const claimed = new Set<string>();
 		return (_metadata, request) => {
 			if (request._tag === 'Transaction') {
 				statements.push(...request.statements);
@@ -142,6 +143,34 @@ const makeDatabase = (
 
 			const statement = { sql: request.sql, parameters: request.parameters };
 			statements.push(statement);
+			if (request.sql.includes('pg_advisory_xact_lock')) {
+				const conversationId = String(request.parameters[0] ?? '');
+				if (claimed.has(conversationId)) {
+					return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 0 } });
+				}
+				claimed.add(conversationId);
+				const turnId = `agent-usage-${conversationId}:turn`;
+				return Promise.resolve({
+					_tag: 'Success',
+					value: {
+						rows: [
+							{
+								task_id: turnId,
+								conversation_id: conversationId,
+								turn_id: turnId,
+								agent_name: 'web'
+							}
+						],
+						affectedRows: 1
+					}
+				});
+			}
+			if (request.sql.includes('as mailbox_status') && request.sql.includes('as has_running')) {
+				return Promise.resolve({
+					_tag: 'Success',
+					value: { rows: [{ mailbox_status: 'active', has_running: false }], affectedRows: 0 }
+				});
+			}
 			if (selectsFrom(request.sql, 'auth_config')) {
 				return Promise.resolve({
 					_tag: 'Success',
@@ -175,6 +204,27 @@ const makeDatabase = (
 								name: subject.teamPath[0],
 								parent_id: null,
 								description: null
+							}
+						],
+						affectedRows: 0
+					}
+				});
+			}
+			if (selectsFrom(request.sql, 'chat_session')) {
+				const conversationId = String(request.parameters[0] ?? '');
+				return Promise.resolve({
+					_tag: 'Success',
+					value: {
+						rows: [
+							{
+								conversation_id: conversationId,
+								agent_name: 'web',
+								title: null,
+								user_id: subject.userId,
+								sandbox_key: subject.userId,
+								visibility: 'personal',
+								envoy_key: null,
+								parent_id: conversationId.startsWith('agent:') ? 'conversation-parent' : null
 							}
 						],
 						affectedRows: 0
@@ -242,8 +292,8 @@ const turnInvocation = (conversationId: string, _message: string): Invocation =>
 	id: InvocationId.make(`agent-usage-${conversationId}`),
 	scope,
 	deadlineEpochMs: Date.now() + 10_000,
-	command: 'agents.execute',
-	input: { conversationId, turnId: `agent-usage-${conversationId}:turn` },
+	command: 'agents.run',
+	input: { subject, conversationId },
 	headers: { authorization: ['Bearer test-session'] }
 });
 

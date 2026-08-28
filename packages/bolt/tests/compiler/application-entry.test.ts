@@ -19,6 +19,35 @@ function compilerPlugin(): Plugin {
 }
 
 describe('workspace application entry', () => {
+	it('rejects private runtime imports from authored browser source', () => {
+		const plugin = compilerPlugin();
+		const configure =
+			typeof plugin.config === 'function' ? plugin.config : plugin.config?.handler;
+		if (typeof configure !== 'function') throw new Error('The Bolt compiler plugin has no config hook');
+		configure.call({} as never, { root: '/workspace' } as never, {} as never);
+
+		const resolve =
+			typeof plugin.resolveId === 'function' ? plugin.resolveId : plugin.resolveId?.handler;
+		if (typeof resolve !== 'function')
+			throw new Error('The Bolt compiler plugin has no resolver hook');
+		const context = {
+			error(message: string): never {
+				throw new Error(message);
+			}
+		};
+
+		for (const source of [
+			'@norbital-ai/bolt/client-runtime',
+			'$bolt/framework-client.js',
+			'$bolt/framework-collections.js',
+			'@norbital-ai/ui/collection-runtime/relationship-directory'
+		]) {
+			expect(() =>
+				resolve.call(context as never, source, '/workspace/src/apps/+private.svelte', {} as never)
+			).toThrow(/private Bolt runtime wiring/);
+		}
+	});
+
 	it('blocks mounting on the framework stylesheet Vite emits for the entry', async () => {
 		const plugin = compilerPlugin();
 		const load = plugin.load;

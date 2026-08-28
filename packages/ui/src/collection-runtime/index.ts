@@ -4,6 +4,7 @@ import type {
 	ErasedCollectionRegistry
 } from '@norbital-ai/std/collection';
 import { getContext, hasContext, setContext, type Component } from 'svelte';
+export { setRelationshipDirectoryContext } from './relationship-directory.js';
 
 const COLLECTION_CLIENT_CONTEXT = Symbol.for('@norbital-ai/ui/collection-client');
 const COLLECTION_SURFACE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-surface');

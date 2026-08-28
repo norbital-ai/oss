@@ -100,14 +100,8 @@ const ENQUEUED_COMMANDS: ReadonlyArray<string> = [
 	'integrations.pull',
 	'integrations.flush',
 	'envoys.drain',
-	// A delegated turn. `sandbox-tools.ts` enqueues `agents.execute` after persisting its authority,
-	// and it was never listed here — harmless only for as long as nothing executed the queue. The
-	// first tick would have refused every subagent, and the refusal would have named the provenance
-	// gate rather than the missing entry. (`tasks.tick` is not listed because it is not task-runnable:
-	// the command that runs other commands is not itself one of them, so the tick is refused on a
-	// row.)
-	'agents.execute',
-	'agents.continue',
+	// `tasks.tick` is not listed because it is not task-runnable: the command that runs other
+	// commands is not itself one of them, so the tick is refused on a row.
 	'envoys.complete',
 	'collections.resume',
 	'collections.discard'

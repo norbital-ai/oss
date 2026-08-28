@@ -387,8 +387,20 @@ export interface CollectionClient<TCollections extends CollectionRegistry> {
 	readonly approvals?: CollectionApprovalOperations;
 }
 
-/** Tenant-authored collection surfaces receive only the typed database vocabulary. */
-export interface CollectionDbClient<TCollections extends CollectionRegistry> {
+/**
+ * Tenant-authored collection surfaces receive only the typed database vocabulary they consume.
+ *
+ * A surface for one authored collection must not require unrelated collections to expose the same
+ * capabilities. In particular, the generic `approval_request` projection is deliberately
+ * read-only in generated browser clients and therefore cannot satisfy a whole-registry writable
+ * client contract.
+ */
+export interface CollectionDbClient<
+	TCollections extends CollectionRegistry,
+	TName extends keyof TCollections = keyof TCollections
+> {
 	readonly [collectionRegistryType]?: TCollections;
-	readonly db: CollectionClient<TCollections>['db'];
+	readonly db:
+		| CollectionClient<TCollections>['db']
+		| Pick<CollectionClient<TCollections>['db'], TName>;
 }

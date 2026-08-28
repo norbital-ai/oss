@@ -4,10 +4,11 @@ import { makeAuthoringApi, type AuthoringOps } from '../../src/runtime/collectio
 
 /** One direct collection route, with the same single declarative write in every authored context. */
 const recordingOps = (calls: Array<string>): AuthoringOps => ({
+	allowedCollections: new Set(['payslips', 'approval_request']),
 	findMany: () => Effect.succeed([]),
 	findFirst: () => Effect.succeed(undefined),
 	count: () => Effect.succeed(0),
-		findNearest: () => Effect.succeed([]),
+	findNearest: () => Effect.succeed([]),
 	mutate: (collection: string, values: Readonly<Record<string, unknown>>) => {
 		calls.push(`mutate:${collection}:${String(values['name'])}`);
 		return Effect.void;
@@ -37,5 +38,18 @@ describe('authored collection operations', () => {
 			yield* api.db['payslips']!.mutate({ name: 'August' });
 			expect(calls).toEqual(['mutate:payslips:August']);
 		});
+	});
+
+	it('makes private platform collections structurally absent even through reflection', () => {
+		const api = makeAuthoringApi(recordingOps([]));
+		expect(Reflect.get(api.db, 'user')).toBeUndefined();
+		expect(Reflect.get(api.db, 'session')).toBeUndefined();
+		expect(Reflect.get(api.db, 'automation_run')).toBeUndefined();
+		expect(Reflect.get(api.db, 'payslips')).toBeDefined();
+
+		const approval = Reflect.get(api.db, 'approval_request');
+		expect(approval).toBeDefined();
+		expect(Reflect.get(approval, 'findMany')).toBeTypeOf('function');
+		expect(Reflect.get(approval, 'mutate')).toBeUndefined();
 	});
 });

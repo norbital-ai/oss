@@ -19,6 +19,8 @@ type RemoteQueryCaching = Readonly<{
 	readonly key: string;
 	readonly collections: ReadonlyArray<string>;
 	readonly registry: LiveQueryRegistry;
+	/** A server-only response may remain live without being retained in browser storage. */
+	readonly retain?: (value: Schema.Json) => boolean;
 }>;
 
 /**
@@ -120,7 +122,13 @@ class ReactiveRemoteQuery<Value extends Schema.Json> implements RemoteQuery<Valu
 					onSuccess: (value) => {
 						if (!attempt.isCurrent()) return;
 						self.current = value;
-						caching?.cache.write(caching.key, value, caching.collections);
+						if (caching !== undefined && (caching.retain?.(value) ?? true)) {
+							caching.cache.write(caching.key, value, caching.collections);
+						} else if (caching !== undefined) {
+							// A prior release may already have persisted this server-only query. Dropping
+							// its dependency set removes that legacy copy as well as refusing the new one.
+							caching.cache.invalidate(caching.collections);
+						}
 					}
 				})
 			);

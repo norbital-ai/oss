@@ -23,15 +23,14 @@ function parsePublicMcpToolName(
 	return { server: name.slice(0, index), tool: name.slice(index + 1) };
 }
 
-// repository-health:allow AL8 -- a rendering view-model, not a message shape: `kind`, `key` and
-// `status` are panel concerns with no wire meaning, and this package exports no canonical message
+// repository-health:allow AL8 -- a rendering view-model, not a message shape: `kind` and `key` are
+// panel concerns with no wire meaning, and this package exports no canonical message
 // type to compose from (`MessageRow` is a private Schema.Struct with a different field set).
 type PanelText = {
 	readonly kind: 'text';
 	readonly key: string;
 	readonly role: string;
 	readonly content: string;
-	readonly status?: string;
 };
 
 /** One provider reasoning part, intentionally separate from the answer and collapsed in the UI. */
@@ -490,8 +489,6 @@ function toPanelRow(
 	if (typeof id !== 'string') return [];
 	if (record.kind === 'usage') return [];
 	const role = typeof record.role === 'string' ? record.role : 'assistant';
-	const durableStatus = record.status;
-	const status = typeof durableStatus === 'string' ? { status: durableStatus } : {};
 	if (record.kind === 'reasoning') {
 		const content = textOf(record);
 		return content !== null && content.trim() ? [{ kind: 'reasoning', key: id, content }] : [];
@@ -511,11 +508,11 @@ function toPanelRow(
 		// A turn that only called a tool has no words of its own. The calls already say what it did, so a
 		// blank bubble beside them is noise.
 		if (text.trim().length === 0) continue;
-		rows.push({ kind: 'text', key, role, content: text, ...status });
+		rows.push({ kind: 'text', key, role, content: text });
 	}
 	// A record that produced nothing still happened. Rendering it empty beats dropping a turn out of
 	// the conversation, which is what silently losing a failed turn would look like.
-	return rows.length > 0 ? rows : [{ kind: 'text', key: id, role, content: '', ...status }];
+	return rows.length > 0 ? rows : [{ kind: 'text', key: id, role, content: '' }];
 }
 
 /** Projects one stored tool call into the collapsed row the panel renders. */

@@ -138,7 +138,7 @@ const historyFor = (runtime: BoltTestRuntime, subject: Identity.Subject, convers
 	);
 
 describe('agent conversation inbox authority', () => {
-	it('commits a new conversation, turn, mailbox, task and run before inference', async () => {
+	it('commits a new conversation, turn, mailbox and run before inference', async () => {
 		harness = await makeBoltTestRuntime(testWorkspace());
 		const runtime = harness;
 		const admitted = await runtime.runtime.runPromise(
@@ -167,7 +167,9 @@ describe('agent conversation inbox authority', () => {
 				(select count(*)::int from agent_run where conversation_id = $1) as runs`,
 			['atomic-conversation']
 		);
-		expect(counts[0]).toEqual({ sessions: 1, messages: 2, mailboxes: 1, tasks: 1, runs: 1 });
+		// Agent admission starts its direct FIFO runner after this transaction commits. It must not
+		// manufacture a scheduler task merely to execute the first I/O-bound step.
+		expect(counts[0]).toEqual({ sessions: 1, messages: 2, mailboxes: 1, tasks: 0, runs: 1 });
 		expect(
 			await runtime.database.query(
 				`select distinct collection_name
@@ -205,7 +207,7 @@ describe('agent conversation inbox authority', () => {
 				(select count(*)::int from agent_run where conversation_id = $1) as runs`,
 			['atomic-conversation']
 		);
-		expect(afterRetry[0]).toEqual({ sessions: 1, messages: 2, mailboxes: 1, tasks: 1, runs: 1 });
+		expect(afterRetry[0]).toEqual({ sessions: 1, messages: 2, mailboxes: 1, tasks: 0, runs: 1 });
 		// A fresh query has no admission response or component state to lean on. It sees the same
 		// persisted transcript and queue projection a remounted sync client will reconstruct.
 		expect(

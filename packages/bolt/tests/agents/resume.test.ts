@@ -174,17 +174,6 @@ const targetTurn: JsonObject = {
 	parts: [{ kind: 'text', text: 'The draft is ready.' }]
 };
 
-const task = (command: string, input: Schema.Json): InvocationType =>
-	Invocation.cases.Task.make({
-		protocolVersion: PROTOCOL_VERSION,
-		id: InvocationId.make(`task-${command}`),
-		scope,
-		deadlineEpochMs: Date.now() + 30_000,
-		command,
-		input,
-		attempt: 0
-	});
-
 const command = (name: string, input: Schema.Json): InvocationType =>
 	Invocation.cases.Command.make({
 		protocolVersion: PROTOCOL_VERSION,
@@ -203,6 +192,7 @@ const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
 /** A stateful database boundary that applies exactly the resume statements the runtime emits. */
 const resumeStore = (initial = parkedTurn(), authorized = true) => {
 	let current = initial;
+	let claimed = false;
 	const statements: Array<Statement> = [];
 	const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 		call: (_metadata, request) => {
@@ -219,18 +209,55 @@ const resumeStore = (initial = parkedTurn(), authorized = true) => {
 			for (const entry of requested) {
 				const statement = { sql: entry.sql, parameters: entry.parameters } satisfies Statement;
 				statements.push(statement);
+				if (statement.sql.includes('pg_advisory_xact_lock')) {
+					if (claimed) {
+						rows = [];
+					} else {
+						claimed = true;
+						rows = [
+							{
+								task_id: childTaskId,
+								conversation_id: childId,
+								turn_id: childTaskId,
+								agent_name: 'web'
+							}
+						];
+					}
+					continue;
+				}
+				if (
+					statement.sql.includes('as mailbox_status') &&
+					statement.sql.includes('as has_running')
+				) {
+					rows = [{ mailbox_status: 'active', has_running: false }];
+					continue;
+				}
 				const authenticated = authRows(statement);
 				if (authenticated !== undefined) {
 					rows = authenticated;
 					continue;
 				}
 				if (operationOn(statement, 'select', 'chat_session')) {
-					if (selectsColumn(statement, 'chat_session', 'conversation_id')) {
+					if (selectsColumn(statement, 'chat_session', 'agent_name')) {
 						const conversationId = hasParameter(statement, childId) ? childId : parentId;
 						rows = [
 							{
 								conversation_id: conversationId,
-								parent_id: conversationId === childId ? parentId : null,
+								agent_name: 'web',
+								title: null,
+								user_id: subject.userId,
+								sandbox_key: subject.userId,
+								visibility: 'personal',
+								envoy_key: null,
+								parent_id: conversationId === childId && authorized ? parentId : null
+							}
+						];
+					} else if (selectsColumn(statement, 'chat_session', 'conversation_id')) {
+						const conversationId = hasParameter(statement, childId) ? childId : parentId;
+						rows = [
+							{
+								conversation_id: conversationId,
+								parent_id: conversationId === childId && authorized ? parentId : null,
 								sandbox_key: subject.userId
 							}
 						];
@@ -295,15 +322,11 @@ describe('agent continuation', () => {
 			}
 		};
 		const facilities: FacilityBindings = { scope, database: store.database, ai, tasks };
-		const invocation = task('agents.continue', {
-			conversationId: parentId,
-			agentId: childId,
-			taskId: childTaskId
-		});
+		const invocation = command('agents.run', { subject, conversationId: childId });
 		const result = await bundle.dispatch(invocation, facilities, new AbortController().signal);
 		expect(result, JSON.stringify(result)).toMatchObject({
 			_tag: 'Success',
-			response: { value: { continued: true } }
+			response: { value: { conversationId: childId, status: 'drained' } }
 		});
 		expect(calls).toBe(1);
 		expect(store.current()).toMatchObject({
@@ -351,7 +374,7 @@ describe('agent continuation', () => {
 		expect(calls).toBe(1);
 	});
 
-	it('refuses a target outside the parent conversation before reading or invoking it', async () => {
+	it('does not resume a parent when the settled child has no stored parent', async () => {
 		const store = resumeStore(parkedTurn(), false);
 		let calls = 0;
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
@@ -361,15 +384,14 @@ describe('agent continuation', () => {
 			}
 		};
 		const result = await bundle.dispatch(
-			task('agents.continue', {
-				conversationId: parentId,
-				agentId: childId,
-				taskId: childTaskId
-			}),
+			command('agents.run', { subject, conversationId: childId }),
 			{ scope, database: store.database, ai, tasks },
 			new AbortController().signal
 		);
-		expect(result).toMatchObject({ _tag: 'Failure', error: { httpStatus: 403 } });
+		expect(result).toMatchObject({
+			_tag: 'Success',
+			response: { value: { conversationId: childId, status: 'drained' } }
+		});
 		expect(calls).toBe(0);
 		expect(store.current()).toEqual(parkedTurn());
 	});
@@ -384,11 +406,7 @@ describe('agent continuation', () => {
 			}
 		};
 		const result = await bundle.dispatch(
-			task('agents.continue', {
-				conversationId: parentId,
-				agentId: childId,
-				taskId: childTaskId
-			}),
+			command('agents.run', { subject, conversationId: childId }),
 			{ scope, database: store.database, ai, tasks },
 			new AbortController().signal
 		);
@@ -397,59 +415,8 @@ describe('agent continuation', () => {
 		expect(store.current()).toMatchObject({ status: 'failed', resumed: 4 });
 	});
 
-	it('enqueues the parent exactly when a delegated child settles', async () => {
-		const statements: Array<Statement> = [];
-		let insertedMessages = 0;
-		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
-			call: (_metadata, request) => {
-				const requested =
-					request._tag === 'Query'
-						? [{ sql: request.sql, parameters: request.parameters }]
-						: request.statements;
-				let rows: ReadonlyArray<JsonObject> = [];
-				for (const entry of requested) {
-					const statement = { sql: entry.sql, parameters: entry.parameters } satisfies Statement;
-					statements.push(statement);
-					const authenticated = authRows(statement);
-					if (authenticated !== undefined) {
-						rows = authenticated;
-					} else if (
-						operationOn(statement, 'select', 'chat_session') &&
-						selectsColumn(statement, 'chat_session', 'parent_id')
-					) {
-						rows = [{ parent_id: parentId }];
-					} else if (
-						operationOn(statement, 'select', 'chat_message') &&
-						hasParameter(statement, childId) &&
-						hasParameter(statement, childTaskId)
-					) {
-						rows = [
-							{
-								id: 'child-turn-message',
-								content: {
-									id: childTaskId,
-									status: 'queued',
-									parent_agent_id: parentId,
-									parts: [],
-									subject,
-									agent_name: 'web',
-									usage_unreported: false
-								}
-							}
-						];
-					} else if (operationOn(statement, 'insert', 'chat_message')) {
-						insertedMessages += 1;
-						rows = [{ id: `message-${insertedMessages}` }];
-					} else {
-						rows = [];
-					}
-				}
-				return Promise.resolve({
-					_tag: 'Success',
-					value: { rows, affectedRows: rows.length }
-				});
-			}
-		};
+	it('continues the parent directly when a delegated child settles', async () => {
+		const store = resumeStore();
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: () =>
 				Promise.resolve({
@@ -458,22 +425,12 @@ describe('agent continuation', () => {
 				})
 		};
 		const result = await bundle.dispatch(
-			command('agents.execute', {
-				conversationId: childId,
-				turnId: childTaskId
-			}),
-			{ scope, database, ai, tasks },
+			command('agents.run', { subject, conversationId: childId }),
+			{ scope, database: store.database, ai, tasks },
 			new AbortController().signal
 		);
 		expect(result, JSON.stringify(result)).toMatchObject({ _tag: 'Success' });
-		const enqueue = statements.find((entry) => operationOn(entry, 'insert', 'bolt_task'));
-		expect(enqueue).toBeDefined();
-		expect(enqueue?.parameters).toContain('agents.continue');
-		expect(enqueue?.parameters).toContain('command-agents.execute:resume-parent');
-		expect(enqueue?.parameters.map(jsonParameter)).toContainEqual({
-			conversationId: parentId,
-			agentId: childId,
-			taskId: childTaskId
-		});
+		expect(store.current()).toMatchObject({ status: 'completed' });
+		expect(store.statements.some((entry) => operationOn(entry, 'insert', 'bolt_task'))).toBe(false);
 	});
 });

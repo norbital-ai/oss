@@ -66,7 +66,10 @@ export type WorkspaceOperationsHost = Readonly<{
 	readonly read: (options?: {
 		readonly billing?: boolean;
 	}) => ReturnType<typeof Effect.runPromise<unknown, never>>;
-	readonly run: (input: unknown) => ReturnType<typeof Effect.runPromise<unknown, never>>;
+	readonly run: (
+		input: unknown,
+		signal?: AbortSignal
+	) => ReturnType<typeof Effect.runPromise<unknown, never>>;
 }>;
 
 export type WorkspaceSession = Readonly<{

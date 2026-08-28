@@ -100,10 +100,10 @@ const turn = (id: string, agent: string): Invocation => ({
 	id: InvocationId.make(id),
 	scope,
 	deadlineEpochMs: Date.now() + 10_000,
-	command: 'agents.execute',
+	command: 'agents.run',
 	input: {
-		conversationId: `${agent}-conversation`,
-		turnId: `${id}:turn`
+		subject,
+		conversationId: `${agent}-conversation`
 	},
 	headers: { authorization: ['Bearer test-session'] }
 });
@@ -136,10 +136,40 @@ describe('envoy delegation boundary', () => {
 			}
 		};
 		let returnedMessage = 0;
+		const claimed = new Set<string>();
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			call: (_metadata, request) => {
 				if (request._tag !== 'Query') {
 					return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 1 } });
+				}
+				if (request.sql.includes('pg_advisory_xact_lock')) {
+					const conversationId = String(request.parameters[0] ?? '');
+					if (claimed.has(conversationId)) {
+						return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 0 } });
+					}
+					claimed.add(conversationId);
+					const agent = conversationId.replace(/-conversation$/, '');
+					const turnId = `${agent === 'ingress' ? 'disabled' : 'default'}-envoy-turn:turn`;
+					return Promise.resolve({
+						_tag: 'Success',
+						value: {
+							rows: [
+								{
+									task_id: turnId,
+									conversation_id: conversationId,
+									turn_id: turnId,
+									agent_name: agent
+								}
+							],
+							affectedRows: 1
+						}
+					});
+				}
+				if (request.sql.includes('as mailbox_status') && request.sql.includes('as has_running')) {
+					return Promise.resolve({
+						_tag: 'Success',
+						value: { rows: [{ mailbox_status: 'active', has_running: false }], affectedRows: 0 }
+					});
 				}
 				if (statementIntent(request, 'select', 'session')) {
 					return Promise.resolve({
@@ -179,6 +209,27 @@ describe('envoy delegation boundary', () => {
 						_tag: 'Success',
 						value: {
 							rows: [{ value: 'test-session-secret-that-is-long-enough' }],
+							affectedRows: 0
+						}
+					});
+				}
+				if (statementIntent(request, 'select', 'chat_session')) {
+					const conversationId = String(request.parameters[0] ?? '');
+					return Promise.resolve({
+						_tag: 'Success',
+						value: {
+							rows: [
+								{
+									conversation_id: conversationId,
+									agent_name: conversationId.replace(/-conversation$/, ''),
+									title: null,
+									user_id: subject.userId,
+									sandbox_key: subject.userId,
+									visibility: 'personal',
+									envoy_key: null,
+									parent_id: null
+								}
+							],
 							affectedRows: 0
 						}
 					});
@@ -236,7 +287,7 @@ describe('envoy delegation boundary', () => {
 
 		expect(result).toMatchObject({
 			_tag: 'Success',
-			response: { value: { status: 'completed', output: { text: 'Handled without delegation.' } } }
+			response: { value: { status: 'drained', conversationId: 'ingress-conversation' } }
 		});
 		const firstRequest = requests[0];
 		const secondRequest = requests[1];

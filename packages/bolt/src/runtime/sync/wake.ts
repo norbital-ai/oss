@@ -24,10 +24,13 @@ import { Transport } from '#lib/runtime/facilities/services.js';
  *
  * ## Why it cannot fail a write
  *
- * The announcement happens after the write has committed. There is nothing left to roll back, and a
- * host whose transport is unavailable is not a reason to tell the user their save failed. A dropped
- * announcement costs latency and nothing else: the replica still converges the next time it drains,
- * which is what makes the frame a hint rather than a delivery.
+	 * The announcement happens after the write has committed. There is nothing left to roll back, and a
+	 * host whose transport is unavailable is not a reason to tell the user their save failed. The host
+	 * acknowledgement is awaited briefly so an open replica normally learns immediately without a
+	 * recovery poll. A stalled host is bounded here because it must not hold an already-committed write
+	 * open forever. This is a one-shot delivery deadline, not a retry or polling cycle. Transport failures
+	 * remain swallowed because reporting the committed write as failed would invite a duplicate retry;
+	 * reconnect bootstrap is the recovery boundary.
  */
 
 /** The topic every workspace replica listens on. */
@@ -51,7 +54,7 @@ export const decodeWake = (bytes: Uint8Array): WakeFrame =>
 	Option.getOrElse(decodeFrame(new TextDecoder().decode(bytes)), () => ({ collections: [] }));
 
 type Interface = Readonly<{
-	/** Announces that these collections changed. Never fails, and never blocks the caller's result. */
+	/** Announces that these collections changed. Never fails after the write has committed. */
 	readonly announce: (
 		effectId: EffectId,
 		collections: ReadonlyArray<string>
@@ -79,8 +82,8 @@ export const layer = Layer.effect(
 					// the right call: the row is already committed, so there is no outcome left to report
 					// and nothing a caller could do differently. A host with no transport bound at all
 					// lands here too, which is what lets the engine run in environments that have none.
-					// The timeout belongs inside the never-failing service. Putting it at call sites lets a
-					// timeout defect escape after `announce` has already swallowed the transport's cause.
+					// Keep the deadline inside this never-failing service so it cannot escape from a caller
+					// after the transport cause has already been converted to a successful announcement.
 					.pipe(
 						Effect.timeout(250),
 						Effect.catchCause(() => Effect.void)

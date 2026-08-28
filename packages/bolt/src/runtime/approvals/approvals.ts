@@ -807,9 +807,7 @@ export const layer = Layer.effect(
 					reason: 'approval conflict lost a competing state transition'
 				});
 			const changed = ['approval_request', ...(collection === undefined ? [] : [collection])];
-			yield* wake
-				.announce(EffectId.make(`${effectId}:approval-conflict-wake`), changed)
-				.pipe(Effect.timeout(250), Effect.ignore);
+			yield* wake.announce(EffectId.make(`${effectId}:approval-conflict-wake`), changed);
 			return next;
 		});
 		return Service.of({
@@ -963,9 +961,7 @@ export const layer = Layer.effect(
 							'requestor',
 							...(lock === undefined ? [] : [lock.collection])
 						];
-						yield* wake
-							.announce(EffectId.make(`${effectId}:approval-request-wake`), collections)
-							.pipe(Effect.timeout(250), Effect.ignore);
+						yield* wake.announce(EffectId.make(`${effectId}:approval-request-wake`), collections);
 						return state;
 					}
 					if (lock !== undefined)
@@ -1078,9 +1074,7 @@ export const layer = Layer.effect(
 					'approval_request',
 					...(notification === undefined ? [] : ['bolt_notifications'])
 				];
-				yield* wake
-					.announce(EffectId.make(`${effectId}:approval-decision-wake`), changed)
-					.pipe(Effect.timeout(250), Effect.ignore);
+				yield* wake.announce(EffectId.make(`${effectId}:approval-decision-wake`), changed);
 				return next;
 			}),
 			withdraw: Effect.fn('Approvals.withdraw')(function* (effectId, subject, state) {
@@ -1122,9 +1116,9 @@ export const layer = Layer.effect(
 						requestId: state.requestId,
 						reason: 'approval withdrawal lost a competing update'
 					});
-				yield* wake
-					.announce(EffectId.make(`${effectId}:approval-withdraw-wake`), ['approval_request'])
-					.pipe(Effect.timeout(250), Effect.ignore);
+				yield* wake.announce(EffectId.make(`${effectId}:approval-withdraw-wake`), [
+					'approval_request'
+				]);
 				return next;
 			}),
 			conflict,

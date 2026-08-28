@@ -206,6 +206,34 @@ export interface SyncPartitionStatusRequest
 	extends Schema.Schema.Type<typeof SyncPartitionStatusRequest> {}
 
 /**
+ * Private Bolt projections whose internal browser surfaces stay live by invalidation only.
+ *
+ * These names never enter `shape`, partition generations, replica provisioning, row deltas, or the
+ * authored API. They are fixed here so an SSE query parameter cannot turn an arbitrary private
+ * system table into an observable change signal. The guest still authenticates the subject and
+ * verifies its internal read predicate before admitting the stream.
+ */
+const SYNC_INVALIDATION_ONLY_COLLECTIONS = Object.freeze([
+	'agent_mailbox',
+	'agent_run',
+	'automation_run',
+	'chat_message',
+	'chat_session'
+] as const);
+const SyncInvalidationOnlyCollections = Schema.Array(Schema.NonEmptyString).check(
+	Schema.makeFilter(
+		(names) =>
+			names.length <= SYNC_INVALIDATION_ONLY_COLLECTIONS.length ||
+			`at most ${SYNC_INVALIDATION_ONLY_COLLECTIONS.length} private invalidation collections are accepted`
+	),
+	Schema.makeFilter(
+		(names) =>
+			new Set(names).size === names.length ||
+			'a sync subscription cannot repeat a private invalidation collection'
+	)
+);
+
+/**
  * The public pull request, excluding the subject the dispatch boundary authenticates and injects.
  *
  * Collections are dependency subscriptions, not query/page identities. The one cursor and generation
@@ -213,6 +241,8 @@ export interface SyncPartitionStatusRequest
  */
 export const SyncPullRequest = Schema.Struct({
 	collections: SyncPartitionCollections,
+	/** Fixed internal names authenticated by the guest; no rows or replica positions exist for them. */
+	invalidations: Schema.optionalKey(SyncInvalidationOnlyCollections),
 	cursor: Schema.NullOr(SyncCursor),
 	generations: SyncCollectionGenerations,
 	rehydration: Schema.optionalKey(SyncRehydrationCost),
@@ -434,6 +464,8 @@ type PartitionGenerationState = Readonly<{
 
 type PreparedPartitionPull = Readonly<{
 	predicates: ReadonlyMap<string, AccessControl.RowPredicate>;
+	/** Guest-authenticated internal names; carried only as admission proof, never queried as rows. */
+	invalidations: ReadonlySet<string>;
 	state: PartitionGenerationState;
 	partition: SyncPartitionIdentity;
 	currentHead: SyncCursor;
@@ -662,6 +694,43 @@ export const layer = Layer.effect(
 			}
 			return predicates;
 		});
+		const invalidationOnlyNames = new Set<string>(SYNC_INVALIDATION_ONLY_COLLECTIONS);
+		const subscriptionInvalidations = Effect.fn('Sync.subscriptionInvalidations')(function* (
+			subject: Identity.Subject,
+			names: ReadonlyArray<string>
+		) {
+			const admitted = new Set<string>();
+			for (const name of names) {
+				if (!invalidationOnlyNames.has(name)) {
+					// Unknown, private-but-unapproved and unauthorized names are intentionally identical.
+					return yield* new AccessControl.AccessDenied({
+						action: 'read',
+						resource: 'sync.invalidation',
+						reason: 'sync subscription unavailable'
+					});
+				}
+				const definition = workspace.definition.collections.find(
+					(collection) => collection.name === name
+				);
+				if (definition === undefined || isReplicatedCollection(definition)) {
+					return yield* new AccessControl.AccessDenied({
+						action: 'read',
+						resource: 'sync.invalidation',
+						reason: 'sync subscription unavailable'
+					});
+				}
+				const predicate = access.predicate(subject, 'read', name);
+				if (!predicate.allowed) {
+					return yield* new AccessControl.AccessDenied({
+						action: 'read',
+						resource: 'sync.invalidation',
+						reason: 'sync subscription unavailable'
+					});
+				}
+				admitted.add(name);
+			}
+			return admitted;
+		});
 		const generationState = Effect.fn('Sync.generationState')(function* (
 			effectId: EffectId,
 			names: ReadonlyArray<string>
@@ -760,6 +829,9 @@ export const layer = Layer.effect(
 			request: SyncPullRequest,
 			prepared?: PreparedPartitionPull
 		) {
+			if (prepared === undefined) {
+				yield* subscriptionInvalidations(subject, request.invalidations ?? []);
+			}
 			const predicates =
 				prepared?.predicates ??
 				(yield* subscriptionPredicates(subject, request.collections));
@@ -1099,11 +1171,15 @@ export const layer = Layer.effect(
 					subject: Identity.Subject;
 					subjectKey: string;
 					collections: ReadonlyArray<string>;
+					invalidations: ReadonlyArray<string>;
 					collectionKey: string;
 					members: Array<number>;
 				}>;
 				type AdmittedGroup = AdmissionGroup &
-					Readonly<{ predicates: ReadonlyMap<string, AccessControl.RowPredicate> }>;
+					Readonly<{
+						predicates: ReadonlyMap<string, AccessControl.RowPredicate>;
+						admittedInvalidations: ReadonlySet<string>;
+					}>;
 				type Bucket = Readonly<{
 					subject: Identity.Subject;
 					pull: SyncPullRequest;
@@ -1116,15 +1192,17 @@ export const layer = Layer.effect(
 				const admissionGroups = new Map<string, AdmissionGroup>();
 				for (const [index, entry] of entries.entries()) {
 					const collections = [...entry.pull.collections].toSorted();
+					const invalidations = [...(entry.pull.invalidations ?? [])].toSorted();
 					const collectionKey = sha256Json(collections);
 					const subjectKey = sha256Json(entry.subject);
-					const key = sha256Json({ subjectKey, collections });
+					const key = sha256Json({ subjectKey, collections, invalidations });
 					const held = admissionGroups.get(key);
 					if (held === undefined) {
 						admissionGroups.set(key, {
 							subject: entry.subject,
 							subjectKey,
 							collections,
+							invalidations,
 							collectionKey,
 							members: [index]
 						});
@@ -1133,13 +1211,20 @@ export const layer = Layer.effect(
 				const admittedGroups: Array<AdmittedGroup> = [];
 				for (const group of admissionGroups.values()) {
 					const admitted = yield* Effect.result(
-						subscriptionPredicates(group.subject, group.collections)
+						Effect.all({
+							predicates: subscriptionPredicates(group.subject, group.collections),
+							invalidations: subscriptionInvalidations(group.subject, group.invalidations)
+						})
 					);
 					if (Result.isFailure(admitted)) {
 						for (const index of group.members) denied.set(index, admitted.failure);
 						continue;
 					}
-					admittedGroups.push({ ...group, predicates: admitted.success });
+					admittedGroups.push({
+						...group,
+						predicates: admitted.success.predicates,
+						admittedInvalidations: admitted.success.invalidations
+					});
 				}
 				const buckets = new Map<string, Bucket>();
 				if (admittedGroups.length > 0) {
@@ -1172,6 +1257,7 @@ export const layer = Layer.effect(
 						partitions.set(partitionKey, partition);
 						const prepared: PreparedPartitionPull = {
 							predicates: group.predicates,
+							invalidations: group.admittedInvalidations,
 							state,
 							partition,
 							currentHead,
@@ -1184,6 +1270,7 @@ export const layer = Layer.effect(
 							const key = sha256Json({
 								partition: partition.key,
 								collections: group.collections,
+								invalidations: group.invalidations,
 								cursor: entry.pull.cursor,
 								generations: entry.pull.generations,
 								limit: entry.pull.limit ?? DEFAULT_SYNC_PULL_LIMIT,

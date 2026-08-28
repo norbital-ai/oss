@@ -92,6 +92,8 @@ export type TurnStatus = Schema.Schema.Type<typeof TurnStatus>;
 export const StoredTurn = Schema.Struct({
 	id: Schema.NonEmptyString,
 	status: TurnStatus,
+	/** Invocation nesting carried with the durable turn, without a scheduler payload. */
+	depth: Schema.optionalKey(Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
 	parent_agent_id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
 	parts: Schema.Array(TurnPart),
 	resumed: Schema.optionalKey(

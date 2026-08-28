@@ -472,11 +472,5 @@
 				<p class="content m-0 break-words whitespace-pre-wrap">{message.content}</p>
 			{/if}
 		</div>
-		{#if message.status === 'streaming'}
-			<Inline as="span" gap="sm" class="text-tiny text-muted-foreground">
-				<Spinner class="size-3.5 text-foreground" label={t('bolt.agent.streaming')} />
-				{t('bolt.agent.streaming')}
-			</Inline>
-		{/if}
 	</Stack>
 {/if}

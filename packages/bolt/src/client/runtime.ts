@@ -61,6 +61,7 @@ import {
 	createCollectionMutationJournal,
 	discoverCollectionMutationJournals,
 	locallyDurableMutationResult,
+	MUTATION_PUSH_STALE_AFTER_MS,
 	mutationWireRequest,
 	prepareLocalCollectionMutation,
 	type CollectionMutationJournal
@@ -464,12 +465,18 @@ const RemoteQueries = {
 						cache,
 						registry,
 						key: cacheKeyFor(command, input),
-						collections: collectionsFor(command, input)
+						collections: collectionsFor(command, input),
+						// Private runtime collections used by Bolt's internal shell still use the ordinary
+						// live-query registry so their registered `collections.findMany` reads can re-execute
+						// when the authenticated source advances. Their
+						// server-only page is never a replica window, though, and must not become a second
+						// durable copy in IndexedDB merely because all queries share this cache seam.
+						retain: (value: Schema.Json) => asJsonRecord(value)['serverOnly'] !== true
 					};
 		/**
 		 * The replica answers first when it can, and declines by returning `undefined` — at which point
-		 * this is exactly the request it always was. The cache still sits in front of both, so a local
-		 * answer is cached on the same terms a remote one is and invalidated by the same collections.
+		 * this is exactly the request it always was. Replica-backed answers use the shared durable cache;
+		 * a response the server marks private remains registered for live invalidation but memory-only.
 		 */
 		return createRemoteQuery(
 			(attempt: RemoteQueryAttempt) =>
@@ -730,30 +737,6 @@ const projectAutomationRun = (row: AutomationRunRow | null): AutomationTaskSnaps
 /** Stable per-name automation state; the generated declaration supplies the exact registry. */
 const automationClient = (runtime: WorkspaceClientRuntime) => {
 	const surfaces = new Map<string, unknown>();
-	const activeTaskIds = new Set<string>();
-	let pollTimer: ReturnType<typeof setTimeout> | undefined;
-	const schedulePoll = () => {
-		if (pollTimer !== undefined || activeTaskIds.size === 0) return;
-		pollTimer = setTimeout(() => {
-			pollTimer = undefined;
-			if (activeTaskIds.size === 0) return;
-			runtime.cache?.invalidate(['automation_run']);
-			runtime.queries?.reexecuteAffected(['automation_run']);
-			schedulePoll();
-		}, 1_000);
-		const portableTimer = pollTimer as unknown as { unref?: () => void };
-		portableTimer.unref?.();
-	};
-	const observeTask = (taskId: string, row: AutomationRunRow | null) => {
-		if (row?.status === 'done' || row?.status === 'failed') activeTaskIds.delete(taskId);
-		else activeTaskIds.add(taskId);
-		if (activeTaskIds.size === 0 && pollTimer !== undefined) {
-			clearTimeout(pollTimer);
-			pollTimer = undefined;
-			return;
-		}
-		schedulePoll();
-	};
 	return new Proxy<Record<string, unknown>>(
 		{},
 		{
@@ -768,17 +751,8 @@ const automationClient = (runtime: WorkspaceClientRuntime) => {
 							'automations.start',
 							{ name: property, input },
 							AutomationStartResponse
-						).pipe(
-							Effect.tap(({ taskId }) =>
-								Effect.tryPromise(
-									() =>
-										runtimeStates.access(runtime)?.automationStarted?.(taskId) ??
-										Promise.resolve()
-								)
-							)
 						),
 					(taskId) => {
-						observeTask(taskId, null);
 						const page = PageQueries.make(runtime, 'collections.findMany', {
 							collection: 'automation_run',
 							where: { task_id: { eq: taskId } },
@@ -794,7 +768,6 @@ const automationClient = (runtime: WorkspaceClientRuntime) => {
 								: Schema.decodeUnknownSync(AutomationRunRow)(rows[0])
 						);
 						const project = (row: AutomationRunRow | null) => {
-							observeTask(taskId, row);
 							if (row !== null) {
 								void runtimeStates
 									.access(runtime)
@@ -811,32 +784,14 @@ const automationClient = (runtime: WorkspaceClientRuntime) => {
 							'automations.stop',
 							{ name: property, taskId },
 							AutomationStopResponse
-						).pipe(
-							Effect.tap(() =>
-								Effect.tryPromise(
-									() =>
-										runtimeStates.access(runtime)?.automationSettled?.(taskId) ??
-										Promise.resolve()
-								)
-							),
-							Effect.asVoid
-						),
+						).pipe(Effect.asVoid),
 					(taskId) =>
-						Effect.tryPromise(
-							() =>
-								runtimeStates.access(runtime)?.automationStarted?.(taskId) ??
-								Promise.resolve()
-						).pipe(
-							Effect.andThen(
-								decodedCommandEffect(
-									runtime,
-									'automations.resume',
-									{ name: property, taskId },
-									AutomationResumeResponse
-								)
-							),
-							Effect.asVoid
-						)
+						decodedCommandEffect(
+							runtime,
+							'automations.resume',
+							{ name: property, taskId },
+							AutomationResumeResponse
+						).pipe(Effect.asVoid)
 				);
 				const created = {
 					run: state.run,
@@ -856,17 +811,38 @@ const automationClient = (runtime: WorkspaceClientRuntime) => {
 	);
 };
 
+export type WorkspaceApiVisibility = Readonly<{
+	/** Exact generic collection names published through this proxy. Omission means framework-internal. */
+	readonly allowedCollections?: ReadonlyArray<string>;
+	/** Published read surfaces whose framework-owned writes remain structurally absent. */
+	readonly readOnlyCollections?: ReadonlyArray<string>;
+	/** System commands are a Bolt shell capability, not part of an authored workspace client. */
+	readonly system?: boolean;
+}>;
+
 /** Groups workspace API construction with the stateful remote-query factory it exposes. */
 const WorkspaceApis = {
-	create: (runtime: WorkspaceClientRuntime, catalog: CollectionCatalog = {}) => {
+	create: (
+		runtime: WorkspaceClientRuntime,
+		catalog: CollectionCatalog = {},
+		visibility: WorkspaceApiVisibility = {}
+	) => {
 		const state = runtimeStates.access(runtime);
 		if (state !== undefined) state.catalog = catalog;
-		return {
-		db: ClientDatabase.database(runtime, catalog),
+		const allowedCollections =
+			visibility.allowedCollections === undefined
+				? undefined
+				: new Set(visibility.allowedCollections);
+		const readOnlyCollections = new Set(visibility.readOnlyCollections ?? []);
+		const collectionAllowed = (collection: string): boolean =>
+			allowedCollections === undefined || allowedCollections.has(collection);
+		const assertCollectionAllowed = (collection: string): void => {
+			if (!collectionAllowed(collection))
+				throw new Error(`Collection ${JSON.stringify(collection)} is private to the Bolt runtime`);
+		};
+		const publicApi = {
+		db: ClientDatabase.database(runtime, catalog, allowedCollections, readOnlyCollections),
 		automations: automationClient(runtime),
-		system: createSystemClient(runtime, (command, input, inputSchema, outputSchema, signal) =>
-			RemoteQueries.make(runtime, command, input, inputSchema, outputSchema, signal)
-		),
 		invoke: new Proxy<Record<string, InvokeMethod>>(
 			{},
 			{
@@ -888,23 +864,31 @@ const WorkspaceApis = {
 			{
 				get: (_target, property) => {
 					if (typeof property !== 'string') return undefined;
+					if (!collectionAllowed(property)) return undefined;
 					return catalog[property] ?? { name: property, fields: [], relationships: [] };
 				}
 			}
 		),
 		records: {
-			findMany: (collection: string, input: Schema.Json = {}) =>
-				PageQueries.make(runtime, 'collections.findMany', { collection, ...asJsonRecord(input) })
+			findMany: (collection: string, input: Schema.Json = {}) => {
+				assertCollectionAllowed(collection);
+				return PageQueries.make(runtime, 'collections.findMany', {
+					collection,
+					...asJsonRecord(input)
+				});
+			}
 		},
 		history: {
-			findMany: (collection: string, recordId: string) =>
-				RemoteQueries.make(
+			findMany: (collection: string, recordId: string) => {
+				assertCollectionAllowed(collection);
+				return RemoteQueries.make(
 					runtime,
 					'collections.history',
 					{ collection, id: recordId },
 					Schema.Json,
 					Schema.Json
-				)
+				);
+			}
 		},
 		approvals: {
 			findMany: (approvalId: string) =>
@@ -959,10 +943,39 @@ const WorkspaceApis = {
 				)
 		}
 		};
+		if (visibility.system === false) return publicApi;
+		return {
+			...publicApi,
+			system: createSystemClient(runtime, (command, input, inputSchema, outputSchema, signal) =>
+				RemoteQueries.make(runtime, command, input, inputSchema, outputSchema, signal)
+			)
+		};
 	}
 };
 
-export const createWorkspaceApiProxy = WorkspaceApis.create;
+type WorkspaceApi = ReturnType<typeof WorkspaceApis.create>;
+type PublicWorkspaceApi = Omit<WorkspaceApi, 'system'>;
+type InternalWorkspaceApi = WorkspaceApi & {
+	readonly system: ReturnType<typeof createSystemClient>;
+};
+
+export function createWorkspaceApiProxy(
+	runtime: WorkspaceClientRuntime,
+	catalog: CollectionCatalog,
+	visibility: WorkspaceApiVisibility & { readonly system: false }
+): PublicWorkspaceApi;
+export function createWorkspaceApiProxy(
+	runtime: WorkspaceClientRuntime,
+	catalog?: CollectionCatalog,
+	visibility?: WorkspaceApiVisibility
+): InternalWorkspaceApi;
+export function createWorkspaceApiProxy(
+	runtime: WorkspaceClientRuntime,
+	catalog: CollectionCatalog = {},
+	visibility: WorkspaceApiVisibility = {}
+): WorkspaceApi {
+	return WorkspaceApis.create(runtime, catalog, visibility);
+}
 
 /**
  * The transport the host declared, resolved per call.
@@ -1106,7 +1119,9 @@ const ClientDatabase = {
 	},
 	database: (
 		runtime: WorkspaceClientRuntime,
-		catalog: CollectionCatalog
+		catalog: CollectionCatalog,
+		allowedCollections?: ReadonlySet<string>,
+		readOnlyCollections: ReadonlySet<string> = new Set()
 	): Readonly<Record<string, unknown>> => {
 		const collections = new Map<string, unknown>();
 		return new Proxy<Record<string, unknown>>(
@@ -1114,9 +1129,28 @@ const ClientDatabase = {
 			{
 				get: (_target, property) => {
 					if (typeof property !== 'string') return undefined;
+					if (allowedCollections !== undefined && !allowedCollections.has(property)) return undefined;
 					const existing = collections.get(property);
 					if (existing !== undefined) return existing;
-					const created = ClientDatabase.collection(runtime, catalog, property);
+					const complete = ClientDatabase.collection(runtime, catalog, property);
+					const created = readOnlyCollections.has(property)
+						? new Proxy(complete, {
+								get: (target, member, receiver) =>
+									member === 'mutate' || member === 'pending'
+										? undefined
+										: Reflect.get(target, member, receiver),
+								has: (target, member) =>
+									member !== 'mutate' && member !== 'pending' && Reflect.has(target, member),
+								ownKeys: (target) =>
+									Reflect.ownKeys(target).filter(
+										(member) => member !== 'mutate' && member !== 'pending'
+									),
+								getOwnPropertyDescriptor: (target, member) =>
+									member === 'mutate' || member === 'pending'
+										? undefined
+										: Reflect.getOwnPropertyDescriptor(target, member)
+							})
+						: complete;
 					collections.set(property, created);
 					return created;
 				}
@@ -1399,30 +1433,62 @@ const ephemeralCacheNamespace = (): string => {
 	return `bolt-ephemeral-partition:${Date.now()}:${ephemeralCacheSequence}`;
 };
 
-const replicaCompatibilityMarker = (partitionKey: string, fingerprint: string): string =>
+const legacyReplicaCompatibilityMarker = (partitionKey: string, fingerprint: string): string =>
 	`bolt-replica-compatible:${partitionKey}:${encodeURIComponent(fingerprint)}`;
 
-const persistedReplicaCompatibility = (partitionKey: string, fingerprint: string): boolean => {
+const replicaCompatibilityMarker = (
+	tenantId: string,
+	partitionKey: string,
+	fingerprint: string
+): string =>
+	`bolt-replica-compatible:v1:${encodeURIComponent(tenantId)}:${encodeURIComponent(partitionKey)}:${encodeURIComponent(fingerprint)}`;
+
+const persistedReplicaCompatibility = (
+	tenantId: string,
+	partitionKey: string,
+	fingerprint: string
+): boolean => {
 	try {
-		return localStorage.getItem(replicaCompatibilityMarker(partitionKey, fingerprint)) === 'ready';
+		const marker = replicaCompatibilityMarker(tenantId, partitionKey, fingerprint);
+		if (localStorage.getItem(marker) === 'ready') return true;
+		const legacyMarker = legacyReplicaCompatibilityMarker(partitionKey, fingerprint);
+		if (localStorage.getItem(legacyMarker) !== 'ready') return false;
+		// Partition keys were already authority-issued. Migrate their earlier receipt only after the
+		// authority has supplied the tenant that owns it, so existing replicas do not block once more.
+		try {
+			localStorage.setItem(marker, 'ready');
+			localStorage.removeItem(legacyMarker);
+		} catch {
+			// The already-proven legacy receipt remains valid even if its best-effort migration fails.
+		}
+		return true;
 	} catch {
 		return false;
 	}
 };
 
-const markReplicaCompatible = (partitionKey: string, fingerprint: string): void => {
+const markReplicaCompatible = (
+	tenantId: string,
+	partitionKey: string,
+	fingerprint: string
+): void => {
 	try {
-		localStorage.setItem(replicaCompatibilityMarker(partitionKey, fingerprint), 'ready');
+		localStorage.setItem(replicaCompatibilityMarker(tenantId, partitionKey, fingerprint), 'ready');
 	} catch {
-		// This loader hint is optional; the durable replica remains authoritative.
+		// This successful-bootstrap receipt is optional; the durable replica remains authoritative.
 	}
 };
 
-const clearReplicaCompatibility = (partitionKey: string, fingerprint: string): void => {
+const clearReplicaCompatibility = (
+	tenantId: string,
+	partitionKey: string,
+	fingerprint: string
+): void => {
 	try {
-		localStorage.removeItem(replicaCompatibilityMarker(partitionKey, fingerprint));
+		localStorage.removeItem(replicaCompatibilityMarker(tenantId, partitionKey, fingerprint));
+		localStorage.removeItem(legacyReplicaCompatibilityMarker(partitionKey, fingerprint));
 	} catch {
-		// The database reset remains authoritative even when the loader hint cannot be removed.
+		// The database reset remains authoritative even when the receipt cannot be removed.
 	}
 };
 
@@ -1915,6 +1981,17 @@ export const createWorkspaceBootstrapController = (
 				accountedBytes: 0
 			};
 		}
+		const accessState = runtimeStates.access(runtime);
+		if (
+			accessState?.serverPartitionKey !== undefined &&
+			accessState.schemaFingerprint !== undefined
+		) {
+			clearReplicaCompatibility(
+				candidate.organization,
+				accessState.serverPartitionKey,
+				accessState.schemaFingerprint
+			);
+		}
 		await (options.deleteInactiveReplicaPartition ?? deleteInactivePGlitePartition)(
 			candidate
 		);
@@ -1931,6 +2008,7 @@ export const createWorkspaceBootstrapController = (
 					)
 				);
 				return persistedReplicaCompatibility(
+					status.partition.tenantId,
 					status.partition.key,
 					status.partition.schemaFingerprint
 				)
@@ -2661,8 +2739,8 @@ const startReplica = (
 			accessState?.syncStatus.markDisconnected();
 		};
 		let pendingMutationIds: ReadonlyArray<string> = [];
-		let mutationStatusPolling = false;
-		let mutationStatusRetry: ReturnType<typeof setTimeout> | undefined;
+		let mutationPushRetry: ReturnType<typeof setTimeout> | undefined;
+		let mutationPushRetryAt: number | undefined;
 		let paused = false;
 		let schemaBarrierPauses = 0;
 		let schemaBarrierTail = Promise.resolve();
@@ -2685,13 +2763,15 @@ const startReplica = (
 		};
 		const pauseIntake = (): void => {
 			closeSubscription();
-			if (mutationStatusRetry !== undefined) clearTimeout(mutationStatusRetry);
-			mutationStatusRetry = undefined;
+			if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+			mutationPushRetry = undefined;
+			mutationPushRetryAt = undefined;
 			paused = true;
 		};
 		const resumeIntake = (): void => {
 			if (!paused || schemaBarrierPauses > 0) return;
 			paused = false;
+			accessState?.scheduleMutationPush?.();
 			streamIfLeading();
 		};
 
@@ -2970,7 +3050,6 @@ const startReplica = (
 			collections?: ReadonlyArray<string>,
 			position?: { readonly cursor: SyncCursor; readonly generations: Readonly<Record<string, number>> }
 		) => void = () => undefined;
-		let requestMutationStatus: () => void = () => undefined;
 		let publishedDependencySignature: string | undefined;
 		/**
 		 * Every collection this workspace has — never the ones a page happens to have mounted.
@@ -2989,10 +3068,21 @@ const startReplica = (
 		const SUBSCRIPTION_LIMIT = 64;
 		const subscribedCollections = (): ReadonlyArray<string> =>
 			readableSubscriptionCollections(
-				Object.keys(runtimeStates.access(runtime)?.catalog ?? {}),
+				// `approval_request` is the sole runtime-owned replicated collection. Keeping it as
+				// the internal anchor lets an otherwise empty authored workspace hold the one live
+				// stream needed for private names-only invalidations. It is already the one explicit
+				// generic system exception, so this does not broaden the authored/public collection set.
+				[...Object.keys(runtimeStates.access(runtime)?.catalog ?? {}), 'approval_request'],
 				local.readable,
 				SUBSCRIPTION_LIMIT
 			);
+		const subscribedInvalidations = (): ReadonlyArray<string> => [
+			'agent_mailbox',
+			'agent_run',
+			'automation_run',
+			'chat_message',
+			'chat_session'
+		];
 		const rehydrationFacts = async () => {
 			const active = (await Effect.runPromise(coverage.listWindows()))
 				.filter(({ leaseCount }) => leaseCount > 0)
@@ -3084,14 +3174,19 @@ const startReplica = (
 				publishedDependencySignature = dependencySignature;
 				if (subscribed.length === 0) {
 					closeSubscription();
-					if (pendingMutationIds.length > 0) requestMutationStatus();
 					settleCatchUp();
 					return;
 				}
 				if (subscription === undefined) requestStream(subscribed, position);
 				else void rehydrationFacts()
 					.then((rehydration) =>
-						subscription?.update(subscribed, position, pendingMutationIds, rehydration)
+						subscription?.update(
+							subscribed,
+							subscribedInvalidations(),
+							position,
+							pendingMutationIds,
+							rehydration
+						)
 					)
 					.catch((cause) => options.onError?.(cause));
 			},
@@ -3190,48 +3285,6 @@ const startReplica = (
 		}
 		coordinator.requestPlannedHydration();
 
-		const pollWriteOnlyMutationStatus = async (): Promise<void> => {
-			if (mutationStatusPolling || pendingMutationIds.length === 0 || !leads() || paused) return;
-			mutationStatusPolling = true;
-			try {
-				const status = await Effect.runPromise(
-					transport.command('sync.partition', { pendingMutationIds: [...pendingMutationIds] }).pipe(
-						Effect.flatMap(Schema.decodeUnknownEffect(SyncPartitionStatusResponse))
-					)
-				);
-				if (status.partition.key !== accessState?.serverPartitionKey) {
-					await accessState?.rebootstrapPartition?.();
-					return;
-				}
-				await confirmMutationDeltas({
-					deltas: [],
-					mutationConfirmations: status.mutationConfirmations,
-					mutationRejections: status.mutationRejections
-				});
-				pendingMutationIds = [
-					...new Set((await Promise.all(
-						(await knownMutationJournals(runtime)).map((journal) =>
-							journal.pendingAuthoritativeMutationIds()
-						)
-					)).flat())
-				].toSorted().slice(0, 256);
-				// A response may be lost before the journal records whether the authority saw the write.
-				// The exact status probe is also the clock that lets `nextPushable` reclaim that stale
-				// `pushing` owner under the same idempotency key after its 30-second lease.
-				accessState?.scheduleMutationPush?.();
-			} finally {
-				mutationStatusPolling = false;
-			}
-			if (pendingMutationIds.length === 0 || !leads() || paused) return;
-			if (mutationStatusRetry !== undefined) clearTimeout(mutationStatusRetry);
-			mutationStatusRetry = setTimeout(() => {
-				mutationStatusRetry = undefined;
-				void pollWriteOnlyMutationStatus().catch((cause) => options.onError?.(cause));
-			}, 2_000);
-		};
-		requestMutationStatus = () => {
-			void pollWriteOnlyMutationStatus().catch((cause) => options.onError?.(cause));
-		};
 		const refreshMutationStreamFacts = async (): Promise<void> => {
 			const journals = await knownMutationJournals(runtime);
 			const ids = [...new Set((await Promise.all(
@@ -3242,22 +3295,24 @@ const startReplica = (
 			const collections = subscribedCollections();
 			if (collections.length === 0) {
 				closeSubscription();
-				if (ids.length > 0)
-					void pollWriteOnlyMutationStatus().catch((cause) => options.onError?.(cause));
 				return;
 			}
-			if (mutationStatusRetry !== undefined) clearTimeout(mutationStatusRetry);
-			mutationStatusRetry = undefined;
 			const [position, rehydration] = await Promise.all([
 				Effect.runPromise(coverage.position()),
 				rehydrationFacts()
 			]);
-			if (subscription === undefined) requestStream(collections, position);
-			else subscription.update(collections, position, pendingMutationIds, rehydration);
-			// The live stream can only confirm a mutation the authority received. If the request died
-			// before arrival there is no delta to wake us, so keep probing the exact pending identities
-			// until the stale journal owner is safely retried or a durable outcome retires it.
-			if (ids.length > 0) requestMutationStatus();
+					if (subscription === undefined) requestStream(collections, position);
+					else
+						subscription.update(
+							collections,
+							subscribedInvalidations(),
+							position,
+							pendingMutationIds,
+							rehydration
+						);
+			// Pending identities ride the one long-held stream and are retained for reconnect. A lost
+			// mutation response is recovered by replaying that idempotent mutation once its owner lease
+			// expires; it never creates a separate status-polling channel.
 		};
 		const installMutationRuntime = async (): Promise<void> => {
 			if (accessState === undefined || accessState.serverPartitionKey === undefined) return;
@@ -3305,8 +3360,35 @@ const startReplica = (
 				await refreshMutationStreamFacts();
 			};
 			await accessState.refreshMutationStatus();
-			const schedule = (): void => {
+			let schedule = (): void => undefined;
+			const scheduleMutationPushAt = (atEpochMs: number): void => {
+				if (mutationPushStopped || !leads() || paused) return;
+				if (mutationPushRetryAt !== undefined && mutationPushRetryAt <= atEpochMs) return;
+				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+				mutationPushRetryAt = atEpochMs;
+				mutationPushRetry = setTimeout(() => {
+					mutationPushRetry = undefined;
+					mutationPushRetryAt = undefined;
+					schedule();
+				}, Math.max(0, atEpochMs - Date.now()));
+				const portableTimer = mutationPushRetry as unknown as { unref?: () => void };
+				portableTimer.unref?.();
+			};
+			const scheduleInterruptedMutationReplay = async (): Promise<void> => {
+				const entries = (await Promise.all(journals.map((journal) => journal.entries()))).flat();
+				const replayAt = entries
+					.filter(({ pushState }) => pushState === 'pushing')
+					.map(({ lastAttemptAtEpochMs }) =>
+						(lastAttemptAtEpochMs ?? Date.now()) + MUTATION_PUSH_STALE_AFTER_MS + 1
+					)
+					.toSorted((left, right) => left - right)[0];
+				if (replayAt !== undefined) scheduleMutationPushAt(replayAt);
+			};
+			schedule = (): void => {
 				if (mutationPushStopped || mutationPushRunning || !leads()) return;
+				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+				mutationPushRetry = undefined;
+				mutationPushRetryAt = undefined;
 				mutationPushRunning = true;
 				void (async () => {
 					try {
@@ -3315,7 +3397,10 @@ const startReplica = (
 								journal,
 								mutation: await journal.nextPushable()
 							})))).find(({ mutation }) => mutation !== undefined);
-							if (pushable?.mutation === undefined || mutationPushStopped || !leads()) return;
+							if (pushable?.mutation === undefined || mutationPushStopped || !leads()) {
+								await scheduleInterruptedMutationReplay();
+								return;
+							}
 							const journal = pushable.journal;
 							const pushing = await journal.markPushing(pushable.mutation.idempotencyKey);
 							let settlement: Schema.Schema.Type<typeof CollectionMutationSettlementSchema>;
@@ -3326,7 +3411,7 @@ const startReplica = (
 										'collections.mutate',
 										mutationWireRequest(pushing),
 										CollectionMutationSettlementSchema
-									)
+									).pipe(Effect.timeout(MUTATION_PUSH_STALE_AFTER_MS))
 								);
 							} catch (cause) {
 								if (terminalMutationFailure(cause)) {
@@ -3340,12 +3425,16 @@ const startReplica = (
 									await accessState.reflectLocalMutation?.([
 										...new Set(pushing.overlay.map(({ row }) => row.collection))
 									]);
+									continue;
 								} else {
 									await journal.retry(pushing.idempotencyKey, cause);
+									// The only retry timer is derived from this failed submission. It replays the
+									// same idempotency key once; it never issues a status/read poll.
+									scheduleMutationPushAt(Date.now() + 2_000);
+									return;
 								}
-								return;
 							}
-				if (settlement.resolution === 'accepted') {
+							if (settlement.resolution === 'accepted') {
 								const reconciled = await journal.reconcile(
 									pushing.idempotencyKey,
 									{ kind: 'accepted' }
@@ -3416,17 +3505,21 @@ const startReplica = (
 			accessState.scheduleMutationPush = schedule;
 			accessState.stopMutationPush = () => {
 				mutationPushStopped = true;
+				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+				mutationPushRetry = undefined;
+				mutationPushRetryAt = undefined;
 			};
-				schedule();
-			};
-			yield* Effect.tryPromise(installMutationRuntime);
+			schedule();
+		};
+		yield* Effect.tryPromise(installMutationRuntime);
 		let physicalNamespaceShutdown: Promise<void> | undefined;
 		const stopPhysicalNamespace = (): Promise<void> => {
 			if (physicalNamespaceShutdown !== undefined) return physicalNamespaceShutdown;
 			physicalNamespaceShutdown = (async () => {
 				closeSubscription();
-				if (mutationStatusRetry !== undefined) clearTimeout(mutationStatusRetry);
-				mutationStatusRetry = undefined;
+				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+				mutationPushRetry = undefined;
+				mutationPushRetryAt = undefined;
 				if (runtime.local !== undefined) delete runtime.local.current;
 				accessState?.stopMutationPush?.();
 				accessState?.mutationJournalUnsubscribe?.();
@@ -3465,8 +3558,9 @@ const startReplica = (
 			if (partitionRebootstrap !== undefined) return partitionRebootstrap;
 			partitionRebootstrap = (async () => {
 				closeSubscription();
-				if (mutationStatusRetry !== undefined) clearTimeout(mutationStatusRetry);
-				mutationStatusRetry = undefined;
+				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+				mutationPushRetry = undefined;
+				mutationPushRetryAt = undefined;
 				if (runtime.local !== undefined) delete runtime.local.current;
 				if (accessState === undefined) return;
 				accessState.stopMutationPush?.();
@@ -3695,10 +3789,18 @@ const startReplica = (
 					}
 					subscription = subscribeToPartition({
 						collections,
+						invalidations: subscribedInvalidations(),
 						position,
 						pendingMutationIds,
 						rehydration,
 						onConnecting: () => accessState?.syncStatus.markSyncing(),
+						onInvalidation: (collections) => {
+							// These names were guest-authenticated when the stream was admitted. They have no
+							// replica windows: drop old response metadata and re-run only Bolt's registered
+							// internal `collections.findMany` reads against the tenant authority.
+							invalidateRuntime(runtime, collections);
+							Effect.runFork(announceToTabs(collections));
+						},
 				onDeltas: (batch) => {
 					if (schemaBarrierPauses > 0 || maintenance !== undefined) return;
 					if (accessState?.serverPartitionKey !== batch.partition.key) {
@@ -3717,13 +3819,10 @@ const startReplica = (
 							// Status-only confirmations have no readable row. Retire them only after the
 							// authoritative batch has committed to the replica.
 							await confirmMutationDeltas(batch);
-							// A tab can reload while a command response is in flight, leaving the durable
-							// journal in `pushing`. The explicit server confirmation is remembered, but
-							// intentionally cannot retire that entry until the interrupted-push lease is
-							// stale. Keep checking that exact status even while the main SSE is otherwise
-							// idle; waiting for another row delta leaves the overlay stuck forever.
-							if (batch.mutationConfirmations.length > 0 && pendingMutationIds.length > 0)
-								requestMutationStatus();
+							// A confirmation received on the one workspace stream is enough. If a command
+							// response was lost, its bounded owner lease replays the same idempotency key;
+							// there is no separate mutation-status polling channel.
+							accessState?.scheduleMutationPush?.();
 							if (batch.complete) {
 								settleCatchUp();
 								accessState?.syncStatus.markConnected();
@@ -3742,6 +3841,7 @@ const startReplica = (
 								const rehydration = await rehydrationFacts();
 								subscription.update(
 									subscribedCollections(),
+									subscribedInvalidations(),
 									{ cursor: batch.cursor, generations: batch.generations },
 									pendingMutationIds,
 									rehydration
@@ -3885,7 +3985,15 @@ const startReplica = (
 				// Demotion is possible in principle; drop the stream rather than stream in duplicate.
 				closeSubscription();
 			});
-		markReplicaCompatible(serverPartition.key, local.fingerprint);
+		// A compatible database is not a completed bootstrap. Persist the receipt only after the
+		// initial authoritative drain has completed, so a failed first catch-up remains retryable.
+		void initialCatchUp.then(
+			() =>
+				markReplicaCompatible(serverPartition.tenantId, serverPartition.key, local.fingerprint),
+			// Readiness failure leaves no receipt and is owned by the bootstrap controller. Consuming it
+			// here prevents this side-effect branch from creating an unhandled rejected Promise.
+			() => undefined
+		);
 
 		const replicaTier: LocalReplica['tier'] =
 			options.storage === undefined || options.storage.tier === 'server-only'
@@ -3903,7 +4011,11 @@ const startReplica = (
 				: { storageBudget: options.storage.budget }),
 			leader: leads,
 			clearAndRebuild: () => {
-				clearReplicaCompatibility(serverPartition.key, local.fingerprint);
+				clearReplicaCompatibility(
+					serverPartition.tenantId,
+					serverPartition.key,
+					local.fingerprint
+				);
 				return Effect.runPromise(rebuildReplica());
 			},
 			initialCatchUpReady: initialCatchUp,
@@ -3925,7 +4037,9 @@ const startReplica = (
 				if (typeof document !== 'undefined') {
 					document.removeEventListener('visibilitychange', onDocumentVisibility);
 				}
-				if (mutationStatusRetry !== undefined) clearTimeout(mutationStatusRetry);
+				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+				mutationPushRetry = undefined;
+				mutationPushRetryAt = undefined;
 				closeSubscription();
 				for (const demand of adjacentHydration.values()) demand.release();
 				adjacentHydration.clear();

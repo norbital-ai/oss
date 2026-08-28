@@ -350,8 +350,6 @@ export const ActivationCommands = {
 		[
 			'collections.resume',
 			'collections.discard',
-			'agents.execute',
-			'agents.continue',
 			'notifications.drain',
 			'integrations.pull',
 			'integrations.flush',

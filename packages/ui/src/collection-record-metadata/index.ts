@@ -1,6 +1,7 @@
 export { default as CollectionRecordMetadataView } from './collection-record-metadata.svelte';
 export {
 	collectionRecordMetadataDescription,
+	collectionRecordLeadingAccent,
 	collectionRecordMutationReason,
 	collectionRecordRestriction,
 	resolveCollectionRecordMetadata,
@@ -9,6 +10,7 @@ export {
 	type CollectionRecordMetadata,
 	type CollectionRecordMetadataResolver,
 	type CollectionRecordMetadataSource,
+	type CollectionRecordLeadingAccent,
 	type CollectionRecordMutation,
 	type CollectionRecordRestrictionMetadata,
 	type CollectionRecordSystemMetadataCopy,

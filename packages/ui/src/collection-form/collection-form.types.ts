@@ -116,7 +116,7 @@ export interface CollectionFormProps<
 	TCollections extends CollectionRegistry,
 	TName extends CollectionFormName<TCollections>
 > {
-	client: CollectionDbClient<TCollections>;
+	client: CollectionDbClient<TCollections, TName>;
 	collection: TName;
 	/**
 	 * The row being edited, or a partial seed for a new one.

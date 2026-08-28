@@ -105,6 +105,7 @@ describe('partition dependency subscription', () => {
 
 		subscription.update(
 			['teams', 'jobs'],
+			[],
 			{ cursor: { xid: 1, sequence: 4 }, generations: { jobs: 4 } },
 			['mutation-2'],
 			{ activeWindows: 1, rowsPerWindow: 20, estimatedBytesPerRow: 128 }

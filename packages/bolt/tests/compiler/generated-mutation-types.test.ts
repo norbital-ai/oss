@@ -98,6 +98,17 @@ describe('generated declarative mutation types', () => {
 		expect(rendered).toContain('readonly automations: AutomationClientApi<AutomationRegistry>');
 	});
 
+	it('keeps the generated authored client free of private runtime capabilities', () => {
+		const rendered = renderClientDeclaration([], '/workspace');
+
+		expect(rendered).toContain('PublicPlatformSchema');
+		expect(rendered).toContain('type PublicCollectionName = keyof Collections & string');
+		expect(rendered).not.toContain('SystemClientApi');
+		expect(rendered).not.toContain('WorkspaceClientRuntime');
+		expect(rendered).not.toContain('readonly system:');
+		expect(rendered).not.toContain('readonly runtime:');
+	});
+
 	it('renders the representation contract', () => {
 		const rendered = renderCollectionTypes('accounts');
 

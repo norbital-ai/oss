@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	collectionRecordLeadingAccent,
 	collectionRecordMutationReason,
 	resolveCollectionRecordMetadata
 } from '../src/collection-record-metadata/collection-record-metadata.ts';
@@ -67,4 +68,16 @@ test('flags never restrict mutations and restrictions apply only to declared ope
 
 test('an empty protected approval field injects no system metadata', () => {
 	assert.deepEqual(resolveCollectionRecordMetadata({ approval_id: '' }, undefined, copy), []);
+});
+
+test('warning metadata produces the same leading accent for every collection surface', () => {
+	const metadata = resolveCollectionRecordMetadata(
+		{},
+		[{ kind: 'flag', tone: 'warning', label: 'Suspicious', description: 'Review this record.' }],
+		copy
+	);
+	assert.deepEqual(collectionRecordLeadingAccent(metadata), {
+		markerClass: 'w-1 bg-warning',
+		tooltip: 'Review this record.'
+	});
 });

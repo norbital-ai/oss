@@ -6,10 +6,12 @@ import { createAgentClient } from '../../src/client/ui/agent/client.svelte.js';
 import { emptyAgentClient, settledQuery } from './agent-client-fixture.js';
 
 describe('agent actions', () => {
-	it('atomically enqueues a conversation without polling or history reconstruction commands', async () => {
+	it('returns after durable admission and starts direct execution without waiting for the run', async () => {
 		const commands: string[] = [];
+		const neverSettles = new Promise<never>(() => undefined);
 		const command = vi.fn((name: string, _input: Schema.Json) => {
 			commands.push(name);
+			if (name === 'agents.run') return neverSettles;
 			return Promise.resolve({
 				conversationId: 'conversation-streaming',
 				taskId: 'task-streaming',
@@ -44,12 +46,90 @@ describe('agent actions', () => {
 			chatId: 'conversation-streaming',
 			taskId: 'task-streaming'
 		});
-		expect(commands).toEqual(['agents.enqueue']);
+		expect(commands).toEqual(['agents.enqueue', 'agents.run']);
 		expect(command.mock.calls[0]?.[1]).toEqual(
 			expect.objectContaining({
 				conversationId: 'conversation-streaming',
 				turnId: 'task-streaming'
 			})
 		);
+		expect(command.mock.calls[1]?.[1]).toEqual({
+			conversationId: 'conversation-streaming'
+		});
+	});
+
+	it('kicks the direct lane for every admitted message while the server owns FIFO', async () => {
+		const commands: Array<{ name: string; input: Schema.Json }> = [];
+		let run = 0;
+		const firstRun = new Promise<never>(() => undefined);
+		const command = vi.fn((name: string, input: Schema.Json) => {
+			commands.push({ name, input });
+			if (name === 'agents.run') {
+				run += 1;
+				return run === 1
+					? firstRun
+					: Promise.resolve({ conversationId: 'conversation-fifo', status: 'busy' });
+			}
+			const turnId =
+				input !== null && typeof input === 'object' && !Array.isArray(input)
+					? Reflect.get(input, 'turnId')
+					: undefined;
+			return Promise.resolve({
+				conversationId: 'conversation-fifo',
+				taskId: turnId,
+				turnId,
+				status: 'queued'
+			});
+		});
+		const agent = createAgentClient(
+			{
+				client: emptyAgentClient({ command }),
+				subject: {
+					userId: 'admin-1',
+					tenantId: 'tenant-1',
+					teamPath: ['admin'],
+					policies: []
+				},
+				agentName: 'web'
+			},
+			{ agentModels: settledQuery({ defaultModel: '', options: [] }) }
+		);
+
+		await Effect.runPromise(
+			agent.start({
+				message: 'First',
+				runId: 'conversation-fifo',
+				turnId: 'turn-1'
+			})
+		);
+		await Effect.runPromise(
+			agent.start({
+				message: 'Second',
+				runId: 'conversation-fifo',
+				turnId: 'turn-2'
+			})
+		);
+
+		expect(commands).toEqual([
+			{
+				name: 'agents.enqueue',
+				input: expect.objectContaining({
+					conversationId: 'conversation-fifo',
+					turnId: 'turn-1',
+					message: 'First'
+				})
+			},
+			{ name: 'agents.run', input: { conversationId: 'conversation-fifo' } },
+			{
+				name: 'agents.enqueue',
+				input: expect.objectContaining({
+					conversationId: 'conversation-fifo',
+					turnId: 'turn-2',
+					message: 'Second'
+				})
+			},
+			{ name: 'agents.run', input: { conversationId: 'conversation-fifo' } }
+		]);
+		expect(commands.some(({ name }) => name === 'agents.history')).toBe(false);
 	});
 });

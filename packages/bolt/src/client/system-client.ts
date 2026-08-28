@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import { AgentEnqueueResult } from '#lib/runtime/agents/agent-schemas.js';
+import { AgentEnqueueResult, AgentRunResult } from '#lib/runtime/agents/agent-schemas.js';
 import { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
 import { WorkspaceAccessSchema } from '#lib/client/ui/settings/rows.js';
 import { AiModelCatalogSchema } from '#lib/client/ui/agent/agent-model-state.svelte.js';
@@ -9,6 +9,7 @@ import {
 	ManifestSchema
 } from '#lib/client/ui/studio/studio-state.js';
 import type { RemoteQuery, WorkspaceClientRuntime } from '#lib/client/contracts.js';
+import { stableStringify } from '#lib/client/replica/query-cache.js';
 
 const EmptyInput = Schema.Struct({});
 const AgentOpenInput = Schema.Struct({
@@ -22,6 +23,7 @@ const AgentEnqueueInput = Schema.Struct({
 	message: Schema.String,
 	documents: Schema.optionalKey(Schema.Array(ChatDocumentRef))
 });
+const AgentRunInput = Schema.Struct({ conversationId: Schema.NonEmptyString });
 const AgentLaneInput = Schema.Struct({ conversationId: Schema.NonEmptyString });
 const AgentDequeueInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
@@ -133,6 +135,7 @@ export type SystemClientApi = Readonly<{
 			CommandInput<typeof AgentEnqueueInput>,
 			CommandOutput<typeof AgentEnqueueResult>
 		>;
+		run: SystemOperation<CommandInput<typeof AgentRunInput>, CommandOutput<typeof AgentRunResult>>;
 		dequeue: SystemOperation<
 			CommandInput<typeof AgentDequeueInput>,
 			CommandOutput<typeof AgentDequeueResponse>
@@ -272,6 +275,28 @@ const query =
 	(input, signal) =>
 		make(name, input, inputSchema, outputSchema, signal);
 
+/** One release-owned query object per semantic input for the lifetime of its workspace client. */
+const memoizedQuery = <
+	Input extends Schema.ConstraintDecoder<Schema.Json>,
+	Output extends Schema.ConstraintDecoder<Schema.Json>
+>(
+	make: SystemQueryFactory,
+	name: string,
+	inputSchema: Input,
+	outputSchema: Output
+): SystemQuery<CommandInput<Input>, CommandOutput<Output>> => {
+	const held = new Map<string, RemoteQuery<CommandOutput<Output>>>();
+	return (input, signal) => {
+		if (signal !== undefined) return make(name, input, inputSchema, outputSchema, signal);
+		const key = stableStringify(input);
+		const existing = held.get(key);
+		if (existing !== undefined) return existing;
+		const created = make(name, input, inputSchema, outputSchema);
+		held.set(key, created);
+		return created;
+	};
+};
+
 /** Builds the typed system namespace attached to every generated workspace client. */
 export const createSystemClient = (
 	runtime: WorkspaceClientRuntime,
@@ -280,6 +305,7 @@ export const createSystemClient = (
 	agents: {
 		open: command(runtime, 'agents.open', AgentOpenInput, AgentOpenResponse),
 		enqueue: command(runtime, 'agents.enqueue', AgentEnqueueInput, AgentEnqueueResult),
+		run: command(runtime, 'agents.run', AgentRunInput, AgentRunResult),
 		dequeue: command(runtime, 'agents.dequeue', AgentDequeueInput, AgentDequeueResponse),
 		reorder: command(runtime, 'agents.reorder', AgentReorderInput, AgentReorderResponse),
 		interrupt: command(runtime, 'agents.interrupt', AgentLaneInput, AgentInterruptResponse),
@@ -344,7 +370,12 @@ export const createSystemClient = (
 	},
 	sync: { shape: query(makeQuery, 'sync.shape', EmptyInput, SyncShapeResponse) },
 	workspace: {
-		manifest: query(makeQuery, 'workspace.manifest', EmptyInput, ManifestSchema),
-		authoringManifest: query(makeQuery, 'workspace.authoringManifest', EmptyInput, ManifestSchema)
+		manifest: memoizedQuery(makeQuery, 'workspace.manifest', EmptyInput, ManifestSchema),
+		authoringManifest: memoizedQuery(
+			makeQuery,
+			'workspace.authoringManifest',
+			EmptyInput,
+			ManifestSchema
+		)
 	}
 });

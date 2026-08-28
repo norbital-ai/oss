@@ -40,38 +40,93 @@ export class AutomationStopped extends Schema.TaggedError<AutomationStopped>()(
 	}
 }
 
+export type AutomationStartOptions = Readonly<{
+	readonly afterMillis?: number | undefined;
+	readonly scope?: Readonly<Record<string, Schema.Json>> | undefined;
+	readonly taskId?: string | undefined;
+	readonly parentDepth?: number | undefined;
+}>;
+
+export type AutomationStartRequest = Readonly<{
+	readonly effectId: EffectIdType;
+	readonly name: string;
+	readonly input: Schema.Json;
+	readonly options?: AutomationStartOptions;
+}>;
+
 /**
  * Starting an automation, and asking what became of one.
  *
  * There used to be a second table under this — `bolt_automation_runs`, with `effect_id`, `task_id`,
  * `state ∈ {queued, scheduled, resumed, cancelled}` and `input`. Every one of those columns shadowed
  * a column of `bolt_task`, and the shadow was written beside a facility call that nothing executed:
- * an automation run was recorded twice and performed zero times. The run *is* the task, so the
- * bookkeeping is gone and this service is now a thin naming layer over the queue.
+ * an automation run was recorded twice and performed zero times. Immediate runs now use the private
+ * task row only as their durable input/lifecycle record and execute in the request that admitted
+ * them. Only an explicit schedule or delay enters the timer queue.
  */
 
 export type Interface = Readonly<{
 	readonly register: (name: string) => Effect.Effect<void, Workspace.WorkspaceLookupError>;
 	/**
-	 * Queue one run of a named automation.
+	 * Admits one run of a named automation.
 	 *
 	 * It takes no `Subject`, and that absence is the change. It used to take the caller's — so the
 	 * same automation ran with whatever authority whoever tripped it happened to hold, so a highly
 	 * privileged caller could accidentally lend all of its grants to the run. An
 	 * automation's authority is a property of the automation: the policies its declaration names,
-	 * minted here, at the runtime's own enqueue point.
+	 * minted here, at the runtime's own admission point.
 	 */
 	readonly start: (
 		effectId: EffectIdType,
 		name: string,
 		input: Schema.Json,
-		/** How long to wait before it becomes due. Absent means as soon as a tick can take it. */
-		options?: Readonly<{ readonly afterMillis?: number | undefined }>
+		/** How long to wait before it becomes due. Absent means direct execution by this caller. */
+		options?: AutomationStartOptions
 	) => Effect.Effect<
 		string,
 		Database.FacilityError | Workspace.WorkspaceLookupError | InvocationBudget.NestingLimitExceeded
 	>;
+	/** Admits many independent starts in one database transaction and emits at most one timer wake. */
+	readonly startMany: (
+		effectId: EffectIdType,
+		runs: ReadonlyArray<AutomationStartRequest>
+	) => Effect.Effect<
+		ReadonlyArray<Readonly<{ readonly name: string; readonly taskId: string }>>,
+		Database.FacilityError | Workspace.WorkspaceLookupError | InvocationBudget.NestingLimitExceeded
+	>;
 	readonly runStep: Interface['start'];
+	/** Runs one already-admitted immediate automation body without a scheduler or wake hop. */
+	readonly execute: <E, R>(
+		effectId: EffectIdType,
+		name: string,
+		taskId: string,
+		run: (input: Schema.Json, attemptEffectId: string) => Effect.Effect<Schema.Json, E, R>
+	) => Effect.Effect<
+		Schema.Json | undefined,
+		E | Database.FacilityError | Workspace.WorkspaceLookupError,
+		R
+	>;
+	/** Executes already-admitted immediate automation bodies with batched claim and settlement. */
+	readonly executeMany: <E, R>(
+		effectId: EffectIdType,
+		runs: ReadonlyArray<Readonly<{ readonly name: string; readonly taskId: string }>>,
+		run: (
+			name: string,
+			taskId: string,
+			input: Schema.Json,
+			attemptEffectId: string
+		) => Effect.Effect<Schema.Json, E, R>
+	) => Effect.Effect<
+		ReadonlyArray<
+			Readonly<{
+				readonly name: string;
+				readonly taskId: string;
+				readonly exit: import('effect').Exit.Exit<Schema.Json, E>;
+			}>
+		>,
+		Database.FacilityError | Workspace.WorkspaceLookupError,
+		R
+	>;
 	readonly status: (
 		effectId: EffectIdType,
 		taskId: string
@@ -124,12 +179,11 @@ export const layer = Layer.effect(
 		const workspace = yield* Workspace.Service;
 		const budget = yield* InvocationBudget.Service;
 		const tenant = yield* TenantScope.Service;
-		const start = Effect.fn('Automations.start')(function* (
-			effectId: EffectIdType,
-			name: string,
-			input: Schema.Json,
-			options?: Readonly<{ readonly afterMillis?: number | undefined }>
+		const prepareStart = Effect.fn('Automations.prepareStart')(function* (
+			request: AutomationStartRequest,
+			nowEpochMs: number
 		) {
+			const { effectId, name, input, options } = request;
 			const declaration = yield* workspace.automation(name);
 			const subject = automationSubject(declaration, tenant.tenantId);
 			// Checked before anything is written, so a chain that has gone too deep leaves no queued row
@@ -140,8 +194,11 @@ export const layer = Layer.effect(
 			// and "inherit the parent's remaining time" has no meaning for work that starts after the
 			// parent has already returned. The other half of the cycle break is that an automation does
 			// not re-trigger on its own writes.
-			const depth = yield* budget.nest(`automation ${name}`);
-			// `bolt_run_as` is stamped here, at the runtime's own enqueue point, so the task the handler
+			const depth = yield* InvocationBudget.make(
+				options?.parentDepth ?? budget.depth,
+				budget.limit
+			).nest(`automation ${name}`);
+			// `bolt_run_as` is stamped here, at the runtime's own admission point, so the handler
 			// later sees was written by this service — a caller's own `bolt_run_as` claim is overwritten,
 			// never forwarded, and what it is overwritten *with* is the automation's own declared
 			// authority rather than whoever's finger was on the trigger. `bolt_depth` rides the same payload, which is why the queue needs no depth
@@ -153,6 +210,7 @@ export const layer = Layer.effect(
 					// `scope`. Spreading a struct input here put `project_id` beside `bolt_run_as`; the
 					// queued turn then decoded `args` and failed before the automation could emit progress.
 					args: input,
+					scope: options?.scope ?? {},
 					bolt_run_as: subject
 				},
 				depth
@@ -160,14 +218,15 @@ export const layer = Layer.effect(
 			// The id the caller gets back is the task's effect id, which is also its idempotency key. A
 			// replayed start therefore names the row the first one wrote, rather than minting a second
 			// identity for a row that was never inserted.
-			const taskId = `${effectId}:start`;
+			const taskId = options?.taskId ?? `${effectId}:start`;
 			const afterMillis = options?.afterMillis;
 			const runAtEpochMs =
-				afterMillis === undefined || afterMillis <= 0
-					? undefined
-					: (yield* Clock.currentTimeMillis) + afterMillis;
-			yield* queue.enqueue(EffectId.make(taskId), [
-				{
+				afterMillis === undefined || afterMillis <= 0 ? undefined : nowEpochMs + afterMillis;
+			return {
+				name,
+				taskId,
+				immediate: runAtEpochMs === undefined,
+				enqueue: {
 					command: `automations.${name}`,
 					input: enqueued,
 					effectId: taskId,
@@ -175,15 +234,75 @@ export const layer = Layer.effect(
 					// no delay at all are the same row rather than two spellings of one.
 					...(runAtEpochMs === undefined ? {} : { runAtEpochMs })
 				}
-			]);
-			return taskId;
+			} as const;
 		});
+		const startMany = Effect.fn('Automations.startMany')(function* (
+			effectId: EffectIdType,
+			runs: ReadonlyArray<AutomationStartRequest>
+		) {
+			if (runs.length === 0) return [];
+			const nowEpochMs = yield* Clock.currentTimeMillis;
+			const prepared = yield* Effect.forEach(runs, (run) => prepareStart(run, nowEpochMs));
+			const immediate = prepared.filter((run) => run.immediate).map((run) => run.enqueue);
+			const delayed = prepared.filter((run) => !run.immediate).map((run) => run.enqueue);
+			if (immediate.length > 0) {
+				yield* queue.admit(EffectId.make(`${effectId}:immediate`), immediate);
+			}
+			if (delayed.length > 0) {
+				// A real delay is the one case in which a timer owns waiting. Once due, the task runner
+				// invokes the authored body directly; it does not schedule another body step.
+				yield* queue.enqueue(EffectId.make(`${effectId}:delayed`), delayed);
+			}
+			return prepared.map(({ name, taskId }) => ({ name, taskId }));
+		});
+		const start = Effect.fn('Automations.start')(function* (
+			effectId: EffectIdType,
+			name: string,
+			input: Schema.Json,
+			options?: AutomationStartOptions
+		) {
+			const [admitted] = yield* startMany(effectId, [
+				{ effectId, name, input, ...(options === undefined ? {} : { options }) }
+			]);
+			if (admitted === undefined) return `${effectId}:start`;
+			return admitted.taskId;
+		});
+		const executeMany: Interface['executeMany'] = (effectId, runs, run) =>
+			Effect.gen(function* () {
+				for (const { name } of runs) yield* workspace.automation(name);
+				const nameByTaskId = new Map(runs.map(({ name, taskId }) => [taskId, name]));
+				const outcomes = yield* queue.runDirectMany(
+					effectId,
+					runs.map(({ name, taskId }) => ({ taskId, command: `automations.${name}` })),
+					(task, attemptEffectId) => {
+						const name = nameByTaskId.get(task.effectId);
+						if (name === undefined)
+							return Effect.die(new Error(`Unknown direct task ${task.effectId}`));
+						return run(name, task.effectId, task.input, attemptEffectId);
+					}
+				);
+				return outcomes.flatMap(({ task, exit }) => {
+					const name = nameByTaskId.get(task.effectId);
+					return name === undefined ? [] : [{ name, taskId: task.effectId, exit }];
+				});
+			});
 		return Service.of({
 			register: Effect.fn('Automations.register')(function* (name) {
 				yield* workspace.automation(name);
 			}),
 			start,
+			startMany,
 			runStep: start,
+			execute: Effect.fn('Automations.execute')(function* (effectId, name, taskId, run) {
+				yield* workspace.automation(name);
+				return yield* queue.runDirect(
+					effectId,
+					taskId,
+					`automations.${name}`,
+					(task, attemptEffectId) => run(task.input, attemptEffectId)
+				);
+			}),
+			executeMany,
 			status: queue.status,
 			progress: queue.progress,
 			stop: Effect.fn('Automations.stop')(function* (effectId, name, taskId) {
@@ -191,10 +310,11 @@ export const layer = Layer.effect(
 				// the queue predicate. The exact command then scopes the id to this automation only.
 				yield* workspace.automation(name);
 				yield* queue.stop(effectId, taskId, `automations.${name}`);
+				yield* queue.interruptActive(EffectId.make(`${effectId}:interrupt`), taskId);
 			}),
 			resume: Effect.fn('Automations.resume')(function* (effectId, name, taskId) {
 				yield* workspace.automation(name);
-				yield* queue.resume(effectId, taskId, `automations.${name}`);
+				yield* queue.resumeDirect(effectId, taskId, `automations.${name}`);
 			})
 		});
 	})

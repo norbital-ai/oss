@@ -222,10 +222,7 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 						};
 			return Promise.resolve({ _tag: 'Success', value: { rows: [resolved], affectedRows: 0 } });
 		}
-		if (
-			request._tag === 'Query' &&
-			request.sql.startsWith('update bolt_sync_partition_registry')
-		) {
+		if (request._tag === 'Query' && request.sql.startsWith('update bolt_sync_partition_registry')) {
 			return Promise.resolve({
 				_tag: 'Success',
 				value: {
@@ -435,7 +432,7 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 		) {
 			browserMutationApplied = true;
 			const completion = request.statements.find((statement) =>
-				statement.sql.includes('update bolt_browser_mutation set status = \'terminal\'')
+				statement.sql.includes("update bolt_browser_mutation set status = 'terminal'")
 			);
 			if (completion !== undefined) {
 				const key = browserMutationLedgerKey(completion.parameters);
@@ -690,13 +687,13 @@ describe('runnable Bolt vertical slice', () => {
 			_tag: 'Success',
 			response: { value: { status: 'queued', turnId: 'turn-1' } }
 		});
-		const result = await invoke('agents.execute', {
-			conversationId: 'conversation-1',
-			turnId: 'turn-1'
+		const result = await invoke('agents.run', {
+			subject,
+			conversationId: 'conversation-1'
 		});
 		expect(result).toMatchObject({
 			_tag: 'Success',
-			response: { value: { output: { text: 'Hello from the HR agent' }, status: 'completed' } }
+			response: { value: { conversationId: 'conversation-1', status: 'drained' } }
 		});
 	});
 
@@ -847,8 +844,6 @@ describe('runnable Bolt vertical slice', () => {
 			// cron is declared by a release and only the guest can read a release. Schedules are now
 			// rows in the tenant's own `bolt_schedule`, and what a host is told is one number.
 			registrations: [
-				{ command: 'agents.continue' },
-				{ command: 'agents.execute' },
 				// A refused approval has cleanup to do — the provisional row it locked. Routed beside
 				// `resume` because a rejection is followed up as deliberately as an approval is.
 				{ command: 'collections.discard' },
@@ -866,6 +861,6 @@ describe('runnable Bolt vertical slice', () => {
 			// has to cost nothing rather than a heartbeat.
 			nextDueAtEpochMs: null
 		});
-		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(10);
+		expect(taskRequests.filter((request) => request._tag === 'Register')).toHaveLength(8);
 	});
 });

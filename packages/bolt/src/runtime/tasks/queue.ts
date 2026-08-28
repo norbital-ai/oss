@@ -200,6 +200,20 @@ const NextDueRow = Schema.Struct({ next_due_at: Schema.NullOr(Schema.String) });
 const decodeDueScheduleRow = Schema.decodeUnknownResult(DueScheduleRow);
 const decodeClaimedTaskRow = Schema.decodeUnknownResult(ClaimedTaskRow);
 
+/** Decodes the exact row shape returned by either scheduler or direct claims. */
+export const decodeTaskRow = (row: unknown): TaskRow | undefined => {
+	const decoded = decodeClaimedTaskRow(row);
+	if (Result.isFailure(decoded)) return undefined;
+	return {
+		id: decoded.success.id,
+		command: decoded.success.command,
+		input: decoded.success.input,
+		attempts: decoded.success.attempts,
+		maxAttempts: decoded.success.max_attempts,
+		effectId: decoded.success.effect_id
+	};
+};
+
 /** Reads a timestamp the facility answered with. Every value crossing that seam is JSON-safe. */
 const epochMsOf = (value: string): number | undefined => {
 	const parsed = Date.parse(value);
@@ -292,6 +306,73 @@ export const enqueueStatements = (enqueues: ReadonlyArray<Enqueue>): ReadonlyArr
 			)
 		];
 	});
+
+/**
+ * Claims one explicitly named run for immediate execution.
+ *
+ * This is intentionally not a due-queue operation: it cannot select another row, advances no
+ * schedule, emits no wake, and holds no lease while the authored body waits on I/O. The row is only
+ * the durable lifecycle/input record for the direct request that already owns execution.
+ */
+export const directClaimStatement = (taskId: string, command: string): Statement =>
+	toStatement(
+		composer
+			.update(boltTask)
+			.set({
+				status: 'running',
+				attempts: increment(boltTask.attempts),
+				error: null,
+				updated_at: dbNow()
+			})
+			.where(
+				and(
+					eq(boltTask.effect_id, taskId),
+					eq(boltTask.command, command),
+					inArray(boltTask.status, ['pending', 'resuming'])
+				)
+			)
+			.returning({
+				id: boltTask.id,
+				command: boltTask.command,
+				input: boltTask.input,
+				attempts: boltTask.attempts,
+				maxAttempts: boltTask.max_attempts,
+				effectId: boltTask.effect_id
+			})
+			.toSQL()
+	);
+
+/** Records a direct run exactly once; a concurrent stop wins the `running` lifecycle fence. */
+export const directSettleStatement = (
+	task: TaskRow,
+	outcome:
+		| Readonly<{ readonly _tag: 'Done'; readonly result: Schema.Json }>
+		| Readonly<{
+				readonly _tag: 'Failed';
+				readonly error: string;
+		  }>
+): Statement =>
+	toStatement(
+		composer
+			.update(boltTask)
+			.set(
+				outcome._tag === 'Done'
+					? {
+							status: 'done',
+							result: storedJson(outcome.result),
+							error: null,
+							updated_at: dbNow()
+						}
+					: {
+							status: 'failed',
+							result: null,
+							error: outcome.error,
+							updated_at: dbNow()
+						}
+			)
+			.where(and(eq(boltTask.id, task.id), eq(boltTask.status, 'running')))
+			.toSQL()
+	);
 
 /** Reads the lifecycle snapshot exposed to a running automation. */
 export const statusStatement = (taskId: string): Statement =>

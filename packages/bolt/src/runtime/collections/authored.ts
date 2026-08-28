@@ -181,6 +181,8 @@ export const runAuthoredHandler = <A>(
 
 /** Read operations shared by authored handlers and policy decisions. */
 export type AuthoringReadOps = Readonly<{
+	/** Exact generic database members structurally visible to authored code. */
+	readonly allowedCollections: ReadonlySet<string>;
 	readonly findMany: (
 		collection: string,
 		input: Readonly<Record<string, unknown>>
@@ -214,12 +216,12 @@ export type AuthoringOps = AuthoringReadOps &
 			values: Readonly<Record<string, unknown>>
 		) => Effect.Effect<void, unknown, never>;
 		/**
-		 * Starts a declared automation in the background.
+		 * Starts a declared automation in the current I/O flow, or waits until an explicit delay.
 		 *
 		 * The third door an author has, beside `{ schedule }` and `{ trigger }`, and the only one that
-		 * says "from code, later, with retry". It is deliberately not a task API: a task is not a thing an
-		 * author has, and a second way to start background work would compete with the automations the
-		 * workspace already declares.
+		 * says "from code". It is deliberately not a task API: a task is not a thing an author has, and
+		 * a second way to start background work would compete with the automations the workspace already
+		 * declares. With no `after`, the body begins here; with `after`, only the wait is scheduled.
 		 */
 		readonly runAutomation: (
 			name: string,
@@ -254,6 +256,7 @@ export const guardAuthoringOps = (
 	ops: AuthoringOps,
 	guard: AuthoredOperationGuard
 ): AuthoringOps => ({
+	allowedCollections: ops.allowedCollections,
 	findMany: (collection, input) =>
 		guard(`db.${collection}.findMany`).pipe(Effect.andThen(ops.findMany(collection, input))),
 	findFirst: (collection, input) =>
@@ -447,28 +450,6 @@ export const afterMillisOf = (after: string | number | undefined): number | unde
 const decodeResearchText = Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }));
 
 /**
- * The `runAutomation` member of the authoring api, owned in one place.
- *
- * Two builders hand out `AuthoringOps`: the invocation-bound one below, and the one the
- * collections layer assembles from its own internals. Both offer the same behaviour here, down to
- * the refusal an author reads when the delay does not parse, so it is written once.
- */
-export const runAutomationOp =
-	(effectId: EffectIdType, automations: Automations.Interface): AuthoringOps['runAutomation'] =>
-	(name, input, options) =>
-		Effect.gen(function* () {
-			const after = options?.after;
-			const afterMillis = afterMillisOf(after);
-			if (afterMillis === undefined) {
-				return yield* new AuthoredRefusal({
-					message: `"${String(after)}" is not a delay ${name} can wait — pass milliseconds, '5 seconds', '1 hour', or another Effect duration.`
-				});
-			}
-			const taskId = yield* automations.start(effectId, name, input, { afterMillis });
-			return { taskId };
-		});
-
-/**
  * The `infer` member of the authoring api, owned in one place.
  *
  * Structured inference is one behaviour — an optional grounding turn whose prose is fed back in as
@@ -539,13 +520,19 @@ const collectionReadApi = (
 	findNearest: (input: Readonly<Record<string, unknown>>) => ops.findNearest(collection, input)
 });
 
-const databaseApi = (collection: (name: string) => Readonly<Record<string, unknown>>): object =>
+const databaseApi = (
+	allowedCollections: ReadonlySet<string>,
+	collection: (name: string) => Readonly<Record<string, unknown>>
+): object =>
 	new Proxy(Object.create(null) as object, {
-		get: (_target, property) => (typeof property === 'string' ? collection(property) : undefined)
+		get: (_target, property) =>
+			typeof property === 'string' && allowedCollections.has(property)
+				? collection(property)
+				: undefined
 	});
 
 export const makeAuthoringApi = (ops: AuthoringOps): RuntimeAuthoringApi => {
-	const database = databaseApi((collection) => {
+	const database = databaseApi(ops.allowedCollections, (collection) => {
 		const reads = collectionReadApi(ops, collection);
 		return collection === 'approval_request'
 			? Object.freeze(reads)
@@ -572,7 +559,9 @@ export const makeAuthoringApi = (ops: AuthoringOps): RuntimeAuthoringApi => {
 /** Builds the smaller, read-only capability object supplied to policy decisions. */
 export const makePolicyDecisionApi = (ops: AuthoringReadOps, subject: Subject): unknown =>
 	Object.freeze({
-		db: databaseApi((collection) => Object.freeze(collectionReadApi(ops, collection))),
+		db: databaseApi(ops.allowedCollections, (collection) =>
+			Object.freeze(collectionReadApi(ops, collection))
+		),
 		requestor: Object.freeze({
 			id: subject.userId,
 			userId: subject.userId,
@@ -597,7 +586,8 @@ export const makeBoundAuthoringOps = (
 	collections: CollectionsInterface,
 	ai: AIInterface,
 	files: FilesInterface,
-	automations: Automations.Interface
+	automations: Automations.Interface,
+	runAutomation?: AuthoringOps['runAutomation']
 ): AuthoringOps => {
 	type QueryInput = Parameters<CollectionsInterface['findMany']>[2];
 	type NearestQueryInput = Parameters<CollectionsInterface['findNearest']>[2];
@@ -659,6 +649,7 @@ export const makeBoundAuthoringOps = (
 			};
 		});
 	return {
+		allowedCollections: collections.authoringCollectionNames,
 		findMany: (collection, input) =>
 			collections.findMany(effectId, subject, query(collection, input)),
 		findFirst: (collection, input) =>
@@ -671,18 +662,21 @@ export const makeBoundAuthoringOps = (
 				.mutate(effectId, subject, collection, [values], false, 0, { declarative: true })
 				.pipe(Effect.asVoid),
 		/**
-		 * Runs a declared automation later, under the subject this handler is already running as.
+		 * Runs a declared automation under its own declared subject.
 		 *
 		 * `after` accepts what Effect's `Duration` accepts — `'1 hour'`, `'30 seconds'`, or a number of
 		 * milliseconds — so an author writes the delay the way they would write any other duration in
-		 * this codebase rather than learning a second vocabulary for one field. Absent means as soon as
-		 * a tick can take it.
+		 * this codebase rather than learning a second vocabulary for one field. Absent means this
+		 * invocation admits and executes the body directly; only a positive delay enters the timer.
 		 *
-		 * Delegated to `Automations.start` rather than writing a row here, so the nesting bound, the
-		 * `bolt_run_as` stamp and the "is this automation declared?" check all happen in the one place
-		 * that has always owned them.
+		 * Delegated to Collections because it owns both the authored handler and the direct execution
+		 * path. The optional override is used by an already-running automation to carry its nesting
+		 * depth into a child; integrations and remotes take this same default rather than admitting a
+		 * row that no scheduler is allowed to execute.
 		 */
-		runAutomation: runAutomationOp(effectId, automations),
+		runAutomation:
+			runAutomation ??
+			((name, input, options) => collections.runAutomation(effectId, name, input, {}, options)),
 		infer: inferOp(effectId, ai, readAsset),
 		readFileAsset: readAsset
 	};

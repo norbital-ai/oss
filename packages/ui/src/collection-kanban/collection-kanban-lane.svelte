@@ -5,7 +5,8 @@
 	import * as CardPrimitive from '#lib/card';
 	import { Checkbox } from '#lib/checkbox';
 	import { useI18n, type UiKeys } from '#lib/i18n';
-	import { Cover, Inline, SCROLL_AXIS_CLASSES, Scroll, Stack } from '#lib/layout';
+	import { Cover, Inline, Scroll, Stack } from '#lib/layout';
+	import type { CollectionRecordLeadingAccent } from '#lib/collection-record-metadata';
 	import { Sortable } from '#lib/sortable';
 	import { badgeColorClass } from '#lib/collection-table/collection-card-colors';
 	import { cn } from '#lib/utils';
@@ -36,6 +37,7 @@
 		updateRestrictionReasonById: ReadonlyMap<string, string>;
 		renderCard: Snippet<[string]>;
 		renderMetadata: Snippet<[string]>;
+		getLeadingAccent: (recordId: string) => CollectionRecordLeadingAccent | null;
 		onOpen: (recordId: string) => void;
 		onToggleSelection: (recordId: string) => void;
 		onMove: (move: LaneMove) => void;
@@ -58,6 +60,7 @@
 		updateRestrictionReasonById,
 		renderCard,
 		renderMetadata,
+		getLeadingAccent,
 		onOpen,
 		onToggleSelection,
 		onMove,
@@ -233,6 +236,7 @@
 			>
 				<Stack gap="sm">
 					{#each recordIds as recordId (recordId)}
+						{@const leadingAccent = getLeadingAccent(recordId)}
 						<div
 							data-sortable-id={recordId}
 							data-sortable-disabled={!movable ||
@@ -262,9 +266,14 @@
 								onclick={() => onOpen(recordId)}
 								onkeydown={(event) => handleCardKeydown(event, recordId)}
 							>
-								<CardPrimitive.Content
-									class={cn('h-full min-w-0 p-3 text-sm', SCROLL_AXIS_CLASSES.y)}
-								>
+								{#if leadingAccent !== null}
+									<span
+										class={cn('absolute inset-y-0 left-0 z-10', leadingAccent.markerClass)}
+										title={leadingAccent.tooltip}
+										aria-hidden="true"
+									></span>
+								{/if}
+								<CardPrimitive.Content class="h-full min-w-0 p-3 text-sm">
 									<Stack gap="sm">
 										{@render renderCard(recordId)}
 										{@render renderMetadata(recordId)}

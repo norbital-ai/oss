@@ -163,10 +163,92 @@ const jsonObjectParameter = (parameters: ReadonlyArray<unknown>): PersistedTurn 
 };
 
 let returnedMessage = 0;
+const admittedTurns = new Map<string, string>();
+const claimedConversations = new Set<string>();
+const turnConversations = new Map<string, string>();
+const persistedTurns = new Map<string, PersistedTurn>();
 const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 	call: (_metadata, request) => {
+		const statements = request._tag === 'Query' ? [request] : request.statements;
+		for (const statement of statements) {
+			const persisted = jsonObjectParameter(statement.parameters);
+			if (
+				persisted !== undefined &&
+				(statementIntent(statement, 'insert', 'chat_message') ||
+					statementIntent(statement, 'update', 'chat_message'))
+			) {
+				persistedTurns.set(persisted.id, persisted);
+			}
+		}
 		if (request._tag !== 'Query') {
+			for (const statement of request.statements) {
+				if (statementIntent(statement, 'insert', 'agent_run')) {
+					const conversationId = String(statement.parameters[0]);
+					const turnId = String(statement.parameters[1]);
+					admittedTurns.set(conversationId, turnId);
+					turnConversations.set(turnId, conversationId);
+				}
+			}
+			const claim = request.statements.find((statement) =>
+				statement.sql.includes('pg_advisory_xact_lock')
+			);
+			if (claim !== undefined) {
+				const conversationId = String(claim.parameters[0] ?? '');
+				if (claimedConversations.has(conversationId)) {
+					return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 0 } });
+				}
+				claimedConversations.add(conversationId);
+				const turnId =
+					admittedTurns.get(conversationId) ??
+					`${conversationId.replace(/^conversation-/, 'agent-')}:turn`;
+				turnConversations.set(turnId, conversationId);
+				return Promise.resolve({
+					_tag: 'Success',
+					value: {
+						rows: [
+							{
+								task_id: turnId,
+								conversation_id: conversationId,
+								turn_id: turnId,
+								agent_name: 'web'
+							}
+						],
+						affectedRows: 1
+					}
+				});
+			}
 			return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 1 } });
+		}
+		if (request.sql.includes('pg_advisory_xact_lock')) {
+			const conversationId = String(request.parameters[0] ?? '');
+			if (claimedConversations.has(conversationId)) {
+				return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 0 } });
+			}
+			claimedConversations.add(conversationId);
+			const turnId =
+				admittedTurns.get(conversationId) ??
+				`${conversationId.replace(/^conversation-/, 'agent-')}:turn`;
+			turnConversations.set(turnId, conversationId);
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [
+						{
+							task_id: turnId,
+							conversation_id: conversationId,
+							turn_id: turnId,
+							agent_name: 'web'
+						}
+					],
+					affectedRows: 1
+				}
+			});
+		}
+		if (request.sql.includes('as mailbox_status') && request.sql.includes('as has_running')) {
+			return Promise.resolve({
+				_tag: 'Success',
+				value: { rows: [{ mailbox_status: 'active', has_running: false }], affectedRows: 0 }
+			});
 		}
 		if (statementIntent(request, 'select', 'session')) {
 			return Promise.resolve({ _tag: 'Success', value: { rows: [subjectRow], affectedRows: 0 } });
@@ -193,26 +275,69 @@ const sessionDatabase: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 				value: { rows: [{ value: 'test-session-secret-that-is-long-enough' }], affectedRows: 0 }
 			});
 		}
-		if (statementIntent(request, 'select', 'chat_message') && request.sql.includes('turn_id')) {
+		if (statementIntent(request, 'select', 'chat_session')) {
 			const conversationId = String(request.parameters[0] ?? '');
-			const turnId = String(request.parameters[1] ?? '');
 			return Promise.resolve({
 				_tag: 'Success',
 				value: {
 					rows: [
 						{
-							id: `${turnId}:message`,
-							content: {
-								id: turnId,
-								status: 'queued',
-								parent_agent_id: null,
-								parts: [],
-								subject,
-								agent_name: 'web',
-								usage_unreported: false
-							}
+							conversation_id: conversationId,
+							agent_name: 'web',
+							title: null,
+							user_id: subject.userId,
+							sandbox_key: subject.userId,
+							visibility: 'personal',
+							envoy_key: null,
+							parent_id: null
 						}
 					],
+					affectedRows: 0
+				}
+			});
+		}
+		if (statementIntent(request, 'select', 'chat_message') && request.sql.includes('turn_id')) {
+			// Drizzle may place literal predicates (for example `role = 'assistant'`) before
+			// either identifier. Resolve the persisted target semantically instead of coupling
+			// this facility double to a generated parameter order.
+			const values = request.parameters.map(String);
+			const turnId = values.find((value) => turnConversations.has(value)) ?? '';
+			const conversationId =
+				values.find((value) => [...turnConversations.values()].includes(value)) ?? '';
+			const content =
+				persistedTurns.get(turnId) ??
+				(turnId === ''
+					? undefined
+					: {
+							id: turnId,
+							status: 'queued' as const,
+							parent_agent_id: null,
+							parts: [],
+							subject,
+							agent_name: 'web',
+							usage_unreported: false
+						});
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows:
+						content === undefined || turnConversations.get(turnId) !== conversationId
+							? []
+							: [{ id: `${turnId}:message`, content }],
+					affectedRows: 0
+				}
+			});
+		}
+		if (statementIntent(request, 'select', 'chat_message')) {
+			const conversationId = String(request.parameters[0] ?? '');
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [...persistedTurns.entries()].flatMap(([turnId, content]) =>
+						turnConversations.get(turnId) === conversationId
+							? [{ id: `${turnId}:message`, role: 'assistant', content }]
+							: []
+					),
 					affectedRows: 0
 				}
 			});
@@ -275,17 +400,16 @@ describe('Bolt agent tool loop', () => {
 			id: InvocationId.make('agent-tools'),
 			scope,
 			deadlineEpochMs: Date.now() + 10_000,
-			command: 'agents.execute',
+			command: 'agents.run',
 			input: {
-				conversationId: 'conversation-tools',
-				turnId: 'agent-tools:turn'
+				conversationId: 'conversation-tools'
 			},
 			headers: { authorization: ['Bearer test-session'] }
 		};
 		const result = await bundle.dispatch(invocation, facilities, new AbortController().signal);
 		expect(result).toMatchObject({
 			_tag: 'Success',
-			response: { value: { output: { text: 'Workspace has employees' }, status: 'completed' } }
+			response: { value: { conversationId: 'conversation-tools', status: 'drained' } }
 		});
 		expect(turns).toBe(2);
 		expect(Schema.decodeUnknownSync(BundleResult)(result)).toEqual(result);
@@ -389,10 +513,9 @@ describe('Bolt agent tool loop', () => {
 				id: InvocationId.make('agent-streaming'),
 				scope,
 				deadlineEpochMs: Date.now() + 10_000,
-				command: 'agents.execute',
+				command: 'agents.run',
 				input: {
-					conversationId: 'conversation-streaming',
-					turnId: 'agent-streaming:turn'
+					conversationId: 'conversation-streaming'
 				},
 				headers: { authorization: ['Bearer test-session'] }
 			},
@@ -451,10 +574,9 @@ describe('Bolt agent tool loop', () => {
 				id: InvocationId.make('agent-two-rounds'),
 				scope,
 				deadlineEpochMs: Date.now() + 10_000,
-				command: 'agents.execute',
+				command: 'agents.run',
 				input: {
-					conversationId: 'conversation-two-rounds',
-					turnId: 'agent-two-rounds:turn'
+					conversationId: 'conversation-two-rounds'
 				},
 				headers: { authorization: ['Bearer test-session'] }
 			},
@@ -574,17 +696,16 @@ describe('Bolt agent tool loop', () => {
 			id: InvocationId.make('agent-mcp'),
 			scope,
 			deadlineEpochMs: Date.now() + 10_000,
-			command: 'agents.execute',
+			command: 'agents.run',
 			input: {
-				conversationId: 'conversation-mcp',
-				turnId: 'agent-mcp:turn'
+				conversationId: 'conversation-mcp'
 			},
 			headers: { authorization: ['Bearer test-session'] }
 		};
 		const result = await bundle.dispatch(invocation, facilities, new AbortController().signal);
 		expect(result).toMatchObject({
 			_tag: 'Success',
-			response: { value: { output: { text: 'Found 2 hits' }, status: 'completed' } }
+			response: { value: { conversationId: 'conversation-mcp', status: 'drained' } }
 		});
 		expect(connectorCalls).toEqual([
 			{
@@ -626,10 +747,9 @@ describe('Bolt agent tool loop', () => {
 				id: InvocationId.make('agent-mcp-undeclared'),
 				scope,
 				deadlineEpochMs: Date.now() + 10_000,
-				command: 'agents.execute',
+				command: 'agents.run',
 				input: {
-					conversationId: 'conversation-mcp-undeclared',
-					turnId: 'agent-mcp-undeclared:turn'
+					conversationId: 'conversation-mcp-undeclared'
 				},
 				headers: { authorization: ['Bearer test-session'] }
 			},
@@ -668,8 +788,8 @@ describe('Bolt agent tool loop', () => {
 
 	it('spawns an in-session subagent and parks only at the explicit await', async () => {
 		let turns = 0;
-		const targetAgentId = 'agent:agent-spawn:tool:0:0';
-		const targetTaskId = 'agent-spawn:tool:0:0';
+		const targetAgentId = 'agent:agent-spawn:turn:tool:0:0';
+		const targetTaskId = 'agent-spawn:turn:tool:0:0';
 		const ai: FacilityBinding<AIRequest, AIResponse> = {
 			call: () => {
 				turns += 1;
@@ -681,25 +801,28 @@ describe('Bolt agent tool loop', () => {
 								? {
 										toolCalls: [{ name: 'spawn_agent', input: { task: 'Draft the offer' } }]
 									}
-								: {
-										toolCalls: [
-											{
-												name: 'await_agent',
-												input: { agentId: targetAgentId, taskId: targetTaskId }
-											}
-										]
-									}
+								: turns === 2
+									? {
+											toolCalls: [
+												{
+													name: 'await_agent',
+													input: { agentId: targetAgentId, taskId: targetTaskId }
+												}
+											]
+										}
+									: turns === 3
+										? { text: 'Draft complete.' }
+										: { text: 'Delegation complete.' }
 					}
 				});
 			}
 		};
-		// The spawn is a `bolt_task` row now, written through the database facility, and the host is
-		// told about it with a `Wake` through the tasks facility — so both are observed where they
-		// land rather than on one facility.
-		const enqueued: Array<string> = [];
+		// The spawn is a durable `agent_run` admission and direct execution. The task facility is used
+		// only for an in-memory interruption handle; no Wake may be emitted.
+		const taskSignals: Array<string> = [];
 		const tasks: FacilityBinding<TaskRequest, TaskResponse> = {
 			call: (_metadata, request) => {
-				if (request._tag === 'Wake') enqueued.push('wake');
+				if (request._tag === 'Wake') taskSignals.push('wake');
 				return Promise.resolve({ _tag: 'Success', value: {} });
 			}
 		};
@@ -710,18 +833,23 @@ describe('Bolt agent tool loop', () => {
 					statementIntent(request, 'select', 'chat_session') &&
 					request.parameters.includes(targetAgentId)
 				) {
+					const relatedLookup = request.sql.startsWith('select "conversation_id", "parent_id"');
 					return Promise.resolve({
 						_tag: 'Success',
 						value: {
 							rows: [
-								{
-									conversation_id: 'conversation-spawn',
-									parent_id: null,
-									user_id: subject.userId,
-									sandbox_key: subject.userId,
-									agent_name: 'web',
-									title: 'Delegate the offer'
-								},
+								...(relatedLookup
+									? [
+											{
+												conversation_id: 'conversation-spawn',
+												parent_id: null,
+												user_id: subject.userId,
+												sandbox_key: subject.userId,
+												agent_name: 'web',
+												title: 'Delegate the offer'
+											}
+										]
+									: []),
 								{
 									conversation_id: targetAgentId,
 									parent_id: 'conversation-spawn',
@@ -735,14 +863,6 @@ describe('Bolt agent tool loop', () => {
 						}
 					});
 				}
-				const statements = request._tag === 'Query' ? [request] : request.statements;
-				for (const statement of statements) {
-					if (statementIntent(statement, 'insert', 'bolt_task')) {
-						enqueued.push(
-							String(statement.parameters.find((parameter) => parameter === 'agents.execute'))
-						);
-					}
-				}
 				return sessionDatabase.call(metadata, request, signal);
 			}
 		};
@@ -753,22 +873,20 @@ describe('Bolt agent tool loop', () => {
 			id: InvocationId.make('agent-spawn'),
 			scope,
 			deadlineEpochMs: Date.now() + 10_000,
-			command: 'agents.execute',
+			command: 'agents.run',
 			input: {
-				conversationId: 'conversation-spawn',
-				turnId: 'agent-spawn:turn'
+				conversationId: 'conversation-spawn'
 			},
 			headers: { authorization: ['Bearer test-session'] }
 		};
 		const result = await bundle.dispatch(invocation, facilities, new AbortController().signal);
 		expect(result).toMatchObject({
 			_tag: 'Success',
-			response: { value: { status: 'waiting', output: { waiting: true } } }
+			response: { value: { conversationId: 'conversation-spawn', status: 'drained' } }
 		});
-		expect(enqueued).toContain('agents.execute');
-		expect(turns).toBe(2);
-		// And the host is told to come back — the row is durable, and something has to pick it up.
-		expect(enqueued).toContain('wake');
+		expect(turns).toBe(4);
+		expect(persistedTurns.get(targetTaskId)?.status).toBe('completed');
+		expect(taskSignals).not.toContain('wake');
 	});
 
 	it('executes compiled workspace tool handlers', async () => {
@@ -802,10 +920,9 @@ describe('Bolt agent tool loop', () => {
 				id: InvocationId.make('agent-workspace-tool'),
 				scope,
 				deadlineEpochMs: Date.now() + 10_000,
-				command: 'agents.execute',
+				command: 'agents.run',
 				input: {
-					conversationId: 'conversation-workspace-tool',
-					turnId: 'agent-workspace-tool:turn'
+					conversationId: 'conversation-workspace-tool'
 				},
 				headers: { authorization: ['Bearer test-session'] }
 			},
@@ -814,7 +931,7 @@ describe('Bolt agent tool loop', () => {
 		);
 		expect(result).toMatchObject({
 			_tag: 'Success',
-			response: { value: { output: { text: 'Summarized' }, status: 'completed' } }
+			response: { value: { conversationId: 'conversation-workspace-tool', status: 'drained' } }
 		});
 	});
 });

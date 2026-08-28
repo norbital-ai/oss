@@ -17,8 +17,8 @@ describe('replica fallback reporting', () => {
 		join(import.meta.dirname, '../../src/client/runtime.ts'),
 		'utf8'
 	);
-	const plugin = readFileSync(
-		join(import.meta.dirname, '../../src/compiler/vite-plugin.ts'),
+	const generatedClient = readFileSync(
+		join(import.meta.dirname, '../../src/compiler/sync.ts'),
 		'utf8'
 	);
 
@@ -39,8 +39,8 @@ describe('replica fallback reporting', () => {
 	});
 
 	it('supplies the callback from the generated host seam', () => {
-		expect(plugin).toContain('onStorageTier: (tier, reason) =>');
-		expect(plugin).toContain('no browser replica: ');
-		expect(plugin).toContain('onError: (cause) =>');
+		expect(generatedClient).toContain('onStorageTier: (tier, reason) =>');
+		expect(generatedClient).toContain('no browser replica: ');
+		expect(generatedClient).toContain('onError: (cause) =>');
 	});
 });

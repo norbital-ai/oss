@@ -49,6 +49,7 @@
 	import { CollectionActionToolbar } from '#lib/collection-toolbar';
 	import {
 		CollectionRecordMetadataView,
+		collectionRecordLeadingAccent,
 		collectionRecordMutationReason,
 		type ResolvedCollectionRecordMetadata
 	} from '#lib/collection-record-metadata';
@@ -257,6 +258,8 @@
 		return reasons;
 	});
 	const updateRestrictedRecordIds = $derived(new Set(updateRestrictionReasonById.keys()));
+	const leadingAccentFor = (recordId: string) =>
+		collectionRecordLeadingAccent(metadataById.get(recordId) ?? []);
 	const groups = $derived.by((): Array<[string, Row[], string[]]> => {
 		const laneKeys =
 			resolvedLaneValues.length > 0 ? resolvedLaneValues : Object.keys(boardQuery.result);
@@ -567,6 +570,7 @@
 					{updateRestrictionReasonById}
 					renderCard={kanbanCard}
 					renderMetadata={kanbanMetadata}
+					getLeadingAccent={leadingAccentFor}
 					onOpen={openRecordById}
 					onToggleSelection={toggleSelection}
 					onMove={(move) => void moveRecord(move)}

@@ -122,38 +122,40 @@
 	<Scroll name="Organization general settings">
 		<Stack gap="md" fill>
 			{#if loading}
-				<Inline align="center" gap="sm" class="py-8 text-sm text-muted-foreground">
+				<Inline align="center" gap="sm" class="text-sm text-muted-foreground" role="status">
 					<Icon icon="lucide:loader-2" class="size-4 animate-spin" />
-					Loading…
+					Loading saved organization details…
 				</Inline>
-			{:else}
-				{#if failure}
-					<div
-						class="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive"
-						role="alert"
-					>
-						{failure}
-					</div>
-				{/if}
+			{/if}
+			{#if failure}
+				<div
+					class="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive"
+					role="alert"
+				>
+					{failure}
+				</div>
+			{/if}
 
-				<!-- The record as a card, matching the settings surfaces' card treatment: an outlined box on
+			<!-- The record as a card, matching the settings surfaces' card treatment: an outlined box on
 				     the card background holds the form, spanning the tab content boundaries so it lines up
 				     flush with the trigger strip above it. -->
-				<Stack
-					as="form"
-					gap="md"
-					class="rounded-lg border border-border bg-card p-4 sm:p-6"
-					onsubmit={(event) => {
-						event.preventDefault();
-						void Effect.runPromise(
-							Effect.gen(function* () {
-								busy = 'profile';
-								yield* saveProfile({ ...profile, name: organizationName.trim() });
-								busy = null;
-							})
-						);
-					}}
-				>
+			<Stack
+				as="form"
+				gap="md"
+				class="rounded-lg border border-border bg-card p-4 sm:p-6"
+				aria-busy={loading}
+				onsubmit={(event) => {
+					event.preventDefault();
+					void Effect.runPromise(
+						Effect.gen(function* () {
+							busy = 'profile';
+							yield* saveProfile({ ...profile, name: organizationName.trim() });
+							busy = null;
+						})
+					);
+				}}
+			>
+				<fieldset disabled={loading} class="contents">
 					<Stack gap="sm">
 						<label class="text-sm font-medium" for="orgName">Organization name</label>
 						<Input
@@ -303,8 +305,8 @@
 							</Inline>
 						</Button>
 					</Inline>
-				</Stack>
-			{/if}
+				</fieldset>
+			</Stack>
 		</Stack>
 	</Scroll>
 </Bound>

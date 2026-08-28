@@ -4,10 +4,7 @@ import {
 	type CollectionMutationBaseVersion,
 	type CollectionMutationGraph
 } from '@norbital-ai/bolt-protocol';
-import {
-	canonicalSchemaStepEncoding,
-	digestSchemaSteps
-} from '@norbital-ai/std/reckon/hash';
+import { canonicalSchemaStepEncoding, digestSchemaSteps } from '@norbital-ai/std/reckon/hash';
 export { canonicalSchemaStepEncoding, digestSchemaSteps };
 import type { ModelExclusion, ModelIndex } from '../authoring/models-schema.js';
 import {
@@ -25,6 +22,7 @@ import type {
 import { collection } from '../authoring/workspace-schema.js';
 import {
 	IDENTITY_COLLECTIONS,
+	isReplicatedCollection,
 	withSystemCollections
 } from '../runtime/schema/system-collections.js';
 
@@ -560,12 +558,6 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 			// so queue code writes one source of truth and the browser never reads the queue itself.
 			id: 'bolt:function-automation-run-projection',
 			sql: `create or replace function bolt_project_automation_run() returns trigger language plpgsql as $bolt_automation_run$ begin if TG_OP = 'DELETE' then if OLD.command like 'automations.%' then delete from automation_run where task_id = OLD.effect_id; end if; return OLD; end if; if NEW.command like 'automations.%' then insert into automation_run (task_id, name, status, attempts, max_attempts, progress, progress_sequence, progress_updated_at, result, error, next_run_at) values (NEW.effect_id, substring(NEW.command from length('automations.') + 1), NEW.status, NEW.attempts, NEW.max_attempts, NEW.progress, NEW.progress_sequence, NEW.progress_updated_at, NEW.result, NEW.error, case when NEW.status in ('pending', 'resuming') then NEW.run_at else null end) on conflict (task_id) do update set name = excluded.name, status = excluded.status, attempts = excluded.attempts, max_attempts = excluded.max_attempts, progress = excluded.progress, progress_sequence = excluded.progress_sequence, progress_updated_at = excluded.progress_updated_at, result = excluded.result, error = excluded.error, next_run_at = excluded.next_run_at, updated_at = now(), row_version = automation_run.row_version + 1; end if; return NEW; end $bolt_automation_run$`
-		},
-		{
-			// Agent task inputs contain private authority and message references, so clients receive only
-			// the lane-safe lifecycle projection. The trigger keeps it atomic with the queue row.
-			id: 'bolt:function-agent-run-projection',
-			sql: `create or replace function bolt_project_agent_run() returns trigger language plpgsql as $bolt_agent_run$ begin if TG_OP = 'DELETE' then if OLD.command = 'agents.execute' then delete from agent_run where task_id = OLD.effect_id; end if; return OLD; end if; if NEW.command = 'agents.execute' then insert into agent_run (task_id, conversation_id, turn_id, agent_name, status, position, error, next_run_at) values (NEW.effect_id, NEW.input->>'conversationId', NEW.input->>'turnId', NEW.input->>'agent', case NEW.status when 'pending' then 'queued' when 'done' then 'completed' else NEW.status end, NEW.position, NEW.error, case when NEW.status in ('pending', 'resuming', 'running') then NEW.run_at else null end) on conflict (task_id) do update set conversation_id = excluded.conversation_id, turn_id = excluded.turn_id, agent_name = excluded.agent_name, status = excluded.status, position = excluded.position, error = excluded.error, next_run_at = excluded.next_run_at, updated_at = now(), row_version = agent_run.row_version + 1; end if; return NEW; end $bolt_agent_run$`
 		}
 	];
 	/**
@@ -625,10 +617,6 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 			sql: 'drop trigger if exists bolt_project_agent_run on bolt_task'
 		},
 		{
-			id: 'sync-trigger:bolt_task-agent-run:2-create',
-			sql: 'create trigger bolt_project_agent_run after insert or update or delete on bolt_task for each row execute function bolt_project_agent_run()'
-		},
-		{
 			id: 'sync-trigger:bolt_task-automation-run:1-drop',
 			sql: 'drop trigger if exists bolt_project_automation_run on bolt_task'
 		},
@@ -653,45 +641,89 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
  * advertised migration digest a verification of the bytes that are later applied, instead of a
  * digest of a similar plan assembled along another path.
  */
+const REPLICA_FOUNDATION_STEP_IDS: ReadonlySet<string> = new Set([
+	'bolt:extension-btree-gist',
+	'bolt:extension-pg-trgm',
+	'bolt:extension-vector',
+	'bolt:function-daterange',
+	'bolt:function-instant'
+]);
+
 export const replicaProvisioningSteps = (
 	workspace: WorkspaceDefinition
 ): ReadonlyArray<SchemaStep> => {
-	const plan = buildSchemaPlan(workspace);
 	/**
-	 * System tables are created *before* the workspace lineage, not after it.
+	 * A replica receives the current queryable shape, never the server's migration history.
 	 *
-	 * A workspace migration may reference a system table: `job_assignments.assignee_user_id`
-	 * declares a relation to `user`, and drizzle emits that foreign key inside the workspace
-	 * lineage. A server already holds those tables by the time a lineage is applied, so the order
-	 * never mattered there. A browser replica applies this exact list into an empty database, and
-	 * the constraint ran before anything had created `user` — provisioning died at that step
-	 * (`relation "user" does not exist`) and the workspace fell back to server-only with no replica
-	 * at all. Only the creation steps move; indexes, initialisers and exclusions stay after the
-	 * lineage, where a tenant table they touch already exists.
+	 * The lineage may name private runtime tables in foreign keys (an authored `r.one.user` is the
+	 * common case), and the server plan contains every auth, agent, automation and sync table. Sending
+	 * either to the browser would disclose and synthesize a server-private schema just to satisfy a
+	 * constraint the authoritative database already enforces. Rendering the current collection
+	 * declaration keeps the UUID column but deliberately has no relationship constraints, which is
+	 * also the right logical-replication behavior when related rows arrive independently.
 	 */
-	const isSystemTableCreation = (id: string): boolean => {
-		const parts = id.split(':');
-		if (parts[0] !== 'collection' || parts[1] === undefined) return false;
-		if (!systemTableNames.has(parts[1])) return false;
-		return parts.length === 2 || parts[2] === 'column';
-	};
-	const systemTables = plan.steps.filter(({ id }) => isSystemTableCreation(id));
-	const remaining = plan.steps.filter(({ id }) => !isSystemTableCreation(id));
-	return [
-		...remaining.filter(({ id }) => id.startsWith('bolt:')),
-		...systemTables,
-		...[...(workspace.migrations ?? [])]
-			.toSorted((left, right) => left.tag.localeCompare(right.tag))
-			.flatMap((entry) =>
-				entry.statements.map((sql, index) => ({ id: `lineage:${entry.tag}:${index}`, sql }))
-			),
-		...remaining.filter(({ id }) => !id.startsWith('bolt:'))
-	];
+	const replicaCollections = withSystemCollections(workspace).collections
+		.filter(isReplicatedCollection)
+		.toSorted((left, right) => left.name.localeCompare(right.name));
+	const collectionSteps = replicaCollections.flatMap((definition) => {
+		// A polymorphic reference is one logical value backed by one nullable UUID column per target.
+		// The server enforces the one-of constraint; the replica only needs the physical columns that
+		// synced row images and local query compilation address.
+		const physicalFieldEntries: Array<readonly [string, FieldDefinition]> = [];
+		for (const [name, field] of Object.entries(definition.fields)) {
+			if (field.type !== 'reference' || field.reference === undefined) {
+				physicalFieldEntries.push([name, field]);
+				continue;
+			}
+			for (const { storageColumn } of field.reference.targets) {
+				physicalFieldEntries.push([
+					storageColumn,
+					{
+						type: 'uuid',
+						required: false,
+						indexed: field.indexed,
+						...(field.unique === true ? { unique: true } : {})
+					}
+				]);
+			}
+		}
+		const physicalFields: Readonly<Record<string, FieldDefinition>> =
+			Object.fromEntries(physicalFieldEntries);
+		const physicalDefinition = { ...definition, fields: physicalFields };
+		const fields = Object.entries(physicalFields)
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([name, field]) => renderColumn(name, field));
+		const table = quoteIdentifier(definition.name);
+		return [
+			{
+				id: `replica:collection:${definition.name}`,
+				sql: `create table if not exists ${table} (${SYSTEM_COLUMNS}${fields.length === 0 ? '' : `, ${fields.join(', ')}`})`
+			},
+			...declaredIndexSteps(physicalDefinition),
+			...modelIndexSteps(definition),
+			...searchIndexSteps(definition),
+			...(definition.exclusions ?? []).map((exclusion) =>
+				exclusionStep(definition.name, exclusion)
+			)
+		];
+	});
+	const foundation = buildSchemaPlan(workspace).steps.filter(({ id }) =>
+		REPLICA_FOUNDATION_STEP_IDS.has(id)
+	);
+	return [...foundation, ...collectionSteps];
 };
 
 export type MutationCompatibilityResolution = Readonly<
-	| { readonly resolution: 'accepted'; readonly graph: CollectionMutationGraph; readonly baseVersions: ReadonlyArray<CollectionMutationBaseVersion> }
-	| { readonly resolution: 'rebased'; readonly graph: CollectionMutationGraph; readonly baseVersions: ReadonlyArray<CollectionMutationBaseVersion> }
+	| {
+			readonly resolution: 'accepted';
+			readonly graph: CollectionMutationGraph;
+			readonly baseVersions: ReadonlyArray<CollectionMutationBaseVersion>;
+	  }
+	| {
+			readonly resolution: 'rebased';
+			readonly graph: CollectionMutationGraph;
+			readonly baseVersions: ReadonlyArray<CollectionMutationBaseVersion>;
+	  }
 	| { readonly resolution: 'quarantined'; readonly reason: string }
 >;
 
@@ -852,12 +884,7 @@ export const reconcileMutationSchema = (
 					!baseVersionKeys.has(`${nestedOldName}\u0000${childId}`)
 						? 'create'
 						: 'update';
-				const nested = renameValues(
-					nestedOldName,
-					relation.target,
-					childValues,
-					childAction
-				);
+				const nested = renameValues(nestedOldName, relation.target, childValues, childAction);
 				if (!nested.ok) return nested;
 				children.push(nested.values);
 			}
@@ -882,8 +909,7 @@ export const reconcileMutationSchema = (
 			...entry,
 			row: {
 				...entry.row,
-				collection:
-					adapter.collectionRenames?.[entry.row.collection] ?? entry.row.collection
+				collection: adapter.collectionRenames?.[entry.row.collection] ?? entry.row.collection
 			}
 		}))
 	};

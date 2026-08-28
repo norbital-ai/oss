@@ -3,8 +3,10 @@
 	import { untrack, type Component } from 'svelte';
 	import { ModeWatcher } from 'mode-watcher';
 	import { humanize } from '@norbital-ai/std/string';
+	import type { CollectionQuery, CollectionRecord } from '@norbital-ai/std/collection';
 	import {
 		setCollectionClientContext,
+		setRelationshipDirectoryContext,
 		setCollectionSurfaceRuntime,
 		type CollectionSurface
 	} from '@norbital-ai/ui/collection-runtime';
@@ -29,10 +31,7 @@
 	import { WEB_AGENT_ID } from '#lib/client/ui/agent/conversation-selector.js';
 	import { WorkspaceUploadClient } from '../state/file-upload-client.svelte.js';
 	import { workspaceSession } from '#lib/client/session.js';
-	import {
-		createWorkspaceBootstrapController,
-		type WorkspaceSyncStatus
-	} from '#lib/client/runtime.js';
+	import type { WorkspaceSyncStatus } from '#lib/client/runtime.js';
 	import type {
 		CompiledWorkspace,
 		WorkspaceHostActions,
@@ -68,7 +67,7 @@
 	const session = workspaceSession();
 	let replicaAccessScope = $state(session.accessScope);
 	let interactiveQueriesRequestedScope = $state<string | undefined>(undefined);
-	const syncStatusSignal = untrack(() => workspace.runtime?.syncStatus);
+	const syncStatusSignal = untrack(() => workspace.syncStatus);
 	let syncStatus = $state.raw<WorkspaceSyncStatus | undefined>(syncStatusSignal?.current());
 
 	/**
@@ -121,17 +120,61 @@
 		surfaces: collectionSurfaces,
 		claimView: () => () => undefined
 	});
+	const safeUserDirectoryQuery = (query: unknown): CollectionQuery<CollectionRecord> => {
+		const input =
+			query !== null && typeof query === 'object' && !Array.isArray(query)
+				? (query as Readonly<Record<string, unknown>>)
+				: {};
+		const rawWhere =
+			input['where'] !== null && typeof input['where'] === 'object' && !Array.isArray(input['where'])
+				? (input['where'] as Readonly<Record<string, unknown>>)
+				: {};
+		const where = Object.fromEntries(
+			Object.entries(rawWhere).filter(([field]) => field === 'id' || field === 'name')
+		) as Record<string, unknown>;
+		const search = typeof input['search'] === 'string' ? input['search'].trim() : '';
+		if (search.length > 0)
+			where.name = { ilike: `%${search.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%` };
+		const rawOrderBy =
+			input['orderBy'] !== null &&
+			typeof input['orderBy'] === 'object' &&
+			!Array.isArray(input['orderBy'])
+				? (input['orderBy'] as Readonly<Record<string, unknown>>)
+				: {};
+		const orderBy = Object.fromEntries(
+			Object.entries(rawOrderBy).filter(
+				([field, direction]) =>
+					(field === 'id' || field === 'name') && (direction === 'asc' || direction === 'desc')
+			)
+		) as NonNullable<CollectionQuery<CollectionRecord>['orderBy']>;
+		const requestedLimit =
+			typeof input['limit'] === 'number' && Number.isInteger(input['limit'])
+				? input['limit']
+				: 100;
+		return {
+			columns: { id: true, name: true },
+			where: where as NonNullable<CollectionQuery<CollectionRecord>['where']>,
+			orderBy,
+			limit: Math.max(1, Math.min(100, requestedLimit))
+		};
+	};
+	setRelationshipDirectoryContext({
+		findMany: (collectionName, query) =>
+			collectionName === 'user'
+				? workspace.frameworkClient.records.findMany('user', safeUserDirectoryQuery(query))
+				: workspace.client.records.findMany(collectionName, query)
+	});
 
 	/**
 	 * The workspace's own collection client, published for surfaces that have no table above them.
 	 *
 	 * A record sheet used to be rendered by whichever `CollectionTable` had registered it on mount,
 	 * which meant a `?stack=` frame naming a table on an unopened tab had nothing to render with. The
-	 * sheet now reads the record itself, and this is where it gets the client to read it through —
-	 * the same compiled client Studio's Data tab uses, from the bundle, never from a host lookup.
+	 * sheet now reads the record itself, and this is where it gets the public authored client to read
+	 * it through — from the bundle, never from a host lookup.
 	 *
-	 * The generated client is typed with the complete collection capability, including records,
-	 * history and approvals, so the context receives it directly without a second runtime guard.
+	 * Runtime-owned collections stay on the separate framework client. The relationship renderer gets
+	 * only a fixed safe `user` id/name projection through its private context above.
 	 */
 	// svelte-ignore state_referenced_locally -- the compiled workspace is fixed for this mount.
 	setCollectionClientContext(() => workspace.client);
@@ -225,11 +268,11 @@
 	 * The web agent has no declaration and no name of its own beyond this one; every *other* agent is
 	 * an envoy, reached on a transport rather than here.
 	 */
-	const agentModelsQuery = $derived(workspace.client.system.ai.models({}));
+	const agentModelsQuery = $derived(workspace.frameworkClient.system.ai.models({}));
 
 	provideAgentClient(
 		untrack(() => ({
-			client: workspace.client,
+			client: workspace.frameworkClient,
 			subject,
 			agentName: WEB_AGENT_ID
 		})),
@@ -256,7 +299,7 @@
 	 */
 	const visibleAppsQuery = $derived.by(() => {
 		void replicaAccessScope;
-		return workspace.client.system.apps.visible({});
+		return workspace.frameworkClient.system.apps.visible({});
 	});
 	const allAuthoredAppNames = untrack(() => [
 		...new Set([...Object.keys(workspace.appGroups), ...Object.keys(workspace.appLoaders)])
@@ -285,7 +328,7 @@
 		// menu, so it waits for the first real interaction instead of competing with app data reads.
 		if (!accessScope.startsWith('team:') && interactiveQueriesRequestedScope !== accessScope)
 			return undefined;
-		return workspace.client.system.access.impersonation({});
+		return workspace.frameworkClient.system.access.impersonation({});
 	});
 	const impersonation = $derived(impersonationQuery?.current ?? null);
 
@@ -299,7 +342,7 @@
 	 * a preview would append one row per request and bury the entry that says it began.
 	 */
 	const impersonateTeam = (teamId: string): Effect.Effect<void> =>
-		workspace.client.system.access.impersonateTeam({ teamId }).pipe(
+		workspace.frameworkClient.system.access.impersonateTeam({ teamId }).pipe(
 			Effect.map(() => {
 				// The host callback writes the cookie synchronously. Switch the browser caches immediately
 				// so no reader can observe rows held under the previous policy scope.
@@ -466,11 +509,7 @@
 	 */
 	$effect(() => {
 		const accessScope = replicaAccessScope;
-		return actions.registerBootstrap?.(
-			workspace.runtime === undefined
-				? { start: () => workspace.startLocalReplica(accessScope) }
-				: createWorkspaceBootstrapController(workspace.runtime, accessScope)
-		);
+		return actions.registerBootstrap?.(workspace.createBootstrap(accessScope));
 	});
 
 	$effect(() => {
@@ -522,7 +561,7 @@
 	});
 
 	const memberAccessQuery = $derived(
-		workspace.client.system.identity.workspaceAccess({ tenantId: view.organization.id })
+		workspace.frameworkClient.system.identity.workspaceAccess({ tenantId: view.organization.id })
 	);
 </script>
 
@@ -577,13 +616,13 @@
 			error={memberAccessQuery.error === undefined ? undefined : String(memberAccessQuery.error)}
 		/>
 	{:else if hostPlugin === 'workspace-studio'}
-		<StudioShell client={workspace.client} />
+		<StudioShell client={workspace.frameworkClient} />
 	{:else if hostPlugin === 'organization'}
-		<OrganizationSettings tenantId={view.organization.id} client={workspace.client} />
+		<OrganizationSettings tenantId={view.organization.id} client={workspace.frameworkClient} />
 	{:else if hostPlugin === 'envoys'}
-		<EnvoysSettings client={workspace.client} />
+		<EnvoysSettings client={workspace.frameworkClient} />
 	{:else if hostPlugin === 'environment_secrets'}
-		<SecretsSettings client={workspace.client} />
+		<SecretsSettings client={workspace.frameworkClient} />
 	{:else if hostPlugin !== null}
 		<Scroll as="section" name={hostPlugin} inset class="bg-background" aria-label={hostPlugin}>
 			<Stack gap="sm">

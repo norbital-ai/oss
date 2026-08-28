@@ -1,24 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
-import { buildSchemaPlan, replicaProvisioningSteps } from '../../src/compiler/schema-plan.js';
+import {
+	buildSchemaPlan,
+	planTableNames,
+	replicaProvisioningSteps
+} from '../../src/compiler/schema-plan.js';
 
 /**
- * A browser replica applies this list into an empty database, so its order is load-bearing in a
- * way the server's never was.
- *
- * A workspace migration may reference a system table — a relation to `user` makes drizzle emit
- * `REFERENCES "user"("id")` inside the workspace lineage. The server already holds `user` by the
- * time any lineage runs, so nothing there depended on the order. The replica creates everything
- * from nothing: with system tables emitted after the lineage, that constraint executed against a
- * database where `user` did not exist yet, provisioning failed at that step, and the workspace
- * silently fell back to server-only with no browser replica at all.
+ * A browser replica is a projection of the current sync-visible model, not a copy of the server
+ * schema. In particular, an authored relation to `user` keeps its scalar UUID locally while the
+ * server remains the only database that creates and enforces the foreign key.
  */
-describe('replica provisioning order', () => {
+describe('replica provisioning boundary', () => {
 	const definition = workspace({
 		name: 'dispatch',
 		version: '1',
 		collections: [
-			collection({ name: 'job_assignments', fields: { note: field.string() } })
+			collection({
+				name: 'job_assignments',
+				fields: { assignee_user_id: field.uuid(), note: field.string() }
+			}),
+			collection({
+				name: 'private_notes',
+				fields: { note: field.string() },
+				sync: false
+			})
 		],
 		apps: [],
 		policies: [],
@@ -34,63 +40,64 @@ describe('replica provisioning order', () => {
 				tag: '20260824074156_baseline',
 				statements: [
 					'CREATE TABLE "job_assignments" ("id" uuid PRIMARY KEY, "assignee_user_id" uuid)',
-					'ALTER TABLE "job_assignments" ADD CONSTRAINT "job_assignments_assignee_user_id_user_fk" FOREIGN KEY ("assignee_user_id") REFERENCES "user"("id")'
+					'ALTER TABLE "job_assignments" ADD CONSTRAINT "job_assignments_assignee_user_id_user_fk" FOREIGN KEY ("assignee_user_id") REFERENCES "user"("id")',
+					'CREATE TABLE "private_notes" ("id" uuid PRIMARY KEY, "note" text)'
 				]
 			}
 		]
 	});
 
-	const ids = replicaProvisioningSteps(definition).map(({ id }) => id);
-	const at = (id: string): number => ids.indexOf(id);
+	const steps = replicaProvisioningSteps(definition);
+	const sql = steps.map(({ sql }) => sql).join('\n');
 
-	it('creates every system table the lineage can reference before the lineage runs', () => {
-		const firstLineage = ids.findIndex((id) => id.startsWith('lineage:'));
-		expect(firstLineage).toBeGreaterThan(-1);
-		const created = ids
-			.slice(0, firstLineage)
-			.filter((id) => id.startsWith('collection:') && !id.includes(':column:'));
-		expect(created).toContain('collection:user');
-		expect(created).toContain('collection:team');
-		expect(created).toContain('collection:bolt_task');
+	it('creates only replicated tenant tables and approval_request', () => {
+		expect(planTableNames({ fingerprint: 'replica', steps })).toEqual([
+			'approval_request',
+			'job_assignments'
+		]);
 	});
 
-	it('puts the foreign key to user after the table it references', () => {
-		expect(at('collection:user')).toBeLessThan(
-			at('lineage:20260824074156_baseline:1')
-		);
+	it('does not carry private server table names or migration lineage', () => {
+		for (const privateName of [
+			'user',
+			'team',
+			'session',
+			'account',
+			'verification',
+			'requestor',
+			'chat_session',
+			'chat_message',
+			'agent_mailbox',
+			'agent_run',
+			'automation_run',
+			'bolt_notifications',
+			'bolt_task',
+			'bolt_sync_outbox'
+		]) {
+			expect(sql).not.toMatch(new RegExp(`(?:^|[^a-z0-9_])${privateName}(?:$|[^a-z0-9_])`, 'i'));
+		}
+		expect(steps.some(({ id }) => id.startsWith('lineage:'))).toBe(false);
+		expect(sql).not.toContain('private_notes');
 	});
 
-	it('still applies extensions and functions first', () => {
-		const firstBolt = ids.findIndex((id) => id.startsWith('bolt:'));
-		const firstCollection = ids.findIndex((id) => id.startsWith('collection:'));
-		expect(firstBolt).toBe(0);
-		expect(firstBolt).toBeLessThan(firstCollection);
+	it('keeps the identity reference as a UUID without a local foreign key', () => {
+		const assignment = steps.find(({ id }) => id === 'replica:collection:job_assignments');
+		expect(assignment?.sql).toContain('"assignee_user_id" uuid');
+		expect(assignment?.sql.toLowerCase()).not.toContain('foreign key');
+		expect(assignment?.sql.toLowerCase()).not.toContain('references');
 	});
 
-	it('leaves indexes and initialisers after the lineage', () => {
-		const lastLineage = ids.map((id) => id.startsWith('lineage:')).lastIndexOf(true);
-		const indexes = ids.filter((id) => id.startsWith('index:') || id.includes(':index:'));
-		for (const id of indexes) expect(at(id)).toBeGreaterThan(lastLineage);
+	it('leaves the authoritative server plan and its private tables intact', () => {
+		const serverPlan = buildSchemaPlan(definition);
+		expect(planTableNames(serverPlan)).toContain('user');
+		expect(definition.migrations?.[0]?.statements[1]).toContain('REFERENCES "user"');
 	});
 
-	/**
-	 * Pins the defect itself, so this file cannot pass against the order it was written to reject.
-	 *
-	 * This rebuilds the previous expression — foundation, lineage, then every remaining plan step —
-	 * from the same plan the fixed function consumes. It is the exact list a replica used to
-	 * receive, and it puts `collection:user` after the constraint that references `user`.
-	 */
-	it('rejects the previous order, which emitted the table after the constraint', () => {
-		const plan = buildSchemaPlan(definition);
-		const previous = [
-			...plan.steps.filter(({ id }) => id.startsWith('bolt:')),
-			...[{ id: 'lineage:20260824074156_baseline:1' }],
-			...plan.steps.filter(({ id }) => !id.startsWith('bolt:'))
-		].map(({ id }) => id);
-		expect(previous.indexOf('collection:user')).toBeGreaterThan(
-			previous.indexOf('lineage:20260824074156_baseline:1')
-		);
-		// and the shipped order is the other way round
-		expect(at('collection:user')).toBeLessThan(at('lineage:20260824074156_baseline:1'));
+	it('installs only the pure schema helpers before the replica tables', () => {
+		const firstCollection = steps.findIndex(({ id }) => id.startsWith('replica:collection:'));
+		expect(firstCollection).toBeGreaterThan(0);
+		expect(steps.slice(0, firstCollection).every(({ id }) => id.startsWith('bolt:'))).toBe(true);
+		expect(sql).not.toContain('bolt_capture_sync_change');
+		expect(sql).not.toContain('bolt_project_');
 	});
 });

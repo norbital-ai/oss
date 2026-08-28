@@ -6,6 +6,7 @@
 	import { Cluster } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import { getCollectionClientContext } from '#lib/collection-runtime';
+	import { getRelationshipDirectoryContext } from '../../collection-runtime/relationship-directory.js';
 	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
 
 	interface Props extends DataRendererProps {
@@ -37,7 +38,7 @@
 		class: className,
 		onValueChange
 	}: Props = $props();
-	const records = getCollectionClientContext().records;
+	const records = getRelationshipDirectoryContext() ?? getCollectionClientContext().records;
 	const target = $derived.by(() => {
 		if (!field.relation) {
 			throw new Error(`RelationshipRenderer requires relation metadata for field "${field.name}".`);
@@ -95,6 +96,11 @@
 			? valueQueryInput.records.findMany(valueQueryInput.target, valueQueryInput.query)
 			: null
 	);
+	const resolvedLabel = (record: CollectionRecord): string => {
+		if (target === 'user' && typeof record.name === 'string') return record.name;
+		if (relationOptions) return relationOptions.label(record);
+		return typeof record.id === 'string' ? record.id : '—';
+	};
 
 	/** Label per selected id: the caller's, else one resolved from the target record. */
 	const labelById = $derived.by(() => {
@@ -105,7 +111,7 @@
 		});
 		for (const record of valueQuery?.current ?? []) {
 			const id = record.id;
-			if (typeof id === 'string' && relationOptions) byId.set(id, relationOptions.label(record));
+			if (typeof id === 'string') byId.set(id, resolvedLabel(record));
 		}
 		return byId;
 	});
@@ -115,7 +121,7 @@
 		for (const record of optionsQuery?.current ?? []) {
 			const id = record.id;
 			if (typeof id !== 'string') continue;
-			byId.set(id, relationOptions ? relationOptions.label(record) : id);
+			byId.set(id, resolvedLabel(record));
 		}
 		// Keep a labelled current selection visible even when it falls outside the option query.
 		for (const id of selectedIds) {

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Effect, Fiber, Schedule, Schema } from 'effect';
+	import { Effect, Fiber, Schema } from 'effect';
 	import { onMount } from 'svelte';
 	import { Button } from '@norbital-ai/ui/button';
 	import * as Dialog from '@norbital-ai/ui/dialog';
@@ -56,6 +56,9 @@
 		envoy: Schema.String,
 		provider: Schema.String,
 		state: Schema.Literals(['disconnected', 'connecting', 'pairing', 'connected', 'error']),
+		revision: Schema.optionalKey(
+			Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+		),
 		pairedAs: Schema.optionalKey(Schema.String),
 		pairing: Schema.optionalKey(Schema.String),
 		pairingExpiresAt: Schema.optionalKey(Schema.Number),
@@ -168,7 +171,8 @@
 	const runPairingRequest = (
 		envoy: string,
 		provider: string,
-		operation: 'pair' | 'status' | 'unpair'
+		operation: 'pair' | 'status' | 'observe' | 'unpair',
+		afterRevision?: number
 	): Effect.Effect<void> =>
 		Effect.suspend(() => {
 			const requestVersion = (connectionRequestVersions.get(envoy) ?? 0) + 1;
@@ -176,8 +180,17 @@
 
 			return Effect.gen(function* () {
 				const answer = yield* Schema.decodeUnknownEffect(ConnectionAnswerSchema)(
-					yield* Effect.tryPromise(() =>
-						operations.run({ action: 'transport', operation, envoy, provider })
+					yield* Effect.tryPromise((signal) =>
+						operations.run(
+							{
+								action: 'transport',
+								operation,
+								envoy,
+								provider,
+								...(afterRevision === undefined ? {} : { afterRevision })
+							},
+							signal
+						)
 					)
 				);
 				const next = answer.connection;
@@ -205,11 +218,11 @@
 	/**
 	 * Owns the one host-side socket open that may be unresolved for an envoy.
 	 *
-	 * `operations.run` returns a Promise and does not accept an AbortSignal. Running this request in
-	 * the modal fiber made interruption look like cancellation: its finalizer released `pairingBusy`
-	 * while the host was still opening the socket, so reopening dispatched a second `pair`. The
-	 * independently owned Promise below lives until the real host request settles. Every dialog that
-	 * opens in the meantime awaits that same Promise, and only its polling subscription is interruptible.
+	 * The socket open itself deliberately outlives the modal fiber. Releasing `pairingBusy` when a
+	 * dialog closes would make interruption look like cancellation while the host is still opening,
+	 * so reopening could dispatch a second `pair`. The independently owned Promise below lives until
+	 * the real host request settles. Every dialog opened meanwhile awaits that same Promise; the event
+	 * observation after it is interruptible.
 	 */
 	const ownPairingOpen = (envoy: string, provider: string): Promise<void> => {
 		const existing = pairingOpens.get(envoy);
@@ -258,37 +271,41 @@
 		}
 	};
 
-	/**
-	 * Keeps the focused pairing flow current while its dialog is open.
-	 *
-	 * Opening a Baileys socket returns `connecting` immediately; the QR arrives on a later provider
-	 * event. A single `pair` request therefore cannot possibly return the code most of the time. The
-	 * paced status cadence reads that asynchronous state, refreshes rotated codes, and is cancelled
-	 * with the dialog so a closed pairing flow leaves no timer or request loop behind.
-	 */
-	const followPairing = (envoy: DeclaredEnvoy): Effect.Effect<void> =>
-		Effect.gen(function* () {
-			// This await is the modal's cancellable subscription to a separately owned host request.
-			// Interrupting it never interrupts or unlocks the unresolved `pair` Promise itself.
-			yield* Effect.promise(() => ownPairingOpen(envoy.name, envoy.transport));
-
-			const shouldContinue = (): boolean => {
-				if (pairingTarget?.name !== envoy.name || connectionErrors[envoy.name] !== undefined)
-					return false;
-				const state = connections[envoy.name]?.state;
-				return state !== 'connected' && state !== 'error' && state !== 'disconnected';
-			};
-
-			if (!shouldContinue()) return;
-			yield* runPairingRequest(envoy.name, envoy.transport, 'status').pipe(
-				Effect.map(shouldContinue),
-				Effect.repeat({
-					schedule: Schedule.spaced(750),
-					while: (continuePolling) => continuePolling
-				}),
-				Effect.asVoid
+	/** Waits for provider-published revisions; it performs no timed status reads. */
+	const observePairing = (envoy: DeclaredEnvoy): Effect.Effect<void> =>
+		Effect.suspend(() => {
+			const current = connections[envoy.name];
+			const revision = current?.revision;
+			if (
+				pairingTarget?.name !== envoy.name ||
+				connectionErrors[envoy.name] !== undefined ||
+				current === undefined ||
+				revision === undefined ||
+				current.state === 'connected' ||
+				current.state === 'error'
+			)
+				return Effect.void;
+			return runPairingRequest(
+				envoy.name,
+				envoy.transport,
+				'observe',
+				revision
+			).pipe(
+				Effect.andThen(
+					Effect.suspend(() => {
+						const nextRevision = connections[envoy.name]?.revision;
+						return nextRevision !== undefined && nextRevision > revision
+							? observePairing(envoy)
+							: Effect.void;
+					})
+				)
 			);
 		});
+
+	const followPairing = (envoy: DeclaredEnvoy): Effect.Effect<void> =>
+		Effect.promise(() => ownPairingOpen(envoy.name, envoy.transport)).pipe(
+			Effect.andThen(observePairing(envoy))
+		);
 
 	function openPairing(envoy: DeclaredEnvoy): void {
 		const resumingOpen = pairingOpens.has(envoy.name);
@@ -532,9 +549,9 @@
 			-->
 			<Scroll name="Envoys">
 				<Stack gap="md" class="min-h-0">
-					{#if manifestQuery === undefined || manifestQuery.loading}
+					{#if manifestQuery === undefined || (manifestQuery.current === undefined && manifestQuery.loading)}
 						<p class="text-sm text-muted-foreground">Reading the workspace manifest…</p>
-					{:else if manifestQuery.error !== undefined}
+					{:else if manifestQuery.current === undefined && manifestQuery.error !== undefined}
 						<p class="text-sm text-destructive" role="alert">
 							{manifestQuery.error instanceof Error
 								? manifestQuery.error.message
@@ -624,7 +641,9 @@
 				>
 					<IconWrapper name="lucide:unplug" class="size-8 text-destructive" />
 					<p class="text-sm font-medium text-foreground">The transport did not open</p>
-					<p class="text-meta">Close this dialog, then try pairing again.</p>
+					<p class="text-meta" role={connection.error === undefined ? undefined : 'alert'}>
+						{connection.error ?? 'Close this dialog, then try pairing again.'}
+					</p>
 				</Stack>
 			{:else if connection?.state === 'pairing' && qr !== undefined}
 				<Stack gap="sm" align="center">

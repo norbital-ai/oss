@@ -28,7 +28,7 @@
 		type CollectionToolbarComposition
 	} from '#lib/collection-toolbar';
 	import {
-		collectionRecordMetadataDescription,
+		collectionRecordLeadingAccent,
 		type ResolvedCollectionRecordMetadata
 	} from '#lib/collection-record-metadata';
 	import {
@@ -125,6 +125,7 @@
 		class: className,
 		rootClass,
 		borderless = false,
+		bounded = true,
 		rowActions,
 		emptyPlaceholder,
 		title,
@@ -151,7 +152,7 @@
 		> // stupidity: boundary-cast — the generated client and runtime manifest share collection keys.
 	);
 	const operations = $derived(
-		client.db[collection] as CollectionOperations<CollectionType<TRow, object>> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row.
+		client.db[collection] as unknown as CollectionOperations<CollectionType<TRow, object>> // stupidity: boundary-cast — Svelte's generic component boundary erases the inferred collection row override; the client key remains constrained by TName.
 	);
 	const recordIdField = 'id';
 	const recordScope = getCollectionRecordScope();
@@ -529,37 +530,9 @@
 		});
 	}
 
-	function flagMarkerClass(
-		metadata: Extract<ResolvedCollectionRecordMetadata, { readonly kind: 'flag' }>
-	): string {
-		switch (metadata.tone) {
-			case 'info':
-				return 'w-1 bg-info';
-			case 'success':
-				return 'w-1 bg-success';
-			case 'warning':
-				return 'w-1 bg-warning';
-			case 'danger':
-				return 'w-1 bg-destructive';
-			case 'neutral':
-				return 'w-1 bg-muted-foreground';
-		}
-	}
-
 	/** One compact marker on the dense grid; list and Kanban surfaces render every metadata item. */
 	function rowLeadingAccent(row: GridRow): { markerClass: string; tooltip: string } | null {
-		const metadata = resolvedRecordMetadata(row.record);
-		const primary = metadata[0];
-		if (!primary) return null;
-		const tooltip = metadata.map(collectionRecordMetadataDescription).join(' • ');
-		if (primary.kind === 'flag') return { markerClass: flagMarkerClass(primary), tooltip };
-		return {
-			markerClass:
-				primary.source === 'system'
-					? 'inset-y-1 w-1 rounded-r-full bg-brand'
-					: 'w-px bg-muted-foreground',
-			tooltip
-		};
+		return collectionRecordLeadingAccent(resolvedRecordMetadata(row.record));
 	}
 
 	function recordActionTabIndex(hovered: boolean, active: boolean): 0 | -1 {
@@ -731,7 +704,9 @@
 <Bound
 	size="full"
 	class="collection-table-responsive min-h-[24rem] w-full"
+	style={bounded ? undefined : 'height: auto; max-height: none;'}
 	data-collection-table-surface
+	data-collection-table-bounded={bounded ? 'true' : 'false'}
 >
 	<!--
 		One toolbar and one pagination bar for both halves of the surface. The wide grid and the narrow
@@ -741,10 +716,18 @@
 	<!--
 		The table is its own tab content box when `rootClass` supplies the outline: toolbar, body and
 		pagination share one border, and `borderless` drops the grid's own inner border so there is
-		exactly one line around the whole surface rather than two. The box hugs its content — no
-		forced fill, so a height-chain break can never collapse it out of view.
+		exactly one line around the whole surface rather than two. An unbounded table lets this box hug
+		its content so a record-detail scrollport can own the vertical axis; a bounded application
+		surface keeps the fixed height chain needed for virtual rows.
 	-->
-	<Cover as="div" gap="sm" top={toolbar} bottom={paginationBar} class={rootClass}>
+	<Cover
+		as="div"
+		gap="sm"
+		top={toolbar}
+		bottom={paginationBar}
+		class={rootClass}
+		style={bounded ? undefined : 'height: auto; max-height: none;'}
+	>
 		<CollectionGrid
 			table={tableApi}
 			{disabled}
@@ -757,6 +740,7 @@
 			rowIndexOffset={queryState.pageIndex * queryState.pageSize}
 			stickyRowActions={true}
 			{borderless}
+			{bounded}
 			{emptyPlaceholder}
 		/>
 
@@ -766,6 +750,7 @@
 			error={errorMessage}
 			selectable={effectiveSelectable}
 			{disabled}
+			{bounded}
 			class={cn('collection-table-narrow', className)}
 			ListCard={ListCard ?? autoListCard}
 			{emptyPlaceholder}

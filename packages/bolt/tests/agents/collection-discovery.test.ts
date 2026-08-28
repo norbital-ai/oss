@@ -117,8 +117,39 @@ describe('agent collection discovery', () => {
 		};
 		const persisted: Array<ReadonlyArray<unknown>> = [];
 		let messageId = 0;
+		let claimed = false;
 		const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 			call: (_metadata, request) => {
+				if (request._tag === 'Query' && request.sql.includes('pg_advisory_xact_lock')) {
+					if (claimed) {
+						return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 0 } });
+					}
+					claimed = true;
+					return Promise.resolve({
+						_tag: 'Success',
+						value: {
+							rows: [
+								{
+									task_id: 'collection-discovery:turn',
+									conversation_id: 'conversation-discovery',
+									turn_id: 'collection-discovery:turn',
+									agent_name: 'whatsapp-field'
+								}
+							],
+							affectedRows: 1
+						}
+					});
+				}
+				if (
+					request._tag === 'Query' &&
+					request.sql.includes('as mailbox_status') &&
+					request.sql.includes('as has_running')
+				) {
+					return Promise.resolve({
+						_tag: 'Success',
+						value: { rows: [{ mailbox_status: 'active', has_running: false }], affectedRows: 0 }
+					});
+				}
 				if (request._tag === 'Query' && request.sql.includes('from "auth_config"')) {
 					return Promise.resolve({
 						_tag: 'Success',
@@ -135,6 +166,26 @@ describe('agent collection discovery', () => {
 					return Promise.resolve({
 						_tag: 'Success',
 						value: { rows: [teamRow], affectedRows: 0 }
+					});
+				}
+				if (request._tag === 'Query' && request.sql.includes('from "chat_session"')) {
+					return Promise.resolve({
+						_tag: 'Success',
+						value: {
+							rows: [
+								{
+									conversation_id: 'conversation-discovery',
+									agent_name: 'whatsapp-field',
+									title: null,
+									user_id: subject.userId,
+									sandbox_key: subject.userId,
+									visibility: 'personal',
+									envoy_key: null,
+									parent_id: null
+								}
+							],
+							affectedRows: 0
+						}
 					});
 				}
 				if (
@@ -223,10 +274,10 @@ describe('agent collection discovery', () => {
 			id: InvocationId.make('collection-discovery'),
 			scope,
 			deadlineEpochMs: Date.now() + 10_000,
-			command: 'agents.execute',
+			command: 'agents.run',
 			input: {
-				conversationId: 'conversation-discovery',
-				turnId: 'collection-discovery:turn'
+				subject,
+				conversationId: 'conversation-discovery'
 			},
 			headers: { authorization: ['Bearer envoy-test-session'] }
 		};

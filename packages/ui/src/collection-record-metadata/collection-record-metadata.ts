@@ -124,3 +124,41 @@ export function collectionRecordMetadataDescription(
 		? metadata.reason
 		: (metadata.description ?? metadata.label);
 }
+
+export type CollectionRecordLeadingAccent = Readonly<{
+	markerClass: string;
+	tooltip: string;
+}>;
+
+/** One shared leading accent for dense rows, list cards and Kanban cards. */
+export function collectionRecordLeadingAccent(
+	metadata: readonly ResolvedCollectionRecordMetadata[]
+): CollectionRecordLeadingAccent | null {
+	const primary = metadata[0];
+	if (primary === undefined) return null;
+	const tooltip = metadata.map(collectionRecordMetadataDescription).join(' • ');
+	if (primary.kind === 'restriction') {
+		return {
+			markerClass:
+				primary.source === 'system'
+					? 'inset-y-1 w-1 rounded-r-full bg-brand'
+					: 'w-px bg-muted-foreground',
+			tooltip
+		};
+	}
+	const markerClass = (() => {
+		switch (primary.tone) {
+			case 'info':
+				return 'w-1 bg-info';
+			case 'success':
+				return 'w-1 bg-success';
+			case 'warning':
+				return 'w-1 bg-warning';
+			case 'danger':
+				return 'w-1 bg-destructive';
+			case 'neutral':
+				return 'w-1 bg-muted-foreground';
+		}
+	})();
+	return { markerClass, tooltip };
+}

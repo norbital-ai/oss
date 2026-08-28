@@ -89,7 +89,35 @@ export const ANY_COLLECTION = '*';
  */
 export const ARBITRARY_QUERY_INVALIDATION = '\u0000bolt:arbitrary-query';
 
+/**
+ * Runtime-owned reads whose answer is not derived from authored collection rows.
+ *
+ * These are release-, session- or host-owned projections. Treating them like arbitrary handlers made
+ * every tenant-row write invalidate workspace manifests, schema state and settings queries. The next
+ * render then replaced useful content with another wire read even though the answer could not have
+ * changed. Commands which intentionally change session or release state already issue a global
+ * invalidation or rebuild the workspace client.
+ */
+const SYSTEM_QUERY_DEPENDENCIES: Readonly<Record<string, ReadonlyArray<string>>> = {
+	'ai.models': [],
+	'apps.visible': [],
+	'access.explain': [],
+	'access.impersonation': [],
+	'envoys.status': [],
+	'identity.workspaceAccess': [],
+	'schema.plan': [],
+	'schema.validate': [],
+	'schema.verify': [],
+	'secrets.status': [],
+	'sync.shape': [],
+	'workspace.manifest': [],
+	'workspace.authoringManifest': [],
+	'approvals.capabilities': ['approval_request']
+};
+
 export const collectionsFor = (command: string, input: Schema.Json): ReadonlyArray<string> => {
+	const systemDependencies = SYSTEM_QUERY_DEPENDENCIES[command];
+	if (systemDependencies !== undefined) return systemDependencies;
 	if (!command.startsWith('collections.')) return [ANY_COLLECTION];
 	if (input === null || typeof input !== 'object' || Array.isArray(input)) return [ANY_COLLECTION];
 	const collection = Reflect.get(input, 'collection');

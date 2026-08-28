@@ -16,10 +16,7 @@ import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
 import { WEB_AGENT_NAME, type WorkspaceDefinition } from '#lib/authoring/workspace-schema.js';
 import { AutomationProgression } from '#lib/authoring/automations-schema.js';
-import {
-	reconcileMutationSchema,
-	replicaProvisioningSteps
-} from '#lib/compiler/schema-plan.js';
+import { reconcileMutationSchema, replicaProvisioningSteps } from '#lib/compiler/schema-plan.js';
 import * as SystemPrincipal from '#lib/runtime/access/system-principal.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
 import { ChatDocumentRef } from '#lib/runtime/agents/chat-messages.js';
@@ -145,105 +142,6 @@ const SyncDistributeInput = Schema.Struct({
 	...Sync.SyncDistributeRequest.fields
 });
 
-/**
- * The commit observer one transport turn reports through.
- *
- * The turn renders its own note from the parts it committed; all this adds is the envoy hop —
- * post or rewrite the conversation's one bubble, best effort, answering the key to rewrite next.
- * A conversation that is not a transport one (the web agent's) has nothing in flight to post on
- * and answers `null`, which the turn treats as nobody watching.
- */
-/** How many tool steps one turn note shows; the rest collapse into a count. */
-const progressVisibleLines = 3;
-
-/**
- * How long one note must rest before it is rewritten, and how long rewrites are tried at all.
- *
- * The interval coalesces a burst of quick tools into a few honest updates instead of a flickering
- * bubble; the window is WhatsApp's own edit horizon with margin, past which a rewrite is refused
- * by the provider and a replacement message would be exactly the noise in-place updates exist
- * to avoid.
- */
-const PROGRESS_EDIT_INTERVAL_MS = 3_500;
-const PROGRESS_WINDOW_MS = 13 * 60_000;
-
-/**
- * The compact body of one turn note, read straight off the turn's own parts.
- *
- * The parts a turn commits are the only record of its tool steps — a note invents none. A part
- * with a matching result is done and carries a check; one still waiting carries a gear; everything
- * older than the newest few collapses into a count, because a turn that ran six tools does not
- * narrate six lines into somebody's chat.
- */
-const renderProgress = (parts: ReadonlyArray<Agents.TurnPart>): string => {
-	const done = new Set(parts.flatMap((part) => (part.kind === 'tool-result' ? [part.id] : [])));
-	const steps = parts.flatMap((part) =>
-		part.kind === 'tool' ? [{ name: part.name, state: done.has(part.id) }] : []
-	);
-	const shown = steps
-		.slice(-progressVisibleLines)
-		.map(({ name, state }) => `${state ? '✓' : '⚙︎'} ${name}`);
-	const elided =
-		steps.length > progressVisibleLines ? [`… ${steps.length - progressVisibleLines} earlier`] : [];
-	return ['⚙︎ Working', ...elided, ...shown].join('\n');
-};
-
-/**
- * Builds the transport surface one turn reflects into — the envoy hop, paced and keyed here so
- * the agent service knows nothing of WhatsApp. The surface owns the bubble's provider key: the
- * first beat sends it, later beats rewrite it, and `currentKey` names it for the completion, which
- * replaces the bubble with the answer. A conversation that is not a transport one (the web
- * agent's) is learned on the first beat, and the surface goes quiet rather than visiting the
- * runtime on every commit after that.
- */
-const observeProgress = (
-	effectId: EffectId,
-	conversationId: string,
-	envoys: Envoys.Interface
-): Agents.TurnSurface => {
-	let beat = 0;
-	let key: string | null = null;
-	let lastEditAt = 0;
-	const startedAt = Date.now();
-	let quiet = false;
-	return {
-		currentKey: () => key,
-		observe: (parts) =>
-			Effect.suspend(() => {
-				if (quiet) return Effect.void;
-				const now = Date.now();
-				if (now - startedAt > PROGRESS_WINDOW_MS) {
-					quiet = true;
-					return Effect.void;
-				}
-				if (key !== null && now - lastEditAt < PROGRESS_EDIT_INTERVAL_MS) return Effect.void;
-				lastEditAt = now;
-				return Effect.catch(
-					Effect.map(
-						envoys.progress(
-							EffectId.make(`${effectId}:progress:${(beat += 1)}`),
-							conversationId,
-							renderProgress(parts),
-							key
-						),
-						(next) => {
-							if (next !== null) {
-								key = next;
-							} else if (key !== null) {
-								// The bubble was lost between beats — the transport dropped it or the
-								// session moved on. The next beat sends a fresh note instead of a ghost.
-								key = null;
-							} else {
-								quiet = true;
-							}
-						}
-					),
-					() => Effect.void
-				);
-			})
-	};
-};
-
 const AgentEnqueueInput = Schema.Struct({
 	subject: Subject,
 	agent: Schema.NonEmptyString,
@@ -251,9 +149,9 @@ const AgentEnqueueInput = Schema.Struct({
 	turnId: Schema.NonEmptyString,
 	message: Schema.String
 });
-const AgentExecuteInput = Schema.Struct({
-	conversationId: Schema.NonEmptyString,
-	turnId: Schema.NonEmptyString
+const AgentRunInput = Schema.Struct({
+	subject: Subject,
+	conversationId: Schema.NonEmptyString
 });
 const AgentDocumentBindInput = Schema.Struct({
 	subject: Subject,
@@ -398,18 +296,17 @@ const AutomationTaskInput = Schema.Struct({
 	args: Schema.Json,
 	scope: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
 	bolt_run_as: Subject,
+	bolt_depth: Schema.optionalKey(
+		Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+	),
 	/** Injected by the trusted task runner, never accepted from the enqueue payload. */
 	bolt_task_id: Schema.NonEmptyString
 });
+type AutomationTaskInputValue = Schema.Schema.Type<typeof AutomationTaskInput>;
 const AgentOpenInput = Schema.Struct({
 	subject: Subject,
 	agent: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString
-});
-const AgentContinueInput = Schema.Struct({
-	conversationId: Schema.NonEmptyString,
-	agentId: Schema.NonEmptyString,
-	taskId: Schema.NonEmptyString
 });
 const AgentLaneInput = Schema.Struct({ subject: Subject, conversationId: Schema.NonEmptyString });
 const AgentDequeueInput = Schema.Struct({
@@ -1054,9 +951,8 @@ const teamAnswer = Effect.fn('Bolt.teamAnswer')(function* (
  * is the other end: whether this command is one the runtime ever enqueues. Everything here is
  * addressed by a name the workspace declared or by a record the runtime already wrote, and none of
  * it takes an identity — `integrations.pull`/`flush` and `automations.<name>` are the runtime's own
- * machinery, `agents.continue` resumes a parent parked on a child, and `agents.execute` runs one
- * already-persisted mailbox item, while
- * `collections.resume` takes `{ requestId }` and derives its authority from the stored approval:
+ * machinery, while `collections.resume` takes `{ requestId }` and derives its authority from the
+ * stored approval:
  * `Collections.resume` refuses a request that is not `Approved` and replays the write under the
  * subject recorded when the original create was authenticated.
  *
@@ -1072,12 +968,6 @@ const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set([
 	'integrations.flush',
 	'envoys.drain',
 	'envoys.complete',
-	// A delegated turn. `sandbox-tools.ts` has enqueued this since delegation was written, and it was
-	// never listed here — harmless only for as long as nothing executed the queue. The first tick
-	// would have refused every subagent, and the refusal would have named the provenance gate rather
-	// than the missing entry.
-	'agents.execute',
-	'agents.continue',
 	'collections.resume',
 	'collections.discard',
 	// Better Auth persists a sign-in challenge, then posts this private courier task. It carries no
@@ -1289,17 +1179,11 @@ const collectionPage = Effect.fn('Bolt.collectionPage')(function* (
 	const retainedLimit = query.limit * 2;
 	const rows = yield* collections.findMany(effectId, input.subject, {
 		...query,
-		...(input.with === undefined
-			? {}
-			: { with: withoutCollectionQueryProjection(input.with) }),
+		...(input.with === undefined ? {} : { with: withoutCollectionQueryProjection(input.with) }),
 		limit: retainedLimit + 1
 	});
 	const retained = rows.slice(0, retainedLimit);
-	const hydration = normalizeCollectionHydration(
-		workspace.definition,
-		input.collection,
-		retained
-	);
+	const hydration = normalizeCollectionHydration(workspace.definition, input.collection, retained);
 	if (Result.isFailure(hydration)) {
 		return yield* new DispatchError({
 			code: 'invalid_stored_record',
@@ -1895,7 +1779,8 @@ const sha256Hex = Effect.fn('Bolt.sha256Hex')((value: string) =>
 	})
 );
 
-const MUTATION_RECORD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const MUTATION_RECORD_ID =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 /**
  * The stable actor/effective-subject binding for dedup and delivery.
@@ -1916,10 +1801,86 @@ const browserMutationScopeFor = (
 	principalId: actor.userId,
 	authorityId: canonicalJson({
 		effectiveSubjectId: subject.userId,
-		impersonationBinding:
-			impersonatedTeam === null ? 'operator' : `team:${impersonatedTeam}`
+		impersonationBinding: impersonatedTeam === null ? 'operator' : `team:${impersonatedTeam}`
 	}),
 	command: 'collections.mutate'
+});
+
+/** Runs one authored automation body in the invocation that already owns it. */
+const executeAutomationBody = Effect.fn('Bolt.executeAutomationBody')(function* (
+	effectId: EffectId,
+	name: string,
+	input: AutomationTaskInputValue
+) {
+	const automation = (yield* AuthoredRuntimeService).automations[name];
+	if (automation === undefined) {
+		return yield* new DispatchError({
+			code: 'unknown_command',
+			message: `Unknown Bolt automation: ${name}`
+		});
+	}
+	const collections = yield* Collections.Service;
+	const ai = yield* AI.Service;
+	const files = yield* Files.Service;
+	const automations = yield* Automations.Service;
+	const guard = Automations.stoppageGuard(automations, effectId, input.bolt_task_id);
+	const ops = guardAuthoringOps(
+		makeBoundAuthoringOps(
+			effectId,
+			input.bolt_run_as,
+			collections,
+			ai,
+			files,
+			automations,
+			(name, nestedInput, options) =>
+				collections.runAutomation(
+					effectId,
+					name,
+					nestedInput,
+					{},
+					{
+						...options,
+						...(input.bolt_depth === undefined ? {} : { parentDepth: input.bolt_depth })
+					}
+				)
+		),
+		guard
+	);
+	const api = makeAutomationApi(makeAuthoringApi(ops), (value) =>
+		guard('progress').pipe(
+			Effect.andThen(Schema.decodeUnknownEffect(AutomationProgression)(value)),
+			Effect.flatMap((progression) =>
+				automations.progress(effectId, input.bolt_task_id, progression)
+			)
+		)
+	);
+	const args = yield* decode(automation.input ?? Schema.Json, input.args);
+	const output = yield* runAuthoredHandler(() =>
+		automation.handler(api, { args, scope: input.scope ?? {} })
+	);
+	const declaredOutput = yield* decode(automation.output ?? Schema.Unknown, output);
+	return yield* decode(Schema.Json, declaredOutput);
+});
+
+/** Claims and runs an immediate automation without handing its body to the scheduler. */
+const executeDirectAutomation = Effect.fn('Bolt.executeDirectAutomation')(function* (
+	effectId: EffectId,
+	name: string,
+	taskId: string
+) {
+	return yield* (yield* Automations.Service).execute(
+		effectId,
+		name,
+		taskId,
+		(raw, attemptEffectId) =>
+			Effect.gen(function* () {
+				const input = yield* decode(AutomationTaskInput, {
+					...(typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw : {}),
+					bolt_task_id: taskId
+				});
+				return yield* executeAutomationBody(EffectId.make(attemptEffectId), name, input);
+			})
+	);
 });
 
 /**
@@ -2504,8 +2465,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 							? delta.mutationId
 							: null
 				})),
-				mutationConfirmations:
-					response.kind === 'delta' ? delivery.confirmations : [],
+				mutationConfirmations: response.kind === 'delta' ? delivery.confirmations : [],
 				mutationRejections: delivery.rejections
 			});
 		}
@@ -2709,9 +2669,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					actorId: authority.actor.userId,
 					effectiveSubjectId: authority.subject.userId,
 					impersonationBinding:
-						authority.impersonatedTeam === null
-							? 'operator'
-							: `team:${authority.impersonatedTeam}`
+						authority.impersonatedTeam === null ? 'operator' : `team:${authority.impersonatedTeam}`
 				},
 				identity
 			);
@@ -2756,15 +2714,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				)
 			);
 		}
-		case 'agents.execute': {
-			const input = yield* decode(AgentExecuteInput, commandInput);
+		case 'agents.run': {
+			const input = yield* decode(AgentRunInput, commandInput);
 			return json(
-				yield* (yield* Agents.Service).execute(
-					effectId,
-					input.conversationId,
-					input.turnId,
-					observeProgress(effectId, input.conversationId, yield* Envoys.Service)
-				)
+				yield* (yield* Agents.Service).run(effectId, input.subject, input.conversationId)
 			);
 		}
 		case 'agents.documents.attach': {
@@ -2814,16 +2767,6 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				input.conversationId
 			);
 			return json({ opened: true, conversationId: input.conversationId });
-		}
-		case 'agents.continue': {
-			const input = yield* decode(AgentContinueInput, commandInput);
-			yield* (yield* Agents.Service).continue(
-				effectId,
-				input.conversationId,
-				input.agentId,
-				input.taskId
-			);
-			return json({ continued: true });
 		}
 		case 'agents.dequeue': {
 			const input = yield* decode(AgentDequeueInput, commandInput);
@@ -3049,20 +2992,16 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				input.subject,
 				described.dependencies
 			);
-			const groups = yield* (yield* Collections.Service).findGrouped(
-				effectId,
-				input.subject,
-				{
-					collection: input.collection,
-					where: input.where,
-					userFilter: input.userFilter,
-					orderBy: input.orderBy,
-					with: withoutCollectionQueryProjection(input.with),
-					search: input.search,
-					groupBy: input.group.by,
-					lanes: input.group.lanes ?? []
-				}
-			);
+			const groups = yield* (yield* Collections.Service).findGrouped(effectId, input.subject, {
+				collection: input.collection,
+				where: input.where,
+				userFilter: input.userFilter,
+				orderBy: input.orderBy,
+				with: withoutCollectionQueryProjection(input.with),
+				search: input.search,
+				groupBy: input.group.by,
+				lanes: input.group.lanes ?? []
+			});
 			const hydration = normalizeCollectionHydration(
 				workspace.definition,
 				input.collection,
@@ -3085,14 +3024,12 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		case 'collections.findFirst': {
 			const input = yield* decode(CollectionFindInput, commandInput);
 			const row = yield* (yield* Collections.Service).findFirst(
-					effectId,
-					input.subject,
-					collectionQuery(input)
-				);
+				effectId,
+				input.subject,
+				collectionQuery(input)
+			);
 			return json(
-				row === undefined
-					? null
-					: projectCollectionQueryRecord(row, input.columns, input.with)
+				row === undefined ? null : projectCollectionQueryRecord(row, input.columns, input.with)
 			);
 		}
 		case 'collections.count': {
@@ -3160,9 +3097,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					actorId: authority.actor.userId,
 					effectiveSubjectId: authority.subject.userId,
 					impersonationBinding:
-						authority.impersonatedTeam === null
-							? 'operator'
-							: `team:${authority.impersonatedTeam}`
+						authority.impersonatedTeam === null ? 'operator' : `team:${authority.impersonatedTeam}`
 				},
 				input.partitionKey
 			);
@@ -3280,7 +3215,8 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				graph: submittedGraph,
 				baseVersions: submittedBaseVersions
 			});
-			const graph = reconciliation.resolution === 'quarantined' ? submittedGraph : reconciliation.graph;
+			const graph =
+				reconciliation.resolution === 'quarantined' ? submittedGraph : reconciliation.graph;
 			const baseVersions =
 				reconciliation.resolution === 'quarantined'
 					? submittedBaseVersions
@@ -3532,23 +3468,24 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			);
 		}
 		/**
-		 * The exact DDL this tenant's database was provisioned with, in order.
+		 * The exact DDL this subject's browser replica is provisioned with, in order.
 		 *
-		 * Served so a browser replica can build a local PostgreSQL whose schema cannot drift from the
-		 * server's — the alternative being a second renderer in the client, which is the mistake the
-		 * plan/lineage split already was. The lineage is carried in the compiled workspace, so this
-		 * needs no generator at runtime and ships no drizzle-kit to the browser.
+		 * The server renders it from the compiled current model, so the browser has no schema generator
+		 * and no drizzle-kit. It intentionally differs from the authoritative schema in one respect:
+		 * private tables and relationship constraints are absent because server-side writes enforce them.
 		 *
-		 * Ordering matches what a real provision applies: the plan's extensions, functions and `bolt_*`
-		 * tables first, because generated columns call `bolt_date` and trigram indexes need
-		 * `pg_trgm`; then the lineage, which owns every authored collection; then the plan's supplements
-		 * for what Drizzle cannot express.
+		 * This is a replica projection rather than the server plan or its lineage: only the extensions
+		 * and pure projection functions the current tenant shape needs, followed by the current replicated
+		 * tenant tables and `approval_request`. Server-private tables and relationship constraints never
+		 * cross this boundary.
 		 */
 		case 'sync.provisioning': {
 			const input = yield* decode(SyncShapeInput, commandInput);
 			const workspace = yield* Workspace.Service;
 			const access = yield* AccessControl.Service;
 			const steps = replicaProvisioningSteps(workspace.definition);
+			const collections = workspace.definition.collections.filter(isReplicatedCollection);
+			const collectionNames = new Set(collections.map(({ name }) => name));
 			const schemaFingerprint =
 				workspace.definition.mutationCompatibility?.currentSchemaFingerprint;
 			if (schemaFingerprint === undefined)
@@ -3571,7 +3508,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				 * does not already state — these are the same collections, spelled as declarations
 				 * instead of as `create table`.
 				 */
-				collections: workspace.definition.collections.map(({ name, fields }) => {
+				collections: collections.map(({ name, fields }) => {
 					const projection = access.predicate(input.subject, 'read', name);
 					return {
 						name,
@@ -3581,7 +3518,12 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 							: {})
 					};
 				}),
-				relations: workspace.definition.relations ?? []
+				// Local joins can only name tables that exist in this replica. Relations to private runtime
+				// collections remain in the authored catalog for Bolt's remote identity renderer, but never
+				// become local schema metadata or an invitation to query a private table.
+				relations: (workspace.definition.relations ?? []).filter(
+					({ source, target }) => collectionNames.has(source) && collectionNames.has(target)
+				)
 			};
 			return json(
 				Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(JSON.stringify(provisioning))
@@ -3617,8 +3559,15 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		case 'automations.start': {
 			const input = yield* decode(AutomationStartInput, commandInput);
 			const automations = yield* Automations.Service;
+			const taskId = yield* automations.start(effectId, input.name, input.input);
+			const result = yield* executeDirectAutomation(
+				EffectId.make(`${effectId}:execute`),
+				input.name,
+				taskId
+			);
 			return json({
-				taskId: yield* automations.start(effectId, input.name, input.input)
+				taskId,
+				result: result ?? null
 			});
 		}
 		case 'automations.register': {
@@ -3628,8 +3577,16 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		}
 		case 'automations.runStep': {
 			const input = yield* decode(AutomationStartInput, commandInput);
+			const automations = yield* Automations.Service;
+			const taskId = yield* automations.runStep(effectId, input.name, input.input);
+			const result = yield* executeDirectAutomation(
+				EffectId.make(`${effectId}:execute`),
+				input.name,
+				taskId
+			);
 			return json({
-				taskId: yield* (yield* Automations.Service).runStep(effectId, input.name, input.input)
+				taskId,
+				result: result ?? null
 			});
 		}
 		case 'automations.stop': {
@@ -3640,7 +3597,12 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		case 'automations.resume': {
 			const input = yield* decode(AutomationLifecycleInput, commandInput);
 			yield* (yield* Automations.Service).resume(effectId, input.name, input.taskId);
-			return json({ resumed: true });
+			const result = yield* executeDirectAutomation(
+				EffectId.make(`${effectId}:execute`),
+				input.name,
+				input.taskId
+			);
+			return json({ resumed: true, result: result ?? null });
 		}
 		case 'envoys.receive': {
 			const input = yield* decode(EnvoyReceiveInput, commandInput);
@@ -3759,29 +3721,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				const automation = (yield* AuthoredRuntimeService).automations[name];
 				if (automation !== undefined) {
 					const input = yield* decode(AutomationTaskInput, commandInput);
-					const collections = yield* Collections.Service;
-					const ai = yield* AI.Service;
-					const files = yield* Files.Service;
-					const automations = yield* Automations.Service;
-					const guard = Automations.stoppageGuard(automations, effectId, input.bolt_task_id);
-					const ops = guardAuthoringOps(
-						makeBoundAuthoringOps(effectId, input.bolt_run_as, collections, ai, files, automations),
-						guard
-					);
-					const api = makeAutomationApi(makeAuthoringApi(ops), (value) =>
-						guard('progress').pipe(
-							Effect.andThen(Schema.decodeUnknownEffect(AutomationProgression)(value)),
-							Effect.flatMap((progression) =>
-								automations.progress(effectId, input.bolt_task_id, progression)
-							)
-						)
-					);
-					const args = yield* decode(automation.input ?? Schema.Json, input.args);
-					const output = yield* runAuthoredHandler(() =>
-						automation.handler(api, { args, scope: input.scope ?? {} })
-					);
-					const declaredOutput = yield* decode(automation.output ?? Schema.Unknown, output);
-					return json(yield* decode(Schema.Json, declaredOutput));
+					return json(yield* executeAutomationBody(effectId, name, input));
 				}
 			}
 			return yield* new DispatchError({

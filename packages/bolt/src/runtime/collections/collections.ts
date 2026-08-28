@@ -32,11 +32,12 @@ import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
 import { Subject } from '#lib/runtime/identity/identity.js';
-import { automationSubject } from '#lib/runtime/identity/static-identity.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
 import * as Workspace from '#lib/runtime/workspace.js';
+import { AutomationProgression } from '#lib/authoring/automations-schema.js';
 import { SYSTEM_COLUMN_NAMES } from '#lib/authoring/system-row-model.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
+import { SYSTEM_COLLECTION_NAMES } from '#lib/runtime/schema/system-collections.js';
 import type {
 	CollectionDefinition,
 	FieldDefinition,
@@ -140,12 +141,13 @@ import {
 import {
 	afterMillisOf,
 	AuthoredRuntimeService,
+	guardAuthoringOps,
 	inferOp,
+	makeAutomationApi,
 	makeAuthoringApi,
 	makePolicyDecisionApi,
 	MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS,
 	runAuthoredHandler,
-	runAutomationOp,
 	inferenceTurnContent,
 	type AuthoringOps,
 	type AuthoringReadOps,
@@ -370,11 +372,7 @@ const StoredBrowserMutationFence = Schema.Struct({
 	}),
 	idempotencyKey: CollectionMutationIdempotencyKey,
 	requestDigest: Schema.NonEmptyString,
-	issuedAtEpochMs: Schema.Number.check(
-		Schema.isInt(),
-		Schema.isGreaterThan(0),
-		Schema.isFinite()
-	),
+	issuedAtEpochMs: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isFinite()),
 	deviceSequence: CollectionMutationDeviceSequence,
 	partitionKey: Schema.NonEmptyString,
 	schemaFingerprint: Schema.NonEmptyString,
@@ -912,6 +910,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			const queue = yield* TaskQueue.Service;
 			const automations = yield* Automations.Service;
 			const authored = yield* AuthoredRuntimeService;
+			const authoringCollectionNames = new Set([
+				...workspace.definition.collections
+					.map(({ name }) => name)
+					.filter((name) => !SYSTEM_COLLECTION_NAMES.has(name)),
+				'approval_request'
+			]);
 			/** The authenticated composite key, in the same order as the unique database index. */
 			const browserMutationScopeParameters = (
 				scope: BrowserMutationScope,
@@ -987,10 +991,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				binding: BrowserMutationPartitionBinding,
 				identity: BrowserMutationPartitionIdentity
 			) {
-				if (
-					identity.tenantId !== binding.tenantId ||
-					identity.environment !== binding.environment
-				)
+				if (identity.tenantId !== binding.tenantId || identity.environment !== binding.environment)
 					return yield* invalidBrowserMutationLedger(
 						'The physical sync partition identity does not match its tenant/environment binding.'
 					);
@@ -1016,42 +1017,38 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					);
 				return identity;
 			});
-			const browserMutationPartition = Effect.fn('Collections.browserMutationPartition')(
-				function* (
-					effectId: EffectId,
-					binding: BrowserMutationPartitionBinding,
-					partitionKey: string
-				) {
-					const result = yield* database.execute(effectId, {
-						_tag: 'Query',
-						// repository-health:allow SQL1 -- fixed private table; every lookup value is bound.
-						sql: `update ${BROWSER_PARTITION_REGISTRY_TABLE} set last_seen_at = now() where partition_key = $1 and tenant_id = $2 and environment = $3 and actor_id = $4 and effective_subject_id = $5 and impersonation_binding = $6 returning identity, schema_fingerprint, authority_generation`,
-						parameters: [partitionKey, ...browserPartitionBindingParameters(binding)]
-					});
-					const row = result.rows[0];
-					if (row === undefined) return undefined;
-					if (!isJsonObject(row))
-						return yield* invalidBrowserMutationLedger(
-							'The physical sync partition registry returned a non-object row.'
-						);
-					const identity = browserPartitionIdentityOf(row['identity']);
-					if (
-						identity === undefined ||
-						identity.key !== partitionKey ||
-						identity.tenantId !== binding.tenantId ||
-						identity.environment !== binding.environment ||
-						identity.schemaFingerprint !== row['schema_fingerprint'] ||
-						identity.authorityGeneration !== row['authority_generation']
-					)
-						return yield* invalidBrowserMutationLedger(
-							'The physical sync partition registry contains an invalid identity.'
-						);
-					return identity;
-				}
-			);
-			const browserMutationDelivery = Effect.fn(
-				'Collections.browserMutationDelivery'
-			)(function* (
+			const browserMutationPartition = Effect.fn('Collections.browserMutationPartition')(function* (
+				effectId: EffectId,
+				binding: BrowserMutationPartitionBinding,
+				partitionKey: string
+			) {
+				const result = yield* database.execute(effectId, {
+					_tag: 'Query',
+					// repository-health:allow SQL1 -- fixed private table; every lookup value is bound.
+					sql: `update ${BROWSER_PARTITION_REGISTRY_TABLE} set last_seen_at = now() where partition_key = $1 and tenant_id = $2 and environment = $3 and actor_id = $4 and effective_subject_id = $5 and impersonation_binding = $6 returning identity, schema_fingerprint, authority_generation`,
+					parameters: [partitionKey, ...browserPartitionBindingParameters(binding)]
+				});
+				const row = result.rows[0];
+				if (row === undefined) return undefined;
+				if (!isJsonObject(row))
+					return yield* invalidBrowserMutationLedger(
+						'The physical sync partition registry returned a non-object row.'
+					);
+				const identity = browserPartitionIdentityOf(row['identity']);
+				if (
+					identity === undefined ||
+					identity.key !== partitionKey ||
+					identity.tenantId !== binding.tenantId ||
+					identity.environment !== binding.environment ||
+					identity.schemaFingerprint !== row['schema_fingerprint'] ||
+					identity.authorityGeneration !== row['authority_generation']
+				)
+					return yield* invalidBrowserMutationLedger(
+						'The physical sync partition registry contains an invalid identity.'
+					);
+				return identity;
+			});
+			const browserMutationDelivery = Effect.fn('Collections.browserMutationDelivery')(function* (
 				effectId: EffectId,
 				scope: BrowserMutationScope,
 				idempotencyKeys: ReadonlyArray<string>,
@@ -1773,12 +1770,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						composer
 							.select({ id: columns['id']! })
 							.from(table)
-							.where(
-								and(
-									eq(columns['id']!, id),
-									AccessControl.predicateExpression(visibility)
-								)
-							)
+							.where(and(eq(columns['id']!, id), AccessControl.predicateExpression(visibility)))
 							.limit(1)
 					);
 					if (result.rows.length > 0) return;
@@ -1890,6 +1882,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 */
 			type HookWriteOps = Pick<AuthoringOps, 'mutate'>;
 			const buildReadOps = (effectId: EffectId, subject: Identity.Subject): AuthoringReadOps => ({
+				allowedCollections: authoringCollectionNames,
 				findMany: (collection, input) => findMany(effectId, subject, { collection, ...input }),
 				findFirst: (collection, input) =>
 					findMany(effectId, subject, { collection, ...input, limit: 1 }).pipe(
@@ -1920,11 +1913,22 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				 * many writes it could fit into thirty seconds and every one of them is a fact.
 				 */
 				depth = 0,
-				staged?: HookWriteOps
+				staged?: HookWriteOps,
+				automationDepth?: number
 			): AuthoringOps => {
 				return {
 					...buildReadOps(effectId, subject),
-					runAutomation: runAutomationOp(effectId, automations),
+					runAutomation: (name, input, options) =>
+						startAutomation(
+							effectId,
+							name,
+							input,
+							{},
+							{
+								...options,
+								...(automationDepth === undefined ? {} : { parentDepth: automationDepth })
+							}
+						),
 					mutate:
 						staged?.mutate ??
 						((collection, values) =>
@@ -1943,8 +1947,99 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				staged?: HookWriteOps
 			): RuntimeAuthoringApi =>
 				makeAuthoringApi(buildOps(effectId, subject, elevated, depth, staged));
+
+			const AutomationExecutionInput = Schema.Struct({
+				args: Schema.Json,
+				scope: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
+				bolt_run_as: Subject,
+				bolt_depth: Schema.optionalKey(
+					Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+				)
+			});
+			const runAutomationBody = Effect.fn('Collections.runAutomationBody')(function* (
+				name: string,
+				taskId: string,
+				raw: Schema.Json,
+				attemptEffectId: string
+			) {
+				const declaration = authored.automations[name];
+				if (declaration === undefined) {
+					return yield* new AuthoredRefusal({ message: `Automation ${name} is not declared.` });
+				}
+				const admitted = yield* Schema.decodeUnknownEffect(AutomationExecutionInput)(raw);
+				const turnEffectId = EffectId.make(attemptEffectId);
+				const guard = Automations.stoppageGuard(automations, turnEffectId, taskId);
+				const api = makeAutomationApi(
+					makeAuthoringApi(
+						guardAuthoringOps(
+							buildOps(
+								turnEffectId,
+								admitted.bolt_run_as,
+								false,
+								0,
+								undefined,
+								admitted.bolt_depth
+							),
+							guard
+						)
+					),
+					(value) =>
+						guard('progress').pipe(
+							Effect.andThen(Schema.decodeUnknownEffect(AutomationProgression)(value)),
+							Effect.flatMap((progression) =>
+								automations.progress(turnEffectId, taskId, progression)
+							)
+						)
+				);
+				const args = yield* Schema.decodeUnknownEffect(declaration.input ?? Schema.Json)(
+					admitted.args
+				);
+				const output = yield* runAuthoredHandler(() =>
+					declaration.handler(api, { args, scope: admitted.scope ?? {} })
+				);
+				const declaredOutput = yield* Schema.decodeUnknownEffect(
+					declaration.output ?? Schema.Unknown
+				)(output);
+				return yield* Schema.decodeUnknownEffect(Schema.Json)(declaredOutput);
+			});
 			/**
-			 * Enqueues the change-triggered automations a write just satisfied.
+			 * Admits and immediately executes one automation unless the caller explicitly supplied a delay.
+			 * The durable row is lifecycle/input state; this Effect remains the sole owner of the body.
+			 */
+			const startAutomation = Effect.fn('Collections.startAutomation')(function* (
+				effectId: EffectId,
+				name: string,
+				input: Schema.Json,
+				scope: Readonly<Record<string, Schema.Json>>,
+				options?: Readonly<{
+					readonly after?: string | number;
+					readonly taskId?: string;
+					readonly parentDepth?: number;
+				}>
+			) {
+				const afterMillis = afterMillisOf(options?.after);
+				if (afterMillis === undefined) {
+					return yield* new AuthoredRefusal({
+						message: `"${String(options?.after)}" is not a delay ${name} can wait — pass milliseconds, '5 seconds', '1 hour', or another Effect duration.`
+					});
+				}
+				const taskId = yield* automations.start(effectId, name, input, {
+					afterMillis,
+					scope,
+					...(options?.taskId === undefined ? {} : { taskId: options.taskId }),
+					...(options?.parentDepth === undefined ? {} : { parentDepth: options.parentDepth })
+				});
+				if (afterMillis > 0) return { taskId };
+				yield* automations.execute(
+					EffectId.make(`${effectId}:execute`),
+					name,
+					taskId,
+					(raw, attemptEffectId) => runAutomationBody(name, taskId, raw, attemptEffectId)
+				);
+				return { taskId };
+			});
+			/**
+			 * Runs the change-triggered automations a write just satisfied.
 			 *
 			 * A scheduled automation runs when a host wakes it; a change automation exists because a
 			 * record did, so the write itself is the trigger — the row is read back elevated and handed
@@ -1965,33 +2060,25 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				if (triggers.length === 0) return;
 				const row =
 					event === 'deleted' ? undefined : yield* readRowElevated(effectId, collection, id);
-				for (const automation of triggers) {
-					const taskId = `${effectId}:event:${automation.name}`;
-					const runAs = automationSubject(automation, tenant.tenantId);
-					// Ignored rather than propagated, as it always was: a change trigger must not fail the
-					// write that caused it. What changes is what an ignored failure now costs — the enqueue is
-					// a row, so an automation that throws when it runs backs off and retries instead of
-					// vanishing, and one that exhausts its attempts is a `failed` row somebody can find.
-					yield* queue
-						.enqueue(EffectId.make(taskId), [
-							{
-								command: `automations.${automation.name}`,
-								input: {
-									args: {},
-									scope:
-										event === 'deleted' || row === undefined
-											? {}
-											: { incoming_record: row as Schema.Json },
-									bolt_run_as: runAs
-								},
-								effectId: taskId
-							}
-						])
-						.pipe(Effect.ignore);
-				}
+				yield* Effect.forEach(
+					triggers,
+					(automation) => {
+						const taskId = `${effectId}:event:${automation.name}`;
+						const scope =
+							event === 'deleted' || row === undefined
+								? {}
+								: { incoming_record: row as Schema.Json };
+						// A change notification is best effort with respect to the write that caused it, but the
+						// run itself is direct: admission and the first I/O step happen in this same Effect.
+						return startAutomation(EffectId.make(taskId), automation.name, {}, scope, {
+							taskId
+						}).pipe(Effect.ignore);
+					},
+					{ concurrency: 'unbounded', discard: true }
+				);
 			});
 			/**
-			 * The same enqueues, for a whole batch, in one facility call.
+			 * The same direct starts for a whole batch.
 			 *
 			 * `emitChangeEvents` is per record and costs two round trips out of the isolate when a trigger
 			 * is declared — a read to build `incoming_record`, then an enqueue — and a batch ran it in a
@@ -2027,22 +2114,34 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						automation.trigger.event === event
 				);
 				if (triggers.length === 0) return;
-				const enqueues = triggers.flatMap((automation) =>
+				const runs = triggers.flatMap((automation) =>
 					records.map((record) => {
 						const taskId = `${record.taskScope}:event:${automation.name}`;
-						const runAs = automationSubject(automation, tenant.tenantId);
-						const scope: Schema.Json =
+						const scope: Readonly<Record<string, Schema.Json>> =
 							event === 'deleted' ? {} : { incoming_record: record.row as Schema.Json };
-						return {
-							command: `automations.${automation.name}`,
-							input: { args: {}, scope, bolt_run_as: runAs },
-							effectId: taskId
-						};
+						return { automation, taskId, scope };
 					})
 				);
-				// Ignored rather than propagated, as the per-row form always did: a change trigger must not
-				// fail the write that caused it.
-				yield* queue.enqueue(effectId, enqueues).pipe(Effect.ignore);
+				// Admission, claim and settlement each cross the database boundary once for the whole batch.
+				// The bodies remain independent I/O Effects and run together after the write; no timer or Wake
+				// owns them, and one failed body cannot keep another run from being settled.
+				const admitted = yield* automations.startMany(
+					effectId,
+					runs.map(({ automation, taskId, scope }) => ({
+						effectId: EffectId.make(taskId),
+						name: automation.name,
+						input: {},
+						options: { taskId, scope }
+					}))
+				);
+				yield* automations
+					.executeMany(
+						EffectId.make(`${effectId}:execute`),
+						admitted,
+						(name, taskId, raw, attemptEffectId) =>
+							runAutomationBody(name, taskId, raw, attemptEffectId)
+					)
+					.pipe(Effect.ignore);
 			});
 			/**
 			 * Decodes one payload through the collection's declared input, if it has one.
@@ -2255,83 +2354,81 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 * `distance` is attached beside the record rather than merged into it, because it describes
 			 * the comparison and not the row — and a collection is free to have a column of that name.
 			 */
-			const findNearest: Interface['findNearest'] = Effect.fn('Collections.findNearest')(
-				function* (effectId: EffectId, subject: Identity.Subject, input: NearestQueryInput) {
-					const definition = yield* workspace.collection(input.collection);
-					yield* access.authorize(subject, 'read', input.collection);
-					const refuse = (field: string, message: string) =>
-						new WhereCompileError({ collection: input.collection, field, message });
-					const column = input.column;
-					if (!Object.hasOwn(definition.fields, column)) {
-						return yield* refuse(
-							'column',
-							`'${column}' is not a column of ${input.collection}; findNearest needs the vector column to measure against.`
-						);
-					}
-					const operator = NEAREST_OPERATORS[input.metric];
-					if (operator === undefined) {
-						return yield* refuse(
-							'metric',
-							`No distance metric '${String(input.metric)}'. Accepted metrics: ${Object.keys(NEAREST_OPERATORS).join(', ')}.`
-						);
-					}
-					if (
-						input.probe.length === 0 ||
-						!input.probe.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
-					) {
-						return yield* refuse(
-							'probe',
-							"probe must be a non-empty array of finite numbers with the column's dimension."
-						);
-					}
-					if (input.maxDistance !== undefined && !Number.isFinite(input.maxDistance)) {
-						return yield* refuse('maxDistance', 'maxDistance must be a finite number.');
-					}
-					const context = makeWhereContext(
-						input.collection,
-						definition.fields,
-						workspace.definition
+			const findNearest: Interface['findNearest'] = Effect.fn('Collections.findNearest')(function* (
+				effectId: EffectId,
+				subject: Identity.Subject,
+				input: NearestQueryInput
+			) {
+				const definition = yield* workspace.collection(input.collection);
+				yield* access.authorize(subject, 'read', input.collection);
+				const refuse = (field: string, message: string) =>
+					new WhereCompileError({ collection: input.collection, field, message });
+				const column = input.column;
+				if (!Object.hasOwn(definition.fields, column)) {
+					return yield* refuse(
+						'column',
+						`'${column}' is not a column of ${input.collection}; findNearest needs the vector column to measure against.`
 					);
-					const compiled = yield* compiledFilter(input, context);
-					const visibility = access.predicate(subject, 'read', input.collection);
-					const limit = Math.min(500, Math.max(1, Math.trunc(input.limit ?? 100)));
-					const table = queryTableFor(input.collection, definition.fields);
-					const columns = columnsOf(table);
-					const vectorColumn = columns[column]!;
-					const distance = vectorDistance(vectorColumn, operator, input.probe);
-					const result = yield* executeBuilt(
-						effectId,
-						database,
-						composer
-							.select({ ...columns, distance: aliased(distance, 'distance') })
-							.from(table)
-							.where(
-								and(
-									isNotNull(vectorColumn),
-									compiled,
-									AccessControl.predicateExpression(visibility),
-									input.maxDistance === undefined
-										? undefined
-										: lessThanOrEqual(distance, input.maxDistance)
-								)
-							)
-							.orderBy(distance)
-							.limit(limit)
-					);
-					return result.rows.map((value) => {
-						const { distance: measured, ...record } = queryRowOf(value);
-						return {
-							...access.mask(
-								subject,
-								'read',
-								input.collection,
-								decodeReferenceRow(record, definition.fields)
-							),
-							distance: typeof measured === 'number' ? measured : Number(measured ?? Number.NaN)
-						};
-					});
 				}
-			);
+				const operator = NEAREST_OPERATORS[input.metric];
+				if (operator === undefined) {
+					return yield* refuse(
+						'metric',
+						`No distance metric '${String(input.metric)}'. Accepted metrics: ${Object.keys(NEAREST_OPERATORS).join(', ')}.`
+					);
+				}
+				if (
+					input.probe.length === 0 ||
+					!input.probe.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
+				) {
+					return yield* refuse(
+						'probe',
+						"probe must be a non-empty array of finite numbers with the column's dimension."
+					);
+				}
+				if (input.maxDistance !== undefined && !Number.isFinite(input.maxDistance)) {
+					return yield* refuse('maxDistance', 'maxDistance must be a finite number.');
+				}
+				const context = makeWhereContext(input.collection, definition.fields, workspace.definition);
+				const compiled = yield* compiledFilter(input, context);
+				const visibility = access.predicate(subject, 'read', input.collection);
+				const limit = Math.min(500, Math.max(1, Math.trunc(input.limit ?? 100)));
+				const table = queryTableFor(input.collection, definition.fields);
+				const columns = columnsOf(table);
+				const vectorColumn = columns[column]!;
+				const distance = vectorDistance(vectorColumn, operator, input.probe);
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({ ...columns, distance: aliased(distance, 'distance') })
+						.from(table)
+						.where(
+							and(
+								isNotNull(vectorColumn),
+								compiled,
+								AccessControl.predicateExpression(visibility),
+								input.maxDistance === undefined
+									? undefined
+									: lessThanOrEqual(distance, input.maxDistance)
+							)
+						)
+						.orderBy(distance)
+						.limit(limit)
+				);
+				return result.rows.map((value) => {
+					const { distance: measured, ...record } = queryRowOf(value);
+					return {
+						...access.mask(
+							subject,
+							'read',
+							input.collection,
+							decodeReferenceRow(record, definition.fields)
+						),
+						distance: typeof measured === 'number' ? measured : Number(measured ?? Number.NaN)
+					};
+				});
+			});
 			/**
 			 * A column value as a parameter, and the placeholder that receives it.
 			 *
@@ -2873,9 +2970,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						.returning({ record_id: columns['id']! })
 				);
 				if (result.affectedRows > 0)
-					yield* wake
-						.announce(EffectId.make(`${effectId}:approval-release-wake`), [collection])
-						.pipe(Effect.timeout(250), Effect.ignore);
+					yield* wake.announce(EffectId.make(`${effectId}:approval-release-wake`), [collection]);
 			});
 			const approvalReleaseStatement = (
 				collection: string,
@@ -3583,9 +3678,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					if (!isJsonObject(row)) continue;
 					const ordinal = row['__bolt_graph_row_ordinal'];
 					const record = row['__bolt_graph_row_record'];
-					if (typeof ordinal === 'number' && isJsonObject(record)) rawByOrdinal.set(ordinal, record);
+					if (typeof ordinal === 'number' && isJsonObject(record))
+						rawByOrdinal.set(ordinal, record);
 				}
-				for (const [[key, request], ordinal] of ordered.map((entry, index) => [entry, index] as const)) {
+				for (const [[key, request], ordinal] of ordered.map(
+					(entry, index) => [entry, index] as const
+				)) {
 					const raw = rawByOrdinal.get(ordinal);
 					if (raw === undefined) {
 						loaded.set(key, undefined);
@@ -3646,7 +3744,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					rawByOrdinal.set(ordinal, bucket);
 				}
 				const loaded = new Map<string, RelatedRowsResult>();
-				for (const [[key, request], ordinal] of ordered.map((entry, index) => [entry, index] as const)) {
+				for (const [[key, request], ordinal] of ordered.map(
+					(entry, index) => [entry, index] as const
+				)) {
 					const definition = yield* workspace.collection(request.edge.childCollection);
 					const raw = rawByOrdinal.get(ordinal) ?? [];
 					loaded.set(key, {
@@ -3691,19 +3791,16 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const relationshipSnapshots = new Map<string, RelationshipSnapshot>();
 				const relatedRowsCache = new Map<string, RelatedRowsResult>();
 				const storedGraphRowsCache = new Map<string, StoredGraphRow | undefined>();
-				const cacheRelatedRows = (
-					request: RelatedRowsRequest,
-					value: RelatedRowsResult
-				): void => {
+				const cacheRelatedRows = (request: RelatedRowsRequest, value: RelatedRowsResult): void => {
 					relatedRowsCache.set(relatedRowsKey(request.edge, request.parentId), value);
 					for (const [index, row] of value.rows.entries()) {
 						const id = row['id'];
 						const raw = value.raw[index];
 						if (typeof id !== 'string' || raw === undefined) continue;
-						storedGraphRowsCache.set(
-							storedGraphRowKey(request.edge.childCollection, id),
-							{ row, snapshot: JSON.stringify(raw) }
-						);
+						storedGraphRowsCache.set(storedGraphRowKey(request.edge.childCollection, id), {
+							row,
+							snapshot: JSON.stringify(raw)
+						});
 					}
 				};
 				const relatedRows = Effect.fn('Collections.relatedRows')(function* (
@@ -3749,7 +3846,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							if (edge === undefined || !Array.isArray(value)) continue;
 							const desiredIds = new Set(
 								value.flatMap((child) => {
-									if (child === null || typeof child !== 'object' || Array.isArray(child)) return [];
+									if (child === null || typeof child !== 'object' || Array.isArray(child))
+										return [];
 									const childId = Reflect.get(child, 'id');
 									return typeof childId === 'string' && childId.length > 0 ? [childId] : [];
 								})
@@ -3765,8 +3863,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								if (typeof childId !== 'string' || childId.length === 0) continue;
 								const browserExisting = options.browserMutation?.baseVersions.some(
 									(entry) =>
-										entry.row.collection === edge.childCollection &&
-										entry.row.recordId === childId
+										entry.row.collection === edge.childCollection && entry.row.recordId === childId
 								);
 								collect(
 									edge.childCollection,
@@ -3780,10 +3877,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						}
 					};
 					collect(rootCollection, rootPayload, options.rootId, options.rootAction);
-					const stored = yield* storedGraphRowsMany(
-						EffectId.make(`${effectId}:graph:row-wave`),
-						[...rows.values()]
-					);
+					const stored = yield* storedGraphRowsMany(EffectId.make(`${effectId}:graph:row-wave`), [
+						...rows.values()
+					]);
 					for (const [key, value] of stored) storedGraphRowsCache.set(key, value);
 					let wave = [...initial.values()];
 					const visited = new Set<string>();
@@ -3928,107 +4024,110 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					| BrowserMutationReplay
 					| AuthoredRefusal
 					| InvocationBudget.NestingLimitExceeded
-				> = Effect.fn('Collections.prepareGraphDelete')(function* (
-					collection,
-					row,
-					depth,
-					requiresBrowserBaseVersion
-				) {
-					const operationPosition = operations.length;
-					const id = row['id'];
-					if (typeof id !== 'string' || id.length === 0)
-						return yield* graphRefusal(
-							collection,
+				> = Effect.fn('Collections.prepareGraphDelete')(
+					function* (collection, row, depth, requiresBrowserBaseVersion) {
+						const operationPosition = operations.length;
+						const id = row['id'];
+						if (typeof id !== 'string' || id.length === 0)
+							return yield* graphRefusal(
+								collection,
+								'delete',
+								`A stored ${collection} row selected for reconciliation has no identifier.`
+							);
+						if (depth > GRAPH_DEPTH_LIMIT)
+							return yield* graphRefusal(
+								collection,
+								'delete',
+								`A cascading relationship delete on ${collection} is more than ${GRAPH_DEPTH_LIMIT} levels deep.`
+							);
+						const identity = `${collection}\u0000${id}`;
+						if (preparedDeletes.has(identity)) return;
+						preparedDeletes.add(identity);
+						const definition = yield* workspace.collection(collection);
+						const snapshot = yield* recordSnapshot(collection, id);
+						if (options.browserMutation !== undefined && requiresBrowserBaseVersion)
+							yield* assertBrowserBaseVersion(
+								EffectId.make(`${effectId}:base-version:${collection}:${id}`),
+								options.browserMutation,
+								collection,
+								id,
+								row
+							);
+						yield* ensureGraphRowUnlocked(collection, id);
+						if (!options.elevated) yield* access.authorize(subject, 'delete', collection);
+						const visibility = options.elevated
+							? AccessControl.unrestricted
+							: access.predicate(subject, 'delete', collection);
+						registerExecutionInvariant(collection, 'delete', visibility);
+						const module = authored.hooks[collection];
+						if (options.runHooks && module?.delete?.perRecord?.before !== undefined) {
+							const api = buildApi(
+								effectId,
+								subject,
+								false,
+								hookDepth + depth + 1,
+								stageHookWrites
+							);
+							yield* runHook(module.delete.perRecord.before, { existing: row, api }, api, {
+								collection,
+								action: 'delete.before'
+							});
+						}
+						const context = { record: row };
+						yield* authorizePolicyWrite(
+							EffectId.make(`${effectId}:graph:policy-authorization:${collection}:${id}`),
+							subject,
+							visibility,
 							'delete',
-							`A stored ${collection} row selected for reconciliation has no identifier.`
-						);
-					if (depth > GRAPH_DEPTH_LIMIT)
-						return yield* graphRefusal(
 							collection,
-							'delete',
-							`A cascading relationship delete on ${collection} is more than ${GRAPH_DEPTH_LIMIT} levels deep.`
+							context
 						);
-					const identity = `${collection}\u0000${id}`;
-					if (preparedDeletes.has(identity)) return;
-					preparedDeletes.add(identity);
-					const definition = yield* workspace.collection(collection);
-					const snapshot = yield* recordSnapshot(collection, id);
-					if (options.browserMutation !== undefined && requiresBrowserBaseVersion)
-						yield* assertBrowserBaseVersion(
-							EffectId.make(`${effectId}:base-version:${collection}:${id}`),
-							options.browserMutation,
+						const approval = yield* resolveApproval(
+							EffectId.make(`${effectId}:graph:approval-flow:${collection}:${id}`),
+							subject,
+							visibility,
+							'delete',
+							collection,
+							context,
+							options.runHooks
+						);
+						if (approval !== undefined)
+							approvalRequirements.push({
+								collection,
+								action: 'delete',
+								approval
+							});
+						// Deleting an owned row necessarily deletes the rows it owns. Plan every descendant through
+						// the same authorization, approval, hooks, history, sync and event pipeline before the
+						// database's foreign-key cascade can make them disappear invisibly.
+						for (const relation of workspace.definition.relations) {
+							if (relation.source !== collection || relation.cardinality !== 'many') continue;
+							const edge = resolveWritableManyRelation(
+								workspace.definition,
+								collection,
+								relation.name
+							);
+							if (edge === undefined || edge.parentColumn !== 'id' || !edge.cascade) continue;
+							const related = yield* relatedRows(scope(), edge, id);
+							registerRelationshipSnapshot(edge, id, related.json);
+							for (const child of related.rows)
+								yield* prepareDelete(edge.childCollection, child, depth + 1, false);
+						}
+						operations.splice(operationPosition, 0, {
+							action: 'delete',
 							collection,
 							id,
-							row
-						);
-					yield* ensureGraphRowUnlocked(collection, id);
-					if (!options.elevated) yield* access.authorize(subject, 'delete', collection);
-					const visibility = options.elevated
-						? AccessControl.unrestricted
-						: access.predicate(subject, 'delete', collection);
-					registerExecutionInvariant(collection, 'delete', visibility);
-					const module = authored.hooks[collection];
-					if (options.runHooks && module?.delete?.perRecord?.before !== undefined) {
-						const api = buildApi(effectId, subject, false, hookDepth + depth + 1, stageHookWrites);
-						yield* runHook(module.delete.perRecord.before, { existing: row, api }, api, {
-							collection,
-							action: 'delete.before'
+							values: {},
+							definition,
+							visibility,
+							previous: row,
+							snapshot,
+							...(module === undefined ? {} : { module }),
+							depth,
+							taskScope: scope()
 						});
 					}
-					const context = { record: row };
-					yield* authorizePolicyWrite(
-						EffectId.make(`${effectId}:graph:policy-authorization:${collection}:${id}`),
-						subject,
-						visibility,
-						'delete',
-						collection,
-						context
-					);
-					const approval = yield* resolveApproval(
-						EffectId.make(`${effectId}:graph:approval-flow:${collection}:${id}`),
-						subject,
-						visibility,
-						'delete',
-						collection,
-						context,
-						options.runHooks
-					);
-					if (approval !== undefined)
-						approvalRequirements.push({
-							collection,
-							action: 'delete',
-							approval
-						});
-					// Deleting an owned row necessarily deletes the rows it owns. Plan every descendant through
-					// the same authorization, approval, hooks, history, sync and event pipeline before the
-					// database's foreign-key cascade can make them disappear invisibly.
-					for (const relation of workspace.definition.relations) {
-						if (relation.source !== collection || relation.cardinality !== 'many') continue;
-						const edge = resolveWritableManyRelation(
-							workspace.definition,
-							collection,
-							relation.name
-						);
-						if (edge === undefined || edge.parentColumn !== 'id' || !edge.cascade) continue;
-						const related = yield* relatedRows(scope(), edge, id);
-						registerRelationshipSnapshot(edge, id, related.json);
-						for (const child of related.rows)
-							yield* prepareDelete(edge.childCollection, child, depth + 1, false);
-					}
-					operations.splice(operationPosition, 0, {
-						action: 'delete',
-						collection,
-						id,
-						values: {},
-						definition,
-						visibility,
-						previous: row,
-						snapshot,
-						...(module === undefined ? {} : { module }),
-						depth,
-						taskScope: scope()
-					});
-				});
+				);
 
 				const prepareNode: (
 					collection: string,
@@ -4092,9 +4191,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						// A before hook may add a relationship graph the browser never observed. Those rows are
 						// trusted server-derived work and cannot honestly be required to carry client base versions.
 						const browserRelationshipNames = new Set(
-							requiresBrowserBaseVersion
-								? submitted.included.map((entry) => entry.edge.name)
-								: []
+							requiresBrowserBaseVersion ? submitted.included.map((entry) => entry.edge.name) : []
 						);
 						let own: Readonly<Record<string, Schema.Json>> = submitted.own;
 						let included = submitted.included;
@@ -4139,13 +4236,11 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						// decode, `prepare`, `before`, and the graph split of what `before` returned — is one
 						// path, because it is one write.
 						if (action === 'update') {
-							previous = (
-								yield* storedGraphRow(
-									EffectId.make(`${effectId}:graph:row:${collection}:${id}`),
-									collection,
-									id
-								)
-							)?.row;
+							previous = (yield* storedGraphRow(
+								EffectId.make(`${effectId}:graph:row:${collection}:${id}`),
+								collection,
+								id
+							))?.row;
 							if (
 								options.browserMutation !== undefined &&
 								!options.elevated &&
@@ -4383,8 +4478,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				// Prime the complete submitted graph before recursive preparation starts. Relationship reads
 				// introduced only by a hook retain the single-request fallback above; authored input and every
 				// cascade descendant discovered from its omissions consume the wave cache.
-				if (!options.elevated)
-					yield* access.authorize(subject, options.rootAction, rootCollection);
+				if (!options.elevated) yield* access.authorize(subject, options.rootAction, rootCollection);
 				yield* primeRelatedRows();
 				const rootId = yield* prepareNode(rootCollection, rootPayload, 0, undefined, {
 					id: options.rootId,
@@ -4966,12 +5060,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									approval.browserMutation.idempotencyKey,
 									approval.browserMutation.requestDigest
 								).pipe(
-									Effect.catchTag(
-										'Bolt.Collections.MutationIdempotencyConflict',
-										(conflict) =>
-											Effect.fail(
-												mutationPhaseFailure('commit', collection, [], conflict)
-											)
+									Effect.catchTag('Bolt.Collections.MutationIdempotencyConflict', (conflict) =>
+										Effect.fail(mutationPhaseFailure('commit', collection, [], conflict))
 									)
 								);
 								if (replay !== undefined) return yield* replayBrowserMutationOutcome(replay);
@@ -5793,7 +5883,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						() =>
 							new ApprovalConflict({ requestId, reason: 'stored approval operation is malformed' })
 					)
-					);
+				);
 			});
 			const approvalBrowserMutationOutcome = Effect.fn(
 				'Collections.approvalBrowserMutationOutcome'
@@ -5808,7 +5898,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						Effect.fail(
 							new ApprovalConflict({
 								requestId,
-								reason: 'stored browser mutation approval provenance has a conflicting request digest'
+								reason:
+									'stored browser mutation approval provenance has a conflicting request digest'
 							})
 						)
 					)
@@ -5853,7 +5944,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					if (operation.action === 'create' && operation.mode !== 'declarative')
 						return yield* new ApprovalConflict({
 							requestId,
-							reason: 'stored browser mutation approval provenance requires declarative create cleanup'
+							reason:
+								'stored browser mutation approval provenance requires declarative create cleanup'
 						});
 					const message =
 						state._tag === 'Rejected'
@@ -5888,7 +5980,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					)
 						return yield* new ApprovalConflict({
 							requestId,
-							reason: 'stored browser mutation approval provenance does not match its ledger outcome'
+							reason:
+								'stored browser mutation approval provenance does not match its ledger outcome'
 						});
 					const releasesRecord = operation.action !== 'create';
 					const statements = [
@@ -5913,9 +6006,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					];
 					yield* database.execute(effectId, { _tag: 'Transaction', statements });
 					if (releasesRecord)
-						yield* wake
-							.announce(EffectId.make(`${effectId}:approval-release-wake`), [operation.collection])
-							.pipe(Effect.timeout(250), Effect.ignore);
+						yield* wake.announce(EffectId.make(`${effectId}:approval-release-wake`), [
+							operation.collection
+						]);
 					return;
 				}
 				const definition = yield* workspace.collection(operation.collection);
@@ -5974,7 +6067,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					)
 						return yield* new ApprovalConflict({
 							requestId,
-							reason: 'stored browser mutation approval provenance does not match its ledger outcome'
+							reason:
+								'stored browser mutation approval provenance does not match its ledger outcome'
 						});
 				}
 				const definition = yield* workspace.collection(operation.collection);
@@ -6021,10 +6115,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									);
 									if (
 										durable?._tag === 'Committed' &&
-										Schema.toEquivalence(BrowserMutationOutcome)(
-											durable,
-											browserMutation.outcome
-										)
+										Schema.toEquivalence(BrowserMutationOutcome)(durable, browserMutation.outcome)
 									)
 										return;
 								}
@@ -6137,10 +6228,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								).pipe(
 									Effect.flatMap((outcome) =>
 										outcome?._tag === 'Committed' &&
-										Schema.toEquivalence(BrowserMutationOutcome)(
-											outcome,
-											browserMutation.outcome
-										)
+										Schema.toEquivalence(BrowserMutationOutcome)(outcome, browserMutation.outcome)
 											? Effect.succeed(true)
 											: Effect.failCause(cause)
 									)
@@ -6169,6 +6257,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				}
 			});
 			return Service.of({
+				authoringCollectionNames,
+				runAutomation: (effectId, name, input, scope = {}, options) =>
+					startAutomation(effectId, name, input, scope, options),
 				findMany,
 				findFirst: Effect.fn('Collections.findFirst')(function* (effectId, subject, input) {
 					return (yield* findMany(effectId, subject, { ...input, limit: 1 }))[0];

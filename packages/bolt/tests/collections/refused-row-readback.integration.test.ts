@@ -12,6 +12,7 @@ import {
 	type WorkspaceDefinition
 } from '../../src/authoring/workspace-schema.js';
 import { describeIntegrations } from '../../src/authoring/integration-introspection.js';
+import { automation } from '../../src/authoring/automations-schema.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { emptyAuthoredRuntime } from '../../src/runtime/collections/authored.js';
 import { makeBoltTestRuntime, type BoltTestRuntime } from '../support/bolt-test-layer.js';
@@ -50,7 +51,14 @@ const workspaceWith = (integrations: WorkspaceDefinition['integrations']): Works
 		],
 		apps: [app({ name: 'refused', label: 'Refused' })],
 		teams: { writers: ['note-quota'] },
-		automations: [],
+		automations: [
+			automation({
+				name: 'on_note',
+				trigger: { _tag: 'Change', collection: 'notes', event: 'created' },
+				command: 'on_note',
+				policies: ['automation-data']
+			})
+		],
 		integrations,
 		prompt: 'You are the test workspace agent.',
 		tools: [],

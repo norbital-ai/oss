@@ -13,6 +13,7 @@ import { collection, field } from '../../src/authoring/workspace-schema.js';
 import {
 	canonicalSchemaStepEncoding,
 	digestSchemaSteps,
+	planTableNames,
 	type SchemaStep
 } from '../../src/compiler/schema-plan.js';
 import { dispatchInvocation } from '../../src/runtime/dispatch.js';
@@ -69,6 +70,7 @@ describe('schema barrier wire', () => {
 		const provisioning = provisioningAnswer.value as {
 			readonly fingerprint: string;
 			readonly steps: ReadonlyArray<SchemaStep>;
+			readonly collections: ReadonlyArray<{ readonly name: string }>;
 		};
 
 		expect(facts).toMatchObject({
@@ -88,6 +90,16 @@ describe('schema barrier wire', () => {
 		expect(facts.affectedCollections).not.toContain('user');
 		expect(facts.affectedCollections).not.toContain('automation_run');
 		expect(facts).not.toHaveProperty('generation');
+		expect(provisioning.collections.map(({ name }) => name).toSorted()).toEqual([
+			'accounts',
+			'approval_request',
+			'zebra'
+		]);
+		expect(planTableNames({ fingerprint: provisioning.fingerprint, steps: provisioning.steps })).toEqual([
+			'accounts',
+			'approval_request',
+			'zebra'
+		]);
 	});
 
 	it('pins the canonical digest input to ordered id/sql JSON encoded as UTF-8', () => {

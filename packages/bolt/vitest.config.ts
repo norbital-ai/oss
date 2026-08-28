@@ -34,15 +34,13 @@ export default defineConfig({
 		unstubEnvs: true,
 		unstubGlobals: true,
 		pool: 'forks',
-		// The integration suite provisions a real PGlite database per test file, and each one is a
-		// Postgres — memory and CPU, not a mock. Left to spawn one fork per core, the machine
-		// saturates and files that pass alone time out at five seconds together: nine failures that
-		// change identity between runs and say nothing about the code. A suite whose default run is
-		// flaky is worse than a slow one, because every real regression then has to be argued with.
-		//
-		// The unit suite has no such contention — nothing it starts outlives a function call — so it
-		// takes every core the runner has.
-		maxWorkers: integrationSuite ? 4 : undefined,
+		// Both suites include compiler-heavy files. Letting Vitest spawn one fork per core makes their
+		// TypeScript programs and temporary workspace builds compete for the same CPU and filesystem;
+		// on an 18-core host the otherwise-green unit suite reproducibly times out nine files at five
+		// seconds. Four workers keep useful parallelism while the same suite remains inside its real
+		// timeout budget. The integration suite also provisions a PGlite database per file, so it uses
+		// the same bound for memory as well as CPU.
+		maxWorkers: 4,
 		// Four workers sharing a small Actions runner push database boot and an in-process TypeScript
 		// program past five seconds even though their focused runs take two to three. Integration work
 		// gets that headroom; a unit test that needs more than five seconds is a unit test in the

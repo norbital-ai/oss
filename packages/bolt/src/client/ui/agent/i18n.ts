@@ -99,7 +99,6 @@ const boltAgentMessages = defineMessages({
 		'bolt.agent.send': 'Send message',
 		'bolt.agent.steps': '{count} steps',
 		'bolt.agent.stop': 'Stop generating',
-		'bolt.agent.streaming': 'Streaming',
 		'bolt.agent.subagentTranscriptAria': 'Subagent transcript',
 		'bolt.agent.system': 'System',
 		'bolt.agent.task': 'Task',
@@ -174,7 +173,7 @@ const boltAgentMessages = defineMessages({
 		'bolt.shell.openWorkspaceAgent': 'Open workspace agent',
 		'bolt.shell.openWorkspaceAgentWithShortcut': 'Open workspace agent ({shortcut})',
 		'bolt.shell.workspaceAgentDescription':
-			'Answers stream here and stay with this tenant workspace.',
+			'Replies appear here as each step completes and stay with this tenant workspace.',
 		'bolt.shell.workspaceAgentTitle': 'Workspace agent'
 	},
 	zh: {
@@ -272,7 +271,6 @@ const boltAgentMessages = defineMessages({
 		'bolt.agent.send': '发送消息',
 		'bolt.agent.steps': '{count} 个步骤',
 		'bolt.agent.stop': '停止生成',
-		'bolt.agent.streaming': '生成中',
 		'bolt.agent.subagentTranscriptAria': '子助手记录',
 		'bolt.agent.system': '系统',
 		'bolt.agent.task': '任务',
@@ -344,7 +342,8 @@ const boltAgentMessages = defineMessages({
 		'bolt.shell.omniTitle': '搜索工作区',
 		'bolt.shell.openWorkspaceAgent': '打开工作区助手',
 		'bolt.shell.openWorkspaceAgentWithShortcut': '打开工作区助手（{shortcut}）',
-		'bolt.shell.workspaceAgentDescription': '回答会在此处流式呈现，并保留在该租户工作区中。',
+		'bolt.shell.workspaceAgentDescription':
+			'每个步骤完成后，回复会显示在此处，并保留在该租户工作区中。',
 		'bolt.shell.workspaceAgentTitle': '工作区助手'
 	}
 });

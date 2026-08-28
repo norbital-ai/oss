@@ -83,7 +83,7 @@ export interface CollectionKanbanProps<
 	TCollections extends CollectionRegistry,
 	TName extends CollectionKanbanName<TCollections>
 > {
-	client: CollectionDbClient<TCollections>;
+	client: CollectionDbClient<TCollections, TName>;
 	collection: TName;
 	view?: string;
 	groupBy: CollectionKanbanFieldName<CollectionRow<TCollections[TName]>>;

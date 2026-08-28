@@ -25,7 +25,8 @@ import {
 const SUPPORTED_OFFLINE_MUTATION_HORIZON_MS =
 	COLLECTION_MUTATION_SCHEMA_COMPATIBILITY_HORIZON_MILLIS;
 /** A tab that vanished while sending cannot own a journal entry forever. Server dedup makes retry safe. */
-const MUTATION_PUSH_STALE_AFTER_MS = 30_000;
+/** The exact lease after which another owner may replay the same idempotent mutation. */
+export const MUTATION_PUSH_STALE_AFTER_MS = 30_000;
 
 /** The exact operation fields the runtime adds durable identity and ordering to before transport. */
 export type CollectionMutationGraph = ProtocolCollectionMutationGraph;
