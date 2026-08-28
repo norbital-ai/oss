@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { setWorkspaceSession } from '../../src/client/session.js';
 import {
+	partitionEventData,
 	readableSubscriptionCollections,
 	subscribeToPartition,
 	type EventSourceLike
@@ -51,6 +52,13 @@ const source = () => {
 beforeEach(session);
 
 describe('partition dependency subscription', () => {
+	it('reads an SSE payload from a cross-realm event object', () => {
+		const event = Object.create(null) as { data?: string };
+		event.data = '{"kind":"delta"}';
+		expect(partitionEventData(event)).toBe('{"kind":"delta"}');
+		expect(partitionEventData({})).toBeUndefined();
+	});
+
 	it('subscribes only to the subject-readable part of the workspace catalogue', () => {
 		expect(
 			readableSubscriptionCollections(

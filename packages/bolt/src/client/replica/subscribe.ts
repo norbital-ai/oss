@@ -129,13 +129,22 @@ const parsePartition = (data: string | undefined) =>
 	});
 const parseReady = (data: string | undefined) =>
 	Result.try(() => Schema.decodeUnknownSync(PartitionReadyWire)(JSON.parse(data ?? '')));
+
+/** Reads SSE payloads without assuming the event was constructed in this JavaScript realm. */
+export const partitionEventData = (event: unknown): string | undefined => {
+	if (event === null || typeof event !== 'object' || !('data' in event)) return undefined;
+	const data = Reflect.get(event, 'data');
+	return data === undefined ? undefined : String(data);
+};
+
 const eventSourceFactory = (url: string): EventSourceLike => {
 	const source = new EventSource(url, { withCredentials: true });
 	return {
 		addEventListener: (type, listener) =>
-			source.addEventListener(type, (event) =>
-				listener(event instanceof MessageEvent ? { data: String(event.data) } : {})
-			),
+			source.addEventListener(type, (event) => {
+				const data = partitionEventData(event);
+				listener(data === undefined ? {} : { data });
+			}),
 		close: () => source.close(),
 		set onerror(listener: ((event: unknown) => void) | null) {
 			source.onerror = listener;
