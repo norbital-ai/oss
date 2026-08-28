@@ -1296,6 +1296,7 @@ export const createCollectionMutationJournal = async (
 			}),
 		observeAuthoritativeBatch: (batch) =>
 			locked(async () => {
+				const observedAtEpochMs = now();
 				let envelope = read();
 				let changed = false;
 				const retirements: Array<MutationOverlayRetirement> = [];
@@ -1361,11 +1362,24 @@ export const createCollectionMutationJournal = async (
 				}
 				for (const entry of envelope.entries) {
 					const confirmation = entry.authoritative.confirmation;
+					const interruptedPushConfirmed =
+						entry.pushState === 'pushing' &&
+						(entry.lastAttemptAtEpochMs === undefined ||
+							entry.lastAttemptAtEpochMs <=
+								observedAtEpochMs - MUTATION_PUSH_STALE_AFTER_MS);
 					if (
-						entry.pushState !== 'awaiting-authoritative-delta' ||
+						(entry.pushState !== 'awaiting-authoritative-delta' &&
+							!interruptedPushConfirmed) ||
 						confirmation === undefined
 					)
 						continue;
+					if (interruptedPushConfirmed) {
+						complete({
+							kind: 'accepted',
+							idempotencyKey: entry.idempotencyKey,
+							settledAtEpochMs: observedAtEpochMs
+						});
+					}
 					retirements.push(overlayRetirementOf(entry, confirmation));
 					envelope = removeEntry(envelope, entry.idempotencyKey);
 					changed = true;

@@ -101,6 +101,36 @@ describe('the durable browser mutation journal', () => {
 		});
 	});
 
+	it('retires an interrupted push when the authority confirms it after the response was lost', async () => {
+		let at = 1_700_000_000_000;
+		const journal = await createCollectionMutationJournal(identity, {
+			storage: storage(),
+			now: () => at,
+			randomId: () => 'mutation-lost-response'
+		});
+		const reserved = await journal.reserve(draft);
+		await journal.markPushing(reserved.idempotencyKey);
+		const settlement = journal.settlement(reserved.idempotencyKey);
+
+		at += 30_001;
+		const result = await journal.observeAuthoritativeBatch({
+			deltas: [],
+			confirmations: [
+				{ mutationId: reserved.idempotencyKey, cursor: { xid: 12, sequence: 3 } }
+			],
+			mutationRejections: []
+		});
+
+		expect(result.retirements).toMatchObject([
+			{
+				idempotencyKey: reserved.idempotencyKey,
+				confirmationCursor: { xid: 12, sequence: 3 }
+			}
+		]);
+		await expect(settlement.settled).resolves.toMatchObject({ kind: 'accepted' });
+		expect(await journal.entries()).toEqual([]);
+	});
+
 	it('isolates policy-equivalent actors that share one physical server partition', async () => {
 		const persisted = storage();
 		let next = 0;
