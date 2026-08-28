@@ -3709,6 +3709,13 @@ const startReplica = (
 							// Status-only confirmations have no readable row. Retire them only after the
 							// authoritative batch has committed to the replica.
 							await confirmMutationDeltas(batch);
+							// A tab can reload while a command response is in flight, leaving the durable
+							// journal in `pushing`. The explicit server confirmation is remembered, but
+							// intentionally cannot retire that entry until the interrupted-push lease is
+							// stale. Keep checking that exact status even while the main SSE is otherwise
+							// idle; waiting for another row delta leaves the overlay stuck forever.
+							if (batch.mutationConfirmations.length > 0 && pendingMutationIds.length > 0)
+								requestMutationStatus();
 							if (batch.complete) {
 								settleCatchUp();
 								accessState?.syncStatus.markConnected();
