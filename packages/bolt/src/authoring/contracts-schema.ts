@@ -1001,8 +1001,8 @@ export type CollectionPipelines<S extends AnySchema, N extends TableName<S>> = {
 			context: { readonly input: unknown },
 			api: Api<S>
 		) =>
-			| Effect.Effect<ReadonlyArray<MutationInsertFor<S, N>>, unknown, never>
-			| ReadonlyArray<MutationInsertFor<S, N>>;
+			| Effect.Effect<ReadonlyArray<MutateInput<S, N>>, unknown, never>
+			| ReadonlyArray<MutateInput<S, N>>;
 	};
 };
 type CollectionEventTrigger<S extends AnySchema, N extends TableName<S>> =

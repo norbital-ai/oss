@@ -86,11 +86,12 @@ const authored = {
 	...emptyAuthoredRuntime,
 	hooks: {
 		notes: {
-			create: {
+			mutate: {
 				perRecord: {
 					after: {
 						description: 'records which written row it was handed',
 						handler: (context: unknown) => {
+							if (Reflect.get(context as object, 'previous') !== undefined) return undefined;
 							afterRecords.push(
 								(context as { readonly record?: Readonly<Record<string, unknown>> }).record
 							);
@@ -274,21 +275,22 @@ describe('an authored create the predicate refused', () => {
 			...emptyAuthoredRuntime,
 			hooks: {
 				notes: {
-					create: {
+					mutate: {
 						perRecord: {
 							before: {
 								description: 'creates a second note through the authored mutation api',
 								handler: (context: unknown, api: unknown) =>
 									Effect.gen(function* () {
 										const input = (context as { readonly input: Record<string, unknown> }).input;
+										if (Reflect.get(context as object, 'existing') !== undefined) return input;
 										const notes = (api as { readonly db: Record<string, Record<string, Function>> })
 											.db['notes'];
 										const mutate = notes?.['mutate'];
 										if (typeof mutate !== 'function')
 											return yield* Effect.die('notes.mutate is unavailable');
-										innerAnswer = yield* (
-											mutate as (v: unknown) => Effect.Effect<unknown>
-										)({ body: 'inner' }).pipe(Effect.result);
+										innerAnswer = yield* (mutate as (v: unknown) => Effect.Effect<unknown>)({
+											body: 'inner'
+										}).pipe(Effect.result);
 										return input;
 									})
 							}

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { text } from '../../src/authoring/index.js';
-import { collection, workspace } from '../../src/authoring/workspace-schema.js';
+import { collection, field, workspace } from '../../src/authoring/workspace-schema.js';
 import { buildSchemaPlan, replicaProvisioningSteps } from '../../src/compiler/schema-plan.js';
 
 /**
@@ -19,7 +18,7 @@ describe('replica provisioning order', () => {
 		name: 'dispatch',
 		version: '1',
 		collections: [
-			collection({ name: 'job_assignments', fields: { note: text() } })
+			collection({ name: 'job_assignments', fields: { note: field.string() } })
 		],
 		apps: [],
 		policies: [],

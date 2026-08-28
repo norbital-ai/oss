@@ -31,7 +31,7 @@ describe('replica fallback reporting', () => {
 	it('reports a reason at every server-only fallback', () => {
 		const calls = [...runtime.matchAll(/options\.onStorageTier\?\.\(\s*'server-only'([^)]*)\)/gu)];
 		expect(calls.length).toBeGreaterThanOrEqual(5);
-		for (const [, rest] of calls) expect(rest.trim()).not.toBe('');
+		for (const [, rest = ''] of calls) expect(rest.trim()).not.toBe('');
 	});
 
 	it('passes the storage decision’s own reason through unchanged', () => {

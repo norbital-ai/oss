@@ -488,17 +488,31 @@ export const compileModelTables = <
  * The operation/phase pairs an authored `+hooks.ts` actually declares.
  *
  * The Studio reports a hook count per collection, and counting files would say "1" for a module
- * declaring five handlers. The declaration is an ordinary object — `{ create: { before: { handler } } }`
- * — so the leaves are countable directly.
+ * declaring five handlers. The declaration is an ordinary object —
+ * `{ mutate: { prepare, perRecord: { before: { handler } } } }` — so the leaves are countable
+ * directly. `perRecord` is structural documentation, not part of the phase name exposed by the
+ * runtime, hence `mutate.before` rather than `mutate.perRecord.before`.
  */
 export const describeHooks = (declaration: unknown): ReadonlyArray<string> => {
 	if (declaration === null || typeof declaration !== 'object') return [];
 	const named: Array<string> = [];
-	for (const [operation, phases] of Object.entries(declaration)) {
-		if (phases === null || typeof phases !== 'object') continue;
-		for (const [phase, hook] of Object.entries(phases)) {
+	for (const operation of ['mutate', 'delete'] as const) {
+		const operationDeclaration = Reflect.get(declaration, operation);
+		if (operationDeclaration === null || typeof operationDeclaration !== 'object') continue;
+		if (
+			operation === 'mutate' &&
+			typeof Reflect.get(operationDeclaration, 'prepare') === 'function'
+		) {
+			named.push('mutate.prepare');
+		}
+		const perRecord = Reflect.get(operationDeclaration, 'perRecord');
+		if (perRecord === null || typeof perRecord !== 'object') continue;
+		for (const phase of ['before', 'after'] as const) {
+			const hook = Reflect.get(perRecord, phase);
 			if (hook === null || typeof hook !== 'object') continue;
-			if (typeof Reflect.get(hook, 'handler') === 'function') named.push(`${operation}.${phase}`);
+			if (typeof Reflect.get(hook, 'handler') === 'function') {
+				named.push(`${operation}.${phase}`);
+			}
 		}
 	}
 	return named.toSorted();

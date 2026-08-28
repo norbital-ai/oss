@@ -13,7 +13,7 @@ import {
 /**
  * Both per-row costs are declared, or the measurement is of a path that never ran.
  *
- * `create.after` is what used to force a second read of a row that had just been read back, and a
+ * `mutate.after` is what used to force a second read of a row that had just been read back, and a
  * change trigger is what used to force a third read plus an enqueue. A collection with neither
  * exercises none of it — `emitChangeEvents` returns immediately when no automation watches the
  * collection — so a fixture without them would pass this test no matter what the pipeline does.
@@ -22,7 +22,7 @@ const authored = {
 	...emptyAuthoredRuntime,
 	hooks: {
 		notes: {
-			create: {
+			mutate: {
 				perRecord: {
 					after: { description: 'observe the written row', handler: () => undefined }
 				}

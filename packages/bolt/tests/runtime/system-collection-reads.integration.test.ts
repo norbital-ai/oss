@@ -287,6 +287,7 @@ const RUNTIME_OWNED = [
 	'team',
 	'chat_session',
 	'chat_message',
+	'automation_run',
 	'bolt_notifications'
 ];
 
@@ -311,6 +312,10 @@ describe('reading runtime-owned collections as an ordinary member', () => {
 					`${name} was refused to a member: ${outcome.failure.reason} (${outcome.failure.action} on ${outcome.failure.resource})`
 				);
 			expect(outcome._tag).toBe('Success');
+			if (outcome._tag === 'Success')
+				expect(Reflect.get(outcome.success.value as object, 'serverOnly')).toBe(
+					name !== 'approval_request'
+				);
 		}
 	});
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CollectionHooks, CreateGraph } from '../../src/authoring/contracts-schema.js';
+import type { CollectionHooks, MutateGraph } from '../../src/authoring/contracts-schema.js';
 
 /**
  * That a nested write is checked at compile time, not discovered at run time.
@@ -56,7 +56,7 @@ interface TestSchema {
 	};
 }
 
-type RunGraph = CreateGraph<TestSchema, 'payroll_runs'>;
+type RunGraph = MutateGraph<TestSchema, 'payroll_runs'>;
 
 /** Columns alone: no expansion is required of anyone. */
 const flat: RunGraph = { company_id: 'c', period: '2026-08' };
@@ -100,7 +100,7 @@ const expandsAOneRelation: RunGraph = { company_id: 'c', period: '2026-08', payr
 
 /** And the same rules hold through the hook that returns one, which is the point. */
 const hooks: CollectionHooks<TestSchema, 'payroll_runs'> = {
-	create: {
+	mutate: {
 		perRecord: {
 			before: {
 				description: 'Builds a run and its payslips.',

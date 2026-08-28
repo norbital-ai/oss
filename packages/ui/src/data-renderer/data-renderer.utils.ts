@@ -10,6 +10,9 @@ import {
 	formatPhoneDisplay,
 	phoneCountryFromLocale
 } from '#lib/data-renderer/phone_number/phone_number.utils';
+import { coerceNumericValue } from '#lib/data-renderer/numeric/numeric.values';
+
+export { coerceNumericValue } from '#lib/data-renderer/numeric/numeric.values';
 
 type Translate = (key: string, vars?: MessageVars) => string;
 export type { Translate };
@@ -117,8 +120,8 @@ function formatScalar(
 		case 'numeric':
 		case 'number':
 		case 'integer': {
-			const numeric = typeof value === 'number' ? value : Number(value);
-			return Number.isFinite(numeric)
+			const numeric = coerceNumericValue(value);
+			return numeric !== null
 				? new Intl.NumberFormat(locale).format(numeric)
 				: String(value);
 		}

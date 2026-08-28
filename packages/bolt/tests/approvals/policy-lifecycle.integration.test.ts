@@ -125,39 +125,30 @@ const authored = {
 	approvalFlows: functions.approvalFlows,
 	hooks: {
 		records: {
-			create: {
+			mutate: {
 				perRecord: {
 					before: {
 						description: 'Derive the server-owned status before policy decisions.',
 						handler: (context: unknown) => {
 							const input = objectAt(context, 'input');
-							events.push(`create.before:${String(input['title'])}`);
-							return { ...input, status: 'created-prepared' };
-						}
-					},
-					after: {
-						description: 'Observe only a settled stored create.',
-						handler: (context: unknown) => {
-							const record = objectAt(context, 'record');
-							events.push(`create.after:${String(record['status'])}`);
-						}
-					}
-				}
-			},
-			update: {
-				perRecord: {
-					before: {
-						description: 'Derive an update status before policy decisions.',
-						handler: (context: unknown) => {
-							const input = objectAt(context, 'input');
+							const existing = Reflect.get(context as object, 'existing');
+							if (existing === undefined) {
+								events.push(`create.before:${String(input['title'])}`);
+								return { ...input, status: 'created-prepared' };
+							}
 							events.push(`update.before:${String(input['title'])}`);
 							return { ...input, status: 'updated-prepared' };
 						}
 					},
 					after: {
-						description: 'Observe only a settled stored update.',
+						description: 'Observe only a settled stored mutation.',
 						handler: (context: unknown) => {
 							const record = objectAt(context, 'record');
+							const previousValue = Reflect.get(context as object, 'previous');
+							if (previousValue === undefined) {
+								events.push(`create.after:${String(record['status'])}`);
+								return;
+							}
 							const previous = objectAt(context, 'previous');
 							const changes = objectAt(context, 'changes');
 							events.push(
@@ -370,13 +361,14 @@ describe('policy and hook lifecycle', () => {
 				approvalFlows: transitionFunctions.approvalFlows,
 				hooks: {
 					versions: {
-						create: {
+						mutate: {
 							perRecord: {
 								before: {
 									description: 'Closes the predecessor inside the successor graph.',
 									handler: (context: unknown, api: unknown) =>
 										Effect.gen(function* () {
 											const input = objectAt(context, 'input');
+											if (Reflect.get(context as object, 'existing') !== undefined) return input;
 											const predecessor = String(input['supersedes_id']);
 											transitionEvents.push(`prepare:${predecessor}`);
 											const database = objectAt(api, 'db');

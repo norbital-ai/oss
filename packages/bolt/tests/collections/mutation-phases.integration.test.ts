@@ -54,7 +54,7 @@ const hooksRefusingIn = (site: 'before' | 'after') => ({
 	...emptyAuthoredRuntime,
 	hooks: {
 		notes: {
-			create: {
+			mutate: {
 				perRecord: {
 					[site]: {
 						description: `refuses in ${site}`,
@@ -106,7 +106,7 @@ describe('a batched write that fails', () => {
 		const cause = Collections.unwrapMutationPhase(failure);
 		expect(cause).toBeInstanceOf(AuthoredRefusal);
 		expect((cause as AuthoredRefusal).message).toBe('A note must name a subject.');
-		expect((cause as AuthoredRefusal).action).toBe('create.before');
+		expect((cause as AuthoredRefusal).action).toBe('mutate.before');
 	}, 60_000);
 
 	it('reports an after-hook refusal as settle, naming the rows that are already facts', async () => {
@@ -124,7 +124,7 @@ describe('a batched write that fails', () => {
 		expect([...committed].toSorted()).toEqual(stored.map((row) => String(row['id'])).toSorted());
 		const cause = Collections.unwrapMutationPhase(failure);
 		expect(cause).toBeInstanceOf(AuthoredRefusal);
-		expect((cause as AuthoredRefusal).action).toBe('create.after');
+		expect((cause as AuthoredRefusal).action).toBe('mutate.after');
 	}, 60_000);
 
 	it('leaves a successful batch untouched', async () => {

@@ -308,11 +308,9 @@
 		if (status !== 'ready') return status;
 		if (syncStatus === undefined) return 'Sync status unavailable';
 		if (syncStatus.issues.length > 0) return 'Sync issues need attention';
-		if (syncStatus.connectivity === 'offline') return 'Offline — downloaded data only';
 		if (syncStatus.connectivity === 'disconnected')
 			return 'Sync disconnected — downloaded data only';
-		if (syncStatus.connectivity === 'connecting') return 'Connecting to sync';
-		if (syncStatus.connectivity === 'unverified') return 'Sync connection unverified';
+		if (syncStatus.connectivity === 'syncing') return 'Syncing with the authority';
 		if (syncStatus.offlineRetainedOnly) return 'Data freshness unverified';
 		if (syncStatus.pendingMutations > 0)
 			return 'Changes are saved locally and awaiting confirmation';

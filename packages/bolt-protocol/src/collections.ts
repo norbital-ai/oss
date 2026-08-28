@@ -255,6 +255,8 @@ const CollectionDependencyGenerations = Schema.Record(
 );
 
 const CollectionQueryProofFields = {
+	/** True when an authenticated page is deliberately excluded from browser replication. */
+	serverOnly: Schema.optionalKey(Schema.Boolean),
 	readCursor: CollectionReadCursor,
 	partitionKey: Schema.NonEmptyString,
 	confirmedDependencies: Schema.Array(Schema.NonEmptyString),

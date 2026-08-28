@@ -67,13 +67,17 @@ const authoredFor = (
 	approvalFlows: functions.approvalFlows,
 	hooks: {
 		entries: {
-			create: {
+			mutate: {
 				perRecord: {
 					before: {
 						description: 'Normalizes the candidate before policy code runs.',
 						handler: (context: unknown) => {
-							const input = (context as { readonly input: Readonly<Record<string, unknown>> })
-								.input;
+							const mutation = context as {
+								readonly input: Readonly<Record<string, unknown>>;
+								readonly existing?: Readonly<Record<string, unknown>>;
+							};
+							const { input } = mutation;
+							if (mutation.existing !== undefined) return input;
 							return {
 								...input,
 								normalized: String(input['label']).trim().toLocaleLowerCase()

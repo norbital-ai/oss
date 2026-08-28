@@ -80,11 +80,12 @@ describe('declarative settlement under a later writer', () => {
 				...emptyAuthoredRuntime,
 				hooks: {
 					notes: {
-						create: {
+						mutate: {
 							perRecord: {
 								after: {
 									description: 'fails after the transaction is already committed',
-									handler: () => {
+									handler: (context: unknown) => {
+										if (Reflect.get(context as object, 'previous') !== undefined) return;
 										throw new Error('settlement exploded');
 									}
 								}
@@ -140,11 +141,12 @@ describe('declarative settlement under a later writer', () => {
 			...emptyAuthoredRuntime,
 			hooks: {
 				notes: {
-					update: {
+					mutate: {
 						perRecord: {
 							after: {
 								description: 'records the exact row committed by this mutation',
 								handler: (context: unknown) => {
+									if (Reflect.get(context as object, 'previous') === undefined) return;
 									const transition = context as {
 										readonly previous: Record<string, unknown>;
 										readonly changes: Record<string, unknown>;

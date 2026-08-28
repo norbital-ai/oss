@@ -66,8 +66,7 @@ describe('messages between adjacent agents', () => {
 		const admitted = await harness.runtime.runPromise(
 			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-retry', {
 				kind: 'user_message',
-				text: 'Keep trying if the model is temporarily unavailable.',
-				documents: []
+				text: 'Keep trying if the model is temporarily unavailable.'
 			})
 		);
 		await expect(
@@ -113,8 +112,7 @@ describe('messages between adjacent agents', () => {
 		const admitted = await harness.runtime.runPromise(
 			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-send', {
 				kind: 'user_message',
-				text: 'Reply to the migration agent',
-				documents: []
+				text: 'Reply to the migration agent'
 			})
 		);
 		await harness.runtime.runPromise(
@@ -173,8 +171,7 @@ describe('messages between adjacent agents', () => {
 		const admitted = await harness.runtime.runPromise(
 			agents.enqueue(harness.effectId('enqueue'), adminSubject, 'web', sender, 'turn-prompt', {
 				kind: 'user_message',
-				text: 'Anything outstanding?',
-				documents: []
+				text: 'Anything outstanding?'
 			})
 		);
 		await harness.runtime.runPromise(

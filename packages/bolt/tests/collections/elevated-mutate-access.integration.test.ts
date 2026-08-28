@@ -60,12 +60,13 @@ const authored = {
 	...emptyAuthoredRuntime,
 	hooks: {
 		runs: {
-			create: {
+			mutate: {
 				perRecord: {
 					after: {
 						description: 'Builds the derived output owned by the completed run.',
 						handler: (context: unknown, api: unknown) =>
 							Effect.gen(function* () {
+								if (Reflect.get(context as object, 'previous') !== undefined) return;
 								const runId = String(
 									(context as { readonly record: Readonly<Record<string, unknown>> }).record.id
 								);

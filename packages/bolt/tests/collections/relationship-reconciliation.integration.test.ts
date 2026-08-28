@@ -25,8 +25,7 @@ const policySubject = { ...adminSubject, admin: false };
  */
 const relationshipWorkspace = (
 	reviewBudgets = false,
-	reviewCostEstimates = false,
-	inverseCascade = false
+	reviewCostEstimates = false
 ) => {
 	const review = { flow: () => approveBy('reviewers'), superceded_by: [] };
 	const write = (reviewed: boolean) => (reviewed ? { approval: review } : {});
@@ -120,8 +119,7 @@ const relationshipWorkspace = (
 				target: 'budgets',
 				cardinality: 'one',
 				from: { collection: 'cost_estimates', column: 'budget_id' },
-				to: { collection: 'budgets', column: 'id' },
-				...(inverseCascade ? { cascade: true } : {})
+				to: { collection: 'budgets', column: 'id' }
 			},
 			{
 				name: 'estimate_lines',
@@ -135,8 +133,7 @@ const relationshipWorkspace = (
 				target: 'cost_estimates',
 				cardinality: 'one',
 				from: { collection: 'cost_estimate_lines', column: 'cost_estimate_id' },
-				to: { collection: 'cost_estimates', column: 'id' },
-				...(inverseCascade ? { cascade: true } : {})
+				to: { collection: 'cost_estimates', column: 'id' }
 			}
 		],
 		apps: [
@@ -169,12 +166,29 @@ const relationshipWorkspace = (
 };
 
 const definition = relationshipWorkspace();
-const approvalDefinition = relationshipWorkspace(true);
-const childApprovalDefinition = relationshipWorkspace(false, true);
-const inverseCascadeDefinition = relationshipWorkspace(false, false, true);
+const withCascadeRelations = (
+	base: ReturnType<typeof relationshipWorkspace>,
+	names: ReadonlySet<string>
+) => ({
+	...base,
+	relations: base.relations.map((relation) =>
+		names.has(relation.name) ? { ...relation, cascade: true } : relation
+	)
+});
+const rootCascadeRelations = new Set(['cost_estimate_budget']);
+const rootCascadeDefinition = withCascadeRelations(definition, rootCascadeRelations);
+const approvalDefinition = withCascadeRelations(relationshipWorkspace(true), rootCascadeRelations);
+const childApprovalDefinition = withCascadeRelations(
+	relationshipWorkspace(false, true),
+	rootCascadeRelations
+);
+const inverseCascadeDefinition = withCascadeRelations(
+	definition,
+	new Set(['cost_estimate_budget', 'line_estimate'])
+);
 const directManyInverseCascadeDefinition = {
-	...definition,
-	relations: definition.relations.map((relation) => {
+	...rootCascadeDefinition,
+	relations: rootCascadeDefinition.relations.map((relation) => {
 		if (relation.name === 'budget_cost_estimates')
 			return {
 				...relation,
@@ -253,16 +267,14 @@ const deletionHooks = (calls: Array<string>) => ({
 				perRecord: {
 					before: {
 						description: 'Records estimate delete preparation.',
-						handler: (context: unknown) => {
+						handler: () => {
 							calls.push('estimate.before');
-							return context;
 						}
 					},
 					after: {
 						description: 'Records estimate delete settlement.',
-						handler: (context: unknown) => {
+						handler: () => {
 							calls.push('estimate.after');
-							return context;
 						}
 					}
 				}
@@ -273,16 +285,14 @@ const deletionHooks = (calls: Array<string>) => ({
 				perRecord: {
 					before: {
 						description: 'Records line delete preparation.',
-						handler: (context: unknown) => {
+						handler: () => {
 							calls.push('line.before');
-							return context;
 						}
 					},
 					after: {
 						description: 'Records line delete settlement.',
-						handler: (context: unknown) => {
+						handler: () => {
 							calls.push('line.after');
-							return context;
 						}
 					}
 				}
@@ -295,13 +305,17 @@ const budgetUpdateHooks = (calls: Array<string>) => ({
 	...emptyAuthoredRuntime,
 	hooks: {
 		budgets: {
-			update: {
+			mutate: {
 				perRecord: {
 					before: {
 						description: 'Records approved root preparation.',
 						handler: (context: unknown) => {
-							calls.push('budget.before');
-							return (context as { readonly input: Record<string, unknown> }).input;
+							const write = context as {
+								readonly input: Record<string, unknown>;
+								readonly existing?: Readonly<Record<string, unknown>>;
+							};
+							if (write.existing !== undefined) calls.push('budget.before');
+							return write.input;
 						}
 					}
 				}
@@ -478,7 +492,7 @@ describe('declarative relationship reconciliation', () => {
 				...emptyAuthoredRuntime,
 				hooks: {
 					budgets: {
-						create: {
+						mutate: {
 							prepare: () => {
 								calls.push('prepare');
 								return undefined;
@@ -538,7 +552,7 @@ describe('declarative relationship reconciliation', () => {
 				...emptyAuthoredRuntime,
 				hooks: {
 					budgets: {
-						create: {
+						mutate: {
 							perRecord: {
 								before: {
 									description: 'Stages an audit and then refuses the parent.',
@@ -1019,7 +1033,7 @@ describe('declarative relationship reconciliation', () => {
 	}, 60_000);
 
 	it('creates a root and children, then updates, inserts, and deletes to match the desired state', async () => {
-		harness = await makeBoltTestRuntime(definition);
+		harness = await makeBoltTestRuntime(rootCascadeDefinition);
 
 		await mutateBudget(harness, 'reconcile-create', {
 			name: 'FY27 operating budget',
@@ -1065,7 +1079,7 @@ describe('declarative relationship reconciliation', () => {
 		expect(storedEstimates.some((row) => row['id'] === hardwareId)).toBe(false);
 	}, 60_000);
 
-	it('leaves an omitted relationship untouched and treats an explicit empty array as delete all', async () => {
+	it('creates and updates named children without deleting omissions on a non-owned edge', async () => {
 		harness = await makeBoltTestRuntime(definition);
 		await mutateBudget(harness, 'omission-create', {
 			name: 'Draft',
@@ -1081,6 +1095,7 @@ describe('declarative relationship reconciliation', () => {
 		const before = await harness.database.query(
 			'select id, budget_id, label, amount from cost_estimates order by label'
 		);
+		const firstId = requiredId(before[0], 'first estimate');
 
 		await mutateBudget(harness, 'omission-update', { id: budgetId, name: 'Still populated' });
 		expect(
@@ -1089,20 +1104,42 @@ describe('declarative relationship reconciliation', () => {
 			)
 		).toEqual(before);
 
+		await mutateBudget(harness, 'non-owned-reconcile', {
+			id: budgetId,
+			budget_cost_estimates: [
+				{ id: firstId, label: 'A revised', amount: 11 },
+				{ label: 'C', amount: 30 }
+			]
+		});
+		const reconciled = await harness.database.query(
+			'select id, budget_id, label, amount from cost_estimates order by label'
+		);
+		expect(reconciled).toEqual([
+			{ id: firstId, budget_id: budgetId, label: 'A revised', amount: 11 },
+			before[1],
+			{ id: expect.any(String), budget_id: budgetId, label: 'C', amount: 30 }
+		]);
+
 		await mutateBudget(harness, 'omission-clear', {
 			id: budgetId,
-			name: 'Cleared',
+			name: 'Still non-owning',
 			budget_cost_estimates: []
 		});
-		expect(await harness.database.query('select id from cost_estimates')).toEqual([]);
+		expect(
+			await harness.database.query(
+				'select id, budget_id, label, amount from cost_estimates order by label'
+			)
+		).toEqual(reconciled);
 		expect(
 			await harness.database.query('select name from budgets where id = $1', [budgetId])
-		).toEqual([{ name: 'Cleared' }]);
+		).toEqual([{ name: 'Still non-owning' }]);
 	}, 60_000);
 
 	it('does not plan descendant deletion across a non-cascade edge', async () => {
 		const calls: Array<string> = [];
-		harness = await makeBoltTestRuntime(definition, { authored: deletionHooks(calls) });
+		harness = await makeBoltTestRuntime(rootCascadeDefinition, {
+			authored: deletionHooks(calls)
+		});
 		await mutateBudget(harness, 'noncascade-seed', {
 			name: 'Protected descendants',
 			budget_cost_estimates: [
@@ -1182,7 +1219,7 @@ describe('declarative relationship reconciliation', () => {
 	}, 60_000);
 
 	it('synchronizes an explicitly included grandchild relation while an omitted sibling relation is untouched', async () => {
-		harness = await makeBoltTestRuntime(definition);
+		harness = await makeBoltTestRuntime(inverseCascadeDefinition);
 		await mutateBudget(harness, 'recursive-create', {
 			name: 'Recursive',
 			budget_cost_estimates: [
@@ -1264,6 +1301,64 @@ describe('declarative relationship reconciliation', () => {
 				[estimateBId]
 			)
 		).toEqual(linesBBefore);
+	}, 60_000);
+
+	it('loads every submitted relationship frontier in one planning statement', async () => {
+		harness = await makeBoltTestRuntime(inverseCascadeDefinition);
+		await mutateBudget(harness, 'planning-wave-seed', {
+			name: 'One relationship wave',
+			budget_cost_estimates: Array.from({ length: 8 }, (_, index) => ({
+				label: `Estimate ${index}`,
+				amount: index + 1,
+				estimate_lines: [{ code: `LINE-${index}`, quantity: index + 1 }]
+			}))
+		});
+		const budgetId = requiredId(
+			(await harness.database.query('select id from budgets'))[0],
+			'budget'
+		);
+		const estimates = await harness.database.query(
+			'select id, label, amount from cost_estimates order by label'
+		);
+		const lines = await harness.database.query(
+			'select id, cost_estimate_id, code, quantity from cost_estimate_lines order by code'
+		);
+		const lineByEstimate = new Map(lines.map((line) => [line['cost_estimate_id'], line]));
+
+		harness.database.forget();
+		await mutateBudget(harness, 'planning-wave-update', {
+			id: budgetId,
+			budget_cost_estimates: estimates.map((estimate) => {
+				const estimateId = requiredId(estimate, 'estimate');
+				const line = lineByEstimate.get(estimateId);
+				return {
+					id: estimateId,
+					label: estimate['label'],
+					amount: estimate['amount'],
+					estimate_lines: [
+						{
+							id: requiredId(line, 'line'),
+							code: line?.['code'],
+							quantity: line?.['quantity']
+						}
+					]
+				};
+			})
+		});
+
+		const relationshipPlanning = harness.database.statements.filter((statement) =>
+			statement.includes('__bolt_relation_ordinal')
+		);
+		const rowPlanning = harness.database.statements.filter((statement) =>
+			statement.includes('__bolt_graph_row_ordinal')
+		);
+		// The root edge and all eight child edges are heterogeneous requests in one UNION, not nine
+		// facility calls from inside recursive prepareNode. The root, estimates and lines likewise
+		// share one exact pre-image read rather than a read plus a snapshot query for every node.
+		expect(relationshipPlanning).toHaveLength(1);
+		expect(relationshipPlanning[0]?.match(/ union all /g)).toHaveLength(8);
+		expect(rowPlanning).toHaveLength(1);
+		expect(rowPlanning[0]?.match(/ union all /g)).toHaveLength(16);
 	}, 60_000);
 
 	it('rolls back the entire graph when a new child omits a required field', async () => {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { setWorkspaceSession } from '../../src/client/session.js';
 import {
+	readableSubscriptionCollections,
 	subscribeToPartition,
 	type EventSourceLike
 } from '../../src/client/replica/subscribe.js';
@@ -50,6 +51,17 @@ const source = () => {
 beforeEach(session);
 
 describe('partition dependency subscription', () => {
+	it('subscribes only to the subject-readable part of the workspace catalogue', () => {
+		expect(
+			readableSubscriptionCollections(
+				['verification', 'jobs', 'teams', 'jobs', 'session'],
+				// `sync.shape` is the server-owned boundary. Private system collections never enter it.
+				new Set(['jobs', 'teams']),
+				64
+			)
+		).toEqual(['jobs', 'teams']);
+	});
+
 	/**
 	 * One stream per client, for the life of the session.
 	 *

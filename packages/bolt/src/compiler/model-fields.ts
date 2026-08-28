@@ -237,9 +237,16 @@ export const extractCollectionCatalog = (
 			builder === 'instant' || customType === 'instant_range'
 				? instantPrecision(window)
 				: undefined;
-		const relation = relations.find(
+		const relationCandidates = relations.filter(
 			(candidate) => candidate.from?.collection === name && candidate.from.column === fieldName
 		);
+		// An inverse `many` edge inherits the child's foreign-key endpoints so ownership and cascade
+		// planning can reason about the same physical constraint from either side. That inherited edge
+		// is not the field's renderer relation, though: a payslip employment id points to one
+		// employment, not to the parent's collection of payslips. Prefer the edge authored on this
+		// collection and retain the inherited candidate only as compatibility for incomplete catalogs.
+		const relation =
+			relationCandidates.find((candidate) => candidate.source === name) ?? relationCandidates[0];
 		fields.push({
 			name: fieldName,
 			// A `custom()` column is keyed by the type it declares, not by the word "custom": the renderer

@@ -150,6 +150,42 @@ describe('replica storage budget', () => {
 });
 
 describe('schema barriers', () => {
+	it('adopts a committed generation when a freshly provisioned namespace already has the exact schema', async () => {
+		let durable = { generation: 0, fingerprint: 'same', protocolVersion: 1 };
+		const events: Array<string> = [];
+		const controller = createSchemaBarrierController({
+			leader: () => true,
+			readDurable: async () => durable,
+			adoptGeneration: async (barrier) => {
+				durable = {
+					generation: barrier.generation,
+					fingerprint: barrier.fingerprint,
+					protocolVersion: barrier.minimumProtocolVersion
+				};
+				events.push(`adopt:${barrier.generation}`);
+				return durable;
+			},
+			withdrawReaders: () => events.push('withdraw'),
+			switchNamespace: async () => {
+				events.push('switch');
+			}
+		});
+
+		await controller.accept({
+			generation: 2,
+			fingerprint: 'same',
+			minimumProtocolVersion: 1,
+			affectedCollections: ['jobs'],
+			migrationDigest: 'sha256:same'
+		});
+		expect(events).toEqual(['adopt:2']);
+		expect(controller.state()).toMatchObject({
+			phase: 'idle',
+			generation: 2,
+			fingerprint: 'same'
+		});
+	});
+
 	it('withdraws readers and switches physical namespace without mutating the old replica', async () => {
 		const durable = { generation: 1, fingerprint: 'one', protocolVersion: 1 };
 		const events: Array<string> = [];

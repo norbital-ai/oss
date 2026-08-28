@@ -1,5 +1,10 @@
 import { Effect } from 'effect';
 import { afterEach, describe, expect, it } from 'vitest';
+import type {
+	FacilityBinding,
+	FileRequest,
+	FileResponse
+} from '@norbital-ai/bolt-protocol';
 import * as Agents from '../../src/runtime/agents/agents.js';
 import { chatDocumentStorageKey } from '../../src/runtime/agents/chat-messages.js';
 import {
@@ -16,7 +21,14 @@ afterEach(async () => {
 
 describe('chat session document ownership', () => {
 	it('binds every upload to one session and refuses both foreign and generic keys', async () => {
-		harness = await makeBoltTestRuntime();
+		const bytes = new Uint8Array(128);
+		const files: FacilityBinding<FileRequest, FileResponse> = {
+			call: async (_metadata, request) => ({
+				_tag: 'Success',
+				value: request._tag === 'Read' ? { key: request.key, bytes } : {}
+			})
+		};
+		harness = await makeBoltTestRuntime(undefined, { files });
 		const service = await harness.runtime.runPromise(Agents.Service);
 		await harness.runtime.runPromise(
 			Effect.all([
@@ -32,31 +44,31 @@ describe('chat session document ownership', () => {
 			mime_type: 'application/pdf'
 		};
 		await harness.runtime.runPromise(
-			service.bindDocument(harness.effectId('bind:a'), adminSubject, 'conversation-a', file)
+			service.attachFile(harness.effectId('bind:a'), adminSubject, 'conversation-a', file)
 		);
 		expect(
 			await harness.runtime.runPromise(
-				service.resolveDocument(
+				service.readMedia(
 					harness.effectId('resolve:a'),
 					adminSubject,
 					'conversation-a',
 					storageKey
 				)
 			)
-		).toEqual(file);
+		).toEqual({ file, bytes });
 		await expect(
 			harness.runtime.runPromise(
-				service.resolveDocument(
+				service.readMedia(
 					harness.effectId('resolve:b'),
 					adminSubject,
 					'conversation-b',
 					storageKey
 				)
 			)
-		).rejects.toThrow(/not owned by this chat session/i);
+		).rejects.toThrow(/outside this chat session namespace/i);
 		await expect(
 			harness.runtime.runPromise(
-				service.bindDocument(harness.effectId('bind:generic'), adminSubject, 'conversation-a', {
+				service.attachFile(harness.effectId('bind:generic'), adminSubject, 'conversation-a', {
 					...file,
 					storage_key: 'uploads/site-plan.pdf'
 				})

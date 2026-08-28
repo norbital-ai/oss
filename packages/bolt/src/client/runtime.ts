@@ -78,11 +78,13 @@ import {
 	type LocalReader
 } from '#lib/client/replica/local-reads.js';
 import {
+	readableSubscriptionCollections,
 	subscribeToPartition,
 	type PartitionSubscription
 } from '#lib/client/replica/subscribe.js';
 import {
 	readDurableReplicaSchema,
+	ReplicaProvisioningFailure,
 	writeDurableReplicaSchema,
 	type PGliteLike,
 	type ProvisioningStep as ProvisioningStepType
@@ -728,6 +730,30 @@ const projectAutomationRun = (row: AutomationRunRow | null): AutomationTaskSnaps
 /** Stable per-name automation state; the generated declaration supplies the exact registry. */
 const automationClient = (runtime: WorkspaceClientRuntime) => {
 	const surfaces = new Map<string, unknown>();
+	const activeTaskIds = new Set<string>();
+	let pollTimer: ReturnType<typeof setTimeout> | undefined;
+	const schedulePoll = () => {
+		if (pollTimer !== undefined || activeTaskIds.size === 0) return;
+		pollTimer = setTimeout(() => {
+			pollTimer = undefined;
+			if (activeTaskIds.size === 0) return;
+			runtime.cache?.invalidate(['automation_run']);
+			runtime.queries?.reexecuteAffected(['automation_run']);
+			schedulePoll();
+		}, 1_000);
+		const portableTimer = pollTimer as unknown as { unref?: () => void };
+		portableTimer.unref?.();
+	};
+	const observeTask = (taskId: string, row: AutomationRunRow | null) => {
+		if (row?.status === 'done' || row?.status === 'failed') activeTaskIds.delete(taskId);
+		else activeTaskIds.add(taskId);
+		if (activeTaskIds.size === 0 && pollTimer !== undefined) {
+			clearTimeout(pollTimer);
+			pollTimer = undefined;
+			return;
+		}
+		schedulePoll();
+	};
 	return new Proxy<Record<string, unknown>>(
 		{},
 		{
@@ -752,6 +778,7 @@ const automationClient = (runtime: WorkspaceClientRuntime) => {
 							)
 						),
 					(taskId) => {
+						observeTask(taskId, null);
 						const page = PageQueries.make(runtime, 'collections.findMany', {
 							collection: 'automation_run',
 							where: { task_id: { eq: taskId } },
@@ -767,6 +794,7 @@ const automationClient = (runtime: WorkspaceClientRuntime) => {
 								: Schema.decodeUnknownSync(AutomationRunRow)(rows[0])
 						);
 						const project = (row: AutomationRunRow | null) => {
+							observeTask(taskId, row);
 							if (row !== null) {
 								void runtimeStates
 									.access(runtime)
@@ -1763,7 +1791,10 @@ export const startLocalReplica = (
 					}).pipe(
 						Effect.mapError((cause) => {
 							if (
-								!(cause instanceof ReplicaStoredStateCorruption) ||
+								!(
+									cause instanceof ReplicaStoredStateCorruption ||
+									cause instanceof ReplicaProvisioningFailure
+								) ||
 								storage === undefined ||
 								storage.tier === 'server-only'
 							) return cause;
@@ -2209,9 +2240,6 @@ const startReplica = (
 				partitionId: profilePartitionId
 			});
 			if (accessState !== undefined) {
-				accessState.automationStarted = automationLeases.started;
-				accessState.automationObserved = automationLeases.observe;
-				accessState.automationSettled = automationLeases.settled;
 				accessState.acquirePendingMutationLease = async (stableLeaseId) => {
 					await profileIndex.lease({
 						id: stableLeaseId,
@@ -2287,6 +2315,15 @@ const startReplica = (
 		if ((options.leadership?.leader() ?? local.engine.isLeader !== false) === true) {
 			yield* reconcileAutomationLeases();
 		}
+		// Publish lifecycle callbacks only after the authoritative reconciliation succeeds. A failed
+		// startup closes the profile index; exposing callbacks before this point leaves the automation
+		// client holding a function that targets that closed database, so a successfully enqueued run
+		// is reported as a local Effect.tryPromise failure.
+		if (accessState !== undefined && automationLeases !== undefined) {
+			accessState.automationStarted = automationLeases.started;
+			accessState.automationObserved = automationLeases.observe;
+			accessState.automationSettled = automationLeases.settled;
+		}
 
 		const enforceBudget = (): Effect.Effect<void> =>
 			profileIndex === undefined ||
@@ -2337,6 +2374,11 @@ const startReplica = (
 			Effect.gen(function* () {
 				const kind = collectionWindowKind(captured.command);
 				if (kind === undefined) return;
+				if (asJsonRecord(captured.value)['serverOnly'] === true) {
+					if (captured.flight !== undefined)
+						accessState?.partitionSync?.cancelWindowFlight(captured.flight);
+					return;
+				}
 				const input = asJsonRecord(captured.input);
 				const collection = input['collection'];
 				if (typeof collection !== 'string') return;
@@ -2946,9 +2988,11 @@ const startReplica = (
 		 */
 		const SUBSCRIPTION_LIMIT = 64;
 		const subscribedCollections = (): ReadonlyArray<string> =>
-			[...new Set(Object.keys(runtimeStates.access(runtime)?.catalog ?? {}))]
-				.toSorted()
-				.slice(0, SUBSCRIPTION_LIMIT);
+			readableSubscriptionCollections(
+				Object.keys(runtimeStates.access(runtime)?.catalog ?? {}),
+				local.readable,
+				SUBSCRIPTION_LIMIT
+			);
 		const rehydrationFacts = async () => {
 			const active = (await Effect.runPromise(coverage.listWindows()))
 				.filter(({ leaseCount }) => leaseCount > 0)
@@ -3487,6 +3531,21 @@ const startReplica = (
 							protocolVersion: durable.protocolVersion
 						}
 					);
+			},
+			adoptGeneration: async (barrier) => {
+				const adopted = {
+					authorityGeneration: barrier.generation,
+					fingerprint: barrier.fingerprint,
+					protocolVersion: PROTOCOL_VERSION
+				};
+				await Effect.runPromise(
+					coverage.transaction(writeDurableReplicaSchema(local.engine, adopted))
+				);
+				return {
+					generation: adopted.authorityGeneration,
+					fingerprint: adopted.fingerprint,
+					protocolVersion: adopted.protocolVersion
+				};
 			},
 			withdrawReaders: () => {
 				if (runtime.local?.current === localReader && runtime.local !== undefined)

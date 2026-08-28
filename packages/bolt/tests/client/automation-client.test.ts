@@ -72,7 +72,7 @@ const pageFor = (row: AutomationRunRow | undefined) => ({
 });
 
 describe('generated automation client state', () => {
-	it('changes only when the automation_run live collection is invalidated by sync', async () => {
+	it('refreshes the authenticated automation_run query without a status command', async () => {
 		let starts = 0;
 		let reads = 0;
 		const commands: Array<string> = [];
@@ -106,8 +106,8 @@ describe('generated automation client state', () => {
 		const readsBeforeChange = reads;
 
 		rows.set('run-1', runRow('run-1', 'done'));
-		// This is what the replica does after applying an outbox change. The automation surface itself
-		// has no watcher and cannot observe the changed backing map until this sync invalidation lands.
+		// Force the same cache turn the active-run refresher schedules, without making this unit test
+		// wait for wall-clock time.
 		cache.invalidate(['automation_run']);
 		queries.reexecuteAffected(['automation_run']);
 		await vi.waitFor(() => expect(run.current?.status).toBe('done'));
@@ -141,7 +141,7 @@ describe('generated automation client state', () => {
 		expect(automation.pending).toBe(1);
 	});
 
-	it('stops and resumes the same durable row while sync remains the only state observer', async () => {
+	it('stops and resumes the same durable row through its server-only query', async () => {
 		const taskId = 'historical-task:start';
 		const rows = new Map([[taskId, runRow(taskId, 'paused')]]);
 		const cache = createQueryCache('automation-client::lifecycle');

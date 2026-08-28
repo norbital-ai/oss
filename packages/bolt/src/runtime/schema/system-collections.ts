@@ -56,6 +56,26 @@ export const SYSTEM_COLLECTION_NAMES: ReadonlySet<string> = new Set(
 	SYSTEM_COLLECTIONS.map(({ name }) => name)
 );
 
+/**
+ * The one runtime-owned collection deliberately mirrored into a browser replica.
+ *
+ * Identity, agent, automation, notification and approval-party records remain server-private and
+ * are read through authenticated commands. Approval requests are the exception because the inbox
+ * is an offline-capable workspace surface whose row predicate already limits each replica to the
+ * requests its subject may see.
+ */
+export const REPLICATED_SYSTEM_COLLECTION_NAMES: ReadonlySet<string> = new Set([
+	collections.approval_request.name
+]);
+
+/** The complete admission rule for collections crossing the server-to-browser sync boundary. */
+export const isReplicatedCollection = (
+	collection: Pick<CollectionDefinition<Readonly<Record<string, FieldDefinition>>>, 'name' | 'sync'>
+): boolean =>
+	collection.sync !== false &&
+	(!SYSTEM_COLLECTION_NAMES.has(collection.name) ||
+		REPLICATED_SYSTEM_COLLECTION_NAMES.has(collection.name));
+
 const SYSTEM_COLLECTIONS_BY_NAME = new Map(
 	SYSTEM_COLLECTIONS.map((definition) => [definition.name, definition] as const)
 );

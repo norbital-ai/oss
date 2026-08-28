@@ -57,6 +57,21 @@ describe('cascade relations', () => {
 		});
 	});
 
+	it('uses the owning child edge for a foreign-key field catalog', () => {
+		const catalog = extractCollectionCatalog(
+			'payslips',
+			`export default defineModel({
+	payroll_run_id: uuid().notNull()
+});`,
+			relations
+		);
+		expect(catalog.fields[0]?.relation).toEqual({
+			name: 'run',
+			target: 'payroll_runs',
+			cardinality: 'one'
+		});
+	});
+
 	it('reads both relations of the block, wrapper or not', () => {
 		expect(relations.map(({ name }) => name).toSorted()).toEqual(['employment', 'payslips', 'run']);
 	});

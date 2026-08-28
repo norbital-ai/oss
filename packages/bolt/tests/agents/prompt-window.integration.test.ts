@@ -62,8 +62,7 @@ describe('agent prompt window', () => {
 				'turn-latest',
 				{
 					kind: 'user_message',
-					text: 'continue',
-					documents: []
+					text: 'continue'
 				}
 			)
 		);

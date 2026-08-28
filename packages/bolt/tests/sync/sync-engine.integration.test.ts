@@ -81,6 +81,28 @@ const compareCursors = (left: Sync.SyncCursor, right: Sync.SyncCursor): number =
 
 const ORIGIN: Sync.SyncCursor = { xid: 0, sequence: 0 };
 describe('Partition-oriented sync pull', () => {
+	it('publishes authored collections and approval requests while refusing private system tables', async () => {
+		harness = await makeBoltTestRuntime();
+		const { runtime, effectId } = harness;
+		const result = await runtime.runPromise(
+			Effect.gen(function* () {
+				const sync = yield* Sync.Service;
+				return {
+					shape: yield* sync.shape(adminSubject),
+					requestor: yield* Effect.result(
+						sync.positions(effectId('private-requestor'), adminSubject, ['requestor'])
+					),
+					user: yield* Effect.result(
+						sync.positions(effectId('private-user'), adminSubject, ['user'])
+					)
+				};
+			})
+		);
+		expect(result.shape).toEqual(['approval_request', 'people']);
+		expect(result.requestor._tag).toBe('Failure');
+		expect(result.user._tag).toBe('Failure');
+	});
+
 	it('emits full-row upserts and removes from before/after visibility transitions', async () => {
 		harness = await makeBoltTestRuntime(sparseWorkspace());
 		const { runtime, effectId, database } = harness;

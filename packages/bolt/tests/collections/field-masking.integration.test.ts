@@ -103,14 +103,19 @@ describe('authored policy field masks', () => {
 				...emptyAuthoredRuntime,
 				hooks: {
 					assignments: {
-						update: {
+						mutate: {
 							perRecord: {
 								before: {
 									description: 'Attempts to add a controller-only note.',
-									handler: (context: unknown) => ({
-										...(context as { readonly input: Record<string, unknown> }).input,
-										controller_note: 'injected by hook'
-									})
+									handler: (context: unknown) => {
+										const mutation = context as {
+											readonly input: Record<string, unknown>;
+											readonly existing?: Record<string, unknown>;
+										};
+										return mutation.existing === undefined
+											? mutation.input
+											: { ...mutation.input, controller_note: 'injected by hook' };
+									}
 								}
 							}
 						}
@@ -173,16 +178,19 @@ describe('authored policy field masks', () => {
 				...emptyAuthoredRuntime,
 				hooks: {
 					assignments: {
-						create: {
+						mutate: {
 							perRecord: {
 								before: {
 									description: 'Owns the controller-only provenance field.',
-									handler: (context: unknown) => ({
-										title: String(
-											(context as { readonly input: Record<string, unknown> }).input['title']
-										),
-										source: 'server-computed'
-									})
+									handler: (context: unknown) => {
+										const mutation = context as {
+											readonly input: Record<string, unknown>;
+											readonly existing?: Record<string, unknown>;
+										};
+										return mutation.existing === undefined
+											? { title: String(mutation.input['title']), source: 'server-computed' }
+											: mutation.input;
+									}
 								}
 							}
 						}

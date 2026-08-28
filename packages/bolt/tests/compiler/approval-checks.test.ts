@@ -207,7 +207,7 @@ describe('approval gates that cannot roll back', () => {
 		const diagnostics = approvalDiagnostics(
 			withCollections(
 				[gated('payroll_runs', 'update')],
-				[{ name: 'payroll_runs', fields: {} }] as WorkspaceDefinition['collections']
+				[{ name: 'payroll_runs', fields: {}, history: true }] as WorkspaceDefinition['collections']
 			)
 		);
 		expect(diagnostics.map(({ rule }) => rule)).not.toContain('approval-without-history');

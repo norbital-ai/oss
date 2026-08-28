@@ -146,6 +146,23 @@ const eventSourceFactory = (url: string): EventSourceLike => {
 const normalizeCollections = (collections: ReadonlyArray<string>): ReadonlyArray<string> =>
 	[...new Set(collections.map((name) => name.trim()).filter((name) => name.length > 0))].sort();
 
+/**
+ * The compiled catalogue describes the workspace, while `sync.shape` describes this subject.
+ *
+ * A partition subscription may ask only for collections the guest said this credential can read.
+ * Sending the whole catalogue makes one private system collection refuse the entire stream, which
+ * leaves every permitted collection stuck on its retained local rows even though ordinary reads
+ * and writes still succeed.
+ */
+export const readableSubscriptionCollections = (
+	collections: ReadonlyArray<string>,
+	readable: ReadonlySet<string>,
+	limit: number
+): ReadonlyArray<string> =>
+	normalizeCollections(collections)
+		.filter((collection) => readable.has(collection))
+		.slice(0, limit);
+
 const normalizeMutationIds = (ids: ReadonlyArray<string> = []): ReadonlyArray<string> => {
 	const normalized = [...new Set(ids.filter((id) => id.length > 0))].sort();
 	if (normalized.length > 256 || normalized.some((id) => id.length > 256))

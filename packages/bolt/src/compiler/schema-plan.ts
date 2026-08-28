@@ -754,6 +754,35 @@ export const reconcileMutationSchema = (
 	const oldCollectionName = (current: string): string =>
 		Object.entries(adapter.collectionRenames ?? {}).find(([, target]) => target === current)?.[0] ??
 		current;
+	const relationshipOwnsChildren = (source: string, name: string): boolean => {
+		const many = workspace.relations.find(
+			(relation) =>
+				relation.source === source && relation.cardinality === 'many' && relation.name === name
+		);
+		if (many === undefined) return false;
+		const hasWritableEndpoints = (relation: WorkspaceDefinition['relations'][number]): boolean => {
+			const { from, to } = relation;
+			return (
+				from !== undefined &&
+				to !== undefined &&
+				((from.collection === many.target && to.collection === source) ||
+					(to.collection === many.target && from.collection === source))
+			);
+		};
+		const inverses = workspace.relations.filter(
+			(relation) =>
+				relation.source === many.target &&
+				relation.target === source &&
+				relation.cardinality === 'one'
+		);
+		const inverseCascade = inverses.length === 1 && inverses[0]?.cascade === true;
+		if (hasWritableEndpoints(many)) return many.cascade === true || inverseCascade;
+		const writableInverses = inverses.filter(hasWritableEndpoints);
+		return (
+			writableInverses.length === 1 &&
+			(many.cascade === true || writableInverses[0]?.cascade === true)
+		);
+	};
 	const baseVersionKeys = new Set(
 		input.baseVersions.map(({ row }) => `${row.collection}\u0000${row.recordId}`)
 	);
@@ -797,10 +826,12 @@ export const reconcileMutationSchema = (
 				continue;
 			}
 			const nestedOldName = oldCollectionName(relation.target);
-			// A many relationship included in an update is a complete desired state. Rows omitted from
-			// it are deletes even though they do not appear as child objects in the graph.
+			// An owned many relationship included in an update is a complete desired state. Rows
+			// omitted from a non-cascade edge continue to live independently, so that graph implies only
+			// the create/update actions carried by its child objects.
 			if (
 				action === 'update' &&
+				relationshipOwnsChildren(currentName, renamed) &&
 				(adapter.incompatibleActions?.[nestedOldName] ?? []).includes('delete')
 			)
 				return {

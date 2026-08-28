@@ -149,7 +149,7 @@ describe('agent conversation inbox authority', () => {
 					'web',
 					'atomic-conversation',
 					'atomic-turn',
-					{ kind: 'user_message', text: 'Run payroll', documents: [] }
+					{ kind: 'user_message', text: 'Run payroll' }
 				);
 			})
 		);
@@ -192,7 +192,7 @@ describe('agent conversation inbox authority', () => {
 					'web',
 					'atomic-conversation',
 					'atomic-turn',
-					{ kind: 'user_message', text: 'Run payroll', documents: [] }
+					{ kind: 'user_message', text: 'Run payroll' }
 				);
 			})
 		);
@@ -236,7 +236,7 @@ describe('agent conversation inbox authority', () => {
 						'web',
 						'conflicting-conversation',
 						'atomic-turn',
-						{ kind: 'user_message', text: 'Different work', documents: [] }
+						{ kind: 'user_message', text: 'Different work' }
 					);
 				})
 			)
@@ -283,8 +283,7 @@ describe('agent conversation inbox authority', () => {
 				role: 'user',
 				content: JSON.stringify({
 					kind: 'user_message',
-					text: 'Can I get a quote?',
-					documents: []
+					text: 'Can I get a quote?'
 				})
 			})
 			.toSQL();
@@ -315,7 +314,7 @@ describe('agent conversation inbox authority', () => {
 		expect(publicHistory.messages).toEqual([
 			{
 				role: 'user',
-				content: { kind: 'user_message', text: 'Can I get a quote?', documents: [] },
+				content: { kind: 'user_message', text: 'Can I get a quote?' },
 				turn_id: null
 			}
 		]);

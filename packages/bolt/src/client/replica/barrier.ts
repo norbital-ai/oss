@@ -27,6 +27,12 @@ export type SchemaBarrierHooks = Readonly<{
 	readonly leader: () => boolean;
 	/** Re-read after every wake/promotion; this durable answer outranks in-memory phase or broadcasts. */
 	readonly readDurable: () => Promise<DurableReplicaSchema>;
+	/**
+	 * Persists a committed generation when this physical namespace already has the barrier's exact
+	 * schema fingerprint. A freshly provisioned namespace starts at generation zero; without this
+	 * adoption step every reconnect sees the same committed barrier and reloads forever.
+	 */
+	readonly adoptGeneration?: (barrier: ReplicaSchemaBarrier) => Promise<DurableReplicaSchema>;
 	/** Synchronously removes affected local readers before the old namespace is retired. */
 	readonly withdrawReaders: (collections: ReadonlyArray<string>) => void;
 	/**
@@ -102,6 +108,11 @@ export const createSchemaBarrierController = (
 			(durable.generation === barrier.generation && durable.fingerprint === barrier.fingerprint)
 		) {
 			idleAt(durable);
+			return;
+		}
+		if (durable.fingerprint === barrier.fingerprint && hooks.adoptGeneration !== undefined) {
+			const adopted = await hooks.adoptGeneration(barrier);
+			idleAt(adopted);
 			return;
 		}
 

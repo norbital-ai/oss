@@ -7,24 +7,33 @@ describe('hook introspection', () => {
 	it('names every declared operation and phase', () => {
 		expect(
 			describeHooks({
-				create: { before: { handler }, after: { handler } },
-				update: { before: { handler } }
+				mutate: {
+					prepare: handler,
+					perRecord: { before: { handler }, after: { handler } }
+				},
+				delete: { perRecord: { before: { handler } } }
 			})
-		).toEqual(['create.after', 'create.before', 'update.before']);
+		).toEqual(['delete.before', 'mutate.after', 'mutate.before', 'mutate.prepare']);
 	});
 
 	it('counts leaves, not files — a module declaring five handlers is five hooks', () => {
 		const declaration = {
-			create: { before: { handler }, after: { handler } },
-			update: { before: { handler }, after: { handler } },
-			delete: { before: { handler } }
+			mutate: {
+				prepare: handler,
+				perRecord: { before: { handler }, after: { handler } }
+			},
+			delete: { perRecord: { before: { handler }, after: { handler } } }
 		};
 		expect(describeHooks(declaration)).toHaveLength(5);
 	});
 
 	it('ignores a phase that declares no handler', () => {
 		expect(
-			describeHooks({ create: { before: { description: 'documented but not implemented' } } })
+			describeHooks({
+				mutate: {
+					perRecord: { before: { description: 'documented but not implemented' } }
+				}
+			})
 		).toEqual([]);
 	});
 
@@ -32,17 +41,19 @@ describe('hook introspection', () => {
 		expect(describeHooks(undefined)).toEqual([]);
 		expect(describeHooks(null)).toEqual([]);
 		expect(describeHooks('hooks')).toEqual([]);
-		expect(describeHooks({ create: 'before' })).toEqual([]);
+		expect(describeHooks({ mutate: 'before' })).toEqual([]);
+		expect(describeHooks({ mutate: { prepare: { handler } } })).toEqual([]);
+		expect(describeHooks({ delete: { perRecord: 'before' } })).toEqual([]);
 	});
 
 	it('is stable in order regardless of declaration order', () => {
 		const forward = describeHooks({
-			update: { before: { handler } },
-			create: { after: { handler } }
+			delete: { perRecord: { before: { handler } } },
+			mutate: { perRecord: { after: { handler } } }
 		});
 		const reversed = describeHooks({
-			create: { after: { handler } },
-			update: { before: { handler } }
+			mutate: { perRecord: { after: { handler } } },
+			delete: { perRecord: { before: { handler } } }
 		});
 		expect(forward).toEqual(reversed);
 	});

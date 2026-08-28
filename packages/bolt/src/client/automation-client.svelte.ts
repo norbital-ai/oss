@@ -96,11 +96,11 @@ type ReadRun = (taskId: string) => RemoteQuery<AutomationTaskSnapshot | null>;
 type LifecycleRun = (taskId: string) => Effect.Effect<void, unknown>;
 
 /**
- * One automation run backed only by the ordinary sync-aware collection query.
+ * One automation run backed by an authenticated server-only collection query.
  *
- * There is no watcher, timer, refresh loop, SSE endpoint or socket here. The database trigger
- * projects `bolt_task` into `automation_run`; the existing replica stream applies its outbox row,
- * invalidates this query, and its local PGlite answer changes reactively.
+ * `automation_run` is runtime state, so it never enters the browser replica. The client runtime
+ * refreshes active runs through the same row- and field-masked query until they settle; this public
+ * view remains an ordinary reactive `RemoteQuery` and never exposes queue internals.
  */
 class ManagedAutomationRun implements AutomationRun {
 	readonly id: string;

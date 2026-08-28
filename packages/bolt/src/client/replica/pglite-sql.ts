@@ -509,13 +509,26 @@ export const provision = Effect.fn('ReplicaSql.provision')(function* (
 			.exec(step.sql)
 			.pipe(
 				Effect.mapError(
-					(cause) => new Error(`Replica provisioning failed at ${step.id}: ${String(cause)}`)
+					(cause) => new ReplicaProvisioningFailure(step.id, cause)
 				)
 			);
 	}
 	yield* ensureReplicaLedger(database);
 	return true;
 });
+
+/** A failed compiler-authored DDL step leaves only reconstructible browser state behind. */
+export class ReplicaProvisioningFailure extends Error {
+	readonly stepId: string;
+	readonly cause: unknown;
+
+	constructor(stepId: string, cause: unknown) {
+		super(`Replica provisioning failed at ${stepId}: ${String(cause)}`);
+		this.name = 'ReplicaProvisioningFailure';
+		this.stepId = stepId;
+		this.cause = cause;
+	}
+}
 
 /** M3 requires a new physical namespace; provisioning never mutates an old schema in place. */
 export class ReplicaNamespaceMismatch extends Error {

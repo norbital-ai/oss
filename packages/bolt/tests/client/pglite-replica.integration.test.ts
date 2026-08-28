@@ -18,6 +18,7 @@ import { adaptPGlite } from '../../src/client/replica/pglite-loader.js';
 import {
 	createPGliteStore,
 	provision,
+	ReplicaProvisioningFailure,
 	type LocalReplicaStore
 } from '../../src/client/replica/pglite-sql.js';
 import {
@@ -99,6 +100,22 @@ const readerFor = (replica: Replica): LocalReader => createLocalReader(
 	identity,
 	{ pinnedCollation: true }
 );
+
+it('classifies failed provisioning DDL as reconstructible replica state', async () => {
+	const database = await PGlite.create('memory://');
+	databases.push(database);
+	const engine = adaptPGlite(database);
+	await expect(
+		Effect.runPromise(
+			provision(engine, [
+				{ id: 'lineage:broken:0', sql: 'create table "broken" ("id" definitely_not_a_type)' }
+			])
+		)
+	).rejects.toMatchObject({
+		name: 'ReplicaProvisioningFailure',
+		stepId: 'lineage:broken:0'
+	} satisfies Partial<ReplicaProvisioningFailure>);
+});
 
 type PermittedPerson = Readonly<{
 	readonly recordId: string;

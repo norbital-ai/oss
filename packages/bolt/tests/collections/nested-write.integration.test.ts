@@ -72,12 +72,12 @@ const authored = {
 	...emptyAuthoredRuntime,
 	hooks: {
 		orders: {
-			create: {
+			mutate: {
 				perRecord: {
 					before: {
 						description: 'Expands an order into its lines.',
 						handler: (context: unknown) => ({
-							reference: (context as CreateContext).input['reference'],
+							reference: (context as MutateContext).input['reference'],
 							order_line_order: [{ sku: 'a-1' }, { sku: 'a-2' }]
 						})
 					}
@@ -87,8 +87,8 @@ const authored = {
 	}
 };
 
-/** What the runtime hands a create hook. Cast to, because the authored module types it `unknown`. */
-type CreateContext = { readonly input: Record<string, unknown> };
+/** What the runtime hands a mutate hook. Cast to, because the authored module types it `unknown`. */
+type MutateContext = { readonly input: Record<string, unknown> };
 
 let harness: BoltTestRuntime | undefined;
 afterEach(async () => {
@@ -130,12 +130,12 @@ describe('a nested write', () => {
 				...authored,
 				hooks: {
 					orders: {
-						create: {
+						mutate: {
 							perRecord: {
 								before: {
 									description: 'Returns a misspelled relation name.',
 									handler: (context: unknown) => ({
-										reference: (context as CreateContext).input['reference'],
+										reference: (context as MutateContext).input['reference'],
 										order_line_orders: [{ sku: 'a-1' }]
 									})
 								}
@@ -175,7 +175,7 @@ describe('a batch prepare', () => {
 		...emptyAuthoredRuntime,
 		hooks: {
 			orders: {
-				create: {
+				mutate: {
 					// Once for the batch. Returns data; decides nothing.
 					prepare: (context: unknown) => {
 						const { inputs } = context as { inputs: ReadonlyArray<Record<string, unknown>> };
@@ -186,7 +186,7 @@ describe('a batch prepare', () => {
 						before: {
 							description: 'Rejects a reference the batch has already claimed.',
 							handler: (context: unknown) => {
-								const { input, prepared } = context as CreateContext & {
+								const { input, prepared } = context as MutateContext & {
 									prepared: { seen: Set<string> };
 								};
 								return {

@@ -248,7 +248,7 @@ describe('collection pagination', () => {
 		expect(reads[0]).not.toMatch(/jsonb_agg|\blimit\b/iu);
 	});
 
-	it('groups the complete authorized set in SQL instead of projecting a 500-row page', async () => {
+	it('groups the complete authorized set from one bounded relational read', async () => {
 		harness = await makeBoltTestRuntime(people);
 		await seed(harness);
 		await session(harness);
@@ -267,6 +267,7 @@ describe('collection pagination', () => {
 		const groups = value['groups'] as Record<string, Array<Record<string, unknown>>>;
 		expect(groups['Engineering']?.map(({ name }) => name)).toEqual(['Ada', 'Ada', 'Bea']);
 		expect(groups['Research']?.map(({ name }) => name)).toEqual(['Ada', 'Bea', 'Cy']);
+		expect(Object.values(groups).flat()).toHaveLength(6);
 		expect(value['baseRows']).toHaveLength(6);
 		expect(value['reproducibility']).toEqual(
 			expect.objectContaining({ _tag: 'ServerProof', reasons: expect.arrayContaining(['grouped']) })
@@ -275,8 +276,8 @@ describe('collection pagination', () => {
 			/\bfrom\s+(?:"people"|people)(?:\s|$)/iu.test(statement)
 		);
 		expect(reads).toHaveLength(1);
-		expect(reads[0]).toMatch(/jsonb_agg\s*\(/iu);
 		expect(reads[0]).toMatch(/\blimit\b/iu);
+		expect(reads[0]).not.toMatch(/jsonb_agg\s*\(/iu);
 	});
 
 	it('stamps the page with a sync head sampled before the row query', async () => {

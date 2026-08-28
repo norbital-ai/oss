@@ -3534,42 +3534,131 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				return { own, included };
 			});
 
-			const relatedRows = Effect.fn('Collections.relatedRows')(function* (
+			type RelatedRowsRequest = Readonly<{
+				edge: WritableManyRelation;
+				parentId: string;
+			}>;
+			type RelatedRowsResult = Readonly<{
+				rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
+				raw: ReadonlyArray<Readonly<Record<string, unknown>>>;
+				json: string;
+			}>;
+			type StoredGraphRow = Readonly<{
+				row: Readonly<Record<string, unknown>>;
+				snapshot: string;
+			}>;
+			const relatedRowsKey = (edge: WritableManyRelation, parentId: string): string =>
+				`${edge.childCollection}\u0000${edge.childColumn}\u0000${parentId}`;
+			const storedGraphRowKey = (collection: string, id: string): string =>
+				`${collection}\u0000${id}`;
+
+			/** Exact existing nodes named by a submitted graph, batched across heterogeneous tables. */
+			const storedGraphRowsMany = Effect.fn('Collections.storedGraphRowsMany')(function* (
 				effectId: EffectId,
-				edge: WritableManyRelation,
-				parentId: string
+				requests: ReadonlyArray<Readonly<{ collection: string; id: string }>>
 			) {
-				const definition = yield* workspace.collection(edge.childCollection);
-				const child = tableAlias(queryTableFor(edge.childCollection, definition.fields), 'child');
-				const columns = getColumns(child) as Readonly<Record<string, AnyPgColumn>>;
-				const result = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({
-							...columns,
-							__bolt_snapshot: aliased(rowJson('child'), '__bolt_snapshot')
-						})
-						.from(child)
-						.where(eq(columns[edge.childColumn]!, parentId))
-						.orderBy(asc(columns['id']!))
+				const unique = new Map<string, Readonly<{ collection: string; id: string }>>();
+				for (const request of requests) {
+					const key = storedGraphRowKey(request.collection, request.id);
+					if (!unique.has(key)) unique.set(key, request);
+				}
+				const ordered = [...unique.entries()].toSorted(([left], [right]) =>
+					left.localeCompare(right)
 				);
-				const raw = result.rows.filter(isJsonObject);
-				const snapshots = raw.flatMap((row) =>
-					isJsonObject(row['__bolt_snapshot']) ? [row['__bolt_snapshot']] : []
+				const loaded = new Map<string, StoredGraphRow | undefined>();
+				if (ordered.length === 0) return loaded;
+				const parameters: Array<Schema.Json> = [];
+				const branches = ordered.map(([, request], ordinal) => {
+					const ordinalParameter = parameters.push(ordinal);
+					const idParameter = parameters.push(request.id);
+					return `select $${ordinalParameter}::integer as "__bolt_graph_row_ordinal", to_jsonb(record) as "__bolt_graph_row_record" from ${quoteIdentifier(request.collection)} as record where record.id = $${idParameter}`;
+				});
+				const result = yield* database.execute(effectId, {
+					_tag: 'Query',
+					sql: branches.join(' union all '),
+					parameters
+				});
+				const rawByOrdinal = new Map<number, Readonly<Record<string, unknown>>>();
+				for (const row of result.rows) {
+					if (!isJsonObject(row)) continue;
+					const ordinal = row['__bolt_graph_row_ordinal'];
+					const record = row['__bolt_graph_row_record'];
+					if (typeof ordinal === 'number' && isJsonObject(record)) rawByOrdinal.set(ordinal, record);
+				}
+				for (const [[key, request], ordinal] of ordered.map((entry, index) => [entry, index] as const)) {
+					const raw = rawByOrdinal.get(ordinal);
+					if (raw === undefined) {
+						loaded.set(key, undefined);
+						continue;
+					}
+					const definition = yield* workspace.collection(request.collection);
+					loaded.set(key, {
+						row: decodeReferenceRow(raw, definition.fields) as Readonly<Record<string, unknown>>,
+						snapshot: JSON.stringify(raw)
+					});
+				}
+				return loaded;
+			});
+
+			/**
+			 * Reads every requested ownership edge in one statement.
+			 *
+			 * A recursive graph used to issue this SELECT from inside `prepareNode`: one facility call for
+			 * every existing parent and every included relationship. The rows are still exact, elevated
+			 * pre-images — hooks, authorization, approval review and omission planning all keep consuming
+			 * the same value — but heterogeneous child tables are projected to one JSON shape and unioned.
+			 * The ordinal is an integer rather than the internal NUL-delimited cache key because PostgreSQL
+			 * text values cannot carry a NUL byte.
+			 */
+			const relatedRowsMany = Effect.fn('Collections.relatedRowsMany')(function* (
+				effectId: EffectId,
+				requests: ReadonlyArray<RelatedRowsRequest>
+			) {
+				const unique = new Map<string, RelatedRowsRequest>();
+				for (const request of requests) {
+					const key = relatedRowsKey(request.edge, request.parentId);
+					if (!unique.has(key)) unique.set(key, request);
+				}
+				const ordered = [...unique.entries()].toSorted(([left], [right]) =>
+					left.localeCompare(right)
 				);
-				return {
-					rows: raw.map(
-						(row) =>
-							decodeReferenceRow(
-								Object.fromEntries(
-									Object.entries(row).filter(([key]) => key !== '__bolt_snapshot')
-								),
-								definition.fields
-							) as Readonly<Record<string, unknown>>
-					),
-					json: JSON.stringify(snapshots)
-				};
+				const empty = new Map<string, RelatedRowsResult>();
+				if (ordered.length === 0) return empty;
+				const parameters: Array<Schema.Json> = [];
+				const branches = ordered.map(([, request], ordinal) => {
+					const ordinalParameter = parameters.push(ordinal);
+					const parentParameter = parameters.push(request.parentId);
+					return `select $${ordinalParameter}::integer as "__bolt_relation_ordinal", to_jsonb(child) as "__bolt_relation_record" from ${quoteIdentifier(request.edge.childCollection)} as child where child.${quoteIdentifier(request.edge.childColumn)} = $${parentParameter}`;
+				});
+				const result = yield* database.execute(effectId, {
+					_tag: 'Query',
+					sql: `select * from (${branches.join(' union all ')}) as planned order by "__bolt_relation_ordinal", "__bolt_relation_record"->>'id'`,
+					parameters
+				});
+				const rawByOrdinal = new Map<number, Array<Readonly<Record<string, unknown>>>>();
+				for (const row of result.rows) {
+					if (!isJsonObject(row)) continue;
+					const ordinal = row['__bolt_relation_ordinal'];
+					const record = row['__bolt_relation_record'];
+					if (typeof ordinal !== 'number' || !isJsonObject(record)) continue;
+					const bucket = rawByOrdinal.get(ordinal) ?? [];
+					bucket.push(record);
+					rawByOrdinal.set(ordinal, bucket);
+				}
+				const loaded = new Map<string, RelatedRowsResult>();
+				for (const [[key, request], ordinal] of ordered.map((entry, index) => [entry, index] as const)) {
+					const definition = yield* workspace.collection(request.edge.childCollection);
+					const raw = rawByOrdinal.get(ordinal) ?? [];
+					loaded.set(key, {
+						rows: raw.map(
+							(row) =>
+								decodeReferenceRow(row, definition.fields) as Readonly<Record<string, unknown>>
+						),
+						raw,
+						json: JSON.stringify(raw)
+					});
+				}
+				return loaded;
 			});
 
 			/**
@@ -3600,6 +3689,137 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			) {
 				const operations: Array<PreparedGraphOperation> = [];
 				const relationshipSnapshots = new Map<string, RelationshipSnapshot>();
+				const relatedRowsCache = new Map<string, RelatedRowsResult>();
+				const storedGraphRowsCache = new Map<string, StoredGraphRow | undefined>();
+				const cacheRelatedRows = (
+					request: RelatedRowsRequest,
+					value: RelatedRowsResult
+				): void => {
+					relatedRowsCache.set(relatedRowsKey(request.edge, request.parentId), value);
+					for (const [index, row] of value.rows.entries()) {
+						const id = row['id'];
+						const raw = value.raw[index];
+						if (typeof id !== 'string' || raw === undefined) continue;
+						storedGraphRowsCache.set(
+							storedGraphRowKey(request.edge.childCollection, id),
+							{ row, snapshot: JSON.stringify(raw) }
+						);
+					}
+				};
+				const relatedRows = Effect.fn('Collections.relatedRows')(function* (
+					requestEffectId: EffectId,
+					edge: WritableManyRelation,
+					parentId: string
+				) {
+					const key = relatedRowsKey(edge, parentId);
+					const cached = relatedRowsCache.get(key);
+					if (cached !== undefined) return cached;
+					const loaded = yield* relatedRowsMany(requestEffectId, [{ edge, parentId }]);
+					const value = loaded.get(key) ?? { rows: [], raw: [], json: '[]' };
+					cacheRelatedRows({ edge, parentId }, value);
+					return value;
+				});
+				const cascadeEdgesFrom = (collection: string): ReadonlyArray<WritableManyRelation> =>
+					workspace.definition.relations.flatMap((relation) => {
+						if (relation.source !== collection || relation.cardinality !== 'many') return [];
+						const edge = resolveWritableManyRelation(
+							workspace.definition,
+							collection,
+							relation.name
+						);
+						return edge?.cascade === true && edge.parentColumn === 'id' ? [edge] : [];
+					});
+				type PrimedRelationshipRequest = RelatedRowsRequest &
+					Readonly<{ desiredIds: ReadonlySet<string> }>;
+				const primeRelatedRows = Effect.fn('Collections.primeRelatedRows')(function* () {
+					const initial = new Map<string, PrimedRelationshipRequest>();
+					const rows = new Map<string, Readonly<{ collection: string; id: string }>>();
+					const collect = (
+						collection: string,
+						payload: Readonly<Record<string, unknown>>,
+						id: string,
+						action: 'create' | 'update'
+					): void => {
+						if (action === 'update') {
+							const key = storedGraphRowKey(collection, id);
+							if (!rows.has(key)) rows.set(key, { collection, id });
+						}
+						for (const [name, value] of Object.entries(payload)) {
+							const edge = resolveWritableManyRelation(workspace.definition, collection, name);
+							if (edge === undefined || !Array.isArray(value)) continue;
+							const desiredIds = new Set(
+								value.flatMap((child) => {
+									if (child === null || typeof child !== 'object' || Array.isArray(child)) return [];
+									const childId = Reflect.get(child, 'id');
+									return typeof childId === 'string' && childId.length > 0 ? [childId] : [];
+								})
+							);
+							if (action === 'update') {
+								const key = relatedRowsKey(edge, id);
+								if (!initial.has(key)) initial.set(key, { edge, parentId: id, desiredIds });
+							}
+							for (const child of value) {
+								if (child === null || typeof child !== 'object' || Array.isArray(child)) continue;
+								const childPayload = child as Readonly<Record<string, unknown>>;
+								const childId = childPayload['id'];
+								if (typeof childId !== 'string' || childId.length === 0) continue;
+								const browserExisting = options.browserMutation?.baseVersions.some(
+									(entry) =>
+										entry.row.collection === edge.childCollection &&
+										entry.row.recordId === childId
+								);
+								collect(
+									edge.childCollection,
+									childPayload,
+									childId,
+									options.browserMutation === undefined || browserExisting === true
+										? 'update'
+										: 'create'
+								);
+							}
+						}
+					};
+					collect(rootCollection, rootPayload, options.rootId, options.rootAction);
+					const stored = yield* storedGraphRowsMany(
+						EffectId.make(`${effectId}:graph:row-wave`),
+						[...rows.values()]
+					);
+					for (const [key, value] of stored) storedGraphRowsCache.set(key, value);
+					let wave = [...initial.values()];
+					const visited = new Set<string>();
+					let waveNumber = 0;
+					while (wave.length > 0) {
+						const pending = wave.filter(
+							(request) => !visited.has(relatedRowsKey(request.edge, request.parentId))
+						);
+						if (pending.length === 0) break;
+						for (const request of pending)
+							visited.add(relatedRowsKey(request.edge, request.parentId));
+						const loaded = yield* relatedRowsMany(
+							EffectId.make(`${effectId}:graph:relationship-wave:${waveNumber++}`),
+							pending
+						);
+						for (const request of pending) {
+							const value = loaded.get(relatedRowsKey(request.edge, request.parentId));
+							if (value !== undefined) cacheRelatedRows(request, value);
+						}
+						const next = new Map<string, PrimedRelationshipRequest>();
+						for (const request of pending) {
+							if (!request.edge.cascade) continue;
+							const rows = loaded.get(relatedRowsKey(request.edge, request.parentId))?.rows ?? [];
+							for (const row of rows) {
+								const childId = row['id'];
+								if (typeof childId !== 'string' || request.desiredIds.has(childId)) continue;
+								for (const edge of cascadeEdgesFrom(request.edge.childCollection)) {
+									const key = relatedRowsKey(edge, childId);
+									if (!visited.has(key) && !next.has(key))
+										next.set(key, { edge, parentId: childId, desiredIds: new Set() });
+								}
+							}
+						}
+						wave = [...next.values()];
+					}
+				});
 				const approvalRequirements: Array<{
 					readonly collection: string;
 					readonly action: 'create' | 'update' | 'delete';
@@ -3634,31 +3854,34 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 					if (!relationshipSnapshots.has(key))
 						relationshipSnapshots.set(key, { edge, parentId, json });
 				};
+				const storedGraphRow = Effect.fn('Collections.storedGraphRow')(function* (
+					rowEffectId: EffectId,
+					collection: string,
+					id: string
+				) {
+					const key = storedGraphRowKey(collection, id);
+					if (storedGraphRowsCache.has(key)) return storedGraphRowsCache.get(key);
+					const loaded = yield* storedGraphRowsMany(rowEffectId, [{ collection, id }]);
+					const value = loaded.get(key);
+					storedGraphRowsCache.set(key, value);
+					return value;
+				});
 				const recordSnapshot = Effect.fn('Collections.recordSnapshot')(function* (
 					collection: string,
 					id: string
 				) {
-					const definition = yield* workspace.collection(collection);
-					const record = tableAlias(queryTableFor(collection, definition.fields), 'record');
-					const columns = getColumns(record) as Readonly<Record<string, AnyPgColumn>>;
-					const result = yield* executeBuilt(
+					const stored = yield* storedGraphRow(
 						EffectId.make(`${effectId}:graph:snapshot:${collection}:${id}`),
-						database,
-						composer
-							.select({ snapshot: aliased(rowJson('record'), 'snapshot') })
-							.from(record)
-							.where(eq(columns['id']!, id))
-							.limit(1)
+						collection,
+						id
 					);
-					const row = result.rows[0];
-					const snapshot = isJsonObject(row) ? row['snapshot'] : undefined;
-					if (!isJsonObject(snapshot))
+					if (stored === undefined)
 						return yield* graphRefusal(
 							collection,
 							'update',
 							`${collection} ${id} no longer exists.`
 						);
-					return JSON.stringify(snapshot);
+					return stored.snapshot;
 				});
 				const ensureGraphRowUnlocked = Effect.fn('Collections.ensureGraphRowUnlocked')(function* (
 					collection: string,
@@ -3916,7 +4139,13 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						// decode, `prepare`, `before`, and the graph split of what `before` returned — is one
 						// path, because it is one write.
 						if (action === 'update') {
-							previous = yield* readRowElevated(effectId, collection, id);
+							previous = (
+								yield* storedGraphRow(
+									EffectId.make(`${effectId}:graph:row:${collection}:${id}`),
+									collection,
+									id
+								)
+							)?.row;
 							if (
 								options.browserMutation !== undefined &&
 								!options.elevated &&
@@ -4104,8 +4333,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 									relationshipRequiresBrowserBaseVersion
 								);
 							}
+							// Inclusion authorizes reconciliation of the children it names, but absence is
+							// destructive only for an owned edge. A non-cascade `many` is a convenient write
+							// surface over independently-lived rows; treating its array as ownership would let a
+							// partial editor delete siblings it does not own.
 							for (const [childId, row] of byId) {
-								if (!desiredIds.has(childId))
+								if (relation.edge.cascade && !desiredIds.has(childId))
 									yield* prepareDelete(
 										relation.edge.childCollection,
 										row,
@@ -4147,6 +4380,12 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						})
 				};
 
+				// Prime the complete submitted graph before recursive preparation starts. Relationship reads
+				// introduced only by a hook retain the single-request fallback above; authored input and every
+				// cascade descendant discovered from its omissions consume the wave cache.
+				if (!options.elevated)
+					yield* access.authorize(subject, options.rootAction, rootCollection);
+				yield* primeRelatedRows();
 				const rootId = yield* prepareNode(rootCollection, rootPayload, 0, undefined, {
 					id: options.rootId,
 					action: options.rootAction,
@@ -6015,20 +6254,58 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								reason: 'import pipeline returned no rows'
 							});
 						}
-						yield* createMany(
-							effectId,
-							subject,
-							rows.map((row, index) => ({
-								collection: inputs[index]?.collection ?? inputs[0]?.collection ?? '',
-								id:
-									typeof row === 'object' &&
-									row !== null &&
-									typeof Reflect.get(row, 'id') === 'string'
-										? (Reflect.get(row, 'id') as string)
-										: deriveRecordId(`${inputs[0]?.collection ?? ''}:${effectId}:${index}`),
-								values: row as Readonly<Record<string, Schema.Json>>
-							}))
-						);
+						for (let index = 0; index < rows.length; index += 1) {
+							const row = rows[index];
+							const collection = inputs[index]?.collection ?? inputs[0]?.collection ?? '';
+							if (typeof row !== 'object' || row === null || Array.isArray(row)) {
+								return yield* new AccessControl.AccessDenied({
+									action: 'import',
+									resource: collection,
+									reason: `import pipeline row ${index + 1} is not a record`
+								});
+							}
+							const record = row as Readonly<Record<string, unknown>>;
+							const submittedId = record['id'];
+							if (
+								submittedId !== undefined &&
+								(typeof submittedId !== 'string' || submittedId.length === 0)
+							) {
+								return yield* new AccessControl.AccessDenied({
+									action: 'import',
+									resource: collection,
+									reason: `import pipeline row ${index + 1} has an invalid id`
+								});
+							}
+							const action = typeof submittedId === 'string' ? 'update' : 'create';
+							const id =
+								typeof submittedId === 'string'
+									? submittedId
+									: deriveRecordId(`${collection}:${effectId}:${index}`);
+							/**
+							 * The runtime, not authored code, owns a create's identity. Supplying the derived id to
+							 * the graph lets a retry choose the same row without misclassifying that id as an update;
+							 * an authored id is the opposite assertion and deliberately selects update. Both then
+							 * take the canonical declarative mutation path, including hooks, policy and relations.
+							 */
+							yield* mutate(
+								EffectId.make(`${effectId}:${index}`),
+								subject,
+								collection,
+								[{ ...record, id }],
+								false,
+								0,
+								{ declarative: true, root: { id, action } }
+							).pipe(
+								// Imports never carry a browser-mutation fence, so replay cannot be a
+								// recoverable outcome on this path. Keep that internal invariant out of
+								// the public import error union instead of pretending it is a business error.
+								Effect.catchIf(isBrowserMutationReplay, (cause) => Effect.die(cause)),
+								Effect.catchIf(
+									(cause): cause is MutationPhaseFailure => cause instanceof MutationPhaseFailure,
+									(cause) => Effect.fail(cause.underlying as MutationError)
+								)
+							);
+						}
 						return rows.length;
 					}
 					yield* createMany(effectId, subject, inputs);

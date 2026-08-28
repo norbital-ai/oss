@@ -5,8 +5,17 @@ import {
 	SyncCursor,
 	SyncPartitionDelta
 } from '../../src/runtime/sync/sync.js';
+import {
+	isReplicatedCollection,
+	SYSTEM_COLLECTIONS
+} from '../../src/runtime/schema/system-collections.js';
 
 describe('Sync owner', () => {
+	it('keeps every runtime-owned collection server-private except approval requests', () => {
+		expect(SYSTEM_COLLECTIONS.filter(isReplicatedCollection).map(({ name }) => name)).toEqual([
+			'approval_request'
+		]);
+	});
 	it('decodes ordered xid/sequence cursors', () =>
 		expect(Schema.decodeUnknownSync(SyncCursor)({ xid: 4, sequence: 9 })).toEqual({
 			xid: 4,

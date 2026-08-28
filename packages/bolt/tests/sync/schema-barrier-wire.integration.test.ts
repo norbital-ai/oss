@@ -81,8 +81,12 @@ describe('schema barrier wire', () => {
 		// Runtime-owned materialized collections join authored ones. Returning all of them is the
 		// conservative release-only answer when the guest cannot know which prior release is leaving.
 		expect(facts.affectedCollections).toEqual([...facts.affectedCollections].toSorted());
-		expect(facts.affectedCollections).toEqual(expect.arrayContaining(['accounts', 'zebra']));
+		expect(facts.affectedCollections).toEqual(
+			expect.arrayContaining(['accounts', 'approval_request', 'zebra'])
+		);
 		expect(facts.affectedCollections).not.toContain('private_notes');
+		expect(facts.affectedCollections).not.toContain('user');
+		expect(facts.affectedCollections).not.toContain('automation_run');
 		expect(facts).not.toHaveProperty('generation');
 	});
 

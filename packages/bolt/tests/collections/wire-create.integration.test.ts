@@ -118,15 +118,22 @@ const authored = {
 	...emptyAuthoredRuntime,
 	hooks: {
 		orders: {
-			create: {
+			mutate: {
 				perRecord: {
 					before: {
 						description: 'Stamps the status the workspace, not the caller, decides.',
-						handler: (context: unknown) => ({
-							...(context as { readonly input: Record<string, unknown> }).input,
-							status: 'accepted',
-							occurred_at: new Date('2026-08-23T05:00:00.000Z')
-						})
+						handler: (context: unknown) => {
+							const mutation = context as {
+								readonly input: Record<string, unknown>;
+								readonly existing?: Record<string, unknown>;
+							};
+							if (mutation.existing !== undefined) return mutation.input;
+							return {
+								...mutation.input,
+								status: 'accepted',
+								occurred_at: new Date('2026-08-23T05:00:00.000Z')
+							};
+						}
 					}
 				}
 			}
@@ -573,7 +580,7 @@ describe('collections.mutate over the wire', () => {
 			...emptyAuthoredRuntime,
 			hooks: {
 				orders: {
-					create: {
+					mutate: {
 						perRecord: {
 							before: {
 								description: 'rejects the M4 write once',

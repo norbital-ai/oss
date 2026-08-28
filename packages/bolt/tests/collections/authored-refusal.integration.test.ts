@@ -120,7 +120,7 @@ describe('a refusal raised from a real hook', () => {
 				...emptyAuthoredRuntime,
 				hooks: {
 					people: {
-						create: {
+						mutate: {
 							// Nested under `perRecord` because that is where a rule authored for one record now
 							// lives: `prepare` runs once for the batch and decides nothing, and `before` runs once
 							// per record, which is the only place a refusal can come from.
@@ -134,7 +134,7 @@ describe('a refusal raised from a real hook', () => {
 									 * standing in. `AuthoredHookPoint.handler` is `(context: unknown, api: unknown) =>
 									 * unknown`, because by the time the runtime holds a handler the authoring types have
 									 * already done their work at compile time. An author gets the narrow one —
-									 * `CreateBefore` in `authoring/contracts-schema.ts` types the context properly, and
+									 * `MutateBefore` in `authoring/contracts-schema.ts` types the context properly, and
 									 * `satisfies Hooks` from the generated `$types.js` is what applies it.
 									 *
 									 * This suite hand-builds an `AuthoredRuntime`, which is the runtime side, so it
@@ -143,7 +143,12 @@ describe('a refusal raised from a real hook', () => {
 									 * contract every real workspace is written against in order to suit a double.
 									 */
 									handler: (context: unknown) => {
-										const input = (context as { readonly input: Record<string, unknown> }).input;
+										const mutation = context as {
+											readonly input: Record<string, unknown>;
+											readonly existing?: Record<string, unknown>;
+										};
+										const { input } = mutation;
+										if (mutation.existing !== undefined) return input;
 										if (input['team'] == null) refuse('A person must belong to a team.');
 										return input;
 									}
@@ -176,7 +181,7 @@ describe('a refusal raised from a real hook', () => {
 		expect(refusal).toMatchObject({
 			message: 'A person must belong to a team.',
 			collection: 'people',
-			action: 'create.before'
+			action: 'mutate.before'
 		});
 		// The load-bearing half. A `before` hook refuses *ahead of* the write, so there is nothing to
 		// undo — and if the refusal had arrived after the insert, this row would exist and the

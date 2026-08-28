@@ -304,4 +304,97 @@ describe('compiler-owned mutation schema compatibility', () => {
 		if (existingChildUpdate.resolution === 'quarantined')
 			expect(existingChildUpdate.reason).toContain('children cannot preserve update semantics');
 	});
+
+	it('applies implied delete compatibility only to owned relationships', () => {
+		const base = workspace({
+			name: 'relationship-delete-compatibility',
+			version: '1',
+			collections: [
+				collection({ name: 'parents', fields: {} }),
+				collection({
+					name: 'children',
+					fields: {
+						parent_id: { type: 'uuid', required: true, indexed: false }
+					}
+				})
+			],
+			relations: [
+				{
+					name: 'parent_children',
+					source: 'parents',
+					target: 'children',
+					cardinality: 'many',
+					from: { collection: 'children', column: 'parent_id' },
+					to: { collection: 'parents', column: 'id' }
+				}
+			],
+			apps: [],
+			policies: [],
+			prompt: 'test',
+			tools: [],
+			skills: [],
+			automations: [],
+			envoys: [],
+			integrations: [],
+			requiredFacilities: [],
+			mutationCompatibility: {
+				offlineHorizonMillis: 100,
+				currentSchemaFingerprint: 'schema:new',
+				adapters: [
+					{
+						fromSchemaFingerprint: 'schema:old',
+						incompatibleActions: { children: ['delete'] }
+					}
+				]
+			}
+		});
+		const reconcile = (definition: typeof base) =>
+			reconcileMutationSchema(definition, {
+				fromSchemaFingerprint: 'schema:old',
+				toSchemaFingerprint: 'schema:new',
+				ageMillis: 1,
+				graph: {
+					action: 'update',
+					collection: 'parents',
+					values: { id: 'parent-1', parent_children: [] }
+				},
+				baseVersions: []
+			});
+
+		expect(reconcile(base).resolution).toBe('rebased');
+
+		const directCascade = {
+			...base,
+			relations: base.relations.map((relation) => ({ ...relation, cascade: true }))
+		};
+		const direct = reconcile(directCascade);
+		expect(direct.resolution).toBe('quarantined');
+		if (direct.resolution === 'quarantined')
+			expect(direct.reason).toContain('children cannot preserve delete semantics');
+
+		const inverseCascade = {
+			...base,
+			relations: [
+				{
+					name: 'parent_children',
+					source: 'parents',
+					target: 'children',
+					cardinality: 'many' as const
+				},
+				{
+					name: 'child_parent',
+					source: 'children',
+					target: 'parents',
+					cardinality: 'one' as const,
+					from: { collection: 'children', column: 'parent_id' },
+					to: { collection: 'parents', column: 'id' },
+					cascade: true
+				}
+			]
+		};
+		const inverse = reconcile(inverseCascade);
+		expect(inverse.resolution).toBe('quarantined');
+		if (inverse.resolution === 'quarantined')
+			expect(inverse.reason).toContain('children cannot preserve delete semantics');
+	});
 });

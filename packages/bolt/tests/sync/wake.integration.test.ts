@@ -156,8 +156,7 @@ describe('announcing a change on the sync topic', () => {
 				'turn-live',
 				{
 					kind: 'user_message',
-					text: 'Show me the current state.',
-					documents: []
+					text: 'Show me the current state.'
 				}
 			)
 		);

@@ -297,6 +297,27 @@ const database: FacilityBinding<DatabaseRequest, DatabaseResponse> = {
 		}
 		if (
 			request._tag === 'Query' &&
+			request.sql.includes('__bolt_graph_row_ordinal') &&
+			request.parameters.includes(employeeRecordId)
+		) {
+			const record = browserMutationApplied
+				? { id: employeeRecordId, name: 'Grace', row_version: 2 }
+				: { id: employeeRecordId, name: 'Ada', row_version: 1 };
+			return Promise.resolve({
+				_tag: 'Success',
+				value: {
+					rows: [
+						{
+							__bolt_graph_row_ordinal: 0,
+							__bolt_graph_row_record: record
+						}
+					],
+					affectedRows: 0
+				}
+			});
+		}
+		if (
+			request._tag === 'Query' &&
 			request.sql.includes('from "employees"') &&
 			!request.sql.includes('to_jsonb') &&
 			request.parameters.includes(employeeRecordId)

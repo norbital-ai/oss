@@ -56,7 +56,10 @@ import * as Notifications from '#lib/runtime/notifications/notifications.js';
 import { Notification } from '#lib/runtime/notifications/notifications.js';
 import { RemoteRegistry, type RuntimeRemoteRegistry } from '#lib/runtime/remotes.js';
 import * as WorkspaceSchema from '#lib/runtime/schema/workspace-schema.js';
-import { SYSTEM_COLLECTION_NAMES } from '#lib/runtime/schema/system-collections.js';
+import {
+	isReplicatedCollection,
+	SYSTEM_COLLECTION_NAMES
+} from '#lib/runtime/schema/system-collections.js';
 import { Secrets, type Interface as SecretsInterface } from '#lib/runtime/secrets/secrets.js';
 import {
 	PersonalSecrets,
@@ -1195,6 +1198,50 @@ const MINTED_IDENTITY = [
 ] as const;
 
 /**
+ * Samples a durable replica proof only when every query dependency may cross the sync boundary.
+ *
+ * Runtime-owned identity, automation, agent, notification and approval-party collections remain
+ * available through their explicit authenticated read grants, but their rows must never be
+ * hydrated into a browser partition. A server-only response therefore carries enough inert wire
+ * coordinates to keep the ordinary page protocol stable and marks itself so the client declines
+ * materialisation. Its rows live only in the in-memory query that asked for them.
+ */
+const collectionQueryPosition = Effect.fn('Bolt.collectionQueryPosition')(function* (
+	effectId: EffectId,
+	subject: Identity.Subject,
+	dependencies: ReadonlyArray<string>
+) {
+	const workspace = yield* Workspace.Service;
+	const definitions = new Map(
+		workspace.definition.collections.map((collection) => [collection.name, collection] as const)
+	);
+	const serverOnly = dependencies.some((name) => {
+		const definition = definitions.get(name);
+		return definition === undefined || !isReplicatedCollection(definition);
+	});
+	const sync = yield* Sync.Service;
+	if (!serverOnly) {
+		const position = yield* sync.positions(effectId, subject, dependencies);
+		return {
+			serverOnly: false,
+			readCursor: position.cursor,
+			partitionKey: position.partition.key,
+			confirmedDependencies: Object.keys(position.generations).toSorted(),
+			dependencyGenerations: position.generations
+		};
+	}
+	const readCursor = yield* sync.head(EffectId.make(`${effectId}:head`));
+	const partition = yield* sync.partition(EffectId.make(`${effectId}:partition`), subject);
+	return {
+		serverOnly: true,
+		readCursor,
+		partitionKey: partition.key,
+		confirmedDependencies: [] as ReadonlyArray<string>,
+		dependencyGenerations: {} as Readonly<Record<string, number>>
+	};
+});
+
+/**
  * Answers one keyset page: the rows, and the cursor its successor should carry.
  *
  * It lives at the boundary that owns the page ceiling, so `findMany` keeps returning plain rows for
@@ -1233,7 +1280,7 @@ const collectionPage = Effect.fn('Bolt.collectionPage')(function* (
 	 * a commit the page did not observe and let CoverageLedger claim a page current past an unseen row.
 	 * The suffix is distinct because database facilities deduplicate by effect id.
 	 */
-	const position = yield* (yield* Sync.Service).positions(
+	const position = yield* collectionQueryPosition(
 		EffectId.make(`${effectId}:page-position`),
 		input.subject,
 		described.dependencies
@@ -1281,10 +1328,7 @@ const collectionPage = Effect.fn('Bolt.collectionPage')(function* (
 				? Collections.encodeCollectionCursor(ordering, last)
 				: null,
 		lookahead: Math.max(0, retained.length - query.limit),
-		readCursor: position.cursor,
-		partitionKey: position.partition.key,
-		confirmedDependencies: Object.keys(position.generations).toSorted(),
-		dependencyGenerations: position.generations,
+		...position,
 		reproducibility: described.reproducibility
 	});
 });
@@ -3000,7 +3044,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					message: 'Grouped collection query could not be canonicalized'
 				});
 			}
-			const position = yield* (yield* Sync.Service).positions(
+			const position = yield* collectionQueryPosition(
 				EffectId.make(`${effectId}:grouped-position`),
 				input.subject,
 				described.dependencies
@@ -3034,10 +3078,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				groups,
 				baseRows: hydration.success.baseRows,
 				relationshipRefs: hydration.success.relationshipRefs,
-				readCursor: position.cursor,
-				partitionKey: position.partition.key,
-				confirmedDependencies: Object.keys(position.generations).toSorted(),
-				dependencyGenerations: position.generations,
+				...position,
 				reproducibility: described.reproducibility
 			});
 		}
@@ -3069,7 +3110,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					message: 'Collection count could not be canonicalized'
 				});
 			}
-			const position = yield* (yield* Sync.Service).positions(
+			const position = yield* collectionQueryPosition(
 				EffectId.make(`${effectId}:count-position`),
 				input.subject,
 				described.dependencies
@@ -3080,10 +3121,7 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 					input.subject,
 					collectionQuery(input)
 				),
-				readCursor: position.cursor,
-				partitionKey: position.partition.key,
-				confirmedDependencies: Object.keys(position.generations).toSorted(),
-				dependencyGenerations: position.generations,
+				...position,
 				reproducibility: described.reproducibility
 			});
 		}

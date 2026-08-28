@@ -6,6 +6,7 @@
 	import { Inline, Stack } from '#lib/layout';
 	import { cn } from '#lib/utils';
 	import type { DataRendererProps } from '#lib/data-renderer/data-renderer.types';
+	import { coerceNumericValue } from '#lib/data-renderer/data-renderer.utils';
 
 	const { t } = useI18n<UiKeys>();
 
@@ -23,14 +24,20 @@
 	const localeEffective = $derived(locale ?? useI18n<UiKeys>().intlLocale);
 
 	const values = $derived(
-		Array.isArray(value) ? value.filter((item): item is number => typeof item === 'number') : []
+		Array.isArray(value)
+			? value.flatMap((item) => {
+					const numeric = coerceNumericValue(item);
+					return numeric === null ? [] : [numeric];
+				})
+			: []
 	);
-	const scalarValue = $derived(typeof value === 'number' ? String(value) : '');
+	const scalar = $derived(coerceNumericValue(value));
+	const scalarValue = $derived(scalar === null ? '' : String(scalar));
 	const step = $derived(field.kind === 'integer' ? 1 : 'any');
 	const formatted = $derived.by(() => {
 		const formatter = new Intl.NumberFormat(localeEffective);
 		if (field.array) return values.map((item) => formatter.format(item)).join(', ');
-		return typeof value === 'number' ? formatter.format(value) : placeholder;
+		return scalar === null ? placeholder : formatter.format(scalar);
 	});
 
 	function parseInput(input: HTMLInputElement): number | null | undefined {

@@ -18,6 +18,7 @@ import type * as Identity from '#lib/runtime/identity/identity.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { decodeReferenceRow } from '#lib/runtime/collections/references.js';
+import { isReplicatedCollection } from '#lib/runtime/schema/system-collections.js';
 import * as Compaction from '#lib/runtime/sync/compaction.js';
 import {
 	aliased,
@@ -591,7 +592,7 @@ export const layer = Layer.effect(
 			affectedCollections: [
 				...new Set(
 					workspace.definition.collections
-						.filter(({ sync }) => sync !== false)
+						.filter(isReplicatedCollection)
 						.map(({ name }) => name)
 				)
 			].toSorted((left, right) => left.localeCompare(right))
@@ -648,7 +649,7 @@ export const layer = Layer.effect(
 					(collection) => collection.name === name
 				);
 				const predicate = access.predicate(subject, 'read', name);
-				if (definition === undefined || definition.sync === false || !predicate.allowed) {
+				if (definition === undefined || !isReplicatedCollection(definition) || !predicate.allowed) {
 					// Unknown, disabled and unauthorized are intentionally indistinguishable. The caller
 					// already supplied the spelling; the response must not confirm whether it exists.
 					return yield* new AccessControl.AccessDenied({
@@ -694,7 +695,7 @@ export const layer = Layer.effect(
 		): SyncPartitionIdentity => {
 			let actorBound = false;
 			const policySurface = workspace.definition.collections
-				.filter(({ sync }) => sync !== false)
+				.filter(isReplicatedCollection)
 				.map(({ name }) => {
 					const predicate = access.predicate(subject, 'read', name);
 					actorBound ||= predicate.actorBound;
@@ -1241,7 +1242,7 @@ export const layer = Layer.effect(
 			shape: Effect.fn('Sync.shape')(function* (subject) {
 				return workspace.definition.collections
 					.flatMap((collection) =>
-						collection.sync === false
+						!isReplicatedCollection(collection)
 							? []
 							: access.predicate(subject, 'read', collection.name).allowed
 								? [collection.name]

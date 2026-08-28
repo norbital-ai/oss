@@ -129,7 +129,8 @@ describe('envoy burst admission and chat documents', () => {
 							harness.effectId(`${effectId}:complete`),
 							'field_ops_whatsapp',
 							conversationId,
-							result.output
+							result.output,
+							null
 						)
 					)
 				);
@@ -187,10 +188,22 @@ describe('envoy burst admission and chat documents', () => {
 			});
 			expect(
 				await harness.database.query(
-					`select conversation_id, storage_key from chat_document where storage_key = $1`,
-					[write.key]
+					`select conversation_id, files from chat_session where conversation_id = $1`,
+					[conversationId]
 				)
-			).toEqual([{ conversation_id: conversationId, storage_key: write.key }]);
+			).toEqual([
+				{
+					conversation_id: conversationId,
+					files: [
+						{
+							storage_key: write.key,
+							file_name: 'whatsapp-message-1.png',
+							file_size: 3,
+							mime_type: 'image/png'
+						}
+					]
+				}
+			]);
 
 			expect((await receive('receive:duplicate', delivery('message-1'))).status).toBe('duplicate');
 			expect(fileRequests).toHaveLength(1);
