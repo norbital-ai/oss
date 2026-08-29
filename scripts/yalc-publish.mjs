@@ -14,14 +14,28 @@
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { readManifest } from './lib/package-release.mjs';
-import { readJsonIfPresent, signatureField } from './lib/yalc-consumers.mjs';
+import {
+	readJsonIfPresent,
+	resolveTenantSubstrateRoot,
+	signatureField,
+	tenantSubstratePackagePaths,
+	tenantSubstrateRootEnvironment
+} from './lib/yalc-consumers.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const tenantSubstrateRoot = resolveTenantSubstrateRoot();
+const packagePaths = tenantSubstratePackagePaths(tenantSubstrateRoot);
+const yalcStoreDirectory = packagePaths.yalcStore;
+const commandEnvironment = {
+	...process.env,
+	[tenantSubstrateRootEnvironment]: tenantSubstrateRoot,
+	npm_config_store_dir: packagePaths.pnpmStore,
+	npm_config_cache: packagePaths.pnpmCache
+};
 const allPackages = [
 	{ name: '@norbital-ai/bolt-protocol', directory: 'packages/bolt-protocol' },
 	{ name: '@norbital-ai/config', directory: 'packages/config' },
@@ -78,7 +92,7 @@ const buildTargetOnly = arguments_['build-target-only'] ?? false;
 const reportPath = arguments_.report;
 
 const run = (command, args, cwd = repositoryRoot) => {
-	execFileSync(command, args, { cwd, stdio: 'inherit' });
+	execFileSync(command, args, { cwd, stdio: 'inherit', env: commandEnvironment });
 };
 
 const workspaceVersions = Object.fromEntries(
@@ -203,9 +217,7 @@ if (buildable.length > 0) {
 
 /** Where yalc has pushed this package, so the rewrite can follow it. */
 const installationsOf = (name) => {
-	const installations = readJsonIfPresent(path.join(os.homedir(), '.yalc/installations.json'))?.[
-		name
-	];
+	const installations = readJsonIfPresent(path.join(yalcStoreDirectory, 'installations.json'))?.[name];
 	return Array.isArray(installations) ? installations : [];
 };
 
@@ -213,10 +225,22 @@ const report = { packages: {} };
 
 for (const { directory, name } of packages) {
 	const packageRoot = path.join(repositoryRoot, directory);
-	run('pnpm', ['exec', 'yalc', 'publish', '--private', '--no-scripts'], packageRoot);
+	run(
+		'pnpm',
+		[
+			'exec',
+			'yalc',
+			'--store-folder',
+			yalcStoreDirectory,
+			'publish',
+			'--private',
+			'--no-scripts'
+		],
+		packageRoot
+	);
 
 	const { version } = readManifest(path.join(packageRoot, 'package.json'));
-	const storeDirectory = path.join(os.homedir(), '.yalc/packages', name, version);
+	const storeDirectory = path.join(yalcStoreDirectory, 'packages', name, version);
 	const storeManifestPath = path.join(storeDirectory, 'package.json');
 	// yalc's own content hash of what it just stored. Reused rather than recomputed: it is the same
 	// string yalc records in every consumer's lockfile, which is what makes the comparison below
@@ -239,7 +263,19 @@ for (const { directory, name } of packages) {
 		// `--private` is required on the push as well as the publish: without it yalc refuses private
 		// packages with "Will not publish package with `private: true`" and exits 0, so bolt/bolt-server
 		// changes silently never reached their installations. Only a later `yalc add` refreshed them.
-		run('pnpm', ['exec', 'yalc', 'push', '--replace', '--private'], packageRoot);
+		run(
+			'pnpm',
+			[
+				'exec',
+				'yalc',
+				'--store-folder',
+				yalcStoreDirectory,
+				'push',
+				'--replace',
+				'--private'
+			],
+			packageRoot
+		);
 		// The push republishes from source, overwriting the manifest rewritten above.
 		writeManifest(storeManifestPath, manifest);
 	}

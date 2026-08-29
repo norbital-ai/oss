@@ -1,5 +1,6 @@
 /** Consumer-side yalc linking; pnpm must reinstall whenever stamped package signatures differ. */
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, lstatSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { safeParse } from '@norbital-ai/std/json';
@@ -10,6 +11,128 @@ export const signatureField = 'yalcSignature';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const localPackageNames = new Set(readPublicPackageEntries(repositoryRoot).map(({ name }) => name));
+
+export const tenantSubstrateRootEnvironment = 'NORBITAL_TENANT_SUBSTRATE_ROOT';
+const tenantSubstrateSchema = 'norbital-tenant-substrate/v1';
+const tenantSubstrateLabelKey = 'io.norbital.tenant-substrate';
+const generationPattern =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const microsandboxResourcePattern = /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]*$/;
+
+const exactResourceNames = (values) =>
+	Array.isArray(values) &&
+	values.every((value) => typeof value === 'string' && microsandboxResourcePattern.test(value)) &&
+	new Set(values).size === values.length;
+
+const exactInstances = (values, root) =>
+	Array.isArray(values) &&
+	values.every(
+		(value) => {
+			if (
+				value === null ||
+				typeof value !== 'object' ||
+				!microsandboxResourcePattern.test(String(value.name ?? '')) ||
+				typeof value.workspace !== 'string' ||
+				!path.isAbsolute(value.workspace) ||
+				canonicalPath(value.workspace) !== value.workspace
+			) {
+				return false;
+			}
+			const relative = path.relative(path.join(root, 'tenants'), value.workspace);
+			const parts = relative.split(path.sep);
+			return (
+				!relative.startsWith('..') &&
+				!path.isAbsolute(relative) &&
+				parts.length === 5 &&
+				parts[0]?.length > 0 &&
+				parts[1] === 'repositories' &&
+				parts[2]?.length > 0 &&
+				parts[3] === 'worktrees' &&
+				parts[4]?.length > 0
+			);
+		}
+	) &&
+	new Set(values.map((value) => value.name)).size === values.length;
+
+const canonicalPath = (input) => {
+	let cursor = path.resolve(input);
+	const tail = [];
+	while (!existsSync(cursor)) {
+		const parent = path.dirname(cursor);
+		if (parent === cursor) break;
+		tail.unshift(path.basename(cursor));
+		cursor = parent;
+	}
+	const physical = existsSync(cursor) ? realpathSync.native(cursor) : path.resolve(cursor);
+	return path.join(physical, ...tail);
+};
+
+/**
+ * The realm has one package-materialisation root. Publishing is an internal `env` phase, so it
+ * refuses to recreate or silently claim an unowned root when that phase has not opened it first.
+ */
+export const resolveTenantSubstrateRoot = ({ environment = process.env } = {}) => {
+	const configured = environment[tenantSubstrateRootEnvironment]?.trim();
+	const selected = configured || path.resolve(repositoryRoot, '../norbital/.tenant_substrate');
+	if (!path.isAbsolute(selected)) {
+		throw new Error(`${tenantSubstrateRootEnvironment} must be an absolute path: ${selected}`);
+	}
+	const root = canonicalPath(selected);
+	if (root !== path.resolve(selected)) {
+		throw new Error(`tenant substrate root must be canonical, not a symlink alias: ${selected}`);
+	}
+	const marker = path.join(root, '.owner.json');
+	if (!existsSync(marker)) {
+		throw new Error(`tenant substrate ownership marker is missing: ${marker}`);
+	}
+	const markerStat = lstatSync(marker);
+	if (!markerStat.isFile() || markerStat.isSymbolicLink()) {
+		throw new Error(`tenant substrate ownership marker is not a regular file: ${marker}`);
+	}
+	const owner = readJsonIfPresent(marker);
+	const digest = createHash('sha256').update(root).digest('hex');
+	if (
+		owner?.schema !== tenantSubstrateSchema ||
+		owner.canonicalRootDigest !== digest ||
+		owner.target !== 'dev' ||
+		!generationPattern.test(owner.generation) ||
+		owner.microsandbox?.label !== `${tenantSubstrateLabelKey}=${digest}` ||
+		!exactInstances(owner.microsandbox?.instances, root) ||
+		!exactResourceNames(owner.microsandbox?.volumes) ||
+		!exactResourceNames(owner.microsandbox?.snapshots) ||
+		!exactResourceNames(owner.microsandbox?.images)
+	) {
+		throw new Error(`tenant substrate ownership marker does not own ${root}`);
+	}
+	return root;
+};
+
+/** Refuse a symlinked package subtree before pnpm or yalc can write outside the owned root. */
+export const tenantSubstratePackagePaths = (root) => {
+	const paths = {
+		pnpmStore: path.join(root, 'packages/pnpm-store'),
+		pnpmCache: path.join(root, 'packages/pnpm-cache'),
+		yalcStore: path.join(root, 'packages/local/yalc')
+	};
+	for (const [name, candidate] of Object.entries(paths)) {
+		if (canonicalPath(candidate) !== candidate) {
+			throw new Error(`tenant substrate ${name} path escapes through a symlink: ${candidate}`);
+		}
+	}
+	return paths;
+};
+
+/** yalc's complete mutable global store, including installations.json, lives under packages/local. */
+export const resolveYalcStoreDirectory = (options) => {
+	const root = resolveTenantSubstrateRoot(options);
+	return tenantSubstratePackagePaths(root).yalcStore;
+};
+
+const withYalcStore = (storeDirectory, arguments_) => [
+	'--store-folder',
+	storeDirectory,
+	...arguments_
+];
 
 export const readJsonIfPresent = (file) => {
 	if (!existsSync(file)) return undefined;
@@ -45,7 +168,14 @@ export const stalePackages = (consumerDirectory, names) =>
 	});
 
 /** Link consumers without leaving publish-time dependency coordinates in source control. */
-export const linkConsumers = ({ consumers, force = false, install, run, yalcBin }) => {
+export const linkConsumers = ({
+	consumers,
+	force = false,
+	install,
+	run,
+	yalcBin,
+	yalcStoreDirectory = resolveYalcStoreDirectory()
+}) => {
 	return Effect.runSync(
 		Effect.acquireUseRelease(
 			Effect.sync(() => {
@@ -71,6 +201,7 @@ export const linkConsumers = ({ consumers, force = false, install, run, yalcBin 
 								consumerDirectory: consumer.directory,
 								names: packages,
 								yalcBin,
+								yalcStoreDirectory,
 								run
 							});
 							const stale = stalePackages(consumer.directory, packages);
@@ -96,7 +227,13 @@ export const linkConsumers = ({ consumers, force = false, install, run, yalcBin 
 };
 
 /** Convert registry pins to pure overlays; pnpm remains the sole owner of node_modules. */
-export const ensurePureInstallation = ({ consumerDirectory, names, yalcBin, run }) => {
+export const ensurePureInstallation = ({
+	consumerDirectory,
+	names,
+	yalcBin,
+	yalcStoreDirectory = resolveYalcStoreDirectory(),
+	run
+}) => {
 	const manifest = readJsonIfPresent(path.join(consumerDirectory, 'package.json'));
 	const lockfile = readJsonIfPresent(path.join(consumerDirectory, 'yalc.lock'));
 	const unlinked = names.filter(
@@ -109,10 +246,15 @@ export const ensurePureInstallation = ({ consumerDirectory, names, yalcBin, run 
 	const impure = names.filter((name) => lockfile?.packages?.[name]?.pure !== true);
 	if (unlinked.length > 0) {
 		// Plain add records the replaced registry pin; the pure pass then yields ownership to pnpm.
-		run(yalcBin, ['add', ...unlinked], consumerDirectory);
+		run(yalcBin, withYalcStore(yalcStoreDirectory, ['add', ...unlinked]), consumerDirectory);
 	}
 	const prepared = [...new Set([...unlinked, ...impure])];
-	if (prepared.length > 0) run(yalcBin, ['add', '--pure', ...prepared], consumerDirectory);
+	if (prepared.length > 0)
+		run(
+			yalcBin,
+			withYalcStore(yalcStoreDirectory, ['add', '--pure', ...prepared]),
+			consumerDirectory
+		);
 	for (const name of prepared) {
 		// Pure mode must leave neither yalc's directory nor its displaced copy of pnpm's link.
 		const segments = name.split('/');

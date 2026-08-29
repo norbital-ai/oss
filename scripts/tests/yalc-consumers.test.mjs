@@ -1,5 +1,15 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+	existsSync,
+	mkdtempSync,
+	mkdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -7,6 +17,7 @@ import {
 	ensurePureInstallation,
 	linkConsumers,
 	managedPackages,
+	resolveYalcStoreDirectory,
 	stalePackages
 } from '../lib/yalc-consumers.mjs';
 
@@ -16,6 +27,66 @@ const writeJson = (file, value) => {
 	writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 };
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
+
+test('yalc store resolves beneath the configured owned tenant substrate root', () => {
+	const root = realpathSync.native(fixture());
+	try {
+		const rootDigest = createHash('sha256').update(root).digest('hex');
+		writeJson(path.join(root, '.owner.json'), {
+			schema: 'norbital-tenant-substrate/v1',
+			target: 'dev',
+			generation: randomUUID(),
+			canonicalRootDigest: rootDigest,
+			microsandbox: {
+				label: `io.norbital.tenant-substrate=${rootDigest}`,
+				instances: [],
+				volumes: [],
+				snapshots: [],
+				images: []
+			}
+		});
+		assert.equal(
+			resolveYalcStoreDirectory({
+				environment: { NORBITAL_TENANT_SUBSTRATE_ROOT: root }
+			}),
+			path.join(root, 'packages/local/yalc')
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('yalc store refuses a package subtree that escapes through a symlink', () => {
+	const root = realpathSync.native(fixture());
+	const outside = realpathSync.native(fixture());
+	try {
+		const rootDigest = createHash('sha256').update(root).digest('hex');
+		writeJson(path.join(root, '.owner.json'), {
+			schema: 'norbital-tenant-substrate/v1',
+			target: 'dev',
+			generation: randomUUID(),
+			canonicalRootDigest: rootDigest,
+			microsandbox: {
+				label: `io.norbital.tenant-substrate=${rootDigest}`,
+				instances: [],
+				volumes: [],
+				snapshots: [],
+				images: []
+			}
+		});
+		symlinkSync(outside, path.join(root, 'packages'), 'dir');
+		assert.throws(
+			() =>
+				resolveYalcStoreDirectory({
+					environment: { NORBITAL_TENANT_SUBSTRATE_ROOT: root }
+				}),
+			/symlink/
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(outside, { recursive: true, force: true });
+	}
+});
 
 test('managedPackages finds clean exact-version consumers as well as existing overlays', () => {
 	const root = fixture();
@@ -37,6 +108,7 @@ test('managedPackages finds clean exact-version consumers as well as existing ov
 test('ensurePureInstallation establishes a clean link before converting it to pure', () => {
 	const root = fixture();
 	try {
+		const yalcStoreDirectory = path.join(root, 'tenant-substrate/packages/local/yalc');
 		const manifestPath = path.join(root, 'package.json');
 		const lockPath = path.join(root, 'yalc.lock');
 		writeJson(manifestPath, {
@@ -82,13 +154,21 @@ test('ensurePureInstallation establishes a clean link before converting it to pu
 				consumerDirectory: root,
 				names: ['@norbital-ai/bolt', '@norbital-ai/ui'],
 				yalcBin: '/fake/yalc',
+				yalcStoreDirectory,
 				run
 			}),
 			['@norbital-ai/bolt', '@norbital-ai/ui']
 		);
 		assert.deepEqual(calls, [
-			['add', '@norbital-ai/bolt'],
-			['add', '--pure', '@norbital-ai/bolt', '@norbital-ai/ui']
+			['--store-folder', yalcStoreDirectory, 'add', '@norbital-ai/bolt'],
+			[
+				'--store-folder',
+				yalcStoreDirectory,
+				'add',
+				'--pure',
+				'@norbital-ai/bolt',
+				'@norbital-ai/ui'
+			]
 		]);
 		assert.equal(
 			readJson(manifestPath).dependencies['@norbital-ai/bolt'],
@@ -106,6 +186,7 @@ test('ensurePureInstallation establishes a clean link before converting it to pu
 test('ensurePureInstallation refuses a partial --only store on a clean consumer', () => {
 	const root = fixture();
 	try {
+		const yalcStoreDirectory = path.join(root, 'tenant-substrate/packages/local/yalc');
 		writeJson(path.join(root, 'package.json'), {
 			dependencies: { '@norbital-ai/bolt': '0.0.12' }
 		});
@@ -115,6 +196,7 @@ test('ensurePureInstallation refuses a partial --only store on a clean consumer'
 					consumerDirectory: root,
 					names: ['@norbital-ai/bolt'],
 					yalcBin: '/fake/yalc',
+					yalcStoreDirectory,
 					run: () => undefined
 				}),
 			/without --only/
@@ -150,6 +232,7 @@ test('stalePackages compares the pushed and materialised signatures', () => {
 test('linkConsumers restores dependency files when installation fails', () => {
 	const root = fixture();
 	try {
+		const yalcStoreDirectory = path.join(root, 'tenant-substrate/packages/local/yalc');
 		const manifestPath = path.join(root, 'package.json');
 		writeJson(manifestPath, { dependencies: { '@norbital-ai/bolt': '0.0.12' } });
 		const original = readFileSync(manifestPath);
@@ -158,6 +241,7 @@ test('linkConsumers restores dependency files when installation fails', () => {
 				linkConsumers({
 					consumers: [{ name: 'fixture', directory: root }],
 					yalcBin: '/fake/yalc',
+					yalcStoreDirectory,
 					run: (_command, args) => {
 						mkdirSync(path.join(root, '.yalc/@norbital-ai/bolt'), { recursive: true });
 						writeJson(manifestPath, {

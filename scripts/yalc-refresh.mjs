@@ -30,10 +30,24 @@ import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { managedPackages, stalePackages } from './lib/yalc-consumers.mjs';
+import {
+	managedPackages,
+	resolveTenantSubstrateRoot,
+	stalePackages,
+	tenantSubstratePackagePaths,
+	tenantSubstrateRootEnvironment
+} from './lib/yalc-consumers.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const realmRoot = path.resolve(repositoryRoot, '..');
+const tenantSubstrateRoot = resolveTenantSubstrateRoot();
+const packagePaths = tenantSubstratePackagePaths(tenantSubstrateRoot);
+const commandEnvironment = {
+	...process.env,
+	[tenantSubstrateRootEnvironment]: tenantSubstrateRoot,
+	npm_config_store_dir: packagePaths.pnpmStore,
+	npm_config_cache: packagePaths.pnpmCache
+};
 
 /** Every repository that consumes the packages, and owns its own linker. */
 const CONSUMER_REPOSITORIES = ['templates', 'templates_private', 'norbital'];
@@ -41,10 +55,10 @@ const CONSUMER_REPOSITORIES = ['templates', 'templates_private', 'norbital'];
 const { values } = parseArgs({ options: { only: { type: 'string' } }, strict: true });
 
 const run = (command, args, cwd) =>
-	execFileSync(command, args, { cwd, stdio: 'inherit', env: process.env });
+	execFileSync(command, args, { cwd, stdio: 'inherit', env: commandEnvironment });
 
 const capture = (command, args, cwd) =>
-	execFileSync(command, args, { cwd, encoding: 'utf8', env: process.env }).trim();
+	execFileSync(command, args, { cwd, encoding: 'utf8', env: commandEnvironment }).trim();
 
 /**
  * Workspaces inside a consumer repository.
