@@ -877,6 +877,13 @@ const SYSTEM_ONLY_COMMANDS: ReadonlySet<string> = new Set([
 	 * same work without coming through this boundary at all.
 	 */
 	'sync.compact',
+	/**
+	 * Fills in record embeddings a bulk write could not.
+	 *
+	 * Host-authenticated for the same reason `sync.compact` is: it is called after a seed, spends
+	 * provider credit, and belongs to the deployment rather than to any workspace's authority model.
+	 */
+	'collections.embed',
 	/** One host-authenticated admission fans many independently authenticated pulls into one read. */
 	'sync.distribute'
 ]);
@@ -2634,6 +2641,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		case 'sync.shape': {
 			const input = yield* decode(SyncShapeInput, commandInput);
 			return json(yield* (yield* Sync.Service).shape(input.subject));
+		}
+		case 'collections.embed': {
+			const collections = yield* Collections.Service;
+			return json(yield* collections.embedRecords(effectId));
 		}
 		case 'sync.compact': {
 			const input = yield* decode(SyncCompactInput, commandInput);

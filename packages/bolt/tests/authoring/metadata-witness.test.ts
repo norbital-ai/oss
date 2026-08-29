@@ -52,7 +52,8 @@ const MODEL_METADATA: Required<ModelMetadata> = {
 	history: true,
 	sync: true,
 	indexes: [],
-	exclusions: []
+	exclusions: [],
+	embedding: { fields: [] }
 };
 
 /** `text()`, `phone()` and `enums()` share one bag, so one witness covers all three. */
@@ -85,6 +86,10 @@ const WITNESSES: ReadonlyArray<Witness> = [
 			indexes: 'authoredIndex',
 			exclusions: 'renderArtifact',
 			recordLabel: 'extractCollectionCatalog',
+			// Two readers, one declaration: `compileModelTable` renders the `record_embedding` column
+			// and `recordEmbeddingIndexes` its HNSW index, so a declared embedding reaches the lineage
+			// as both. Named here by the one that owns the column.
+			embedding: 'recordEmbeddingColumn',
 			// Lifted off `model.metadata` onto the collection descriptor beside `exclusions`, then
 			// projected by `workspace.manifest` so a host surface can read them.
 			description: 'renderArtifact',

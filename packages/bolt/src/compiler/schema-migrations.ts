@@ -20,6 +20,7 @@ import {
 import type * as DrizzleKitPostgres from 'drizzle-kit/api-postgres';
 import { collectionSearchTrigramIndexName } from '@norbital-ai/std/collection';
 import {
+	RECORD_EMBEDDING_COLUMN,
 	compileModelTable,
 	describeModelColumns,
 	searchableColumns
@@ -375,6 +376,31 @@ const REFERENCE_ONLY_TABLES: Readonly<Record<string, PgTable>> = {
 };
 
 /**
+ * The HNSW index over a declared record embedding.
+ *
+ * Declared here rather than left to the author, for the same reason the column is: a vector column
+ * without an approximate-nearest-neighbour index still answers `findNearest`, by scanning every
+ * row. That is correct and quietly unusable, and it is exactly the shape of failure a demo finds
+ * first. `vector_cosine_ops` because record embeddings are compared by angle — the models return
+ * unnormalised vectors and magnitude carries no meaning across records.
+ */
+const recordEmbeddingIndexes = (
+	collectionName: string,
+	model: ModelDeclaration,
+	self: Readonly<Record<string, ExtraConfigColumn>>
+): Array<PgTableExtraConfigValue> => {
+	if (model.metadata?.embedding === undefined) return [];
+	const column = self[RECORD_EMBEDDING_COLUMN];
+	if (column === undefined) return [];
+	return [
+		index(collectionIndexName(collectionName, `${RECORD_EMBEDDING_COLUMN}_hnsw`)).using(
+			'hnsw',
+			column.op('vector_cosine_ops')
+		)
+	];
+};
+
+/**
  * The Drizzle tables a workspace's authored models describe, as drizzle-kit serialises them.
  *
  * The identity table is reachable as a foreign-key target but is never returned, and the difference
@@ -396,6 +422,7 @@ const workspaceMigrationTables = (
 			),
 			...declaredIndexes(name, model.columns, self),
 			...searchIndexes(name, model.columns, self),
+			...recordEmbeddingIndexes(name, model, self),
 			...referenceEntities(name, model.columns, self, targets),
 			// Read when Drizzle asks for the table config rather than now, so a relation may point at a
 			// collection declared later in the same pass.

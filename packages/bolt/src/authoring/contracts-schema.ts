@@ -93,9 +93,21 @@ type BuilderData<B> = B extends { readonly _: infer Config extends { readonly da
 export type SystemRow = {
 	readonly [K in keyof SystemRowColumns]: BuilderData<SystemRowColumns[K]>;
 };
-type SelectForColumns<C extends Readonly<Record<string, AnyModelFieldBuilder>>> = SystemRow & {
-	readonly [K in keyof C]: BuilderData<C[K]>;
-};
+/**
+ * The platform's record embedding, offered to every row shape and optional on all of them.
+ *
+ * Not part of `SystemRow`: that type is derived from `defineSystemRowModel`, and adding it there
+ * would give every table the physical column, when only a collection that declares
+ * `embedding` gets one. Optional rather than required because it is absent in exactly two ordinary
+ * situations — a collection that declares no embedding, and a row whose vector has not been written
+ * yet — so authored code has to narrow before using it, which is the truth about the value.
+ */
+type RecordEmbeddingRow = { readonly record_embedding?: readonly number[] | null };
+
+type SelectForColumns<C extends Readonly<Record<string, AnyModelFieldBuilder>>> = SystemRow &
+	RecordEmbeddingRow & {
+		readonly [K in keyof C]: BuilderData<C[K]>;
+	};
 type RequiredInsertKeys<C extends Readonly<Record<string, AnyModelFieldBuilder>>> = {
 	[K in keyof C]: C[K] extends { readonly _: { readonly notNull: true } }
 		? C[K] extends { readonly _: { readonly hasDefault: true } }
@@ -469,7 +481,9 @@ export type NearestMetric = 'l2' | 'cosine' | 'ip';
  * type.
  */
 export type VectorColumnName<S extends AnySchema, N extends TableName<S>> = {
-	readonly [K in keyof SchemaRow<S, N>]-?: NonNullable<SchemaRow<S, N>[K]> extends ReadonlyArray<number>
+	readonly [K in keyof SchemaRow<S, N>]-?: NonNullable<
+		SchemaRow<S, N>[K]
+	> extends ReadonlyArray<number>
 		? Array<number> extends NonNullable<SchemaRow<S, N>[K]>
 			? K
 			: never
@@ -526,9 +540,7 @@ interface CollectionQuery<S extends AnySchema, N extends TableName<S>> {
 		const Config extends SchemaNearestConfig<S, N, Col>
 	>(
 		config: Config & { readonly column: Col }
-	): Effect.Effect<
-		Array<SchemaQueryRow<S, N, Config> & Readonly<{ readonly distance: number }>>
-	>;
+	): Effect.Effect<Array<SchemaQueryRow<S, N, Config> & Readonly<{ readonly distance: number }>>>;
 }
 interface ApprovalRequestRow extends SystemRow {
 	readonly collection_name: string;
@@ -625,16 +637,13 @@ type DeclaredInput<Inputs, N extends PropertyKey> =
  * desired state, not one of the parent's own columns, so it is not part of what `input` narrows.
  */
 type DeclaredMutationValues<S extends AnySchema, N extends MutationTableName<S>, Declared> = (
-	| Declared
-	| (Readonly<{ readonly id: MutationIdentity<S, N> }> & Partial<Declared>)
+	Declared | (Readonly<{ readonly id: MutationIdentity<S, N> }> & Partial<Declared>)
 ) &
 	MutationChildren<S, N>;
 
-export type MutationValuesFor<
-	S extends AnySchema,
-	N extends MutationTableName<S>,
-	Inputs
-> = [DeclaredInput<Inputs, N>] extends [never]
+export type MutationValuesFor<S extends AnySchema, N extends MutationTableName<S>, Inputs> = [
+	DeclaredInput<Inputs, N>
+] extends [never]
 	? CollectionMutationValues<S, N>
 	: DeclaredMutationValues<S, N, DeclaredInput<Inputs, N>>;
 

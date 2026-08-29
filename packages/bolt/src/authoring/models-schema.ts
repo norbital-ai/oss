@@ -47,6 +47,27 @@ export interface ModelExclusion {
 }
 
 /**
+ * One embedding of the whole record, over the attributes the author chooses.
+ *
+ * Record-level rather than per-attribute: what makes two job photographs the same scene is the
+ * photograph together with what was written about it, and an embedding per column can only ever
+ * compare halves. The platform maintains the vector as a system column, so authored code never
+ * calls a model — it declares which fields mean something and searches with `findNearest`.
+ *
+ * `fields` names declared columns. Text-shaped columns contribute their text; `file()` columns
+ * contribute their bytes as an image part, so a photograph participates directly rather than
+ * through a caption about it.
+ */
+export interface ModelEmbedding {
+	/** Declared columns that feed the vector, in the order they are sent to the model. */
+	readonly fields: ReadonlyArray<string>;
+	/** The embeddings model; the host's configured default when absent. */
+	readonly model?: string;
+	/** Matryoshka truncation, when the model supports it. The model's own width when absent. */
+	readonly dimensions?: number;
+}
+
+/**
  * What a `defineModel` declaration may say about the collection as a whole.
  *
  * Every key here is read by something; an option nothing reads is a lie in the authoring surface, so
@@ -72,6 +93,8 @@ export interface ModelMetadata {
 	readonly sync?: boolean;
 	readonly indexes?: ReadonlyArray<ModelIndex>;
 	readonly exclusions?: ReadonlyArray<ModelExclusion>;
+	/** One platform-maintained vector over the named fields. See `ModelEmbedding`. */
+	readonly embedding?: ModelEmbedding;
 }
 
 export interface ModelDeclaration<

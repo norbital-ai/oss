@@ -13,7 +13,7 @@ import type {
 	WebhookRequestSpec,
 	WebhookSignatureSpec
 } from './contracts-schema.js';
-import type { ModelExclusion, ModelIndex } from './models-schema.js';
+import type { ModelExclusion, ModelIndex, ModelEmbedding } from './models-schema.js';
 
 /**
  * `uuid` is its own member rather than a flavour of `string`.
@@ -208,6 +208,14 @@ export interface CollectionDefinition<Fields extends Readonly<Record<string, Fie
 	readonly exclusions?: ReadonlyArray<ModelExclusion>;
 	/** Database indexes declared by the model, including compound and partial indexes. */
 	readonly indexes?: ReadonlyArray<ModelIndex>;
+	/**
+	 * One platform-maintained record embedding, when the model declares one.
+	 *
+	 * Carried on the definition rather than derived at each reader, for the reason `exclusions` is:
+	 * the schema plan renders the column and its index, and the runtime write path decides what to
+	 * send the model — two consumers that must agree on one declaration.
+	 */
+	readonly embedding?: ModelEmbedding;
 	/** Workspace-relative path of the authored model, so a host surface can link to its source. */
 	readonly sourcePath?: string;
 }

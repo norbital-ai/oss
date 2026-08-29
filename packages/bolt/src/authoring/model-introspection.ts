@@ -17,6 +17,7 @@ import type { CollectionDefinition, FieldDefinition, ScalarType } from './worksp
 import {
 	isReferenceBuilder,
 	referenceStorageColumn,
+	vector,
 	type AnyModelFieldBuilder,
 	type ModelDeclaration,
 	type ModelIndex,
@@ -377,6 +378,7 @@ export const compileModel = (
 		...(metadata?.history === undefined ? {} : { history: metadata.history }),
 		...(metadata?.description === undefined ? {} : { description: metadata.description }),
 		...(metadata?.icon === undefined ? {} : { icon: metadata.icon }),
+		...(metadata?.embedding === undefined ? {} : { embedding: metadata.embedding }),
 		...(options.sourcePath === undefined ? {} : { sourcePath: options.sourcePath })
 	};
 };
@@ -425,6 +427,38 @@ type CompiledModelTable<
  * come from the collection runtime, and callers may add relationship constraints without
  * redeclaring either. Better Auth and tenant migrations both consume this exact operation.
  */
+/**
+ * The column name a declared record embedding is maintained under.
+ *
+ * One name for every collection, like `id` or `created_at`, because it is a platform column rather
+ * than an authored one: a reader asking "is this record semantically searchable" must not have to
+ * know what the author called it.
+ */
+export const RECORD_EMBEDDING_COLUMN = 'record_embedding';
+
+/**
+ * The width used when a model declares an embedding without asking for one.
+ *
+ * A Postgres `vector` column is typed by its dimensionality, so unlike `dimensions` on the wire this
+ * cannot be left to the provider — the table has to be created with a number. 256 is the Matryoshka
+ * truncation the field-operations corpus is calibrated against and small enough that an HNSW index
+ * over a large collection stays cheap.
+ */
+export const DEFAULT_RECORD_EMBEDDING_DIMENSIONS = 256;
+
+/** The physical column a declared record embedding contributes, or nothing when none is declared. */
+const recordEmbeddingColumn = (
+	declaration: ModelDeclaration | undefined
+): Readonly<Record<string, AnyPgColumnBuilder>> => {
+	const embedding = declaration?.metadata?.embedding;
+	if (embedding === undefined) return {};
+	return {
+		[RECORD_EMBEDDING_COLUMN]: vector({
+			dimensions: embedding.dimensions ?? DEFAULT_RECORD_EMBEDDING_DIMENSIONS
+		})
+	};
+};
+
 export const compileModelTable = <
 	const TName extends string,
 	const TColumns extends Readonly<Record<string, AnyModelFieldBuilder>>
@@ -442,8 +476,10 @@ export const compileModelTable = <
 		}
 		for (const tag of Object.keys(builder.targets)) {
 			const storageColumn = referenceStorageColumn(fieldName, tag);
-			if (Object.hasOwn(declaration.columns, storageColumn) ||
-				Object.hasOwn(authoredColumns, storageColumn))
+			if (
+				Object.hasOwn(declaration.columns, storageColumn) ||
+				Object.hasOwn(authoredColumns, storageColumn)
+			)
 				throw new TypeError(
 					`Reference field ${fieldName} generates column ${storageColumn}, but that column is already declared.`
 				);
@@ -452,6 +488,7 @@ export const compileModelTable = <
 	}
 	const columns = {
 		...defineSystemRowModel().columns,
+		...recordEmbeddingColumn(declaration),
 		...authoredColumns
 	} as SystemRowColumns &
 		AuthoredPhysicalColumns<TColumns> &

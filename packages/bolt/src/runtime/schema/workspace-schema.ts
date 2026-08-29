@@ -1,6 +1,7 @@
 // repository-health:allow SEM_PARALLEL -- the runtime workspace-schema consumes the compiler
 // schema-plan build/plan/identify names over the #lib alias, so the pair is linked, not parallel.
 import { Array, Context, Effect, Layer, Result, Schema } from 'effect';
+import { RECORD_EMBEDDING_COLUMN } from '#lib/authoring/model-introspection.js';
 import { eq } from 'drizzle-orm';
 import { pgSchema, pgTable, text } from 'drizzle-orm/pg-core';
 import type { EffectId } from '@norbital-ai/bolt-protocol';
@@ -71,6 +72,10 @@ export const layer = Layer.effect(
 				collection.name,
 				new Set([
 					...SYSTEM_COLUMN_NAMES,
+					// The platform's own column, declared by the model but owned by no field: without it
+					// here, the lineage creates `record_embedding` and this check calls the column it just
+					// created unexpected, which fails provisioning on a correct database.
+					...(collection.embedding === undefined ? [] : [RECORD_EMBEDDING_COLUMN]),
 					...Object.entries(collection.fields).flatMap(([name, field]) =>
 						field.reference === undefined
 							? [name]

@@ -56,6 +56,19 @@ export const AIRequest = Schema.TaggedUnion({
 		maxOutputTokens: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
 		webSearch: Schema.optionalKey(AIWebSearch),
 		responseSchema: Schema.optionalKey(Schema.Json)
+	},
+	/**
+	 * One embedding call over multimodal inputs.
+	 *
+	 * `inputs` carries OpenAI-compatible content-part arrays — a `text` part, an `image_url` part
+	 * with a `data:` URL, or both — so one request can embed a photograph, a caption, or the two
+	 * jointly. `dimensions` asks the provider for a truncated vector when the model supports
+	 * Matryoshka output; the provider's default dimensionality is used when it is absent.
+	 */
+	Embed: {
+		model: Schema.NonEmptyString,
+		inputs: Schema.Array(Schema.Json),
+		dimensions: Schema.optionalKey(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)))
 	}
 });
 export type AIRequest = typeof AIRequest.Type;

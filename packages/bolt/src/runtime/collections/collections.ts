@@ -1,5 +1,9 @@
 import { deriveRecordId } from '#lib/runtime/derive-record-id.js';
 import {
+	DEFAULT_RECORD_EMBEDDING_DIMENSIONS,
+	RECORD_EMBEDDING_COLUMN
+} from '#lib/authoring/model-introspection.js';
+import {
 	and,
 	asc,
 	count as countRows,
@@ -1517,13 +1521,43 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				);
 			};
 			const queryTables = new Map<string, ReturnType<typeof collectionQueryTable>>();
+			/**
+			 * Every query table a collection with a declared embedding gets, carrying that column.
+			 *
+			 * `definition.fields` holds authored columns, and `record_embedding` is not one — the
+			 * platform renders it. Augmenting here rather than at each of the nine call sites means one
+			 * decision rather than nine, and the cache stays keyed by collection name because the
+			 * augmentation is a function of the declaration, not of the caller.
+			 *
+			 * Typed as a `string` scalar carrying its own `sqlType`, which is how every other vector
+			 * column in this codebase is described: the scalar kind is what queries and access masking
+			 * reason about, and `vector(n)` is what the database is told.
+			 */
+			const queryFieldsFor = (
+				name: string,
+				fields: Readonly<Record<string, FieldDefinition>>
+			): Readonly<Record<string, FieldDefinition>> => {
+				const declared = workspace.definition.collections.find(
+					(collection) => collection.name === name
+				)?.embedding;
+				if (declared === undefined) return fields;
+				return {
+					...fields,
+					[RECORD_EMBEDDING_COLUMN]: {
+						type: 'string',
+						required: false,
+						indexed: true,
+						sqlType: `vector(${declared.dimensions ?? DEFAULT_RECORD_EMBEDDING_DIMENSIONS})`
+					}
+				};
+			};
 			const queryTableFor = (
 				name: string,
 				fields: Readonly<Record<string, FieldDefinition>>
 			): ReturnType<typeof collectionQueryTable> => {
 				const existing = queryTables.get(name);
 				if (existing !== undefined) return existing;
-				const table = collectionQueryTable(name, fields);
+				const table = collectionQueryTable(name, queryFieldsFor(name, fields));
 				queryTables.set(name, table);
 				return table;
 			};
@@ -1816,6 +1850,152 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const mimeType = typeof file.mime_type === 'string' ? file.mime_type : null;
 				const name = typeof file.file_name === 'string' ? file.file_name : storageKey;
 				return { id: storageKey, name, mimeType, size: bytes.byteLength, bytes };
+			});
+			/**
+			 * Base64 without `Buffer`, because the runtime this executes in has no Node globals.
+			 *
+			 * A tenant runtime is an isolated-vm context: no `process`, no `Buffer`, and no `btoa` worth
+			 * relying on. `Buffer.from(bytes).toString('base64')` is the obvious line to write, works in
+			 * every test that runs in ordinary Node, and fails in the only place it matters with
+			 * `Buffer is not defined` — which arrives at an operator as a workspace whose photographs
+			 * were never embedded.
+			 */
+			const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+			const base64Encode = (bytes: Uint8Array): string => {
+				let out = '';
+				for (let index = 0; index < bytes.length; index += 3) {
+					const first = bytes[index] ?? 0;
+					const second = bytes[index + 1];
+					const third = bytes[index + 2];
+					const triple = (first << 16) | ((second ?? 0) << 8) | (third ?? 0);
+					out += BASE64_ALPHABET[(triple >> 18) & 63];
+					out += BASE64_ALPHABET[(triple >> 12) & 63];
+					out += second === undefined ? '=' : BASE64_ALPHABET[(triple >> 6) & 63];
+					out += third === undefined ? '=' : BASE64_ALPHABET[triple & 63];
+				}
+				return out;
+			};
+			/**
+			 * How many rows one backfill call may embed per collection, and how many share one request.
+			 *
+			 * The per-request bound is small because the inputs carry base64 image bytes: a whole corpus
+			 * in one body is a request no provider accepts, and one row per request throws away the
+			 * batching they all offer.
+			 *
+			 * The per-call bound is small for a different reason: a tenant invocation has a compute
+			 * deadline, and embedding a 426-photograph corpus in one call exceeds it — the guest is
+			 * halted and nothing is written, which is the worst of both. Bounded here, the caller loops
+			 * and each call commits what it finished. The pass selects only rows whose embedding is
+			 * null, so calling it again after it is done costs one query and returns nothing.
+			 */
+			const RECORD_EMBEDDING_BACKFILL_LIMIT = 2;
+			const RECORD_EMBEDDING_BATCH_ROWS = 2;
+			/**
+			 * The content parts one record contributes to its embedding, in declared field order.
+			 *
+			 * Text columns contribute their text; `file()` columns contribute their bytes as an image
+			 * part, so a photograph is embedded as a photograph rather than as a caption about one. A
+			 * field the row has no value for is skipped rather than sent empty — an empty string is not
+			 * neutral to an embedding model, it is a token that drags every sparse record together.
+			 */
+			const recordEmbeddingParts = Effect.fn('Collections.recordEmbeddingParts')(function* (
+				effectId: EffectId,
+				collection: CollectionDefinition<Readonly<Record<string, FieldDefinition>>>,
+				row: Readonly<Record<string, unknown>>
+			) {
+				const parts: Array<Schema.Json> = [];
+				for (const name of collection.embedding?.fields ?? []) {
+					const value = row[name];
+					if (value === null || value === undefined) continue;
+					const field = collection.fields[name];
+					if (field?.type === 'json' && typeof value === 'object' && 'storage_key' in value) {
+						const asset = yield* readAsset(effectId, value as Record<string, unknown>).pipe(
+							Effect.catch(() => Effect.succeed(undefined))
+						);
+						if (asset === undefined || asset.bytes.byteLength === 0) continue;
+						const base64 = base64Encode(asset.bytes);
+						parts.push({
+							type: 'image_url',
+							image_url: { url: `data:${asset.mimeType ?? 'image/jpeg'};base64,${base64}` }
+						});
+						continue;
+					}
+					const text = typeof value === 'string' ? value : JSON.stringify(value);
+					if (text.trim() === '') continue;
+					parts.push({ type: 'text', text });
+				}
+				return parts;
+			});
+			/**
+			 * One bounded backfill pass per collection that declares an embedding.
+			 *
+			 * Rows are embedded in small batches because the inputs carry base64 image bytes: one
+			 * request per row wastes the provider's batching, and one request for the whole corpus is a
+			 * body no provider accepts. The vectors are written back in a single statement per batch,
+			 * matched by id rather than by position in a second query.
+			 */
+			const embedRecords = Effect.fn('Collections.embedRecords')(function* (
+				effectId: EffectId,
+				limit: number = RECORD_EMBEDDING_BACKFILL_LIMIT
+			) {
+				const summary: Array<{ readonly collection: string; readonly embedded: number }> = [];
+				for (const collection of workspace.definition.collections) {
+					const declared = collection.embedding;
+					if (declared === undefined) continue;
+					const fields = declared.fields.filter((name) => collection.fields[name] !== undefined);
+					if (fields.length === 0) continue;
+					const table = CollectionSql.quoteIdentifier(collection.name);
+					const selected = yield* database.execute(effectId, {
+						_tag: 'Query',
+						// repository-health:allow SQL1 -- identifiers come from the compiled workspace definition.
+						sql: `select "id", ${fields.map(CollectionSql.quoteIdentifier).join(', ')} from ${table} where ${CollectionSql.quoteIdentifier(RECORD_EMBEDDING_COLUMN)} is null order by "id" limit $1`,
+						parameters: [limit]
+					});
+					let embedded = 0;
+					for (
+						let offset = 0;
+						offset < selected.rows.length;
+						offset += RECORD_EMBEDDING_BATCH_ROWS
+					) {
+						const batch = selected.rows.slice(offset, offset + RECORD_EMBEDDING_BATCH_ROWS);
+						const prepared: Array<{ readonly id: unknown; readonly input: Schema.Json }> = [];
+						for (const row of batch) {
+							const parts = yield* recordEmbeddingParts(
+								effectId,
+								collection,
+								row as Readonly<Record<string, unknown>>
+							);
+							if (parts.length === 0) continue;
+							prepared.push({ id: (row as { id: unknown }).id, input: { content: parts } });
+						}
+						if (prepared.length === 0) continue;
+						const response = yield* ai
+							.execute(effectId, {
+								_tag: 'Embed',
+								model: declared.model ?? 'default',
+								inputs: prepared.map(({ input }) => input),
+								...(declared.dimensions === undefined ? {} : { dimensions: declared.dimensions })
+							})
+							.pipe(Effect.catch(() => Effect.succeed(undefined)));
+						const vectors = Array.isArray(response?.output)
+							? (response.output as ReadonlyArray<ReadonlyArray<number>>)
+							: [];
+						const writable = prepared.flatMap(({ id }, position) => {
+							const embedding = vectors[position];
+							return embedding === undefined || embedding.length === 0 ? [] : [{ id, embedding }];
+						});
+						if (writable.length === 0) continue;
+						yield* database.execute(effectId, {
+							_tag: 'Query',
+							// repository-health:allow SQL1 -- one bound json document; the table name is compiled.
+							sql: `update ${table} as target set ${CollectionSql.quoteIdentifier(RECORD_EMBEDDING_COLUMN)} = (source.embedding)::text::vector, "updated_at" = now() from jsonb_to_recordset($1::jsonb) as source(id uuid, embedding jsonb) where target."id" = source.id`,
+							parameters: [JSON.stringify(writable) as Schema.Json]
+						});
+						embedded += writable.length;
+					}
+					summary.push({ collection: collection.name, embedded });
+				}
+				return summary;
 			});
 			/**
 			 * Runs one authored hook handler with its context object, resolving Effect, promise, and plain
@@ -2364,7 +2544,17 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				const refuse = (field: string, message: string) =>
 					new WhereCompileError({ collection: input.collection, field, message });
 				const column = input.column;
-				if (!Object.hasOwn(definition.fields, column)) {
+				/**
+				 * The platform's own record embedding is addressable, when the collection declares one.
+				 *
+				 * It is not an authored field — nothing declares it in `defineModel`'s columns — so the
+				 * ordinary check would refuse the one column the feature exists to search. Gated on the
+				 * declaration rather than on the name alone, so a collection without an embedding still
+				 * refuses it, and with the message it would have given for any other unknown column.
+				 */
+				const searchesRecordEmbedding =
+					column === RECORD_EMBEDDING_COLUMN && definition.embedding !== undefined;
+				if (!Object.hasOwn(definition.fields, column) && !searchesRecordEmbedding) {
 					return yield* refuse(
 						'column',
 						`'${column}' is not a column of ${input.collection}; findNearest needs the vector column to measure against.`
@@ -6266,6 +6456,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				}),
 				count,
 				findNearest,
+				embedRecords,
 				findGrouped,
 				create,
 				createMany,

@@ -469,6 +469,21 @@ export type Interface = Readonly<{
 		subject: Subject,
 		input: NearestQueryInput
 	) => Effect.Effect<ReadonlyArray<NearestQueryRow>, QueryError>;
+	/**
+	 * Fills in missing record embeddings for every collection that declares one.
+	 *
+	 * A backfill rather than only a write-path hook, because rows arrive without passing through
+	 * `mutate`: the seed loader writes its corpus as bulk SQL, so a workspace can be fully populated
+	 * and hold no vectors at all. Bounded per call and re-runnable — it selects only rows whose
+	 * embedding is null, so calling it twice embeds nothing twice.
+	 */
+	readonly embedRecords: (
+		effectId: EffectId,
+		limit?: number
+	) => Effect.Effect<
+		ReadonlyArray<{ readonly collection: string; readonly embedded: number }>,
+		QueryError
+	>;
 	readonly findGrouped: (
 		effectId: EffectId,
 		subject: Subject,
