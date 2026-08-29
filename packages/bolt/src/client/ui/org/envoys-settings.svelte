@@ -285,12 +285,7 @@
 				current.state === 'error'
 			)
 				return Effect.void;
-			return runPairingRequest(
-				envoy.name,
-				envoy.transport,
-				'observe',
-				revision
-			).pipe(
+			return runPairingRequest(envoy.name, envoy.transport, 'observe', revision).pipe(
 				Effect.andThen(
 					Effect.suspend(() => {
 						const nextRevision = connections[envoy.name]?.revision;
@@ -331,6 +326,54 @@
 		return () => {
 			Effect.runFork(Fiber.interrupt(fiber));
 		};
+	});
+
+	/**
+	 * The clock behind the pairing countdown, ticking only while the dialog shows a code.
+	 *
+	 * `pairingExpiresAt` is the host's wall clock, so the remaining time is host minus client and a
+	 * skewed client shows a shifted count — accepted, because the alternative is a countdown the host
+	 * would have to stream. What is not accepted is showing a code past its expiry: a scanned-expired
+	 * code fails on the phone with a message that blames the phone's connection, which is exactly the
+	 * misattribution this page exists to prevent.
+	 */
+	let pairingNow = $state(Date.now());
+	$effect(() => {
+		const target = pairingTarget;
+		if (target === undefined) return;
+		const connection = connections[target.name];
+		if (connection?.state !== 'pairing' || connection.pairingExpiresAt === undefined) return;
+		pairingNow = Date.now();
+		const timer = setInterval(() => {
+			pairingNow = Date.now();
+		}, 500);
+		return () => clearInterval(timer);
+	});
+
+	/**
+	 * The provider rotates the code on its own clock and the long poll delivers each rotation, so
+	 * expiry normally passes unseen. When a code has been expired this long with no newer revision,
+	 * the poll itself is what died — a proxy can drop a long request without an error reaching either
+	 * end — and the dialog would wait forever on a socket that is still rotating. One re-ask per
+	 * stalled revision resynchronizes and resumes observing; the revision guard keeps a slow first
+	 * kick from stacking a second.
+	 */
+	const EXPIRED_REFRESH_GRACE_MS = 5_000;
+	const refreshKicks = new Map<string, number>();
+	$effect(() => {
+		const target = pairingTarget;
+		if (target === undefined) return;
+		const connection = connections[target.name];
+		if (connection?.state !== 'pairing' || connection.pairingExpiresAt === undefined) return;
+		if (pairingNow - connection.pairingExpiresAt < EXPIRED_REFRESH_GRACE_MS) return;
+		const revision = connection.revision ?? 0;
+		if (refreshKicks.get(target.name) === revision) return;
+		refreshKicks.set(target.name, revision);
+		Effect.runFork(
+			runPairingRequest(target.name, target.transport, 'status').pipe(
+				Effect.andThen(observePairing(target))
+			)
+		);
 	});
 
 	// The read is the browser's, as it is in `studio/envoys-panel.svelte`: server rendering must not
@@ -584,6 +627,11 @@
 		{@const failure = connectionErrors[target.name]}
 		{@const qr = qrCodes[target.name]}
 		{@const reconnecting = pairingReconnects[target.name] === true}
+		{@const pairingRemainingMs =
+			connection?.state === 'pairing' && connection.pairingExpiresAt !== undefined
+				? Math.max(0, connection.pairingExpiresAt - pairingNow)
+				: undefined}
+		{@const pairingExpired = pairingRemainingMs === 0}
 		<Dialog.Content class="w-[min(28rem,calc(100vw-2rem))]">
 			<Dialog.Header>
 				<Dialog.Title>{reconnecting ? 'Reconnect' : 'Pair'} {target.name}</Dialog.Title>
@@ -645,7 +693,7 @@
 						{connection.error ?? 'Close this dialog, then try pairing again.'}
 					</p>
 				</Stack>
-			{:else if connection?.state === 'pairing' && qr !== undefined}
+			{:else if connection?.state === 'pairing' && qr !== undefined && !pairingExpired}
 				<Stack gap="sm" align="center">
 					<!-- Fixed white quiet zone and a fixed pixel size keep the camera-readable code intact. -->
 					<img
@@ -657,9 +705,14 @@
 					/>
 					<p class="max-w-sm text-center text-meta">
 						{target.transport === 'whatsapp'
-							? 'Scan this code with the linked-devices camera. It refreshes here if WhatsApp rotates it.'
-							: `Use this pairing code with ${target.transport}. It refreshes here if the provider rotates it.`}
+							? 'Scan this code with the linked-devices camera. It refreshes here when WhatsApp rotates it.'
+							: `Use this pairing code with ${target.transport}. It refreshes here when the provider rotates it.`}
 					</p>
+					{#if pairingRemainingMs !== undefined}
+						<p class="text-meta tabular-nums" aria-live="polite">
+							This code expires in {Math.ceil(pairingRemainingMs / 1000)}s.
+						</p>
+					{/if}
 				</Stack>
 			{:else}
 				<Stack gap="sm" align="center" class="p-8 text-center" aria-live="polite">
@@ -668,18 +721,22 @@
 						class="size-8 text-muted-foreground motion-safe:animate-spin"
 					/>
 					<p class="text-sm font-medium text-foreground">
-						{reconnecting
-							? 'Reopening the transport…'
-							: target.transport === 'whatsapp'
-								? 'Waiting for a pairing code…'
-								: 'Opening the transport…'}
+						{pairingExpired
+							? 'Waiting for a fresh code…'
+							: reconnecting
+								? 'Reopening the transport…'
+								: target.transport === 'whatsapp'
+									? 'Waiting for a pairing code…'
+									: 'Opening the transport…'}
 					</p>
 					<p class="text-meta">
-						{reconnecting
-							? 'The host is using the saved credential for this envoy.'
-							: target.transport === 'whatsapp'
-								? 'The code will appear when WhatsApp publishes it.'
-								: `The host is starting the ${target.transport} connection.`}
+						{pairingExpired
+							? 'The previous code expired, so it was taken off screen. A new one appears when the provider rotates it.'
+							: reconnecting
+								? 'The host is using the saved credential for this envoy.'
+								: target.transport === 'whatsapp'
+									? 'The code will appear when WhatsApp publishes it.'
+									: `The host is starting the ${target.transport} connection.`}
 					</p>
 				</Stack>
 			{/if}
