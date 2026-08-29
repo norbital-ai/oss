@@ -209,7 +209,21 @@ const toBase64Url = (bytes: Uint8Array): string => {
  * buffer of the wrong length and was reported as the wrong size rather than as mangled.
  */
 const fromBase64Url = (text: string): Uint8Array<ArrayBuffer> | undefined => {
-	const trimmed = text.replace(/=+$/, '');
+	/**
+	 * Both alphabets, because `BASE64_KEY` already admits both and the message names a command
+	 * that emits the other one.
+	 *
+	 * `openssl rand -base64 32` — the generator this module tells an operator to run — produces
+	 * standard base64, so roughly one key in two contains a `+` or a `/`. Those passed the
+	 * validation regex, which accepts `[A-Za-z0-9+/_-]`, and then failed here, because this
+	 * alphabet has neither character. The result was a host that had done exactly what it was told
+	 * and still refused every seal with `is not decodable base64url` — including, silently, every
+	 * envoy credential, which surfaces a layer away as a pairing that will not persist.
+	 *
+	 * Strictness is not what is being given up: an unmapped character still returns `undefined`
+	 * below. What changes is that the two spellings of the same 32 bytes are both read.
+	 */
+	const trimmed = text.replace(/=+$/, '').replaceAll('+', '-').replaceAll('/', '_');
 	const out: Array<number> = [];
 	let accumulator = 0;
 	let bits = 0;
