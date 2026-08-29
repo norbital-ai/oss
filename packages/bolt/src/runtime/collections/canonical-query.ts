@@ -121,10 +121,7 @@ const columnProjection = (value: unknown): ColumnProjection | undefined => {
 	return entries.length === 0 ? undefined : Object.fromEntries(entries);
 };
 
-const projectColumns = (
-	row: StoredRecord,
-	columns: ColumnProjection | undefined
-): StoredRecord => {
+const projectColumns = (row: StoredRecord, columns: ColumnProjection | undefined): StoredRecord => {
 	if (columns === undefined) return row;
 	const entries = Object.entries(columns);
 	const inclusive = entries.some(([, included]) => included);
@@ -217,9 +214,9 @@ const canonicalRelationships = (value: unknown): Schema.Json | null => {
 			normalized[key] =
 				order === undefined
 					? (jsonValue(entry) ?? null)
-					: Object.entries(order).flatMap(([field, direction]) =>
+					: (Object.entries(order).flatMap(([field, direction]) =>
 							direction === 'asc' || direction === 'desc' ? [[field, direction]] : []
-						) as Schema.Json;
+						) as Schema.Json);
 			continue;
 		}
 		const child = canonicalRelationships(entry);
@@ -333,9 +330,7 @@ export const COLLECTION_QUERY_LOCAL_EVALUATOR_CONTRACT = {
 
 const LOCAL_OPERATORS = new Set<string>(COLLECTION_QUERY_LOCAL_EVALUATOR_CONTRACT.operators);
 
-const TEXT_OPERATORS = new Set<string>(
-	COLLECTION_QUERY_LOCAL_EVALUATOR_CONTRACT.textOperators
-);
+const TEXT_OPERATORS = new Set<string>(COLLECTION_QUERY_LOCAL_EVALUATOR_CONTRACT.textOperators);
 
 type QueryInspection = {
 	readonly dependencies: Set<string>;
@@ -534,7 +529,8 @@ export const canonicalizeCollectionQuery = (
 	if (
 		inspection.usesRelationshipPredicates ||
 		(inspection.usesRelationships && options.localRelationships !== true)
-	) reasons.push('local-relationships-unavailable');
+	)
+		reasons.push('local-relationships-unavailable');
 	if (query.search !== null && options.localSearch !== true) {
 		reasons.push('local-search-unavailable');
 	}
@@ -648,11 +644,13 @@ export const normalizeCollectionHydration = (
 			return undefined;
 		}
 		const row: Record<string, Schema.Json> = { ...candidate };
-		const children: Array<Readonly<{
-			relation: string;
-			targetCollection: string;
-			record: Readonly<Record<string, Schema.Json>>;
-		}>> = [];
+		const children: Array<
+			Readonly<{
+				relation: string;
+				targetCollection: string;
+				record: Readonly<Record<string, Schema.Json>>;
+			}>
+		> = [];
 
 		for (const [field, fieldDefinition] of Object.entries(collectionDefinition.fields)) {
 			if (fieldDefinition.reference === undefined) continue;

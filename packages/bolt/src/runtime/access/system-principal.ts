@@ -294,7 +294,10 @@ export const verifySystemSignature = Effect.fn('Bolt.verifySystemSignature')(fun
 	// invocation, which is the only way a sandboxed runtime with no `process` can hold one. A bundle
 	// running in a plain process gets the process-env implementation; a caller that provided neither
 	// falls back to the ambient environment for the same reason.
-	const hostConfig = Option.getOrElse(yield* Effect.serviceOption(HostConfig), hostConfigFromProcessEnv);
+	const hostConfig = Option.getOrElse(
+		yield* Effect.serviceOption(HostConfig),
+		hostConfigFromProcessEnv
+	);
 	const secret = yield* hostConfig
 		.read(GATEWAY_SECRET_VARIABLE)
 		.pipe(Effect.catch(() => Effect.succeed(Option.none<Redacted.Redacted<string>>())));

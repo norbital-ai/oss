@@ -7,10 +7,7 @@ import {
 	compileWhere,
 	type WhereContext
 } from '#lib/runtime/collections/where.js';
-import type {
-	LocalReplicaStore,
-	ReplicaOverlayView
-} from '#lib/client/replica/pglite-sql.js';
+import type { LocalReplicaStore, ReplicaOverlayView } from '#lib/client/replica/pglite-sql.js';
 import { decodeReferenceRow } from '#lib/runtime/collections/references.js';
 import { encodeCollectionCursor } from '#lib/runtime/collections/cursor.js';
 import { searchableColumns } from '#lib/authoring/model-introspection.js';
@@ -228,10 +225,12 @@ const overlayView = (
 ): Effect.Effect<ReplicaOverlayView | undefined, unknown> => {
 	if (provider === undefined || localActorBinding === undefined) return Effect.succeed(undefined);
 	return Effect.gen(function* () {
-		const mutations = snapshot ?? (yield* Effect.tryPromise({
-			try: provider.snapshot,
-			catch: (cause) => cause
-		}));
+		const mutations =
+			snapshot ??
+			(yield* Effect.tryPromise({
+				try: provider.snapshot,
+				catch: (cause) => cause
+			}));
 		const scoped = mutations.filter(
 			(mutation) =>
 				mutation.active &&
@@ -241,7 +240,7 @@ const overlayView = (
 		const affectedRecordIds = [
 			...new Set(
 				scoped.flatMap(({ operations }) =>
-					operations.flatMap(({ row }) => row.collection === collection ? [row.recordId] : [])
+					operations.flatMap(({ row }) => (row.collection === collection ? [row.recordId] : []))
 				)
 			)
 		];
@@ -296,28 +295,18 @@ export const createLocalWindowRecomputer = (
 		const requestedRelationships = new Set(Object.keys(relationships));
 		const dependencies = new Set(proof.dependencies);
 		return mutations
-			.filter(
-				(mutation) =>
-					mutation.active &&
-					mutation.localActorBinding === localActorBinding
-			)
+			.filter((mutation) => mutation.active && mutation.localActorBinding === localActorBinding)
 			.every((mutation) => {
-				const relevant = mutation.operations.filter(({ row }) =>
-					dependencies.has(row.collection)
-				);
+				const relevant = mutation.operations.filter(({ row }) => dependencies.has(row.collection));
 				if (relevant.length === 0) return true;
 				// Target-row activity, or a multi-row self-relation graph, can change which normalized
 				// edges exist. Keep the proof stale until the server supplies a replacement sidecar.
-				if (
-					relevant.some(({ row }) => row.collection !== proof.collection) ||
-					relevant.length > 1
-				) return false;
+				if (relevant.some(({ row }) => row.collection !== proof.collection) || relevant.length > 1)
+					return false;
 				const operation = relevant[0];
 				if (operation === undefined || operation.kind === 'remove') return true;
 				// A root reference change also changes its edge even though it is one row operation.
-				return [...requestedRelationships].every(
-					(name) => !Object.hasOwn(operation.values, name)
-				);
+				return [...requestedRelationships].every((name) => !Object.hasOwn(operation.values, name));
 			});
 	};
 	const evaluate = (queryKey: string): Effect.Effect<boolean, unknown> =>
@@ -329,7 +318,8 @@ export const createLocalWindowRecomputer = (
 				!proof.locallyReproducible ||
 				!proof.dirty ||
 				proof.canonical['kind'] !== 'findMany'
-			) return false;
+			)
+				return false;
 			const overlayProvider = options.overlay;
 			const localActorBinding = options.localActorBinding;
 			const overlaySnapshot =
@@ -346,21 +336,21 @@ export const createLocalWindowRecomputer = (
 			const canonicalSearch = proof.canonical['search'];
 			if (canonicalSearch !== null && typeof canonicalSearch !== 'string') return false;
 			const searchableFields = searchableColumns(context.fields);
-			const readable = shape.collections.find(({ name }) => name === proof.collection)?.readableFields;
+			const readable = shape.collections.find(
+				({ name }) => name === proof.collection
+			)?.readableFields;
 			if (
 				canonicalSearch !== null &&
 				searchableFields.length > 0 &&
 				(readable === undefined ||
 					(readable !== null && searchableFields.some((field) => !readable.includes(field))))
-			) return false;
+			)
+				return false;
 			const compiled = compileWhere(canonicalPredicate(proof.canonical), context);
 			if (Result.isFailure(compiled)) return false;
 			const searched = compileSearch(context.fields, canonicalSearch, proof.collection);
 			const terms = compileOrderTerms(orderBy, context);
-			const priorVisibleCapacity = Math.max(
-				0,
-				proof.orderedRowIds.length - proof.lookaheadCount
-			);
+			const priorVisibleCapacity = Math.max(0, proof.orderedRowIds.length - proof.lookaheadCount);
 			const visibleCapacity =
 				proof.nextCursor === null
 					? Math.min(MAX_REPLICA_WINDOW_ROWS - 1, Math.max(100, priorVisibleCapacity))
@@ -369,32 +359,34 @@ export const createLocalWindowRecomputer = (
 				proof.nextCursor === null
 					? Math.min(MAX_REPLICA_WINDOW_ROWS, visibleCapacity + 1)
 					: proof.orderedRowIds.length;
-			const evaluated = yield* windows.transaction(Effect.gen(function* () {
-				const position = yield* windows.position();
-				const overlay = yield* overlayView(
-					store,
-					proof.collection,
-					partitionKey,
-					localActorBinding,
-					overlayProvider,
-					overlaySnapshot
-				);
-				const rows = yield* store.findMany({
-					collection: proof.collection,
-					filter: compiled.success,
-					search: searched,
-					orderBy: terms,
-					limit: evaluationLimit,
-					...(overlay === undefined ? {} : { overlay })
-				});
-				return {
-					position,
-					rows,
-					optimisticRowIds: overlay?.rows.flatMap((row) =>
-						typeof row['id'] === 'string' ? [row['id']] : []
-					) ?? []
-				};
-			}));
+			const evaluated = yield* windows.transaction(
+				Effect.gen(function* () {
+					const position = yield* windows.position();
+					const overlay = yield* overlayView(
+						store,
+						proof.collection,
+						partitionKey,
+						localActorBinding,
+						overlayProvider,
+						overlaySnapshot
+					);
+					const rows = yield* store.findMany({
+						collection: proof.collection,
+						filter: compiled.success,
+						search: searched,
+						orderBy: terms,
+						limit: evaluationLimit,
+						...(overlay === undefined ? {} : { overlay })
+					});
+					return {
+						position,
+						rows,
+						optimisticRowIds:
+							overlay?.rows.flatMap((row) => (typeof row['id'] === 'string' ? [row['id']] : [])) ??
+							[]
+					};
+				})
+			);
 			const { position, rows, optimisticRowIds } = evaluated;
 			const logicalRows: Array<Readonly<Record<string, Schema.Json>>> = [];
 			for (const value of rows) {
@@ -402,23 +394,21 @@ export const createLocalWindowRecomputer = (
 				if (Result.isFailure(stored)) return false;
 				logicalRows.push(decodeReferenceRow(stored.success, context.fields));
 			}
-			const ids = logicalRows.flatMap((row) => typeof row['id'] === 'string' ? [row['id']] : []);
+			const ids = logicalRows.flatMap((row) => (typeof row['id'] === 'string' ? [row['id']] : []));
 			if (ids.length !== logicalRows.length || new Set(ids).size !== ids.length) return false;
 			const lookaheadCount = Math.max(0, logicalRows.length - visibleCapacity);
 			const boundaryCovered = proof.nextCursor === null ? true : lookaheadCount > 0;
 			const last = logicalRows[logicalRows.length - 1];
-			const nextCursor = proof.nextCursor === null
-				? lookaheadCount === 0 || last === undefined
-					? null
-					: encodeCollectionCursor(terms, last)
-				: last === undefined
-					? null
-					: encodeCollectionCursor(terms, last);
+			const nextCursor =
+				proof.nextCursor === null
+					? lookaheadCount === 0 || last === undefined
+						? null
+						: encodeCollectionCursor(terms, last)
+					: last === undefined
+						? null
+						: encodeCollectionCursor(terms, last);
 			const dependencyGenerations = Object.fromEntries(
-				proof.dependencies.map((dependency) => [
-					dependency,
-					position.generations[dependency] ?? 0
-				])
+				proof.dependencies.map((dependency) => [dependency, position.generations[dependency] ?? 0])
 			);
 			return yield* windows.recomputeWindow({
 				queryKey,
@@ -434,38 +424,43 @@ export const createLocalWindowRecomputer = (
 	const protectedOverlayRows = (): Effect.Effect<
 		ReadonlyArray<Readonly<{ collection: string; recordId: string }>>,
 		unknown
-	> => options.overlay === undefined || options.localActorBinding === undefined
-		? Effect.succeed([])
-		: Effect.tryPromise({ try: options.overlay.snapshot, catch: (cause) => cause }).pipe(
-			Effect.map((mutations) => overlayReferences(
-				mutations
-					.filter(({ localActorBinding }) => localActorBinding === options.localActorBinding)
-					.flatMap(({ operations }) => operations)
-			))
-		);
+	> =>
+		options.overlay === undefined || options.localActorBinding === undefined
+			? Effect.succeed([])
+			: Effect.tryPromise({ try: options.overlay.snapshot, catch: (cause) => cause }).pipe(
+					Effect.map((mutations) =>
+						overlayReferences(
+							mutations
+								.filter(({ localActorBinding }) => localActorBinding === options.localActorBinding)
+								.flatMap(({ operations }) => operations)
+						)
+					)
+				);
 	const pruneAfter = (complete: boolean): Effect.Effect<void, unknown> =>
 		complete
 			? protectedOverlayRows().pipe(
-				Effect.flatMap((protectedRows) => windows.pruneBaseRows(protectedRows)),
-				Effect.asVoid
-			)
+					Effect.flatMap((protectedRows) => windows.pruneBaseRows(protectedRows)),
+					Effect.asVoid
+				)
 			: Effect.void;
 	return {
-		recompute: (queryKey) => Effect.gen(function* () {
-			const recomputed = yield* evaluate(queryKey);
-			yield* pruneAfter(recomputed);
-			return recomputed;
-		}),
-		recomputeMany: (queryKeys) => Effect.gen(function* () {
-			const recomputed: Array<string> = [];
-			let complete = true;
-			for (const queryKey of new Set(queryKeys)) {
-				if (yield* evaluate(queryKey)) recomputed.push(queryKey);
-				else complete = false;
-			}
-			yield* pruneAfter(complete);
-			return recomputed;
-		})
+		recompute: (queryKey) =>
+			Effect.gen(function* () {
+				const recomputed = yield* evaluate(queryKey);
+				yield* pruneAfter(recomputed);
+				return recomputed;
+			}),
+		recomputeMany: (queryKeys) =>
+			Effect.gen(function* () {
+				const recomputed: Array<string> = [];
+				let complete = true;
+				for (const queryKey of new Set(queryKeys)) {
+					if (yield* evaluate(queryKey)) recomputed.push(queryKey);
+					else complete = false;
+				}
+				yield* pruneAfter(complete);
+				return recomputed;
+			})
 	};
 };
 
@@ -597,7 +592,7 @@ export const createLocalReader = (
 			for (const [relationName, relationSpec] of Object.entries(requested)) {
 				if (relationSpec === false || relationSpec === undefined) continue;
 				const sourceIds = new Set(
-					attached.flatMap((row) => typeof row['id'] === 'string' ? [row['id']] : [])
+					attached.flatMap((row) => (typeof row['id'] === 'string' ? [row['id']] : []))
 				);
 				const edges = proof.relationshipRefs.filter(
 					(edge) =>
@@ -611,7 +606,9 @@ export const createLocalReader = (
 				);
 				if (reference === undefined && relation === undefined) return undefined;
 				const resolved = new Map<string, Readonly<Record<string, Schema.Json>>>();
-				for (const targetCollection of new Set(edges.map(({ targetCollection }) => targetCollection))) {
+				for (const targetCollection of new Set(
+					edges.map(({ targetCollection }) => targetCollection)
+				)) {
 					const targetIds = [
 						...new Set(
 							edges
@@ -688,165 +685,178 @@ export const createLocalReader = (
 		});
 
 	return {
-		answer: (command, input) => Effect.gen(function* () {
-			const kind =
-				command === 'collections.findMany'
-					? 'findMany'
-					: command === 'collections.count'
-						? 'count'
-						: command === 'collections.findGrouped'
-							? 'findGrouped'
-							: undefined;
-			if (kind === undefined) return undefined;
-			const record = decodeJsonObject(input);
-			if (Result.isFailure(record)) return undefined;
-			const decoded =
-				kind === 'findGrouped'
-					? decodeLocalGroupedReadInput(record.success)
-					: decodeLocalReadInput(record.success);
-			if (Result.isFailure(decoded)) return undefined;
-			const {
-				after,
-				collection,
-				columns,
-				limit,
-				orderBy,
-				with: relationshipSelection
-			} = decoded.success;
-			if (!readableCollections.has(collection)) return undefined;
-			const readableFields = readableFieldsByCollection.get(collection);
-			if (readableFields === undefined) return undefined;
-			if (kind !== 'count' && readableFields !== null && !readableFields.has('id')) return undefined;
-			const context = contextFor(collection);
-			if (context === undefined) return undefined;
-			const terms = compileOrderTerms(orderBy, context);
-			if (
-				kind === 'findMany' &&
-				readableFields !== null &&
-				terms.some(({ column }) => !readableFields.has(column))
-			) return undefined;
-			const description = yield* describeClientQueryWindow(
-				kind, record.success, catalog, identity, {
-					localRelationships: true,
-					localSearch:
-						readableFields === null ||
-						searchableColumns(context.fields).every((field) => readableFields.has(field)),
-					...(options.pinnedCollation === undefined
-						? {}
-						: { pinnedCollation: options.pinnedCollation })
-				}
-			).pipe(Effect.catch(() => Effect.succeed(undefined)));
-			if (description === undefined) return undefined;
-			const pageLimit = ENumber.clamp({ minimum: 1, maximum: 500 })(limit ?? 100);
-			return yield* windows.readWindow(description.queryKey, (proof) => Effect.gen(function* () {
-				if (proof.collection !== collection) return undefined;
-				if (kind === 'count') {
-					if (proof.serverResult?.kind !== 'count' || proof.proofOwner !== 'server') return undefined;
-					return {
-						value: {
-							count: proof.serverResult.value,
-							readCursor: proof.readCursor,
-							partitionKey: identity.partitionKey,
-							confirmedDependencies: proof.dependencies,
-							dependencyGenerations: proof.dependencyGenerations,
-							reproducibility: description.reproducibility
-						},
-						status: proof.valid && !proof.dirty ? 'fresh' as const : 'stale' as const,
-						queryKey: proof.queryKey,
-						proofOwner: proof.proofOwner,
-						dependencies: proof.dependencies,
-						relationDependency: hasCanonicalRelationshipSelection(
-							description.query.relationships
-						)
-					};
-				}
-				// ServerProof membership and rows are an authoritative cached result. Overlaying a pending
-				// delete would make that retained result look incomplete, while overlaying a create could not
-				// prove where it belongs. Only LocalExact windows evaluate O3 through O4.
-				const applyOverlay = proof.proofOwner === 'local' && proof.locallyReproducible;
-				const ordered = yield* retainedRows(collection, proof.orderedRowIds, applyOverlay);
-				if (ordered === undefined) return undefined;
-				const hydrated = yield* attachRetainedRelationships(
+		answer: (command, input) =>
+			Effect.gen(function* () {
+				const kind =
+					command === 'collections.findMany'
+						? 'findMany'
+						: command === 'collections.count'
+							? 'count'
+							: command === 'collections.findGrouped'
+								? 'findGrouped'
+								: undefined;
+				if (kind === undefined) return undefined;
+				const record = decodeJsonObject(input);
+				if (Result.isFailure(record)) return undefined;
+				const decoded =
+					kind === 'findGrouped'
+						? decodeLocalGroupedReadInput(record.success)
+						: decodeLocalReadInput(record.success);
+				if (Result.isFailure(decoded)) return undefined;
+				const {
+					after,
 					collection,
-					ordered,
-					relationshipSelection,
-					proof,
-					applyOverlay
-				);
-				if (hydrated === undefined) return undefined;
-				if (kind === 'findGrouped') {
-					if (proof.serverResult?.kind !== 'findGrouped' || proof.proofOwner !== 'server') {
-						return undefined;
+					columns,
+					limit,
+					orderBy,
+					with: relationshipSelection
+				} = decoded.success;
+				if (!readableCollections.has(collection)) return undefined;
+				const readableFields = readableFieldsByCollection.get(collection);
+				if (readableFields === undefined) return undefined;
+				if (kind !== 'count' && readableFields !== null && !readableFields.has('id'))
+					return undefined;
+				const context = contextFor(collection);
+				if (context === undefined) return undefined;
+				const terms = compileOrderTerms(orderBy, context);
+				if (
+					kind === 'findMany' &&
+					readableFields !== null &&
+					terms.some(({ column }) => !readableFields.has(column))
+				)
+					return undefined;
+				const description = yield* describeClientQueryWindow(
+					kind,
+					record.success,
+					catalog,
+					identity,
+					{
+						localRelationships: true,
+						localSearch:
+							readableFields === null ||
+							searchableColumns(context.fields).every((field) => readableFields.has(field)),
+						...(options.pinnedCollation === undefined
+							? {}
+							: { pinnedCollation: options.pinnedCollation })
 					}
-					const byId = new Map(
-						hydrated.flatMap((row) => typeof row['id'] === 'string' ? [[row['id'], row] as const] : [])
-					);
-					const groups: Record<string, ReadonlyArray<Readonly<Record<string, Schema.Json>>>> = {};
-					for (const [lane, ids] of Object.entries(proof.serverResult.groups)) {
-						const rows = ids.flatMap((id) => {
-							const row = byId.get(id);
-							return row === undefined ? [] : [row];
-						});
-						if (rows.length !== ids.length) return undefined;
-						groups[lane] = projectCollectionQueryRows(
-							rows.map((row) =>
-								projectReadableRow(row, readableFields, relationshipSelection)
-							),
-							columns,
-							relationshipSelection
+				).pipe(Effect.catch(() => Effect.succeed(undefined)));
+				if (description === undefined) return undefined;
+				const pageLimit = ENumber.clamp({ minimum: 1, maximum: 500 })(limit ?? 100);
+				return yield* windows.readWindow(description.queryKey, (proof) =>
+					Effect.gen(function* () {
+						if (proof.collection !== collection) return undefined;
+						if (kind === 'count') {
+							if (proof.serverResult?.kind !== 'count' || proof.proofOwner !== 'server')
+								return undefined;
+							return {
+								value: {
+									count: proof.serverResult.value,
+									readCursor: proof.readCursor,
+									partitionKey: identity.partitionKey,
+									confirmedDependencies: proof.dependencies,
+									dependencyGenerations: proof.dependencyGenerations,
+									reproducibility: description.reproducibility
+								},
+								status: proof.valid && !proof.dirty ? ('fresh' as const) : ('stale' as const),
+								queryKey: proof.queryKey,
+								proofOwner: proof.proofOwner,
+								dependencies: proof.dependencies,
+								relationDependency: hasCanonicalRelationshipSelection(
+									description.query.relationships
+								)
+							};
+						}
+						// ServerProof membership and rows are an authoritative cached result. Overlaying a pending
+						// delete would make that retained result look incomplete, while overlaying a create could not
+						// prove where it belongs. Only LocalExact windows evaluate O3 through O4.
+						const applyOverlay = proof.proofOwner === 'local' && proof.locallyReproducible;
+						const ordered = yield* retainedRows(collection, proof.orderedRowIds, applyOverlay);
+						if (ordered === undefined) return undefined;
+						const hydrated = yield* attachRetainedRelationships(
+							collection,
+							ordered,
+							relationshipSelection,
+							proof,
+							applyOverlay
 						);
-					}
-					return {
-						value: { groups },
-						status: proof.valid && !proof.dirty ? 'fresh' as const : 'stale' as const,
-						queryKey: proof.queryKey,
-						proofOwner: proof.proofOwner,
-						dependencies: proof.dependencies,
-						relationDependency: hasCanonicalRelationshipSelection(
-							description.query.relationships
-						)
-					};
-				}
-				let start = 0;
-				if (after !== undefined) {
-					const anchor = hydrated.findIndex((row) => encodeCollectionCursor(terms, row) === after);
-					if (anchor < 0) return undefined;
-					start = anchor + 1;
-				}
-				const visible = hydrated.slice(start, start + pageLimit);
-				const last = visible[visible.length - 1];
-				const retainedAfterVisible = hydrated.length - (start + visible.length);
-				const hasMore = retainedAfterVisible > 0 || proof.nextCursor !== null;
-				// A non-terminal proof needs a full requested page plus one retained boundary row. Once
-				// that lookahead is consumed, an anchor alone cannot prove a short continuation.
-				const requestedBoundaryCovered =
-					proof.nextCursor === null ||
-					(visible.length === pageLimit && retainedAfterVisible > 0);
-				const nextCursor = hasMore && last !== undefined
-					? encodeCollectionCursor(terms, last)
-					: null;
-				return {
-					value: {
-						rows: projectCollectionQueryRows(
-							visible.map((row) =>
-								projectReadableRow(row, readableFields, relationshipSelection)
-							),
-							columns,
-							relationshipSelection
-						),
-						nextCursor
-					},
-					status: proof.valid && !proof.dirty && requestedBoundaryCovered
-						? 'fresh' as const
-						: 'stale' as const,
-					queryKey: proof.queryKey,
-					proofOwner: proof.proofOwner,
-					dependencies: proof.dependencies,
-					relationDependency: hasCanonicalRelationshipSelection(
-						description.query.relationships
-					)
-				};
-			}));
-		})
+						if (hydrated === undefined) return undefined;
+						if (kind === 'findGrouped') {
+							if (proof.serverResult?.kind !== 'findGrouped' || proof.proofOwner !== 'server') {
+								return undefined;
+							}
+							const byId = new Map(
+								hydrated.flatMap((row) =>
+									typeof row['id'] === 'string' ? [[row['id'], row] as const] : []
+								)
+							);
+							const groups: Record<
+								string,
+								ReadonlyArray<Readonly<Record<string, Schema.Json>>>
+							> = {};
+							for (const [lane, ids] of Object.entries(proof.serverResult.groups)) {
+								const rows = ids.flatMap((id) => {
+									const row = byId.get(id);
+									return row === undefined ? [] : [row];
+								});
+								if (rows.length !== ids.length) return undefined;
+								groups[lane] = projectCollectionQueryRows(
+									rows.map((row) => projectReadableRow(row, readableFields, relationshipSelection)),
+									columns,
+									relationshipSelection
+								);
+							}
+							return {
+								value: { groups },
+								status: proof.valid && !proof.dirty ? ('fresh' as const) : ('stale' as const),
+								queryKey: proof.queryKey,
+								proofOwner: proof.proofOwner,
+								dependencies: proof.dependencies,
+								relationDependency: hasCanonicalRelationshipSelection(
+									description.query.relationships
+								)
+							};
+						}
+						let start = 0;
+						if (after !== undefined) {
+							const anchor = hydrated.findIndex(
+								(row) => encodeCollectionCursor(terms, row) === after
+							);
+							if (anchor < 0) return undefined;
+							start = anchor + 1;
+						}
+						const visible = hydrated.slice(start, start + pageLimit);
+						const last = visible[visible.length - 1];
+						const retainedAfterVisible = hydrated.length - (start + visible.length);
+						const hasMore = retainedAfterVisible > 0 || proof.nextCursor !== null;
+						// A non-terminal proof needs a full requested page plus one retained boundary row. Once
+						// that lookahead is consumed, an anchor alone cannot prove a short continuation.
+						const requestedBoundaryCovered =
+							proof.nextCursor === null ||
+							(visible.length === pageLimit && retainedAfterVisible > 0);
+						const nextCursor =
+							hasMore && last !== undefined ? encodeCollectionCursor(terms, last) : null;
+						return {
+							value: {
+								rows: projectCollectionQueryRows(
+									visible.map((row) =>
+										projectReadableRow(row, readableFields, relationshipSelection)
+									),
+									columns,
+									relationshipSelection
+								),
+								nextCursor
+							},
+							status:
+								proof.valid && !proof.dirty && requestedBoundaryCovered
+									? ('fresh' as const)
+									: ('stale' as const),
+							queryKey: proof.queryKey,
+							proofOwner: proof.proofOwner,
+							dependencies: proof.dependencies,
+							relationDependency: hasCanonicalRelationshipSelection(description.query.relationships)
+						};
+					})
+				);
+			})
 	};
 };

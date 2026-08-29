@@ -41,13 +41,18 @@ export const replicaPartitionKey = (identity: ReplicaPartitionIdentity): string 
 	] as const;
 	if (!Number.isSafeInteger(identity.formatVersion) || identity.formatVersion < 1)
 		throw new Error('Replica partition formatVersion must be a positive safe integer');
-	return components
-		.map(([label, value]) => `${label.length.toString(36)}.${label}.${value.length.toString(36)}.${value}`)
-		// `encodeURIComponent` deliberately leaves `~` alone. Escape it as well because `~` is the
-		// component delimiter; otherwise a value containing the delimiter would make this serialization
-		// ambiguous to a future parser even though browser storage itself accepts the name.
-		.map((component) => encodeURIComponent(component).replaceAll('~', '%7E'))
-		.join('~');
+	return (
+		components
+			.map(
+				([label, value]) =>
+					`${label.length.toString(36)}.${label}.${value.length.toString(36)}.${value}`
+			)
+			// `encodeURIComponent` deliberately leaves `~` alone. Escape it as well because `~` is the
+			// component delimiter; otherwise a value containing the delimiter would make this serialization
+			// ambiguous to a future parser even though browser storage itself accepts the name.
+			.map((component) => encodeURIComponent(component).replaceAll('~', '%7E'))
+			.join('~')
+	);
 };
 
 const hex = (buffer: ArrayBuffer): string =>

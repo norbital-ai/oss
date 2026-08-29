@@ -107,9 +107,8 @@ export type DigestibleSchemaStep = Readonly<{
  * order, steps in application order, and no whitespace or newline. Re-projecting the keys prevents
  * caller metadata or object construction order from changing the digest. SQL remains exact.
  */
-export const canonicalSchemaStepEncoding = (
-	steps: ReadonlyArray<DigestibleSchemaStep>
-): string => JSON.stringify(steps.map(({ id, sql }) => ({ id, sql })));
+export const canonicalSchemaStepEncoding = (steps: ReadonlyArray<DigestibleSchemaStep>): string =>
+	JSON.stringify(steps.map(({ id, sql }) => ({ id, sql })));
 
 /** SHA-256 of `canonicalSchemaStepEncoding`, labelled so algorithms cannot be confused. */
 export const digestSchemaSteps = (steps: ReadonlyArray<DigestibleSchemaStep>): string =>

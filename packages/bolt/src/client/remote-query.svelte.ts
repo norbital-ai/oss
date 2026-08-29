@@ -147,5 +147,4 @@ export const createRemoteQuery = <Output extends Schema.ConstraintDecoder<Schema
 	fetchValue: (attempt: RemoteQueryAttempt) => Effect.Effect<Output['Type'], unknown>,
 	caching: RemoteQueryCaching | undefined,
 	_schema: Output
-): RemoteQuery<Output['Type']> =>
-	new ReactiveRemoteQuery(fetchValue, caching);
+): RemoteQuery<Output['Type']> => new ReactiveRemoteQuery(fetchValue, caching);

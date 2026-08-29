@@ -1,9 +1,4 @@
-export type {
-	TKanbanItem,
-	TCardSnippet,
-	KanbanProps,
-	KanbanColumnProps
-} from './types.js';
+export type { TKanbanItem, TCardSnippet, KanbanProps, KanbanColumnProps } from './types.js';
 
 // Component imports - adjust paths to match your actual file names
 import KanbanColumnComponent from './kanban-column.svelte';

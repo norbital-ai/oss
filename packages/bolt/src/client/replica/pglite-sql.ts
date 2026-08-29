@@ -1,15 +1,5 @@
 import { Cache, Effect, Schema } from 'effect';
-import {
-	and,
-	asc,
-	desc,
-	eq,
-	getColumns,
-	inArray,
-	sql,
-	type SQL,
-	type SQLChunk
-} from 'drizzle-orm';
+import { and, asc, desc, eq, getColumns, inArray, sql, type SQL, type SQLChunk } from 'drizzle-orm';
 import { customType, pgTable, type AnyPgColumn, type AnyPgTable } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/pg-proxy';
 import type { FieldDefinition } from '#lib/authoring/workspace-schema.js';
@@ -215,7 +205,7 @@ const REPLICA_LEDGER_STEPS: ReadonlyArray<ProvisioningStep> = [
 	},
 	{
 		id: 'replica:base-row',
-			sql: `create table if not exists bolt_replica_base_row (
+		sql: `create table if not exists bolt_replica_base_row (
 			collection text not null,
 			record_id uuid not null,
 			row_version bigint not null check (row_version >= 1),
@@ -526,18 +516,12 @@ export const provision = Effect.fn('ReplicaSql.provision')(function* (
 		return false;
 	}
 	if (fingerprint !== undefined && state !== undefined) {
-		return yield* Effect.fail(
-			new ReplicaNamespaceMismatch(state.fingerprint, fingerprint)
-		);
+		return yield* Effect.fail(new ReplicaNamespaceMismatch(state.fingerprint, fingerprint));
 	}
 	for (const step of steps) {
 		yield* database
 			.exec(step.sql)
-			.pipe(
-				Effect.mapError(
-					(cause) => new ReplicaProvisioningFailure(step.id, cause)
-				)
-			);
+			.pipe(Effect.mapError((cause) => new ReplicaProvisioningFailure(step.id, cause)));
 	}
 	yield* ensureReplicaLedger(database);
 	return true;
@@ -653,7 +637,7 @@ const replicaCollection = (
 						definition.generated === undefined ? [field] : []
 					)
 				]
-			: readableFields ?? []
+			: (readableFields ?? [])
 	);
 	// Identity and whole-row version are structural replica facts, not optional UI projection.
 	completeFields.add('id');
@@ -715,7 +699,9 @@ const upsertWholeRow = (
 	const missing = [...collection.completeFields].filter((name) => !Object.hasOwn(row, name));
 	if (missing.length > 0) {
 		return Effect.fail(
-			new Error(`Authoritative replica row is partial; missing permitted fields: ${missing.join(', ')}`)
+			new Error(
+				`Authoritative replica row is partial; missing permitted fields: ${missing.join(', ')}`
+			)
 		);
 	}
 	const physical = encodeReferenceValues(row, collection.fields);
@@ -802,10 +788,11 @@ export const createPGliteStore = (
 					})
 				);
 		const validRowCursor = (cursor: ReplicaRowCursor | undefined): boolean =>
-			cursor === undefined || (
-				Number.isSafeInteger(cursor.xid) && cursor.xid >= 0 &&
-				Number.isSafeInteger(cursor.sequence) && cursor.sequence >= 0
-			);
+			cursor === undefined ||
+			(Number.isSafeInteger(cursor.xid) &&
+				cursor.xid >= 0 &&
+				Number.isSafeInteger(cursor.sequence) &&
+				cursor.sequence >= 0);
 		const compareAuthoritativeFact = (
 			row: AuthoritativeReplicaRemoval,
 			previous: StoredBaseVersion
@@ -816,15 +803,15 @@ export const createPGliteStore = (
 			}
 			return row.rowVersion - previous.rowVersion;
 		};
-			const writeBaseVersion = (
-				row: AuthoritativeReplicaRemoval,
-				previous: StoredBaseVersion | undefined,
-				present: boolean
-			): Effect.Effect<void, unknown> => {
-				const cursor = row.cursor ?? previous?.cursor ?? { xid: 0, sequence: 0 };
-				return database
-					.query(
-						`insert into bolt_replica_base_row
+		const writeBaseVersion = (
+			row: AuthoritativeReplicaRemoval,
+			previous: StoredBaseVersion | undefined,
+			present: boolean
+		): Effect.Effect<void, unknown> => {
+			const cursor = row.cursor ?? previous?.cursor ?? { xid: 0, sequence: 0 };
+			return database
+				.query(
+					`insert into bolt_replica_base_row
 						 (collection, record_id, row_version, cursor_xid, cursor_sequence,
 						  present, evicted, tombstone_until)
 						 values ($1, $2::uuid, $3, $4, $5, $6, false,
@@ -836,94 +823,93 @@ export const createPGliteStore = (
 						 present = excluded.present,
 						 evicted = false,
 						 tombstone_until = excluded.tombstone_until`,
-						[row.collection, row.recordId, row.rowVersion, cursor.xid, cursor.sequence, present]
-					)
-					.pipe(Effect.asVoid);
-			};
-			const queryRows = (
-				collection: ReplicaCollection,
-				input: ReplicaRead
-			): Effect.Effect<ReadonlyArray<Schema.Json>, unknown> =>
-				Effect.gen(function* () {
-					const filter = combineReplicaFilters(input.filter, input.search);
-					let query = view
-						.select()
-						.from(collection.table)
-						.where(
-							input.recordIds === undefined
-								? compiledFragment(filter)
-								: input.recordIds.length === 0
-									? sql`false`
-									: and(
-											compiledFragment(filter),
-											inArray(collection.columns['id']!, [...input.recordIds])
-										)
-						)
-						.$dynamic();
-					const ordering = input.orderBy.flatMap((term) => {
-						const column = collection.columns[term.column];
-						if (column === undefined) return [];
-						const expression = term.collation === 'C'
-							? sql`${column} collate "C"`
-							: column;
-						return [term.direction === 'asc' ? asc(expression) : desc(expression)];
-					});
-					if (ordering.length > 0) query = query.orderBy(...ordering);
-					if (input.limit !== undefined) query = query.limit(input.limit);
-					const rows = yield* executeBuilt(() => query);
-					return rows.map(replicaJson);
-				});
-			const queryOverlayRows = (
-				collection: ReplicaCollection,
-				input: ReplicaRead,
-				overlay: ReplicaOverlayView
-			): Effect.Effect<ReadonlyArray<Schema.Json>, unknown> => {
+					[row.collection, row.recordId, row.rowVersion, cursor.xid, cursor.sequence, present]
+				)
+				.pipe(Effect.asVoid);
+		};
+		const queryRows = (
+			collection: ReplicaCollection,
+			input: ReplicaRead
+		): Effect.Effect<ReadonlyArray<Schema.Json>, unknown> =>
+			Effect.gen(function* () {
 				const filter = combineReplicaFilters(input.filter, input.search);
-				const affectedRecordIds = [...new Set(overlay.affectedRecordIds)];
-				if (
-					affectedRecordIds.length === 0 ||
-					affectedRecordIds.length !== overlay.affectedRecordIds.length
-				) {
-					return Effect.fail(new Error('Mutation overlay view has invalid or repeated affected ids'));
-				}
-				const projectedIds = overlay.rows.flatMap((row) =>
-					typeof row['id'] === 'string' ? [row['id']] : []
-				);
-				if (
-					projectedIds.length !== overlay.rows.length ||
-					new Set(projectedIds).size !== projectedIds.length ||
-					projectedIds.some((id) => !affectedRecordIds.includes(id))
-				) {
-					return Effect.fail(new Error('Mutation overlay view contains invalid or repeated row ids'));
-				}
-				const quote = (value: string): string => `"${value.replaceAll('"', '""')}"`;
-				const table = quote(input.collection);
-				const filterParameters = [...filter.parameters];
-				let parameter = filterParameters.length;
-				const affectedParameter = ++parameter;
-				const overlayParameter = ++parameter;
-				const parameters: Array<unknown> = [
-					...filterParameters,
-					affectedRecordIds,
-					JSON.stringify(
-						overlay.rows.map((row) => encodeReferenceValues(row, collection.fields))
+				let query = view
+					.select()
+					.from(collection.table)
+					.where(
+						input.recordIds === undefined
+							? compiledFragment(filter)
+							: input.recordIds.length === 0
+								? sql`false`
+								: and(
+										compiledFragment(filter),
+										inArray(collection.columns['id']!, [...input.recordIds])
+									)
 					)
-				];
-				const membership = input.recordIds === undefined
+					.$dynamic();
+				const ordering = input.orderBy.flatMap((term) => {
+					const column = collection.columns[term.column];
+					if (column === undefined) return [];
+					const expression = term.collation === 'C' ? sql`${column} collate "C"` : column;
+					return [term.direction === 'asc' ? asc(expression) : desc(expression)];
+				});
+				if (ordering.length > 0) query = query.orderBy(...ordering);
+				if (input.limit !== undefined) query = query.limit(input.limit);
+				const rows = yield* executeBuilt(() => query);
+				return rows.map(replicaJson);
+			});
+		const queryOverlayRows = (
+			collection: ReplicaCollection,
+			input: ReplicaRead,
+			overlay: ReplicaOverlayView
+		): Effect.Effect<ReadonlyArray<Schema.Json>, unknown> => {
+			const filter = combineReplicaFilters(input.filter, input.search);
+			const affectedRecordIds = [...new Set(overlay.affectedRecordIds)];
+			if (
+				affectedRecordIds.length === 0 ||
+				affectedRecordIds.length !== overlay.affectedRecordIds.length
+			) {
+				return Effect.fail(new Error('Mutation overlay view has invalid or repeated affected ids'));
+			}
+			const projectedIds = overlay.rows.flatMap((row) =>
+				typeof row['id'] === 'string' ? [row['id']] : []
+			);
+			if (
+				projectedIds.length !== overlay.rows.length ||
+				new Set(projectedIds).size !== projectedIds.length ||
+				projectedIds.some((id) => !affectedRecordIds.includes(id))
+			) {
+				return Effect.fail(new Error('Mutation overlay view contains invalid or repeated row ids'));
+			}
+			const quote = (value: string): string => `"${value.replaceAll('"', '""')}"`;
+			const table = quote(input.collection);
+			const filterParameters = [...filter.parameters];
+			let parameter = filterParameters.length;
+			const affectedParameter = ++parameter;
+			const overlayParameter = ++parameter;
+			const parameters: Array<unknown> = [
+				...filterParameters,
+				affectedRecordIds,
+				JSON.stringify(overlay.rows.map((row) => encodeReferenceValues(row, collection.fields)))
+			];
+			const membership =
+				input.recordIds === undefined
 					? 'true'
 					: input.recordIds.length === 0
 						? 'false'
 						: `${table}."id" = any($${++parameter}::uuid[])`;
-				if (input.recordIds !== undefined && input.recordIds.length > 0)
-					parameters.push([...input.recordIds]);
-				const order = input.orderBy.flatMap((term) =>
-					collection.columns[term.column] === undefined
-						? []
-						: [`"__bolt_effective".${quote(term.column)}${term.collation === 'C' ? ' collate "C"' : ''} ${term.direction}`]
-				);
-				const limit = input.limit === undefined ? '' : ` limit $${++parameter}`;
-				if (input.limit !== undefined) parameters.push(input.limit);
-				const statement = `with "__bolt_overlay_rows" as (
+			if (input.recordIds !== undefined && input.recordIds.length > 0)
+				parameters.push([...input.recordIds]);
+			const order = input.orderBy.flatMap((term) =>
+				collection.columns[term.column] === undefined
+					? []
+					: [
+							`"__bolt_effective".${quote(term.column)}${term.collation === 'C' ? ' collate "C"' : ''} ${term.direction}`
+						]
+			);
+			const limit = input.limit === undefined ? '' : ` limit $${++parameter}`;
+			if (input.limit !== undefined) parameters.push(input.limit);
+			const statement = `with "__bolt_overlay_rows" as (
 					select * from jsonb_populate_recordset(null::public.${table}, $${overlayParameter}::jsonb)
 				)
 				select * from (
@@ -935,58 +921,62 @@ export const createPGliteStore = (
 					where (${filter.sql}) and (${membership})
 				) as "__bolt_effective"
 				${order.length === 0 ? '' : `order by ${order.join(', ')}`}${limit}`;
-				return database.query<Record<string, unknown>>(statement, parameters).pipe(
-					Effect.map(({ rows }) => rows.map(replicaJson))
-				);
-			};
+			return database
+				.query<Record<string, unknown>>(statement, parameters)
+				.pipe(Effect.map(({ rows }) => rows.map(replicaJson)));
+		};
 
-			return {
-				findMany: (input) =>
-					Effect.gen(function* () {
-						const collection = yield* collectionFor(input.collection);
-						return yield* (input.overlay === undefined
-							? queryRows(collection, input)
-							: queryOverlayRows(collection, input, input.overlay));
-					}),
-				baseRows: (name, recordIds) =>
-					Effect.gen(function* () {
-						const collection = yield* collectionFor(name);
-						if (recordIds?.length === 0) return [];
-						const id = collection.columns['id'];
-						if (id === undefined)
-							return yield* Effect.fail(new Error('Replica collection has no id column'));
-						const rows = yield* executeBuilt(() =>
-							recordIds === undefined
-								? view.select().from(collection.table)
-								: view.select().from(collection.table).where(inArray(id, [...recordIds]))
-						);
-						const versions = yield* database.query<{
-							readonly record_id: string;
-							readonly row_version: number | string;
-						}>(
-							`select record_id, row_version from bolt_replica_base_row
+		return {
+			findMany: (input) =>
+				Effect.gen(function* () {
+					const collection = yield* collectionFor(input.collection);
+					return yield* input.overlay === undefined
+						? queryRows(collection, input)
+						: queryOverlayRows(collection, input, input.overlay);
+				}),
+			baseRows: (name, recordIds) =>
+				Effect.gen(function* () {
+					const collection = yield* collectionFor(name);
+					if (recordIds?.length === 0) return [];
+					const id = collection.columns['id'];
+					if (id === undefined)
+						return yield* Effect.fail(new Error('Replica collection has no id column'));
+					const rows = yield* executeBuilt(() =>
+						recordIds === undefined
+							? view.select().from(collection.table)
+							: view
+									.select()
+									.from(collection.table)
+									.where(inArray(id, [...recordIds]))
+					);
+					const versions = yield* database.query<{
+						readonly record_id: string;
+						readonly row_version: number | string;
+					}>(
+						`select record_id, row_version from bolt_replica_base_row
 							 where collection = $1 and present = true
 							 ${recordIds === undefined ? '' : 'and record_id = any($2::uuid[])'}`,
-							recordIds === undefined ? [name] : [name, [...recordIds]]
-						);
-						const byId = new Map(
-							versions.rows.map((row) => [row.record_id, Number(row.row_version)] as const)
-						);
-						return rows.flatMap((row) => {
-							const json = replicaJson(row);
-							if (json === null || typeof json !== 'object' || Array.isArray(json)) return [];
-							const object = json as Readonly<Record<string, Schema.Json>>;
-							const recordId = object['id'];
-							const rowVersion = typeof recordId === 'string' ? byId.get(recordId) : undefined;
-							return typeof recordId === 'string' && rowVersion !== undefined
-								? [{ recordId, rowVersion, row: object }]
-								: [];
-						});
-					}),
+						recordIds === undefined ? [name] : [name, [...recordIds]]
+					);
+					const byId = new Map(
+						versions.rows.map((row) => [row.record_id, Number(row.row_version)] as const)
+					);
+					return rows.flatMap((row) => {
+						const json = replicaJson(row);
+						if (json === null || typeof json !== 'object' || Array.isArray(json)) return [];
+						const object = json as Readonly<Record<string, Schema.Json>>;
+						const recordId = object['id'];
+						const rowVersion = typeof recordId === 'string' ? byId.get(recordId) : undefined;
+						return typeof recordId === 'string' && rowVersion !== undefined
+							? [{ recordId, rowVersion, row: object }]
+							: [];
+					});
+				}),
 			applyAuthoritativeRow: (input) =>
 				Effect.gen(function* () {
 					if (
-						!Number.isSafeInteger(input.rowVersion) || input.rowVersion < 1 ||
+						!Number.isSafeInteger(input.rowVersion) ||
+						input.rowVersion < 1 ||
 						!validRowCursor(input.cursor)
 					) {
 						return yield* Effect.fail(new Error('Authoritative replica row version is invalid'));
@@ -1015,7 +1005,8 @@ export const createPGliteStore = (
 			removeAuthoritativeRow: (input) =>
 				Effect.gen(function* () {
 					if (
-						!Number.isSafeInteger(input.rowVersion) || input.rowVersion < 1 ||
+						!Number.isSafeInteger(input.rowVersion) ||
+						input.rowVersion < 1 ||
 						!validRowCursor(input.cursor)
 					) {
 						return yield* Effect.fail(new Error('Authoritative replica row version is invalid'));
@@ -1071,9 +1062,7 @@ export const createPGliteStore = (
 					return rows.flatMap((row) => (typeof row.id === 'string' ? [row.id] : []));
 				}),
 			hasRecord: (name, recordId) =>
-				versionFor(name, recordId).pipe(
-					Effect.map((version) => version?.present === true)
-				),
+				versionFor(name, recordId).pipe(Effect.map((version) => version?.present === true)),
 			clearNamespace: () =>
 				Effect.gen(function* () {
 					// Replica sessions run with `session_replication_role = replica`. PostgreSQL therefore

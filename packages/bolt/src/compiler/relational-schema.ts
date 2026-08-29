@@ -73,7 +73,10 @@ export type ManyOrientation = Readonly<{
 
 export type RelationalSchemaOptions = Readonly<{
 	/** Builds the query descriptor for one collection; the read path shares these instances. */
-	readonly table: (collection: string, fields: Readonly<Record<string, FieldDefinition>>) => PgTable;
+	readonly table: (
+		collection: string,
+		fields: Readonly<Record<string, FieldDefinition>>
+	) => PgTable;
 	/**
 	 * Resolves a `many` edge's endpoints.
 	 *
@@ -172,11 +175,7 @@ const relationConfig = (
 				const from = column(collection.name, oriented.parentColumn);
 				const to = column(oriented.childCollection, oriented.childColumn);
 				if (from === undefined || to === undefined) continue;
-				declare(
-					collection.name,
-					relation.name,
-					helpers.many[relation.target]?.({ from, to })
-				);
+				declare(collection.name, relation.name, helpers.many[relation.target]?.({ from, to }));
 				continue;
 			}
 

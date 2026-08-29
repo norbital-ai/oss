@@ -2,10 +2,7 @@ import type {
 	PersistentReplicaTier,
 	ReplicaProfileEvictionCandidate
 } from '#lib/client/replica/budget.js';
-import {
-	replicaPartitionKey,
-	type ReplicaPartitionIdentity
-} from '#lib/client/replica/leader.js';
+import { replicaPartitionKey, type ReplicaPartitionIdentity } from '#lib/client/replica/leader.js';
 
 /** Pure physical location derivation, kept out of the deferred PGlite loader dependency graph. */
 export const replicaLocation = (
@@ -129,10 +126,7 @@ export const parseReplicaPGliteLocation = (location: string): ParsedPGliteLocati
 };
 
 type OpfsDirectory = Readonly<{
-	removeEntry: (
-		name: string,
-		options: Readonly<{ readonly recursive: true }>
-	) => Promise<void>;
+	removeEntry: (name: string, options: Readonly<{ readonly recursive: true }>) => Promise<void>;
 }>;
 
 export type ReplicaPhysicalStorageEnvironment = Readonly<{
@@ -157,13 +151,13 @@ const deleteIndexedDatabase = (factory: IDBFactory, name: string): Promise<void>
 	});
 
 export class ReplicaPhysicalPartitionBusy extends Error {
-  readonly partitionId: string;
+	readonly partitionId: string;
 
-  constructor(partitionId: string) {
-    super('Replica physical partition is active in another browser context');
-    this.partitionId = partitionId;
-    this.name = 'ReplicaPhysicalPartitionBusy';
-  }
+	constructor(partitionId: string) {
+		super('Replica physical partition is active in another browser context');
+		this.partitionId = partitionId;
+		this.name = 'ReplicaPhysicalPartitionBusy';
+	}
 }
 
 /**
@@ -213,7 +207,9 @@ export const deleteInactivePGlitePartition = async (
 			if (lock === null) throw new ReplicaPhysicalPartitionBusy(candidate.partitionId);
 			if (location.tier === 'opfs') {
 				try {
-					await (await activeEnvironment.opfsRoot()).removeEntry(location.name, { recursive: true });
+					await (
+						await activeEnvironment.opfsRoot()
+					).removeEntry(location.name, { recursive: true });
 				} catch (cause) {
 					if (!notFound(cause)) throw cause;
 				}

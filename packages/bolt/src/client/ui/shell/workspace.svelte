@@ -126,7 +126,9 @@
 				? (query as Readonly<Record<string, unknown>>)
 				: {};
 		const rawWhere =
-			input['where'] !== null && typeof input['where'] === 'object' && !Array.isArray(input['where'])
+			input['where'] !== null &&
+			typeof input['where'] === 'object' &&
+			!Array.isArray(input['where'])
 				? (input['where'] as Readonly<Record<string, unknown>>)
 				: {};
 		const where = Object.fromEntries(
@@ -134,7 +136,9 @@
 		) as Record<string, unknown>;
 		const search = typeof input['search'] === 'string' ? input['search'].trim() : '';
 		if (search.length > 0)
-			where.name = { ilike: `%${search.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%` };
+			where.name = {
+				ilike: `%${search.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`
+			};
 		const rawOrderBy =
 			input['orderBy'] !== null &&
 			typeof input['orderBy'] === 'object' &&
@@ -148,9 +152,7 @@
 			)
 		) as NonNullable<CollectionQuery<CollectionRecord>['orderBy']>;
 		const requestedLimit =
-			typeof input['limit'] === 'number' && Number.isInteger(input['limit'])
-				? input['limit']
-				: 100;
+			typeof input['limit'] === 'number' && Number.isInteger(input['limit']) ? input['limit'] : 100;
 		return {
 			columns: { id: true, name: true },
 			where: where as NonNullable<CollectionQuery<CollectionRecord>['where']>,

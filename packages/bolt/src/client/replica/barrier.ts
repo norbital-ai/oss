@@ -8,11 +8,7 @@ export type DurableReplicaSchema = Readonly<{
 	readonly protocolVersion: number;
 }>;
 
-export type SchemaBarrierPhase =
-	| 'idle'
-	| 'withdrawing-readers'
-	| 'switching-namespace'
-	| 'failed';
+export type SchemaBarrierPhase = 'idle' | 'withdrawing-readers' | 'switching-namespace' | 'failed';
 
 export type SchemaBarrierState = Readonly<{
 	readonly phase: SchemaBarrierPhase;

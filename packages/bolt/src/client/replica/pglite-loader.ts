@@ -5,10 +5,7 @@ import {
 	type ReplicaPartitionIdentity,
 	type ReplicationLeadership
 } from '#lib/client/replica/leader.js';
-import {
-	selectReplicaStorage,
-	type ReplicaStorageDecision
-} from '#lib/client/replica/budget.js';
+import { selectReplicaStorage, type ReplicaStorageDecision } from '#lib/client/replica/budget.js';
 import { Effect } from 'effect';
 import type { PGliteInterface } from '@electric-sql/pglite';
 import { replicaLocation } from '#lib/client/replica/physical-storage.js';
@@ -88,14 +85,14 @@ export const withReplicationLeadership = (
 });
 
 export class ReplicaServerOnly extends Error {
-  readonly tier = 'server-only' as const;
-  readonly reason: string;
+	readonly tier = 'server-only' as const;
+	readonly reason: string;
 
-  constructor(reason: string) {
-    super(`Local replica unavailable: ${reason}`);
-    this.reason = reason;
-    this.name = 'ReplicaServerOnly';
-  }
+	constructor(reason: string) {
+		super(`Local replica unavailable: ${reason}`);
+		this.reason = reason;
+		this.name = 'ReplicaServerOnly';
+	}
 }
 
 export type OpenPGliteOptions = Readonly<{
@@ -108,9 +105,9 @@ export const openPGlite = Effect.fn('Replica.openPGlite')(function* (
 	scope: string | ReplicaPartitionIdentity = 'local',
 	options: OpenPGliteOptions = {}
 ): Effect.fn.Return<PGliteLike, unknown> {
-	const storage =
-		options.storage ?? (yield* Effect.tryPromise(() => selectReplicaStorage()));
-	if (storage.tier === 'server-only') return yield* Effect.fail(new ReplicaServerOnly(storage.reason));
+	const storage = options.storage ?? (yield* Effect.tryPromise(() => selectReplicaStorage()));
+	if (storage.tier === 'server-only')
+		return yield* Effect.fail(new ReplicaServerOnly(storage.reason));
 	const dataDir = replicaLocation(scope, storage.tier);
 	/**
 	 * `new URL(..., import.meta.url)` rather than a bare specifier, because this has to survive being

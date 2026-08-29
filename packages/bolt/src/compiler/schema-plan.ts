@@ -662,8 +662,8 @@ export const replicaProvisioningSteps = (
 	 * declaration keeps the UUID column but deliberately has no relationship constraints, which is
 	 * also the right logical-replication behavior when related rows arrive independently.
 	 */
-	const replicaCollections = withSystemCollections(workspace).collections
-		.filter(isReplicatedCollection)
+	const replicaCollections = withSystemCollections(workspace)
+		.collections.filter(isReplicatedCollection)
 		.toSorted((left, right) => left.name.localeCompare(right.name));
 	const collectionSteps = replicaCollections.flatMap((definition) => {
 		// A polymorphic reference is one logical value backed by one nullable UUID column per target.
@@ -702,9 +702,7 @@ export const replicaProvisioningSteps = (
 			...declaredIndexSteps(physicalDefinition),
 			...modelIndexSteps(definition),
 			...searchIndexSteps(definition),
-			...(definition.exclusions ?? []).map((exclusion) =>
-				exclusionStep(definition.name, exclusion)
-			)
+			...(definition.exclusions ?? []).map((exclusion) => exclusionStep(definition.name, exclusion))
 		];
 	});
 	const foundation = buildSchemaPlan(workspace).steps.filter(({ id }) =>

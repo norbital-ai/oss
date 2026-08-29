@@ -14,9 +14,7 @@ export const SelectionStateSchema = Schema.Struct({
 export type SelectionState = typeof SelectionStateSchema.Type;
 
 export type TreeNodes<TMetadata> =
-	| TreeChildNode<TMetadata>
-	| TreeParentNode<TMetadata>
-	| RequiredTreeChildNode<TMetadata>;
+	TreeChildNode<TMetadata> | TreeParentNode<TMetadata> | RequiredTreeChildNode<TMetadata>;
 
 /**
  * Callback type for node actions

@@ -97,10 +97,7 @@ export const layer = Layer.effect(
 						message: 'The document key is outside this chat session namespace.'
 					});
 				}
-				const rows = yield* attachmentsOf(
-					EffectId.make(`${effectId}:files`),
-					conversationId
-				);
+				const rows = yield* attachmentsOf(EffectId.make(`${effectId}:files`), conversationId);
 				const decoded = decodeFileItems(rows.rows[0]);
 				const found =
 					decoded._tag === 'Some'
@@ -115,11 +112,7 @@ export const layer = Layer.effect(
 				return found;
 			});
 
-		const attach = Effect.fn('ChatDocuments.attach')(function* (
-			effectId,
-			conversationId,
-			file
-		) {
+		const attach = Effect.fn('ChatDocuments.attach')(function* (effectId, conversationId, file) {
 			if (!isChatDocumentStorageKey(conversationId, file.storage_key)) {
 				return yield* new ChatDocumentError({
 					conversationId,
@@ -156,12 +149,7 @@ export const layer = Layer.effect(
 
 		return Service.of({
 			attach,
-			write: Effect.fn('ChatDocuments.write')(function* (
-				effectId,
-				conversationId,
-				file,
-				bytes
-			) {
+			write: Effect.fn('ChatDocuments.write')(function* (effectId, conversationId, file, bytes) {
 				if (bytes.byteLength !== file.file_size) {
 					return yield* new ChatDocumentError({
 						conversationId,
@@ -200,11 +188,7 @@ export const layer = Layer.effect(
 						)
 					);
 			}),
-			media: Effect.fn('ChatDocuments.media')(function* (
-				effectId,
-				conversationId,
-				storageKey
-			) {
+			media: Effect.fn('ChatDocuments.media')(function* (effectId, conversationId, storageKey) {
 				const file = yield* owned(effectId, conversationId, storageKey);
 				const response = yield* files
 					.execute(EffectId.make(`${effectId}:read`), { _tag: 'Read', key: storageKey })
@@ -225,11 +209,7 @@ export const layer = Layer.effect(
 				}
 				return { file, bytes: response.bytes };
 			}),
-			remove: Effect.fn('ChatDocuments.remove')(function* (
-				effectId,
-				conversationId,
-				storageKey
-			) {
+			remove: Effect.fn('ChatDocuments.remove')(function* (effectId, conversationId, storageKey) {
 				const found = yield* owned(effectId, conversationId, storageKey).pipe(Effect.option);
 				if (Option.isSome(found)) {
 					const rows = yield* attachmentsOf(EffectId.make(`${effectId}:read`), conversationId);

@@ -54,15 +54,17 @@ const readProvisioning = Effect.fn('ReplicaBootstrap.readProvisioning')(function
 });
 
 const readShape = (transport: BootstrapTransport): Effect.Effect<ReadonlyArray<string>, unknown> =>
-	transport.command('sync.shape', {}).pipe(
-		Effect.map(
-			(answer) =>
-				Result.getOrElse(
-					Schema.decodeUnknownResult(Schema.Array(Schema.String))(answer),
-					() => null
-				) ?? []
-		)
-	);
+	transport
+		.command('sync.shape', {})
+		.pipe(
+			Effect.map(
+				(answer) =>
+					Result.getOrElse(
+						Schema.decodeUnknownResult(Schema.Array(Schema.String))(answer),
+						() => null
+					) ?? []
+			)
+		);
 
 const FOLLOWER_PROVISION_TIMEOUT_MILLIS = 30_000;
 const FOLLOWER_PROVISION_POLL_MILLIS = 50;
@@ -102,13 +104,13 @@ export type LocalDatabase = Readonly<{
 
 /** The current namespace could not satisfy the base/window storage contract. */
 export class ReplicaStoredStateCorruption extends Error {
-  readonly cause?: unknown;
+	readonly cause?: unknown;
 
-  constructor(message: string, cause?: unknown) {
-    super(message);
-    if (cause !== undefined) this.cause = cause;
-    this.name = 'ReplicaStoredStateCorruption';
-  }
+	constructor(message: string, cause?: unknown) {
+		super(message);
+		if (cause !== undefined) this.cause = cause;
+		this.name = 'ReplicaStoredStateCorruption';
+	}
 }
 
 /**
@@ -149,16 +151,9 @@ export const openLocalDatabase = Effect.fn('ReplicaBootstrap.openLocalDatabase')
 		provisioning.shape.collections.map((collection) => [collection.name, collection.fields])
 	);
 	const readableFieldsByCollection = Object.fromEntries(
-		provisioning.shape.collections.map((collection) => [
-			collection.name,
-			collection.readableFields
-		])
+		provisioning.shape.collections.map((collection) => [collection.name, collection.readableFields])
 	);
-	const store = yield* createPGliteStore(
-		database,
-		fieldsByCollection,
-		readableFieldsByCollection
-	);
+	const store = yield* createPGliteStore(database, fieldsByCollection, readableFieldsByCollection);
 	const readable = new Set(yield* readShape(transport));
 	if (provisioned) {
 		yield* withTransaction(database, store.clearNamespace());

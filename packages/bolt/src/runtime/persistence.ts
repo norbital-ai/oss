@@ -199,11 +199,7 @@ export const dynamicTable = (table: string, tableAlias: string): SQL =>
  * independently against an outbox row's before and after images. Both table and alias are
  * builder-escaped identifiers; the image remains an expression supplied by the typed outbox table.
  */
-export const jsonRecord = (
-	table: string,
-	image: SQLWrapper,
-	tableAlias: string
-): SQL =>
+export const jsonRecord = (table: string, image: SQLWrapper, tableAlias: string): SQL =>
 	expression([
 		fixed('jsonb_populate_record(null::'),
 		sql.identifier(table),
@@ -267,7 +263,10 @@ export const jsonArrayContainsAny = (
 		: expression([
 				column,
 				fixed(' ?| array['),
-				sql.join(values.map((value) => sql.param(value)), fixed(', ')),
+				sql.join(
+					values.map((value) => sql.param(value)),
+					fixed(', ')
+				),
 				fixed(']::text[]')
 			]);
 

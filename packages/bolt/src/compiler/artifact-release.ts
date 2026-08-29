@@ -18,8 +18,7 @@ import {
 } from '@norbital-ai/bolt-protocol';
 import type { WorkspaceMigrationEntry } from '../authoring/workspace-schema.js';
 
-const digest = (bytes: Uint8Array): string =>
-	createHash('sha256').update(bytes).digest('hex');
+const digest = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 
 /** Canonical byte representation of structured release objects. */
 const jsonBytes = (value: unknown): Uint8Array =>
@@ -29,10 +28,14 @@ const jsonBytes = (value: unknown): Uint8Array =>
  * One compiler-owned partition for Rolldown's `codeSplitting.groups` and its release role.
  */
 export type ServerCodeRole = ArtifactCodeChunk['role'];
-export type ServerModulePartition = Readonly<{ readonly name: string; readonly role: ServerCodeRole }>;
+export type ServerModulePartition = Readonly<{
+	readonly name: string;
+	readonly role: ServerCodeRole;
+}>;
 
 const normalizedModuleId = (id: string): string => id.split('?')[0]?.replaceAll('\\', '/') ?? id;
-const isWithin = (path: string, root: string): boolean => path === root || path.startsWith(`${root}/`);
+const isWithin = (path: string, root: string): boolean =>
+	path === root || path.startsWith(`${root}/`);
 const safeChunkName = (value: string): string => value.replaceAll(/[^a-zA-Z0-9_-]/g, '-');
 
 /** Assigns one transformed module from compiler-known provenance; no module is imported to decide. */
@@ -88,13 +91,17 @@ const graphImport = (importer: string, target: string) => {
 export const buildCodeGraph = (
 	entrypoint: string,
 	outputs: ReadonlyArray<EmittedServerChunk>
-): Readonly<{ readonly graph: ArtifactCodeGraph; readonly objects: ReadonlyMap<string, Uint8Array> }> => {
+): Readonly<{
+	readonly graph: ArtifactCodeGraph;
+	readonly objects: ReadonlyMap<string, Uint8Array>;
+}> => {
 	const paths = new Set<string>();
 	const objects = new Map<string, Uint8Array>();
 	const chunks = outputs
 		.toSorted((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))
 		.map((output): ArtifactCodeChunk => {
-			if (paths.has(output.path)) throw new Error(`Duplicate server code chunk path: ${output.path}`);
+			if (paths.has(output.path))
+				throw new Error(`Duplicate server code chunk path: ${output.path}`);
 			if (output.dynamicImports.length > 0)
 				throw new Error(
 					`Server code chunk ${output.path} retains unsupported dynamic imports: ${output.dynamicImports.join(', ')}`
@@ -108,9 +115,7 @@ export const buildCodeGraph = (
 				sha256,
 				byteLength: output.bytes.byteLength,
 				imports: output.imports.map((target) => graphImport(output.path, target)),
-				dynamicImports: output.dynamicImports.map((target) =>
-					graphImport(output.path, target)
-				)
+				dynamicImports: output.dynamicImports.map((target) => graphImport(output.path, target))
 			};
 		});
 	if (!paths.has(entrypoint)) throw new Error(`Server code graph has no entrypoint ${entrypoint}`);
@@ -128,9 +133,7 @@ export const buildCodeGraph = (
 		byteLength: chunks.reduce((total, chunk) => total + chunk.byteLength, 0),
 		chunks
 	} as const;
-	const sha256 = digest(
-		new TextEncoder().encode(canonicalArtifactCodeGraphIndexEncoding(index))
-	);
+	const sha256 = digest(new TextEncoder().encode(canonicalArtifactCodeGraphIndexEncoding(index)));
 	const graph = { ...index, sha256 };
 	const refusals = artifactCodeGraphRefusals(graph);
 	if (refusals.length > 0)
@@ -155,9 +158,7 @@ export type TenantReleaseInput = Readonly<{
 		readonly entrypoint: string;
 		readonly chunks: ReadonlyArray<EmittedServerChunk>;
 	}>;
-	readonly lockfile:
-		| Readonly<{ readonly path: string; readonly bytes: Uint8Array }>
-		| undefined;
+	readonly lockfile: Readonly<{ readonly path: string; readonly bytes: Uint8Array }> | undefined;
 	readonly toolchain: Readonly<Record<string, string>>;
 }>;
 
@@ -240,10 +241,7 @@ export const writeTenantRelease = async (
 	for (const [sha256, bytes] of built.objects) {
 		await writeFile(join(objectsDirectory, sha256), bytes);
 	}
-	await writeFile(
-		join(artifactDirectory, ARTIFACT_RELEASE_FILE),
-		built.manifestBytes
-	);
+	await writeFile(join(artifactDirectory, ARTIFACT_RELEASE_FILE), built.manifestBytes);
 	return built;
 };
 

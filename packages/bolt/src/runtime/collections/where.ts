@@ -597,9 +597,7 @@ export const compileSearch = (
 	const searchable = searchableColumns(fields);
 	if (searchable.length === 0) return { sql: 'false', parameters: [] };
 	const columnSql = (name: string): string =>
-		qualifier === undefined
-			? WhereSql.quoteIdentifier(name)
-			: WhereSql.qualify(qualifier, name);
+		qualifier === undefined ? WhereSql.quoteIdentifier(name) : WhereSql.qualify(qualifier, name);
 	return {
 		sql: searchable
 			.map((name) => `${columnSql(name)}::text collate "C" ilike $1 escape '\\'`)

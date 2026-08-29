@@ -88,7 +88,7 @@ const run = (): Promise<void> => {
 				'  --name <name>  migration name (defaults to "auto")',
 				'  --json         emit the result as JSON',
 				'  --watch        rerun sync when authored source changes',
-				'  --no-semantic  decline the audit\'s semantic tier (no credential, no network)',
+				"  --no-semantic  decline the audit's semantic tier (no credential, no network)",
 				''
 			].join('\n')
 		);

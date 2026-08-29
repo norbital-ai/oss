@@ -235,10 +235,7 @@ export interface CollectionFilterOptions {
 
 /** Durable client-side progression of one local-first collection mutation. */
 export type CollectionMutationPushState =
-	| 'queued'
-	| 'pushing'
-	| 'awaiting-authoritative-delta'
-	| 'quarantined';
+	'queued' | 'pushing' | 'awaiting-authoritative-delta' | 'quarantined';
 
 export interface CollectionMutationQuarantine {
 	readonly code: 'compatibility-horizon-expired' | 'schema-incompatible' | 'manual-review';
@@ -276,9 +273,7 @@ export type CollectionMutationSettlement = Readonly<
 >;
 
 export type CollectionMutationSettlementStatus =
-	| CollectionMutationPushState
-	| CollectionMutationSettlement['kind']
-	| 'unknown';
+	CollectionMutationPushState | CollectionMutationSettlement['kind'] | 'unknown';
 
 export interface CollectionMutationSettlementHandle {
 	readonly idempotencyKey: string;
@@ -401,6 +396,5 @@ export interface CollectionDbClient<
 > {
 	readonly [collectionRegistryType]?: TCollections;
 	readonly db:
-		| CollectionClient<TCollections>['db']
-		| Pick<CollectionClient<TCollections>['db'], TName>;
+		CollectionClient<TCollections>['db'] | Pick<CollectionClient<TCollections>['db'], TName>;
 }

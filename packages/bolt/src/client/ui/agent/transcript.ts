@@ -531,9 +531,10 @@ function toToolCall(
 	const answered = id !== null && context.results.has(id);
 	const output = answered ? context.results.get(id) : undefined;
 	const decodedOutput = Option.getOrElse(decodeJsonObject(output), emptyJsonObject);
-	const childAgentId = name === 'spawn_agent' && typeof decodedOutput.agentId === 'string'
-		? decodedOutput.agentId
-		: undefined;
+	const childAgentId =
+		name === 'spawn_agent' && typeof decodedOutput.agentId === 'string'
+			? decodedOutput.agentId
+			: undefined;
 	const children =
 		childAgentId !== undefined && depth < MAX_SUBAGENT_DEPTH
 			? (context.byAgent.get(childAgentId) ?? []).flatMap((row) =>

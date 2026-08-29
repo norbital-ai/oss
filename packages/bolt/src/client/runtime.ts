@@ -295,7 +295,9 @@ export const rowsFrom = (value: unknown): ReadonlyArray<Schema.Json> | undefined
 };
 
 /** Authoritative query pages retain trailing lookahead, but the public query exposes only its page. */
-const visibleRowsFrom = (value: Schema.Json | undefined): ReadonlyArray<Schema.Json> | undefined => {
+const visibleRowsFrom = (
+	value: Schema.Json | undefined
+): ReadonlyArray<Schema.Json> | undefined => {
 	const rows = rowsFrom(value);
 	if (rows === undefined || value === null || typeof value !== 'object' || Array.isArray(value)) {
 		return rows;
@@ -342,7 +344,8 @@ const mutationRowReferences = (
 	const references: Array<MutationRowReference> = [];
 	const visit = (name: string, row: Readonly<Record<string, Schema.Json>>): void => {
 		const id = row['id'];
-		if (typeof id === 'string' && id.length > 0) references.push({ collection: name, recordId: id });
+		if (typeof id === 'string' && id.length > 0)
+			references.push({ collection: name, recordId: id });
 		for (const relation of catalog[name]?.relationships ?? []) {
 			if (relation.cardinality !== 'many') continue;
 			const children = row[relation.name];
@@ -448,10 +451,7 @@ const RemoteQueries = {
 		inputSchema: Input,
 		outputSchema: Output,
 		signal?: AbortSignal,
-		afterRemote?: (
-			value: Output['Type'],
-			flight?: WindowFlight
-		) => Effect.Effect<void, never>
+		afterRemote?: (value: Output['Type'], flight?: WindowFlight) => Effect.Effect<void, never>
 	): RemoteQuery<Output['Type']> => {
 		const cache = runtime.cache;
 		const registry = runtime.queries;
@@ -491,19 +491,16 @@ const RemoteQueries = {
 							if (cacheKeyFor(tracked.command, tracked.input) !== cacheKeyFor(command, checked)) {
 								continue;
 							}
-								if (
-									tracked.queryKey !== undefined &&
-									tracked.queryKey !== answered.queryKey
-								) {
-									// This releases both the canonical window mount and its physical profile lease.
-									// The new key is mounted below and trackVisibleQuery then acquires its exact lease.
-									if (state?.releaseVisibleQuery !== undefined) state.releaseVisibleQuery(token);
-									else tracked.releaseWindow?.();
-								} else {
-									tracked.releaseWindow?.();
-								}
-								tracked.queryKey = answered.queryKey;
-								tracked.lastAccessAt = Date.now();
+							if (tracked.queryKey !== undefined && tracked.queryKey !== answered.queryKey) {
+								// This releases both the canonical window mount and its physical profile lease.
+								// The new key is mounted below and trackVisibleQuery then acquires its exact lease.
+								if (state?.releaseVisibleQuery !== undefined) state.releaseVisibleQuery(token);
+								else tracked.releaseWindow?.();
+							} else {
+								tracked.releaseWindow?.();
+							}
+							tracked.queryKey = answered.queryKey;
+							tracked.lastAccessAt = Date.now();
 							const releaseWindow = state?.partitionSync?.mountWindow(
 								answered.queryKey,
 								answered.dependencies,
@@ -531,7 +528,7 @@ const RemoteQueries = {
 							});
 						}
 						const decoded = yield* Schema.decodeUnknownEffect(outputSchema)(answered.value);
-							return decoded;
+						return decoded;
 					}
 					const flight =
 						collectionWindowKind(command) === undefined
@@ -551,7 +548,7 @@ const RemoteQueries = {
 					if (afterRemote !== undefined && attempt.isCurrent()) yield* afterRemote(remote, flight);
 					else if (flight !== undefined)
 						runtimeStates.access(runtime)?.partitionSync?.cancelWindowFlight(flight);
-						return remote;
+					return remote;
 				}),
 			caching,
 			outputSchema
@@ -615,7 +612,9 @@ const CountQueries = {
 			Schema.Json,
 			undefined,
 			(value, flight) =>
-				Effect.sync(() => captureAuthoritativeQuery(runtime, 'collections.count', input, value, flight))
+				Effect.sync(() =>
+					captureAuthoritativeQuery(runtime, 'collections.count', input, value, flight)
+				)
 		);
 		const projected = projectRemoteQuery(query, countFrom, (value) => {
 			const count = countFrom(value);
@@ -661,13 +660,7 @@ const GroupedQueries = {
 			undefined,
 			(value, flight) =>
 				Effect.sync(() =>
-					captureAuthoritativeQuery(
-						runtime,
-						'collections.findGrouped',
-						groupedInput,
-						value,
-						flight
-					)
+					captureAuthoritativeQuery(runtime, 'collections.findGrouped', groupedInput, value, flight)
 				)
 		);
 		const projected = projectRemoteQuery(
@@ -675,7 +668,8 @@ const GroupedQueries = {
 			(value) => projectedGroupsFrom(value, groupedInput),
 			(value) => {
 				const groups = projectedGroupsFrom(value, groupedInput);
-				if (groups === undefined) throw new Error('Grouped collection query completed without groups');
+				if (groups === undefined)
+					throw new Error('Grouped collection query completed without groups');
 				return groups;
 			}
 		);
@@ -760,12 +754,10 @@ const automationClient = (runtime: WorkspaceClientRuntime) => {
 						});
 						const source = projectRemoteQuery(
 							page,
-							(rows) => rows[0] === undefined
-								? null
-								: Schema.decodeUnknownSync(AutomationRunRow)(rows[0]),
-							(rows) => rows[0] === undefined
-								? null
-								: Schema.decodeUnknownSync(AutomationRunRow)(rows[0])
+							(rows) =>
+								rows[0] === undefined ? null : Schema.decodeUnknownSync(AutomationRunRow)(rows[0]),
+							(rows) =>
+								rows[0] === undefined ? null : Schema.decodeUnknownSync(AutomationRunRow)(rows[0])
 						);
 						const project = (row: AutomationRunRow | null) => {
 							if (row !== null) {
@@ -841,107 +833,107 @@ const WorkspaceApis = {
 				throw new Error(`Collection ${JSON.stringify(collection)} is private to the Bolt runtime`);
 		};
 		const publicApi = {
-		db: ClientDatabase.database(runtime, catalog, allowedCollections, readOnlyCollections),
-		automations: automationClient(runtime),
-		invoke: new Proxy<Record<string, InvokeMethod>>(
-			{},
-			{
-				get: (_target, property) =>
-					typeof property === 'string'
-						? (input: Schema.Json) =>
-								RemoteQueries.make(
-									runtime,
-									`invoke.${property}`,
-									{ input },
-									Schema.Json,
-									Schema.Json
-								)
-						: undefined
-			}
-		),
-		collections: new Proxy<Record<string, CollectionCatalogEntry>>(
-			{},
-			{
-				get: (_target, property) => {
-					if (typeof property !== 'string') return undefined;
-					if (!collectionAllowed(property)) return undefined;
-					return catalog[property] ?? { name: property, fields: [], relationships: [] };
+			db: ClientDatabase.database(runtime, catalog, allowedCollections, readOnlyCollections),
+			automations: automationClient(runtime),
+			invoke: new Proxy<Record<string, InvokeMethod>>(
+				{},
+				{
+					get: (_target, property) =>
+						typeof property === 'string'
+							? (input: Schema.Json) =>
+									RemoteQueries.make(
+										runtime,
+										`invoke.${property}`,
+										{ input },
+										Schema.Json,
+										Schema.Json
+									)
+							: undefined
 				}
+			),
+			collections: new Proxy<Record<string, CollectionCatalogEntry>>(
+				{},
+				{
+					get: (_target, property) => {
+						if (typeof property !== 'string') return undefined;
+						if (!collectionAllowed(property)) return undefined;
+						return catalog[property] ?? { name: property, fields: [], relationships: [] };
+					}
+				}
+			),
+			records: {
+				findMany: (collection: string, input: Schema.Json = {}) => {
+					assertCollectionAllowed(collection);
+					return PageQueries.make(runtime, 'collections.findMany', {
+						collection,
+						...asJsonRecord(input)
+					});
+				}
+			},
+			history: {
+				findMany: (collection: string, recordId: string) => {
+					assertCollectionAllowed(collection);
+					return RemoteQueries.make(
+						runtime,
+						'collections.history',
+						{ collection, id: recordId },
+						Schema.Json,
+						Schema.Json
+					);
+				}
+			},
+			approvals: {
+				findMany: (approvalId: string) =>
+					RemoteQueries.make(
+						runtime,
+						'approvals.capabilities',
+						{ requestId: approvalId },
+						ApprovalCapabilityInput,
+						ApprovalCapabilityRows
+					),
+				process: (input: {
+					readonly approvalRequestId: string;
+					readonly action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE' | 'SUPERSEDED';
+					readonly comments?: string;
+				}) =>
+					Effect.runPromise(
+						Effect.gen(function* () {
+							const state = yield* commandEffect(runtime, 'approvals.status', {
+								requestId: input.approvalRequestId
+							});
+							const decision =
+								input.action === 'SUPERSEDED'
+									? 'supersede'
+									: input.action === 'APPROVED'
+										? 'approve'
+										: input.action === 'REQUEST_FOR_CHANGE'
+											? 'request_changes'
+											: 'reject';
+							const decodedState = Schema.decodeUnknownResult(ApprovalState)(state);
+							if (Result.isFailure(decodedState)) return;
+							yield* commandEffect(runtime, 'approvals.decide', {
+								state: decodedState.success,
+								decision,
+								...(input.comments === undefined ? {} : { reason: input.comments })
+							});
+							yield* invalidateApproval(runtime);
+						})
+					),
+				withdraw: (approvalRequestId: string) =>
+					Effect.runPromise(
+						Effect.gen(function* () {
+							const state = yield* commandEffect(runtime, 'approvals.status', {
+								requestId: approvalRequestId
+							});
+							const decodedState = Schema.decodeUnknownResult(ApprovalState)(state);
+							if (Result.isFailure(decodedState)) return;
+							yield* commandEffect(runtime, 'approvals.withdraw', {
+								state: decodedState.success
+							});
+							yield* invalidateApproval(runtime);
+						})
+					)
 			}
-		),
-		records: {
-			findMany: (collection: string, input: Schema.Json = {}) => {
-				assertCollectionAllowed(collection);
-				return PageQueries.make(runtime, 'collections.findMany', {
-					collection,
-					...asJsonRecord(input)
-				});
-			}
-		},
-		history: {
-			findMany: (collection: string, recordId: string) => {
-				assertCollectionAllowed(collection);
-				return RemoteQueries.make(
-					runtime,
-					'collections.history',
-					{ collection, id: recordId },
-					Schema.Json,
-					Schema.Json
-				);
-			}
-		},
-		approvals: {
-			findMany: (approvalId: string) =>
-				RemoteQueries.make(
-					runtime,
-					'approvals.capabilities',
-					{ requestId: approvalId },
-					ApprovalCapabilityInput,
-					ApprovalCapabilityRows
-				),
-			process: (input: {
-				readonly approvalRequestId: string;
-				readonly action: 'APPROVED' | 'REJECTED' | 'REQUEST_FOR_CHANGE' | 'SUPERSEDED';
-				readonly comments?: string;
-			}) =>
-				Effect.runPromise(
-					Effect.gen(function* () {
-						const state = yield* commandEffect(runtime, 'approvals.status', {
-							requestId: input.approvalRequestId
-						});
-						const decision =
-							input.action === 'SUPERSEDED'
-								? 'supersede'
-								: input.action === 'APPROVED'
-									? 'approve'
-									: input.action === 'REQUEST_FOR_CHANGE'
-										? 'request_changes'
-										: 'reject';
-						const decodedState = Schema.decodeUnknownResult(ApprovalState)(state);
-						if (Result.isFailure(decodedState)) return;
-						yield* commandEffect(runtime, 'approvals.decide', {
-							state: decodedState.success,
-							decision,
-							...(input.comments === undefined ? {} : { reason: input.comments })
-						});
-						yield* invalidateApproval(runtime);
-					})
-				),
-			withdraw: (approvalRequestId: string) =>
-				Effect.runPromise(
-					Effect.gen(function* () {
-						const state = yield* commandEffect(runtime, 'approvals.status', {
-							requestId: approvalRequestId
-						});
-						const decodedState = Schema.decodeUnknownResult(ApprovalState)(state);
-						if (Result.isFailure(decodedState)) return;
-						yield* commandEffect(runtime, 'approvals.withdraw', {
-							state: decodedState.success
-						});
-						yield* invalidateApproval(runtime);
-					})
-				)
-		}
 		};
 		if (visibility.system === false) return publicApi;
 		return {
@@ -1004,11 +996,13 @@ const invalidateApproval = (runtime: WorkspaceClientRuntime): Effect.Effect<void
 	return (ledger === undefined ? Effect.succeed([]) : ledger.dependencies()).pipe(
 		Effect.flatMap((dependencies) =>
 			(state?.invalidateCoverage?.(dependencies) ?? Effect.void).pipe(
-				Effect.andThen(Effect.sync(() => {
-					const affected = [...new Set([...dependencies, ARBITRARY_QUERY_INVALIDATION])];
-					invalidateRuntime(runtime, affected);
-					state?.invalidation?.announce(affected);
-				}))
+				Effect.andThen(
+					Effect.sync(() => {
+						const affected = [...new Set([...dependencies, ARBITRARY_QUERY_INVALIDATION])];
+						invalidateRuntime(runtime, affected);
+						state?.invalidation?.announce(affected);
+					})
+				)
 			)
 		)
 	);
@@ -1063,11 +1057,14 @@ const ClientDatabase = {
 							state.readRowVersions === undefined
 						)
 							return yield* Effect.fail(
-								new Error('The authoritative sync partition is not ready; wait for workspace sync before mutating.')
+								new Error(
+									'The authoritative sync partition is not ready; wait for workspace sync before mutating.'
+								)
 							);
-						const rowVersions = yield* Effect.tryPromise(() =>
-							state.readRowVersions?.(mutationRowReferences(catalog, collection, values)) ??
-							Promise.resolve(new Map<string, number>())
+						const rowVersions = yield* Effect.tryPromise(
+							() =>
+								state.readRowVersions?.(mutationRowReferences(catalog, collection, values)) ??
+								Promise.resolve(new Map<string, number>())
 						);
 						const prepared = yield* Effect.try(() =>
 							prepareLocalCollectionMutation({
@@ -1094,15 +1091,17 @@ const ClientDatabase = {
 								await acquireReplicaPendingMutationLease(runtime, reserved.idempotencyKey);
 							} catch (cause) {
 								state.reportError?.(cause);
-								void acquireReplicaPendingMutationLease(runtime, reserved.idempotencyKey)
-									.catch((retryCause) => state.reportError?.(retryCause));
+								void acquireReplicaPendingMutationLease(runtime, reserved.idempotencyKey).catch(
+									(retryCause) => state.reportError?.(retryCause)
+								);
 								// The journal itself remains the durable source and protects the overlay rows.
 							}
 							try {
 								await state.reflectLocalMutation?.(prepared.affectedCollections);
 							} catch (cause) {
 								state.reportError?.(cause);
-								void state.reflectLocalMutation?.(prepared.affectedCollections)
+								void state
+									.reflectLocalMutation?.(prepared.affectedCollections)
 									.catch((retryCause) => state.reportError?.(retryCause));
 								// The next journal subscription/stream turn retries projection from durable O4.
 							}
@@ -1129,7 +1128,8 @@ const ClientDatabase = {
 			{
 				get: (_target, property) => {
 					if (typeof property !== 'string') return undefined;
-					if (allowedCollections !== undefined && !allowedCollections.has(property)) return undefined;
+					if (allowedCollections !== undefined && !allowedCollections.has(property))
+						return undefined;
 					const existing = collections.get(property);
 					if (existing !== undefined) return existing;
 					const complete = ClientDatabase.collection(runtime, catalog, property);
@@ -1315,7 +1315,10 @@ function beginAuthoritativeQueryFlight(
 	);
 }
 
-const publishReplicaProgress = (state: RuntimeAccessState, progress: ReplicaBootstrapProgress): void => {
+const publishReplicaProgress = (
+	state: RuntimeAccessState,
+	progress: ReplicaBootstrapProgress
+): void => {
 	state.progress = progress;
 	for (const listener of state.progressListeners) listener(progress);
 };
@@ -1577,9 +1580,11 @@ const knownMutationJournals = async (
 };
 
 const protectedMutationRows = async (runtime: WorkspaceClientRuntime) => {
-	const rows = (await Promise.all(
-		(await knownMutationJournals(runtime)).map((journal) => journal.protectedRows())
-	)).flat();
+	const rows = (
+		await Promise.all(
+			(await knownMutationJournals(runtime)).map((journal) => journal.protectedRows())
+		)
+	).flat();
 	return [...new Map(rows.map((row) => [`${row.collection}\u0000${row.recordId}`, row])).values()];
 };
 
@@ -1708,7 +1713,9 @@ export const acquireReplicaPendingMutationLease = (
 	stableLeaseId: string
 ): Promise<void> => {
 	if (stableLeaseId.trim() === '') return Promise.reject(new Error('Mutation lease id is empty'));
-	return runtimeStates.access(runtime)?.acquirePendingMutationLease?.(stableLeaseId) ?? Promise.resolve();
+	return (
+		runtimeStates.access(runtime)?.acquirePendingMutationLease?.(stableLeaseId) ?? Promise.resolve()
+	);
 };
 
 /** Releases the exact durable mutation lease after acknowledgement or terminal rejection. */
@@ -1717,7 +1724,9 @@ export const releaseReplicaPendingMutationLease = (
 	stableLeaseId: string
 ): Promise<void> => {
 	if (stableLeaseId.trim() === '') return Promise.reject(new Error('Mutation lease id is empty'));
-	return runtimeStates.access(runtime)?.releasePendingMutationLease?.(stableLeaseId) ?? Promise.resolve();
+	return (
+		runtimeStates.access(runtime)?.releasePendingMutationLease?.(stableLeaseId) ?? Promise.resolve()
+	);
 };
 
 const serverOnlyReplica = (
@@ -1758,7 +1767,10 @@ export const startLocalReplica = (
 				})
 			);
 			if (partition === undefined) {
-				options.onStorageTier?.('server-only', 'The replica partition identity could not be resolved');
+				options.onStorageTier?.(
+					'server-only',
+					'The replica partition identity could not be resolved'
+				);
 				return serverOnlyReplica(ephemeralCacheNamespace());
 			}
 			const serverPartitionStatus = yield* commandEffect(runtime, 'sync.partition', {}).pipe(
@@ -1801,25 +1813,22 @@ export const startLocalReplica = (
 								'server-only',
 								'The browser replica profile index could not be opened'
 							);
-								return serverOnlyReplica(serverPartition.key, partition.principalSource);
+							return serverOnlyReplica(serverPartition.key, partition.principalSource);
 						}
 						const locks = nativeWebLocks();
 						if (locks === undefined) {
 							profileIndex.close();
 							profileIndex = undefined;
-							options.onStorageTier?.(
-								'server-only',
-								'This browser exposes no Web Locks manager'
-							);
-								return serverOnlyReplica(serverPartition.key, partition.principalSource);
-							}
-							const partitionId = replicaProfilePartitionId(serverPartition.key, storage.tier);
+							options.onStorageTier?.('server-only', 'This browser exposes no Web Locks manager');
+							return serverOnlyReplica(serverPartition.key, partition.principalSource);
+						}
+						const partitionId = replicaProfilePartitionId(serverPartition.key, storage.tier);
 						physicalLease = openReplicaPhysicalPartitionLease(
 							partitionId,
 							locks as unknown as ReplicaStorageLockManager
 						);
 						yield* Effect.tryPromise(() => physicalLease?.ready ?? Promise.resolve());
-							const elected = openReplicationLeadership(serverPartition.key, locks);
+						const elected = openReplicationLeadership(serverPartition.key, locks);
 						leadership = elected;
 						yield* Effect.promise(() => elected.ready);
 						if (elected.failed()) {
@@ -1832,7 +1841,7 @@ export const startLocalReplica = (
 								'server-only',
 								'The replication leadership election was refused by the lock manager'
 							);
-								return serverOnlyReplica(serverPartition.key, partition.principalSource);
+							return serverOnlyReplica(serverPartition.key, partition.principalSource);
 						}
 						options.onStorageTier?.(storage.tier);
 					} else {
@@ -1863,7 +1872,8 @@ export const startLocalReplica = (
 								) ||
 								storage === undefined ||
 								storage.tier === 'server-only'
-							) return cause;
+							)
+								return cause;
 							const partitionId = replicaProfilePartitionId(serverPartition.key, storage.tier);
 							return new ReplicaLocalCorruption(cause.message, cause, {
 								id: partitionId,
@@ -1916,11 +1926,7 @@ export class ReplicaLocalCorruption extends Error {
 	readonly cause: unknown | undefined;
 	readonly partition: ReplicaProfileEvictionCandidate | undefined;
 
-	constructor(
-		message: string,
-		cause?: unknown,
-		partition?: ReplicaProfileEvictionCandidate
-	) {
+	constructor(message: string, cause?: unknown, partition?: ReplicaProfileEvictionCandidate) {
 		super(message);
 		this.name = 'ReplicaLocalCorruption';
 		this.cause = cause;
@@ -1943,8 +1949,8 @@ export const createWorkspaceBootstrapController = (
 					throw cause instanceof ReplicaLocalCorruption
 						? cause
 						: cause instanceof ReplicaStoredStateCorruption
-						? new ReplicaLocalCorruption(cause.message, cause)
-						: cause;
+							? new ReplicaLocalCorruption(cause.message, cause)
+							: cause;
 				})
 				.then((opened) => {
 					replica = opened;
@@ -1992,9 +1998,7 @@ export const createWorkspaceBootstrapController = (
 				accessState.schemaFingerprint
 			);
 		}
-		await (options.deleteInactiveReplicaPartition ?? deleteInactivePGlitePartition)(
-			candidate
-		);
+		await (options.deleteInactiveReplicaPartition ?? deleteInactivePGlitePartition)(candidate);
 		starting = undefined;
 		await start();
 	};
@@ -2043,7 +2047,8 @@ export const createWorkspaceBootstrapController = (
 const startReplica = (
 	runtime: WorkspaceClientRuntime,
 	open:
-		((steps: ReadonlyArray<ProvisioningStepType>) => Effect.Effect<PGliteLike, unknown>) | undefined,
+		| ((steps: ReadonlyArray<ProvisioningStepType>) => Effect.Effect<PGliteLike, unknown>)
+		| undefined,
 	options: {
 		readonly accessScope: string;
 		readonly onChange?: (applied: number) => void;
@@ -2070,9 +2075,7 @@ const startReplica = (
 					Effect.flatMap(({ openPGlite }) =>
 						openPGlite(steps, options.serverPartition.key, {
 							...(options.storage === undefined ? {} : { storage: options.storage }),
-							...(options.leadership === undefined
-								? {}
-								: { leadership: options.leadership })
+							...(options.leadership === undefined ? {} : { leadership: options.leadership })
 						})
 					)
 				));
@@ -2084,2014 +2087,2098 @@ const startReplica = (
 		};
 		const local = yield* openLocalDatabase(transport, openEngine);
 		const initialize = Effect.gen(function* () {
-		if (accessScopeFor(runtime) !== options.accessScope) {
-			yield* local.close();
-			return yield* Effect.fail(new Error('Local replica access scope changed during startup'));
-		}
-		const coverage = yield* createWindowLedger(local.engine, local.store).pipe(
-			Effect.mapError(
-				(cause) =>
-					new ReplicaStoredStateCorruption(
-						'Replica coverage metadata could not be read or upgraded',
-						cause
-					)
-			)
-		);
-		let maintenance: ReplicaSchemaMaintenance | undefined;
-		const invalidateCoverage = (collections: ReadonlyArray<string>): Effect.Effect<void> =>
-			coverage.invalidateDependencies(collections).pipe(
-				Effect.asVoid,
-				Effect.catch((cause) => Effect.sync(() => options.onError?.(cause)))
-			);
-		const accessState = runtimeStates.access(runtime);
-		const serverPartition = options.serverPartition;
-		if (serverPartition.schemaFingerprint !== local.fingerprint)
-			return yield* Effect.fail(
-				new Error('The local replica schema does not match the authoritative sync partition.')
-			);
-		if (accessState !== undefined) {
-			if (options.onError === undefined) delete accessState.reportError;
-			else accessState.reportError = options.onError;
-			accessState.schemaFingerprint = serverPartition.schemaFingerprint;
-			accessState.serverPartitionKey = serverPartition.key;
-			accessState.readRowVersions = async (references) => {
-				const recordIdsByCollection = new Map<string, Set<string>>();
-				for (const { collection, recordId } of references) {
-					const recordIds = recordIdsByCollection.get(collection) ?? new Set<string>();
-					recordIds.add(recordId);
-					recordIdsByCollection.set(collection, recordIds);
-				}
-				const rows = await Promise.all(
-					[...recordIdsByCollection].map(async ([collection, recordIds]) => ({
-						collection,
-						rows: await Effect.runPromise(local.store.baseRows(collection, [...recordIds]))
-					}))
-				);
-				const versions = new Map<string, number>();
-				for (const group of rows) {
-					for (const row of group.rows) {
-						const key = `${group.collection}\u0000${row.recordId}`;
-						versions.set(key, row.rowVersion);
-					}
-				}
-				return versions;
-			};
-		}
-		yield* Effect.tryPromise(() => mutationJournalFor(runtime));
-		let overlaySnapshot: Awaited<ReturnType<CollectionMutationJournal['overlay']>> = [];
-		const refreshOverlaySnapshot = async (): Promise<void> => {
-			overlaySnapshot = (
-				await Promise.all((await knownMutationJournals(runtime)).map((journal) => journal.overlay()))
-			).flat();
-		};
-		const overlay = { snapshot: async () => overlaySnapshot };
-		const activeOverlayCollections = async (): Promise<ReadonlyArray<string>> => [
-			...new Set(
-				(await overlay.snapshot()).flatMap((mutation) =>
-					mutation.operations.map(({ row }) => row.collection)
-				)
-			)
-		];
-		yield* Effect.tryPromise(refreshOverlaySnapshot);
-		if (accessState !== undefined) accessState.refreshOverlaySnapshot = refreshOverlaySnapshot;
-		if (accessState !== undefined) accessState.invalidateCoverage = invalidateCoverage;
-		const durableSchema = yield* readDurableReplicaSchema(local.engine);
-		if (
-			durableSchema !== undefined &&
-			durableSchema.fingerprint === local.fingerprint &&
-			durableSchema.protocolVersion !== PROTOCOL_VERSION
-		) {
-			yield* coverage.transaction(
-				writeDurableReplicaSchema(local.engine, {
-					...durableSchema,
-					protocolVersion: PROTOCOL_VERSION
-				})
-			);
-		}
-		const createReader = (partitionKey: string): LocalReader => createLocalReader(
-			local.store,
-			local.shape,
-			local.readable,
-			coverage,
-			{
-				protocolVersion: PROTOCOL_VERSION,
-				schemaFingerprint: local.fingerprint,
-				partitionKey
-			},
-			{
-				pinnedCollation: true,
-				overlay,
-				localActorBinding: options.partition.key
+			if (accessScopeFor(runtime) !== options.accessScope) {
+				yield* local.close();
+				return yield* Effect.fail(new Error('Local replica access scope changed during startup'));
 			}
-		);
-		let localReader = createReader(serverPartition.key);
-		if (accessState !== undefined) publishReplicaProgress(accessState, { phase: 'loading' });
-
-		const persistentStorage =
-			options.storage !== undefined && options.storage.tier !== 'server-only'
-				? options.storage
-				: undefined;
-		const profileIndex = persistentStorage === undefined ? undefined : options.profileIndex;
-		const profilePartitionId =
-			persistentStorage === undefined
-				? undefined
-			: replicaProfilePartitionId(serverPartition.key, persistentStorage.tier);
-		const profileOwnerId = `replica-tab:${
-			globalThis.crypto?.randomUUID?.() ?? `${Date.now()}:${Math.random()}`
-		}`;
-		const visibleLeases = new Map<string, ReplicaLeaseHandle>();
-		const visibleLeaseId = (token: string): string => `${profileOwnerId}:visible:${token}`;
-		let leaseOwner: Readonly<{ readonly stop: () => Promise<void> }> | undefined;
-		let automationLeases: ReturnType<typeof createRunningAutomationLeaseHooks> | undefined;
-		const visibleLeaseSweep = setInterval(() => {
-			void (async () => {
-				if (accessState === undefined) return;
-				const expiresBefore = Date.now() - INACTIVE_WINDOW_TTL_MILLIS;
-				for (const [token, tracked] of accessState.visibleQueries) {
-					if (tracked.owner.deref() !== undefined && tracked.lastAccessAt > expiresBefore) continue;
-					accessState.releaseVisibleQuery?.(token);
-					accessState.visibleQueries.delete(token);
-				}
-				await Effect.runPromise(
-					coverage.expireInactiveWindows(await protectedMutationRows(runtime)).pipe(Effect.asVoid)
-				);
-			})().catch((cause) => options.onError?.(cause));
-		}, 60_000);
-		const demoteUnprovenVisibleQueries = (): void => {
-			if (accessState === undefined) return;
-			const documentVisible =
-				typeof document !== 'undefined' && document.visibilityState === 'visible';
-			const visibleAfter = Date.now() - VISIBLE_QUERY_PRIORITY_EVIDENCE_MILLIS;
-			for (const tracked of accessState.visibleQueries.values()) {
-				if (documentVisible && tracked.lastAccessAt >= visibleAfter) continue;
-				tracked.visibility = 'hidden';
-				tracked.releaseWindow?.setVisibility('hidden');
-			}
-		};
-		const visiblePrioritySweep = setInterval(demoteUnprovenVisibleQueries, 1_000);
-		const onDocumentVisibility = (): void => {
-			if (document.visibilityState !== 'visible') demoteUnprovenVisibleQueries();
-		};
-		if (typeof document !== 'undefined') {
-			document.addEventListener('visibilitychange', onDocumentVisibility);
-		}
-
-		const replaceProfileWindows = (listed: ReadonlyArray<QueryWindowSummary>): Promise<void> => {
-			if (profileIndex === undefined || profilePartitionId === undefined || persistentStorage === undefined)
-				return Promise.resolve();
-			const indexed = profileWindowsFromLedger(profilePartitionId, listed);
-			return profileIndex
-				.notePartition(
-					profilePartition({
-						id: profilePartitionId,
-						organization: serverPartition.tenantId,
-						tier: persistentStorage.tier,
-						location: replicaLocation(serverPartition.key, persistentStorage.tier),
-						windows: indexed
-					})
-				)
-				.then(() =>
-					profileIndex.replaceWindows(
-						profilePartitionId,
-						indexed.map(({ id, kind, accountedBytes, lastAccess }) => ({
-							id,
-							kind,
-							accountedBytes,
-							lastAccess
-						}))
-					)
-				);
-		};
-
-		const ensureVisibleLease = (token: string): Effect.Effect<void, unknown> =>
-			Effect.gen(function* () {
-				if (
-					profileIndex === undefined ||
-					profilePartitionId === undefined ||
-					visibleLeases.has(token) ||
-					accessState === undefined
-				) return;
-				const tracked = accessState.visibleQueries.get(token);
-				if (tracked === undefined || tracked.owner.deref() === undefined) {
-					accessState.visibleQueries.delete(token);
-					return;
-				}
-				const queryKey = tracked.queryKey;
-				if (queryKey === undefined) return;
-				const listed = yield* coverage.listWindows();
-				if (!listed.some(({ id }) => id === queryKey)) return;
-				const ownerId = visibleLeaseId(token);
-				yield* coverage.acquireWindowLease(queryKey, ownerId);
-				const lease = yield* Effect.tryPromise(() =>
-					profileIndex.lease({
-						id: ownerId,
-						ownerId: profileOwnerId,
-						partitionId: profilePartitionId,
-						windowId: queryKey,
-						kind: 'visible-window'
-					})
-				).pipe(
-					Effect.tapError(() => coverage.releaseWindowLease(queryKey, ownerId))
-				);
-				visibleLeases.set(token, lease);
-			});
-
-		if (profileIndex !== undefined && profilePartitionId !== undefined) {
-			const listed = yield* coverage.listWindows();
-			yield* Effect.tryPromise(() => replaceProfileWindows(listed));
-			yield* Effect.tryPromise(() =>
-				profileIndex.lease({
-					id: `${profileOwnerId}:active`,
-					ownerId: profileOwnerId,
-					partitionId: profilePartitionId,
-					kind: 'active-tab'
-				})
-			);
-			leaseOwner = maintainReplicaLeaseOwner(
-				profileIndex,
-				profileOwnerId,
-				options.onError === undefined ? {} : { onFailure: options.onError }
-			);
-			automationLeases = createRunningAutomationLeaseHooks({
-				index: profileIndex,
-				ownerId: profileOwnerId,
-				partitionId: profilePartitionId
-			});
-			if (accessState !== undefined) {
-				accessState.acquirePendingMutationLease = async (stableLeaseId) => {
-					await profileIndex.lease({
-						id: stableLeaseId,
-						ownerId: `pending-mutation:${stableLeaseId}`,
-						partitionId: profilePartitionId,
-						kind: 'pending-mutation'
-					});
-				};
-				accessState.releasePendingMutationLease = (stableLeaseId) =>
-					profileIndex.releaseLease(stableLeaseId);
-				accessState.trackVisibleQuery = (token) =>
-					Effect.runFork(
-						ensureVisibleLease(token).pipe(
-							Effect.catch((cause) => Effect.sync(() => options.onError?.(cause)))
+			const coverage = yield* createWindowLedger(local.engine, local.store).pipe(
+				Effect.mapError(
+					(cause) =>
+						new ReplicaStoredStateCorruption(
+							'Replica coverage metadata could not be read or upgraded',
+							cause
 						)
-					);
-				accessState.releaseVisibleQuery = (token) => {
-					const tracked = accessState.visibleQueries.get(token);
-					tracked?.releaseWindow?.();
-					if (tracked?.queryKey !== undefined) {
-						Effect.runFork(
-							coverage.releaseWindowLease(tracked.queryKey, visibleLeaseId(token)).pipe(
-								Effect.catch((cause) => Effect.sync(() => options.onError?.(cause)))
-							)
-						);
-					}
-					const lease = visibleLeases.get(token);
-					visibleLeases.delete(token);
-					if (lease !== undefined) void lease.release().catch((cause) => options.onError?.(cause));
-				};
-				for (const token of accessState.visibleQueries.keys()) {
-					accessState.trackVisibleQuery(token);
-				}
-			}
-		}
-
-		const reconcileAutomationLeases = (): Effect.Effect<void, unknown> => {
-			if (automationLeases === undefined) return Effect.void;
-			return Effect.gen(function* () {
-				const activeTaskIds = new Set<string>();
-				const seenCursors = new Set<string>();
-				let after: string | undefined;
-				for (;;) {
-					const page = yield* transport.command('collections.findMany', {
-						collection: 'automation_run',
-						where: { status: { in: ['pending', 'resuming', 'running'] } },
-						orderBy: { task_id: 'asc' },
-						limit: 500,
-						...(after === undefined ? {} : { after })
-					});
-					const rows = rowsFrom(page);
-					if (rows === undefined)
-						return yield* Effect.fail(
-							new Error('Automation lease reconciliation received no authoritative page')
-						);
-					for (const value of rows) {
-						const taskId = asJsonRecord(value)['task_id'];
-						if (typeof taskId === 'string' && taskId.length > 0) activeTaskIds.add(taskId);
-					}
-					const next = cursorFrom(page);
-					if (next === null) break;
-					if (seenCursors.has(next))
-						return yield* Effect.fail(new Error('Automation reconciliation cursor repeated'));
-					seenCursors.add(next);
-					after = next;
-				}
-				yield* Effect.tryPromise(() =>
-					automationLeases?.reconcile({ complete: true, activeTaskIds: [...activeTaskIds] }) ??
-					Promise.resolve()
+				)
+			);
+			let maintenance: ReplicaSchemaMaintenance | undefined;
+			const invalidateCoverage = (collections: ReadonlyArray<string>): Effect.Effect<void> =>
+				coverage.invalidateDependencies(collections).pipe(
+					Effect.asVoid,
+					Effect.catch((cause) => Effect.sync(() => options.onError?.(cause)))
 				);
-			});
-		};
-		if ((options.leadership?.leader() ?? local.engine.isLeader !== false) === true) {
-			yield* reconcileAutomationLeases();
-		}
-		// Publish lifecycle callbacks only after the authoritative reconciliation succeeds. A failed
-		// startup closes the profile index; exposing callbacks before this point leaves the automation
-		// client holding a function that targets that closed database, so a successfully enqueued run
-		// is reported as a local Effect.tryPromise failure.
-		if (accessState !== undefined && automationLeases !== undefined) {
-			accessState.automationStarted = automationLeases.started;
-			accessState.automationObserved = automationLeases.observe;
-			accessState.automationSettled = automationLeases.settled;
-		}
-
-		const enforceBudget = (): Effect.Effect<void> =>
-			profileIndex === undefined ||
-			profilePartitionId === undefined ||
-			persistentStorage === undefined ||
-			typeof navigator === 'undefined' ||
-			typeof navigator.storage?.estimate !== 'function'
-				? Effect.void
-				: Effect.gen(function* () {
-					const listed = yield* coverage.listWindows();
-					yield* Effect.tryPromise(() => replaceProfileWindows(listed));
-					for (const token of accessState?.visibleQueries.keys() ?? []) {
-						yield* ensureVisibleLease(token);
+			const accessState = runtimeStates.access(runtime);
+			const serverPartition = options.serverPartition;
+			if (serverPartition.schemaFingerprint !== local.fingerprint)
+				return yield* Effect.fail(
+					new Error('The local replica schema does not match the authoritative sync partition.')
+				);
+			if (accessState !== undefined) {
+				if (options.onError === undefined) delete accessState.reportError;
+				else accessState.reportError = options.onError;
+				accessState.schemaFingerprint = serverPartition.schemaFingerprint;
+				accessState.serverPartitionKey = serverPartition.key;
+				accessState.readRowVersions = async (references) => {
+					const recordIdsByCollection = new Map<string, Set<string>>();
+					for (const { collection, recordId } of references) {
+						const recordIds = recordIdsByCollection.get(collection) ?? new Set<string>();
+						recordIds.add(recordId);
+						recordIdsByCollection.set(collection, recordIds);
 					}
-					if ((options.leadership?.leader() ?? local.engine.isLeader !== false) === false) return;
-					yield* Effect.tryPromise(() =>
-						enforceIndexedReplicaProfileBudget({
-							index: profileIndex,
-							budget: persistentStorage.budget,
-							estimate: () => navigator.storage.estimate(),
-							releasePhysical: async (candidate) => {
-								if (
-									candidate.partitionId === profilePartitionId &&
-									candidate.kind !== 'partition'
-								) {
-									await Effect.runPromise(
-										coverage.releaseWindow(
-											candidate.id,
-											await protectedMutationRows(runtime)
-										).pipe(Effect.asVoid)
-									);
-									return;
-								}
-								if (candidate.kind === 'partition') {
-									await (options.deleteInactiveReplicaPartition ?? deleteInactivePGlitePartition)(
-										candidate
-									);
-									return;
-								}
-								throw new Error('No safe physical release adapter for replica eviction candidate');
-							}
-						})
-					).pipe(Effect.asVoid);
-				}).pipe(Effect.catch((cause) => Effect.sync(() => options.onError?.(cause))));
-
-		let m3Hydrating = false;
-		const materializeQuery = (captured: AuthoritativeQueryCapture): Effect.Effect<void, unknown> =>
-			Effect.gen(function* () {
-				const kind = collectionWindowKind(captured.command);
-				if (kind === undefined) return;
-				if (asJsonRecord(captured.value)['serverOnly'] === true) {
-					if (captured.flight !== undefined)
-						accessState?.partitionSync?.cancelWindowFlight(captured.flight);
-					return;
-				}
-				const input = asJsonRecord(captured.input);
-				const collection = input['collection'];
-				if (typeof collection !== 'string') return;
-				if (maintenance?.affectedCollections.includes(collection) === true) return;
-				const decoded =
-					kind === 'findMany'
-						? ({
-								kind,
-								response: yield* Schema.decodeUnknownEffect(CollectionQueryPage)(captured.value)
-							} as const)
-						: kind === 'count'
-							? ({
-									kind,
-									response: yield* Schema.decodeUnknownEffect(CollectionCountWindow)(captured.value)
-								} as const)
-							: ({
-									kind,
-									response: yield* Schema.decodeUnknownEffect(CollectionGroupedWindow)(captured.value)
-								} as const);
-				const proof = decoded.response;
-				if (
-					accessState?.serverPartitionKey !== undefined &&
-					accessState.serverPartitionKey !== proof.partitionKey
-				) {
-					if (captured.flight !== undefined)
-						accessState.partitionSync?.cancelWindowFlight(captured.flight);
-					yield* Effect.tryPromise(() =>
-						accessState.rebootstrapPartition?.() ?? Promise.resolve()
+					const rows = await Promise.all(
+						[...recordIdsByCollection].map(async ([collection, recordIds]) => ({
+							collection,
+							rows: await Effect.runPromise(local.store.baseRows(collection, [...recordIds]))
+						}))
 					);
-					return;
-				}
-				const description = yield* describeClientQueryWindow(
-					decoded.kind,
-					input,
-					accessState?.catalog ?? {},
+					const versions = new Map<string, number>();
+					for (const group of rows) {
+						for (const row of group.rows) {
+							const key = `${group.collection}\u0000${row.recordId}`;
+							versions.set(key, row.rowVersion);
+						}
+					}
+					return versions;
+				};
+			}
+			yield* Effect.tryPromise(() => mutationJournalFor(runtime));
+			let overlaySnapshot: Awaited<ReturnType<CollectionMutationJournal['overlay']>> = [];
+			const refreshOverlaySnapshot = async (): Promise<void> => {
+				overlaySnapshot = (
+					await Promise.all(
+						(await knownMutationJournals(runtime)).map((journal) => journal.overlay())
+					)
+				).flat();
+			};
+			const overlay = { snapshot: async () => overlaySnapshot };
+			const activeOverlayCollections = async (): Promise<ReadonlyArray<string>> => [
+				...new Set(
+					(await overlay.snapshot()).flatMap((mutation) =>
+						mutation.operations.map(({ row }) => row.collection)
+					)
+				)
+			];
+			yield* Effect.tryPromise(refreshOverlaySnapshot);
+			if (accessState !== undefined) accessState.refreshOverlaySnapshot = refreshOverlaySnapshot;
+			if (accessState !== undefined) accessState.invalidateCoverage = invalidateCoverage;
+			const durableSchema = yield* readDurableReplicaSchema(local.engine);
+			if (
+				durableSchema !== undefined &&
+				durableSchema.fingerprint === local.fingerprint &&
+				durableSchema.protocolVersion !== PROTOCOL_VERSION
+			) {
+				yield* coverage.transaction(
+					writeDurableReplicaSchema(local.engine, {
+						...durableSchema,
+						protocolVersion: PROTOCOL_VERSION
+					})
+				);
+			}
+			const createReader = (partitionKey: string): LocalReader =>
+				createLocalReader(
+					local.store,
+					local.shape,
+					local.readable,
+					coverage,
 					{
 						protocolVersion: PROTOCOL_VERSION,
 						schemaFingerprint: local.fingerprint,
-						partitionKey: proof.partitionKey
+						partitionKey
 					},
 					{
 						pinnedCollation: true,
-						localRelationships: true,
-						localSearch: (() => {
-							const shape = local.shape.collections.find(({ name }) => name === collection);
-							if (shape?.readableFields === undefined) return false;
-							const searchable = Object.entries(shape.fields)
-								.filter(([, field]) => field.search === true)
-								.map(([field]) => field);
-							return shape.readableFields === null ||
-								searchable.every((field) => shape.readableFields?.includes(field));
-						})()
+						overlay,
+						localActorBinding: options.partition.key
 					}
 				);
-				if (description === undefined)
-					return yield* Effect.fail(new Error('Authoritative collection query could not be canonicalized'));
-				const payload = yield* Effect.gen(function* () {
-					if (decoded.kind === 'findMany') {
-						const confirmation = confirmCollectionQueryPage(description, decoded.response);
+			let localReader = createReader(serverPartition.key);
+			if (accessState !== undefined) publishReplicaProgress(accessState, { phase: 'loading' });
+
+			const persistentStorage =
+				options.storage !== undefined && options.storage.tier !== 'server-only'
+					? options.storage
+					: undefined;
+			const profileIndex = persistentStorage === undefined ? undefined : options.profileIndex;
+			const profilePartitionId =
+				persistentStorage === undefined
+					? undefined
+					: replicaProfilePartitionId(serverPartition.key, persistentStorage.tier);
+			const profileOwnerId = `replica-tab:${
+				globalThis.crypto?.randomUUID?.() ?? `${Date.now()}:${Math.random()}`
+			}`;
+			const visibleLeases = new Map<string, ReplicaLeaseHandle>();
+			const visibleLeaseId = (token: string): string => `${profileOwnerId}:visible:${token}`;
+			let leaseOwner: Readonly<{ readonly stop: () => Promise<void> }> | undefined;
+			let automationLeases: ReturnType<typeof createRunningAutomationLeaseHooks> | undefined;
+			const visibleLeaseSweep = setInterval(() => {
+				void (async () => {
+					if (accessState === undefined) return;
+					const expiresBefore = Date.now() - INACTIVE_WINDOW_TTL_MILLIS;
+					for (const [token, tracked] of accessState.visibleQueries) {
+						if (tracked.owner.deref() !== undefined && tracked.lastAccessAt > expiresBefore)
+							continue;
+						accessState.releaseVisibleQuery?.(token);
+						accessState.visibleQueries.delete(token);
+					}
+					await Effect.runPromise(
+						coverage.expireInactiveWindows(await protectedMutationRows(runtime)).pipe(Effect.asVoid)
+					);
+				})().catch((cause) => options.onError?.(cause));
+			}, 60_000);
+			const demoteUnprovenVisibleQueries = (): void => {
+				if (accessState === undefined) return;
+				const documentVisible =
+					typeof document !== 'undefined' && document.visibilityState === 'visible';
+				const visibleAfter = Date.now() - VISIBLE_QUERY_PRIORITY_EVIDENCE_MILLIS;
+				for (const tracked of accessState.visibleQueries.values()) {
+					if (documentVisible && tracked.lastAccessAt >= visibleAfter) continue;
+					tracked.visibility = 'hidden';
+					tracked.releaseWindow?.setVisibility('hidden');
+				}
+			};
+			const visiblePrioritySweep = setInterval(demoteUnprovenVisibleQueries, 1_000);
+			const onDocumentVisibility = (): void => {
+				if (document.visibilityState !== 'visible') demoteUnprovenVisibleQueries();
+			};
+			if (typeof document !== 'undefined') {
+				document.addEventListener('visibilitychange', onDocumentVisibility);
+			}
+
+			const replaceProfileWindows = (listed: ReadonlyArray<QueryWindowSummary>): Promise<void> => {
+				if (
+					profileIndex === undefined ||
+					profilePartitionId === undefined ||
+					persistentStorage === undefined
+				)
+					return Promise.resolve();
+				const indexed = profileWindowsFromLedger(profilePartitionId, listed);
+				return profileIndex
+					.notePartition(
+						profilePartition({
+							id: profilePartitionId,
+							organization: serverPartition.tenantId,
+							tier: persistentStorage.tier,
+							location: replicaLocation(serverPartition.key, persistentStorage.tier),
+							windows: indexed
+						})
+					)
+					.then(() =>
+						profileIndex.replaceWindows(
+							profilePartitionId,
+							indexed.map(({ id, kind, accountedBytes, lastAccess }) => ({
+								id,
+								kind,
+								accountedBytes,
+								lastAccess
+							}))
+						)
+					);
+			};
+
+			const ensureVisibleLease = (token: string): Effect.Effect<void, unknown> =>
+				Effect.gen(function* () {
+					if (
+						profileIndex === undefined ||
+						profilePartitionId === undefined ||
+						visibleLeases.has(token) ||
+						accessState === undefined
+					)
+						return;
+					const tracked = accessState.visibleQueries.get(token);
+					if (tracked === undefined || tracked.owner.deref() === undefined) {
+						accessState.visibleQueries.delete(token);
+						return;
+					}
+					const queryKey = tracked.queryKey;
+					if (queryKey === undefined) return;
+					const listed = yield* coverage.listWindows();
+					if (!listed.some(({ id }) => id === queryKey)) return;
+					const ownerId = visibleLeaseId(token);
+					yield* coverage.acquireWindowLease(queryKey, ownerId);
+					const lease = yield* Effect.tryPromise(() =>
+						profileIndex.lease({
+							id: ownerId,
+							ownerId: profileOwnerId,
+							partitionId: profilePartitionId,
+							windowId: queryKey,
+							kind: 'visible-window'
+						})
+					).pipe(Effect.tapError(() => coverage.releaseWindowLease(queryKey, ownerId)));
+					visibleLeases.set(token, lease);
+				});
+
+			if (profileIndex !== undefined && profilePartitionId !== undefined) {
+				const listed = yield* coverage.listWindows();
+				yield* Effect.tryPromise(() => replaceProfileWindows(listed));
+				yield* Effect.tryPromise(() =>
+					profileIndex.lease({
+						id: `${profileOwnerId}:active`,
+						ownerId: profileOwnerId,
+						partitionId: profilePartitionId,
+						kind: 'active-tab'
+					})
+				);
+				leaseOwner = maintainReplicaLeaseOwner(
+					profileIndex,
+					profileOwnerId,
+					options.onError === undefined ? {} : { onFailure: options.onError }
+				);
+				automationLeases = createRunningAutomationLeaseHooks({
+					index: profileIndex,
+					ownerId: profileOwnerId,
+					partitionId: profilePartitionId
+				});
+				if (accessState !== undefined) {
+					accessState.acquirePendingMutationLease = async (stableLeaseId) => {
+						await profileIndex.lease({
+							id: stableLeaseId,
+							ownerId: `pending-mutation:${stableLeaseId}`,
+							partitionId: profilePartitionId,
+							kind: 'pending-mutation'
+						});
+					};
+					accessState.releasePendingMutationLease = (stableLeaseId) =>
+						profileIndex.releaseLease(stableLeaseId);
+					accessState.trackVisibleQuery = (token) =>
+						Effect.runFork(
+							ensureVisibleLease(token).pipe(
+								Effect.catch((cause) => Effect.sync(() => options.onError?.(cause)))
+							)
+						);
+					accessState.releaseVisibleQuery = (token) => {
+						const tracked = accessState.visibleQueries.get(token);
+						tracked?.releaseWindow?.();
+						if (tracked?.queryKey !== undefined) {
+							Effect.runFork(
+								coverage
+									.releaseWindowLease(tracked.queryKey, visibleLeaseId(token))
+									.pipe(Effect.catch((cause) => Effect.sync(() => options.onError?.(cause))))
+							);
+						}
+						const lease = visibleLeases.get(token);
+						visibleLeases.delete(token);
+						if (lease !== undefined)
+							void lease.release().catch((cause) => options.onError?.(cause));
+					};
+					for (const token of accessState.visibleQueries.keys()) {
+						accessState.trackVisibleQuery(token);
+					}
+				}
+			}
+
+			const reconcileAutomationLeases = (): Effect.Effect<void, unknown> => {
+				if (automationLeases === undefined) return Effect.void;
+				return Effect.gen(function* () {
+					const activeTaskIds = new Set<string>();
+					const seenCursors = new Set<string>();
+					let after: string | undefined;
+					for (;;) {
+						const page = yield* transport.command('collections.findMany', {
+							collection: 'automation_run',
+							where: { status: { in: ['pending', 'resuming', 'running'] } },
+							orderBy: { task_id: 'asc' },
+							limit: 500,
+							...(after === undefined ? {} : { after })
+						});
+						const rows = rowsFrom(page);
+						if (rows === undefined)
+							return yield* Effect.fail(
+								new Error('Automation lease reconciliation received no authoritative page')
+							);
+						for (const value of rows) {
+							const taskId = asJsonRecord(value)['task_id'];
+							if (typeof taskId === 'string' && taskId.length > 0) activeTaskIds.add(taskId);
+						}
+						const next = cursorFrom(page);
+						if (next === null) break;
+						if (seenCursors.has(next))
+							return yield* Effect.fail(new Error('Automation reconciliation cursor repeated'));
+						seenCursors.add(next);
+						after = next;
+					}
+					yield* Effect.tryPromise(
+						() =>
+							automationLeases?.reconcile({ complete: true, activeTaskIds: [...activeTaskIds] }) ??
+							Promise.resolve()
+					);
+				});
+			};
+			if ((options.leadership?.leader() ?? local.engine.isLeader !== false) === true) {
+				yield* reconcileAutomationLeases();
+			}
+			// Publish lifecycle callbacks only after the authoritative reconciliation succeeds. A failed
+			// startup closes the profile index; exposing callbacks before this point leaves the automation
+			// client holding a function that targets that closed database, so a successfully enqueued run
+			// is reported as a local Effect.tryPromise failure.
+			if (accessState !== undefined && automationLeases !== undefined) {
+				accessState.automationStarted = automationLeases.started;
+				accessState.automationObserved = automationLeases.observe;
+				accessState.automationSettled = automationLeases.settled;
+			}
+
+			const enforceBudget = (): Effect.Effect<void> =>
+				profileIndex === undefined ||
+				profilePartitionId === undefined ||
+				persistentStorage === undefined ||
+				typeof navigator === 'undefined' ||
+				typeof navigator.storage?.estimate !== 'function'
+					? Effect.void
+					: Effect.gen(function* () {
+							const listed = yield* coverage.listWindows();
+							yield* Effect.tryPromise(() => replaceProfileWindows(listed));
+							for (const token of accessState?.visibleQueries.keys() ?? []) {
+								yield* ensureVisibleLease(token);
+							}
+							if ((options.leadership?.leader() ?? local.engine.isLeader !== false) === false)
+								return;
+							yield* Effect.tryPromise(() =>
+								enforceIndexedReplicaProfileBudget({
+									index: profileIndex,
+									budget: persistentStorage.budget,
+									estimate: () => navigator.storage.estimate(),
+									releasePhysical: async (candidate) => {
+										if (
+											candidate.partitionId === profilePartitionId &&
+											candidate.kind !== 'partition'
+										) {
+											await Effect.runPromise(
+												coverage
+													.releaseWindow(candidate.id, await protectedMutationRows(runtime))
+													.pipe(Effect.asVoid)
+											);
+											return;
+										}
+										if (candidate.kind === 'partition') {
+											await (
+												options.deleteInactiveReplicaPartition ?? deleteInactivePGlitePartition
+											)(candidate);
+											return;
+										}
+										throw new Error(
+											'No safe physical release adapter for replica eviction candidate'
+										);
+									}
+								})
+							).pipe(Effect.asVoid);
+						}).pipe(Effect.catch((cause) => Effect.sync(() => options.onError?.(cause))));
+
+			let m3Hydrating = false;
+			const materializeQuery = (
+				captured: AuthoritativeQueryCapture
+			): Effect.Effect<void, unknown> =>
+				Effect.gen(function* () {
+					const kind = collectionWindowKind(captured.command);
+					if (kind === undefined) return;
+					if (asJsonRecord(captured.value)['serverOnly'] === true) {
+						if (captured.flight !== undefined)
+							accessState?.partitionSync?.cancelWindowFlight(captured.flight);
+						return;
+					}
+					const input = asJsonRecord(captured.input);
+					const collection = input['collection'];
+					if (typeof collection !== 'string') return;
+					if (maintenance?.affectedCollections.includes(collection) === true) return;
+					const decoded =
+						kind === 'findMany'
+							? ({
+									kind,
+									response: yield* Schema.decodeUnknownEffect(CollectionQueryPage)(captured.value)
+								} as const)
+							: kind === 'count'
+								? ({
+										kind,
+										response: yield* Schema.decodeUnknownEffect(CollectionCountWindow)(
+											captured.value
+										)
+									} as const)
+								: ({
+										kind,
+										response: yield* Schema.decodeUnknownEffect(CollectionGroupedWindow)(
+											captured.value
+										)
+									} as const);
+					const proof = decoded.response;
+					if (
+						accessState?.serverPartitionKey !== undefined &&
+						accessState.serverPartitionKey !== proof.partitionKey
+					) {
+						if (captured.flight !== undefined)
+							accessState.partitionSync?.cancelWindowFlight(captured.flight);
+						yield* Effect.tryPromise(
+							() => accessState.rebootstrapPartition?.() ?? Promise.resolve()
+						);
+						return;
+					}
+					const description = yield* describeClientQueryWindow(
+						decoded.kind,
+						input,
+						accessState?.catalog ?? {},
+						{
+							protocolVersion: PROTOCOL_VERSION,
+							schemaFingerprint: local.fingerprint,
+							partitionKey: proof.partitionKey
+						},
+						{
+							pinnedCollation: true,
+							localRelationships: true,
+							localSearch: (() => {
+								const shape = local.shape.collections.find(({ name }) => name === collection);
+								if (shape?.readableFields === undefined) return false;
+								const searchable = Object.entries(shape.fields)
+									.filter(([, field]) => field.search === true)
+									.map(([field]) => field);
+								return (
+									shape.readableFields === null ||
+									searchable.every((field) => shape.readableFields?.includes(field))
+								);
+							})()
+						}
+					);
+					if (description === undefined)
+						return yield* Effect.fail(
+							new Error('Authoritative collection query could not be canonicalized')
+						);
+					const payload = yield* Effect.gen(function* () {
+						if (decoded.kind === 'findMany') {
+							const confirmation = confirmCollectionQueryPage(description, decoded.response);
+							if (Result.isFailure(confirmation)) return yield* Effect.fail(confirmation.failure);
+							const baseRows = authoritativeBaseRowsFromPage(collection, decoded.response);
+							if (Result.isFailure(baseRows)) return yield* Effect.fail(baseRows.failure);
+							return {
+								confirmation: confirmation.success,
+								baseRows: baseRows.success,
+								orderedRowIds: decoded.response.rows.map((row) => String(row['id'])),
+								relationshipRefs: decoded.response.relationshipRefs,
+								nextCursor: decoded.response.nextCursor,
+								continuation: typeof input['after'] === 'string' ? input['after'] : null,
+								lookaheadCount: decoded.response.lookahead,
+								serverResult: undefined
+							} as const;
+						}
+						if (decoded.kind === 'count') {
+							const confirmation = confirmCollectionCountWindow(description, decoded.response);
+							if (Result.isFailure(confirmation)) return yield* Effect.fail(confirmation.failure);
+							return {
+								confirmation: confirmation.success,
+								baseRows: [],
+								orderedRowIds: [],
+								relationshipRefs: [],
+								nextCursor: null,
+								continuation: null,
+								lookaheadCount: 0,
+								serverResult: { kind: 'count', value: decoded.response.count } as const
+							} as const;
+						}
+						const confirmation = confirmCollectionGroupedWindow(description, decoded.response);
 						if (Result.isFailure(confirmation)) return yield* Effect.fail(confirmation.failure);
-						const baseRows = authoritativeBaseRowsFromPage(collection, decoded.response);
+						const baseRows = authoritativeBaseRowsFromGroupedWindow(collection, decoded.response);
 						if (Result.isFailure(baseRows)) return yield* Effect.fail(baseRows.failure);
+						const groups = groupedRowIdsFromWindow(decoded.response);
+						if (Result.isFailure(groups)) return yield* Effect.fail(groups.failure);
 						return {
 							confirmation: confirmation.success,
 							baseRows: baseRows.success,
-							orderedRowIds: decoded.response.rows.map((row) => String(row['id'])),
+							orderedRowIds: Object.values(groups.success).flat(),
 							relationshipRefs: decoded.response.relationshipRefs,
-							nextCursor: decoded.response.nextCursor,
-							continuation: typeof input['after'] === 'string' ? input['after'] : null,
-							lookaheadCount: decoded.response.lookahead,
-							serverResult: undefined
-						} as const;
-					}
-					if (decoded.kind === 'count') {
-						const confirmation = confirmCollectionCountWindow(description, decoded.response);
-						if (Result.isFailure(confirmation)) return yield* Effect.fail(confirmation.failure);
-						return {
-							confirmation: confirmation.success,
-							baseRows: [],
-							orderedRowIds: [],
-							relationshipRefs: [],
 							nextCursor: null,
 							continuation: null,
 							lookaheadCount: 0,
-							serverResult: { kind: 'count', value: decoded.response.count } as const
+							serverResult: { kind: 'findGrouped', groups: groups.success } as const
 						} as const;
-					}
-					const confirmation = confirmCollectionGroupedWindow(description, decoded.response);
-					if (Result.isFailure(confirmation)) return yield* Effect.fail(confirmation.failure);
-					const baseRows = authoritativeBaseRowsFromGroupedWindow(collection, decoded.response);
-					if (Result.isFailure(baseRows)) return yield* Effect.fail(baseRows.failure);
-					const groups = groupedRowIdsFromWindow(decoded.response);
-					if (Result.isFailure(groups)) return yield* Effect.fail(groups.failure);
-					return {
-						confirmation: confirmation.success,
-						baseRows: baseRows.success,
-						orderedRowIds: Object.values(groups.success).flat(),
-						relationshipRefs: decoded.response.relationshipRefs,
-						nextCursor: null,
-						continuation: null,
-						lookaheadCount: 0,
-						serverResult: { kind: 'findGrouped', groups: groups.success } as const
-					} as const;
-				});
-				const confirmedDescription = {
-					...description,
-					dependencies: payload.confirmation.dependencies,
-					reproducibility: payload.confirmation.reproducibility
-				};
-			const window = windowDescriptorOf(confirmedDescription);
-			let installedFresh = false;
-			const install = (context: WindowInstallContext) => {
-				return coverage.installWindow({
-						window,
+					});
+					const confirmedDescription = {
+						...description,
 						dependencies: payload.confirmation.dependencies,
-						baseRows: payload.baseRows,
-						orderedRowIds: payload.orderedRowIds,
-						relationshipRefs: payload.relationshipRefs,
-						...(payload.serverResult === undefined
-							? {}
-							: { serverResult: payload.serverResult }),
-						nextCursor: payload.nextCursor,
-						readCursor: proof.readCursor,
-						dependencyGenerations: payload.confirmation.dependencyGenerations,
-						continuation: payload.continuation,
-						lookaheadCount: payload.lookaheadCount,
-						valid: context.proofMayBeValid,
-						...(context.bufferedDeltas === undefined || context.bufferedDeltas.length === 0
-							? {}
-							: {
-									bufferedDeltas: {
-										deltas: context.bufferedDeltas,
-										headCursor: context.position.cursor,
-										generations: context.position.generations,
-										affectedCollections: [
-											...new Set(context.bufferedDeltas.map(({ collection }) => collection))
-										],
-										refillCollections: []
-							}
-						})
-				}).pipe(
-						Effect.tap((proof) => Effect.sync(() => {
-							installedFresh = proof.valid && !proof.dirty;
-						})),
-						Effect.map(({ valid, dirty }) => ({ valid, dirty }))
-					);
-				};
-				const currentPosition = yield* coverage.position();
-				if (captured.flight !== undefined && accessState?.partitionSync !== undefined) {
-					yield* Effect.tryPromise(() =>
-						accessState.partitionSync?.installWindowFlight(
-							captured.flight as WindowFlight,
-							proof.readCursor,
-							payload.confirmation.dependencyGenerations,
-							install
-						) ?? Promise.resolve()
-					);
-				} else {
-					const installed = yield* install({
-						position: currentPosition,
-						proofMayBeValid: true,
-						bufferedDeltas: []
-					});
-					if (installed.dirty) yield* recomputer.recomputeMany([window.queryKey]).pipe(Effect.asVoid);
-				}
-				if (accessState !== undefined) {
-					accessState.serverPartitionKey = proof.partitionKey;
-					if (installedFresh) accessState.staleWindowKeys.delete(window.queryKey);
-					else if (window.proofOwner === 'server')
-						accessState.staleWindowKeys.add(window.queryKey);
-					accessState.syncStatus.patch({
-						staleServerProofWindows: accessState.staleWindowKeys.size
-					});
-					for (const tracked of accessState.visibleQueries.values()) {
-						if (cacheKeyFor(tracked.command, tracked.input) !== captured.key) continue;
-						if (tracked.queryKey !== undefined && tracked.queryKey !== window.queryKey) {
-							tracked.releaseWindow?.();
-							const priorLease = [...visibleLeases.entries()].find(
-								([token]) => accessState.visibleQueries.get(token) === tracked
-							);
-							if (priorLease !== undefined) {
-								yield* coverage.releaseWindowLease(
-									tracked.queryKey,
-									visibleLeaseId(priorLease[0])
-								).pipe(Effect.asVoid);
-								visibleLeases.delete(priorLease[0]);
-								yield* Effect.tryPromise(() => priorLease[1].release());
-							}
-						}
-						tracked.queryKey = window.queryKey;
-						tracked.lastAccessAt = Date.now();
-						tracked.releaseWindow?.();
-						const releaseWindow = accessState.partitionSync?.mountWindow(
-							window.queryKey,
-							payload.confirmation.dependencies,
-							tracked.visibility,
-							{
-								relationDependency: hasCanonicalRelationshipSelection(
-									description.query.relationships
-								)
-							}
-						);
-						if (releaseWindow === undefined) delete tracked.releaseWindow;
-						else tracked.releaseWindow = releaseWindow;
-						if (tracked.visibility === 'visible') {
-							accessState.requestAdjacentHydration?.(window.queryKey);
-						}
-					}
-					localReader = createReader(proof.partitionKey);
-					if (!m3Hydrating && runtime.local !== undefined)
-						runtime.local.current = localReader;
-				}
-				yield* enforceBudget();
-			});
-
-		let queryMaterializationTail = Promise.resolve();
-		const queueMaterializeQuery = (query: AuthoritativeQueryCapture): void => {
-			queryMaterializationTail = queryMaterializationTail
-				.then(() => Effect.runPromise(materializeQuery(query)))
-				.catch((cause) => options.onError?.(cause));
-		};
-		if (accessState !== undefined) {
-			accessState.materializeQuery = queueMaterializeQuery;
-		}
-
-		const invalidateNamed = (collections: ReadonlyArray<string>): void => {
-			if (cache === undefined || registry === undefined) return;
-			cache.invalidate(collections);
-			// Catch-up can invalidate queries mounted before the replica was ready. Keep their last remote
-			// value on screen until the ordered catch-up has drained; the one wildcard refresh below then
-			// runs with the reader installed instead of issuing a remote request for every streamed batch.
-			if (runtime.local?.current === localReader) registry.reexecuteAffected(collections);
-		};
-
-		/** Tells sibling runtime documents what this leader just finished applying. */
-		const announceToTabs = (collections: ReadonlyArray<string>): Effect.Effect<void> =>
-			Effect.sync(() => runtimeStates.access(runtime)?.invalidation?.announce(collections));
-
-		/** Clears the reconstructible cache without advancing past a batch it could not apply. */
-		const rebuildReplica = (): Effect.Effect<void, unknown> =>
-			Effect.tryPromise(async () => {
-				closeSubscription();
-				const readerWasInstalled = runtime.local?.current === localReader;
-				if (readerWasInstalled && runtime.local !== undefined) delete runtime.local.current;
-				const position = await Effect.runPromise(coverage.position());
-				coordinator.rebuild('headRollback', position);
-				await coordinator.idle();
-				await refreshOverlaySnapshot();
-				const overlayCollections = await activeOverlayCollections();
-				if (overlayCollections.length > 0)
-					await accessState?.reflectLocalMutation?.(overlayCollections);
-				if (
-					readerWasInstalled &&
-					runtime.local !== undefined &&
-					accessScopeFor(runtime) === options.accessScope
-				) {
-					runtime.local.current = localReader;
-				}
-				cache?.clear();
-				if (runtime.local?.current === localReader) registry?.reexecuteAffected([ANY_COLLECTION]);
-				await Effect.runPromise(announceToTabs([ANY_COLLECTION]));
-				await Effect.runPromise(enforceBudget());
-				streamIfLeading();
-			});
-
-		// Custom/in-process engines keep their injected leadership seam for tests and non-browser hosts.
-		const leads = (): boolean => options.leadership?.leader() ?? local.engine.isLeader !== false;
-		let recomputer = createLocalWindowRecomputer(
-			local.store,
-			local.shape,
-			coverage,
-			serverPartition.key,
-			{ overlay, localActorBinding: options.partition.key }
-		);
-		let subscription: PartitionSubscription | undefined;
-		let observedStreamHead: SyncCursor | undefined;
-		const closeSubscription = (): void => {
-			subscription?.stop();
-			subscription = undefined;
-			accessState?.syncStatus.markDisconnected();
-		};
-		let pendingMutationIds: ReadonlyArray<string> = [];
-		let mutationPushRetry: ReturnType<typeof setTimeout> | undefined;
-		let mutationPushRetryAt: number | undefined;
-		let paused = false;
-		let schemaBarrierPauses = 0;
-		let schemaBarrierTail = Promise.resolve();
-		let maintenanceTail = Promise.resolve();
-		let catchUpSettled = false;
-		let resolveCatchUp: () => void = () => undefined;
-		const initialCatchUp = new Promise<void>((resolve) => {
-			resolveCatchUp = resolve;
-		});
-		/**
-		 * The replica is level with the authority: replay is complete and nothing local is queued.
-		 *
-		 * This is the only transition into `connected`, because it is the only moment the client can
-		 * say its rows are the authority's rows.
-		 */
-		const settleCatchUp = (): void => {
-			if (catchUpSettled) return;
-			catchUpSettled = true;
-			resolveCatchUp();
-		};
-		const pauseIntake = (): void => {
-			closeSubscription();
-			if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
-			mutationPushRetry = undefined;
-			mutationPushRetryAt = undefined;
-			paused = true;
-		};
-		const resumeIntake = (): void => {
-			if (!paused || schemaBarrierPauses > 0) return;
-			paused = false;
-			accessState?.scheduleMutationPush?.();
-			streamIfLeading();
-		};
-
-		const captureFromCanonicalWindow = (
-			canonical: Readonly<Record<string, Schema.Json>>
-		): AuthoritativeQueryCapture | undefined => {
-			const kind = canonical['kind'];
-			const collection = canonical['collection'];
-			if (
-				(kind !== 'findMany' && kind !== 'count' && kind !== 'findGrouped') ||
-				typeof collection !== 'string'
-			) return undefined;
-			const input: Record<string, Schema.Json> = { collection };
-			const authoredWhere = canonical['authoredWhere'];
-			const userFilter = canonical['userFilter'];
-			const search = canonical['search'];
-			const relationships = canonical['relationships'];
-			if (authoredWhere !== null && authoredWhere !== undefined) input['where'] = authoredWhere;
-			if (userFilter !== null && userFilter !== undefined) input['userFilter'] = userFilter;
-			if (search !== null && search !== undefined) input['search'] = search;
-			if (relationships !== null && relationships !== undefined) input['with'] = relationships;
-			const order = canonical['orderBy'];
-			if (Array.isArray(order)) {
-				const terms = order.flatMap((term) => {
-					const record = asJsonRecord(term);
-					const field = record['field'];
-					const direction = record['direction'];
-					return typeof field === 'string' && (direction === 'asc' || direction === 'desc')
-						? [[field, direction] as const]
-						: [];
-				});
-				if (terms.length > 0) input['orderBy'] = Object.fromEntries(terms);
-			}
-			const group = canonical['group'];
-			if (group !== null && group !== undefined) input['group'] = group;
-			const command = `collections.${kind}`;
-			return {
-				key: cacheKeyFor(command, input),
-				command,
-				input,
-				value: null
-			};
-		};
-		const queryCaptureForWindow = async (
-			queryKey: string
-		): Promise<AuthoritativeQueryCapture | undefined> => {
-			if (accessState !== undefined) {
-				for (const tracked of accessState.visibleQueries.values()) {
-					if (tracked.queryKey !== queryKey || tracked.owner.deref() === undefined) continue;
-					const firstPageInput = { ...asJsonRecord(tracked.input) };
-					delete firstPageInput['after'];
-					return {
-						key: cacheKeyFor(tracked.command, firstPageInput),
-						command: tracked.command,
-						input: firstPageInput,
-						value: null
+						reproducibility: payload.confirmation.reproducibility
 					};
-				}
+					const window = windowDescriptorOf(confirmedDescription);
+					let installedFresh = false;
+					const install = (context: WindowInstallContext) => {
+						return coverage
+							.installWindow({
+								window,
+								dependencies: payload.confirmation.dependencies,
+								baseRows: payload.baseRows,
+								orderedRowIds: payload.orderedRowIds,
+								relationshipRefs: payload.relationshipRefs,
+								...(payload.serverResult === undefined
+									? {}
+									: { serverResult: payload.serverResult }),
+								nextCursor: payload.nextCursor,
+								readCursor: proof.readCursor,
+								dependencyGenerations: payload.confirmation.dependencyGenerations,
+								continuation: payload.continuation,
+								lookaheadCount: payload.lookaheadCount,
+								valid: context.proofMayBeValid,
+								...(context.bufferedDeltas === undefined || context.bufferedDeltas.length === 0
+									? {}
+									: {
+											bufferedDeltas: {
+												deltas: context.bufferedDeltas,
+												headCursor: context.position.cursor,
+												generations: context.position.generations,
+												affectedCollections: [
+													...new Set(context.bufferedDeltas.map(({ collection }) => collection))
+												],
+												refillCollections: []
+											}
+										})
+							})
+							.pipe(
+								Effect.tap((proof) =>
+									Effect.sync(() => {
+										installedFresh = proof.valid && !proof.dirty;
+									})
+								),
+								Effect.map(({ valid, dirty }) => ({ valid, dirty }))
+							);
+					};
+					const currentPosition = yield* coverage.position();
+					if (captured.flight !== undefined && accessState?.partitionSync !== undefined) {
+						yield* Effect.tryPromise(
+							() =>
+								accessState.partitionSync?.installWindowFlight(
+									captured.flight as WindowFlight,
+									proof.readCursor,
+									payload.confirmation.dependencyGenerations,
+									install
+								) ?? Promise.resolve()
+						);
+					} else {
+						const installed = yield* install({
+							position: currentPosition,
+							proofMayBeValid: true,
+							bufferedDeltas: []
+						});
+						if (installed.dirty)
+							yield* recomputer.recomputeMany([window.queryKey]).pipe(Effect.asVoid);
+					}
+					if (accessState !== undefined) {
+						accessState.serverPartitionKey = proof.partitionKey;
+						if (installedFresh) accessState.staleWindowKeys.delete(window.queryKey);
+						else if (window.proofOwner === 'server')
+							accessState.staleWindowKeys.add(window.queryKey);
+						accessState.syncStatus.patch({
+							staleServerProofWindows: accessState.staleWindowKeys.size
+						});
+						for (const tracked of accessState.visibleQueries.values()) {
+							if (cacheKeyFor(tracked.command, tracked.input) !== captured.key) continue;
+							if (tracked.queryKey !== undefined && tracked.queryKey !== window.queryKey) {
+								tracked.releaseWindow?.();
+								const priorLease = [...visibleLeases.entries()].find(
+									([token]) => accessState.visibleQueries.get(token) === tracked
+								);
+								if (priorLease !== undefined) {
+									yield* coverage
+										.releaseWindowLease(tracked.queryKey, visibleLeaseId(priorLease[0]))
+										.pipe(Effect.asVoid);
+									visibleLeases.delete(priorLease[0]);
+									yield* Effect.tryPromise(() => priorLease[1].release());
+								}
+							}
+							tracked.queryKey = window.queryKey;
+							tracked.lastAccessAt = Date.now();
+							tracked.releaseWindow?.();
+							const releaseWindow = accessState.partitionSync?.mountWindow(
+								window.queryKey,
+								payload.confirmation.dependencies,
+								tracked.visibility,
+								{
+									relationDependency: hasCanonicalRelationshipSelection(
+										description.query.relationships
+									)
+								}
+							);
+							if (releaseWindow === undefined) delete tracked.releaseWindow;
+							else tracked.releaseWindow = releaseWindow;
+							if (tracked.visibility === 'visible') {
+								accessState.requestAdjacentHydration?.(window.queryKey);
+							}
+						}
+						localReader = createReader(proof.partitionKey);
+						if (!m3Hydrating && runtime.local !== undefined) runtime.local.current = localReader;
+					}
+					yield* enforceBudget();
+				});
+
+			let queryMaterializationTail = Promise.resolve();
+			const queueMaterializeQuery = (query: AuthoritativeQueryCapture): void => {
+				queryMaterializationTail = queryMaterializationTail
+					.then(() => Effect.runPromise(materializeQuery(query)))
+					.catch((cause) => options.onError?.(cause));
+			};
+			if (accessState !== undefined) {
+				accessState.materializeQuery = queueMaterializeQuery;
 			}
-			return Effect.runPromise(
-				coverage.readWindow(queryKey, (proof) =>
-					Effect.succeed(captureFromCanonicalWindow(proof.canonical))
+
+			const invalidateNamed = (collections: ReadonlyArray<string>): void => {
+				if (cache === undefined || registry === undefined) return;
+				cache.invalidate(collections);
+				// Catch-up can invalidate queries mounted before the replica was ready. Keep their last remote
+				// value on screen until the ordered catch-up has drained; the one wildcard refresh below then
+				// runs with the reader installed instead of issuing a remote request for every streamed batch.
+				if (runtime.local?.current === localReader) registry.reexecuteAffected(collections);
+			};
+
+			/** Tells sibling runtime documents what this leader just finished applying. */
+			const announceToTabs = (collections: ReadonlyArray<string>): Effect.Effect<void> =>
+				Effect.sync(() => runtimeStates.access(runtime)?.invalidation?.announce(collections));
+
+			/** Clears the reconstructible cache without advancing past a batch it could not apply. */
+			const rebuildReplica = (): Effect.Effect<void, unknown> =>
+				Effect.tryPromise(async () => {
+					closeSubscription();
+					const readerWasInstalled = runtime.local?.current === localReader;
+					if (readerWasInstalled && runtime.local !== undefined) delete runtime.local.current;
+					const position = await Effect.runPromise(coverage.position());
+					coordinator.rebuild('headRollback', position);
+					await coordinator.idle();
+					await refreshOverlaySnapshot();
+					const overlayCollections = await activeOverlayCollections();
+					if (overlayCollections.length > 0)
+						await accessState?.reflectLocalMutation?.(overlayCollections);
+					if (
+						readerWasInstalled &&
+						runtime.local !== undefined &&
+						accessScopeFor(runtime) === options.accessScope
+					) {
+						runtime.local.current = localReader;
+					}
+					cache?.clear();
+					if (runtime.local?.current === localReader) registry?.reexecuteAffected([ANY_COLLECTION]);
+					await Effect.runPromise(announceToTabs([ANY_COLLECTION]));
+					await Effect.runPromise(enforceBudget());
+					streamIfLeading();
+				});
+
+			// Custom/in-process engines keep their injected leadership seam for tests and non-browser hosts.
+			const leads = (): boolean => options.leadership?.leader() ?? local.engine.isLeader !== false;
+			let recomputer = createLocalWindowRecomputer(
+				local.store,
+				local.shape,
+				coverage,
+				serverPartition.key,
+				{ overlay, localActorBinding: options.partition.key }
+			);
+			let subscription: PartitionSubscription | undefined;
+			let observedStreamHead: SyncCursor | undefined;
+			const closeSubscription = (): void => {
+				subscription?.stop();
+				subscription = undefined;
+				accessState?.syncStatus.markDisconnected();
+			};
+			let pendingMutationIds: ReadonlyArray<string> = [];
+			let mutationPushRetry: ReturnType<typeof setTimeout> | undefined;
+			let mutationPushRetryAt: number | undefined;
+			let paused = false;
+			let schemaBarrierPauses = 0;
+			let schemaBarrierTail = Promise.resolve();
+			let maintenanceTail = Promise.resolve();
+			let catchUpSettled = false;
+			let resolveCatchUp: () => void = () => undefined;
+			const initialCatchUp = new Promise<void>((resolve) => {
+				resolveCatchUp = resolve;
+			});
+			/**
+			 * The replica is level with the authority: replay is complete and nothing local is queued.
+			 *
+			 * This is the only transition into `connected`, because it is the only moment the client can
+			 * say its rows are the authority's rows.
+			 */
+			const settleCatchUp = (): void => {
+				if (catchUpSettled) return;
+				catchUpSettled = true;
+				resolveCatchUp();
+			};
+			const pauseIntake = (): void => {
+				closeSubscription();
+				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+				mutationPushRetry = undefined;
+				mutationPushRetryAt = undefined;
+				paused = true;
+			};
+			const resumeIntake = (): void => {
+				if (!paused || schemaBarrierPauses > 0) return;
+				paused = false;
+				accessState?.scheduleMutationPush?.();
+				streamIfLeading();
+			};
+
+			const captureFromCanonicalWindow = (
+				canonical: Readonly<Record<string, Schema.Json>>
+			): AuthoritativeQueryCapture | undefined => {
+				const kind = canonical['kind'];
+				const collection = canonical['collection'];
+				if (
+					(kind !== 'findMany' && kind !== 'count' && kind !== 'findGrouped') ||
+					typeof collection !== 'string'
 				)
-			);
-		};
-		const fetchAndMaterialize = async (
-			capture: AuthoritativeQueryCapture,
-			flight?: WindowFlight
-		): Promise<void> => {
-			const value = await Effect.runPromise(transport.command(capture.command, capture.input));
-			await Effect.runPromise(materializeQuery({
-				...capture,
-				value,
-				...(flight === undefined ? {} : { flight })
-			}));
-		};
-		const fetchConvergedFindManyCapture = async (
-			capture: AuthoritativeQueryCapture,
-			targetRowCount: number
-		): Promise<AuthoritativeQueryCapture> => {
-			const rootInput = { ...asJsonRecord(capture.input) };
-			delete rootInput['after'];
-			const requestedLimit =
-				typeof rootInput['limit'] === 'number' &&
-				Number.isSafeInteger(rootInput['limit']) && rootInput['limit'] >= 1
-					? Math.min(500, rootInput['limit'])
-					: 100;
-			const refillLimit = Math.min(
-				500,
-				Math.max(requestedLimit, Math.ceil(Math.max(1, targetRowCount) / 2))
-			);
-			rootInput['limit'] = refillLimit;
-			const maxPages = Math.ceil(
-				Math.max(1, targetRowCount) / (refillLimit * 2)
-			) + 1;
-			const pages: Array<CollectionQueryPage> = [];
-			const seenCursors = new Set<string>();
-			let totalRows = 0;
-			let expectedProof: string | undefined;
-			let pageInput = rootInput;
-			for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
-				const value = await Effect.runPromise(
-					transport.command(capture.command, pageInput).pipe(
-						Effect.flatMap(Schema.decodeUnknownEffect(CollectionQueryPage))
+					return undefined;
+				const input: Record<string, Schema.Json> = { collection };
+				const authoredWhere = canonical['authoredWhere'];
+				const userFilter = canonical['userFilter'];
+				const search = canonical['search'];
+				const relationships = canonical['relationships'];
+				if (authoredWhere !== null && authoredWhere !== undefined) input['where'] = authoredWhere;
+				if (userFilter !== null && userFilter !== undefined) input['userFilter'] = userFilter;
+				if (search !== null && search !== undefined) input['search'] = search;
+				if (relationships !== null && relationships !== undefined) input['with'] = relationships;
+				const order = canonical['orderBy'];
+				if (Array.isArray(order)) {
+					const terms = order.flatMap((term) => {
+						const record = asJsonRecord(term);
+						const field = record['field'];
+						const direction = record['direction'];
+						return typeof field === 'string' && (direction === 'asc' || direction === 'desc')
+							? [[field, direction] as const]
+							: [];
+					});
+					if (terms.length > 0) input['orderBy'] = Object.fromEntries(terms);
+				}
+				const group = canonical['group'];
+				if (group !== null && group !== undefined) input['group'] = group;
+				const command = `collections.${kind}`;
+				return {
+					key: cacheKeyFor(command, input),
+					command,
+					input,
+					value: null
+				};
+			};
+			const queryCaptureForWindow = async (
+				queryKey: string
+			): Promise<AuthoritativeQueryCapture | undefined> => {
+				if (accessState !== undefined) {
+					for (const tracked of accessState.visibleQueries.values()) {
+						if (tracked.queryKey !== queryKey || tracked.owner.deref() === undefined) continue;
+						const firstPageInput = { ...asJsonRecord(tracked.input) };
+						delete firstPageInput['after'];
+						return {
+							key: cacheKeyFor(tracked.command, firstPageInput),
+							command: tracked.command,
+							input: firstPageInput,
+							value: null
+						};
+					}
+				}
+				return Effect.runPromise(
+					coverage.readWindow(queryKey, (proof) =>
+						Effect.succeed(captureFromCanonicalWindow(proof.canonical))
 					)
 				);
-				const proofSignature = JSON.stringify({
-					partitionKey: value.partitionKey,
-					confirmedDependencies: [...value.confirmedDependencies].toSorted(),
-					dependencyGenerations: Object.fromEntries(
-						Object.entries(value.dependencyGenerations).toSorted(([left], [right]) =>
-							left.localeCompare(right)
-						)
-					),
-					reproducibility: value.reproducibility
-				});
-				if (expectedProof !== undefined && proofSignature !== expectedProof) {
-					throw new Error('Query-window refill dependencies moved between bounded pages');
-				}
-				expectedProof = proofSignature;
-				pages.push(value);
-				totalRows += value.rows.length;
-				if (totalRows > MAX_REPLICA_WINDOW_ROWS) {
-					throw new Error('Query-window refill exceeds the durable membership cap');
-				}
-				if (value.nextCursor === null || totalRows >= targetRowCount) break;
-				if (value.rows.length === 0 || seenCursors.has(value.nextCursor)) {
-					throw new Error('Query-window refill returned a non-advancing continuation');
-				}
-				seenCursors.add(value.nextCursor);
-				pageInput = { ...rootInput, after: value.nextCursor };
-			}
-			const first = pages[0];
-			const last = pages.at(-1);
-			if (first === undefined || last === undefined) {
-				throw new Error('Query-window refill returned no authoritative page');
-			}
-			if (last.nextCursor !== null && totalRows < targetRowCount) {
-				throw new Error('Query-window refill did not cover its retained boundary');
-			}
-			const baseRows = new Map<string, CollectionQueryPage['baseRows'][number]>();
-			const relationships = new Map<
-				string,
-				CollectionQueryPage['relationshipRefs'][number]
-			>();
-			for (const page of pages) {
-				for (const row of page.baseRows) {
-					const key = `${row.collection}\u0000${row.recordId}`;
-					const prior = baseRows.get(key);
-					if (prior !== undefined && prior.rowVersion !== row.rowVersion) {
-						throw new Error('Query-window refill observed two versions of one base row');
-					}
-					baseRows.set(key, row);
-				}
-				for (const relationship of page.relationshipRefs) {
-					const key = [
-						relationship.sourceCollection, relationship.sourceRecordId,
-						relationship.relation, relationship.targetCollection,
-						relationship.targetRecordId
-					].join('\u0000');
-					relationships.set(key, relationship);
-				}
-			}
-			const value = {
-				...last,
-				rows: pages.flatMap((page) => page.rows),
-				baseRows: [...baseRows.values()],
-				relationshipRefs: [...relationships.values()]
 			};
-			return {
-				...capture,
-				key: cacheKeyFor(capture.command, rootInput),
-				input: rootInput,
-				value
+			const fetchAndMaterialize = async (
+				capture: AuthoritativeQueryCapture,
+				flight?: WindowFlight
+			): Promise<void> => {
+				const value = await Effect.runPromise(transport.command(capture.command, capture.input));
+				await Effect.runPromise(
+					materializeQuery({
+						...capture,
+						value,
+						...(flight === undefined ? {} : { flight })
+					})
+				);
 			};
-		};
-		const adjacentHydration = new Map<
-			string,
-			Readonly<{ readonly cursor: string; readonly release: () => void }>
-		>();
-		const refillWindow = async (
-			queryKey: string,
-			priority: 0 | 1 | 2
-		): Promise<void> => {
-			const capture = await queryCaptureForWindow(queryKey);
-			if (capture === undefined) return;
-			const proof = await Effect.runPromise(coverage.readWindow(
-				queryKey,
-				(window) => Effect.succeed({
-					dependencies: window.dependencies,
-					nextCursor: window.nextCursor,
-					rowCount: window.orderedRowIds.length
-				})
-			));
-			if (proof === undefined) return;
-			const adjacent = adjacentHydration.get(queryKey);
-			const hydrationCapture =
-				priority === 1 && adjacent !== undefined && adjacent.cursor === proof.nextCursor
-					? (() => {
-							const input = { ...asJsonRecord(capture.input), after: adjacent.cursor };
-							return { ...capture, key: cacheKeyFor(capture.command, input), input };
-						})()
-					: capture;
-			const dependencies = proof.dependencies;
-			const flight = coordinator.beginWindowFlight(queryKey, dependencies);
-			try {
-				if (hydrationCapture === capture && capture.command === 'collections.findMany') {
-					const converged = await fetchConvergedFindManyCapture(capture, proof.rowCount);
-					await Effect.runPromise(materializeQuery({ ...converged, flight }));
-				} else {
-					await fetchAndMaterialize(hydrationCapture, flight);
-				}
-			} finally {
-				coordinator.cancelWindowFlight(flight);
-				if (adjacentHydration.get(queryKey) === adjacent && adjacent !== undefined) {
-					adjacent.release();
-					adjacentHydration.delete(queryKey);
-				}
-			}
-			const installed = await Effect.runPromise(coverage.readWindow(
-				queryKey,
-				(proof) => Effect.succeed({ valid: proof.valid, dirty: proof.dirty })
-			));
-			if (installed?.valid !== true || installed.dirty) {
-				coordinator.requestRefill(queryKey);
-				return;
-			}
-			invalidateNamed(dependencies);
-		};
-		const rehydrateActive = async (queryKeys: ReadonlyArray<string>): Promise<void> => {
-			const captures = (await Promise.all(queryKeys.map(queryCaptureForWindow))).flatMap((capture) => {
-				return capture === undefined ? [] : [capture];
-			});
-			m3Hydrating = true;
-			try {
-				accessState?.staleWindowKeys.clear();
-				accessState?.syncStatus.patch({ staleServerProofWindows: 0 });
-				for (let index = 0; index < captures.length; index += 2) {
-					await Promise.all(
-						captures.slice(index, index + 2).map((capture) => fetchAndMaterialize(capture))
+			const fetchConvergedFindManyCapture = async (
+				capture: AuthoritativeQueryCapture,
+				targetRowCount: number
+			): Promise<AuthoritativeQueryCapture> => {
+				const rootInput = { ...asJsonRecord(capture.input) };
+				delete rootInput['after'];
+				const requestedLimit =
+					typeof rootInput['limit'] === 'number' &&
+					Number.isSafeInteger(rootInput['limit']) &&
+					rootInput['limit'] >= 1
+						? Math.min(500, rootInput['limit'])
+						: 100;
+				const refillLimit = Math.min(
+					500,
+					Math.max(requestedLimit, Math.ceil(Math.max(1, targetRowCount) / 2))
+				);
+				rootInput['limit'] = refillLimit;
+				const maxPages = Math.ceil(Math.max(1, targetRowCount) / (refillLimit * 2)) + 1;
+				const pages: Array<CollectionQueryPage> = [];
+				const seenCursors = new Set<string>();
+				let totalRows = 0;
+				let expectedProof: string | undefined;
+				let pageInput = rootInput;
+				for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+					const value = await Effect.runPromise(
+						transport
+							.command(capture.command, pageInput)
+							.pipe(Effect.flatMap(Schema.decodeUnknownEffect(CollectionQueryPage)))
 					);
+					const proofSignature = JSON.stringify({
+						partitionKey: value.partitionKey,
+						confirmedDependencies: [...value.confirmedDependencies].toSorted(),
+						dependencyGenerations: Object.fromEntries(
+							Object.entries(value.dependencyGenerations).toSorted(([left], [right]) =>
+								left.localeCompare(right)
+							)
+						),
+						reproducibility: value.reproducibility
+					});
+					if (expectedProof !== undefined && proofSignature !== expectedProof) {
+						throw new Error('Query-window refill dependencies moved between bounded pages');
+					}
+					expectedProof = proofSignature;
+					pages.push(value);
+					totalRows += value.rows.length;
+					if (totalRows > MAX_REPLICA_WINDOW_ROWS) {
+						throw new Error('Query-window refill exceeds the durable membership cap');
+					}
+					if (value.nextCursor === null || totalRows >= targetRowCount) break;
+					if (value.rows.length === 0 || seenCursors.has(value.nextCursor)) {
+						throw new Error('Query-window refill returned a non-advancing continuation');
+					}
+					seenCursors.add(value.nextCursor);
+					pageInput = { ...rootInput, after: value.nextCursor };
 				}
-			} finally {
-				m3Hydrating = false;
-			}
-		};
-
-		const confirmMutationDeltas = async (
-			batch: Pick<
-				Parameters<PartitionSyncCoordinator['acceptDeltas']>[0],
-				'deltas' | 'mutationConfirmations' | 'mutationRejections'
-			>
-		): Promise<void> => {
-			const journals = await knownMutationJournals(runtime);
-			const retirements = (
-				await Promise.all(journals.map((journal) => journal.observeAuthoritativeBatch({
-					deltas: batch.deltas.map((delta) => ({
-						mutationId: delta.mutationId,
-						row: { collection: delta.collection, recordId: delta.recordId },
-						kind: delta.op,
-						rowVersion: delta.rowVersion
-					})),
-					confirmations: batch.mutationConfirmations,
-					mutationRejections: batch.mutationRejections
-				})))
-			).flatMap(({ retirements }) => retirements);
-			if (retirements.length === 0) return;
-			await refreshOverlaySnapshot();
-			for (const retirement of retirements)
-				await releaseReplicaPendingMutationLease(runtime, retirement.idempotencyKey);
-			await accessState?.reflectLocalMutation?.([
-				...new Set(retirements.flatMap(({ affectedCollections }) => affectedCollections))
-			]);
-		};
-		let requestStream: (
-			collections?: ReadonlyArray<string>,
-			position?: { readonly cursor: SyncCursor; readonly generations: Readonly<Record<string, number>> }
-		) => void = () => undefined;
-		let publishedDependencySignature: string | undefined;
-		/**
-		 * Every collection this workspace has — never the ones a page happens to have mounted.
-		 *
-		 * The partition stream is opened once per client and stays open, so its subscription cannot
-		 * depend on what is on screen. Deriving it from mounted windows meant navigating between
-		 * surfaces tore the stream down and built a new one, and a surface holding no live query tore
-		 * it down and left nothing to reopen it — which is how a workspace ended up permanently
-		 * reporting a dead stream while every command it sent answered normally.
-		 *
-		 * A workspace's collection set is fixed for the session, so the subscription is too. The
-		 * server accepts 64 (`MAX_SYNC_PARTITION_COLLECTIONS`); the largest template declares 23, so
-		 * the cap is headroom rather than a limit anyone reaches, and truncating is still better than
-		 * a refused stream.
-		 */
-		const SUBSCRIPTION_LIMIT = 64;
-		const subscribedCollections = (): ReadonlyArray<string> =>
-			readableSubscriptionCollections(
-				// `approval_request` is the sole runtime-owned replicated collection. Keeping it as
-				// the internal anchor lets an otherwise empty authored workspace hold the one live
-				// stream needed for private names-only invalidations. It is already the one explicit
-				// generic system exception, so this does not broaden the authored/public collection set.
-				[...Object.keys(runtimeStates.access(runtime)?.catalog ?? {}), 'approval_request'],
-				local.readable,
-				SUBSCRIPTION_LIMIT
-			);
-		const subscribedInvalidations = (): ReadonlyArray<string> => [
-			'agent_mailbox',
-			'agent_run',
-			'automation_run',
-			'chat_message',
-			'chat_session'
-		];
-		const rehydrationFacts = async () => {
-			const active = (await Effect.runPromise(coverage.listWindows()))
-				.filter(({ leaseCount }) => leaseCount > 0)
-				.slice(0, 256);
-			const rowCounts = await Promise.all(
-				active.map(({ id }) =>
-					Effect.runPromise(
-						coverage.readWindow(id, (proof) => Effect.succeed(proof.orderedRowIds.length))
-					).then((count) => count ?? 0)
-				)
-			);
-			const rows = rowCounts.reduce((total, count) => total + count, 0);
-			const bytes = active.reduce((total, window) => total + window.bytes, 0);
-			return {
-				activeWindows: active.length,
-				rowsPerWindow: Math.max(1, Math.min(500, Math.ceil(rows / Math.max(active.length, 1)))),
-				estimatedBytesPerRow: Math.max(
-					1,
-					Math.min(1_048_576, Math.ceil(bytes / Math.max(rows, 1)))
-				)
+				const first = pages[0];
+				const last = pages.at(-1);
+				if (first === undefined || last === undefined) {
+					throw new Error('Query-window refill returned no authoritative page');
+				}
+				if (last.nextCursor !== null && totalRows < targetRowCount) {
+					throw new Error('Query-window refill did not cover its retained boundary');
+				}
+				const baseRows = new Map<string, CollectionQueryPage['baseRows'][number]>();
+				const relationships = new Map<string, CollectionQueryPage['relationshipRefs'][number]>();
+				for (const page of pages) {
+					for (const row of page.baseRows) {
+						const key = `${row.collection}\u0000${row.recordId}`;
+						const prior = baseRows.get(key);
+						if (prior !== undefined && prior.rowVersion !== row.rowVersion) {
+							throw new Error('Query-window refill observed two versions of one base row');
+						}
+						baseRows.set(key, row);
+					}
+					for (const relationship of page.relationshipRefs) {
+						const key = [
+							relationship.sourceCollection,
+							relationship.sourceRecordId,
+							relationship.relation,
+							relationship.targetCollection,
+							relationship.targetRecordId
+						].join('\u0000');
+						relationships.set(key, relationship);
+					}
+				}
+				const value = {
+					...last,
+					rows: pages.flatMap((page) => page.rows),
+					baseRows: [...baseRows.values()],
+					relationshipRefs: [...relationships.values()]
+				};
+				return {
+					...capture,
+					key: cacheKeyFor(capture.command, rootInput),
+					input: rootInput,
+					value
+				};
 			};
-		};
+			const adjacentHydration = new Map<
+				string,
+				Readonly<{ readonly cursor: string; readonly release: () => void }>
+			>();
+			const refillWindow = async (queryKey: string, priority: 0 | 1 | 2): Promise<void> => {
+				const capture = await queryCaptureForWindow(queryKey);
+				if (capture === undefined) return;
+				const proof = await Effect.runPromise(
+					coverage.readWindow(queryKey, (window) =>
+						Effect.succeed({
+							dependencies: window.dependencies,
+							nextCursor: window.nextCursor,
+							rowCount: window.orderedRowIds.length
+						})
+					)
+				);
+				if (proof === undefined) return;
+				const adjacent = adjacentHydration.get(queryKey);
+				const hydrationCapture =
+					priority === 1 && adjacent !== undefined && adjacent.cursor === proof.nextCursor
+						? (() => {
+								const input = { ...asJsonRecord(capture.input), after: adjacent.cursor };
+								return { ...capture, key: cacheKeyFor(capture.command, input), input };
+							})()
+						: capture;
+				const dependencies = proof.dependencies;
+				const flight = coordinator.beginWindowFlight(queryKey, dependencies);
+				try {
+					if (hydrationCapture === capture && capture.command === 'collections.findMany') {
+						const converged = await fetchConvergedFindManyCapture(capture, proof.rowCount);
+						await Effect.runPromise(materializeQuery({ ...converged, flight }));
+					} else {
+						await fetchAndMaterialize(hydrationCapture, flight);
+					}
+				} finally {
+					coordinator.cancelWindowFlight(flight);
+					if (adjacentHydration.get(queryKey) === adjacent && adjacent !== undefined) {
+						adjacent.release();
+						adjacentHydration.delete(queryKey);
+					}
+				}
+				const installed = await Effect.runPromise(
+					coverage.readWindow(queryKey, (proof) =>
+						Effect.succeed({ valid: proof.valid, dirty: proof.dirty })
+					)
+				);
+				if (installed?.valid !== true || installed.dirty) {
+					coordinator.requestRefill(queryKey);
+					return;
+				}
+				invalidateNamed(dependencies);
+			};
+			const rehydrateActive = async (queryKeys: ReadonlyArray<string>): Promise<void> => {
+				const captures = (await Promise.all(queryKeys.map(queryCaptureForWindow))).flatMap(
+					(capture) => {
+						return capture === undefined ? [] : [capture];
+					}
+				);
+				m3Hydrating = true;
+				try {
+					accessState?.staleWindowKeys.clear();
+					accessState?.syncStatus.patch({ staleServerProofWindows: 0 });
+					for (let index = 0; index < captures.length; index += 2) {
+						await Promise.all(
+							captures.slice(index, index + 2).map((capture) => fetchAndMaterialize(capture))
+						);
+					}
+				} finally {
+					m3Hydrating = false;
+				}
+			};
 
-		const initialPosition = yield* coverage.position();
-		const coordinator = createPartitionSyncCoordinator({
-			initialPosition,
-			store: {
-				position: () => coverage.position(),
-				applyDeltas: (batch) => coverage.applyDeltaBatch({
-					deltas: batch.deltas,
-					headCursor: batch.cursor,
-					generations: batch.generations,
-					affectedCollections: batch.affectedCollections,
-					refillCollections: batch.refillCollections
-				}).pipe(Effect.map((outcome) => ({
-					applied: outcome.applied,
-					affectedCollections: outcome.collections,
-					affectedWindowIds: outcome.affectedWindowIds,
-					proofWithdrawals: outcome.proofWithdrawals
-				}))),
-				invalidateDependencies: (collections, generations) =>
-					coverage.invalidateDependencies(collections, generations).pipe(Effect.asVoid),
-				rebuildNamespace: () => coverage.rebuildNamespace(),
-				recordPosition: (position) => coverage.recordPosition(position)
-			},
-			rerunAffected: (collections) => {
-				invalidateNamed(collections);
-				Effect.runFork(announceToTabs(collections));
-			},
-			recomputeWindows: (queryKeys) =>
-				Effect.runPromise(recomputer.recomputeMany(queryKeys)).then((restored) => {
-					for (const queryKey of restored) accessState?.staleWindowKeys.delete(queryKey);
-					return restored;
-				}),
-			onApplied: async (batch, outcome) => {
-				if (outcome.applied > 0) options.onChange?.(outcome.applied);
-				await confirmMutationDeltas(batch);
-				await Effect.runPromise(enforceBudget());
-			},
-			onProofWithdrawals: (queryKeys) => {
-				if (accessState === undefined) return;
-				void Promise.all(
-					queryKeys.map((queryKey) =>
+			const confirmMutationDeltas = async (
+				batch: Pick<
+					Parameters<PartitionSyncCoordinator['acceptDeltas']>[0],
+					'deltas' | 'mutationConfirmations' | 'mutationRejections'
+				>
+			): Promise<void> => {
+				const journals = await knownMutationJournals(runtime);
+				const retirements = (
+					await Promise.all(
+						journals.map((journal) =>
+							journal.observeAuthoritativeBatch({
+								deltas: batch.deltas.map((delta) => ({
+									mutationId: delta.mutationId,
+									row: { collection: delta.collection, recordId: delta.recordId },
+									kind: delta.op,
+									rowVersion: delta.rowVersion
+								})),
+								confirmations: batch.mutationConfirmations,
+								mutationRejections: batch.mutationRejections
+							})
+						)
+					)
+				).flatMap(({ retirements }) => retirements);
+				if (retirements.length === 0) return;
+				await refreshOverlaySnapshot();
+				for (const retirement of retirements)
+					await releaseReplicaPendingMutationLease(runtime, retirement.idempotencyKey);
+				await accessState?.reflectLocalMutation?.([
+					...new Set(retirements.flatMap(({ affectedCollections }) => affectedCollections))
+				]);
+			};
+			let requestStream: (
+				collections?: ReadonlyArray<string>,
+				position?: {
+					readonly cursor: SyncCursor;
+					readonly generations: Readonly<Record<string, number>>;
+				}
+			) => void = () => undefined;
+			let publishedDependencySignature: string | undefined;
+			/**
+			 * Every collection this workspace has — never the ones a page happens to have mounted.
+			 *
+			 * The partition stream is opened once per client and stays open, so its subscription cannot
+			 * depend on what is on screen. Deriving it from mounted windows meant navigating between
+			 * surfaces tore the stream down and built a new one, and a surface holding no live query tore
+			 * it down and left nothing to reopen it — which is how a workspace ended up permanently
+			 * reporting a dead stream while every command it sent answered normally.
+			 *
+			 * A workspace's collection set is fixed for the session, so the subscription is too. The
+			 * server accepts 64 (`MAX_SYNC_PARTITION_COLLECTIONS`); the largest template declares 23, so
+			 * the cap is headroom rather than a limit anyone reaches, and truncating is still better than
+			 * a refused stream.
+			 */
+			const SUBSCRIPTION_LIMIT = 64;
+			const subscribedCollections = (): ReadonlyArray<string> =>
+				readableSubscriptionCollections(
+					// `approval_request` is the sole runtime-owned replicated collection. Keeping it as
+					// the internal anchor lets an otherwise empty authored workspace hold the one live
+					// stream needed for private names-only invalidations. It is already the one explicit
+					// generic system exception, so this does not broaden the authored/public collection set.
+					[...Object.keys(runtimeStates.access(runtime)?.catalog ?? {}), 'approval_request'],
+					local.readable,
+					SUBSCRIPTION_LIMIT
+				);
+			const subscribedInvalidations = (): ReadonlyArray<string> => [
+				'agent_mailbox',
+				'agent_run',
+				'automation_run',
+				'chat_message',
+				'chat_session'
+			];
+			const rehydrationFacts = async () => {
+				const active = (await Effect.runPromise(coverage.listWindows()))
+					.filter(({ leaseCount }) => leaseCount > 0)
+					.slice(0, 256);
+				const rowCounts = await Promise.all(
+					active.map(({ id }) =>
 						Effect.runPromise(
+							coverage.readWindow(id, (proof) => Effect.succeed(proof.orderedRowIds.length))
+						).then((count) => count ?? 0)
+					)
+				);
+				const rows = rowCounts.reduce((total, count) => total + count, 0);
+				const bytes = active.reduce((total, window) => total + window.bytes, 0);
+				return {
+					activeWindows: active.length,
+					rowsPerWindow: Math.max(1, Math.min(500, Math.ceil(rows / Math.max(active.length, 1)))),
+					estimatedBytesPerRow: Math.max(
+						1,
+						Math.min(1_048_576, Math.ceil(bytes / Math.max(rows, 1)))
+					)
+				};
+			};
+
+			const initialPosition = yield* coverage.position();
+			const coordinator = createPartitionSyncCoordinator({
+				initialPosition,
+				store: {
+					position: () => coverage.position(),
+					applyDeltas: (batch) =>
+						coverage
+							.applyDeltaBatch({
+								deltas: batch.deltas,
+								headCursor: batch.cursor,
+								generations: batch.generations,
+								affectedCollections: batch.affectedCollections,
+								refillCollections: batch.refillCollections
+							})
+							.pipe(
+								Effect.map((outcome) => ({
+									applied: outcome.applied,
+									affectedCollections: outcome.collections,
+									affectedWindowIds: outcome.affectedWindowIds,
+									proofWithdrawals: outcome.proofWithdrawals
+								}))
+							),
+					invalidateDependencies: (collections, generations) =>
+						coverage.invalidateDependencies(collections, generations).pipe(Effect.asVoid),
+					rebuildNamespace: () => coverage.rebuildNamespace(),
+					recordPosition: (position) => coverage.recordPosition(position)
+				},
+				rerunAffected: (collections) => {
+					invalidateNamed(collections);
+					Effect.runFork(announceToTabs(collections));
+				},
+				recomputeWindows: (queryKeys) =>
+					Effect.runPromise(recomputer.recomputeMany(queryKeys)).then((restored) => {
+						for (const queryKey of restored) accessState?.staleWindowKeys.delete(queryKey);
+						return restored;
+					}),
+				onApplied: async (batch, outcome) => {
+					if (outcome.applied > 0) options.onChange?.(outcome.applied);
+					await confirmMutationDeltas(batch);
+					await Effect.runPromise(enforceBudget());
+				},
+				onProofWithdrawals: (queryKeys) => {
+					if (accessState === undefined) return;
+					void Promise.all(
+						queryKeys.map((queryKey) =>
+							Effect.runPromise(
+								coverage.readWindow(queryKey, (proof) =>
+									Effect.succeed(proof.proofOwner === 'server' && (!proof.valid || proof.dirty))
+								)
+							).then((stale) => ({ queryKey, stale: stale === true }))
+						)
+					)
+						.then((windows) => {
+							for (const { queryKey, stale } of windows) {
+								if (stale) accessState.staleWindowKeys.add(queryKey);
+								else accessState.staleWindowKeys.delete(queryKey);
+							}
+							accessState.syncStatus.patch({
+								staleServerProofWindows: accessState.staleWindowKeys.size
+							});
+						})
+						.catch((cause) => options.onError?.(cause));
+				},
+				refillWindow,
+				rehydrateActive: (queryKeys) => rehydrateActive(queryKeys),
+				onDependenciesChanged: (_collections, position) => {
+					if (!leads() || paused) return;
+					// The subscription is the workspace, so a dependency change never re-targets the stream.
+					// What still matters is the cursor and cost facts it carries.
+					const subscribed = subscribedCollections();
+					const dependencySignature = JSON.stringify(subscribed);
+					if (dependencySignature === publishedDependencySignature) return;
+					publishedDependencySignature = dependencySignature;
+					if (subscribed.length === 0) {
+						closeSubscription();
+						settleCatchUp();
+						return;
+					}
+					if (subscription === undefined) requestStream(subscribed, position);
+					else
+						void rehydrationFacts()
+							.then((rehydration) =>
+								subscription?.update(
+									subscribed,
+									subscribedInvalidations(),
+									position,
+									pendingMutationIds,
+									rehydration
+								)
+							)
+							.catch((cause) => options.onError?.(cause));
+				},
+				...(options.onError === undefined ? {} : { onError: options.onError })
+			});
+			const requestAdjacentHydration = (queryKey: string): void => {
+				void Effect.runPromise(
+					coverage.readWindow(queryKey, (proof) => Effect.succeed(proof.nextCursor))
+				)
+					.then((nextCursor) => {
+						const existing = adjacentHydration.get(queryKey);
+						if (nextCursor === null || nextCursor === undefined) {
+							existing?.release();
+							adjacentHydration.delete(queryKey);
+							return;
+						}
+						if (existing?.cursor === nextCursor) return;
+						existing?.release();
+						const demand = coordinator.retainHydration({
+							ownerId: `adjacent:${queryKey}`,
+							queryKey,
+							reason: 'adjacent',
+							queryKeyEvidence: 'concrete'
+						});
+						adjacentHydration.set(queryKey, {
+							cursor: nextCursor,
+							release: demand.release
+						});
+						// The continuation is explicitly P1 even when the visible root window is P0.
+						coordinator.requestRefill(queryKey, 1);
+					})
+					.catch((cause) => options.onError?.(cause));
+			};
+			if (accessState !== undefined) {
+				accessState.partitionSync = coordinator;
+				accessState.windowLedger = coverage;
+				accessState.requestAdjacentHydration = requestAdjacentHydration;
+				accessState.reflectLocalMutation = async (collections) => {
+					const dirtied = await Effect.runPromise(coverage.dirtyDependencies(collections));
+					await Effect.runPromise(recomputer.recomputeMany(dirtied.affectedWindowIds));
+					for (const queryKey of dirtied.proofWithdrawals) {
+						coordinator.requestRefill(queryKey);
+						const serverProof = await Effect.runPromise(
 							coverage.readWindow(queryKey, (proof) =>
 								Effect.succeed(proof.proofOwner === 'server' && (!proof.valid || proof.dirty))
 							)
-						).then((stale) => ({ queryKey, stale: stale === true }))
-					)
-				).then((windows) => {
-					for (const { queryKey, stale } of windows) {
-						if (stale) accessState.staleWindowKeys.add(queryKey);
+						);
+						if (serverProof === true) accessState.staleWindowKeys.add(queryKey);
 						else accessState.staleWindowKeys.delete(queryKey);
 					}
 					accessState.syncStatus.patch({
 						staleServerProofWindows: accessState.staleWindowKeys.size
 					});
-				}).catch((cause) => options.onError?.(cause));
-			},
-			refillWindow,
-			rehydrateActive: (queryKeys) => rehydrateActive(queryKeys),
-			onDependenciesChanged: (_collections, position) => {
-				if (!leads() || paused) return;
-				// The subscription is the workspace, so a dependency change never re-targets the stream.
-				// What still matters is the cursor and cost facts it carries.
-				const subscribed = subscribedCollections();
-				const dependencySignature = JSON.stringify(subscribed);
-				if (dependencySignature === publishedDependencySignature) return;
-				publishedDependencySignature = dependencySignature;
-				if (subscribed.length === 0) {
-					closeSubscription();
-					settleCatchUp();
-					return;
-				}
-				if (subscription === undefined) requestStream(subscribed, position);
-				else void rehydrationFacts()
-					.then((rehydration) =>
-						subscription?.update(
-							subscribed,
-							subscribedInvalidations(),
-							position,
-							pendingMutationIds,
-							rehydration
-						)
-					)
-					.catch((cause) => options.onError?.(cause));
-			},
-				...(options.onError === undefined ? {} : { onError: options.onError })
-			});
-		const requestAdjacentHydration = (queryKey: string): void => {
-			void Effect.runPromise(
-				coverage.readWindow(queryKey, (proof) => Effect.succeed(proof.nextCursor))
-			).then((nextCursor) => {
-				const existing = adjacentHydration.get(queryKey);
-				if (nextCursor === null || nextCursor === undefined) {
-					existing?.release();
-					adjacentHydration.delete(queryKey);
-					return;
-				}
-				if (existing?.cursor === nextCursor) return;
-				existing?.release();
-				const demand = coordinator.retainHydration({
-					ownerId: `adjacent:${queryKey}`,
-					queryKey,
-					reason: 'adjacent',
-					queryKeyEvidence: 'concrete'
+					invalidateNamed(collections);
+					await Effect.runPromise(announceToTabs(collections));
+				};
+				yield* Effect.tryPromise(async () => {
+					await refreshOverlaySnapshot();
+					const collections = await activeOverlayCollections();
+					if (collections.length > 0) await accessState.reflectLocalMutation?.(collections);
 				});
-				adjacentHydration.set(queryKey, {
-					cursor: nextCursor,
-					release: demand.release
-				});
-				// The continuation is explicitly P1 even when the visible root window is P0.
-				coordinator.requestRefill(queryKey, 1);
-			}).catch((cause) => options.onError?.(cause));
-		};
-		if (accessState !== undefined) {
-			accessState.partitionSync = coordinator;
-			accessState.windowLedger = coverage;
-			accessState.requestAdjacentHydration = requestAdjacentHydration;
-			accessState.reflectLocalMutation = async (collections) => {
-				const dirtied = await Effect.runPromise(coverage.dirtyDependencies(collections));
-				await Effect.runPromise(recomputer.recomputeMany(dirtied.affectedWindowIds));
-				for (const queryKey of dirtied.proofWithdrawals) {
-					coordinator.requestRefill(queryKey);
-					const serverProof = await Effect.runPromise(
-						coverage.readWindow(queryKey, (proof) =>
-							Effect.succeed(proof.proofOwner === 'server' && (!proof.valid || proof.dirty))
-						)
-					);
-					if (serverProof === true) accessState.staleWindowKeys.add(queryKey);
-					else accessState.staleWindowKeys.delete(queryKey);
-				}
-				accessState.syncStatus.patch({
-					staleServerProofWindows: accessState.staleWindowKeys.size
-				});
-				invalidateNamed(collections);
-				await Effect.runPromise(announceToTabs(collections));
-			};
-			yield* Effect.tryPromise(async () => {
-				await refreshOverlaySnapshot();
-				const collections = await activeOverlayCollections();
-				if (collections.length > 0) await accessState.reflectLocalMutation?.(collections);
-			});
-			yield* Effect.forEach(
-				[...accessState.visibleQueries.values()],
-				(tracked) => tracked.queryKey === undefined
-					? Effect.void
-					: coverage.readWindow(tracked.queryKey, (proof) => Effect.sync(() => {
-						tracked.releaseWindow?.();
-						tracked.releaseWindow = coordinator.mountWindow(
-							proof.queryKey,
-							proof.dependencies,
-							tracked.visibility,
-							{
-								relationDependency: hasCanonicalRelationshipSelection(
-									proof.canonical['relationships']
-								)
-							}
-						);
-					})).pipe(Effect.asVoid),
-				{ discard: true }
-			);
-		}
-		const retainedWindows = yield* coverage.listWindows();
-		for (const window of retainedWindows) {
-			coordinator.noteRecentHydration({
-				queryKey: window.id,
-				lastAccess: window.lastAccess
-			});
-		}
-		if (profileIndex !== undefined && profilePartitionId !== undefined) {
-			const profile = yield* Effect.tryPromise(() => profileIndex.snapshot());
-			for (const window of profile.windows) {
-				if (window.partitionId !== profilePartitionId) continue;
+				yield* Effect.forEach(
+					[...accessState.visibleQueries.values()],
+					(tracked) =>
+						tracked.queryKey === undefined
+							? Effect.void
+							: coverage
+									.readWindow(tracked.queryKey, (proof) =>
+										Effect.sync(() => {
+											tracked.releaseWindow?.();
+											tracked.releaseWindow = coordinator.mountWindow(
+												proof.queryKey,
+												proof.dependencies,
+												tracked.visibility,
+												{
+													relationDependency: hasCanonicalRelationshipSelection(
+														proof.canonical['relationships']
+													)
+												}
+											);
+										})
+									)
+									.pipe(Effect.asVoid),
+					{ discard: true }
+				);
+			}
+			const retainedWindows = yield* coverage.listWindows();
+			for (const window of retainedWindows) {
 				coordinator.noteRecentHydration({
 					queryKey: window.id,
 					lastAccess: window.lastAccess
 				});
 			}
-		}
-		coordinator.requestPlannedHydration();
-
-		const refreshMutationStreamFacts = async (): Promise<void> => {
-			const journals = await knownMutationJournals(runtime);
-			const ids = [...new Set((await Promise.all(
-				journals.map((journal) => journal.pendingAuthoritativeMutationIds())
-			)).flat())].toSorted().slice(0, 256);
-			pendingMutationIds = ids;
-			if (!leads() || paused) return;
-			const collections = subscribedCollections();
-			if (collections.length === 0) {
-				closeSubscription();
-				return;
+			if (profileIndex !== undefined && profilePartitionId !== undefined) {
+				const profile = yield* Effect.tryPromise(() => profileIndex.snapshot());
+				for (const window of profile.windows) {
+					if (window.partitionId !== profilePartitionId) continue;
+					coordinator.noteRecentHydration({
+						queryKey: window.id,
+						lastAccess: window.lastAccess
+					});
+				}
 			}
-			const [position, rehydration] = await Promise.all([
-				Effect.runPromise(coverage.position()),
-				rehydrationFacts()
-			]);
-					if (subscription === undefined) requestStream(collections, position);
-					else
-						subscription.update(
-							collections,
-							subscribedInvalidations(),
-							position,
-							pendingMutationIds,
-							rehydration
-						);
-			// Pending identities ride the one long-held stream and are retained for reconnect. A lost
-			// mutation response is recovered by replaying that idempotent mutation once its owner lease
-			// expires; it never creates a separate status-polling channel.
-		};
-		const installMutationRuntime = async (): Promise<void> => {
-			if (accessState === undefined || accessState.serverPartitionKey === undefined) return;
-			let mutationPushRunning = false;
-			let mutationPushStopped = false;
-			await mutationJournalFor(runtime);
-			const journals = await knownMutationJournals(runtime);
-			const publishMutationSnapshot = (
-				snapshot: Awaited<ReturnType<CollectionMutationJournal['snapshot']>>
-			): void => {
-				const active = snapshot.mutations.filter(({ pushState }) => pushState !== 'quarantined');
-				accessState.syncStatus.patch({
-					pendingMutations: active.length,
-					issues: snapshot.issues.map((issue) =>
-						issue.kind === 'rejected'
-							? {
-									mutationId: issue.idempotencyKey,
-									kind: 'rejected' as const,
-									message: issue.message,
-									atEpochMs: issue.settledAtEpochMs
-								}
-							: {
-									mutationId: issue.idempotencyKey,
-									kind: 'quarantined' as const,
-									message: issue.quarantine.message,
-									atEpochMs: issue.settledAtEpochMs
-								}
+			coordinator.requestPlannedHydration();
+
+			const refreshMutationStreamFacts = async (): Promise<void> => {
+				const journals = await knownMutationJournals(runtime);
+				const ids = [
+					...new Set(
+						(
+							await Promise.all(
+								journals.map((journal) => journal.pendingAuthoritativeMutationIds())
+							)
+						).flat()
 					)
-				});
+				]
+					.toSorted()
+					.slice(0, 256);
+				pendingMutationIds = ids;
+				if (!leads() || paused) return;
+				const collections = subscribedCollections();
+				if (collections.length === 0) {
+					closeSubscription();
+					return;
+				}
+				const [position, rehydration] = await Promise.all([
+					Effect.runPromise(coverage.position()),
+					rehydrationFacts()
+				]);
+				if (subscription === undefined) requestStream(collections, position);
+				else
+					subscription.update(
+						collections,
+						subscribedInvalidations(),
+						position,
+						pendingMutationIds,
+						rehydration
+					);
+				// Pending identities ride the one long-held stream and are retained for reconnect. A lost
+				// mutation response is recovered by replaying that idempotent mutation once its owner lease
+				// expires; it never creates a separate status-polling channel.
 			};
-			accessState.mutationJournalUnsubscribe?.();
-			const unsubscribers = journals.map((journal) => journal.subscribe(() => {
-				void accessState.refreshMutationStatus?.().catch((cause) => options.onError?.(cause));
-			}));
-			accessState.mutationJournalUnsubscribe = () => {
-				for (const unsubscribe of unsubscribers) unsubscribe();
-			};
-			accessState.refreshMutationStatus = async () => {
-				await refreshOverlaySnapshot();
-				const snapshots = await Promise.all(journals.map((journal) => journal.snapshot()));
-				publishMutationSnapshot({
-					mutations: snapshots.flatMap(({ mutations }) => mutations),
-					issues: snapshots.flatMap(({ issues }) => issues)
-				});
-				await refreshMutationStreamFacts();
-			};
-			await accessState.refreshMutationStatus();
-			let schedule = (): void => undefined;
-			const scheduleMutationPushAt = (atEpochMs: number): void => {
-				if (mutationPushStopped || !leads() || paused) return;
-				if (mutationPushRetryAt !== undefined && mutationPushRetryAt <= atEpochMs) return;
-				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
-				mutationPushRetryAt = atEpochMs;
-				mutationPushRetry = setTimeout(() => {
+			const installMutationRuntime = async (): Promise<void> => {
+				if (accessState === undefined || accessState.serverPartitionKey === undefined) return;
+				let mutationPushRunning = false;
+				let mutationPushStopped = false;
+				await mutationJournalFor(runtime);
+				const journals = await knownMutationJournals(runtime);
+				const publishMutationSnapshot = (
+					snapshot: Awaited<ReturnType<CollectionMutationJournal['snapshot']>>
+				): void => {
+					const active = snapshot.mutations.filter(({ pushState }) => pushState !== 'quarantined');
+					accessState.syncStatus.patch({
+						pendingMutations: active.length,
+						issues: snapshot.issues.map((issue) =>
+							issue.kind === 'rejected'
+								? {
+										mutationId: issue.idempotencyKey,
+										kind: 'rejected' as const,
+										message: issue.message,
+										atEpochMs: issue.settledAtEpochMs
+									}
+								: {
+										mutationId: issue.idempotencyKey,
+										kind: 'quarantined' as const,
+										message: issue.quarantine.message,
+										atEpochMs: issue.settledAtEpochMs
+									}
+						)
+					});
+				};
+				accessState.mutationJournalUnsubscribe?.();
+				const unsubscribers = journals.map((journal) =>
+					journal.subscribe(() => {
+						void accessState.refreshMutationStatus?.().catch((cause) => options.onError?.(cause));
+					})
+				);
+				accessState.mutationJournalUnsubscribe = () => {
+					for (const unsubscribe of unsubscribers) unsubscribe();
+				};
+				accessState.refreshMutationStatus = async () => {
+					await refreshOverlaySnapshot();
+					const snapshots = await Promise.all(journals.map((journal) => journal.snapshot()));
+					publishMutationSnapshot({
+						mutations: snapshots.flatMap(({ mutations }) => mutations),
+						issues: snapshots.flatMap(({ issues }) => issues)
+					});
+					await refreshMutationStreamFacts();
+				};
+				await accessState.refreshMutationStatus();
+				let schedule = (): void => undefined;
+				const scheduleMutationPushAt = (atEpochMs: number): void => {
+					if (mutationPushStopped || !leads() || paused) return;
+					if (mutationPushRetryAt !== undefined && mutationPushRetryAt <= atEpochMs) return;
+					if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+					mutationPushRetryAt = atEpochMs;
+					mutationPushRetry = setTimeout(
+						() => {
+							mutationPushRetry = undefined;
+							mutationPushRetryAt = undefined;
+							schedule();
+						},
+						Math.max(0, atEpochMs - Date.now())
+					);
+					const portableTimer = mutationPushRetry as unknown as { unref?: () => void };
+					portableTimer.unref?.();
+				};
+				const scheduleInterruptedMutationReplay = async (): Promise<void> => {
+					const entries = (await Promise.all(journals.map((journal) => journal.entries()))).flat();
+					const replayAt = entries
+						.filter(({ pushState }) => pushState === 'pushing')
+						.map(
+							({ lastAttemptAtEpochMs }) =>
+								(lastAttemptAtEpochMs ?? Date.now()) + MUTATION_PUSH_STALE_AFTER_MS + 1
+						)
+						.toSorted((left, right) => left - right)[0];
+					if (replayAt !== undefined) scheduleMutationPushAt(replayAt);
+				};
+				schedule = (): void => {
+					if (mutationPushStopped || mutationPushRunning || !leads()) return;
+					if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
 					mutationPushRetry = undefined;
 					mutationPushRetryAt = undefined;
-					schedule();
-				}, Math.max(0, atEpochMs - Date.now()));
-				const portableTimer = mutationPushRetry as unknown as { unref?: () => void };
-				portableTimer.unref?.();
-			};
-			const scheduleInterruptedMutationReplay = async (): Promise<void> => {
-				const entries = (await Promise.all(journals.map((journal) => journal.entries()))).flat();
-				const replayAt = entries
-					.filter(({ pushState }) => pushState === 'pushing')
-					.map(({ lastAttemptAtEpochMs }) =>
-						(lastAttemptAtEpochMs ?? Date.now()) + MUTATION_PUSH_STALE_AFTER_MS + 1
-					)
-					.toSorted((left, right) => left - right)[0];
-				if (replayAt !== undefined) scheduleMutationPushAt(replayAt);
-			};
-			schedule = (): void => {
-				if (mutationPushStopped || mutationPushRunning || !leads()) return;
-				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
-				mutationPushRetry = undefined;
-				mutationPushRetryAt = undefined;
-				mutationPushRunning = true;
-				void (async () => {
-					try {
-						for (;;) {
-							const pushable = (await Promise.all(journals.map(async (journal) => ({
-								journal,
-								mutation: await journal.nextPushable()
-							})))).find(({ mutation }) => mutation !== undefined);
-							if (pushable?.mutation === undefined || mutationPushStopped || !leads()) {
-								await scheduleInterruptedMutationReplay();
-								return;
-							}
-							const journal = pushable.journal;
-							const pushing = await journal.markPushing(pushable.mutation.idempotencyKey);
-							let settlement: Schema.Schema.Type<typeof CollectionMutationSettlementSchema>;
-							try {
-								settlement = await Effect.runPromise(
-									decodedCommandEffect(
-										runtime,
-										'collections.mutate',
-										mutationWireRequest(pushing),
-										CollectionMutationSettlementSchema
-									).pipe(Effect.timeout(MUTATION_PUSH_STALE_AFTER_MS))
-								);
-							} catch (cause) {
-								if (terminalMutationFailure(cause)) {
+					mutationPushRunning = true;
+					void (async () => {
+						try {
+							for (;;) {
+								const pushable = (
+									await Promise.all(
+										journals.map(async (journal) => ({
+											journal,
+											mutation: await journal.nextPushable()
+										}))
+									)
+								).find(({ mutation }) => mutation !== undefined);
+								if (pushable?.mutation === undefined || mutationPushStopped || !leads()) {
+									await scheduleInterruptedMutationReplay();
+									return;
+								}
+								const journal = pushable.journal;
+								const pushing = await journal.markPushing(pushable.mutation.idempotencyKey);
+								let settlement: Schema.Schema.Type<typeof CollectionMutationSettlementSchema>;
+								try {
+									settlement = await Effect.runPromise(
+										decodedCommandEffect(
+											runtime,
+											'collections.mutate',
+											mutationWireRequest(pushing),
+											CollectionMutationSettlementSchema
+										).pipe(Effect.timeout(MUTATION_PUSH_STALE_AFTER_MS))
+									);
+								} catch (cause) {
+									if (terminalMutationFailure(cause)) {
+										await journal.reconcile(pushing.idempotencyKey, {
+											kind: 'rejected',
+											code: 'forbidden',
+											message: cause instanceof Error ? cause.message : String(cause)
+										});
+										await refreshOverlaySnapshot();
+										await releaseReplicaPendingMutationLease(runtime, pushing.idempotencyKey);
+										await accessState.reflectLocalMutation?.([
+											...new Set(pushing.overlay.map(({ row }) => row.collection))
+										]);
+										continue;
+									} else {
+										await journal.retry(pushing.idempotencyKey, cause);
+										// The only retry timer is derived from this failed submission. It replays the
+										// same idempotency key once; it never issues a status/read poll.
+										scheduleMutationPushAt(Date.now() + 2_000);
+										return;
+									}
+								}
+								if (settlement.resolution === 'accepted') {
+									const reconciled = await journal.reconcile(pushing.idempotencyKey, {
+										kind: 'accepted'
+									});
+									accessState.syncStatus.patch({
+										settledMutations: accessState.syncStatus.current().settledMutations + 1
+									});
+									if (reconciled.retirement !== undefined) {
+										await refreshOverlaySnapshot();
+										await releaseReplicaPendingMutationLease(
+											runtime,
+											reconciled.retirement.idempotencyKey
+										);
+										await accessState.reflectLocalMutation?.(
+											reconciled.retirement.affectedCollections
+										);
+									}
+								} else if (settlement.resolution === 'rebased') {
+									const reconciled = await journal.reconcile(pushing.idempotencyKey, {
+										kind: 'rebased',
+										fromSchemaFingerprint: settlement.fromSchemaFingerprint,
+										toSchemaFingerprint: settlement.toSchemaFingerprint
+									});
+									accessState.syncStatus.patch({
+										settledMutations: accessState.syncStatus.current().settledMutations + 1
+									});
+									if (reconciled.retirement !== undefined) {
+										await refreshOverlaySnapshot();
+										await releaseReplicaPendingMutationLease(
+											runtime,
+											reconciled.retirement.idempotencyKey
+										);
+										await accessState.reflectLocalMutation?.(
+											reconciled.retirement.affectedCollections
+										);
+									}
+								} else if (settlement.resolution === 'rejected') {
 									await journal.reconcile(pushing.idempotencyKey, {
 										kind: 'rejected',
-										code: 'forbidden',
-										message: cause instanceof Error ? cause.message : String(cause)
+										code: settlement.code,
+										message: settlement.message
 									});
 									await refreshOverlaySnapshot();
 									await releaseReplicaPendingMutationLease(runtime, pushing.idempotencyKey);
 									await accessState.reflectLocalMutation?.([
 										...new Set(pushing.overlay.map(({ row }) => row.collection))
 									]);
-									continue;
 								} else {
-									await journal.retry(pushing.idempotencyKey, cause);
-									// The only retry timer is derived from this failed submission. It replays the
-									// same idempotency key once; it never issues a status/read poll.
-									scheduleMutationPushAt(Date.now() + 2_000);
-									return;
+									await journal.reconcile(pushing.idempotencyKey, {
+										kind: 'quarantined',
+										code: 'schema-incompatible',
+										message: settlement.reason
+									});
+									await refreshOverlaySnapshot();
+									await releaseReplicaPendingMutationLease(runtime, pushing.idempotencyKey);
+									await accessState.reflectLocalMutation?.([
+										...new Set(pushing.overlay.map(({ row }) => row.collection))
+									]);
 								}
 							}
-							if (settlement.resolution === 'accepted') {
-								const reconciled = await journal.reconcile(
-									pushing.idempotencyKey,
-									{ kind: 'accepted' }
-								);
-								accessState.syncStatus.patch({
-									settledMutations: accessState.syncStatus.current().settledMutations + 1
-								});
-								if (reconciled.retirement !== undefined) {
-									await refreshOverlaySnapshot();
-									await releaseReplicaPendingMutationLease(
-										runtime,
-										reconciled.retirement.idempotencyKey
-									);
-									await accessState.reflectLocalMutation?.(
-										reconciled.retirement.affectedCollections
-									);
-								}
-							} else if (settlement.resolution === 'rebased') {
-								const reconciled = await journal.reconcile(pushing.idempotencyKey, {
-									kind: 'rebased',
-									fromSchemaFingerprint: settlement.fromSchemaFingerprint,
-									toSchemaFingerprint: settlement.toSchemaFingerprint
-								});
-								accessState.syncStatus.patch({
-									settledMutations: accessState.syncStatus.current().settledMutations + 1
-								});
-								if (reconciled.retirement !== undefined) {
-									await refreshOverlaySnapshot();
-									await releaseReplicaPendingMutationLease(
-										runtime,
-										reconciled.retirement.idempotencyKey
-									);
-									await accessState.reflectLocalMutation?.(
-										reconciled.retirement.affectedCollections
-									);
-								}
-							} else if (settlement.resolution === 'rejected') {
-								await journal.reconcile(pushing.idempotencyKey, {
-									kind: 'rejected',
-									code: settlement.code,
-									message: settlement.message
-								});
-								await refreshOverlaySnapshot();
-								await releaseReplicaPendingMutationLease(runtime, pushing.idempotencyKey);
-								await accessState.reflectLocalMutation?.([
-									...new Set(pushing.overlay.map(({ row }) => row.collection))
-								]);
-							} else {
-								await journal.reconcile(pushing.idempotencyKey, {
-									kind: 'quarantined',
-									code: 'schema-incompatible',
-									message: settlement.reason
-								});
-								await refreshOverlaySnapshot();
-								await releaseReplicaPendingMutationLease(runtime, pushing.idempotencyKey);
-								await accessState.reflectLocalMutation?.([
-									...new Set(pushing.overlay.map(({ row }) => row.collection))
-								]);
-							}
+						} catch (cause) {
+							options.onError?.(cause);
+						} finally {
+							mutationPushRunning = false;
 						}
-					} catch (cause) {
-						options.onError?.(cause);
-					} finally {
-						mutationPushRunning = false;
+					})();
+				};
+				accessState.scheduleMutationPush = schedule;
+				accessState.stopMutationPush = () => {
+					mutationPushStopped = true;
+					if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+					mutationPushRetry = undefined;
+					mutationPushRetryAt = undefined;
+				};
+				schedule();
+			};
+			yield* Effect.tryPromise(installMutationRuntime);
+			let physicalNamespaceShutdown: Promise<void> | undefined;
+			const stopPhysicalNamespace = (): Promise<void> => {
+				if (physicalNamespaceShutdown !== undefined) return physicalNamespaceShutdown;
+				physicalNamespaceShutdown = (async () => {
+					closeSubscription();
+					if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+					mutationPushRetry = undefined;
+					mutationPushRetryAt = undefined;
+					if (runtime.local !== undefined) delete runtime.local.current;
+					accessState?.stopMutationPush?.();
+					accessState?.mutationJournalUnsubscribe?.();
+					for (const demand of adjacentHydration.values()) demand.release();
+					adjacentHydration.clear();
+					await coordinator.stop();
+					await queryMaterializationTail;
+					clearInterval(visibleLeaseSweep);
+					clearInterval(visiblePrioritySweep);
+					if (typeof document !== 'undefined') {
+						document.removeEventListener('visibilitychange', onDocumentVisibility);
 					}
+					await leaseOwner?.stop();
+					await Effect.runPromise(local.close().pipe(Effect.catch(() => Effect.void)));
+					await options.physicalLease?.stop();
+					profileIndex?.close();
 				})();
+				return physicalNamespaceShutdown;
 			};
-			accessState.scheduleMutationPush = schedule;
-			accessState.stopMutationPush = () => {
-				mutationPushStopped = true;
-				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
-				mutationPushRetry = undefined;
-				mutationPushRetryAt = undefined;
+			const switchPhysicalNamespace = async (): Promise<void> => {
+				await stopPhysicalNamespace();
+				if (typeof location === 'undefined' || typeof location.reload !== 'function')
+					throw new Error('A changed sync partition requires a workspace shell reload.');
+				location.reload();
+				// Navigation owns reopening the server-selected physical namespace. Never resume the old one.
+				return await new Promise<void>(() => undefined);
 			};
-			schedule();
-		};
-		yield* Effect.tryPromise(installMutationRuntime);
-		let physicalNamespaceShutdown: Promise<void> | undefined;
-		const stopPhysicalNamespace = (): Promise<void> => {
-			if (physicalNamespaceShutdown !== undefined) return physicalNamespaceShutdown;
-			physicalNamespaceShutdown = (async () => {
-				closeSubscription();
-				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
-				mutationPushRetry = undefined;
-				mutationPushRetryAt = undefined;
-				if (runtime.local !== undefined) delete runtime.local.current;
-				accessState?.stopMutationPush?.();
-				accessState?.mutationJournalUnsubscribe?.();
-				for (const demand of adjacentHydration.values()) demand.release();
-				adjacentHydration.clear();
-				await coordinator.stop();
-				await queryMaterializationTail;
-				clearInterval(visibleLeaseSweep);
-				clearInterval(visiblePrioritySweep);
-				if (typeof document !== 'undefined') {
-					document.removeEventListener('visibilitychange', onDocumentVisibility);
+			let partitionRebootstrap: Promise<void> | undefined;
+			const rebootstrapPartition = (
+				announced?: Schema.Schema.Type<typeof SyncPartitionIdentity>,
+				position: {
+					readonly cursor: SyncCursor;
+					readonly generations: Readonly<Record<string, number>>;
+				} = {
+					cursor: { xid: 0, sequence: 0 },
+					generations: {}
 				}
-				await leaseOwner?.stop();
-				await Effect.runPromise(local.close().pipe(Effect.catch(() => Effect.void)));
-				await options.physicalLease?.stop();
-				profileIndex?.close();
-			})();
-			return physicalNamespaceShutdown;
-		};
-		const switchPhysicalNamespace = async (): Promise<void> => {
-			await stopPhysicalNamespace();
-			if (typeof location === 'undefined' || typeof location.reload !== 'function')
-				throw new Error('A changed sync partition requires a workspace shell reload.');
-			location.reload();
-			// Navigation owns reopening the server-selected physical namespace. Never resume the old one.
-			return await new Promise<void>(() => undefined);
-		};
-		let partitionRebootstrap: Promise<void> | undefined;
-		const rebootstrapPartition = (
-			announced?: Schema.Schema.Type<typeof SyncPartitionIdentity>,
-			position: { readonly cursor: SyncCursor; readonly generations: Readonly<Record<string, number>> } = {
-				cursor: { xid: 0, sequence: 0 },
-				generations: {}
-			}
-		): Promise<void> => {
-			if (partitionRebootstrap !== undefined) return partitionRebootstrap;
-			partitionRebootstrap = (async () => {
-				closeSubscription();
-				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
-				mutationPushRetry = undefined;
-				mutationPushRetryAt = undefined;
-				if (runtime.local !== undefined) delete runtime.local.current;
-				if (accessState === undefined) return;
-				accessState.stopMutationPush?.();
-				accessState.mutationJournalUnsubscribe?.();
-				delete accessState.mutationJournal;
-				delete accessState.mutationJournalUnsubscribe;
-				delete accessState.refreshMutationStatus;
-				delete accessState.refreshOverlaySnapshot;
-				const next = announced ?? (await Effect.runPromise(
-					transport.command('sync.partition', {}).pipe(
-						Effect.flatMap(Schema.decodeUnknownEffect(SyncPartitionStatusResponse))
-					)
-				)).partition;
-				if (next.key !== serverPartition.key) {
-					return switchPhysicalNamespace();
-				}
-				if (next.schemaFingerprint !== local.fingerprint)
-					throw new Error('The replacement sync partition requires a different replica schema.');
-				accessState.serverPartitionKey = next.key;
-				accessState.schemaFingerprint = next.schemaFingerprint;
-				localReader = createReader(next.key);
-				recomputer = createLocalWindowRecomputer(
-					local.store,
-					local.shape,
-					coverage,
-					next.key,
-					{ overlay, localActorBinding: options.partition.key }
-				);
-				await installMutationRuntime();
-				coordinator.rebuild('authority', position);
-				await coordinator.idle();
-				await refreshOverlaySnapshot();
-				const overlayCollections = await activeOverlayCollections();
-				if (overlayCollections.length > 0)
-					await accessState.reflectLocalMutation?.(overlayCollections);
-				if (runtime.local !== undefined && accessScopeFor(runtime) === options.accessScope)
-					runtime.local.current = localReader;
-				streamIfLeading();
-			})().finally(() => {
-				partitionRebootstrap = undefined;
-			});
-			return partitionRebootstrap;
-		};
-		if (accessState !== undefined) accessState.rebootstrapPartition = rebootstrapPartition;
-
-			/**
-		 * Exactly one tab streams.
-		 *
-		 * The database is shared, so a per-tab sync loop would have every open tab fetching the same
-		 * diffs and applying them to the same rows — N times the requests and N times the writes to reach
-		 * one outcome, with the cursor being advanced by whichever tab got there first. Leadership is
-		 * decided by Bolt's explicit Web Lock. PGlite has a separate worker-owner election, but that
-		 * decides which worker executes SQL, not which document is allowed to perform network replication.
-		 *
-		 * A tab that is not the leader opens no stream at all, which is the point — one SSE connection
-		 * per browser instead of one per tab. Browsers cap concurrent connections per host, so tabs used
-		 * to compete for that budget with the very requests the pages were waiting on.
-		 */
-		const defaultBarrierHooks: Omit<SchemaBarrierHooks, 'leader'> = {
-			readDurable: async () => {
-				const durable = await Effect.runPromise(readDurableReplicaSchema(local.engine));
-					return (
-						durable === undefined ? {
-							generation: 0,
-							fingerprint: local.fingerprint,
-							protocolVersion: PROTOCOL_VERSION
-						} : {
-							generation: durable.authorityGeneration,
-							fingerprint: durable.fingerprint,
-							protocolVersion: durable.protocolVersion
-						}
-					);
-			},
-			adoptGeneration: async (barrier) => {
-				const adopted = {
-					authorityGeneration: barrier.generation,
-					fingerprint: barrier.fingerprint,
-					protocolVersion: PROTOCOL_VERSION
-				};
-				await Effect.runPromise(
-					coverage.transaction(writeDurableReplicaSchema(local.engine, adopted))
-				);
-				return {
-					generation: adopted.authorityGeneration,
-					fingerprint: adopted.fingerprint,
-					protocolVersion: adopted.protocolVersion
-				};
-			},
-			withdrawReaders: () => {
-				if (runtime.local?.current === localReader && runtime.local !== undefined)
-					delete runtime.local.current;
-			},
-			switchNamespace: () => switchPhysicalNamespace()
-		};
-		const selectedBarrierHooks = options.schemaBarrier ?? defaultBarrierHooks;
-		const barrierController: SchemaBarrierController = createSchemaBarrierController({
-			...selectedBarrierHooks,
-			leader: leads,
-			// This hook runs only after durable facts prove that the physical namespace must change.
-			// Pausing before `accept` made every repeated, adopted barrier close its own SSE stream.
-			withdrawReaders: (collections) => {
-				pauseIntake();
-				if (accessState !== undefined) {
+			): Promise<void> => {
+				if (partitionRebootstrap !== undefined) return partitionRebootstrap;
+				partitionRebootstrap = (async () => {
+					closeSubscription();
+					if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+					mutationPushRetry = undefined;
+					mutationPushRetryAt = undefined;
+					if (runtime.local !== undefined) delete runtime.local.current;
+					if (accessState === undefined) return;
 					accessState.stopMutationPush?.();
 					accessState.mutationJournalUnsubscribe?.();
 					delete accessState.mutationJournal;
 					delete accessState.mutationJournalUnsubscribe;
 					delete accessState.refreshMutationStatus;
 					delete accessState.refreshOverlaySnapshot;
-					delete accessState.serverPartitionKey;
-				}
-				selectedBarrierHooks.withdrawReaders(collections);
-			}
-		});
-		const acceptSchemaMaintenance = (
-			notice: ReplicaSchemaMaintenance,
-			broadcast = false
-		): Promise<void> => {
-			const current = maintenance;
-			if (current !== undefined && notice.generation < current.generation) return maintenanceTail;
-			maintenance =
-				current?.generation === notice.generation
-					? {
-							generation: notice.generation,
-							affectedCollections: [
-								...new Set([...current.affectedCollections, ...notice.affectedCollections])
-							]
-						}
-					: notice;
-			// Keep the control stream alive so it can deliver the committed barrier or durable abort clear,
-			// but stop this document from opening or reopening data intake until completion is proven.
-			paused = true;
-			// Withdrawing the reader is intentionally broader than the affected set during a namespace switch.
-			if (runtime.local?.current === localReader && runtime.local !== undefined) {
-				delete runtime.local.current;
-			}
-			if (broadcast) accessState?.invalidation?.announceMaintenance(notice);
-			const affected = [...maintenance.affectedCollections];
-			maintenanceTail = maintenanceTail.then(async () => {
-				// The notice itself is not schema authority. It only gates promotion/delivery, waits
-				// accepted work out, and withdraws proof so affected commands use the online path.
-				await coordinator.idle();
-				await queryMaterializationTail;
-				await Effect.runPromise(coverage.invalidateDependencies(affected));
-				invalidateNamed(affected);
-				await Effect.runPromise(announceToTabs(affected));
-			});
-			return maintenanceTail;
-		};
-		const acceptSchemaMaintenanceClear = (
-			clear: ReplicaSchemaMaintenanceClear,
-			broadcast = false
-		): Promise<void> => {
-			if (broadcast) accessState?.invalidation?.announceMaintenanceClear(clear);
-			maintenanceTail = maintenanceTail.then(async () => {
-				const current = maintenance;
-				// The host persists and monotonically replays its latest cleared transition. A later clear
-				// is stronger proof for a tab that missed an earlier frame; an older one proves nothing.
-				if (current === undefined || current.generation > clear.generation) return;
-				// A clear is useful only after the host has re-read its authoritative transition state.
-				// Refreshing durable metadata proves no local generation was invented during maintenance.
-				const durable = await barrierController.refreshFromDurable();
-				maintenance = undefined;
-				if (durable.fingerprint !== local.fingerprint)
-					return switchPhysicalNamespace();
-				if (
-					runtime.local !== undefined &&
-					accessScopeFor(runtime) === options.accessScope
-				) {
-					runtime.local.current = localReader;
-				}
-				resumeIntake();
-				invalidateNamed(current.affectedCollections);
-			});
-			return maintenanceTail;
-		};
-		const schemaControl = (control: ReplicaSchemaControl): void => {
-			const handled =
-				control._tag === 'maintenance'
-					? acceptSchemaMaintenance(control.value)
-					: schemaBarrierTail.then(() => acceptSchemaMaintenanceClear(control.value));
-			void handled.catch((cause) => options.onError?.(cause));
-		};
-		if (accessState !== undefined) accessState.schemaControl = schemaControl;
-		const acceptSchemaBarrier = (barrier: ReplicaSchemaBarrier): Promise<void> => {
-			schemaBarrierPauses += 1;
-			const accepted = schemaBarrierTail.then(async () => {
-				await maintenanceTail;
-				await coordinator.idle();
-				await queryMaterializationTail;
-				await barrierController.accept(barrier);
-			});
-			schemaBarrierTail = accepted.catch(() => undefined);
-			return accepted.finally(() => {
-				schemaBarrierPauses -= 1;
-				// A failed/reload-required barrier keeps intake paused; only the final queued barrier
-				// reaching a durably verified idle state may resume it.
-				if (schemaBarrierPauses === 0 && barrierController.state().phase === 'idle') {
-					resumeIntake();
-				}
-			});
-		};
-
-		let openingStream = false;
-		const streamIfLeading = (
-			knownCollections?: ReadonlyArray<string>,
-			knownPosition?: { readonly cursor: SyncCursor; readonly generations: Readonly<Record<string, number>> }
-		): void => {
-			if (!leads() || subscription !== undefined || paused || openingStream) return;
-			openingStream = true;
-			void (async () => {
-				try {
-					const collections = subscribedCollections();
-					const [position, rehydration] = await Promise.all([
-						knownPosition === undefined
-							? Effect.runPromise(coverage.position())
-							: Promise.resolve(knownPosition),
-						rehydrationFacts()
-					]);
-					if (!leads() || paused || collections.length === 0) {
-						if (collections.length === 0) {
-							accessState?.syncStatus.markDisconnected();
-							settleCatchUp();
-						}
-						return;
+					const next =
+						announced ??
+						(
+							await Effect.runPromise(
+								transport
+									.command('sync.partition', {})
+									.pipe(Effect.flatMap(Schema.decodeUnknownEffect(SyncPartitionStatusResponse)))
+							)
+						).partition;
+					if (next.key !== serverPartition.key) {
+						return switchPhysicalNamespace();
 					}
-					subscription = subscribeToPartition({
-						collections,
-						invalidations: subscribedInvalidations(),
-						position,
-						pendingMutationIds,
-						rehydration,
-						onConnecting: () => accessState?.syncStatus.markSyncing(),
-						onInvalidation: (collections) => {
-							// These names were guest-authenticated when the stream was admitted. They have no
-							// replica windows: drop old response metadata and re-run only Bolt's registered
-							// internal `collections.findMany` reads against the tenant authority.
-							invalidateRuntime(runtime, collections);
-							Effect.runFork(announceToTabs(collections));
-						},
-				onDeltas: (batch) => {
-					if (schemaBarrierPauses > 0 || maintenance !== undefined) return;
-					if (accessState?.serverPartitionKey !== batch.partition.key) {
-						void rebootstrapPartition(batch.partition).catch((cause) => options.onError?.(cause));
-						return;
-					}
-					const headRollback =
-						observedStreamHead !== undefined &&
-						compareSyncCursors(batch.headCursor, observedStreamHead) < 0;
-					observedStreamHead = batch.headCursor;
-					if (headRollback) closeSubscription();
-					if (accessState !== undefined) publishReplicaProgress(accessState, { phase: 'applying' });
-					coordinator.acceptDeltas(batch);
-					void coordinator.idle()
-						.then(async () => {
-							// Status-only confirmations have no readable row. Retire them only after the
-							// authoritative batch has committed to the replica.
-							await confirmMutationDeltas(batch);
-							// A confirmation received on the one workspace stream is enough. If a command
-							// response was lost, its bounded owner lease replays the same idempotency key;
-							// there is no separate mutation-status polling channel.
-							accessState?.scheduleMutationPush?.();
-							if (batch.complete) {
-								settleCatchUp();
-								accessState?.syncStatus.markConnected();
-							}
-							if (accessState !== undefined)
-								publishReplicaProgress(accessState, { phase: 'applying', completed: 1, total: 1 });
-							if (headRollback) {
-								await refreshOverlaySnapshot();
-								const collections = await activeOverlayCollections();
-								if (collections.length > 0)
-									await accessState?.reflectLocalMutation?.(collections);
-								streamIfLeading();
-								return;
-							}
-							if (subscription !== undefined) {
-								const rehydration = await rehydrationFacts();
-								subscription.update(
-									subscribedCollections(),
-									subscribedInvalidations(),
-									{ cursor: batch.cursor, generations: batch.generations },
-									pendingMutationIds,
-									rehydration
-								);
-							}
-						})
-						.catch((cause) => options.onError?.(cause));
-				},
-				onRecovery: (advice) => {
-					closeSubscription();
-					coordinator.recover(advice);
-					void coordinator.idle()
-						.then(() => confirmMutationDeltas({
-							deltas: [],
-							mutationConfirmations: advice.mutationConfirmations,
-							mutationRejections: advice.mutationRejections
-						}))
-						.then(async () => {
-							await refreshOverlaySnapshot();
-							const overlayCollections = await activeOverlayCollections();
-							if (overlayCollections.length > 0)
-								await accessState?.reflectLocalMutation?.(overlayCollections);
-							settleCatchUp();
-							streamIfLeading();
-						})
-						.catch((cause) => options.onError?.(cause));
-				},
-				onReady: (ready) => {
-					void (async () => {
-						if (accessState?.serverPartitionKey !== ready.partition.key) {
-							await rebootstrapPartition(ready.partition, {
-								cursor: ready.cursor,
-								generations: ready.generations
-							});
-							return;
-						}
-						const durable = await Effect.runPromise(coverage.position());
-						observedStreamHead = ready.cursor;
-						const rollback = compareSyncCursors(ready.cursor, durable.cursor) < 0;
-						if (rollback && runtime.local !== undefined) delete runtime.local.current;
-						coordinator.observeReady(ready);
-						if (rollback) {
-							closeSubscription();
-							await coordinator.idle();
-							if (runtime.local !== undefined && accessScopeFor(runtime) === options.accessScope)
-								runtime.local.current = localReader;
-							streamIfLeading();
-							return;
-						}
-						/**
-						 * A `ready` frame proves the stream, not that this replica is level with it.
-						 *
-						 * What follows a fresh connection is catch-up — replaying the deltas missed while it
-						 * was down and pushing whatever was queued locally — and that is what `syncing`
-						 * names. Receiving deltas on a replica that is already level is simply `connected`;
-						 * calling that "syncing" would leave a healthy workspace permanently mid-sync.
-						 */
-						accessState?.syncStatus.markSyncing();
-					})().catch((cause) => options.onError?.(cause));
-				},
-				onPartitionChanged: (partition) => {
-					void rebootstrapPartition(partition).catch((cause) => options.onError?.(cause));
-				},
-				onMaintenance: (notice) => {
-					void acceptSchemaMaintenance(notice, true).catch((cause) => options.onError?.(cause));
-				},
-				onMaintenanceClear: (clear) => {
-					void schemaBarrierTail
-						.then(() => acceptSchemaMaintenanceClear(clear, true))
-						.catch((cause) => options.onError?.(cause));
-				},
-				onBarrier: (barrier) => {
-					void acceptSchemaBarrier(barrier).catch((cause) => options.onError?.(cause));
-				},
-				onError: (cause) => {
-					accessState?.syncStatus.markDisconnected();
-					options.onError?.(cause);
-				}
+					if (next.schemaFingerprint !== local.fingerprint)
+						throw new Error('The replacement sync partition requires a different replica schema.');
+					accessState.serverPartitionKey = next.key;
+					accessState.schemaFingerprint = next.schemaFingerprint;
+					localReader = createReader(next.key);
+					recomputer = createLocalWindowRecomputer(local.store, local.shape, coverage, next.key, {
+						overlay,
+						localActorBinding: options.partition.key
 					});
-				} catch (cause) {
-					accessState?.syncStatus.markDisconnected();
-					options.onError?.(cause);
-				} finally {
-					openingStream = false;
-				}
-			})();
-		};
-		requestStream = streamIfLeading;
-		const leadingAtStartup = leads();
-		if (!leadingAtStartup) {
-			// A follower reads the same shared database its elected leader has already brought up. It opens no
-			// duplicate stream of its own, so there is no local `ready` event to await in this document.
-			settleCatchUp();
-		}
-		streamIfLeading();
-		if (accessScopeFor(runtime) !== options.accessScope) {
-			closeSubscription();
-			yield* Effect.tryPromise(() => coordinator.stop());
-			yield* local.close();
-			return yield* Effect.fail(new Error('Local replica access scope changed during startup'));
-		}
+					await installMutationRuntime();
+					coordinator.rebuild('authority', position);
+					await coordinator.idle();
+					await refreshOverlaySnapshot();
+					const overlayCollections = await activeOverlayCollections();
+					if (overlayCollections.length > 0)
+						await accessState.reflectLocalMutation?.(overlayCollections);
+					if (runtime.local !== undefined && accessScopeFor(runtime) === options.accessScope)
+						runtime.local.current = localReader;
+					streamIfLeading();
+				})().finally(() => {
+					partitionRebootstrap = undefined;
+				});
+				return partitionRebootstrap;
+			};
+			if (accessState !== undefined) accessState.rebootstrapPartition = rebootstrapPartition;
 
-		/**
-		 * Leadership moves when the leading tab closes, and the sync loop has to move with it.
-		 *
-		 * Without this, closing the one tab that happened to be elected would leave every remaining tab
-		 * holding a live database that nothing was feeding: no stream, no drain, and no error — the
-		 * workspace would simply stop updating until someone reloaded. The inherited stream catches up on
-		 * open, so the gap between the old leader dying and the new one connecting is closed by the
-		 * cursor rather than lost.
-		 */
-		/** From here on, only reads backed by a complete coverage proof are answered locally. */
-		if (runtime.local !== undefined) runtime.local.current = localReader;
-		// Install the proof-aware reader first, then reexecute mounted queries. Proven pages stay local;
-		// everything else uses the authoritative command path and is captured after it returns.
-		cache?.clear();
-		registry?.reexecuteAffected([ANY_COLLECTION]);
-
-		const stopWatchingLeader =
-			options.leadership?.onChange(() => {
-				if (leads()) {
-					Effect.runFork(
-						reconcileAutomationLeases().pipe(
-							Effect.catch((cause) => Effect.sync(() => options.onError?.(cause)))
-						)
+			/**
+			 * Exactly one tab streams.
+			 *
+			 * The database is shared, so a per-tab sync loop would have every open tab fetching the same
+			 * diffs and applying them to the same rows — N times the requests and N times the writes to reach
+			 * one outcome, with the cursor being advanced by whichever tab got there first. Leadership is
+			 * decided by Bolt's explicit Web Lock. PGlite has a separate worker-owner election, but that
+			 * decides which worker executes SQL, not which document is allowed to perform network replication.
+			 *
+			 * A tab that is not the leader opens no stream at all, which is the point — one SSE connection
+			 * per browser instead of one per tab. Browsers cap concurrent connections per host, so tabs used
+			 * to compete for that budget with the very requests the pages were waiting on.
+			 */
+			const defaultBarrierHooks: Omit<SchemaBarrierHooks, 'leader'> = {
+				readDurable: async () => {
+					const durable = await Effect.runPromise(readDurableReplicaSchema(local.engine));
+					return durable === undefined
+						? {
+								generation: 0,
+								fingerprint: local.fingerprint,
+								protocolVersion: PROTOCOL_VERSION
+							}
+						: {
+								generation: durable.authorityGeneration,
+								fingerprint: durable.fingerprint,
+								protocolVersion: durable.protocolVersion
+							};
+				},
+				adoptGeneration: async (barrier) => {
+					const adopted = {
+						authorityGeneration: barrier.generation,
+						fingerprint: barrier.fingerprint,
+						protocolVersion: PROTOCOL_VERSION
+					};
+					await Effect.runPromise(
+						coverage.transaction(writeDurableReplicaSchema(local.engine, adopted))
 					);
-					accessState?.scheduleMutationPush?.();
-					void accessState?.refreshMutationStatus?.().catch((cause) => options.onError?.(cause));
-					streamIfLeading();
-					return;
+					return {
+						generation: adopted.authorityGeneration,
+						fingerprint: adopted.fingerprint,
+						protocolVersion: adopted.protocolVersion
+					};
+				},
+				withdrawReaders: () => {
+					if (runtime.local?.current === localReader && runtime.local !== undefined)
+						delete runtime.local.current;
+				},
+				switchNamespace: () => switchPhysicalNamespace()
+			};
+			const selectedBarrierHooks = options.schemaBarrier ?? defaultBarrierHooks;
+			const barrierController: SchemaBarrierController = createSchemaBarrierController({
+				...selectedBarrierHooks,
+				leader: leads,
+				// This hook runs only after durable facts prove that the physical namespace must change.
+				// Pausing before `accept` made every repeated, adopted barrier close its own SSE stream.
+				withdrawReaders: (collections) => {
+					pauseIntake();
+					if (accessState !== undefined) {
+						accessState.stopMutationPush?.();
+						accessState.mutationJournalUnsubscribe?.();
+						delete accessState.mutationJournal;
+						delete accessState.mutationJournalUnsubscribe;
+						delete accessState.refreshMutationStatus;
+						delete accessState.refreshOverlaySnapshot;
+						delete accessState.serverPartitionKey;
+					}
+					selectedBarrierHooks.withdrawReaders(collections);
 				}
-				closeSubscription();
-			}) ??
-			local.engine.onLeaderChange(() => {
-				if (leads()) {
-					accessState?.scheduleMutationPush?.();
-					void accessState?.refreshMutationStatus?.().catch((cause) => options.onError?.(cause));
-					streamIfLeading();
-					return;
-				}
-				// Demotion is possible in principle; drop the stream rather than stream in duplicate.
-				closeSubscription();
 			});
-		// A compatible database is not a completed bootstrap. Persist the receipt only after the
-		// initial authoritative drain has completed, so a failed first catch-up remains retryable.
-		void initialCatchUp.then(
-			() =>
-				markReplicaCompatible(serverPartition.tenantId, serverPartition.key, local.fingerprint),
-			// Readiness failure leaves no receipt and is owned by the bootstrap controller. Consuming it
-			// here prevents this side-effect branch from creating an unhandled rejected Promise.
-			() => undefined
-		);
-
-		const replicaTier: LocalReplica['tier'] =
-			options.storage === undefined || options.storage.tier === 'server-only'
-				? 'custom'
-				: options.storage.tier;
-		return {
-			fingerprint: local.fingerprint,
-			rows: local.rows,
-			resumed: local.resumed,
-			tier: replicaTier,
-			partitionKey: serverPartition.key,
-			principalSource: options.partition.principalSource,
-			...(options.storage === undefined || options.storage.tier === 'server-only'
-				? {}
-				: { storageBudget: options.storage.budget }),
-			leader: leads,
-			clearAndRebuild: () => {
-				clearReplicaCompatibility(
-					serverPartition.tenantId,
-					serverPartition.key,
-					local.fingerprint
-				);
-				return Effect.runPromise(rebuildReplica());
-			},
-			initialCatchUpReady: initialCatchUp,
-			barrier: acceptSchemaBarrier,
-			refreshDurableSchema: () =>
-				barrierController.refreshFromDurable().then(() => {
-					if (barrierController.state().phase === 'idle') {
+			const acceptSchemaMaintenance = (
+				notice: ReplicaSchemaMaintenance,
+				broadcast = false
+			): Promise<void> => {
+				const current = maintenance;
+				if (current !== undefined && notice.generation < current.generation) return maintenanceTail;
+				maintenance =
+					current?.generation === notice.generation
+						? {
+								generation: notice.generation,
+								affectedCollections: [
+									...new Set([...current.affectedCollections, ...notice.affectedCollections])
+								]
+							}
+						: notice;
+				// Keep the control stream alive so it can deliver the committed barrier or durable abort clear,
+				// but stop this document from opening or reopening data intake until completion is proven.
+				paused = true;
+				// Withdrawing the reader is intentionally broader than the affected set during a namespace switch.
+				if (runtime.local?.current === localReader && runtime.local !== undefined) {
+					delete runtime.local.current;
+				}
+				if (broadcast) accessState?.invalidation?.announceMaintenance(notice);
+				const affected = [...maintenance.affectedCollections];
+				maintenanceTail = maintenanceTail.then(async () => {
+					// The notice itself is not schema authority. It only gates promotion/delivery, waits
+					// accepted work out, and withdraws proof so affected commands use the online path.
+					await coordinator.idle();
+					await queryMaterializationTail;
+					await Effect.runPromise(coverage.invalidateDependencies(affected));
+					invalidateNamed(affected);
+					await Effect.runPromise(announceToTabs(affected));
+				});
+				return maintenanceTail;
+			};
+			const acceptSchemaMaintenanceClear = (
+				clear: ReplicaSchemaMaintenanceClear,
+				broadcast = false
+			): Promise<void> => {
+				if (broadcast) accessState?.invalidation?.announceMaintenanceClear(clear);
+				maintenanceTail = maintenanceTail.then(async () => {
+					const current = maintenance;
+					// The host persists and monotonically replays its latest cleared transition. A later clear
+					// is stronger proof for a tab that missed an earlier frame; an older one proves nothing.
+					if (current === undefined || current.generation > clear.generation) return;
+					// A clear is useful only after the host has re-read its authoritative transition state.
+					// Refreshing durable metadata proves no local generation was invented during maintenance.
+					const durable = await barrierController.refreshFromDurable();
+					maintenance = undefined;
+					if (durable.fingerprint !== local.fingerprint) return switchPhysicalNamespace();
+					if (runtime.local !== undefined && accessScopeFor(runtime) === options.accessScope) {
+						runtime.local.current = localReader;
+					}
+					resumeIntake();
+					invalidateNamed(current.affectedCollections);
+				});
+				return maintenanceTail;
+			};
+			const schemaControl = (control: ReplicaSchemaControl): void => {
+				const handled =
+					control._tag === 'maintenance'
+						? acceptSchemaMaintenance(control.value)
+						: schemaBarrierTail.then(() => acceptSchemaMaintenanceClear(control.value));
+				void handled.catch((cause) => options.onError?.(cause));
+			};
+			if (accessState !== undefined) accessState.schemaControl = schemaControl;
+			const acceptSchemaBarrier = (barrier: ReplicaSchemaBarrier): Promise<void> => {
+				schemaBarrierPauses += 1;
+				const accepted = schemaBarrierTail.then(async () => {
+					await maintenanceTail;
+					await coordinator.idle();
+					await queryMaterializationTail;
+					await barrierController.accept(barrier);
+				});
+				schemaBarrierTail = accepted.catch(() => undefined);
+				return accepted.finally(() => {
+					schemaBarrierPauses -= 1;
+					// A failed/reload-required barrier keeps intake paused; only the final queued barrier
+					// reaching a durably verified idle state may resume it.
+					if (schemaBarrierPauses === 0 && barrierController.state().phase === 'idle') {
 						resumeIntake();
 					}
-				}),
-			stop: () => {
-				// Withdrawn first: a closed database that is still being asked would fail every read that
-				// had been succeeding, rather than quietly going back to the wire.
-				if (runtime.local !== undefined) delete runtime.local.current;
-				stopWatchingLeader?.();
-				options.leadership?.stop();
-				clearInterval(visibleLeaseSweep);
-				clearInterval(visiblePrioritySweep);
-				if (typeof document !== 'undefined') {
-					document.removeEventListener('visibilitychange', onDocumentVisibility);
+				});
+			};
+
+			let openingStream = false;
+			const streamIfLeading = (
+				knownCollections?: ReadonlyArray<string>,
+				knownPosition?: {
+					readonly cursor: SyncCursor;
+					readonly generations: Readonly<Record<string, number>>;
 				}
-				if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
-				mutationPushRetry = undefined;
-				mutationPushRetryAt = undefined;
-				closeSubscription();
-				for (const demand of adjacentHydration.values()) demand.release();
-				adjacentHydration.clear();
-				const syncStopped = coordinator.stop();
-				const state = runtimeStates.access(runtime);
-				state?.stopMutationPush?.();
-				state?.mutationJournalUnsubscribe?.();
-				if (state?.materializeQuery !== undefined) delete state.materializeQuery;
-				if (state?.invalidateCoverage === invalidateCoverage) delete state.invalidateCoverage;
-				if (state?.schemaControl === schemaControl) delete state.schemaControl;
-				if (state?.trackVisibleQuery !== undefined) delete state.trackVisibleQuery;
-				if (state?.releaseVisibleQuery !== undefined) delete state.releaseVisibleQuery;
-				if (state?.requestAdjacentHydration !== undefined)
-					delete state.requestAdjacentHydration;
-				if (state?.acquirePendingMutationLease !== undefined)
-					delete state.acquirePendingMutationLease;
-				if (state?.releasePendingMutationLease !== undefined)
-					delete state.releasePendingMutationLease;
-				if (state?.automationStarted !== undefined) delete state.automationStarted;
-				if (state?.automationObserved !== undefined) delete state.automationObserved;
-				if (state?.automationSettled !== undefined) delete state.automationSettled;
-				if (state?.partitionSync === coordinator) delete state.partitionSync;
-				if (state?.windowLedger === coverage) delete state.windowLedger;
-				if (state !== undefined) {
-					delete state.scheduleMutationPush;
-					delete state.stopMutationPush;
-					delete state.rebootstrapPartition;
-					delete state.reflectLocalMutation;
-					delete state.mutationJournalUnsubscribe;
-					delete state.mutationJournal;
-					delete state.refreshMutationStatus;
-					delete state.refreshOverlaySnapshot;
-					delete state.readRowVersions;
-					delete state.reportError;
-				}
-				state?.invalidation?.close();
-				if (state !== undefined) delete state.invalidation;
-				const closeReplica = async (): Promise<void> => {
+			): void => {
+				if (!leads() || subscription !== undefined || paused || openingStream) return;
+				openingStream = true;
+				void (async () => {
 					try {
-						await syncStopped;
-						await Effect.runPromise(local.close().pipe(Effect.catch(() => Effect.void)));
-						await leaseOwner?.stop();
+						const collections = subscribedCollections();
+						const [position, rehydration] = await Promise.all([
+							knownPosition === undefined
+								? Effect.runPromise(coverage.position())
+								: Promise.resolve(knownPosition),
+							rehydrationFacts()
+						]);
+						if (!leads() || paused || collections.length === 0) {
+							if (collections.length === 0) {
+								accessState?.syncStatus.markDisconnected();
+								settleCatchUp();
+							}
+							return;
+						}
+						subscription = subscribeToPartition({
+							collections,
+							invalidations: subscribedInvalidations(),
+							position,
+							pendingMutationIds,
+							rehydration,
+							onConnecting: () => accessState?.syncStatus.markSyncing(),
+							onInvalidation: (collections) => {
+								// These names were guest-authenticated when the stream was admitted. They have no
+								// replica windows: drop old response metadata and re-run only Bolt's registered
+								// internal `collections.findMany` reads against the tenant authority.
+								invalidateRuntime(runtime, collections);
+								Effect.runFork(announceToTabs(collections));
+							},
+							onDeltas: (batch) => {
+								if (schemaBarrierPauses > 0 || maintenance !== undefined) return;
+								if (accessState?.serverPartitionKey !== batch.partition.key) {
+									void rebootstrapPartition(batch.partition).catch((cause) =>
+										options.onError?.(cause)
+									);
+									return;
+								}
+								const headRollback =
+									observedStreamHead !== undefined &&
+									compareSyncCursors(batch.headCursor, observedStreamHead) < 0;
+								observedStreamHead = batch.headCursor;
+								if (headRollback) closeSubscription();
+								if (accessState !== undefined)
+									publishReplicaProgress(accessState, { phase: 'applying' });
+								coordinator.acceptDeltas(batch);
+								void coordinator
+									.idle()
+									.then(async () => {
+										// Status-only confirmations have no readable row. Retire them only after the
+										// authoritative batch has committed to the replica.
+										await confirmMutationDeltas(batch);
+										// A confirmation received on the one workspace stream is enough. If a command
+										// response was lost, its bounded owner lease replays the same idempotency key;
+										// there is no separate mutation-status polling channel.
+										accessState?.scheduleMutationPush?.();
+										if (batch.complete) {
+											settleCatchUp();
+											accessState?.syncStatus.markConnected();
+										}
+										if (accessState !== undefined)
+											publishReplicaProgress(accessState, {
+												phase: 'applying',
+												completed: 1,
+												total: 1
+											});
+										if (headRollback) {
+											await refreshOverlaySnapshot();
+											const collections = await activeOverlayCollections();
+											if (collections.length > 0)
+												await accessState?.reflectLocalMutation?.(collections);
+											streamIfLeading();
+											return;
+										}
+										if (subscription !== undefined) {
+											const rehydration = await rehydrationFacts();
+											subscription.update(
+												subscribedCollections(),
+												subscribedInvalidations(),
+												{ cursor: batch.cursor, generations: batch.generations },
+												pendingMutationIds,
+												rehydration
+											);
+										}
+									})
+									.catch((cause) => options.onError?.(cause));
+							},
+							onRecovery: (advice) => {
+								closeSubscription();
+								coordinator.recover(advice);
+								void coordinator
+									.idle()
+									.then(() =>
+										confirmMutationDeltas({
+											deltas: [],
+											mutationConfirmations: advice.mutationConfirmations,
+											mutationRejections: advice.mutationRejections
+										})
+									)
+									.then(async () => {
+										await refreshOverlaySnapshot();
+										const overlayCollections = await activeOverlayCollections();
+										if (overlayCollections.length > 0)
+											await accessState?.reflectLocalMutation?.(overlayCollections);
+										settleCatchUp();
+										streamIfLeading();
+									})
+									.catch((cause) => options.onError?.(cause));
+							},
+							onReady: (ready) => {
+								void (async () => {
+									if (accessState?.serverPartitionKey !== ready.partition.key) {
+										await rebootstrapPartition(ready.partition, {
+											cursor: ready.cursor,
+											generations: ready.generations
+										});
+										return;
+									}
+									const durable = await Effect.runPromise(coverage.position());
+									observedStreamHead = ready.cursor;
+									const rollback = compareSyncCursors(ready.cursor, durable.cursor) < 0;
+									if (rollback && runtime.local !== undefined) delete runtime.local.current;
+									coordinator.observeReady(ready);
+									if (rollback) {
+										closeSubscription();
+										await coordinator.idle();
+										if (
+											runtime.local !== undefined &&
+											accessScopeFor(runtime) === options.accessScope
+										)
+											runtime.local.current = localReader;
+										streamIfLeading();
+										return;
+									}
+									/**
+									 * A `ready` frame proves the stream, not that this replica is level with it.
+									 *
+									 * What follows a fresh connection is catch-up — replaying the deltas missed while it
+									 * was down and pushing whatever was queued locally — and that is what `syncing`
+									 * names. Receiving deltas on a replica that is already level is simply `connected`;
+									 * calling that "syncing" would leave a healthy workspace permanently mid-sync.
+									 */
+									accessState?.syncStatus.markSyncing();
+								})().catch((cause) => options.onError?.(cause));
+							},
+							onPartitionChanged: (partition) => {
+								void rebootstrapPartition(partition).catch((cause) => options.onError?.(cause));
+							},
+							onMaintenance: (notice) => {
+								void acceptSchemaMaintenance(notice, true).catch((cause) =>
+									options.onError?.(cause)
+								);
+							},
+							onMaintenanceClear: (clear) => {
+								void schemaBarrierTail
+									.then(() => acceptSchemaMaintenanceClear(clear, true))
+									.catch((cause) => options.onError?.(cause));
+							},
+							onBarrier: (barrier) => {
+								void acceptSchemaBarrier(barrier).catch((cause) => options.onError?.(cause));
+							},
+							onError: (cause) => {
+								accessState?.syncStatus.markDisconnected();
+								options.onError?.(cause);
+							}
+						});
 					} catch (cause) {
+						accessState?.syncStatus.markDisconnected();
 						options.onError?.(cause);
 					} finally {
-						await options.physicalLease?.stop();
-						profileIndex?.close();
+						openingStream = false;
 					}
-				};
-				void closeReplica();
+				})();
+			};
+			requestStream = streamIfLeading;
+			const leadingAtStartup = leads();
+			if (!leadingAtStartup) {
+				// A follower reads the same shared database its elected leader has already brought up. It opens no
+				// duplicate stream of its own, so there is no local `ready` event to await in this document.
+				settleCatchUp();
 			}
-		};
+			streamIfLeading();
+			if (accessScopeFor(runtime) !== options.accessScope) {
+				closeSubscription();
+				yield* Effect.tryPromise(() => coordinator.stop());
+				yield* local.close();
+				return yield* Effect.fail(new Error('Local replica access scope changed during startup'));
+			}
+
+			/**
+			 * Leadership moves when the leading tab closes, and the sync loop has to move with it.
+			 *
+			 * Without this, closing the one tab that happened to be elected would leave every remaining tab
+			 * holding a live database that nothing was feeding: no stream, no drain, and no error — the
+			 * workspace would simply stop updating until someone reloaded. The inherited stream catches up on
+			 * open, so the gap between the old leader dying and the new one connecting is closed by the
+			 * cursor rather than lost.
+			 */
+			/** From here on, only reads backed by a complete coverage proof are answered locally. */
+			if (runtime.local !== undefined) runtime.local.current = localReader;
+			// Install the proof-aware reader first, then reexecute mounted queries. Proven pages stay local;
+			// everything else uses the authoritative command path and is captured after it returns.
+			cache?.clear();
+			registry?.reexecuteAffected([ANY_COLLECTION]);
+
+			const stopWatchingLeader =
+				options.leadership?.onChange(() => {
+					if (leads()) {
+						Effect.runFork(
+							reconcileAutomationLeases().pipe(
+								Effect.catch((cause) => Effect.sync(() => options.onError?.(cause)))
+							)
+						);
+						accessState?.scheduleMutationPush?.();
+						void accessState?.refreshMutationStatus?.().catch((cause) => options.onError?.(cause));
+						streamIfLeading();
+						return;
+					}
+					closeSubscription();
+				}) ??
+				local.engine.onLeaderChange(() => {
+					if (leads()) {
+						accessState?.scheduleMutationPush?.();
+						void accessState?.refreshMutationStatus?.().catch((cause) => options.onError?.(cause));
+						streamIfLeading();
+						return;
+					}
+					// Demotion is possible in principle; drop the stream rather than stream in duplicate.
+					closeSubscription();
+				});
+			// A compatible database is not a completed bootstrap. Persist the receipt only after the
+			// initial authoritative drain has completed, so a failed first catch-up remains retryable.
+			void initialCatchUp.then(
+				() =>
+					markReplicaCompatible(serverPartition.tenantId, serverPartition.key, local.fingerprint),
+				// Readiness failure leaves no receipt and is owned by the bootstrap controller. Consuming it
+				// here prevents this side-effect branch from creating an unhandled rejected Promise.
+				() => undefined
+			);
+
+			const replicaTier: LocalReplica['tier'] =
+				options.storage === undefined || options.storage.tier === 'server-only'
+					? 'custom'
+					: options.storage.tier;
+			return {
+				fingerprint: local.fingerprint,
+				rows: local.rows,
+				resumed: local.resumed,
+				tier: replicaTier,
+				partitionKey: serverPartition.key,
+				principalSource: options.partition.principalSource,
+				...(options.storage === undefined || options.storage.tier === 'server-only'
+					? {}
+					: { storageBudget: options.storage.budget }),
+				leader: leads,
+				clearAndRebuild: () => {
+					clearReplicaCompatibility(
+						serverPartition.tenantId,
+						serverPartition.key,
+						local.fingerprint
+					);
+					return Effect.runPromise(rebuildReplica());
+				},
+				initialCatchUpReady: initialCatchUp,
+				barrier: acceptSchemaBarrier,
+				refreshDurableSchema: () =>
+					barrierController.refreshFromDurable().then(() => {
+						if (barrierController.state().phase === 'idle') {
+							resumeIntake();
+						}
+					}),
+				stop: () => {
+					// Withdrawn first: a closed database that is still being asked would fail every read that
+					// had been succeeding, rather than quietly going back to the wire.
+					if (runtime.local !== undefined) delete runtime.local.current;
+					stopWatchingLeader?.();
+					options.leadership?.stop();
+					clearInterval(visibleLeaseSweep);
+					clearInterval(visiblePrioritySweep);
+					if (typeof document !== 'undefined') {
+						document.removeEventListener('visibilitychange', onDocumentVisibility);
+					}
+					if (mutationPushRetry !== undefined) clearTimeout(mutationPushRetry);
+					mutationPushRetry = undefined;
+					mutationPushRetryAt = undefined;
+					closeSubscription();
+					for (const demand of adjacentHydration.values()) demand.release();
+					adjacentHydration.clear();
+					const syncStopped = coordinator.stop();
+					const state = runtimeStates.access(runtime);
+					state?.stopMutationPush?.();
+					state?.mutationJournalUnsubscribe?.();
+					if (state?.materializeQuery !== undefined) delete state.materializeQuery;
+					if (state?.invalidateCoverage === invalidateCoverage) delete state.invalidateCoverage;
+					if (state?.schemaControl === schemaControl) delete state.schemaControl;
+					if (state?.trackVisibleQuery !== undefined) delete state.trackVisibleQuery;
+					if (state?.releaseVisibleQuery !== undefined) delete state.releaseVisibleQuery;
+					if (state?.requestAdjacentHydration !== undefined) delete state.requestAdjacentHydration;
+					if (state?.acquirePendingMutationLease !== undefined)
+						delete state.acquirePendingMutationLease;
+					if (state?.releasePendingMutationLease !== undefined)
+						delete state.releasePendingMutationLease;
+					if (state?.automationStarted !== undefined) delete state.automationStarted;
+					if (state?.automationObserved !== undefined) delete state.automationObserved;
+					if (state?.automationSettled !== undefined) delete state.automationSettled;
+					if (state?.partitionSync === coordinator) delete state.partitionSync;
+					if (state?.windowLedger === coverage) delete state.windowLedger;
+					if (state !== undefined) {
+						delete state.scheduleMutationPush;
+						delete state.stopMutationPush;
+						delete state.rebootstrapPartition;
+						delete state.reflectLocalMutation;
+						delete state.mutationJournalUnsubscribe;
+						delete state.mutationJournal;
+						delete state.refreshMutationStatus;
+						delete state.refreshOverlaySnapshot;
+						delete state.readRowVersions;
+						delete state.reportError;
+					}
+					state?.invalidation?.close();
+					if (state !== undefined) delete state.invalidation;
+					const closeReplica = async (): Promise<void> => {
+						try {
+							await syncStopped;
+							await Effect.runPromise(local.close().pipe(Effect.catch(() => Effect.void)));
+							await leaseOwner?.stop();
+						} catch (cause) {
+							options.onError?.(cause);
+						} finally {
+							await options.physicalLease?.stop();
+							profileIndex?.close();
+						}
+					};
+					void closeReplica();
+				}
+			};
 		});
 		return yield* initialize.pipe(
 			Effect.tapError(() => local.close().pipe(Effect.catch(() => Effect.void)))
@@ -4143,11 +4230,11 @@ export const createBrowserWorkspaceRuntime = (
 	const bolt = createBoltClient(scope, options.transport ?? browserTransport);
 	// A full persisted namespace needs an async SHA-256 principal fingerprint. Until replica startup
 	// resolves it, use a document-private namespace that cannot paint another principal's cached rows.
-		const accessState: RuntimeAccessState = {
-			current: normalizedAccessScope(session.accessScope),
-			catalog: {},
-			syncStatus: createWorkspaceSyncStatus(),
-			staleWindowKeys: new Set(),
+	const accessState: RuntimeAccessState = {
+		current: normalizedAccessScope(session.accessScope),
+		catalog: {},
+		syncStatus: createWorkspaceSyncStatus(),
+		staleWindowKeys: new Set(),
 		cache: createQueryCache(ephemeralCacheNamespace()),
 		visibleQueries: new Map(),
 		progressListeners: new Set(),
@@ -4162,20 +4249,20 @@ export const createBrowserWorkspaceRuntime = (
 		invalidate: (collections) => accessState.cache.invalidate(collections),
 		clear: () => accessState.cache.clear()
 	};
-		const runtime: {
+	const runtime: {
 		bolt: BoltClient;
 		db: Readonly<Record<string, unknown>>;
 		local: { current?: LocalReader };
 		cache: QueryCache;
-			queries: LiveQueryRegistry;
-			syncStatus: MutableWorkspaceSyncStatusSignal;
+		queries: LiveQueryRegistry;
+		syncStatus: MutableWorkspaceSyncStatusSignal;
 	} = {
 		bolt,
 		db: {},
 		local: {},
-			cache,
-			queries: createLiveQueryRegistry(),
-			syncStatus: accessState.syncStatus
+		cache,
+		queries: createLiveQueryRegistry(),
+		syncStatus: accessState.syncStatus
 	};
 	runtimeStates.rememberAccess(runtime, accessState);
 	runtime.db = ClientDatabase.database(runtime, {});

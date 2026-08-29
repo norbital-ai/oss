@@ -233,7 +233,9 @@ export class ReplicaHeadMovedBackwards extends Error {
 	readonly incoming: SyncCursor;
 
 	constructor(current: SyncCursor, incoming: SyncCursor) {
-		super('Authoritative head moved behind the durable replica position; namespace rebuild required');
+		super(
+			'Authoritative head moved behind the durable replica position; namespace rebuild required'
+		);
 		this.name = 'ReplicaHeadMovedBackwards';
 		this.current = current;
 		this.incoming = incoming;
@@ -241,13 +243,17 @@ export class ReplicaHeadMovedBackwards extends Error {
 }
 
 export type WindowLedger = Readonly<{
-	readonly transaction: <Value>(body: Effect.Effect<Value, unknown>) => Effect.Effect<Value, unknown>;
+	readonly transaction: <Value>(
+		body: Effect.Effect<Value, unknown>
+	) => Effect.Effect<Value, unknown>;
 	readonly readWindow: <Value>(
 		queryKey: string,
 		use: (proof: QueryWindowProof) => Effect.Effect<Value, unknown>
 	) => Effect.Effect<Value | undefined, unknown>;
 	readonly installWindow: (input: InstallQueryWindow) => Effect.Effect<QueryWindowProof, unknown>;
-	readonly applyDeltaBatch: (input: PartitionDeltaBatch) => Effect.Effect<DeltaApplyOutcome, unknown>;
+	readonly applyDeltaBatch: (
+		input: PartitionDeltaBatch
+	) => Effect.Effect<DeltaApplyOutcome, unknown>;
 	readonly invalidateDependencies: (
 		collections: ReadonlyArray<string>,
 		generations?: Readonly<Record<string, number>>
@@ -305,22 +311,25 @@ type StoredWindowRow = Readonly<{
 	readonly lease_count: number | string;
 }>;
 
-type StoredWindowProofRow = StoredWindowRow & Readonly<{
-	readonly membership: unknown;
-	readonly relationships: unknown;
-}>;
+type StoredWindowProofRow = StoredWindowRow &
+	Readonly<{
+		readonly membership: unknown;
+		readonly relationships: unknown;
+	}>;
 
 const readStoredWindow = (
 	database: PGliteLike,
 	queryKey: string
 ): Effect.Effect<StoredWindowRow | undefined, unknown> =>
-	database.query<StoredWindowRow>(
-		`select query_key, collection, canonical_query, dependencies, proof_owner,
+	database
+		.query<StoredWindowRow>(
+			`select query_key, collection, canonical_query, dependencies, proof_owner,
 		 locally_reproducible, proof_confirmed, valid, dirty, read_xid, read_sequence,
 		 dependency_generations, server_result, next_cursor, lookahead_count, lease_count
 		 from bolt_replica_window where query_key = $1 limit 1`,
-		[queryKey]
-	).pipe(Effect.map(({ rows }) => rows[0]));
+			[queryKey]
+		)
+		.pipe(Effect.map(({ rows }) => rows[0]));
 
 const proofFrom = (stored: StoredWindowProofRow): QueryWindowProof | undefined => {
 	const canonical = jsonRecord(jsonValue(stored.canonical_query));
@@ -330,7 +339,8 @@ const proofFrom = (stored: StoredWindowProofRow): QueryWindowProof | undefined =
 		dependencies.length === 0 ||
 		(stored.proof_owner !== 'local' && stored.proof_owner !== 'server') ||
 		(stored.proof_owner === 'local') !== stored.locally_reproducible
-	) return undefined;
+	)
+		return undefined;
 	const membershipValue = jsonValue(stored.membership);
 	if (!Array.isArray(membershipValue)) return undefined;
 	const membership = membershipValue.flatMap((value) => {
@@ -358,22 +368,25 @@ const proofFrom = (stored: StoredWindowProofRow): QueryWindowProof | undefined =
 		!Number.isSafeInteger(lookaheadCount) ||
 		lookaheadCount < 0 ||
 		lookaheadCount > Math.min(membership.length, MAX_REPLICA_WINDOW_LOOKAHEAD_ROWS) ||
-		!Number.isSafeInteger(leaseCount) || leaseCount < 0
-	) return undefined;
-	const relationships = Schema.decodeUnknownResult(
-		Schema.Array(CollectionRelationshipMembership)
-	)(jsonValue(stored.relationships));
+		!Number.isSafeInteger(leaseCount) ||
+		leaseCount < 0
+	)
+		return undefined;
+	const relationships = Schema.decodeUnknownResult(Schema.Array(CollectionRelationshipMembership))(
+		jsonValue(stored.relationships)
+	);
 	if (
 		Result.isFailure(relationships) ||
 		relationships.success.length > MAX_REPLICA_WINDOW_RELATIONSHIPS
-	) return undefined;
-	const serverResult = stored.server_result == null
-		? undefined
-		: serverResultOf(stored.server_result);
+	)
+		return undefined;
+	const serverResult =
+		stored.server_result == null ? undefined : serverResultOf(stored.server_result);
 	if (
 		(stored.server_result != null && serverResult === undefined) ||
 		(serverResult !== undefined && stored.proof_owner !== 'server')
-	) return undefined;
+	)
+		return undefined;
 	return {
 		queryKey: stored.query_key,
 		canonical,
@@ -498,10 +511,10 @@ export const createWindowLedger = Effect.fn('ReplicaWindow.create')(function* (
 				) &&
 				(stored.next_cursor === null || Number(stored.lookahead_count) > 0);
 			if (valid === stored.valid) continue;
-			yield* database.query(
-				'update bolt_replica_window set valid = $2 where query_key = $1',
-				[stored.query_key, valid]
-			);
+			yield* database.query('update bolt_replica_window set valid = $2 where query_key = $1', [
+				stored.query_key,
+				valid
+			]);
 		}
 	});
 
@@ -553,11 +566,14 @@ export const createWindowLedger = Effect.fn('ReplicaWindow.create')(function* (
 	): Effect.fn.Return<ReadonlyArray<string>, unknown> {
 		const targets = new Set(collections);
 		if (targets.size === 0) return [];
-		const rows = yield* database.query<{ readonly query_key: string; readonly dependencies: unknown }>(
-			'select query_key, dependencies from bolt_replica_window'
-		);
+		const rows = yield* database.query<{
+			readonly query_key: string;
+			readonly dependencies: unknown;
+		}>('select query_key, dependencies from bolt_replica_window');
 		const affected = rows.rows.flatMap((row) =>
-			stringsOf(row.dependencies).some((dependency) => targets.has(dependency)) ? [row.query_key] : []
+			stringsOf(row.dependencies).some((dependency) => targets.has(dependency))
+				? [row.query_key]
+				: []
 		);
 		if (affected.length > 0) {
 			yield* database.query(
@@ -704,32 +720,40 @@ export const createWindowLedger = Effect.fn('ReplicaWindow.create')(function* (
 		const latestByRecord = new Map<string, PartitionDelta>();
 		for (const delta of input.deltas) {
 			if (
-				!validCursor(delta.cursor) || compareSyncCursors(delta.cursor, input.headCursor) > 0 ||
+				!validCursor(delta.cursor) ||
+				compareSyncCursors(delta.cursor, input.headCursor) > 0 ||
 				compareSyncCursors(delta.cursor, current.cursor) <= 0
-			) continue;
+			)
+				continue;
 			const key = `${delta.collection}\u0000${delta.recordId}`;
 			const prior = latestByRecord.get(key);
 			if (
-				prior === undefined || compareSyncCursors(delta.cursor, prior.cursor) > 0 ||
-				(compareSyncCursors(delta.cursor, prior.cursor) === 0 && delta.rowVersion > prior.rowVersion)
-			) latestByRecord.set(key, delta);
+				prior === undefined ||
+				compareSyncCursors(delta.cursor, prior.cursor) > 0 ||
+				(compareSyncCursors(delta.cursor, prior.cursor) === 0 &&
+					delta.rowVersion > prior.rowVersion)
+			)
+				latestByRecord.set(key, delta);
 		}
-		const ordered = [...latestByRecord.values()].toSorted(
-			(left, right) => compareSyncCursors(left.cursor, right.cursor)
+		const ordered = [...latestByRecord.values()].toSorted((left, right) =>
+			compareSyncCursors(left.cursor, right.cursor)
 		);
 		for (const delta of ordered) {
 			const retained = yield* store.hasRecord(delta.collection, delta.recordId);
 			// ServerProof membership is opaque. An unseen upsert advances its causal fence but its
 			// payload is immediately evicted, and every dependent proof is withdrawn for refill.
-			const dropsPayload = !retained && (
-				delta.op === 'remove' || !stagingCollections.has(delta.collection)
-			);
-			const outcome = delta.op === 'upsert'
-				? yield* store.applyAuthoritativeRow({
-						collection: delta.collection, recordId: delta.recordId,
-						rowVersion: delta.rowVersion, cursor: delta.cursor, row: delta.row
-					})
-				: yield* store.removeAuthoritativeRow({ ...delta, cursor: delta.cursor });
+			const dropsPayload =
+				!retained && (delta.op === 'remove' || !stagingCollections.has(delta.collection));
+			const outcome =
+				delta.op === 'upsert'
+					? yield* store.applyAuthoritativeRow({
+							collection: delta.collection,
+							recordId: delta.recordId,
+							rowVersion: delta.rowVersion,
+							cursor: delta.cursor,
+							row: delta.row
+						})
+					: yield* store.removeAuthoritativeRow({ ...delta, cursor: delta.cursor });
 			if (dropsPayload) {
 				droppedCollections.add(delta.collection);
 				if (outcome.applied && delta.op === 'upsert') {
@@ -745,7 +769,8 @@ export const createWindowLedger = Effect.fn('ReplicaWindow.create')(function* (
 			if (
 				generation > (current.generations[collection] ?? 0) &&
 				!rowActivityCollections.has(collection)
-			) refillCollections.add(collection);
+			)
+				refillCollections.add(collection);
 		}
 		const affectedWindowIds: Array<string> = [];
 		const proofWithdrawals: Array<string> = [];
@@ -756,8 +781,11 @@ export const createWindowLedger = Effect.fn('ReplicaWindow.create')(function* (
 			if (!mustRefill && !needsRerun) continue;
 			affectedWindowIds.push(window.query_key);
 			const dirty =
-				(window.valid || window.dirty) && needsRerun && !mustRefill &&
-				window.proof_owner === 'local' && window.locally_reproducible &&
+				(window.valid || window.dirty) &&
+				needsRerun &&
+				!mustRefill &&
+				window.proof_owner === 'local' &&
+				window.locally_reproducible &&
 				(Number(window.lease_count) > 0 || window.query_key === flight?.queryKey);
 			yield* database.query(
 				`update bolt_replica_window set valid = false, dirty = $2,
@@ -788,223 +816,268 @@ export const createWindowLedger = Effect.fn('ReplicaWindow.create')(function* (
 
 	return {
 		transaction,
-		readWindow: (queryKey, use) => Effect.gen(function* () {
-			const before = yield* readProof(queryKey);
-			if (before === undefined) return undefined;
-			const value = yield* use(before);
-			if (value === undefined) return undefined;
-			// A local answer may read base rows after the proof snapshot. Confirm the same atomic proof is
-			// still installed before returning it; a concurrent delta/window install makes this attempt
-			// decline and retry remotely instead of serving mixed generations. Both snapshots are one
-			// bounded SELECT and never acquire the writer permit or open a transaction.
-			const after = yield* readProof(queryKey);
-			return after !== undefined && stableStringify(before) === stableStringify(after)
-				? value
-				: undefined;
-		}),
-		installWindow: (input) => transaction(Effect.gen(function* () {
-			if (!validCursor(input.readCursor) || !validGenerationMap(input.dependencyGenerations)) {
-				return yield* Effect.fail(new Error('Invalid authoritative query-window proof'));
-			}
-			const dependencies = uniqueNonEmpty([...input.dependencies], 'Window dependencies');
-			if ((input.window.proofOwner === 'local') !== input.window.locallyReproducible) {
-				return yield* Effect.fail(new Error('Window proof ownership is inconsistent'));
-			}
-			if (
-				dependencies.length !== input.window.dependencies.length ||
-				dependencies.some((dependency) => !input.window.dependencies.includes(dependency))
-			) {
-				return yield* Effect.fail(
-					new Error('Installed dependencies differ from the confirmed canonical window')
-				);
-			}
-			const generationKeys = Object.keys(input.dependencyGenerations).toSorted();
-			const sortedDependencies = [...dependencies].toSorted();
-			if (
-				generationKeys.length !== sortedDependencies.length ||
-				generationKeys.some((collection, index) => collection !== sortedDependencies[index])
-			) {
-				return yield* Effect.fail(
-					new Error('Window generations must exactly cover the confirmed dependencies')
-				);
-			}
-			const incomingIds = uniqueNonEmpty([...input.orderedRowIds], 'Window row ids');
-			const baseRowKeys = new Set<string>();
-			for (const row of input.baseRows) {
-				const key = `${row.collection}\u0000${row.recordId}`;
-				if (baseRowKeys.has(key)) {
-					return yield* Effect.fail(new Error('Window hydration repeats one authoritative base row'));
-				}
-				baseRowKeys.add(key);
-			}
-			const relationships = input.relationshipRefs ?? [];
-			if (relationships.length > MAX_REPLICA_WINDOW_RELATIONSHIPS) {
-				return yield* Effect.fail(new Error('Window relationship membership exceeds the durable cap'));
-			}
-			const relationshipKeys = new Set<string>();
-			for (const relationship of relationships) {
-				const parts = [
-					relationship.sourceCollection, relationship.sourceRecordId, relationship.relation,
-					relationship.targetCollection, relationship.targetRecordId
-				];
-				if (parts.some((part) => part.length === 0)) {
-					return yield* Effect.fail(new Error('Window relationship edge is empty'));
-				}
-				const key = parts.join('\u0000');
-				if (relationshipKeys.has(key)) {
-					return yield* Effect.fail(new Error('Window relationship edge is repeated'));
-				}
-				relationshipKeys.add(key);
-			}
-			if (input.serverResult !== undefined && input.window.proofOwner !== 'server') {
-				return yield* Effect.fail(new Error('Only a ServerProof window may retain a server result'));
-			}
-			if (input.serverResult !== undefined && serverResultOf(input.serverResult) === undefined) {
-				return yield* Effect.fail(new Error('Server query result descriptor is invalid'));
-			}
-			if (
-				!Number.isSafeInteger(input.lookaheadCount) || input.lookaheadCount < 0 ||
-				input.lookaheadCount > incomingIds.length ||
-				input.lookaheadCount > MAX_REPLICA_WINDOW_LOOKAHEAD_ROWS
-			) return yield* Effect.fail(new Error('Window lookahead count is invalid'));
-			const existing = yield* readStoredWindow(database, input.window.queryKey);
-			const append = input.continuation !== null;
-			if (append && (input.serverResult !== undefined || existing?.server_result != null)) {
-				return yield* Effect.fail(new Error('An aggregate server result cannot be extended'));
-			}
-			if (append && existing === undefined) {
-				return yield* Effect.fail(new Error('A continuation cannot create a window without its prefix'));
-			}
-			if (
-				existing !== undefined &&
-				stableStringify(jsonValue(existing.canonical_query)) !== stableStringify(input.window.canonical)
-			) return yield* Effect.fail(new Error('Query key is already bound to a different canonical query'));
-			const priorIds = existing === undefined
-				? []
-				: (yield* database.query<{ readonly record_id: string }>(
-					`select record_id from bolt_replica_window_row
-					 where query_key = $1 order by ordinal asc`, [input.window.queryKey]
-				)).rows.map(({ record_id }) => record_id);
-			const preservesTail =
-				existing !== undefined && !append &&
-				input.serverResult === undefined && existing.server_result == null &&
-				input.nextCursor !== null && incomingIds.length < priorIds.length;
-			const incomingSet = new Set(incomingIds);
-			const retainedTail = preservesTail
-				? priorIds.filter((recordId) => !incomingSet.has(recordId))
-				: [];
-			const priorSet = new Set(priorIds);
-			const extension = append
-				? incomingIds.filter((recordId) => !priorSet.has(recordId))
-				: incomingIds;
-			const orderedRowIds = append
-				? [...priorIds, ...extension]
-				: [...incomingIds, ...retainedTail];
-			const retained = new Set(orderedRowIds);
-			if (orderedRowIds.length > MAX_REPLICA_WINDOW_ROWS) {
-				return yield* Effect.fail(new Error('Window membership exceeds the durable cap'));
-			}
-			const preservesRelationships = append || retainedTail.length > 0;
-			const priorRelationships = !preservesRelationships
-				? []
-				: (yield* database.query<CollectionRelationshipMembership>(
-					`select source_collection as "sourceCollection", source_record_id as "sourceRecordId",
+		readWindow: (queryKey, use) =>
+			Effect.gen(function* () {
+				const before = yield* readProof(queryKey);
+				if (before === undefined) return undefined;
+				const value = yield* use(before);
+				if (value === undefined) return undefined;
+				// A local answer may read base rows after the proof snapshot. Confirm the same atomic proof is
+				// still installed before returning it; a concurrent delta/window install makes this attempt
+				// decline and retry remotely instead of serving mixed generations. Both snapshots are one
+				// bounded SELECT and never acquire the writer permit or open a transaction.
+				const after = yield* readProof(queryKey);
+				return after !== undefined && stableStringify(before) === stableStringify(after)
+					? value
+					: undefined;
+			}),
+		installWindow: (input) =>
+			transaction(
+				Effect.gen(function* () {
+					if (!validCursor(input.readCursor) || !validGenerationMap(input.dependencyGenerations)) {
+						return yield* Effect.fail(new Error('Invalid authoritative query-window proof'));
+					}
+					const dependencies = uniqueNonEmpty([...input.dependencies], 'Window dependencies');
+					if ((input.window.proofOwner === 'local') !== input.window.locallyReproducible) {
+						return yield* Effect.fail(new Error('Window proof ownership is inconsistent'));
+					}
+					if (
+						dependencies.length !== input.window.dependencies.length ||
+						dependencies.some((dependency) => !input.window.dependencies.includes(dependency))
+					) {
+						return yield* Effect.fail(
+							new Error('Installed dependencies differ from the confirmed canonical window')
+						);
+					}
+					const generationKeys = Object.keys(input.dependencyGenerations).toSorted();
+					const sortedDependencies = [...dependencies].toSorted();
+					if (
+						generationKeys.length !== sortedDependencies.length ||
+						generationKeys.some((collection, index) => collection !== sortedDependencies[index])
+					) {
+						return yield* Effect.fail(
+							new Error('Window generations must exactly cover the confirmed dependencies')
+						);
+					}
+					const incomingIds = uniqueNonEmpty([...input.orderedRowIds], 'Window row ids');
+					const baseRowKeys = new Set<string>();
+					for (const row of input.baseRows) {
+						const key = `${row.collection}\u0000${row.recordId}`;
+						if (baseRowKeys.has(key)) {
+							return yield* Effect.fail(
+								new Error('Window hydration repeats one authoritative base row')
+							);
+						}
+						baseRowKeys.add(key);
+					}
+					const relationships = input.relationshipRefs ?? [];
+					if (relationships.length > MAX_REPLICA_WINDOW_RELATIONSHIPS) {
+						return yield* Effect.fail(
+							new Error('Window relationship membership exceeds the durable cap')
+						);
+					}
+					const relationshipKeys = new Set<string>();
+					for (const relationship of relationships) {
+						const parts = [
+							relationship.sourceCollection,
+							relationship.sourceRecordId,
+							relationship.relation,
+							relationship.targetCollection,
+							relationship.targetRecordId
+						];
+						if (parts.some((part) => part.length === 0)) {
+							return yield* Effect.fail(new Error('Window relationship edge is empty'));
+						}
+						const key = parts.join('\u0000');
+						if (relationshipKeys.has(key)) {
+							return yield* Effect.fail(new Error('Window relationship edge is repeated'));
+						}
+						relationshipKeys.add(key);
+					}
+					if (input.serverResult !== undefined && input.window.proofOwner !== 'server') {
+						return yield* Effect.fail(
+							new Error('Only a ServerProof window may retain a server result')
+						);
+					}
+					if (
+						input.serverResult !== undefined &&
+						serverResultOf(input.serverResult) === undefined
+					) {
+						return yield* Effect.fail(new Error('Server query result descriptor is invalid'));
+					}
+					if (
+						!Number.isSafeInteger(input.lookaheadCount) ||
+						input.lookaheadCount < 0 ||
+						input.lookaheadCount > incomingIds.length ||
+						input.lookaheadCount > MAX_REPLICA_WINDOW_LOOKAHEAD_ROWS
+					)
+						return yield* Effect.fail(new Error('Window lookahead count is invalid'));
+					const existing = yield* readStoredWindow(database, input.window.queryKey);
+					const append = input.continuation !== null;
+					if (append && (input.serverResult !== undefined || existing?.server_result != null)) {
+						return yield* Effect.fail(new Error('An aggregate server result cannot be extended'));
+					}
+					if (append && existing === undefined) {
+						return yield* Effect.fail(
+							new Error('A continuation cannot create a window without its prefix')
+						);
+					}
+					if (
+						existing !== undefined &&
+						stableStringify(jsonValue(existing.canonical_query)) !==
+							stableStringify(input.window.canonical)
+					)
+						return yield* Effect.fail(
+							new Error('Query key is already bound to a different canonical query')
+						);
+					const priorIds =
+						existing === undefined
+							? []
+							: (yield* database.query<{ readonly record_id: string }>(
+									`select record_id from bolt_replica_window_row
+					 where query_key = $1 order by ordinal asc`,
+									[input.window.queryKey]
+								)).rows.map(({ record_id }) => record_id);
+					const preservesTail =
+						existing !== undefined &&
+						!append &&
+						input.serverResult === undefined &&
+						existing.server_result == null &&
+						input.nextCursor !== null &&
+						incomingIds.length < priorIds.length;
+					const incomingSet = new Set(incomingIds);
+					const retainedTail = preservesTail
+						? priorIds.filter((recordId) => !incomingSet.has(recordId))
+						: [];
+					const priorSet = new Set(priorIds);
+					const extension = append
+						? incomingIds.filter((recordId) => !priorSet.has(recordId))
+						: incomingIds;
+					const orderedRowIds = append
+						? [...priorIds, ...extension]
+						: [...incomingIds, ...retainedTail];
+					const retained = new Set(orderedRowIds);
+					if (orderedRowIds.length > MAX_REPLICA_WINDOW_ROWS) {
+						return yield* Effect.fail(new Error('Window membership exceeds the durable cap'));
+					}
+					const preservesRelationships = append || retainedTail.length > 0;
+					const priorRelationships = !preservesRelationships
+						? []
+						: (yield* database.query<CollectionRelationshipMembership>(
+								`select source_collection as "sourceCollection", source_record_id as "sourceRecordId",
 					 relation, target_collection as "targetCollection", target_record_id as "targetRecordId"
 					 from bolt_replica_window_relationship where query_key = $1`,
-					[input.window.queryKey]
-				)).rows;
-			const storedRelationshipKeys = new Set<string>();
-			const storedRelationships = [...priorRelationships, ...relationships].filter((relationship) => {
-				const key = [
-					relationship.sourceCollection, relationship.sourceRecordId, relationship.relation,
-					relationship.targetCollection, relationship.targetRecordId
-				].join('\u0000');
-				if (storedRelationshipKeys.has(key)) return false;
-				storedRelationshipKeys.add(key);
-				return true;
-			});
-			if (storedRelationships.length > MAX_REPLICA_WINDOW_RELATIONSHIPS) {
-				return yield* Effect.fail(new Error('Window relationship membership exceeds the durable cap'));
-			}
-			if (input.serverResult?.kind === 'findGrouped') {
-				const groupedIds = Object.values(input.serverResult.groups).flat();
-				if (
-					groupedIds.length !== orderedRowIds.length ||
-					new Set(groupedIds).size !== groupedIds.length ||
-					groupedIds.some((id) => !retained.has(id))
-				) {
-					return yield* Effect.fail(
-						new Error('Grouped server result is not an exact partition of retained root rows')
+								[input.window.queryKey]
+							)).rows;
+					const storedRelationshipKeys = new Set<string>();
+					const storedRelationships = [...priorRelationships, ...relationships].filter(
+						(relationship) => {
+							const key = [
+								relationship.sourceCollection,
+								relationship.sourceRecordId,
+								relationship.relation,
+								relationship.targetCollection,
+								relationship.targetRecordId
+							].join('\u0000');
+							if (storedRelationshipKeys.has(key)) return false;
+							storedRelationshipKeys.add(key);
+							return true;
+						}
 					);
-				}
-			}
-			if (input.serverResult?.kind === 'count' && orderedRowIds.length > 0) {
-				return yield* Effect.fail(new Error('A retained count cannot carry row membership'));
-			}
-			const currentPosition = yield* readReplicaPosition(database);
-			if (compareSyncCursors(input.readCursor, currentPosition.cursor) > 0) {
-				const storedWindows = yield* database.query<{
-					readonly query_key: string;
-					readonly dependencies: unknown;
-				}>('select query_key, dependencies from bolt_replica_window');
-				const dependencySet = new Set(dependencies);
-				const quarantined = storedWindows.rows.flatMap((stored) =>
-					stringsOf(stored.dependencies).some((dependency) => dependencySet.has(dependency))
-						? [stored.query_key]
-						: []
-				);
-				if (quarantined.length > 0) {
-					yield* database.query(
-						`update bolt_replica_window set valid = false, dirty = false
+					if (storedRelationships.length > MAX_REPLICA_WINDOW_RELATIONSHIPS) {
+						return yield* Effect.fail(
+							new Error('Window relationship membership exceeds the durable cap')
+						);
+					}
+					if (input.serverResult?.kind === 'findGrouped') {
+						const groupedIds = Object.values(input.serverResult.groups).flat();
+						if (
+							groupedIds.length !== orderedRowIds.length ||
+							new Set(groupedIds).size !== groupedIds.length ||
+							groupedIds.some((id) => !retained.has(id))
+						) {
+							return yield* Effect.fail(
+								new Error('Grouped server result is not an exact partition of retained root rows')
+							);
+						}
+					}
+					if (input.serverResult?.kind === 'count' && orderedRowIds.length > 0) {
+						return yield* Effect.fail(new Error('A retained count cannot carry row membership'));
+					}
+					const currentPosition = yield* readReplicaPosition(database);
+					if (compareSyncCursors(input.readCursor, currentPosition.cursor) > 0) {
+						const storedWindows = yield* database.query<{
+							readonly query_key: string;
+							readonly dependencies: unknown;
+						}>('select query_key, dependencies from bolt_replica_window');
+						const dependencySet = new Set(dependencies);
+						const quarantined = storedWindows.rows.flatMap((stored) =>
+							stringsOf(stored.dependencies).some((dependency) => dependencySet.has(dependency))
+								? [stored.query_key]
+								: []
+						);
+						if (quarantined.length > 0) {
+							yield* database.query(
+								`update bolt_replica_window set valid = false, dirty = false
 						 where query_key = any($1::text[])`,
-						[quarantined]
-					);
-				}
-			}
-			for (const row of input.baseRows) {
-				yield* store.applyAuthoritativeRow({ ...row, cursor: input.readCursor });
-			}
-			for (const recordId of incomingIds) {
-				if (!(yield* store.hasRecord(input.window.collection, recordId))) {
-					return yield* Effect.fail(new Error('Window membership names a missing authoritative base row'));
-				}
-			}
-			for (const relationship of relationships) {
-				if (
-					!(yield* store.hasRecord(relationship.sourceCollection, relationship.sourceRecordId)) ||
-					!(yield* store.hasRecord(relationship.targetCollection, relationship.targetRecordId))
-				) {
-					return yield* Effect.fail(
-						new Error('Window relationship names a missing authoritative base row')
-					);
-				}
-			}
-			const proofCurrent = proofGenerationsCurrent(
-				dependencies, input.dependencyGenerations, currentPosition.generations
-			) && compareSyncCursors(input.readCursor, currentPosition.cursor) <= 0;
-			const prefixConfirmed = !append || (
-				existing?.proof_confirmed === true &&
-				proofGenerationsCurrent(
-					dependencies,
-					generationsOf(existing.dependency_generations),
-					input.dependencyGenerations
-				)
-			);
-			const boundaryCovered =
-				(input.nextCursor === null || input.lookaheadCount > 0) &&
-				retainedTail.length === 0 && prefixConfirmed;
-			const leaseRows = yield* database.query<{ readonly lease_count: number | string }>(
-				`select count(*)::integer as lease_count from bolt_replica_window_lease
+								[quarantined]
+							);
+						}
+					}
+					for (const row of input.baseRows) {
+						yield* store.applyAuthoritativeRow({ ...row, cursor: input.readCursor });
+					}
+					for (const recordId of incomingIds) {
+						if (!(yield* store.hasRecord(input.window.collection, recordId))) {
+							return yield* Effect.fail(
+								new Error('Window membership names a missing authoritative base row')
+							);
+						}
+					}
+					for (const relationship of relationships) {
+						if (
+							!(yield* store.hasRecord(
+								relationship.sourceCollection,
+								relationship.sourceRecordId
+							)) ||
+							!(yield* store.hasRecord(relationship.targetCollection, relationship.targetRecordId))
+						) {
+							return yield* Effect.fail(
+								new Error('Window relationship names a missing authoritative base row')
+							);
+						}
+					}
+					const proofCurrent =
+						proofGenerationsCurrent(
+							dependencies,
+							input.dependencyGenerations,
+							currentPosition.generations
+						) && compareSyncCursors(input.readCursor, currentPosition.cursor) <= 0;
+					const prefixConfirmed =
+						!append ||
+						(existing?.proof_confirmed === true &&
+							proofGenerationsCurrent(
+								dependencies,
+								generationsOf(existing.dependency_generations),
+								input.dependencyGenerations
+							));
+					const boundaryCovered =
+						(input.nextCursor === null || input.lookaheadCount > 0) &&
+						retainedTail.length === 0 &&
+						prefixConfirmed;
+					const leaseRows = yield* database.query<{ readonly lease_count: number | string }>(
+						`select count(*)::integer as lease_count from bolt_replica_window_lease
 				 where query_key = $1`,
-				[input.window.queryKey]
-			);
-			const leaseCount = Number(leaseRows.rows[0]?.lease_count ?? 0);
-			const bytes = stableStringify(input.window.canonical).length +
-				orderedRowIds.reduce((total, id) => total + id.length, 0) +
-				stableStringify(storedRelationships).length +
-				(input.serverResult === undefined ? 0 : stableStringify(input.serverResult).length);
-			yield* database.query(
-				`insert into bolt_replica_window
+						[input.window.queryKey]
+					);
+					const leaseCount = Number(leaseRows.rows[0]?.lease_count ?? 0);
+					const bytes =
+						stableStringify(input.window.canonical).length +
+						orderedRowIds.reduce((total, id) => total + id.length, 0) +
+						stableStringify(storedRelationships).length +
+						(input.serverResult === undefined ? 0 : stableStringify(input.serverResult).length);
+					yield* database.query(
+						`insert into bolt_replica_window
 				 (query_key, collection, canonical_query, dependencies, proof_owner,
 				  locally_reproducible, valid, dirty, read_xid, read_sequence,
 				  dependency_generations, server_result, next_cursor, row_count, lookahead_count,
@@ -1026,88 +1099,122 @@ export const createWindowLedger = Effect.fn('ReplicaWindow.create')(function* (
 				 lookahead_count = excluded.lookahead_count, expires_at = excluded.expires_at,
 				 bytes = excluded.bytes,
 				 last_access = excluded.last_access`,
-				[
-					input.window.queryKey, input.window.collection,
-					JSON.stringify(input.window.canonical), JSON.stringify(dependencies),
-					input.window.proofOwner, input.window.locallyReproducible,
-					(input.valid ?? true) && proofCurrent && boundaryCovered,
-					input.readCursor.xid, input.readCursor.sequence,
-					JSON.stringify(input.dependencyGenerations),
-					input.serverResult === undefined ? null : JSON.stringify(input.serverResult),
-					input.nextCursor, orderedRowIds.length, input.lookaheadCount,
-					leaseCount, bytes, INACTIVE_WINDOW_TTL_MILLIS,
-					(input.valid ?? true) && boundaryCovered
-				]
-			);
-			if (!append) {
-				yield* database.query('delete from bolt_replica_window_row where query_key = $1', [input.window.queryKey]);
-				yield* insertWindowMembership(
-					database, input.window.queryKey, input.window.collection, orderedRowIds
-				);
-			} else {
-				yield* insertWindowMembership(
-					database, input.window.queryKey, input.window.collection, extension, priorIds.length
-				);
-			}
-			if (!preservesRelationships) {
-				yield* database.query('delete from bolt_replica_window_relationship where query_key = $1', [input.window.queryKey]);
-			}
-			yield* insertWindowRelationships(database, input.window.queryKey, relationships);
-			if (input.bufferedDeltas !== undefined) {
-				yield* applyBatch(
-					input.bufferedDeltas,
-					input.window.proofOwner === 'local'
-						? { queryKey: input.window.queryKey, stagingCollections: dependencies }
-						: undefined
-				);
-			}
-			const installed = yield* readProof(input.window.queryKey);
-			if (installed === undefined) return yield* Effect.fail(new Error('Installed window is unreadable'));
-			return installed;
-		})),
-		applyDeltaBatch: (input) => transaction(applyBatch(input)),
-		invalidateDependencies: (collections, generations) => transaction(invalidate(collections, generations)),
-		dirtyDependencies: (collections) => transaction(dirtyOverlayDependencies(collections)),
-		recomputeWindow: (input) => transaction(Effect.gen(function* () {
-				const stored = yield* readStoredWindow(database, input.queryKey);
-				if (
-					stored === undefined ||
-					!stored.locally_reproducible ||
-					stored.proof_owner !== 'local' ||
-					!stored.dirty ||
-					!validCursor(input.readCursor) ||
-					!validGenerationMap(input.dependencyGenerations)
-				) return false;
-				const dependencies = stringsOf(stored.dependencies).toSorted();
-				const generationKeys = Object.keys(input.dependencyGenerations).toSorted();
-				if (
-					generationKeys.length !== dependencies.length ||
-					generationKeys.some((collection, index) => collection !== dependencies[index])
-				) return false;
-				const ids = uniqueNonEmpty([...input.orderedRowIds], 'Recomputed window row ids');
-				if (
-					ids.length > MAX_REPLICA_WINDOW_ROWS ||
-					!Number.isSafeInteger(input.lookaheadCount) ||
-					input.lookaheadCount < 0 ||
-					input.lookaheadCount > Math.min(ids.length, MAX_REPLICA_WINDOW_LOOKAHEAD_ROWS)
-				) return false;
-				const optimisticRowIds = new Set(
-					uniqueNonEmpty([...(input.optimisticRowIds ?? [])], 'Optimistic window row ids')
-				);
-				for (const id of ids) {
-					if (!optimisticRowIds.has(id) && !(yield* store.hasRecord(stored.collection, id))) {
-						return false;
+						[
+							input.window.queryKey,
+							input.window.collection,
+							JSON.stringify(input.window.canonical),
+							JSON.stringify(dependencies),
+							input.window.proofOwner,
+							input.window.locallyReproducible,
+							(input.valid ?? true) && proofCurrent && boundaryCovered,
+							input.readCursor.xid,
+							input.readCursor.sequence,
+							JSON.stringify(input.dependencyGenerations),
+							input.serverResult === undefined ? null : JSON.stringify(input.serverResult),
+							input.nextCursor,
+							orderedRowIds.length,
+							input.lookaheadCount,
+							leaseCount,
+							bytes,
+							INACTIVE_WINDOW_TTL_MILLIS,
+							(input.valid ?? true) && boundaryCovered
+						]
+					);
+					if (!append) {
+						yield* database.query('delete from bolt_replica_window_row where query_key = $1', [
+							input.window.queryKey
+						]);
+						yield* insertWindowMembership(
+							database,
+							input.window.queryKey,
+							input.window.collection,
+							orderedRowIds
+						);
+					} else {
+						yield* insertWindowMembership(
+							database,
+							input.window.queryKey,
+							input.window.collection,
+							extension,
+							priorIds.length
+						);
 					}
-				}
-				const position = yield* readReplicaPosition(database);
-				const current = compareSyncCursors(input.readCursor, position.cursor) === 0 && proofGenerationsCurrent(
-					dependencies, input.dependencyGenerations, position.generations
-				);
-				const valid = current && input.boundaryCovered;
-				yield* database.query('delete from bolt_replica_window_row where query_key = $1', [input.queryKey]);
-				yield* insertWindowMembership(database, input.queryKey, stored.collection, ids);
-				yield* database.query(
-					`update bolt_replica_window set valid = $2, dirty = false,
+					if (!preservesRelationships) {
+						yield* database.query(
+							'delete from bolt_replica_window_relationship where query_key = $1',
+							[input.window.queryKey]
+						);
+					}
+					yield* insertWindowRelationships(database, input.window.queryKey, relationships);
+					if (input.bufferedDeltas !== undefined) {
+						yield* applyBatch(
+							input.bufferedDeltas,
+							input.window.proofOwner === 'local'
+								? { queryKey: input.window.queryKey, stagingCollections: dependencies }
+								: undefined
+						);
+					}
+					const installed = yield* readProof(input.window.queryKey);
+					if (installed === undefined)
+						return yield* Effect.fail(new Error('Installed window is unreadable'));
+					return installed;
+				})
+			),
+		applyDeltaBatch: (input) => transaction(applyBatch(input)),
+		invalidateDependencies: (collections, generations) =>
+			transaction(invalidate(collections, generations)),
+		dirtyDependencies: (collections) => transaction(dirtyOverlayDependencies(collections)),
+		recomputeWindow: (input) =>
+			transaction(
+				Effect.gen(function* () {
+					const stored = yield* readStoredWindow(database, input.queryKey);
+					if (
+						stored === undefined ||
+						!stored.locally_reproducible ||
+						stored.proof_owner !== 'local' ||
+						!stored.dirty ||
+						!validCursor(input.readCursor) ||
+						!validGenerationMap(input.dependencyGenerations)
+					)
+						return false;
+					const dependencies = stringsOf(stored.dependencies).toSorted();
+					const generationKeys = Object.keys(input.dependencyGenerations).toSorted();
+					if (
+						generationKeys.length !== dependencies.length ||
+						generationKeys.some((collection, index) => collection !== dependencies[index])
+					)
+						return false;
+					const ids = uniqueNonEmpty([...input.orderedRowIds], 'Recomputed window row ids');
+					if (
+						ids.length > MAX_REPLICA_WINDOW_ROWS ||
+						!Number.isSafeInteger(input.lookaheadCount) ||
+						input.lookaheadCount < 0 ||
+						input.lookaheadCount > Math.min(ids.length, MAX_REPLICA_WINDOW_LOOKAHEAD_ROWS)
+					)
+						return false;
+					const optimisticRowIds = new Set(
+						uniqueNonEmpty([...(input.optimisticRowIds ?? [])], 'Optimistic window row ids')
+					);
+					for (const id of ids) {
+						if (!optimisticRowIds.has(id) && !(yield* store.hasRecord(stored.collection, id))) {
+							return false;
+						}
+					}
+					const position = yield* readReplicaPosition(database);
+					const current =
+						compareSyncCursors(input.readCursor, position.cursor) === 0 &&
+						proofGenerationsCurrent(
+							dependencies,
+							input.dependencyGenerations,
+							position.generations
+						);
+					const valid = current && input.boundaryCovered;
+					yield* database.query('delete from bolt_replica_window_row where query_key = $1', [
+						input.queryKey
+					]);
+					yield* insertWindowMembership(database, input.queryKey, stored.collection, ids);
+					yield* database.query(
+						`update bolt_replica_window set valid = $2, dirty = false,
 					 proof_confirmed = $9,
 					 read_xid = $3, read_sequence = $4,
 					 dependency_generations = $5::jsonb,
@@ -1117,20 +1224,28 @@ export const createWindowLedger = Effect.fn('ReplicaWindow.create')(function* (
 						+ $6::bigint * 36::bigint,
 					 last_access = current_timestamp
 					 where query_key = $1`,
-					[
-						input.queryKey, valid, input.readCursor.xid, input.readCursor.sequence,
-						JSON.stringify(input.dependencyGenerations), ids.length,
-						input.lookaheadCount, input.nextCursor, input.boundaryCovered
-					]
-				);
-				return valid;
-			})),
+						[
+							input.queryKey,
+							valid,
+							input.readCursor.xid,
+							input.readCursor.sequence,
+							JSON.stringify(input.dependencyGenerations),
+							ids.length,
+							input.lookaheadCount,
+							input.nextCursor,
+							input.boundaryCovered
+						]
+					);
+					return valid;
+				})
+			),
 		acquireWindowLease: (queryKey, ownerId) =>
 			ownerId.length === 0
 				? Effect.fail(new Error('Replica window lease owner cannot be empty'))
 				: transaction(
-					database.query<{ readonly query_key: string }>(
-						`with acquired as (
+						database
+							.query<{ readonly query_key: string }>(
+								`with acquired as (
 							insert into bolt_replica_window_lease (query_key, owner_id)
 							select $1, $2 where exists (
 								select 1 from bolt_replica_window where query_key = $1
@@ -1149,15 +1264,17 @@ export const createWindowLedger = Effect.fn('ReplicaWindow.create')(function* (
 						from counted
 						where query_key = $1 and exists (select 1 from acquired)
 						returning query_key`,
-						[queryKey, ownerId]
-					).pipe(Effect.map(({ rows }) => rows.length > 0))
-				),
+								[queryKey, ownerId]
+							)
+							.pipe(Effect.map(({ rows }) => rows.length > 0))
+					),
 		releaseWindowLease: (queryKey, ownerId) =>
 			ownerId.length === 0
 				? Effect.fail(new Error('Replica window lease owner cannot be empty'))
 				: transaction(
-					database.query<{ readonly query_key: string }>(
-						`with released as (
+						database
+							.query<{ readonly query_key: string }>(
+								`with released as (
 							delete from bolt_replica_window_lease
 							where query_key = $1 and owner_id = $2
 							returning query_key
@@ -1175,98 +1292,127 @@ export const createWindowLedger = Effect.fn('ReplicaWindow.create')(function* (
 						from counted
 						where query_key = $1 and exists (select 1 from released)
 						returning query_key`,
-						[queryKey, ownerId, INACTIVE_WINDOW_TTL_MILLIS]
-					).pipe(Effect.map(({ rows }) => rows.length > 0))
-				),
-		releaseWindow: (queryKey, protectedRows) => transaction(Effect.gen(function* () {
-			// Replica sessions disable FK cascade triggers. Remove the reconstructible children
-			// explicitly before their window or they keep base rows artificially reachable.
-			yield* database.query(
-				'delete from bolt_replica_window_lease where query_key = $1', [queryKey]
-			);
-			yield* database.query(
-				'delete from bolt_replica_window_relationship where query_key = $1', [queryKey]
-			);
-			yield* database.query(
-				'delete from bolt_replica_window_row where query_key = $1', [queryKey]
-			);
-			const deleted = yield* database.query<{ readonly query_key: string }>(
-				'delete from bolt_replica_window where query_key = $1 returning query_key', [queryKey]
-			);
-			if (deleted.rows.length === 0) return 0;
-			return yield* prune(protectedRows);
-		})),
-		expireInactiveWindows: (protectedRows) => transaction(Effect.gen(function* () {
-			const candidates = yield* database.query<{ readonly query_key: string }>(
-				`select query_key from bolt_replica_window
-				 where lease_count = 0 and expires_at <= current_timestamp`
-			);
-			const queryKeys = candidates.rows.map(({ query_key }) => query_key);
-			if (queryKeys.length === 0) return [];
-			yield* database.query(
-				'delete from bolt_replica_window_lease where query_key = any($1::text[])', [queryKeys]
-			);
-			yield* database.query(
-				'delete from bolt_replica_window_relationship where query_key = any($1::text[])', [queryKeys]
-			);
-			yield* database.query(
-				'delete from bolt_replica_window_row where query_key = any($1::text[])', [queryKeys]
-			);
-			const expired = yield* database.query<{ readonly query_key: string }>(
-				`delete from bolt_replica_window where query_key = any($1::text[])
-				 and lease_count = 0 and expires_at <= current_timestamp returning query_key`,
-				[queryKeys]
-			);
-			if (expired.rows.length > 0) yield* prune(protectedRows);
-			return expired.rows.map(({ query_key }) => query_key);
-		})),
-		pruneBaseRows: (protectedRows) => transaction(prune(protectedRows)),
-		listWindows: () => database.query<{
-			readonly query_key: string;
-			readonly collection: string;
-			readonly valid: boolean;
-			readonly dirty: boolean;
-			readonly lease_count: number | string;
-			readonly bytes: number | string;
-			readonly last_access: Date | string;
-		}>(
-			`select query_key, collection, valid, dirty, lease_count, bytes, last_access
-			 from bolt_replica_window`
-		).pipe(Effect.map(({ rows }) => rows.map((row) => ({
-			id: row.query_key,
-			collection: row.collection,
-			kind: 'window' as const,
-			valid: row.valid,
-			dirty: row.dirty,
-			leaseCount: Number(row.lease_count),
-			bytes: Number(row.bytes),
-			lastAccess: row.last_access instanceof Date
-				? row.last_access.getTime() : new Date(row.last_access).getTime()
-		})))),
-		dependencies: () => database.query<{ readonly dependencies: unknown }>(
-			'select dependencies from bolt_replica_window where lease_count > 0'
-		).pipe(Effect.map(({ rows }) => [
-			...new Set(rows.flatMap(({ dependencies }) => stringsOf(dependencies)))
-			])),
-		position: () => readReplicaPosition(database),
-		recordPosition: (position) => transaction(Effect.gen(function* () {
-				if (!validCursor(position.cursor) || !validGenerationMap(position.generations)) {
-					return yield* Effect.fail(new Error('Invalid durable replica position'));
-				}
-				const current = yield* readReplicaPosition(database);
-				if (compareSyncCursors(position.cursor, current.cursor) < 0) {
-					return yield* Effect.fail(
-						new ReplicaHeadMovedBackwards(current.cursor, position.cursor)
+								[queryKey, ownerId, INACTIVE_WINDOW_TTL_MILLIS]
+							)
+							.pipe(Effect.map(({ rows }) => rows.length > 0))
+					),
+		releaseWindow: (queryKey, protectedRows) =>
+			transaction(
+				Effect.gen(function* () {
+					// Replica sessions disable FK cascade triggers. Remove the reconstructible children
+					// explicitly before their window or they keep base rows artificially reachable.
+					yield* database.query('delete from bolt_replica_window_lease where query_key = $1', [
+						queryKey
+					]);
+					yield* database.query(
+						'delete from bolt_replica_window_relationship where query_key = $1',
+						[queryKey]
 					);
-				}
-			const recorded = {
-				cursor: position.cursor,
-				generations: mergeGenerations(current.generations, position.generations)
-			};
-			yield* writeReplicaPosition(database, recorded);
-			yield* refreshConfirmedProofs(recorded);
-			return recorded;
-		})),
+					yield* database.query('delete from bolt_replica_window_row where query_key = $1', [
+						queryKey
+					]);
+					const deleted = yield* database.query<{ readonly query_key: string }>(
+						'delete from bolt_replica_window where query_key = $1 returning query_key',
+						[queryKey]
+					);
+					if (deleted.rows.length === 0) return 0;
+					return yield* prune(protectedRows);
+				})
+			),
+		expireInactiveWindows: (protectedRows) =>
+			transaction(
+				Effect.gen(function* () {
+					const candidates = yield* database.query<{ readonly query_key: string }>(
+						`select query_key from bolt_replica_window
+				 where lease_count = 0 and expires_at <= current_timestamp`
+					);
+					const queryKeys = candidates.rows.map(({ query_key }) => query_key);
+					if (queryKeys.length === 0) return [];
+					yield* database.query(
+						'delete from bolt_replica_window_lease where query_key = any($1::text[])',
+						[queryKeys]
+					);
+					yield* database.query(
+						'delete from bolt_replica_window_relationship where query_key = any($1::text[])',
+						[queryKeys]
+					);
+					yield* database.query(
+						'delete from bolt_replica_window_row where query_key = any($1::text[])',
+						[queryKeys]
+					);
+					const expired = yield* database.query<{ readonly query_key: string }>(
+						`delete from bolt_replica_window where query_key = any($1::text[])
+				 and lease_count = 0 and expires_at <= current_timestamp returning query_key`,
+						[queryKeys]
+					);
+					if (expired.rows.length > 0) yield* prune(protectedRows);
+					return expired.rows.map(({ query_key }) => query_key);
+				})
+			),
+		pruneBaseRows: (protectedRows) => transaction(prune(protectedRows)),
+		listWindows: () =>
+			database
+				.query<{
+					readonly query_key: string;
+					readonly collection: string;
+					readonly valid: boolean;
+					readonly dirty: boolean;
+					readonly lease_count: number | string;
+					readonly bytes: number | string;
+					readonly last_access: Date | string;
+				}>(
+					`select query_key, collection, valid, dirty, lease_count, bytes, last_access
+			 from bolt_replica_window`
+				)
+				.pipe(
+					Effect.map(({ rows }) =>
+						rows.map((row) => ({
+							id: row.query_key,
+							collection: row.collection,
+							kind: 'window' as const,
+							valid: row.valid,
+							dirty: row.dirty,
+							leaseCount: Number(row.lease_count),
+							bytes: Number(row.bytes),
+							lastAccess:
+								row.last_access instanceof Date
+									? row.last_access.getTime()
+									: new Date(row.last_access).getTime()
+						}))
+					)
+				),
+		dependencies: () =>
+			database
+				.query<{ readonly dependencies: unknown }>(
+					'select dependencies from bolt_replica_window where lease_count > 0'
+				)
+				.pipe(
+					Effect.map(({ rows }) => [
+						...new Set(rows.flatMap(({ dependencies }) => stringsOf(dependencies)))
+					])
+				),
+		position: () => readReplicaPosition(database),
+		recordPosition: (position) =>
+			transaction(
+				Effect.gen(function* () {
+					if (!validCursor(position.cursor) || !validGenerationMap(position.generations)) {
+						return yield* Effect.fail(new Error('Invalid durable replica position'));
+					}
+					const current = yield* readReplicaPosition(database);
+					if (compareSyncCursors(position.cursor, current.cursor) < 0) {
+						return yield* Effect.fail(
+							new ReplicaHeadMovedBackwards(current.cursor, position.cursor)
+						);
+					}
+					const recorded = {
+						cursor: position.cursor,
+						generations: mergeGenerations(current.generations, position.generations)
+					};
+					yield* writeReplicaPosition(database, recorded);
+					yield* refreshConfirmedProofs(recorded);
+					return recorded;
+				})
+			),
 		rebuildNamespace: () => transaction(store.clearNamespace())
 	};
 });

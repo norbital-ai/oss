@@ -2029,9 +2029,7 @@ const WorkspaceSynchronization = {
 						join(generated, 'collections.js'),
 						compiler.renderCollectionCatalog(
 							[
-								...systemCollectionCatalog().filter(
-									(entry) => entry.name === 'approval_request'
-								),
+								...systemCollectionCatalog().filter((entry) => entry.name === 'approval_request'),
 								...collectionCatalog
 							],
 							[...collectionCatalog.map((entry) => entry.name), 'approval_request']
@@ -2040,10 +2038,7 @@ const WorkspaceSynchronization = {
 					compiler.write(
 						join(generated, 'framework-collections.js'),
 						// Full platform metadata belongs only to Bolt's private framework client.
-						compiler.renderCollectionCatalog([
-							...systemCollectionCatalog(),
-							...collectionCatalog
-						])
+						compiler.renderCollectionCatalog([...systemCollectionCatalog(), ...collectionCatalog])
 					),
 					compiler.write(
 						join(generated, 'collections.d.ts'),

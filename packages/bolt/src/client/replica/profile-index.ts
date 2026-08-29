@@ -1,7 +1,4 @@
-import {
-	enforceProfileReplicaBudget,
-	planProfileEviction
-} from '#lib/client/replica/budget.js';
+import { enforceProfileReplicaBudget, planProfileEviction } from '#lib/client/replica/budget.js';
 import type {
 	PersistentReplicaTier,
 	ReplicaLeaseKind,
@@ -174,20 +171,21 @@ const decodeState = (
 	const windows = record['windows'].map(decodeWindow);
 	const leases = record['leases'].map(decodeLease);
 	const claims = Array.isArray(record['claims']) ? record['claims'].map(decodeClaim) : [];
-	const uniquePartitions = new Set(
-		partitions.flatMap((entry) => (entry === undefined ? [] : [entry.id]))
-	).size === partitions.length;
-	const uniqueWindows = new Set(
-		windows.flatMap((entry) =>
-			entry === undefined ? [] : [`${entry.partitionId}\u0000${entry.id}`]
-		)
-	).size === windows.length;
-	const uniqueLeases = new Set(
-		leases.flatMap((entry) => (entry === undefined ? [] : [entry.id]))
-	).size === leases.length;
-	const uniqueClaims = new Set(
-		claims.flatMap((entry) => (entry === undefined ? [] : [entry.id]))
-	).size === claims.length;
+	const uniquePartitions =
+		new Set(partitions.flatMap((entry) => (entry === undefined ? [] : [entry.id]))).size ===
+		partitions.length;
+	const uniqueWindows =
+		new Set(
+			windows.flatMap((entry) =>
+				entry === undefined ? [] : [`${entry.partitionId}\u0000${entry.id}`]
+			)
+		).size === windows.length;
+	const uniqueLeases =
+		new Set(leases.flatMap((entry) => (entry === undefined ? [] : [entry.id]))).size ===
+		leases.length;
+	const uniqueClaims =
+		new Set(claims.flatMap((entry) => (entry === undefined ? [] : [entry.id]))).size ===
+		claims.length;
 	if (
 		partitions.some((entry) => entry === undefined) ||
 		windows.some((entry) => entry === undefined) ||
@@ -286,21 +284,17 @@ const withoutCandidate = (
 		? {
 				...state,
 				partitions: state.partitions.filter(({ id }) => id !== candidate.partitionId),
-				windows: state.windows.filter(
-					({ partitionId }) => partitionId !== candidate.partitionId
-				),
+				windows: state.windows.filter(({ partitionId }) => partitionId !== candidate.partitionId),
 				leases: state.leases.filter(({ partitionId }) => partitionId !== candidate.partitionId),
 				claims: state.claims.filter(({ partitionId }) => partitionId !== candidate.partitionId)
 			}
 		: {
 				...state,
 				windows: state.windows.filter(
-					(window) =>
-						window.partitionId !== candidate.partitionId || window.id !== candidate.id
+					(window) => window.partitionId !== candidate.partitionId || window.id !== candidate.id
 				),
 				leases: state.leases.filter(
-					(lease) =>
-						lease.partitionId !== candidate.partitionId || lease.windowId !== candidate.id
+					(lease) => lease.partitionId !== candidate.partitionId || lease.windowId !== candidate.id
 				),
 				claims: state.claims.filter(
 					(claim) =>
@@ -311,7 +305,9 @@ const withoutCandidate = (
 /** Shared policy over IndexedDB in production and a deterministic store in focused tests. */
 export const createReplicaProfileIndex = (store: ReplicaProfileStateStore): ReplicaProfileIndex => {
 	const updateKnown = async <Value>(
-		change: (state: StoredProfileState) => Readonly<{ readonly state: StoredProfileState; readonly value: Value }>
+		change: (
+			state: StoredProfileState
+		) => Readonly<{ readonly state: StoredProfileState; readonly value: Value }>
 	): Promise<Value> =>
 		store.update((raw) => {
 			const decoded = decodeState(raw);
@@ -378,7 +374,8 @@ export const createReplicaProfileIndex = (store: ReplicaProfileStateStore): Repl
 						!nonEmptyString(window.id) ||
 						!finiteNonNegative(window.accountedBytes) ||
 						!finiteTime(window.lastAccess)
-				) || windowIds.size !== windows.length
+				) ||
+				windowIds.size !== windows.length
 			) {
 				throw new Error('Invalid replica profile window');
 			}
@@ -420,8 +417,7 @@ export const createReplicaProfileIndex = (store: ReplicaProfileStateStore): Repl
 			) {
 				throw new Error('Invalid replica lease');
 			}
-			const durable =
-				input.kind === 'pending-mutation' || input.kind === 'running-automation';
+			const durable = input.kind === 'pending-mutation' || input.kind === 'running-automation';
 			const ttl = durable ? undefined : leaseTtl(input.ttlMillis);
 			const id =
 				input.id ??
@@ -435,8 +431,7 @@ export const createReplicaProfileIndex = (store: ReplicaProfileStateStore): Repl
 					if (
 						input.windowId !== undefined &&
 						!current.windows.some(
-							(window) =>
-								window.partitionId === input.partitionId && window.id === input.windowId
+							(window) => window.partitionId === input.partitionId && window.id === input.windowId
 						)
 					) {
 						throw new Error('Cannot lease an unknown replica window');
@@ -498,7 +493,8 @@ export const createReplicaProfileIndex = (store: ReplicaProfileStateStore): Repl
 			};
 		},
 		renewOwner: async (ownerId, now = Date.now()) => {
-			if (!nonEmptyString(ownerId) || !finiteTime(now)) throw new Error('Invalid replica lease owner');
+			if (!nonEmptyString(ownerId) || !finiteTime(now))
+				throw new Error('Invalid replica lease owner');
 			await updateKnown((state) => {
 				const current = pruneExpired(state, now);
 				return {
@@ -571,7 +567,10 @@ export const createReplicaProfileIndex = (store: ReplicaProfileStateStore): Repl
 			if (!claimed) return undefined;
 			return {
 				commit: async () => {
-					await updateKnown((state) => ({ state: withoutCandidate(state, candidate), value: undefined }));
+					await updateKnown((state) => ({
+						state: withoutCandidate(state, candidate),
+						value: undefined
+					}));
 				},
 				release: async () => {
 					await updateKnown((state) => ({
@@ -582,7 +581,10 @@ export const createReplicaProfileIndex = (store: ReplicaProfileStateStore): Repl
 			};
 		},
 		removeCandidate: async (candidate) => {
-			await updateKnown((state) => ({ state: withoutCandidate(state, candidate), value: undefined }));
+			await updateKnown((state) => ({
+				state: withoutCandidate(state, candidate),
+				value: undefined
+			}));
 		},
 		close: store.close
 	};
@@ -591,14 +593,17 @@ export const createReplicaProfileIndex = (store: ReplicaProfileStateStore): Repl
 const requestResult = <Value>(request: IDBRequest<Value>): Promise<Value> =>
 	new Promise((resolve, reject) => {
 		request.onsuccess = () => resolve(request.result);
-		request.onerror = () => reject(request.error ?? new Error('Replica profile IndexedDB request failed'));
+		request.onerror = () =>
+			reject(request.error ?? new Error('Replica profile IndexedDB request failed'));
 	});
 
 const transactionComplete = (transaction: IDBTransaction): Promise<void> =>
 	new Promise((resolve, reject) => {
 		transaction.oncomplete = () => resolve();
-		transaction.onerror = () => reject(transaction.error ?? new Error('Replica profile transaction failed'));
-		transaction.onabort = () => reject(transaction.error ?? new Error('Replica profile transaction aborted'));
+		transaction.onerror = () =>
+			reject(transaction.error ?? new Error('Replica profile transaction failed'));
+		transaction.onabort = () =>
+			reject(transaction.error ?? new Error('Replica profile transaction aborted'));
 	});
 
 const openDatabase = (factory: IDBFactory): Promise<IDBDatabase> =>
@@ -608,7 +613,8 @@ const openDatabase = (factory: IDBFactory): Promise<IDBDatabase> =>
 			if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE);
 		};
 		request.onsuccess = () => resolve(request.result);
-		request.onerror = () => reject(request.error ?? new Error('Replica profile index could not open'));
+		request.onerror = () =>
+			reject(request.error ?? new Error('Replica profile index could not open'));
 		request.onblocked = () => reject(new Error('Replica profile index upgrade is blocked'));
 	});
 
@@ -620,7 +626,8 @@ const openDatabase = (factory: IDBFactory): Promise<IDBDatabase> =>
 export const openBrowserReplicaProfileIndex = async (
 	factory: IDBFactory | undefined = globalThis.indexedDB
 ): Promise<ReplicaProfileIndex> => {
-	if (factory === undefined) throw new Error('IndexedDB replica profile bookkeeping is unavailable');
+	if (factory === undefined)
+		throw new Error('IndexedDB replica profile bookkeeping is unavailable');
 	const database = await openDatabase(factory);
 	const store: ReplicaProfileStateStore = {
 		read: async () => {
@@ -666,9 +673,7 @@ export const profilePartition = (input: {
 	readonly organization: string;
 	readonly tier: PersistentReplicaTier;
 	readonly location: string;
-	readonly windows: ReadonlyArray<
-		Pick<ReplicaProfileWindow, 'accountedBytes' | 'lastAccess'>
-	>;
+	readonly windows: ReadonlyArray<Pick<ReplicaProfileWindow, 'accountedBytes' | 'lastAccess'>>;
 	readonly lastAccess?: number;
 }): ReplicaProfilePartition => ({
 	id: input.id,
@@ -682,12 +687,7 @@ export const profilePartition = (input: {
 });
 
 export type ReplicaAutomationStatus =
-	| 'pending'
-	| 'paused'
-	| 'resuming'
-	| 'running'
-	| 'done'
-	| 'failed';
+	'pending' | 'paused' | 'resuming' | 'running' | 'done' | 'failed';
 
 const activeAutomationStatus = (status: ReplicaAutomationStatus): boolean =>
 	status === 'pending' || status === 'resuming' || status === 'running';
@@ -813,8 +813,7 @@ export const maintainReplicaLeaseOwner = (
 	}
 	const schedule =
 		options.setInterval ??
-		((callback: () => void, milliseconds: number): unknown =>
-			setInterval(callback, milliseconds));
+		((callback: () => void, milliseconds: number): unknown => setInterval(callback, milliseconds));
 	const cancel =
 		options.clearInterval ??
 		((handle: unknown): void => clearInterval(handle as ReturnType<typeof setInterval>));

@@ -219,16 +219,14 @@ const TransportService = Context.Service<TransportInterface>('@norbital-ai/bolt/
  * Both facility layer factories that need this behavior once carried their own copy; the arrow
  * is threshold-relevant enough to keep one definition.
  */
-const distinctIdIn =
-	(issued: Ref.Ref<ReadonlyMap<string, number>>) =>
-	(id: EffectId) =>
-		Ref.modify(issued, (current) => {
-			const used = current.get(id) ?? 0;
-			return [
-				used === 0 ? id : EffectId.make(`${id}#${used}`),
-				new Map(current).set(id, used + 1)
-			] as const;
-		});
+const distinctIdIn = (issued: Ref.Ref<ReadonlyMap<string, number>>) => (id: EffectId) =>
+	Ref.modify(issued, (current) => {
+		const used = current.get(id) ?? 0;
+		return [
+			used === 0 ? id : EffectId.make(`${id}#${used}`),
+			new Map(current).set(id, used + 1)
+		] as const;
+	});
 
 const TransportLayers = {
 	make: (

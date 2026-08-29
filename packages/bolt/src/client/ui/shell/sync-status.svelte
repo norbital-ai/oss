@@ -2,10 +2,7 @@
 	import type { WorkspaceSyncStatus } from '#lib/client/runtime.js';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import { Inline, Stack } from '@norbital-ai/ui/layout';
-	import {
-		workspaceSyncNotices,
-		type WorkspaceSyncNotice
-	} from './sync-status-presentation.js';
+	import { workspaceSyncNotices, type WorkspaceSyncNotice } from './sync-status-presentation.js';
 
 	let { status }: { status: WorkspaceSyncStatus | undefined } = $props();
 

@@ -83,10 +83,9 @@ function requireExactKeys(
 ): asserts value is Record<string, unknown> {
 	const decoded = Schema.decodeUnknownResult(jsonObject)(value);
 	if (Result.isFailure(decoded)) throw new TypeError(`${location} must be an object.`);
-	const record: Record<string, unknown> =
-		Result.isSuccess(decoded)
-			? Result.match(decoded, { onSuccess: (object) => object, onFailure: () => EMPTY_RECORD })
-			: EMPTY_RECORD;
+	const record: Record<string, unknown> = Result.isSuccess(decoded)
+		? Result.match(decoded, { onSuccess: (object) => object, onFailure: () => EMPTY_RECORD })
+		: EMPTY_RECORD;
 	const unexpected = Object.keys(record).filter((key) => !allowed.has(key));
 	if (unexpected.length > 0) {
 		throw new TypeError(`${location} has unsupported ${unexpected.join(', ')} key(s).`);
@@ -170,10 +169,9 @@ const validatePolicyShape = (name: string, declaration: unknown): void => {
 			`Policy ${name}.grants must be a collection/action object. Grant arrays are not supported.`
 		);
 	}
-	const grantMap: Record<string, unknown> =
-		Result.isSuccess(grantsDecoded)
-			? Result.match(grantsDecoded, { onSuccess: (object) => object, onFailure: () => EMPTY_RECORD })
-			: EMPTY_RECORD;
+	const grantMap: Record<string, unknown> = Result.isSuccess(grantsDecoded)
+		? Result.match(grantsDecoded, { onSuccess: (object) => object, onFailure: () => EMPTY_RECORD })
+		: EMPTY_RECORD;
 	for (const [collection, collectionGrants] of Object.entries(grantMap)) {
 		requireExactKeys(collectionGrants, ACTION_KEYS, `Policy ${name}.grants.${collection}`);
 		for (const [action, grant] of Object.entries(collectionGrants)) {
@@ -221,19 +219,19 @@ const describeGrant = (
 	}
 	const approvalDecoded = Schema.decodeUnknownResult(jsonObject)(grant.approval);
 	if (Result.isSuccess(approvalDecoded)) {
-		const approval: Record<string, unknown> =
-			Result.isSuccess(approvalDecoded)
-				? Result.match(approvalDecoded, { onSuccess: (object) => object, onFailure: () => EMPTY_RECORD })
-				: EMPTY_RECORD;
+		const approval: Record<string, unknown> = Result.isSuccess(approvalDecoded)
+			? Result.match(approvalDecoded, {
+					onSuccess: (object) => object,
+					onFailure: () => EMPTY_RECORD
+				})
+			: EMPTY_RECORD;
 		const id = approvalConfigurationId(policyName, collection, action);
 		approvalFlows.set(id, approval.flow as PolicyRuntimeFunction);
 		Object.assign(described, {
 			approval: {
 				id,
 				flow: true,
-				superceded_by: Object.freeze([
-					...(approval.superceded_by as ReadonlyArray<string>)
-				])
+				superceded_by: Object.freeze([...(approval.superceded_by as ReadonlyArray<string>)])
 			}
 		});
 	}

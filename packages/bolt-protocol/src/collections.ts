@@ -28,12 +28,9 @@ export type CollectionWriteValues = typeof CollectionWriteValues.Type;
  */
 export const CollectionMutationIdempotencyKey = Schema.NonEmptyString.check(
 	Schema.isMaxLength(256),
-	Schema.makeFilter((value: string) =>
-		!value.includes('\u0000') || 'must not contain a NUL byte'
-	)
+	Schema.makeFilter((value: string) => !value.includes('\u0000') || 'must not contain a NUL byte')
 ).pipe(Schema.brand('BoltCollectionMutationIdempotencyKey'));
-export type CollectionMutationIdempotencyKey =
-	typeof CollectionMutationIdempotencyKey.Type;
+export type CollectionMutationIdempotencyKey = typeof CollectionMutationIdempotencyKey.Type;
 
 /** Row versions begin at one and advance once for every canonical update. */
 export const CollectionBaseRowVersion = Schema.Number.check(
@@ -53,8 +50,7 @@ export const COLLECTION_MUTATION_RETRY_HORIZON_MILLIS = 24 * 60 * 60 * 1000;
  * a compatibility adapter for the mutation's authored schema. Once it elapses the only safe answer
  * is an explicit quarantine, never silently dropping the journal entry or guessing at its meaning.
  */
-export const COLLECTION_MUTATION_SCHEMA_COMPATIBILITY_HORIZON_MILLIS =
-	14 * 24 * 60 * 60 * 1000;
+export const COLLECTION_MUTATION_SCHEMA_COMPATIBILITY_HORIZON_MILLIS = 14 * 24 * 60 * 60 * 1000;
 
 /** Monotone order assigned by one durable, partition-scoped browser journal. */
 export const CollectionMutationDeviceSequence = Schema.Number.check(
@@ -62,8 +58,7 @@ export const CollectionMutationDeviceSequence = Schema.Number.check(
 	Schema.makeFilter((value: number) => Number.isSafeInteger(value) || 'must be a safe integer'),
 	Schema.isGreaterThanOrEqualTo(1)
 );
-export type CollectionMutationDeviceSequence =
-	typeof CollectionMutationDeviceSequence.Type;
+export type CollectionMutationDeviceSequence = typeof CollectionMutationDeviceSequence.Type;
 
 /** One authoritative whole-row version captured before an offline graph was overlaid. */
 export const CollectionMutationBaseVersion = Schema.Struct({
@@ -81,11 +76,7 @@ const CollectionMutationRetryIdentity = {
 	 * When the browser first minted the key. A server accepts a missing dedup row only inside its
 	 * bounded retry horizon, so pruning old rows can never turn a very late retry into a new write.
 	 */
-	issuedAtEpochMs: Schema.Number.check(
-		Schema.isInt(),
-		Schema.isGreaterThan(0),
-		Schema.isFinite()
-	)
+	issuedAtEpochMs: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isFinite())
 };
 
 /**
@@ -174,8 +165,7 @@ export const CollectionQueryRequestFields = {
 export const CollectionQueryRequest = Schema.Struct(CollectionQueryRequestFields).annotate({
 	identifier: 'BoltCollectionQueryRequest'
 });
-export interface CollectionQueryRequest
-	extends Schema.Schema.Type<typeof CollectionQueryRequest> {}
+export interface CollectionQueryRequest extends Schema.Schema.Type<typeof CollectionQueryRequest> {}
 
 /** Exact server-side grouping requested by a board-like collection surface. */
 export const CollectionGroup = Schema.Struct({
@@ -203,8 +193,9 @@ export const CollectionGroupedQueryRequestFields = {
 export const CollectionGroupedQueryRequest = Schema.Struct(
 	CollectionGroupedQueryRequestFields
 ).annotate({ identifier: 'BoltCollectionGroupedQueryRequest' });
-export interface CollectionGroupedQueryRequest
-	extends Schema.Schema.Type<typeof CollectionGroupedQueryRequest> {}
+export interface CollectionGroupedQueryRequest extends Schema.Schema.Type<
+	typeof CollectionGroupedQueryRequest
+> {}
 
 /** The commit position sampled immediately before an authoritative query executes. */
 export const CollectionReadCursor = Schema.Struct({
@@ -221,8 +212,9 @@ export const CollectionQuerySemantics = Schema.Struct({
 	/** The exact authored operator vocabulary exercised by this query. */
 	operators: Schema.Array(Schema.NonEmptyString)
 }).annotate({ identifier: 'BoltCollectionQuerySemantics' });
-export interface CollectionQuerySemantics
-	extends Schema.Schema.Type<typeof CollectionQuerySemantics> {}
+export interface CollectionQuerySemantics extends Schema.Schema.Type<
+	typeof CollectionQuerySemantics
+> {}
 
 /**
  * Whether an installed window may own a local exactness proof.
@@ -271,8 +263,7 @@ export const CollectionHydrationRow = Schema.Struct({
 	rowVersion: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
 	row: StoredRecord
 }).annotate({ identifier: 'BoltCollectionHydrationRow' });
-export interface CollectionHydrationRow
-	extends Schema.Schema.Type<typeof CollectionHydrationRow> {}
+export interface CollectionHydrationRow extends Schema.Schema.Type<typeof CollectionHydrationRow> {}
 
 /**
  * A normalized edge from a window row to a related base row.
@@ -287,8 +278,9 @@ export const CollectionRelationshipMembership = Schema.Struct({
 	targetCollection: Schema.NonEmptyString,
 	targetRecordId: Schema.NonEmptyString
 }).annotate({ identifier: 'BoltCollectionRelationshipMembership' });
-export interface CollectionRelationshipMembership
-	extends Schema.Schema.Type<typeof CollectionRelationshipMembership> {}
+export interface CollectionRelationshipMembership extends Schema.Schema.Type<
+	typeof CollectionRelationshipMembership
+> {}
 
 /**
  * One bounded authoritative extension of a canonical query window.
@@ -325,16 +317,16 @@ export const CollectionGroupedWindow = Schema.Struct({
 	relationshipRefs: Schema.Array(CollectionRelationshipMembership),
 	...CollectionQueryProofFields
 }).annotate({ identifier: 'BoltCollectionGroupedWindow' });
-export interface CollectionGroupedWindow
-	extends Schema.Schema.Type<typeof CollectionGroupedWindow> {}
+export interface CollectionGroupedWindow extends Schema.Schema.Type<
+	typeof CollectionGroupedWindow
+> {}
 
 /** Counts are always server-proof because a bounded working set cannot prove a global aggregate. */
 export const CollectionCountWindow = Schema.Struct({
 	count: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
 	...CollectionQueryProofFields
 }).annotate({ identifier: 'BoltCollectionCountWindow' });
-export interface CollectionCountWindow
-	extends Schema.Schema.Type<typeof CollectionCountWindow> {}
+export interface CollectionCountWindow extends Schema.Schema.Type<typeof CollectionCountWindow> {}
 
 /** The explicit server-side M4 classification returned for one local-first journal push. */
 export const CollectionMutationSettlement = Schema.Union([

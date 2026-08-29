@@ -16,9 +16,7 @@
 	import * as ToggleGroup from '#lib/toggle-group';
 	import { cn } from '#lib/utils';
 	import { createFileAttachmentExtension } from './extensions/attachment/attachment-extension.svelte';
-	import {
-		ConfiguredMention
-	} from './extensions/mention/mention-configured.svelte';
+	import { ConfiguredMention } from './extensions/mention/mention-configured.svelte';
 	import type { MentionItem } from './extensions/mention/mention-item.js';
 	import MentionTreeMenu from './extensions/mention/mention-tree-menu.svelte';
 	import { createSlashCommands, type CommandItem } from './extensions/slash-commands.svelte';

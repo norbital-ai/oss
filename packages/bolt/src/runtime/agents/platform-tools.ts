@@ -183,10 +183,12 @@ const historyText = (content: unknown): string | null => {
 	if (typeof content !== 'object' || content === null) return null;
 	const parts = Reflect.get(content, 'parts');
 	if (!Array.isArray(parts)) return null;
-	const text = parts.reduce((acc: ReadonlyArray<string>, part) => {
-		const extracted = textOfPart(part);
-		return extracted === null ? acc : [...acc, extracted];
-	}, []).join('\n');
+	const text = parts
+		.reduce((acc: ReadonlyArray<string>, part) => {
+			const extracted = textOfPart(part);
+			return extracted === null ? acc : [...acc, extracted];
+		}, [])
+		.join('\n');
 	return text.length === 0 ? null : text;
 };
 
@@ -225,16 +227,13 @@ export const boundedCollectionReadResult = (
 	const providerHasMore = fetchedRows.length > requestedRows;
 	const encodedRowBytes = pageRows.map(serializedBytes);
 	const rowPrefixBytes: Array<number> = [0];
-	for (const bytes of encodedRowBytes)
-		rowPrefixBytes.push((rowPrefixBytes.at(-1) ?? 0) + bytes);
+	for (const bytes of encodedRowBytes) rowPrefixBytes.push((rowPrefixBytes.at(-1) ?? 0) + bytes);
 
 	const metadata = (returnedRows: number, originalBytes: number | null) => {
 		const omittedRows = pageRows.length - returnedRows;
 		const hasMore = providerHasMore || omittedRows > 0;
 		const next =
-			hasMore && returnedRows > 0
-				? defaultCollectionCursor(pageRows[returnedRows - 1])
-				: null;
+			hasMore && returnedRows > 0 ? defaultCollectionCursor(pageRows[returnedRows - 1]) : null;
 		return {
 			truncated: omittedRows > 0,
 			rowCount: {
@@ -271,9 +270,7 @@ export const boundedCollectionReadResult = (
 			...metadata(returnedRows, originalBytes)
 		});
 		const rowsBytes =
-			returnedRows === 0
-				? 2
-				: 2 + (rowPrefixBytes[returnedRows] ?? 0) + (returnedRows - 1);
+			returnedRows === 0 ? 2 : 2 + (rowPrefixBytes[returnedRows] ?? 0) + (returnedRows - 1);
 		return emptyRowsEnvelopeBytes - 2 + rowsBytes;
 	};
 
@@ -499,7 +496,8 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 			// `load_media` is intercepted by the turn ahead of this switch — it reads session media
 			// through the documents service, which this module does not hold. Naming the reachable
 			// case keeps the switch exhaustive without a fallback that could answer a media load.
-			if (name === 'load_media') return new ToolNotAllowed({ agent: context.agentName, tool: name });
+			if (name === 'load_media')
+				return new ToolNotAllowed({ agent: context.agentName, tool: name });
 			const _exhaustive: never = name;
 			return _exhaustive;
 		}

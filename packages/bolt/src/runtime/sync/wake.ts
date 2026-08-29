@@ -24,13 +24,13 @@ import { Transport } from '#lib/runtime/facilities/services.js';
  *
  * ## Why it cannot fail a write
  *
-	 * The announcement happens after the write has committed. There is nothing left to roll back, and a
-	 * host whose transport is unavailable is not a reason to tell the user their save failed. The host
-	 * acknowledgement is awaited briefly so an open replica normally learns immediately without a
-	 * recovery poll. A stalled host is bounded here because it must not hold an already-committed write
-	 * open forever. This is a one-shot delivery deadline, not a retry or polling cycle. Transport failures
-	 * remain swallowed because reporting the committed write as failed would invite a duplicate retry;
-	 * reconnect bootstrap is the recovery boundary.
+ * The announcement happens after the write has committed. There is nothing left to roll back, and a
+ * host whose transport is unavailable is not a reason to tell the user their save failed. The host
+ * acknowledgement is awaited briefly so an open replica normally learns immediately without a
+ * recovery poll. A stalled host is bounded here because it must not hold an already-committed write
+ * open forever. This is a one-shot delivery deadline, not a retry or polling cycle. Transport failures
+ * remain swallowed because reporting the committed write as failed would invite a duplicate retry;
+ * reconnect bootstrap is the recovery boundary.
  */
 
 /** The topic every workspace replica listens on. */

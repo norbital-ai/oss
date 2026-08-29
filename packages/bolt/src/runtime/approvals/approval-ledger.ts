@@ -52,10 +52,10 @@ export type RollbackStep =
  * is undone first, which unwinds nested graphs in the order they were built. The caller runs the
  * plan in one transaction with constraints deferred, covering the cycles ordering alone cannot.
  */
-export const rollbackPlan = (
-	ledger: ReadonlyArray<LedgerEntry>
-): ReadonlyArray<RollbackStep> => {
-	const newestFirst = [...ledger].toSorted((left, right) => right.first_sequence - left.first_sequence);
+export const rollbackPlan = (ledger: ReadonlyArray<LedgerEntry>): ReadonlyArray<RollbackStep> => {
+	const newestFirst = [...ledger].toSorted(
+		(left, right) => right.first_sequence - left.first_sequence
+	);
 	return [
 		...newestFirst
 			.filter((entry) => entry.base_sequence === null)

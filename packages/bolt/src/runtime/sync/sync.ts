@@ -1,17 +1,9 @@
 import { Context, Effect, Layer, Number as ENumber, Result, Schema } from 'effect';
 import { and, asc, eq, exists, gt, inArray, isNotNull, lt, max, or } from 'drizzle-orm';
 import { sha256Json } from '@norbital-ai/std/reckon/hash';
-import {
-	EffectId,
-	PROTOCOL_VERSION,
-	SyncSchemaFacts,
-	WireError
-} from '@norbital-ai/bolt-protocol';
+import { EffectId, PROTOCOL_VERSION, SyncSchemaFacts, WireError } from '@norbital-ai/bolt-protocol';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
-import {
-	digestSchemaSteps,
-	replicaProvisioningSteps
-} from '#lib/compiler/schema-plan.js';
+import { digestSchemaSteps, replicaProvisioningSteps } from '#lib/compiler/schema-plan.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
@@ -134,8 +126,9 @@ export const SyncCollectionGenerations = Schema.Record(
 			`at most ${MAX_SYNC_PARTITION_COLLECTIONS} sync collection generations are accepted`
 	)
 );
-export interface SyncCollectionGenerations
-	extends Schema.Schema.Type<typeof SyncCollectionGenerations> {}
+export interface SyncCollectionGenerations extends Schema.Schema.Type<
+	typeof SyncCollectionGenerations
+> {}
 
 /** The complete, server-derived security and schema coordinate for one replica namespace. */
 export const SyncPartitionIdentity = Schema.Struct({
@@ -144,14 +137,10 @@ export const SyncPartitionIdentity = Schema.Struct({
 	environment: Schema.NonEmptyString,
 	effectivePolicyHolder: Schema.NonEmptyString,
 	impersonationTarget: Schema.NullOr(Schema.NonEmptyString),
-	authorityGeneration: Schema.Number.check(
-		Schema.isInt(),
-		Schema.isGreaterThanOrEqualTo(0)
-	),
+	authorityGeneration: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
 	schemaFingerprint: Schema.NonEmptyString
 });
-export interface SyncPartitionIdentity
-	extends Schema.Schema.Type<typeof SyncPartitionIdentity> {}
+export interface SyncPartitionIdentity extends Schema.Schema.Type<typeof SyncPartitionIdentity> {}
 
 /** A canonical read position captured before an authoritative page query executes. */
 export const SyncPartitionPosition = Schema.Struct({
@@ -159,8 +148,7 @@ export const SyncPartitionPosition = Schema.Struct({
 	cursor: SyncCursor,
 	generations: SyncCollectionGenerations
 });
-export interface SyncPartitionPosition
-	extends Schema.Schema.Type<typeof SyncPartitionPosition> {}
+export interface SyncPartitionPosition extends Schema.Schema.Type<typeof SyncPartitionPosition> {}
 
 /** Bounded aggregate facts; query identities and window keys never become history coordinates. */
 export const SyncRehydrationCost = Schema.Struct({
@@ -180,8 +168,7 @@ export const SyncRehydrationCost = Schema.Struct({
 		Schema.isLessThanOrEqualTo(MAX_SYNC_ESTIMATED_ROW_BYTES)
 	)
 });
-export interface SyncRehydrationCost
-	extends Schema.Schema.Type<typeof SyncRehydrationCost> {}
+export interface SyncRehydrationCost extends Schema.Schema.Type<typeof SyncRehydrationCost> {}
 
 const SyncMutationId = Schema.String.check(
 	Schema.isMinLength(1),
@@ -202,8 +189,9 @@ export const SyncPendingMutationIds = Schema.Array(SyncMutationId).check(
 export const SyncPartitionStatusRequest = Schema.Struct({
 	pendingMutationIds: Schema.optionalKey(SyncPendingMutationIds)
 });
-export interface SyncPartitionStatusRequest
-	extends Schema.Schema.Type<typeof SyncPartitionStatusRequest> {}
+export interface SyncPartitionStatusRequest extends Schema.Schema.Type<
+	typeof SyncPartitionStatusRequest
+> {}
 
 /**
  * Private Bolt projections whose internal browser surfaces stay live by invalidation only.
@@ -288,14 +276,8 @@ export const SyncPullCost = Schema.Struct({
 	replayEvents: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
 	/** False means the bounded probe is a lower bound and rehydration is advised. */
 	replayEstimateComplete: Schema.Boolean,
-	estimatedBytesPerEvent: Schema.Number.check(
-		Schema.isInt(),
-		Schema.isGreaterThanOrEqualTo(0)
-	),
-	estimatedReplayBytes: Schema.Number.check(
-		Schema.isInt(),
-		Schema.isGreaterThanOrEqualTo(0)
-	),
+	estimatedBytesPerEvent: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+	estimatedReplayBytes: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
 	estimatedRehydrateBytes: Schema.NullOr(
 		Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
 	)
@@ -306,16 +288,16 @@ export const SyncMutationConfirmation = Schema.Struct({
 	mutationId: SyncMutationId,
 	cursor: SyncCursor
 });
-export interface SyncMutationConfirmation
-	extends Schema.Schema.Type<typeof SyncMutationConfirmation> {}
+export interface SyncMutationConfirmation extends Schema.Schema.Type<
+	typeof SyncMutationConfirmation
+> {}
 
 export const SyncMutationRejection = Schema.Struct({
 	mutationId: SyncMutationId,
 	code: Schema.Literals(['refused', 'forbidden']),
 	message: Schema.String
 });
-export interface SyncMutationRejection
-	extends Schema.Schema.Type<typeof SyncMutationRejection> {}
+export interface SyncMutationRejection extends Schema.Schema.Type<typeof SyncMutationRejection> {}
 
 /**
  * Server-issued O2 identity and exact actor-scoped terminal mutation status.
@@ -329,8 +311,9 @@ export const SyncPartitionStatusResponse = Schema.Struct({
 	mutationConfirmations: Schema.Array(SyncMutationConfirmation),
 	mutationRejections: Schema.Array(SyncMutationRejection)
 });
-export interface SyncPartitionStatusResponse
-	extends Schema.Schema.Type<typeof SyncPartitionStatusResponse> {}
+export interface SyncPartitionStatusResponse extends Schema.Schema.Type<
+	typeof SyncPartitionStatusResponse
+> {}
 
 /**
  * One bounded pull answer.
@@ -395,8 +378,7 @@ const SyncDistributeEntries = Schema.Array(SyncDistributeEntry).check(
 );
 
 export const SyncDistributeRequest = Schema.Struct({ entries: SyncDistributeEntries });
-export interface SyncDistributeRequest
-	extends Schema.Schema.Type<typeof SyncDistributeRequest> {}
+export interface SyncDistributeRequest extends Schema.Schema.Type<typeof SyncDistributeRequest> {}
 
 export const SyncDistributeSuccess = Schema.Struct({
 	requestId: Schema.NonEmptyString,
@@ -408,16 +390,12 @@ export const SyncDistributeFailure = Schema.Struct({
 	status: Schema.Union([Schema.Literal(401), Schema.Literal(403)]),
 	error: WireError
 });
-export const SyncDistributeResult = Schema.Union([
-	SyncDistributeSuccess,
-	SyncDistributeFailure
-]);
+export const SyncDistributeResult = Schema.Union([SyncDistributeSuccess, SyncDistributeFailure]);
 export type SyncDistributeResult = Schema.Schema.Type<typeof SyncDistributeResult>;
 export const SyncDistributeResponse = Schema.Struct({
 	results: Schema.Array(SyncDistributeResult)
 });
-export interface SyncDistributeResponse
-	extends Schema.Schema.Type<typeof SyncDistributeResponse> {}
+export interface SyncDistributeResponse extends Schema.Schema.Type<typeof SyncDistributeResponse> {}
 
 /** The already-authenticated service entry; only dispatch may turn a wire credential into this. */
 export type SyncDistributionServiceEntry = Readonly<{
@@ -610,9 +588,7 @@ export const layer = Layer.effect(
 		const provisioningSteps = replicaProvisioningSteps(workspace.definition);
 		const schemaFingerprint = workspace.definition.mutationCompatibility?.currentSchemaFingerprint;
 		if (schemaFingerprint === undefined)
-			throw new TypeError(
-				'Compiled workspace is missing its mutation compatibility fingerprint.'
-			);
+			throw new TypeError('Compiled workspace is missing its mutation compatibility fingerprint.');
 		const schemaFacts = SyncSchemaFacts.make({
 			cursor: 'xid-sequence',
 			version: 1,
@@ -623,9 +599,7 @@ export const layer = Layer.effect(
 			// conservatively correct affected set is every collection this release can materialize.
 			affectedCollections: [
 				...new Set(
-					workspace.definition.collections
-						.filter(isReplicatedCollection)
-						.map(({ name }) => name)
+					workspace.definition.collections.filter(isReplicatedCollection).map(({ name }) => name)
 				)
 			].toSorted((left, right) => left.localeCompare(right))
 		});
@@ -769,12 +743,7 @@ export const layer = Layer.effect(
 					const predicate = access.predicate(subject, 'read', name);
 					actorBound ||= predicate.actorBound;
 					return predicate.allowed
-						? [
-								name,
-								predicate.sql,
-								predicate.parameters,
-								[...(predicate.fields ?? [])].toSorted()
-							]
+						? [name, predicate.sql, predicate.parameters, [...(predicate.fields ?? [])].toSorted()]
 						: [name, 'denied'];
 				})
 				.toSorted((left, right) => String(left[0]).localeCompare(String(right[0])));
@@ -833,8 +802,7 @@ export const layer = Layer.effect(
 				yield* subscriptionInvalidations(subject, request.invalidations ?? []);
 			}
 			const predicates =
-				prepared?.predicates ??
-				(yield* subscriptionPredicates(subject, request.collections));
+				prepared?.predicates ?? (yield* subscriptionPredicates(subject, request.collections));
 			let initialHorizon = prepared?.initialHorizon;
 			let currentHead = prepared?.currentHead;
 			if (currentHead === undefined) {
@@ -847,10 +815,7 @@ export const layer = Layer.effect(
 			}
 			const state =
 				prepared?.state ??
-				(yield* generationState(
-					EffectId.make(`${effectId}:generations`),
-					request.collections
-				));
+				(yield* generationState(EffectId.make(`${effectId}:generations`), request.collections));
 			const partition =
 				prepared?.partition ?? partitionIdentity(subject, state.authorityGeneration);
 			const generationMismatch = request.collections.filter(
@@ -905,8 +870,7 @@ export const layer = Layer.effect(
 			}
 			if (
 				compareSyncCursors(requestedCursor, currentHead) > 0 ||
-				(initialHorizon !== undefined &&
-					compareSyncCursors(requestedCursor, initialHorizon) < 0)
+				(initialHorizon !== undefined && compareSyncCursors(requestedCursor, initialHorizon) < 0)
 			) {
 				return evaluated(recovery('cursorExpired', recoveryCollections));
 			}
@@ -953,12 +917,8 @@ export const layer = Layer.effect(
 				.slice(0, MAX_SYNC_REPLAY_COST_SCAN_EVENTS)
 				.filter(({ relevant: isRelevant }) => isRelevant);
 			const replayEvents = relevantProbe.length;
-			const replayBytes = relevantProbe.reduce(
-				(total, row) => total + Number(row.eventBytes),
-				0
-			);
-			const estimatedBytesPerEvent =
-				replayEvents === 0 ? 0 : Math.ceil(replayBytes / replayEvents);
+			const replayBytes = relevantProbe.reduce((total, row) => total + Number(row.eventBytes), 0);
+			const estimatedBytesPerEvent = replayEvents === 0 ? 0 : Math.ceil(replayBytes / replayEvents);
 			const replayCost: SyncPullCost = {
 				replayEvents,
 				replayEstimateComplete,
@@ -1022,10 +982,7 @@ export const layer = Layer.effect(
 							onlyWhen(beforeVisibility, syncOutbox.before_record),
 							'beforeRecord'
 						),
-						afterRecord: aliased(
-							onlyWhen(afterVisibility, syncOutbox.after_record),
-							'afterRecord'
-						),
+						afterRecord: aliased(onlyWhen(afterVisibility, syncOutbox.after_record), 'afterRecord'),
 						invalidatedCollections: aliased(
 							syncOutbox.invalidated_collections,
 							'invalidatedCollections'
@@ -1040,9 +997,7 @@ export const layer = Layer.effect(
 			const rows = yield* Schema.decodeUnknownEffect(Schema.Array(SyncPullRow))(result.rows).pipe(
 				Effect.mapError(() => new SyncDecodeError({ message: 'Invalid partition delta rows' }))
 			);
-			const afterReadHorizon = yield* readHorizon(
-				EffectId.make(`${effectId}:horizon-after`)
-			);
+			const afterReadHorizon = yield* readHorizon(EffectId.make(`${effectId}:horizon-after`));
 			if (
 				afterReadHorizon !== undefined &&
 				compareSyncCursors(afterReadHorizon, requestedCursor) > 0 &&
@@ -1068,7 +1023,9 @@ export const layer = Layer.effect(
 					}
 					const rowVersion = Number(row.afterRecord['row_version']);
 					if (!Number.isSafeInteger(rowVersion) || rowVersion < 1) {
-						return yield* new SyncDecodeError({ message: 'Visible sync upsert has no row version' });
+						return yield* new SyncDecodeError({
+							message: 'Visible sync upsert has no row version'
+						});
 					}
 					const masked = maskRecord(subject, row.collection, row.afterRecord);
 					if (!isJsonObject(masked)) {
@@ -1093,7 +1050,9 @@ export const layer = Layer.effect(
 						previousVersion < 1 ||
 						previousVersion >= Number.MAX_SAFE_INTEGER
 					) {
-						return yield* new SyncDecodeError({ message: 'Visible sync removal has no row version' });
+						return yield* new SyncDecodeError({
+							message: 'Visible sync removal has no row version'
+						});
 					}
 					delta = {
 						cursor: row.cursor,
@@ -1164,8 +1123,7 @@ export const layer = Layer.effect(
 				effectId: EffectId,
 				entries: ReadonlyArray<SyncDistributionServiceEntry>
 			) {
-				if (entries.length === 0)
-					return [] as ReadonlyArray<SyncDistributionServiceResult>;
+				if (entries.length === 0) return [] as ReadonlyArray<SyncDistributionServiceResult>;
 				const denied = new Map<number, AccessControl.AccessDenied>();
 				type AdmissionGroup = Readonly<{
 					subject: Identity.Subject;
@@ -1231,9 +1189,7 @@ export const layer = Layer.effect(
 					// Head/horizon are tenant-global. Sampling once before generation state preserves pull's
 					// head-before-generations ordering while giving every bucket one coherent batch horizon.
 					const outboxHead = yield* readHead(EffectId.make(`${effectId}:shared-head`));
-					const initialHorizon = yield* readHorizon(
-						EffectId.make(`${effectId}:shared-horizon`)
-					);
+					const initialHorizon = yield* readHorizon(EffectId.make(`${effectId}:shared-horizon`));
 					const currentHead =
 						initialHorizon !== undefined && compareSyncCursors(initialHorizon, outboxHead) > 0
 							? initialHorizon
@@ -1265,8 +1221,7 @@ export const layer = Layer.effect(
 						};
 						for (const index of group.members) {
 							const entry = entries[index];
-							if (entry === undefined)
-								throw new Error('Sync distribution lost an admitted member');
+							if (entry === undefined) throw new Error('Sync distribution lost an admitted member');
 							const key = sha256Json({
 								partition: partition.key,
 								collections: group.collections,
@@ -1291,12 +1246,12 @@ export const layer = Layer.effect(
 				const completed = new Map<number, SyncPullResponse>();
 				for (const [bucketIndex, bucket] of [...buckets.values()].entries()) {
 					const outcome = yield* Effect.result(
-							evaluatePartition(
-								EffectId.make(`${effectId}:partition-pull:${bucketIndex}`),
-								bucket.subject,
-								bucket.pull,
-								bucket.prepared
-							)
+						evaluatePartition(
+							EffectId.make(`${effectId}:partition-pull:${bucketIndex}`),
+							bucket.subject,
+							bucket.pull,
+							bucket.prepared
+						)
 					);
 					if (Result.isFailure(outcome)) {
 						if (outcome.failure instanceof AccessControl.AccessDenied) {
@@ -1310,10 +1265,7 @@ export const layer = Layer.effect(
 						if (member === undefined) {
 							throw new Error('Sync distribution lost a partition cost member');
 						}
-						completed.set(
-							index,
-							adviseRehydration(outcome.success, member.pull.rehydration)
-						);
+						completed.set(index, adviseRehydration(outcome.success, member.pull.rehydration));
 					}
 				}
 				return entries.map((entry, index): SyncDistributionServiceResult => {

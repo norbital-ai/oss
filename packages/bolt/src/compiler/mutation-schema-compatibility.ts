@@ -147,7 +147,10 @@ const storageCompatible = (left: MutationSchemaField, right: MutationSchemaField
 	left.typeSchema === right.typeSchema &&
 	left.dimensions === right.dimensions;
 
-const createSemanticsCompatible = (left: MutationSchemaField, right: MutationSchemaField): boolean =>
+const createSemanticsCompatible = (
+	left: MutationSchemaField,
+	right: MutationSchemaField
+): boolean =>
 	left.notNull === right.notNull &&
 	left.default === right.default &&
 	left.generated === right.generated;
@@ -184,7 +187,12 @@ export const mutationSchemaRenames = (statements: ReadonlyArray<string>): Rename
 const relationFields = (
 	schema: MutationSchemaDescriptor,
 	collection: string
-): Readonly<Record<string, MutationSchemaField & { readonly target: string; readonly cardinality: 'one' | 'many' }>> =>
+): Readonly<
+	Record<
+		string,
+		MutationSchemaField & { readonly target: string; readonly cardinality: 'one' | 'many' }
+	>
+> =>
 	Object.fromEntries(
 		schema.relations
 			.filter(({ source }) => source === collection)
@@ -221,12 +229,14 @@ const nonEmptyRecord = <T>(value: Record<string, T>): Readonly<Record<string, T>
 	Object.keys(value).length === 0 ? undefined : value;
 
 /** Classifies one adjacent compiler-owned migration into the smallest safe forward adapter. */
-export const classifyMutationSchemaTransition = (input: Readonly<{
-	readonly fromSchemaFingerprint: string;
-	readonly from: MutationSchemaDescriptor;
-	readonly to: MutationSchemaDescriptor;
-	readonly statements: ReadonlyArray<string>;
-}>): MutationCompatibilityAdapter => {
+export const classifyMutationSchemaTransition = (
+	input: Readonly<{
+		readonly fromSchemaFingerprint: string;
+		readonly from: MutationSchemaDescriptor;
+		readonly to: MutationSchemaDescriptor;
+		readonly statements: ReadonlyArray<string>;
+	}>
+): MutationCompatibilityAdapter => {
 	const declaredRenames = mutationSchemaRenames(input.statements);
 	const collectionRenames: Record<string, string> = {};
 	const fieldRenames: Record<string, Readonly<Record<string, string>>> = {};
@@ -295,10 +305,11 @@ export const classifyMutationSchemaTransition = (input: Readonly<{
 			if (currentField !== oldField) renames[oldField] = currentField;
 		}
 		for (const [currentField, currentShape] of Object.entries(currentDefinition.fields)) {
-			const wasPresent = Object.entries(oldDefinition.fields).some(([oldField]) =>
-				(declaredFieldRenames[oldField] ?? oldField) === currentField
+			const wasPresent = Object.entries(oldDefinition.fields).some(
+				([oldField]) => (declaredFieldRenames[oldField] ?? oldField) === currentField
 			);
-			if (!wasPresent && currentShape.notNull && currentShape.default === null) incompatibleCreate = true;
+			if (!wasPresent && currentShape.notNull && currentShape.default === null)
+				incompatibleCreate = true;
 		}
 		if (Object.keys(renames).length > 0) fieldRenames[oldCollection] = renames;
 		if (incompatible.size > 0) incompatibleFields[oldCollection] = [...incompatible].toSorted();
@@ -338,7 +349,8 @@ export const composeMutationCompatibilityAdapters = (
 		const intermediateCollection = first.collectionRenames?.[sourceCollection] ?? sourceCollection;
 		const currentCollection =
 			second.collectionRenames?.[intermediateCollection] ?? intermediateCollection;
-		if (currentCollection !== sourceCollection) collectionRenames[sourceCollection] = currentCollection;
+		if (currentCollection !== sourceCollection)
+			collectionRenames[sourceCollection] = currentCollection;
 		const firstRenames = first.fieldRenames?.[sourceCollection] ?? {};
 		const secondRenames = second.fieldRenames?.[intermediateCollection] ?? {};
 		const names = new Set([
@@ -371,7 +383,8 @@ export const composeMutationCompatibilityAdapters = (
 		if (Object.keys(renames).length > 0) fieldRenames[sourceCollection] = renames;
 		if (incompatible.size > 0) incompatibleFields[sourceCollection] = [...incompatible].toSorted();
 		const actions = new Set<MutationAction>(first.incompatibleActions?.[sourceCollection] ?? []);
-		for (const action of second.incompatibleActions?.[intermediateCollection] ?? []) actions.add(action);
+		for (const action of second.incompatibleActions?.[intermediateCollection] ?? [])
+			actions.add(action);
 		if (actions.size > 0) incompatibleActions[sourceCollection] = [...actions].toSorted();
 	}
 	// Collections unchanged in the first transition may acquire their first incompatibility in the
@@ -383,15 +396,17 @@ export const composeMutationCompatibilityAdapters = (
 		...Object.keys(second.incompatibleActions ?? {})
 	])) {
 		const sourceCollection =
-			Object.entries(first.collectionRenames ?? {}).find(([, target]) => target === intermediateCollection)?.[0] ??
-			intermediateCollection;
+			Object.entries(first.collectionRenames ?? {}).find(
+				([, target]) => target === intermediateCollection
+			)?.[0] ?? intermediateCollection;
 		if (sourceCollections.has(sourceCollection)) continue;
 		const currentCollection = composeNames(
 			first.collectionRenames,
 			second.collectionRenames,
 			sourceCollection
 		);
-		if (currentCollection !== sourceCollection) collectionRenames[sourceCollection] = currentCollection;
+		if (currentCollection !== sourceCollection)
+			collectionRenames[sourceCollection] = currentCollection;
 		const renames = second.fieldRenames?.[intermediateCollection];
 		if (renames !== undefined) fieldRenames[sourceCollection] = renames;
 		const fields = second.incompatibleFields?.[intermediateCollection];
@@ -409,13 +424,15 @@ export const composeMutationCompatibilityAdapters = (
 };
 
 /** Advances the persisted release lineage without deleting expired history. */
-export const advanceMutationCompatibilityLedger = (input: Readonly<{
-	readonly previous: MutationCompatibilityLedger | undefined;
-	readonly schema: MutationSchemaDescriptor;
-	readonly statements: ReadonlyArray<string>;
-	readonly atEpochMs: number;
-	readonly offlineHorizonMillis?: number;
-}>): MutationCompatibilityLedger => {
+export const advanceMutationCompatibilityLedger = (
+	input: Readonly<{
+		readonly previous: MutationCompatibilityLedger | undefined;
+		readonly schema: MutationSchemaDescriptor;
+		readonly statements: ReadonlyArray<string>;
+		readonly atEpochMs: number;
+		readonly offlineHorizonMillis?: number;
+	}>
+): MutationCompatibilityLedger => {
 	const fingerprint = mutationSchemaFingerprint(input.schema);
 	const horizon =
 		input.previous?.offlineHorizonMillis ??
@@ -468,7 +485,9 @@ export const advanceMutationCompatibilityLedger = (input: Readonly<{
 			...(adapter === undefined ? {} : { adapterToCurrent: adapter })
 		};
 	});
-	const reintroduced = checkpoints.find((checkpoint) => checkpoint.schemaFingerprint === fingerprint);
+	const reintroduced = checkpoints.find(
+		(checkpoint) => checkpoint.schemaFingerprint === fingerprint
+	);
 	return {
 		version: 1,
 		offlineHorizonMillis: horizon,

@@ -202,7 +202,11 @@ const levelConfig = (
 		const fields = fieldsOf(context.definition, collection);
 		const selection = physicalSelection(fields, requestedColumns(spec));
 		const nested = yield* planWith(context, collection, nestedWith(spec), depth);
-		if (selection !== undefined && Object.keys(selection).length === 0 && nested.with === undefined) {
+		if (
+			selection !== undefined &&
+			Object.keys(selection).length === 0 &&
+			nested.with === undefined
+		) {
 			return yield* new WhereCompileError({
 				collection,
 				field: 'columns',
@@ -295,7 +299,13 @@ const planWith = (
 						depth + 1
 					);
 					config[key] = arm.config;
-					attachments.push({ _tag: 'Reference', key, field: name, tag: target.tag, level: arm.level });
+					attachments.push({
+						_tag: 'Reference',
+						key,
+						field: name,
+						tag: target.tag,
+						level: arm.level
+					});
 				}
 				continue;
 			}
@@ -417,11 +427,7 @@ const readRow = (
 		}
 		// The handle `decodeReferenceRow` rebuilt, if the mask left it there and it names this arm.
 		const handle = record[attachment.field];
-		if (
-			!isObject(handle) ||
-			handle['kind'] !== attachment.tag ||
-			typeof handle['id'] !== 'string'
-		)
+		if (!isObject(handle) || handle['kind'] !== attachment.tag || typeof handle['id'] !== 'string')
 			continue;
 		record[attachment.field] = {
 			kind: attachment.tag,

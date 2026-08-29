@@ -93,7 +93,6 @@
 		return [Math.max(0, first.start), Math.max(0, totalSize - last.end)];
 	});
 
-
 	function emitCardMove(evt: SortablePrimitive.SortableEvent): void {
 		const recordId = evt.item.getAttribute('data-sortable-id');
 		const fromColumnId = evt.from?.getAttribute('data-column-id');

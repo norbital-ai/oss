@@ -326,9 +326,7 @@ const isBaseVersion = (value: unknown): value is MutationBaseRowVersion =>
 		(Number.isSafeInteger(value['rowVersion']) && Number(value['rowVersion']) >= 1));
 
 const isAuthoritativeCursor = (value: unknown): value is MutationAuthoritativeCursor =>
-	isObject(value) &&
-	Number.isSafeInteger(value['xid']) &&
-	Number.isSafeInteger(value['sequence']);
+	isObject(value) && Number.isSafeInteger(value['xid']) && Number.isSafeInteger(value['sequence']);
 
 const isAuthoritativeChange = (value: unknown): value is MutationAuthoritativeChange =>
 	isObject(value) &&
@@ -339,9 +337,7 @@ const isAuthoritativeChange = (value: unknown): value is MutationAuthoritativeCh
 	Number.isSafeInteger(value['rowVersion']) &&
 	Number(value['rowVersion']) >= 1;
 
-const isAuthoritativeConfirmation = (
-	value: unknown
-): value is MutationAuthoritativeConfirmation =>
+const isAuthoritativeConfirmation = (value: unknown): value is MutationAuthoritativeConfirmation =>
 	isObject(value) &&
 	typeof value['mutationId'] === 'string' &&
 	value['mutationId'].trim().length > 0 &&
@@ -358,8 +354,7 @@ const isAuthoritativeProgress = (value: unknown): value is MutationAuthoritative
 	isObject(value) &&
 	Array.isArray(value['changes']) &&
 	value['changes'].every(isAuthoritativeChange) &&
-	(value['confirmation'] === undefined ||
-		isAuthoritativeConfirmation(value['confirmation']));
+	(value['confirmation'] === undefined || isAuthoritativeConfirmation(value['confirmation']));
 
 const authoritativeProgressMatches = (
 	value: MutationAuthoritativeProgress,
@@ -371,9 +366,7 @@ const authoritativeProgressMatches = (
 const isOverlayOperation = (value: unknown): value is MutationOverlayOperation => {
 	if (!isObject(value) || !isOverlayRowReference(value['row'])) return false;
 	if (value['kind'] === 'remove') return true;
-	return (
-		(value['kind'] === 'merge' || value['kind'] === 'replace') && isObject(value['values'])
-	);
+	return (value['kind'] === 'merge' || value['kind'] === 'replace') && isObject(value['values']);
 };
 
 const isCompatibility = (value: unknown): value is MutationCompatibilityHorizon =>
@@ -408,9 +401,7 @@ const isSyncIssue = (value: unknown): value is MutationSyncIssue =>
 		typeof value['message'] === 'string') ||
 		(value['kind'] === 'quarantined' && isQuarantine(value['quarantine'])));
 
-const isSuccessfulMutationSettlement = (
-	value: unknown
-): value is SuccessfulMutationSettlement =>
+const isSuccessfulMutationSettlement = (value: unknown): value is SuccessfulMutationSettlement =>
 	isObject(value) &&
 	typeof value['idempotencyKey'] === 'string' &&
 	value['idempotencyKey'].trim().length > 0 &&
@@ -437,7 +428,7 @@ const graphMatchesEntry = (value: Readonly<Record<string, unknown>>): boolean =>
 	return graph.action === 'delete'
 		? graph.id === value['id']
 		: isObject(value['values']) &&
-			canonicalJson(graph.values) === canonicalJson(value['values'] as Schema.Json);
+				canonicalJson(graph.values) === canonicalJson(value['values'] as Schema.Json);
 };
 
 const isJournalEntry = (value: unknown): value is JournalEntry =>
@@ -528,7 +519,11 @@ const defaultStorage = (): MutationJournalStorage => {
 const defaultLocks = (): MutationJournalLocks | undefined => {
 	if (typeof navigator === 'undefined') return undefined;
 	const locks = Reflect.get(navigator, 'locks');
-	if (typeof locks !== 'object' || locks === null || typeof Reflect.get(locks, 'request') !== 'function')
+	if (
+		typeof locks !== 'object' ||
+		locks === null ||
+		typeof Reflect.get(locks, 'request') !== 'function'
+	)
 		return undefined;
 	return locks as MutationJournalLocks;
 };
@@ -687,17 +682,19 @@ export type PreparedLocalCollectionMutation = Readonly<{
  * row overlay operations contain only that collection's fields. The server uses the absence of a
  * base-version entry to distinguish a client-identified create from an update.
  */
-export const prepareLocalCollectionMutation = (input: Readonly<{
-	readonly catalog: MutationGraphCatalog;
-	readonly collection: string;
-	readonly values: Readonly<Record<string, Schema.Json>>;
-	/** Mutations cannot be authored before a server proof binds this replica to exact current rights. */
-	readonly serverPartitionKey: string | undefined;
-	/** Local replica key derived from the stable principal fingerprint and rendered authority. */
-	readonly localActorBinding: string | undefined;
-	readonly rowVersion: (collection: string, recordId: string) => number | undefined;
-	readonly randomId?: () => string;
-}>): PreparedLocalCollectionMutation => {
+export const prepareLocalCollectionMutation = (
+	input: Readonly<{
+		readonly catalog: MutationGraphCatalog;
+		readonly collection: string;
+		readonly values: Readonly<Record<string, Schema.Json>>;
+		/** Mutations cannot be authored before a server proof binds this replica to exact current rights. */
+		readonly serverPartitionKey: string | undefined;
+		/** Local replica key derived from the stable principal fingerprint and rendered authority. */
+		readonly localActorBinding: string | undefined;
+		readonly rowVersion: (collection: string, recordId: string) => number | undefined;
+		readonly randomId?: () => string;
+	}>
+): PreparedLocalCollectionMutation => {
 	if (typeof input.serverPartitionKey !== 'string' || input.serverPartitionKey.trim() === '')
 		throw new MutationJournalUnavailable(
 			'The server partition proof is not known yet; complete sync partition bootstrap before mutating.'
@@ -717,7 +714,10 @@ export const prepareLocalCollectionMutation = (input: Readonly<{
 	const visit = (
 		collection: string,
 		values: Readonly<Record<string, Schema.Json>>
-	): Readonly<{ readonly values: Readonly<Record<string, Schema.Json>>; readonly created: boolean }> => {
+	): Readonly<{
+		readonly values: Readonly<Record<string, Schema.Json>>;
+		readonly created: boolean;
+	}> => {
 		affectedCollections.add(collection);
 		const submittedId = values['id'];
 		if (submittedId !== undefined && (typeof submittedId !== 'string' || submittedId.trim() === ''))
@@ -764,7 +764,9 @@ export const prepareLocalCollectionMutation = (input: Readonly<{
 				throw new TypeError(`Mutation relationship ${collection}.${key} must be an array`);
 			graphValues[key] = value.map((child, index) => {
 				if (!isObject(child))
-					throw new TypeError(`Mutation relationship ${collection}.${key}[${index}] must be a record`);
+					throw new TypeError(
+						`Mutation relationship ${collection}.${key}[${index}] must be a record`
+					);
 				return visit(relationship.target, child as Readonly<Record<string, Schema.Json>>).values;
 			});
 		}
@@ -781,7 +783,7 @@ export const prepareLocalCollectionMutation = (input: Readonly<{
 				serverPartitionKey,
 				localActorBinding,
 				baseVersions,
-				overlay,
+				overlay
 			}
 		: {
 				action: 'update',
@@ -790,7 +792,7 @@ export const prepareLocalCollectionMutation = (input: Readonly<{
 				serverPartitionKey,
 				localActorBinding,
 				baseVersions,
-				overlay,
+				overlay
 			};
 	return {
 		draft,
@@ -840,9 +842,7 @@ export const mutationWireRequest = (
 };
 
 /** Constructs the browser-facing local acknowledgement after the overlay view has rerun. */
-export const locallyDurableMutationResult = <
-	Row extends object
->(
+export const locallyDurableMutationResult = <Row extends object>(
 	journal: Pick<CollectionMutationJournal, 'settlement'>,
 	mutation: ReservedCollectionMutation,
 	row: Row | null
@@ -932,17 +932,11 @@ export const createCollectionMutationJournal = async (
 	identity: MutationJournalIdentity,
 	options: MutationJournalOptions = {}
 ): Promise<CollectionMutationJournal> => {
-	if (
-		typeof identity.serverPartitionKey !== 'string' ||
-		identity.serverPartitionKey.trim() === ''
-	)
+	if (typeof identity.serverPartitionKey !== 'string' || identity.serverPartitionKey.trim() === '')
 		throw new MutationJournalUnavailable(
 			'The mutation journal cannot open until a server partition proof is known.'
 		);
-	if (
-		typeof identity.localActorBinding !== 'string' ||
-		identity.localActorBinding.trim() === ''
-	)
+	if (typeof identity.localActorBinding !== 'string' || identity.localActorBinding.trim() === '')
 		throw new MutationJournalUnavailable(
 			'The mutation journal cannot open without its authenticated local replica owner.'
 		);
@@ -1030,7 +1024,8 @@ export const createCollectionMutationJournal = async (
 		update: (entry: JournalEntry) => JournalEntry
 	): Readonly<{ readonly envelope: JournalEnvelope; readonly entry: JournalEntry }> => {
 		const index = envelope.entries.findIndex((entry) => entry.idempotencyKey === idempotencyKey);
-		if (index < 0) throw new MutationJournalUnavailable('The mutation is not present in the journal.');
+		if (index < 0)
+			throw new MutationJournalUnavailable('The mutation is not present in the journal.');
 		const entry = update(envelope.entries[index] as JournalEntry);
 		return {
 			envelope: {
@@ -1047,9 +1042,7 @@ export const createCollectionMutationJournal = async (
 	const withIssue = (envelope: JournalEnvelope, issue: MutationSyncIssue): JournalEnvelope => ({
 		...envelope,
 		issues: [
-			...envelope.issues.filter(
-				(candidate) => candidate.idempotencyKey !== issue.idempotencyKey
-			),
+			...envelope.issues.filter((candidate) => candidate.idempotencyKey !== issue.idempotencyKey),
 			issue
 		].slice(-MAX_SYNC_ISSUES)
 	});
@@ -1057,10 +1050,7 @@ export const createCollectionMutationJournal = async (
 	const journal: CollectionMutationJournal = {
 		reserve: (draft) =>
 			locked(async () => {
-				if (
-					typeof draft.serverPartitionKey !== 'string' ||
-					draft.serverPartitionKey.trim() === ''
-				)
+				if (typeof draft.serverPartitionKey !== 'string' || draft.serverPartitionKey.trim() === '')
 					throw new MutationJournalUnavailable(
 						'The mutation is missing its server partition proof and cannot be made durable.'
 					);
@@ -1068,10 +1058,7 @@ export const createCollectionMutationJournal = async (
 					throw new MutationJournalUnavailable(
 						'The mutation server partition proof changed before journal reservation; refetch under the current authority.'
 					);
-				if (
-					typeof draft.localActorBinding !== 'string' ||
-					draft.localActorBinding.trim() === ''
-				)
+				if (typeof draft.localActorBinding !== 'string' || draft.localActorBinding.trim() === '')
 					throw new MutationJournalUnavailable(
 						'The mutation is missing its authenticated local replica owner and cannot be made durable.'
 					);
@@ -1082,9 +1069,7 @@ export const createCollectionMutationJournal = async (
 				const at = now();
 				const fingerprint = await sha256Hex(canonicalJson(wireFingerprintInput(draft)));
 				const envelope = read();
-				const existing = envelope.entries.find(
-					(entry) => entry.fingerprint === fingerprint
-				);
+				const existing = envelope.entries.find((entry) => entry.fingerprint === fingerprint);
 				if (existing !== undefined) {
 					if (existing.pushState === 'quarantined')
 						throw new MutationJournalUnavailable(
@@ -1146,8 +1131,7 @@ export const createCollectionMutationJournal = async (
 				for (const expiredEntry of expired) {
 					const quarantine: MutationQuarantine = {
 						code: 'compatibility-horizon-expired',
-						message:
-							'The mutation is older than the supported offline compatibility horizon.',
+						message: 'The mutation is older than the supported offline compatibility horizon.',
 						atEpochMs
 					};
 					const changed = replaceEntry(envelope, expiredEntry.idempotencyKey, (entry) =>
@@ -1223,9 +1207,7 @@ export const createCollectionMutationJournal = async (
 		reconcile: (idempotencyKey, outcome) =>
 			locked(async () => {
 				const envelope = read();
-				const existing = envelope.entries.find(
-					(entry) => entry.idempotencyKey === idempotencyKey
-				);
+				const existing = envelope.entries.find((entry) => entry.idempotencyKey === idempotencyKey);
 				if (existing === undefined)
 					throw new MutationJournalUnavailable('The mutation is not present in the journal.');
 				const settledAtEpochMs = now();
@@ -1366,11 +1348,9 @@ export const createCollectionMutationJournal = async (
 					const interruptedPushConfirmed =
 						entry.pushState === 'pushing' &&
 						(entry.lastAttemptAtEpochMs === undefined ||
-							entry.lastAttemptAtEpochMs <=
-								observedAtEpochMs - MUTATION_PUSH_STALE_AFTER_MS);
+							entry.lastAttemptAtEpochMs <= observedAtEpochMs - MUTATION_PUSH_STALE_AFTER_MS);
 					if (
-						(entry.pushState !== 'awaiting-authoritative-delta' &&
-							!interruptedPushConfirmed) ||
+						(entry.pushState !== 'awaiting-authoritative-delta' && !interruptedPushConfirmed) ||
 						confirmation === undefined
 					)
 						continue;
@@ -1390,14 +1370,13 @@ export const createCollectionMutationJournal = async (
 			}),
 		pendingAuthoritativeMutationIds: () =>
 			locked(async () =>
-				read().entries
-					.filter(
+				read()
+					.entries.filter(
 						(entry) =>
-							entry.pushState === 'pushing' ||
-							entry.pushState === 'awaiting-authoritative-delta'
+							entry.pushState === 'pushing' || entry.pushState === 'awaiting-authoritative-delta'
 					)
 					.map((entry) => entry.originalIdempotencyKey)
-				),
+			),
 		settlement: (idempotencyKey) => {
 			const persisted = read();
 			const persistedIssue = persisted.issues.find(
@@ -1408,8 +1387,12 @@ export const createCollectionMutationJournal = async (
 			const persistedSettlement = persisted.entries.find(
 				(entry) => entry.idempotencyKey === idempotencyKey
 			)?.authoritySettlement;
-			if (persistedSettlement !== undefined && persistedSettlement !== null &&
-				!terminalOutcomes.has(idempotencyKey)) complete(persistedSettlement);
+			if (
+				persistedSettlement !== undefined &&
+				persistedSettlement !== null &&
+				!terminalOutcomes.has(idempotencyKey)
+			)
+				complete(persistedSettlement);
 			const owned = settlementDeferred(idempotencyKey);
 			const wait = (signal?: AbortSignal): Promise<MutationSettlement> => {
 				if (signal === undefined) return owned.promise;
@@ -1438,15 +1421,13 @@ export const createCollectionMutationJournal = async (
 						const terminal = terminalOutcomes.get(idempotencyKey);
 						if (terminal !== undefined) return terminal.kind;
 						return (
-							read().entries.find(
-								(entry) => entry.idempotencyKey === idempotencyKey
-							)?.pushState ?? 'unknown'
+							read().entries.find((entry) => entry.idempotencyKey === idempotencyKey)?.pushState ??
+							'unknown'
 						);
 					})
 			};
 		},
-		overlay: () =>
-			locked(async () => read().entries.map((entry) => asOverlayMutation(entry))),
+		overlay: () => locked(async () => read().entries.map((entry) => asOverlayMutation(entry))),
 		protectedRows: () =>
 			locked(async () => {
 				const references = new Map<string, OverlayRowReference>();
@@ -1475,9 +1456,7 @@ export const createCollectionMutationJournal = async (
 				const envelope = read();
 				write({
 					...envelope,
-					issues: envelope.issues.filter(
-						(issue) => issue.idempotencyKey !== idempotencyKey
-					)
+					issues: envelope.issues.filter((issue) => issue.idempotencyKey !== idempotencyKey)
 				});
 			})
 	};

@@ -251,9 +251,17 @@
 								draggedItemId === recordId && 'sortable-dragging'
 							)}
 						>
+							<!--
+								`min-h-24`, not `h-32`. A fixed height with `overflow-hidden` sized every card
+								to its emptiest case and silently cut the rest: a two-line title plus a
+								subtitle rendered its last line half-clipped against the card edge, which reads
+								as a rendering fault rather than as content that did not fit. Cards now start
+								compact and grow to what they hold, and the uniform floor keeps a lane of
+								one-line cards regular.
+							-->
 							<CardPrimitive.Root
 								class={cn(
-									'group relative h-32 w-full min-w-0 overflow-hidden rounded-sm transition-colors',
+									'group relative min-h-24 w-full min-w-0 overflow-hidden rounded-sm transition-colors',
 									selectedRecordIds.has(recordId) && 'bg-accent/60 ring-1 ring-ring'
 								)}
 								role="button"

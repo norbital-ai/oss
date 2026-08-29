@@ -121,9 +121,7 @@ function formatScalar(
 		case 'number':
 		case 'integer': {
 			const numeric = coerceNumericValue(value);
-			return numeric !== null
-				? new Intl.NumberFormat(locale).format(numeric)
-				: String(value);
+			return numeric !== null ? new Intl.NumberFormat(locale).format(numeric) : String(value);
 		}
 		case 'money': {
 			return Option.match(decodeMoneyValue(value), {

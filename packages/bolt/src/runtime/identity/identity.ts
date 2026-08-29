@@ -5,10 +5,7 @@ import { Communication, IdentityHooks } from '#lib/runtime/facilities/services.j
 import * as Database from '#lib/runtime/facilities/database.js';
 import { Subject } from './subject.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
-import {
-	makeAuth,
-	SIGN_IN_CODE_EXPIRES_SECONDS
-} from '#lib/runtime/identity/auth.js';
+import { makeAuth, SIGN_IN_CODE_EXPIRES_SECONDS } from '#lib/runtime/identity/auth.js';
 import { identitiesOf, identityMatches } from '#lib/runtime/envoys/transport-identity.js';
 import { composer, dbNow, dbNowPlusSeconds, executeBuilt } from '#lib/runtime/persistence.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
@@ -626,8 +623,7 @@ export const layerWith = (
 												email: message.email,
 												code: message.code,
 												purpose: message.purpose,
-												expiresAtEpochMs:
-													nowEpochMs + SIGN_IN_CODE_EXPIRES_SECONDS * 1_000
+												expiresAtEpochMs: nowEpochMs + SIGN_IN_CODE_EXPIRES_SECONDS * 1_000
 											}
 										}
 									])

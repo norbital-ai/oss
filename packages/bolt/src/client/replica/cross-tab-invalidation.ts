@@ -17,7 +17,10 @@ type OpenReplicaInvalidationChannel = (name: string) => ReplicaInvalidationChann
 
 export type ReplicaSchemaControl =
 	| Readonly<{ readonly _tag: 'maintenance'; readonly value: ReplicaSchemaMaintenanceType }>
-	| Readonly<{ readonly _tag: 'maintenance-clear'; readonly value: ReplicaSchemaMaintenanceClearType }>;
+	| Readonly<{
+			readonly _tag: 'maintenance-clear';
+			readonly value: ReplicaSchemaMaintenanceClearType;
+	  }>;
 
 export type ReplicaInvalidationBus = Readonly<{
 	announce: (collections: ReadonlyArray<string>) => void;

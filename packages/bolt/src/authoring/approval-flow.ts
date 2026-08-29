@@ -1,10 +1,6 @@
 import type { TeamName } from './contracts-schema.js';
 import { ApprovalFlowBrand } from './contracts-schema.js';
-import type {
-	ApprovalFlow,
-	ApprovalReviewFlow,
-	NoApprovalFlow
-} from './contracts-schema.js';
+import type { ApprovalFlow, ApprovalReviewFlow, NoApprovalFlow } from './contracts-schema.js';
 
 export type { ApprovalFlow, ApprovalReviewFlow, NoApprovalFlow } from './contracts-schema.js';
 

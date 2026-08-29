@@ -1,11 +1,7 @@
 export type ReplicaHydrationPriority = 0 | 1 | 2;
 
 export type ReplicaHydrationReason =
-	| 'visible'
-	| 'mounted'
-	| 'relation-dependency'
-	| 'adjacent'
-	| 'recent';
+	'visible' | 'mounted' | 'relation-dependency' | 'adjacent' | 'recent';
 
 export type ReplicaWindowVisibility = 'visible' | 'hidden' | 'unknown';
 
@@ -40,10 +36,7 @@ export type ReplicaHydrationPriorityScheduler = Readonly<{
 		/** Omission is deliberately unproven and therefore remains priority two. */
 		readonly queryKeyEvidence?: 'concrete';
 	}) => ReplicaHydrationDemandHandle;
-	readonly noteRecent: (input: {
-		readonly queryKey: string;
-		readonly lastAccess: number;
-	}) => void;
+	readonly noteRecent: (input: { readonly queryKey: string; readonly lastAccess: number }) => void;
 	readonly snapshot: (now?: number) => ReadonlyArray<ReplicaHydrationCandidate>;
 	readonly clear: () => void;
 }>;

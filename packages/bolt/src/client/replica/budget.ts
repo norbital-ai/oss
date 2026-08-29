@@ -36,7 +36,7 @@ type ReplicaStorageEnvironment = Readonly<{
 	readonly indexeddb: boolean;
 	/** Replication leadership is mandatory for either writable local tier. */
 	readonly webLocks: boolean;
-}>; 
+}>;
 
 const finiteBytes = (value: number | undefined): number | undefined =>
 	value !== undefined && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
@@ -92,8 +92,7 @@ export const selectReplicaStorage = async (
 				);
 			})(),
 		indexeddb: typeof indexedDB !== 'undefined',
-		webLocks:
-			typeof navigator !== 'undefined' && typeof navigator.locks?.request === 'function'
+		webLocks: typeof navigator !== 'undefined' && typeof navigator.locks?.request === 'function'
 	}
 ): Promise<ReplicaStorageDecision> => {
 	if (!environment.webLocks)
@@ -122,7 +121,10 @@ export const selectReplicaStorage = async (
 				? 'indexeddb'
 				: undefined;
 	if (tier === undefined)
-		return { tier: 'server-only', reason: 'No supported persistent browser filesystem is available' };
+		return {
+			tier: 'server-only',
+			reason: 'No supported persistent browser filesystem is available'
+		};
 	const estimate = { usage, quota };
 	return { tier, estimate, budget: storageBudgetFor(tier, estimate) };
 };
@@ -136,10 +138,7 @@ type ReplicaEvictionResult = Readonly<{
 
 type ReplicaProfileEvictionKind = 'window' | 'partition';
 export type ReplicaLeaseKind =
-	| 'visible-window'
-	| 'active-tab'
-	| 'pending-mutation'
-	| 'running-automation';
+	'visible-window' | 'active-tab' | 'pending-mutation' | 'running-automation';
 
 /** One physical PGlite database recorded in the browser-profile directory. */
 export type ReplicaProfilePartition = Readonly<{
@@ -213,11 +212,7 @@ export const planProfileEviction = (
 	const activeLeases = snapshot.leases.filter((lease) => leaseActiveAt(lease, now));
 	const partitionWideLeases = new Set(
 		activeLeases
-			.filter(
-				(lease) =>
-					lease.kind === 'pending-mutation' ||
-					lease.kind === 'running-automation'
-			)
+			.filter((lease) => lease.kind === 'pending-mutation' || lease.kind === 'running-automation')
 			.map((lease) => lease.partitionId)
 	);
 	// Active-tab and visible-window leases are narrower than mutation/automation leases: cold
@@ -248,20 +243,18 @@ export const planProfileEviction = (
 
 	const inactivePartitions = snapshot.partitions
 		.filter((partition) => !partitionsWithAnyLease.has(partition.id))
-		.map(
-			(partition): ReplicaProfileEvictionCandidate => ({
-				id: partition.id,
-				partitionId: partition.id,
-				organization: partition.organization,
-				tier: partition.tier,
-				location: partition.location,
-				kind: 'partition',
-				lastAccess: partition.lastAccess,
-				accountedBytes: partition.accountedBytes
-			})
-		);
+		.map((partition): ReplicaProfileEvictionCandidate => ({
+			id: partition.id,
+			partitionId: partition.id,
+			organization: partition.organization,
+			tier: partition.tier,
+			location: partition.location,
+			kind: 'partition',
+			lastAccess: partition.lastAccess,
+			accountedBytes: partition.accountedBytes
+		}));
 
-	const rank = (kind: ReplicaProfileEvictionKind): number => kind === 'window' ? 0 : 1;
+	const rank = (kind: ReplicaProfileEvictionKind): number => (kind === 'window' ? 0 : 1);
 	return [...windows, ...inactivePartitions].toSorted(
 		(left, right) =>
 			rank(left.kind) - rank(right.kind) ||

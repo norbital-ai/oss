@@ -94,8 +94,9 @@ export const ArtifactObjectReference = Schema.Struct({
 	sha256: Schema.NonEmptyString,
 	byteLength: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
 }).annotate({ identifier: 'BoltArtifactObjectReference' });
-export interface ArtifactObjectReference
-	extends Schema.Schema.Type<typeof ArtifactObjectReference> {}
+export interface ArtifactObjectReference extends Schema.Schema.Type<
+	typeof ArtifactObjectReference
+> {}
 
 /** Exact ESM specifier resolved only to another verified graph node. */
 export const ArtifactCodeImport = Schema.Struct({
@@ -176,7 +177,9 @@ export const artifactCodeGraphRefusals = (graph: ArtifactCodeGraph): ReadonlyArr
 	}
 	const byteLength = graph.chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
 	if (byteLength !== graph.byteLength)
-		refusals.push(`graph byte length mismatch: expected ${graph.byteLength}, described ${byteLength}`);
+		refusals.push(
+			`graph byte length mismatch: expected ${graph.byteLength}, described ${byteLength}`
+		);
 	return refusals;
 };
 
@@ -189,8 +192,9 @@ export interface ArtifactMigration extends Schema.Schema.Type<typeof ArtifactMig
 export const ArtifactMigrationLineage = Schema.Array(ArtifactMigration).annotate({
 	identifier: 'BoltArtifactMigrationLineage'
 });
-export interface ArtifactMigrationLineage
-	extends Schema.Schema.Type<typeof ArtifactMigrationLineage> {}
+export interface ArtifactMigrationLineage extends Schema.Schema.Type<
+	typeof ArtifactMigrationLineage
+> {}
 
 /** Build input identity which does not belong in executable guest code. */
 export const ArtifactProvenance = Schema.Struct({
@@ -343,10 +347,7 @@ export const SyncSchemaFacts = Schema.Struct({
 	/** Version of this description shape; independent of the artifact protocol version below. */
 	version: Schema.Literal(1),
 	fingerprint: Schema.NonEmptyString,
-	minimumProtocolVersion: Schema.Number.check(
-		Schema.isInt(),
-		Schema.isGreaterThanOrEqualTo(1)
-	),
+	minimumProtocolVersion: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
 	/** SHA-256 of the canonical UTF-8 provisioning-step encoding documented by Bolt's compiler. */
 	migrationDigest: Schema.NonEmptyString,
 	/** Every materialized collection whose readers must be withdrawn at a schema boundary. */
@@ -380,10 +381,7 @@ export interface ReplicaSchemaMaintenanceClear extends Schema.Schema.Type<
 export const ReplicaSchemaBarrier = Schema.Struct({
 	generation: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
 	fingerprint: Schema.NonEmptyString,
-	minimumProtocolVersion: Schema.Number.check(
-		Schema.isInt(),
-		Schema.isGreaterThanOrEqualTo(1)
-	),
+	minimumProtocolVersion: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
 	migrationDigest: Schema.NonEmptyString,
 	affectedCollections: Schema.Array(Schema.NonEmptyString)
 }).annotate({ identifier: 'BoltReplicaSchemaBarrier' });

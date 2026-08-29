@@ -38,6 +38,41 @@ export type QueryWindowCatalog = Readonly<
 	>
 >;
 
+/**
+ * The client catalog's renderer kind, answered in the schema vocabulary the query inspection asks in.
+ *
+ * `CollectionQueryMetadata.fieldKind` is consumed by `canonicalCollectionQuery`, which compares it
+ * against `ScalarType` — `'string' | 'uuid' | 'number' | 'boolean' | 'instant' | 'json'` plus
+ * `'reference'`. The server answers it from the compiled `FieldDefinition.type`, which is exactly
+ * that vocabulary. The browser was answering it from `collectionCatalog`, whose `kind` is the *UI*
+ * vocabulary `DataRenderer` and the filter pickers switch on — `text`, `phone`, `enum`, `integer`.
+ *
+ * Nothing rejected the mismatch, it just never matched: ordering `sites` by `name` made the server
+ * see `'string'` and set text semantics, while the browser saw `'text'`, compared it to `'string'`,
+ * and reported no collation. Both then declared the query locally exact and described that
+ * exactness differently, which is precisely what `confirmCollectionQueryProof` refuses — so every
+ * window carrying a text `orderBy` failed and the replica never served a read.
+ *
+ * A `custom('…')` column is deliberately absent: the catalog keys those by the datatype's own name,
+ * and its underlying scalar depends on the Drizzle column the datatype is built from, which this
+ * side cannot see. Those keep answering their catalog kind, exactly as before.
+ */
+const SCHEMA_KIND_BY_CATALOG_KIND: Readonly<Record<string, string>> = {
+	text: 'string',
+	phone: 'string',
+	enum: 'string',
+	integer: 'number',
+	numeric: 'number',
+	number: 'number',
+	boolean: 'boolean',
+	instant: 'instant',
+	uuid: 'uuid',
+	geolocation: 'json',
+	file: 'json',
+	json: 'json',
+	reference: 'reference'
+};
+
 const catalogMetadata = (catalog: QueryWindowCatalog): CollectionQueryMetadata => {
 	const systemKinds: Readonly<Record<string, string>> = {
 		id: 'uuid',
@@ -51,8 +86,11 @@ const catalogMetadata = (catalog: QueryWindowCatalog): CollectionQueryMetadata =
 		hasField: (collection, field) =>
 			SYSTEM_COLUMN_NAMES.includes(field) ||
 			(catalog[collection]?.fields.some(({ name }) => name === field) ?? false),
-		fieldKind: (collection, field) =>
-			catalog[collection]?.fields.find(({ name }) => name === field)?.kind ?? systemKinds[field],
+		fieldKind: (collection, field) => {
+			const declared = catalog[collection]?.fields.find(({ name }) => name === field)?.kind;
+			if (declared === undefined) return systemKinds[field];
+			return SCHEMA_KIND_BY_CATALOG_KIND[declared] ?? declared;
+		},
 		relationTargets: (collection, relation) => {
 			const fieldTargets =
 				catalog[collection]?.fields.find(({ name }) => name === relation)?.relation?.targets ?? [];
@@ -122,9 +160,7 @@ const confirmCollectionQueryProof = (
 	}
 	for (const dependency of derived.dependencies) {
 		if (!confirmed.has(dependency)) {
-			return Result.fail(
-				new Error(`The query server omitted canonical dependency ${dependency}.`)
-			);
+			return Result.fail(new Error(`The query server omitted canonical dependency ${dependency}.`));
 		}
 	}
 	const generationKeys = Object.keys(proof.dependencyGenerations).toSorted();
@@ -143,8 +179,17 @@ const confirmCollectionQueryProof = (
 		canonicalQueryJson(derived.reproducibility.semantics) !==
 			canonicalQueryJson(proof.reproducibility.semantics)
 	) {
+		// Both sides agreed the query is locally exact and then described that exactness
+		// differently, which is a contract mismatch between two evaluators that must agree. Naming
+		// the two descriptions is the whole diagnostic: the sentence alone cannot distinguish a
+		// version skew between the browser and guest bundles from a collation or operator
+		// disagreement over the same query.
 		return Result.fail(
-			new Error('The query server and local evaluator reported different exact semantics.')
+			new Error(
+				`The query server and local evaluator reported different exact semantics for ${derived.query.collection}. ` +
+					`local ${canonicalQueryJson(derived.reproducibility.semantics)} ` +
+					`server ${canonicalQueryJson(proof.reproducibility.semantics)}`
+			)
 		);
 	}
 	return Result.succeed({
@@ -261,12 +306,8 @@ function confirmCollectionHydration(
 		}
 		relationships.add(key);
 		if (
-			!baseRows.has(
-				baseRowKey(relationship.sourceCollection, relationship.sourceRecordId)
-			) ||
-			!baseRows.has(
-				baseRowKey(relationship.targetCollection, relationship.targetRecordId)
-			)
+			!baseRows.has(baseRowKey(relationship.sourceCollection, relationship.sourceRecordId)) ||
+			!baseRows.has(baseRowKey(relationship.targetCollection, relationship.targetRecordId))
 		) {
 			return Result.fail(
 				new Error('The query response contains a relationship with a missing base-row endpoint.')
@@ -329,7 +370,9 @@ export const groupedRowIdsFromWindow = (
 		for (const row of rows) {
 			const id = rowId(row);
 			if (id === undefined) {
-				return Result.fail(new Error(`Authoritative grouped lane ${lane} contains a row without id.`));
+				return Result.fail(
+					new Error(`Authoritative grouped lane ${lane} contains a row without id.`)
+				);
 			}
 			ids.push(id);
 		}

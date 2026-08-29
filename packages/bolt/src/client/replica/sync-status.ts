@@ -87,8 +87,7 @@ export const createWorkspaceSyncStatus = (): MutableWorkspaceSyncStatusSignal =>
 			// replica. Only an explicit stream-ready transition may clear retained-only mode.
 			// Updating an unrelated counter must not turn a catching-up replica into an exact one. Only
 			// an explicit `ready` frame may clear retained-only mode.
-			offlineRetainedOnly:
-				next.connectivity === 'connected' ? next.offlineRetainedOnly : true
+			offlineRetainedOnly: next.connectivity === 'connected' ? next.offlineRetainedOnly : true
 		});
 	};
 	/**

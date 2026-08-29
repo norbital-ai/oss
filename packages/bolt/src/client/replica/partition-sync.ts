@@ -53,7 +53,7 @@ export type PartitionSyncStore = Readonly<{
 	readonly recordPosition: (
 		position: DurablePartitionPosition
 	) => Effect.Effect<DurablePartitionPosition, unknown>;
-}>; 
+}>;
 
 export type WindowFlight = Readonly<{
 	readonly id: number;
@@ -100,9 +100,7 @@ export type PartitionSyncCoordinatorOptions = Readonly<{
 	/** Runs a mounted query against the post-transaction base-through-overlay view. */
 	readonly rerunAffected: (collections: ReadonlyArray<string>) => void;
 	/** Restores dirty LocalExact membership once, inside the batch's serialized apply turn. */
-	readonly recomputeWindows?: (
-		queryKeys: ReadonlyArray<string>
-	) => Promise<ReadonlyArray<string>>;
+	readonly recomputeWindows?: (queryKeys: ReadonlyArray<string>) => Promise<ReadonlyArray<string>>;
 	/** Mutation overlay settlement and metrics observe the already-durable M1 outcome here. */
 	readonly onApplied?: (
 		batch: PartitionDeltaBatch,
@@ -110,10 +108,7 @@ export type PartitionSyncCoordinatorOptions = Readonly<{
 	) => Promise<void>;
 	readonly onProofWithdrawals?: (queryKeys: ReadonlyArray<string>) => void;
 	/** One authoritative bounded page. It must not chase the entire collection. */
-	readonly refillWindow: (
-		queryKey: string,
-		priority: ReplicaHydrationPriority
-	) => Promise<void>;
+	readonly refillWindow: (queryKey: string, priority: ReplicaHydrationPriority) => Promise<void>;
 	/** Rehydrates only active windows after M3 committed the empty/new namespace. */
 	readonly rehydrateActive: (
 		queryKeys: ReadonlyArray<string>,
@@ -146,15 +141,10 @@ export type PartitionSyncCoordinator = Readonly<{
 	readonly noteRecentHydration: (
 		input: Parameters<ReplicaHydrationPriorityScheduler['noteRecent']>[0]
 	) => void;
-	readonly hydrationPlan: (
-		now?: number
-	) => ReadonlyArray<ReplicaHydrationCandidate>;
+	readonly hydrationPlan: (now?: number) => ReadonlyArray<ReplicaHydrationCandidate>;
 	/** Enqueues the current P0/P1/P2 plan in policy order. */
 	readonly requestPlannedHydration: () => void;
-	readonly requestRefill: (
-		queryKey: string,
-		priority?: ReplicaHydrationPriority
-	) => void;
+	readonly requestRefill: (queryKey: string, priority?: ReplicaHydrationPriority) => void;
 	readonly beginWindowFlight: (
 		queryKey: string,
 		dependencies: ReadonlyArray<string>
@@ -238,14 +228,17 @@ export const createPartitionSyncCoordinator = (
 	const activeWindowKeys = (affected?: ReadonlyArray<string>): ReadonlyArray<string> => {
 		const changed = affected === undefined || affected.length === 0 ? undefined : new Set(affected);
 		const priorities = priorityByQueryKey();
-		return [...windows.values()].flatMap((window) =>
-			changed === undefined || windowDependencies(window).some((name) => changed.has(name))
-				? [window.queryKey]
-				: []
-		).toSorted((left, right) =>
-			(priorities.get(left)?.priority ?? 1) - (priorities.get(right)?.priority ?? 1) ||
-			left.localeCompare(right)
-		);
+		return [...windows.values()]
+			.flatMap((window) =>
+				changed === undefined || windowDependencies(window).some((name) => changed.has(name))
+					? [window.queryKey]
+					: []
+			)
+			.toSorted(
+				(left, right) =>
+					(priorities.get(left)?.priority ?? 1) - (priorities.get(right)?.priority ?? 1) ||
+					left.localeCompare(right)
+			);
 	};
 	const report = (cause: unknown): void => options.onError?.(cause);
 	const serialize = (work: () => Promise<void>): Promise<void> => {
@@ -288,17 +281,19 @@ export const createPartitionSyncCoordinator = (
 	const pumpRefills = (): void => {
 		while (!stopped && activeRefills < maxRefills) {
 			const priorities = priorityByQueryKey();
-			const next = [...queuedRefills.entries()].toSorted(([left, leftRequest], [right, rightRequest]) => {
-				const leftCandidate = priorities.get(left);
-				const rightCandidate = priorities.get(right);
-				return (
-					(leftRequest.priority ?? leftCandidate?.priority ?? 2) -
-						(rightRequest.priority ?? rightCandidate?.priority ?? 2) ||
-					(rightCandidate?.lastAccess ?? Number.NEGATIVE_INFINITY) -
-						(leftCandidate?.lastAccess ?? Number.NEGATIVE_INFINITY) ||
-					leftRequest.sequence - rightRequest.sequence
-				);
-			})[0];
+			const next = [...queuedRefills.entries()].toSorted(
+				([left, leftRequest], [right, rightRequest]) => {
+					const leftCandidate = priorities.get(left);
+					const rightCandidate = priorities.get(right);
+					return (
+						(leftRequest.priority ?? leftCandidate?.priority ?? 2) -
+							(rightRequest.priority ?? rightCandidate?.priority ?? 2) ||
+						(rightCandidate?.lastAccess ?? Number.NEGATIVE_INFINITY) -
+							(leftCandidate?.lastAccess ?? Number.NEGATIVE_INFINITY) ||
+						leftRequest.sequence - rightRequest.sequence
+					);
+				}
+			)[0];
 			if (next === undefined) return;
 			const [queryKey, request] = next;
 			const priority = request.priority ?? priorities.get(queryKey)?.priority ?? 2;
@@ -320,8 +315,7 @@ export const createPartitionSyncCoordinator = (
 		for (const key of keys) {
 			const existing = queuedRefills.get(key);
 			if (existing !== undefined) {
-				const existingPriority =
-					existing.priority ?? priorityByQueryKey().get(key)?.priority ?? 2;
+				const existingPriority = existing.priority ?? priorityByQueryKey().get(key)?.priority ?? 2;
 				if (priority !== undefined && priority < existingPriority) {
 					queuedRefills.set(key, { ...existing, priority });
 				}
@@ -340,9 +334,8 @@ export const createPartitionSyncCoordinator = (
 		affectedCollections: ReadonlyArray<string>
 	): void => {
 		void serialize(async () => {
-			const affected = affectedCollections.length === 0
-				? activeDependencies()
-				: affectedCollections;
+			const affected =
+				affectedCollections.length === 0 ? activeDependencies() : affectedCollections;
 			// The recovery head is only a proposal until the new namespace contains the bounded
 			// active-window snapshot. A crash during hydration therefore resumes from the origin.
 			await Effect.runPromise(options.store.rebuildNamespace());
@@ -370,14 +363,15 @@ export const createPartitionSyncCoordinator = (
 				queryKey,
 				visibility
 			});
-			const relationDemand = evidence.relationDependency === true
-				? hydrationPriorities.retain({
-						ownerId: `relation-dependency:${mountId}`,
-						queryKey,
-						reason: 'relation-dependency',
-						queryKeyEvidence: 'concrete'
-					})
-				: undefined;
+			const relationDemand =
+				evidence.relationDependency === true
+					? hydrationPriorities.retain({
+							ownerId: `relation-dependency:${mountId}`,
+							queryKey,
+							reason: 'relation-dependency',
+							queryKeyEvidence: 'concrete'
+						})
+					: undefined;
 			const existing = windows.get(queryKey);
 			if (existing === undefined) {
 				windows.set(queryKey, {
@@ -453,7 +447,7 @@ export const createPartitionSyncCoordinator = (
 					install({ bufferedDeltas, position: durable, proofMayBeValid })
 				);
 				if (installed.dirty) {
-					const restored = await options.recomputeWindows?.([flight.queryKey]) ?? [];
+					const restored = (await options.recomputeWindows?.([flight.queryKey])) ?? [];
 					if (!restored.includes(flight.queryKey)) scheduleRefills([flight.queryKey]);
 				} else if (!proofMayBeValid || !installed.valid) {
 					scheduleRefills([flight.queryKey]);
@@ -471,10 +465,7 @@ export const createPartitionSyncCoordinator = (
 			serverPartitionId = batch.partition.key;
 			serverHead = batch.headCursor;
 			if (partitionChanged || headMovedBack) {
-				doRebuild(
-					{ cursor: batch.cursor, generations: batch.generations },
-					activeDependencies()
-				);
+				doRebuild({ cursor: batch.cursor, generations: batch.generations }, activeDependencies());
 				return;
 			}
 			for (const delta of batch.deltas) {
@@ -506,10 +497,8 @@ export const createPartitionSyncCoordinator = (
 					...outcome.affectedCollections,
 					...batch.deltas.map(({ collection }) => collection)
 				]);
-				if (
-					affected.length > 0 &&
-					(outcome.applied > 0 || outcome.proofWithdrawals.length > 0)
-				) options.rerunAffected(affected);
+				if (affected.length > 0 && (outcome.applied > 0 || outcome.proofWithdrawals.length > 0))
+					options.rerunAffected(affected);
 				const withdrawn = new Set(outcome.proofWithdrawals);
 				const refillKeys = activeWindowKeys(affected).filter((key) => withdrawn.has(key));
 				if (refillKeys.length > 0) scheduleRefills(refillKeys);
@@ -545,10 +534,7 @@ export const createPartitionSyncCoordinator = (
 			serverPartitionId = ready.partition.key;
 			serverHead = ready.cursor;
 			if (partitionChanged || headMovedBack) {
-				doRebuild(
-					{ cursor: ready.cursor, generations: ready.generations },
-					activeDependencies()
-				);
+				doRebuild({ cursor: ready.cursor, generations: ready.generations }, activeDependencies());
 			}
 		},
 		rebuild: (_reason, position, affectedCollections = activeDependencies()) => {

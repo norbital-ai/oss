@@ -95,9 +95,7 @@ const overlapDiagnostics = (
  * definition, and a delete is held rather than applied while it waits, so neither needs a prior
  * version to return to. Only `update` is unrecoverable without history.
  */
-const historyDiagnostics = (
-	definition: WorkspaceDefinition
-): ReadonlyArray<ApprovalDiagnostic> => {
+const historyDiagnostics = (definition: WorkspaceDefinition): ReadonlyArray<ApprovalDiagnostic> => {
 	const withoutHistory = new Set(
 		definition.collections
 			.filter((collection) => collection.history === false)

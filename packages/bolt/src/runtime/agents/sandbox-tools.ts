@@ -7,10 +7,7 @@ import * as Database from '#lib/runtime/facilities/database.js';
 import { composer, executeBuilt } from '#lib/runtime/persistence.js';
 import type * as Identity from '#lib/runtime/identity/identity.js';
 import { ToolNotAllowed } from '#lib/runtime/agents/agent-errors.js';
-import {
-	encodeAgentMessage,
-	type StoredAgentMessage
-} from '#lib/runtime/agents/agent-message.js';
+import { encodeAgentMessage, type StoredAgentMessage } from '#lib/runtime/agents/agent-message.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
 
 const { chat_session: chatSession, chat_message: chatMessage } = SYSTEM_MODEL_TABLES;
@@ -60,7 +57,7 @@ export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'list_agents',
-		description: 'List this agent\'s direct parent and direct children.',
+		description: "List this agent's direct parent and direct children.",
 		command: 'platform:list_agents',
 		inputSchema: objectInput({})
 	},
@@ -72,7 +69,7 @@ export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	},
 	{
 		name: 'message_agent',
-		description: 'Durably queue a message to this agent\'s direct parent or a direct child.',
+		description: "Durably queue a message to this agent's direct parent or a direct child.",
 		command: 'platform:message_agent',
 		inputSchema: objectInput(
 			{
@@ -118,25 +115,21 @@ export const sandboxToolSpecs: ReadonlyArray<ToolDeclaration> = [
 			['agentId', 'orderedTaskIds']
 		)
 	},
-	...(['interrupt_agent', 'stop_agent', 'resume_agent'] as const).map(
-		(name): ToolDeclaration => ({
-			name,
-			description:
-				name === 'interrupt_agent'
-					? 'Interrupt only the currently running task of a direct child agent.'
-					: name === 'stop_agent'
-						? 'Pause a direct child agent and preserve all of its queued work.'
-						: 'Resume the same paused tasks for a direct child agent.',
-			command: `platform:${name}`,
-			inputSchema: agentIdInput
-		})
-	)
+	...(['interrupt_agent', 'stop_agent', 'resume_agent'] as const).map((name): ToolDeclaration => ({
+		name,
+		description:
+			name === 'interrupt_agent'
+				? 'Interrupt only the currently running task of a direct child agent.'
+				: name === 'stop_agent'
+					? 'Pause a direct child agent and preserve all of its queued work.'
+					: 'Resume the same paused tasks for a direct child agent.',
+		command: `platform:${name}`,
+		inputSchema: agentIdInput
+	}))
 ];
 
 type SandboxActionFailure =
-	| Database.FacilityError
-	| ToolNotAllowed
-	| InvocationBudget.NestingLimitExceeded;
+	Database.FacilityError | ToolNotAllowed | InvocationBudget.NestingLimitExceeded;
 type SandboxAction = (
 	effectId: EffectId,
 	input: Schema.Json
@@ -278,9 +271,9 @@ export const executeSandboxTool = Effect.fn('Agents.executeSandboxTool')(functio
 					.where(eq(chatSession.conversation_id, context.conversationId))
 					.limit(1)
 			);
-			const current = Schema.decodeUnknownOption(
-				Schema.Struct({ parent_id: NullableString })
-			)(currentResult.rows[0]);
+			const current = Schema.decodeUnknownOption(Schema.Struct({ parent_id: NullableString }))(
+				currentResult.rows[0]
+			);
 			const parentId = current._tag === 'Some' ? current.value.parent_id : null;
 			const parentResult =
 				parentId === null
