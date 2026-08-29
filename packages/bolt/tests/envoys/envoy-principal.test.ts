@@ -156,6 +156,30 @@ describe('Transport identities recognise a sender without granting them anything
 			canonicalTransportIdentity('whatsapp', '+65 9123 4567')
 		));
 
+	/**
+	 * A JID addresses a device, not an account, and the suffix is digits.
+	 *
+	 * `6589548277:14@s.whatsapp.net` is companion device 14. Canonicalising by stripping non-digits
+	 * folded the separator away and produced `658954827714` — the number with the device id welded
+	 * on — so a stored `6589548277` matched nothing and an `authenticated` envoy answered a linked
+	 * contractor with silence. Multi-device is the only kind of account WhatsApp issues, and the
+	 * suffix changes on every re-pair, so no stored spelling could have matched it either.
+	 */
+	it('reads every device of one account as the same address', () => {
+		const account = canonicalTransportIdentity('whatsapp', '+65 8954 8277');
+		for (const jid of [
+			'6589548277@s.whatsapp.net',
+			'6589548277:3@s.whatsapp.net',
+			'6589548277:14@s.whatsapp.net'
+		])
+			expect(canonicalTransportIdentity('whatsapp', jid)).toBe(account);
+	});
+
+	it('still keeps a different number apart when it carries a device suffix', () =>
+		expect(canonicalTransportIdentity('whatsapp', '6589548277:14@s.whatsapp.net')).not.toBe(
+			canonicalTransportIdentity('whatsapp', '6599999999:14@s.whatsapp.net')
+		));
+
 	it('keeps two different numbers apart', () =>
 		expect(canonicalTransportIdentity('whatsapp', '+65 9123 4567')).not.toBe(
 			canonicalTransportIdentity('whatsapp', '+65 9123 4568')

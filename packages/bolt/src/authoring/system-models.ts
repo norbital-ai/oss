@@ -635,6 +635,33 @@ const invitationModel = defineModel(
 	{ history: false, sync: false }
 );
 
+/**
+ * One offer to attach a messaging address to whichever account claims it.
+ *
+ * Shaped after `invitationModel` on purpose, down to `status`: claiming is a conditional update on
+ * `status = 'pending'`, so the database itself makes a link single-use and a replay finds nothing to
+ * claim. That matters more here than for an email invitation, because this token travels over a
+ * channel the recipient can forward.
+ *
+ * `sender_id` is the canonical transport identity the message arrived from, stored so the claim
+ * writes the address the host actually saw rather than one the browser asked for. `expires_at`
+ * bounds how long a forwarded link stays dangerous; `claimed_by` records which account won it, so a
+ * number that ends up on the wrong account can be traced rather than guessed at.
+ */
+const channelLinkModel = defineModel(
+	{
+		link_id: text().notNull().unique(),
+		tenant_id: text().notNull(),
+		envoy: text().notNull(),
+		transport: text().notNull(),
+		sender_id: text().notNull(),
+		status: text().notNull(),
+		claimed_by: text(),
+		expires_at: instant().notNull()
+	},
+	{ history: false, sync: false }
+);
+
 const notificationModel = defineModel(
 	{
 		recipient: text().notNull(),
@@ -884,6 +911,7 @@ export const INTERNAL_SYSTEM_MODELS = Object.freeze({
 	bolt_collection_history: collectionHistoryModel,
 	bolt_external_subjects: externalSubjectModel,
 	bolt_invitations: invitationModel,
+	bolt_channel_links: channelLinkModel,
 	bolt_schema_state: schemaStateModel,
 	__drizzle_migrations: schemaMigrationModel,
 	bolt_sync_outbox: syncOutboxModel,

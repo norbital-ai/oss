@@ -47,7 +47,20 @@ export const canonicalTransportIdentity = (transport: string, value: string): st
 	// was worse than a wrong answer: see `identityMatches` for why an empty canonical form is unsafe.
 	const sigilless = value.startsWith('@') ? value.slice(1) : value;
 	const beforeDomain = sigilless.split('@', 1)[0] ?? sigilless;
-	if (transport === 'whatsapp' || transport === 'phone') return beforeDomain.replace(/\D/g, '');
+	if (transport === 'whatsapp' || transport === 'phone') {
+		/**
+		 * The device suffix is dropped before the digits are, because it is made of digits.
+		 *
+		 * A WhatsApp JID addresses a *device*, not an account: `6589548277:14@s.whatsapp.net` is
+		 * companion device 14 of that number. Stripping non-digits first folded the separator away and
+		 * left `658954827714` — the number with the device id welded onto the end — so a stored
+		 * `6589548277` matched nothing, the sender was ruled unknown, and an `authenticated` envoy
+		 * answered a linked contractor with silence. It reproduced for every sender, because a
+		 * multi-device account is the only kind WhatsApp issues now, and the suffix changes on every
+		 * re-pair, so no stored spelling could have matched it either.
+		 */
+		return (beforeDomain.split(':', 1)[0] ?? beforeDomain).replace(/\D/g, '');
+	}
 	return beforeDomain.trim().toLowerCase();
 };
 
