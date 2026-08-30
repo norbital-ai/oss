@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { defineModel, reference, text } from '../../src/authoring/index.js';
+import { defineModel, reference, text, vector } from '../../src/authoring/index.js';
 import type {
 	SchemaQueryConfig,
 	SchemaQueryRow,
@@ -177,5 +177,26 @@ describe('polymorphic reference authoring', () => {
 		expect(() => decodeReferenceRow({ period: '2026-08' }, fields)).toThrow(
 			'required reference "source" has no populated target arm'
 		);
+	});
+
+	it('decodes authored and platform pgvector text into finite number arrays', () => {
+		const fields = describeModelColumns(
+			defineModel({ perceptual_embedding: vector({ dimensions: 3 }).notNull() }).columns
+		);
+		expect(
+			decodeReferenceRow(
+				{
+					perceptual_embedding: '[0.25,-1,2.5]',
+					record_embedding: '[3,4,5]'
+				},
+				fields
+			)
+		).toEqual({
+			perceptual_embedding: [0.25, -1, 2.5],
+			record_embedding: [3, 4, 5]
+		});
+		expect(() =>
+			decodeReferenceRow({ perceptual_embedding: '[0,"bad",2]' }, fields)
+		).toThrow('Vector integrity violation');
 	});
 });

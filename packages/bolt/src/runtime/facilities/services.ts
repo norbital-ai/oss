@@ -16,6 +16,9 @@ import type {
 	HostToolResponse,
 	IdentityHookRequest,
 	IdentityHookResponse,
+	SyncChange,
+	SyncCommitRequest,
+	SyncCommitResponse,
 	TaskRequest,
 	TaskResponse,
 	TransportRequest,
@@ -250,6 +253,57 @@ const TransportLayers = {
 		)
 };
 export const Transport = { Service: TransportService, layer: TransportLayers.make } as const;
+
+/** Host commit hook used by long-running internal writers to fan durable changes immediately. */
+type SyncCommitInterface = Readonly<{
+	readonly publish: (effectId: EffectId, request: SyncCommitRequest) => Effect.Effect<void>;
+	readonly drainChanges: Effect.Effect<ReadonlyArray<SyncChange>>;
+}>;
+const SyncCommitService = Context.Service<SyncCommitInterface>('@norbital-ai/bolt/SyncCommit');
+const SyncCommitLayers = {
+	make: (
+		binding: FacilityBinding<SyncCommitRequest, SyncCommitResponse> | undefined,
+		context: CallContext
+	) =>
+		Layer.effect(
+			SyncCommitService,
+			Effect.map(Ref.make<ReadonlyArray<SyncChange>>([]), (pending) =>
+				SyncCommitService.of({
+					publish: (id, request) =>
+						(request.changes.length === 0
+							? Effect.succeed(true)
+							: binding === undefined
+								? Effect.succeed(false)
+								: invokeBinding('syncCommit', binding, context, id, request).pipe(
+										Effect.map(({ accepted }) => accepted),
+										Effect.catch(() => Effect.succeed(false))
+									)
+						).pipe(
+							Effect.flatMap((accepted) =>
+								accepted
+									? Effect.void
+									: Ref.update(pending, (current) => {
+											const seen = new Set(
+												current.map(({ collection, recordId }) => `${collection}\0${recordId}`)
+											);
+											return [
+												...current,
+												...request.changes.filter(({ collection, recordId }) => {
+													const key = `${collection}\0${recordId}`;
+													if (seen.has(key)) return false;
+													seen.add(key);
+													return true;
+												})
+											];
+										})
+							)
+						),
+					drainChanges: Ref.getAndSet(pending, [])
+				})
+			)
+		)
+};
+export const SyncCommit = { Service: SyncCommitService, layer: SyncCommitLayers.make } as const;
 
 /** Durable task capability bound by the host. */
 type TasksInterface = Readonly<{

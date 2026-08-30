@@ -13,6 +13,7 @@ import type {
 	CollectionMutationSettlement,
 	CollectionSearch,
 	EffectId,
+	SyncChange,
 	SyncOutcome,
 	SyncWriteStatus
 } from '@norbital-ai/bolt-protocol';
@@ -108,19 +109,10 @@ export type BrowserMutationScope = Readonly<{
 	readonly authorityId: string;
 }>;
 
-/**
- * What one committed mutation changed, as the commit itself observed it.
- *
- * `records` are the read-back rows of the mutation's roots; `changes` names every record the
- * transaction wrote — root, related writes, and deletes included — and is the change list the host
- * fans to the live-query registry. The change list is a return value of the commit, never a
- * re-read of the changelog.
- */
+/** Read-back roots plus exact committed coordinates for host live-query fan-out. */
 export type CollectionMutationCommit = Readonly<{
 	readonly records: ReadonlyArray<Readonly<Record<string, unknown>>>;
-	readonly changes: ReadonlyArray<
-		Readonly<{ readonly collection: string; readonly recordId: string }>
-	>;
+	readonly changes: ReadonlyArray<SyncChange>;
 }>;
 
 /** The compact durable answer sufficient to replay a browser mutation without executing it. */
@@ -502,6 +494,8 @@ export type Interface = Readonly<{
 			readonly browserMutation?: BrowserMutationFence;
 		}>
 	) => Effect.Effect<CollectionMutationCommit, MutationError>;
+	/** Commits made anywhere in this invocation, drained once by the bundle boundary. */
+	readonly drainChanges: Effect.Effect<ReadonlyArray<SyncChange>>;
 	readonly mutateBrowser: (
 		effectId: EffectId,
 		actor: Subject,

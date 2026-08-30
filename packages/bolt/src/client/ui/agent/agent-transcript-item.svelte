@@ -30,10 +30,13 @@
 	let {
 		message,
 		nested = null,
+		showSpeakerLabel = true,
 		onVerifierPrompt = undefined
 	}: {
 		message: PanelMessage;
 		nested?: 'subagent' | 'history' | null;
+		/** Root transcripts frame an assistant turn once, before reasoning/tools/text. */
+		showSpeakerLabel?: boolean;
 		onVerifierPrompt?: (prompt: string) => void;
 	} = $props();
 
@@ -446,15 +449,17 @@
 		class={['message', !nested && 'my-1.5']}
 		data-role={message.role}
 	>
-		<span class="px-1 text-tiny font-medium text-muted-foreground">
-			{nested === 'subagent' && message.role === 'user'
-				? t('bolt.agent.task')
-				: message.role === 'user'
-					? t('bolt.agent.you')
-					: message.role === 'assistant'
-						? t('bolt.agent.agent')
-						: t('bolt.agent.system')}
-		</span>
+		{#if showSpeakerLabel}
+			<span class="px-1 text-tiny font-medium text-muted-foreground">
+				{nested === 'subagent' && message.role === 'user'
+					? t('bolt.agent.task')
+					: message.role === 'user'
+						? t('bolt.agent.you')
+						: message.role === 'assistant'
+							? t('bolt.agent.agent')
+							: t('bolt.agent.system')}
+			</span>
+		{/if}
 		<div
 			class={nested
 				? 'w-full text-micro leading-relaxed text-foreground/90'

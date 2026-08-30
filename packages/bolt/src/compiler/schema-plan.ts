@@ -483,7 +483,7 @@ export const buildSchemaPlan = (authored: WorkspaceDefinition): SchemaPlan => {
 				searchColumns.length === 0
 					? []
 					: [
-							`${quoteIdentifier(SEARCH_DOCUMENT_COLUMN)} tsvector generated always as (${searchDocumentExpression(searchColumns)}) stored`
+							`${quoteIdentifier(SEARCH_DOCUMENT_COLUMN)} tsvector generated always as (${searchDocumentExpression(searchColumns, collection.fields)}) stored`
 						];
 			const table = SchemaPlanValues.quoteIdentifier(collection.name);
 			const declaredColumns = [...fields.map(({ sql }) => sql), ...searchDocument];

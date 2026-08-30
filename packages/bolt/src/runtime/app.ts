@@ -40,6 +40,7 @@ import type { CallContext } from '#lib/runtime/facilities/database.js';
 import { Files } from '#lib/runtime/facilities/services.js';
 import { HostTools } from '#lib/runtime/facilities/services.js';
 import { IdentityHooks } from '#lib/runtime/facilities/services.js';
+import { SyncCommit } from '#lib/runtime/facilities/services.js';
 import { Tasks } from '#lib/runtime/facilities/services.js';
 import { Transport } from '#lib/runtime/facilities/services.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
@@ -111,6 +112,7 @@ const InvocationLayers = {
 		const tasks = Tasks.layer(facilities.tasks, context);
 		const hostTools = HostTools.layer(facilities.hostTools, context);
 		const transport = Transport.layer(facilities.transport, context);
+		const syncCommit = SyncCommit.layer(facilities.syncCommit, context);
 		const workspaceLayer = Workspace.layer(workspace);
 		const authoredLayer = Layer.succeed(AuthoredRuntimeService, authored);
 		const access = AccessControl.layer.pipe(
@@ -154,7 +156,9 @@ const InvocationLayers = {
 		// `tenantScope`, because an automation's subject is minted here from its declaration rather than
 		// inherited from whoever tripped it — and a minted subject needs a tenant that no row can supply.
 		const automations = Automations.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, database, taskQueue, budget, tenantScope))
+			Layer.provide(
+				Layer.mergeAll(workspaceLayer, database, taskQueue, syncCommit, budget, tenantScope)
+			)
 		);
 		// The wake sits between Collections and the host's transport: Collections announces, the host fans
 		// out. It is its own layer rather than part of Sync because Sync depends on Collections, and the
@@ -171,12 +175,15 @@ const InvocationLayers = {
 					files,
 					ai,
 					taskQueue,
+					syncCommit,
 					authoredLayer
 				)
 			)
 		);
 		const sync = Sync.layer.pipe(
-			Layer.provide(Layer.mergeAll(workspaceLayer, tenantScope, access, identity, collections, database))
+			Layer.provide(
+				Layer.mergeAll(workspaceLayer, tenantScope, access, identity, collections, database)
+			)
 		);
 		const remotes = remoteRegistryLayer(handlers).pipe(
 			// `automations`, because a remote receives the same authored api a hook does, and that api now
@@ -184,9 +191,7 @@ const InvocationLayers = {
 			// automation would be the second shape of authored code rather than the same one.
 			Layer.provide(Layer.mergeAll(collections, automations, ai, files))
 		);
-		const chatDocuments = ChatDocuments.layer.pipe(
-			Layer.provide(Layer.mergeAll(database, files))
-		);
+		const chatDocuments = ChatDocuments.layer.pipe(Layer.provide(Layer.mergeAll(database, files)));
 		const agents = Agents.layer.pipe(
 			Layer.provide(
 				Layer.mergeAll(
@@ -202,6 +207,7 @@ const InvocationLayers = {
 					connector,
 					hostTools,
 					remotes,
+					syncCommit,
 					budget
 				)
 			)
@@ -269,9 +275,7 @@ const InvocationLayers = {
 			)
 		);
 		const notifications = Notifications.layer.pipe(
-			Layer.provide(
-				Layer.mergeAll(workspaceLayer, identity, database, communication, tasks)
-			)
+			Layer.provide(Layer.mergeAll(workspaceLayer, identity, database, communication, tasks))
 		);
 		const hostConfig = Layer.succeed(HostConfig, hostConfigShape);
 		return Layer.mergeAll(
@@ -299,6 +303,7 @@ const InvocationLayers = {
 			taskQueue,
 			hostTools,
 			transport,
+			syncCommit,
 			remotes,
 			authoredLayer,
 			hostConfig,
@@ -636,7 +641,24 @@ const BundleDispatch = {
 			environment: String(invocation.scope.environment),
 			tenantId: String(invocation.scope.tenantId)
 		};
-		const provided = dispatchInvocation(invocation).pipe(
+		const provided = Effect.gen(function* () {
+			const response = yield* dispatchInvocation(invocation);
+			const changes = [...(response.changes ?? [])];
+			const seen = new Set(changes.map(({ collection, recordId }) => `${collection}\0${recordId}`));
+			for (const change of yield* (yield* Collections.Service).drainChanges) {
+				const key = `${change.collection}\0${change.recordId}`;
+				if (seen.has(key)) continue;
+				seen.add(key);
+				changes.push(change);
+			}
+			for (const change of yield* (yield* SyncCommit.Service).drainChanges) {
+				const key = `${change.collection}\0${change.recordId}`;
+				if (seen.has(key)) continue;
+				seen.add(key);
+				changes.push(change);
+			}
+			return changes.length === 0 ? response : { ...response, changes };
+		}).pipe(
 			Effect.provide(
 				invocationLayer(
 					workspace,

@@ -14,6 +14,9 @@
 	import { cn } from '@norbital-ai/ui/utils';
 	import type { WorkspaceClient } from '#lib/client/ui/studio/workspace-client.js';
 	import { Button } from '@norbital-ai/ui/button';
+	import { CollectionTable } from '@norbital-ai/ui/collection-table';
+	import { FormattedValueRenderer } from '@norbital-ai/ui/data-renderer';
+	import AutomationProgressRenderer from './automation-progress.renderer.svelte';
 	import type {
 		EnvironmentVariable,
 		ManifestSection,
@@ -71,6 +74,14 @@
 		Schema.is(AutomationProgressValue)(value) ? value : undefined;
 	const automationRunTime = (value: string | null): string =>
 		value === null ? 'Unknown time' : new Date(value).toLocaleString();
+	const formatAutomationStatus = ({ value }: { value: unknown }): string =>
+		presentAutomationStatus(automationRunStatus(value)).label;
+	const formatAutomationProgress = ({ value }: { value: unknown }): string => {
+		const progress = automationProgress(value);
+		return progress === undefined
+			? 'Not reported'
+			: `${Math.round(progress.progress * 100)}%${progress.text === null ? '' : ` · ${progress.text}`}`;
+	};
 	onMount(() => {
 		browserReady = true;
 	});
@@ -108,20 +119,23 @@
 		);
 	};
 
-	const historyQueries = $derived(
+	const activeRunQueries = $derived(
 		browserReady && client !== undefined
 			? (manifest?.automations ?? []).map((automation) => ({
 					name: automation.name,
 					query: client.db.automation_run.findMany({
-						where: { name: { eq: automation.name } },
+						where: {
+							name: { eq: automation.name },
+							status: { in: ['pending', 'running'] }
+						},
 						orderBy: { created_at: 'desc' },
-						limit: 10
+						limit: 1
 					})
 				}))
 			: []
 	);
-	const historyQuery = (automation: string) =>
-		historyQueries.find(({ name }) => name === automation)?.query;
+	const activeRunQuery = (automation: string) =>
+		activeRunQueries.find(({ name }) => name === automation)?.query;
 	const automationLifecycle = (name: string, taskId: string): Effect.Effect<void> => {
 		const automation = automationState(name);
 		if (automation === undefined) {
@@ -349,7 +363,8 @@
 						{@const run = execution?.latest}
 						{@const latest = run?.current}
 						{@const latestStatus = presentAutomationStatus(latest?.status)}
-						{@const automationHistory = historyQuery(automation.name)}
+						{@const activeQuery = activeRunQuery(automation.name)}
+						{@const activeRun = activeQuery?.current?.[0]}
 						<Stack gap="sm" class="rounded-lg border border-border/60 bg-card p-4 shadow-card">
 							<Inline align="start" justify="between" gap="sm">
 								<Inline gap="sm" class="min-w-0">
@@ -379,10 +394,12 @@
 									<Button
 										size="sm"
 										variant="outline"
-										disabled={(execution?.pending ?? 0) > 0 || execution === undefined}
+										disabled={(execution?.pending ?? 0) > 0 ||
+											activeRun !== undefined ||
+											execution === undefined}
 										onclick={() => void Effect.runPromise(runAutomation(automation.name))}
 									>
-										{(execution?.pending ?? 0) > 0
+										{(execution?.pending ?? 0) > 0 || activeRun !== undefined
 											? 'Running…'
 											: latest?.status === 'failed'
 												? 'Retry'
@@ -437,76 +454,90 @@
 											variant="ghost"
 											aria-label={`Stop latest ${automation.name} run`}
 											onclick={() =>
-												void Effect.runPromise(
-													automationLifecycle(automation.name, run.id)
-												)}
+												void Effect.runPromise(automationLifecycle(automation.name, run.id))}
 										>
 											Stop
 										</Button>
 									{/if}
 								</Inline>
 							{/if}
-							{#if automationHistory?.error !== undefined}
+							{#if activeQuery?.error !== undefined}
 								<p class="text-micro text-destructive">
-									Run history unavailable: {automationHistory.error instanceof Error
-										? automationHistory.error.message
-										: String(automationHistory.error)}
+									Current scheduled run unavailable: {activeQuery.error instanceof Error
+										? activeQuery.error.message
+										: String(activeQuery.error)}
 								</p>
-							{:else if automationHistory?.current !== undefined}
-								{@const rows = automationHistory.current}
-								{#if rows.length === 0}
-									<p class="text-micro text-muted-foreground">
-										No runs recorded. This automation has not run on its schedule or by hand.
-									</p>
-								{:else}
-									<Stack gap="xs" class="border-t border-border/60 pt-2">
-										<p class="text-micro font-semibold text-muted-foreground">Recent runs</p>
-										{#each rows as row (row.task_id)}
-											{@const rowStatus = presentAutomationStatus(automationRunStatus(row.status))}
-											{@const progress = automationProgress(row.progress)}
-											<Inline gap="sm" align="center" class="min-w-0">
-												<span
-													class={cn(
-														'shrink-0 rounded-full px-1.5 py-0.5 text-micro font-semibold',
-														rowStatus.status === 'failed'
-															? 'bg-destructive/10 text-destructive'
-															: rowStatus.status === 'done'
-																? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
-																: 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
-													)}>{rowStatus.label}</span
-												>
-												<span class="shrink-0 text-micro text-muted-foreground">
-													{automationRunTime(row.created_at)}
-												</span>
-												{#if progress !== undefined}
-													<span class="min-w-0 truncate text-micro text-muted-foreground">
-														· {Math.round(progress.progress * 100)}%{progress.text === null
-															? ''
-															: ` · ${progress.text}`}
-													</span>
-												{/if}
-												{#if row.error}
-													<span class="min-w-0 truncate text-micro text-destructive"
-														>· {row.error}</span
-													>
-												{/if}
-												{#if rowStatus.canStop}
-													<Button
-														size="sm"
-														variant="ghost"
-														aria-label={`Stop ${automation.name} run from ${automationRunTime(row.created_at)}`}
-														onclick={() =>
-															void Effect.runPromise(
-																automationLifecycle(automation.name, row.task_id)
-															)}
-													>
-														Stop
-													</Button>
-												{/if}
-											</Inline>
-										{/each}
-									</Stack>
-								{/if}
+							{:else if activeRun !== undefined && activeRun.task_id !== run?.id}
+								{@const activeStatus = presentAutomationStatus(
+									automationRunStatus(activeRun.status)
+								)}
+								{@const activeProgress = automationProgress(activeRun.progress)}
+								<Inline
+									gap="sm"
+									align="center"
+									class="rounded-md bg-muted/45 px-2 py-1.5"
+									aria-live="polite"
+								>
+									<span class="text-micro font-semibold text-foreground">Current scheduled run</span
+									>
+									<span
+										class="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-micro font-semibold text-amber-700 dark:text-amber-300"
+									>
+										{activeStatus.label}
+									</span>
+									{#if activeProgress !== undefined}
+										<span class="min-w-0 truncate text-micro text-muted-foreground">
+											{formatAutomationProgress({ value: activeProgress })}
+										</span>
+									{/if}
+									<Button
+										size="sm"
+										variant="ghost"
+										aria-label={`Stop ${automation.name} run from ${automationRunTime(activeRun.created_at)}`}
+										onclick={() =>
+											void Effect.runPromise(
+												automationLifecycle(automation.name, activeRun.task_id)
+											)}
+									>
+										Stop
+									</Button>
+								</Inline>
+							{/if}
+							{#if client !== undefined}
+								<CollectionTable
+									{client}
+									collection="automation_run"
+									view={`studio:automation-runs:${automation.name}`}
+									title="Run history"
+									description={`Every scheduled and manual invocation of ${automation.name}.`}
+									features={{ create: false, search: false }}
+									query={{
+										where: { name: { eq: automation.name } },
+										orderBy: { created_at: 'desc' }
+									}}
+									bounded={false}
+									borderless
+									rootClass="border-t border-border/60 pt-2"
+								>
+									{#snippet columns({ Column })}
+										<Column name="name" label="Automation" card="title" />
+										<Column
+											name="status"
+											label="Status"
+											card="badge"
+											renderer={FormattedValueRenderer}
+											rendererProps={{ format: formatAutomationStatus }}
+										/>
+										<Column
+											name="progress"
+											label="Progress"
+											card="subtitle"
+											renderer={AutomationProgressRenderer}
+										/>
+										<Column name="progress_updated_at" label="Updated" />
+										<Column name="error" label="Error" />
+									{/snippet}
+								</CollectionTable>
 							{/if}
 						</Stack>
 					{/each}

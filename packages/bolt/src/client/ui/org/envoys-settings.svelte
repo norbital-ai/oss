@@ -93,9 +93,8 @@
 			)
 		)
 	);
-	// Kept beside the statuses rather than folded into them: an envoy whose status could not be read
-	// has no registration state at all, and a record that can hold both would let the page render a
-	// `registered: false` it never received.
+	// Kept beside the statuses rather than folded into them: a failed traffic query is not zero
+	// traffic, and storing both in one record would let the page render counters it never received.
 	const statusErrors = $derived(
 		Object.fromEntries(
 			statusQueries.flatMap(({ name, deadline, query }) =>
@@ -424,6 +423,11 @@
 			<p class="text-xs text-destructive" role="alert">{failure}</p>
 		{/if}
 
+		<p class="text-meta">
+			Pairing only links this envoy to its {envoy.transport} account. Sender registration happens later,
+			when an unknown person messages an authenticated envoy.
+		</p>
+
 		{#if connection?.error !== undefined}
 			<p class="text-xs text-destructive" role="alert">{connection.error}</p>
 		{/if}
@@ -517,24 +521,12 @@
 					{declared.audience === 'public'
 						? 'Public — anyone who can reach the transport.'
 						: declared.audience === 'authenticated'
-							? 'Authenticated — senders matched to a workspace account.'
+							? 'Authenticated — known senders are matched to a workspace identity; unknown senders receive a private 15-minute registration link.'
 							: declared.audience}
 				</dd>
 			</Stack>
 		</Grid>
-		<!--
-			Whether this envoy is connected is the *host's* answer, and it is the only one shown.
-
-			There used to be a second status here, taken from `envoys.status.registered`, and the two
-			would have contradicted each other on every card: that flag means "something once called
-			register", nothing ever does, so it read "Not registered" beside a live paired session.
-			Worse, the honest fix is not to start writing it — a connection is host state, and a marker
-			row in the tenant database recording that a socket was once up would be exactly the state
-			this design keeps out of the tenant, and would stay true after an unpair.
-
-			So the runtime is asked what only it knows — how much traffic this envoy carried — and the
-			host is asked what only it knows. Neither answers for the other.
-		-->
+		<!-- The runtime answers only for traffic; the host answers only for its live transport. -->
 		{@render pairingPanel(declared)}
 		{#if failure !== undefined}
 			<!-- The message is shown verbatim: an operator who sees a blank card concludes the envoy is
@@ -667,6 +659,10 @@
 						{connection.pairedAs === undefined
 							? 'The transport connection is open.'
 							: `Connected as ${connection.pairedAs}.`}
+					</p>
+					<p class="max-w-sm text-meta">
+						Pairing is complete. People register their own numbers only when they first message an
+						authenticated envoy.
 					</p>
 				</Stack>
 			{:else if connection?.state === 'error'}

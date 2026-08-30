@@ -38,6 +38,10 @@ const CONFIG = `import { defineConfig } from '${packageRoot}build/index.js';
 export default defineConfig({ semantic: { disabled: true }, packs: ['norbital'] });
 `;
 
+const REACTIVE_CONFIG = `import { defineConfig } from '${packageRoot}build/index.js';
+export default defineConfig({ semantic: { disabled: true }, packs: ['norbital/reactive'] });
+`;
+
 test('findConfig prefers .norbital/config/doctor over a root-level file', () => {
 	const root = repository('prefer-nested', {
 		'doctor.config.mts': CONFIG,
@@ -74,6 +78,22 @@ test('YAML beside the nested config joins without an explicit patterns glob', as
 			loaded.rules.some((rule) => rule.id === 'HOUSE1'),
 			true,
 			`expected HOUSE1 from ${DOCTOR_CONFIG_DIRECTORY}, got ${loaded.rules.map((rule) => rule.id).join(',')}`
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('loads the reactive product pack by name without a config-side package import', async () => {
+	const root = repository('named-reactive-pack', {
+		[`${DOCTOR_CONFIG_DIRECTORY}/doctor.config.mts`]: REACTIVE_CONFIG
+	});
+	try {
+		const loaded = await loadConfig(root);
+		assert.deepEqual(loaded.packs, ['norbital/reactive']);
+		assert.equal(
+			loaded.rules.some((rule) => rule.id.startsWith('REACT')),
+			true
 		);
 	} finally {
 		rmSync(root, { recursive: true, force: true });

@@ -40,8 +40,7 @@ const definition = workspace({
 			grants: {
 				assignments: {
 					read: { fields: ['id', 'title'] },
-					create: { fields: ['title'] },
-					update: { fields: ['title'] }
+					mutate: { new: { fields: ['title'] }, existing: { fields: ['title'] } }
 				}
 			}
 		})

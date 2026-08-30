@@ -94,8 +94,13 @@ A policy is `src/access/policies/+<name>.ts`. The filename is the only name. `gr
 keyed by collection; presence is the rule, absence is denial.
 
 - Read / history: `{ where?, fields?, dependencies? }`
-- Write: `{ fields?, authorize?, approval? }` — see [approvals](./approvals.md)
+- Mutate: `{ new?: { fields?, authorize?, approval? }, existing?: { fields?, authorize?, approval? } }`
+  — omit `new` to block new rows while allowing changes to existing rows; see
+  [approvals](./approvals.md)
 - Delete: `{ authorize?, approval? }`
+
+`mutate.new` and `mutate.existing` are the only mutation spellings. The former collection keys
+`create` and `update` are unknown and refused.
 
 `where` is normally the same structured field predicate used by collection reads. A relation scope
 that cannot be expressed structurally uses `policySql(statement)`, a policy-only serialized

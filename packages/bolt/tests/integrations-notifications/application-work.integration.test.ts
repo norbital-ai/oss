@@ -1,5 +1,5 @@
 import { Effect, Schema } from 'effect';
-import { and, count, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { SYSTEM_MODEL_TABLES } from '../../src/authoring/system-models.js';
 import { envoy, integration, policy, workspace } from '../../src/authoring/workspace-schema.js';
@@ -10,12 +10,11 @@ import {
 	Notification,
 	Service as NotificationsService
 } from '../../src/runtime/notifications/notifications.js';
-import { aliased, composer, executeBuilt, jsonTextEquals } from '../../src/runtime/persistence.js';
+import { composer, executeBuilt, jsonTextEquals } from '../../src/runtime/persistence.js';
 import { makeBoltTestRuntime } from '../support/bolt-test-layer.js';
 
 const {
 	bolt_audit: audit,
-	bolt_envoy_registrations: envoyRegistrations,
 	bolt_notifications: notifications,
 	bolt_sync_outbox: syncOutbox
 } = SYSTEM_MODEL_TABLES;
@@ -82,15 +81,16 @@ describe('Envoys, Integrations, and Notifications owners', () => {
 			})
 		).toThrow(/identity column/));
 	/**
-	 * The plan is the only thing that creates these two tables — no migration lineage and no
+	 * The plan is the only thing that creates these tables — no migration lineage and no
 	 * hand-written DDL anywhere else provisions them. Asserting the step ids is what makes a
 	 * regression visible as "the plan stopped planning it" rather than as a missing-relation error
 	 * from whichever query happened to run first.
 	 */
 	it('plans the envoy tables the envoy runtime reads and writes', () => {
 		const ids = buildSchemaPlan(envoyedWorkspace()).steps.map(({ id }) => id);
-		expect(ids).toContain('collection:bolt_envoy_registrations');
+		expect(ids).toContain('collection:bolt_channel_links');
 		expect(ids).toContain('collection:bolt_envoy_receipts');
+		expect(ids).toContain('collection:bolt_envoy_inbound');
 	});
 
 	/**
@@ -112,39 +112,20 @@ describe('Envoys, Integrations, and Notifications owners', () => {
 				);
 			expect(await status('status:before')).toEqual({
 				envoy: 'support',
-				registered: false,
 				received: 0,
 				replied: 0
 			});
-			// Twice, because `register` leans on `on conflict do nothing` for idempotency and that clause
-			// is a no-op unless `envoy_name` actually carries a unique constraint. A second row would
-			// not change `exists(...)`, so only counting rows can catch a registrations table planned
-			// without its primary key.
-			for (const attempt of ['register:first', 'register:second']) {
-				await harness.runtime.runPromise(
-					Effect.flatMap(Envoys.Service, (envoys) =>
-						envoys.register(harness.effectId(attempt), 'support')
-					)
-				);
-			}
+			await harness.database.query(
+				`insert into bolt_envoy_receipts
+				 (envoy_name, conversation_id, direction, receipt_key) values
+				 ('support', 'support:dm:one', 'inbound', 'inbound-1'),
+				 ('support', 'support:dm:one', 'outbound', 'outbound-1')`
+			);
 			expect(await status('status:after')).toEqual({
 				envoy: 'support',
-				registered: true,
-				received: 0,
-				replied: 0
+				received: 1,
+				replied: 1
 			});
-			const registrations = await harness.runtime.runPromise(
-				Effect.flatMap(Database.Service, (database) =>
-					executeBuilt(
-						harness.effectId('count'),
-						database,
-						composer
-							.select({ registrations: aliased(count(), 'registrations') })
-							.from(envoyRegistrations)
-					)
-				)
-			);
-			expect(registrations.rows[0]).toMatchObject({ registrations: 1 });
 		} finally {
 			await harness.dispose();
 		}

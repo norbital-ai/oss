@@ -64,6 +64,10 @@
 		CollectionTableRowActionContext
 	} from '#lib/collection-table/collection-table.types';
 	import { collectionTableColumnCanSort } from '#lib/collection-table/collection-table.types';
+	import {
+		collectionTablePageRows,
+		collectionTablePageWindow
+	} from './collection-table-pagination.js';
 
 	const COLUMN_WIDTH_BOUNDS: Readonly<Record<string, readonly [number, number]>> = {
 		boolean: [72, 112],
@@ -183,7 +187,6 @@
 	);
 	let registeredColumns: readonly ColumnConfig[] = $state([]);
 	let initialFitApplied = $state(false);
-	let cursors = $state<Array<string | undefined>>([undefined]);
 	const configuredColumns = new Map<object, ColumnConfig>();
 
 	// svelte-ignore state_referenced_locally
@@ -207,7 +210,7 @@
 	 * `TableAPI` used to hold a second copy of the search string and the page, and every narrowing
 	 * had to remember to call `resetToFirstPage()` before it took effect. The reset is a property of
 	 * the model, not a courtesy each handler pays it, so it lives in `CollectionQueryState` now and
-	 * the table only keeps what is genuinely its own: the cursor for each page it has visited.
+	 * the table consumes that one model directly.
 	 */
 	// svelte-ignore state_referenced_locally
 	const queryState = new CollectionQueryState<TRow>({
@@ -344,10 +347,8 @@
 	);
 
 	/**
-	 * Every cursor past the first belongs to the query that produced it. A new search, filter set,
-	 * page size or sort order makes the rest of the chain point into a result set that no longer
-	 * exists, so it is thrown away rather than re-walked. The page index resets itself inside the
-	 * query model; the cursor ledger is this surface's own bookkeeping.
+	 * Search, filters, and page-size changes reset themselves inside the query model. Sort is the
+	 * remaining narrowing owned by the table, so it resets the page here as well.
 	 */
 	watch(
 		// A signature, not the values: `orderBy` is rebuilt whenever the column registry settles, and
@@ -355,10 +356,10 @@
 		() =>
 			JSON.stringify([queryState.search, queryState.filters, queryState.pageSize, orderBy ?? null]),
 		() => {
-			cursors = [undefined];
 			queryState.setPageIndex(0);
 		}
 	);
+	const pageWindow = $derived(collectionTablePageWindow(queryState.pageIndex, queryState.pageSize));
 
 	const rowsQueryInput = $derived.by(() => {
 		if (disabled) return null;
@@ -372,8 +373,11 @@
 						? undefined
 						: { mode: 'lexical' as const, term: queryState.search },
 				orderBy: orderBy ?? defaultOrderBy,
-				limit: queryState.pageSize,
-				after: cursors[queryState.pageIndex]
+				// The first live answer intentionally has no cursor (§2.3). Ask for a growing live
+				// window and slice the visible page rather than labelling page one as a cursor page it
+				// is not; later pages stay live and no sequential cursor walk is hidden behind a click.
+				limit: pageWindow.limit,
+				after: undefined
 			},
 			filterOptions: queryState.queryOptions
 		};
@@ -383,20 +387,7 @@
 			? rowsQueryInput.operations.findMany(rowsQueryInput.query, rowsQueryInput.filterOptions)
 			: null
 	);
-	const pageRows = $derived(rowsQuery?.current);
-
-	/**
-	 * The cursor for the next page is learned as soon as this one loads, rather than at the moment
-	 * someone presses "next". The shared pagination bar moves the page index and knows nothing about
-	 * cursors — it should not have to.
-	 */
-	watch(
-		() => ({ pageIndex: queryState.pageIndex, cursor: rowsQuery?.nextCursor }),
-		({ pageIndex, cursor }) => {
-			if (cursor) cursors[pageIndex + 1] = cursor;
-		},
-		{ lazy: false }
-	);
+	const pageRows = $derived(collectionTablePageRows(rowsQuery?.current, pageWindow));
 
 	const countQueryInput = $derived.by(() => {
 		if (disabled) return null;
@@ -657,7 +648,6 @@
 	<CollectionPagination
 		query={queryState}
 		total={tableApi.totalRows}
-		hasNextPage={Boolean(rowsQuery?.nextCursor)}
 		{disabled}
 		selectedCount={effectiveSelectable ? selectedRecords.length : undefined}
 	/>
@@ -806,6 +796,10 @@
 	/* These classes are forwarded to child-component roots. They must be global:
 	   a scoped selector carries this component's Svelte hash, which those roots do
 	   not, and leaves both responsive variants painted on top of each other. */
+	:global(.collection-table-responsive) {
+		container-type: inline-size;
+	}
+
 	:global(.collection-table-narrow) {
 		display: none;
 	}

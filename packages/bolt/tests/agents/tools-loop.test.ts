@@ -10,6 +10,7 @@ import {
 	type FacilityBinding,
 	type FacilityBindings,
 	type Invocation,
+	type SyncChange,
 	type TaskRequest,
 	type TaskResponse
 } from '@norbital-ai/bolt-protocol';
@@ -314,7 +315,10 @@ describe('Bolt agent tool loop', () => {
 				turns += 1;
 				const output: AIResponse['output'] =
 					turns === 1
-						? { toolCalls: [{ name: 'describe_workspace', input: {} }] }
+						? {
+								reasoning: 'I should inspect the workspace before answering.',
+								toolCalls: [{ name: 'describe_workspace', input: {} }]
+							}
 						: { text: 'Workspace has employees' };
 				return Promise.resolve({ _tag: 'Success', value: { output } });
 			}
@@ -335,11 +339,18 @@ describe('Bolt agent tool loop', () => {
 			call: () => Promise.resolve({ _tag: 'Success', value: {} })
 		};
 		const hostCalls: Array<string> = [];
+		const liveCommits: Array<ReadonlyArray<SyncChange>> = [];
 		const facilities: FacilityBindings = {
 			scope,
 			database,
 			ai,
 			tasks,
+			syncCommit: {
+				call: (_metadata, request) => {
+					liveCommits.push(request.changes);
+					return Promise.resolve({ _tag: 'Success', value: { accepted: true } });
+				}
+			},
 			hostTools: {
 				call: (_metadata, request) => {
 					hostCalls.push(request.tool);
@@ -383,10 +394,14 @@ describe('Bolt agent tool loop', () => {
 		const finalTurn = rewrites.at(-1);
 		expect(finalTurn).toMatchObject({ status: 'completed' });
 		if (finalTurn === undefined) throw new Error('expected a completed persisted turn');
-		const firstPart = finalTurn.parts[0];
-		if (firstPart === undefined)
+		const firstCall = finalTurn.parts.find((part) => part.kind === 'tool');
+		if (firstCall === undefined)
 			throw new Error('expected the persisted turn to contain a tool call');
 		expect(finalTurn.parts).toEqual([
+			{
+				kind: 'reasoning',
+				text: 'I should inspect the workspace before answering.'
+			},
 			{
 				kind: 'tool',
 				id: expect.any(String),
@@ -395,14 +410,95 @@ describe('Bolt agent tool loop', () => {
 			},
 			{
 				kind: 'tool-result',
-				id: firstPart.id,
+				id: firstCall.id,
 				name: 'describe_workspace',
 				output: expect.anything()
 			},
 			{ kind: 'text', text: 'Workspace has employees' }
 		]);
 		// The turn grows a part at a time rather than arriving whole, which is what lets a reader watch it.
-		expect(rewrites.map((turn) => turn.parts.length)).toEqual([0, 1, 2, 3, 3]);
+		expect(rewrites.map((turn) => turn.parts.length)).toEqual([0, 1, 2, 3, 4, 4]);
+		// Each durable semantic checkpoint reaches the host while this invocation is still running.
+		expect(liveCommits).toHaveLength(6);
+		expect(liveCommits).toEqual(
+			liveCommits.map(() => [
+				{
+					collection: 'chat_message',
+					recordId: 'agent-tools:turn:message',
+					routing: [{ field: 'conversation_id', value: 'conversation-tools' }]
+				}
+			])
+		);
+	});
+
+	it('returns agent collection commits for host live-query fan-out', async () => {
+		let turns = 0;
+		const ai: FacilityBinding<AIRequest, AIResponse> = {
+			call: (_metadata, request) => {
+				if (request._tag === 'Models') return modelCatalogResponse();
+				turns += 1;
+				return Promise.resolve({
+					_tag: 'Success',
+					value: {
+						output:
+							turns === 1
+								? {
+										toolCalls: [
+											{
+												name: 'write_collection',
+												input: {
+													operation: 'create',
+													collection: 'employees',
+													id: 'employee-1',
+													values: { name: 'Dion' }
+												}
+											}
+										]
+									}
+								: { text: 'Employee created.' }
+					}
+				});
+			}
+		};
+		const result = await bundle.dispatch(
+			{
+				_tag: 'Command',
+				protocolVersion: PROTOCOL_VERSION,
+				id: InvocationId.make('agent-write'),
+				scope,
+				deadlineEpochMs: Date.now() + 10_000,
+				command: 'agents.enqueue',
+				input: {
+					agent: 'web',
+					conversationId: 'conversation-write',
+					turnId: 'agent-write:turn',
+					message: 'Create the employee'
+				},
+				headers: { authorization: ['Bearer test-session'] }
+			},
+			{
+				scope,
+				database: sessionDatabase,
+				ai,
+				tasks: { call: () => Promise.resolve({ _tag: 'Success', value: {} }) }
+			},
+			new AbortController().signal
+		);
+
+		expect(result).toMatchObject({
+			_tag: 'Success',
+			response: {
+				value: { conversationId: 'conversation-write', status: 'completed' },
+				changes: expect.arrayContaining([
+					{ collection: 'employees', recordId: 'employee-1' },
+					{
+						collection: 'chat_message',
+						recordId: 'agent-write:turn:message',
+						routing: [{ field: 'conversation_id', value: 'conversation-write' }]
+					}
+				])
+			}
+		});
 	});
 
 	it('keeps one invocation alive beyond the former eight-round ceiling', async () => {

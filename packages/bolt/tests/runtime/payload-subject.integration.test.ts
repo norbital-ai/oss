@@ -147,9 +147,7 @@ const SUBJECT_COMMANDS: ReadonlyArray<string> = [
  * This takes no `Subject`, but a `Command` mints its `tenantId` from the authenticated one all the
  * same.
  */
-const IDENTITY_FIELD_COMMANDS: ReadonlyArray<string> = [
-	'identity.workspaceAccess'
-];
+const IDENTITY_FIELD_COMMANDS: ReadonlyArray<string> = ['identity.workspaceAccess'];
 
 const vaultWorkspace = workspace({
 	name: 'test-workspace',
@@ -195,8 +193,8 @@ const gatedWorkspace = workspace({
 			grants: {
 				people: {
 					read: {},
-					create: {
-						approval: { flow: () => approveBy('approvers'), superceded_by: [] }
+					mutate: {
+						new: { approval: { flow: () => approveBy('approvers'), superceded_by: [] } }
 					}
 				}
 			}

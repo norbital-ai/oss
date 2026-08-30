@@ -15,11 +15,13 @@ export type PolicyRuntimeFunctions = Readonly<{
 
 const functionsByPolicy = new WeakMap<PolicyDeclaration, PolicyRuntimeFunctions>();
 
-const ACTIONS = ['read', 'history', 'create', 'update', 'delete'] as const;
-type PolicyAction = (typeof ACTIONS)[number];
+/** Runtime actions remain flat after the authored mutation branches have been compiled. */
+const RUNTIME_ACTIONS = ['read', 'history', 'create', 'update', 'delete'] as const;
+type PolicyAction = (typeof RUNTIME_ACTIONS)[number];
 const READ_ACTIONS = new Set<PolicyAction>(['read', 'history']);
 const POLICY_KEYS = new Set(['description', 'grants', 'capabilities', 'limits']);
-const ACTION_KEYS = new Set<string>(ACTIONS);
+const COLLECTION_GRANT_KEYS = new Set(['read', 'history', 'mutate', 'delete']);
+const MUTATE_KEYS = new Set(['new', 'existing']);
 const READ_GRANT_KEYS = new Set(['where', 'fields', 'dependencies']);
 const DELETE_GRANT_KEYS = new Set(['authorize', 'approval']);
 const WRITE_GRANT_KEYS = new Set(['fields', 'authorize', 'approval']);
@@ -36,8 +38,12 @@ const AuthoredActionGrant = Schema.Struct({
 const AuthoredCollectionGrants = Schema.Struct({
 	read: Schema.optionalKey(AuthoredActionGrant),
 	history: Schema.optionalKey(AuthoredActionGrant),
-	create: Schema.optionalKey(AuthoredActionGrant),
-	update: Schema.optionalKey(AuthoredActionGrant),
+	mutate: Schema.optionalKey(
+		Schema.Struct({
+			new: Schema.optionalKey(AuthoredActionGrant),
+			existing: Schema.optionalKey(AuthoredActionGrant)
+		})
+	),
 	delete: Schema.optionalKey(AuthoredActionGrant)
 });
 const PolicyCapabilities = Schema.Struct({
@@ -177,18 +183,18 @@ const validateGrantWhere = (grant: Record<string, unknown>, location: string): v
 const validateGrantShape = (
 	name: string,
 	collection: string,
-	action: string,
+	action: PolicyAction,
+	authoredCoordinate: string,
 	grant: unknown
 ): void => {
-	const typedAction = action as PolicyAction;
-	const location = `Policy ${name}.grants.${collection}.${action}`;
-	requireExactKeys(grant, grantKeys(typedAction), location);
+	const location = `Policy ${name}.grants.${collection}.${authoredCoordinate}`;
+	requireExactKeys(grant, grantKeys(action), location);
 	const authorize = Reflect.get(grant, 'authorize');
 	if (authorize !== undefined && typeof authorize !== 'function') {
 		throw new TypeError(`${location}.authorize must be a function.`);
 	}
 	validateGrantFields(grant, location);
-	if (READ_ACTIONS.has(typedAction)) {
+	if (READ_ACTIONS.has(action)) {
 		validateGrantDependencies(grant, location);
 		validateGrantWhere(grant, location);
 	}
@@ -201,16 +207,33 @@ const validatePolicyShape = (name: string, declaration: unknown): void => {
 	const grantsDecoded = Schema.decodeUnknownResult(jsonObject)(grants);
 	if (Result.isFailure(grantsDecoded)) {
 		throw new TypeError(
-			`Policy ${name}.grants must be a collection/action object. Grant arrays are not supported.`
+			`Policy ${name}.grants must be a collection grant object. Grant arrays are not supported.`
 		);
 	}
 	const grantMap: Record<string, unknown> = Result.isSuccess(grantsDecoded)
 		? Result.match(grantsDecoded, { onSuccess: (object) => object, onFailure: () => EMPTY_RECORD })
 		: EMPTY_RECORD;
 	for (const [collection, collectionGrants] of Object.entries(grantMap)) {
-		requireExactKeys(collectionGrants, ACTION_KEYS, `Policy ${name}.grants.${collection}`);
-		for (const [action, grant] of Object.entries(collectionGrants)) {
-			validateGrantShape(name, collection, action, grant);
+		requireExactKeys(
+			collectionGrants,
+			COLLECTION_GRANT_KEYS,
+			`Policy ${name}.grants.${collection}`
+		);
+		for (const [coordinate, grant] of Object.entries(collectionGrants)) {
+			if (coordinate !== 'mutate') {
+				validateGrantShape(name, collection, coordinate as PolicyAction, coordinate, grant);
+				continue;
+			}
+			requireExactKeys(grant, MUTATE_KEYS, `Policy ${name}.grants.${collection}.mutate`);
+			for (const [target, targetGrant] of Object.entries(grant)) {
+				validateGrantShape(
+					name,
+					collection,
+					target === 'new' ? 'create' : 'update',
+					`mutate.${target}`,
+					targetGrant
+				);
+			}
 		}
 	}
 };
@@ -291,14 +314,22 @@ export const describePolicy = (name: string, declaration: unknown): PolicyDeclar
 	const approvalFlows = new Map<string, PolicyRuntimeFunction>();
 	const described = Object.keys(grants)
 		.sort()
-		.flatMap((collection) =>
-			ACTIONS.flatMap((action) => {
-				const grant = grants[collection]?.[action];
+		.flatMap((collection) => {
+			const collectionGrants = grants[collection];
+			const authoredByRuntimeAction = {
+				read: collectionGrants?.read,
+				history: collectionGrants?.history,
+				create: collectionGrants?.mutate?.new,
+				update: collectionGrants?.mutate?.existing,
+				delete: collectionGrants?.delete
+			};
+			return RUNTIME_ACTIONS.flatMap((action) => {
+				const grant = authoredByRuntimeAction[action];
 				return grant === undefined
 					? []
 					: [describeGrant(name, collection, action, grant, authorizations, approvalFlows)];
-			})
-		);
+			});
+		});
 	const policy = Object.freeze({
 		name,
 		description,

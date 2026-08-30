@@ -16,7 +16,7 @@ import * as TenantScope from '#lib/runtime/tenant.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { changelogSince } from './changelog.js';
 import { advanceSubscription } from './delta-engine.js';
-import { contentDigest, heldIdsOf } from './digest.js';
+import { contentDigest, heldCoordinatesOf, heldIdsOf } from './digest.js';
 import { describeSyncQuery, resolveSyncQuery } from './resolver.js';
 
 class SyncInputError extends Schema.TaggedError<SyncInputError>()('Bolt.Sync.InputError', {
@@ -87,7 +87,8 @@ export const layer = Layer.effect(
 					const canSkip =
 						!moved.truncated &&
 						query.digest !== undefined &&
-						(query.digestOnly === true || query.heldIds !== undefined) &&
+						(query.digestOnly === true ||
+							(query.heldIds !== undefined && query.heldCoordinates !== undefined)) &&
 						!described.dependencies.some((collection) => changedCollections.has(collection));
 					if (canSkip) {
 						return {
@@ -97,7 +98,9 @@ export const layer = Layer.effect(
 							policyHash: described.policyHash,
 							dependencies: described.dependencies,
 							policyDependencies: described.policyDependencies,
+							routing: described.routing,
 							heldIds: query.digestOnly === true ? [] : (query.heldIds ?? []),
+							heldCoordinates: query.digestOnly === true ? [] : (query.heldCoordinates ?? []),
 							digestOnly: query.digestOnly === true,
 							digest: query.digest as string,
 							changed: false as const
@@ -109,6 +112,7 @@ export const layer = Layer.effect(
 						query.input
 					);
 					const resolvedIds = heldIdsOf(answer);
+					const heldCoordinates = heldCoordinatesOf(answer, query.input);
 					const digestOnly = resolvedIds.length > MAX_SYNC_HELD_IDS;
 					const digest = yield* Effect.promise(() => contentDigest(answer));
 					const registration = {
@@ -118,7 +122,9 @@ export const layer = Layer.effect(
 						policyHash: described.policyHash,
 						dependencies: described.dependencies,
 						policyDependencies: described.policyDependencies,
+						routing: described.routing,
 						heldIds: digestOnly ? [] : resolvedIds,
+						heldCoordinates: digestOnly ? [] : heldCoordinates,
 						digestOnly,
 						digest
 					};
@@ -175,10 +181,11 @@ export const layer = Layer.effect(
 					return yield* admitted.failure;
 				}
 				const evaluated = yield* Effect.result(
-					advanceSubscription(EffectId.make(`${effectId}:subscription:${index}`), {
-						state,
-						subject: admitted.success.subject
-					})
+					advanceSubscription(
+						EffectId.make(`${effectId}:subscription:${index}`),
+						{ state, subject: admitted.success.subject },
+						request.changes
+					)
 				);
 				if (Result.isFailure(evaluated)) {
 					if (evaluated.failure instanceof AccessControl.AccessDenied) {

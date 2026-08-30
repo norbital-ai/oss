@@ -27,9 +27,11 @@ const refusedWriteWhere = () => {
 		description: 'A write cannot acquire a SQL where escape.',
 		grants: {
 			articles: {
-				create: {
-					// @ts-expect-error policySql is limited to read and history grants
-					where: policySql('true')
+				mutate: {
+					new: {
+						// @ts-expect-error policySql is limited to read and history grants
+						where: policySql('true')
+					}
 				}
 			}
 		}
@@ -83,5 +85,40 @@ describe('policySql', () => {
 
 	it('keeps the write-only type refusal in the compilation corpus', () => {
 		expect(typeof refusedWriteWhere).toBe('function');
+	});
+
+	it('flattens the two authored mutation branches to runtime actions', () => {
+		const described = describePolicy('article-mutator', {
+			description: 'New and existing rows have independent authority.',
+			grants: {
+				articles: { mutate: { new: { fields: ['owner_id'] }, existing: {} } }
+			}
+		});
+		expect(described.grants).toEqual([
+			expect.objectContaining({ collection: 'articles', action: 'create', fields: ['owner_id'] }),
+			expect.objectContaining({ collection: 'articles', action: 'update' })
+		]);
+		const existingOnly = describePolicy('article-editor', {
+			description: 'Existing rows may change, but no new row may be added.',
+			grants: { articles: { mutate: { existing: {} } } }
+		});
+		expect(existingOnly.actions).toEqual(['update']);
+	});
+
+	it('hard-refuses the removed create and update collection grant keys', () => {
+		for (const removed of ['create', 'update']) {
+			expect(() =>
+				describePolicy('removed-write-key', {
+					description: 'Removed policy authoring key.',
+					grants: { articles: { [removed]: {} } }
+				})
+			).toThrow(new RegExp(`unsupported ${removed} key`, 'u'));
+			expect(() =>
+				describePolicy('removed-mutation-branch', {
+					description: 'Removed mutation branch.',
+					grants: { articles: { mutate: { [removed]: {} } } }
+				})
+			).toThrow(new RegExp(`unsupported ${removed} key`, 'u'));
+		}
 	});
 });

@@ -26,32 +26,30 @@ const exactResourceNames = (values) =>
 
 const exactInstances = (values, root) =>
 	Array.isArray(values) &&
-	values.every(
-		(value) => {
-			if (
-				value === null ||
-				typeof value !== 'object' ||
-				!microsandboxResourcePattern.test(String(value.name ?? '')) ||
-				typeof value.workspace !== 'string' ||
-				!path.isAbsolute(value.workspace) ||
-				canonicalPath(value.workspace) !== value.workspace
-			) {
-				return false;
-			}
-			const relative = path.relative(path.join(root, 'tenants'), value.workspace);
-			const parts = relative.split(path.sep);
-			return (
-				!relative.startsWith('..') &&
-				!path.isAbsolute(relative) &&
-				parts.length === 5 &&
-				parts[0]?.length > 0 &&
-				parts[1] === 'repositories' &&
-				parts[2]?.length > 0 &&
-				parts[3] === 'worktrees' &&
-				parts[4]?.length > 0
-			);
+	values.every((value) => {
+		if (
+			value === null ||
+			typeof value !== 'object' ||
+			!microsandboxResourcePattern.test(String(value.name ?? '')) ||
+			typeof value.workspace !== 'string' ||
+			!path.isAbsolute(value.workspace) ||
+			canonicalPath(value.workspace) !== value.workspace
+		) {
+			return false;
 		}
-	) &&
+		const relative = path.relative(path.join(root, 'tenants'), value.workspace);
+		const parts = relative.split(path.sep);
+		return (
+			!relative.startsWith('..') &&
+			!path.isAbsolute(relative) &&
+			parts.length === 5 &&
+			parts[0]?.length > 0 &&
+			parts[1] === 'repositories' &&
+			parts[2]?.length > 0 &&
+			parts[3] === 'worktrees' &&
+			parts[4]?.length > 0
+		);
+	}) &&
 	new Set(values.map((value) => value.name)).size === values.length;
 
 const canonicalPath = (input) => {
@@ -112,6 +110,8 @@ export const tenantSubstratePackagePaths = (root) => {
 	const paths = {
 		pnpmStore: path.join(root, 'packages/pnpm-store'),
 		pnpmCache: path.join(root, 'packages/pnpm-cache'),
+		hostPnpmStore: path.join(root, 'packages/host-pnpm-store'),
+		hostPnpmCache: path.join(root, 'packages/host-pnpm-cache'),
 		yalcStore: path.join(root, 'packages/local/yalc')
 	};
 	for (const [name, candidate] of Object.entries(paths)) {
@@ -236,11 +236,22 @@ export const ensurePureInstallation = ({
 	run,
 	force = false
 }) => {
+	const linkedPackageManifest = (name) =>
+		path.join(consumerDirectory, '.yalc', ...name.split('/'), 'package.json');
+	const outdated = names.filter((name) => {
+		const linked = readJsonIfPresent(linkedPackageManifest(name));
+		const version = linked?.version;
+		if (typeof version !== 'string') return false;
+		const stored = manifestSignature(
+			path.join(yalcStoreDirectory, 'packages', ...name.split('/'), version, 'package.json')
+		);
+		return stored !== undefined && stored !== linked?.[signatureField];
+	});
 	// A stamped signature on leftover `.yalc` files is not proof the store was copied.
 	// `yalc add --pure` skips the copy when it already sees that stamp, so `--force`
-	// must delete the leftover tree first or a rebuilt store never reaches the consumer.
-	if (force) {
-		for (const name of names) {
+	// and a newer store build must delete the leftover tree before re-adding it.
+	if (force || outdated.length > 0) {
+		for (const name of force ? names : outdated) {
 			rmSync(path.join(consumerDirectory, '.yalc', ...name.split('/')), {
 				recursive: true,
 				force: true
@@ -261,7 +272,7 @@ export const ensurePureInstallation = ({
 		// Plain add records the replaced registry pin; the pure pass then yields ownership to pnpm.
 		run(yalcBin, withYalcStore(yalcStoreDirectory, ['add', ...unlinked]), consumerDirectory);
 	}
-	const prepared = [...new Set([...unlinked, ...impure, ...(force ? names : [])])];
+	const prepared = [...new Set([...unlinked, ...impure, ...outdated, ...(force ? names : [])])];
 	if (prepared.length > 0)
 		run(
 			yalcBin,

@@ -26,11 +26,10 @@
 	 * no single answer, and hanging it under an agent asserted one. They are listed as what they are:
 	 * what this workspace authored, granted elsewhere.
 	 *
-	 * The connection column is the honest one, and the honesty rule is kept verbatim. `envoys.status`
-	 * is the only thing the runtime will say about an envoy, and `registered` in it means "someone
-	 * called `envoys.register`", not "the transport is up". So a registered envoy is reported as
-	 * registered and never as connected, and the note under the list says what was not checked
-	 * rather than leaving a green dot to imply it was.
+	 * The status column is the honest one, and the honesty rule is kept verbatim. `envoys.status`
+	 * reports traffic receipts; it says nothing about the host's transport connection and nothing
+	 * about which sender addresses are linked to identities. The chip therefore describes the read,
+	 * while the note under the list says what was not checked.
 	 */
 	let {
 		envoys = [],
@@ -81,9 +80,7 @@
 				? 'bg-destructive/10 text-destructive'
 				: status === undefined
 					? 'bg-muted text-muted-foreground'
-					: status.registered
-						? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-						: 'bg-muted text-muted-foreground'
+					: 'bg-primary/10 text-primary'
 		)}
 		data-testid="studio-envoy-connection"
 		data-envoy={envoy}
@@ -95,9 +92,7 @@
 				? query?.loading
 					? 'Reading…'
 					: 'Not read'
-				: status.registered
-					? 'Registered'
-					: 'Never registered'}
+				: 'Traffic read'}
 	</span>
 {/snippet}
 
@@ -116,7 +111,8 @@
 		</Inline>
 		<p class="max-w-xl text-xs leading-relaxed text-muted-foreground">
 			An agent this workspace exposes on a transport, with its own identity and its own declared
-			policies. What it may do is those policies; this page is where it is reached.
+			policies. Pairing connects the transport; sender registration is a separate, per-person proof
+			of a messaging address.
 		</p>
 
 		{#if envoys.length === 0}

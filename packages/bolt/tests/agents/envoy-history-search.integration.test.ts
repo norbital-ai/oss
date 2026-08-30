@@ -88,4 +88,54 @@ describe('envoy history search scope', () => {
 		})) as { readonly messages: ReadonlyArray<{ readonly content: string }> };
 		expect(next.messages[0]?.content).toContain('first marker');
 	});
+
+	it('lets the web agent search its complete conversation, including a queued follow-up', async () => {
+		harness = await makeBoltTestRuntime();
+		await harness.database.query(
+			`insert into chat_session
+				(conversation_id, agent_name, user_id, sandbox_key, visibility)
+			 values ('web-history', 'web', $1, 'person:admin-1', 'personal')`,
+			[adminSubject.userId]
+		);
+		await harness.database.query(
+			`insert into chat_message (conversation_id, turn_id, role, content, created_at) values
+			 ('web-history', 'old', 'user', $1::jsonb, '2026-08-01T10:00:00.000Z'),
+			 ('web-history', 'queued', 'user', $2::jsonb, '2026-08-31T10:00:00.000Z'),
+			 ('web-history', 'queued', 'assistant', $3::jsonb, '2026-08-31T10:00:00.001Z')`,
+			[
+				JSON.stringify({ kind: 'user_message', text: 'older searchable marker' }),
+				JSON.stringify({ kind: 'user_message', text: 'incoming queued marker' }),
+				JSON.stringify({ id: 'queued', status: 'queued', parts: [] })
+			]
+		);
+
+		const result = await harness.runtime.runPromise(
+			Effect.gen(function* () {
+				const database = yield* Database.Service;
+				const workspace = yield* Workspace.Service;
+				const collections = yield* Collections.Service;
+				const hostTools = yield* HostTools.Service;
+				return yield* executePlatformTool(
+					'search_envoy_history',
+					{ limit: 50 },
+					{
+						effectId: harness!.effectId('search:web'),
+						subject: adminSubject,
+						agentName: 'web',
+						conversationId: 'web-history',
+						database,
+						envoyWideHistory: false,
+						skills: [],
+						toolNames: ['search_envoy_history'],
+						collectionNames: [],
+						workspace,
+						collections,
+						hostTools
+					}
+				);
+			})
+		);
+		expect(JSON.stringify(result)).toContain('older searchable marker');
+		expect(JSON.stringify(result)).toContain('incoming queued marker');
+	});
 });

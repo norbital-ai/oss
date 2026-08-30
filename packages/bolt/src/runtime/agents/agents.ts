@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref, Schema } from 'effect';
+import { Context, Effect, Layer, Option, Ref, Schema } from 'effect';
 import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
 import {
 	addAIUsage,
@@ -7,14 +7,16 @@ import {
 	readAIUsage,
 	type AgentEnqueueResult,
 	type ChatDocumentRef,
-	type EffectId as EffectIdType
+	type DatabaseResponse,
+	type EffectId as EffectIdType,
+	type SyncChange
 } from '@norbital-ai/bolt-protocol';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
 import { PendingApproval } from '#lib/runtime/collections/collections.js';
-import { AI, Connector, HostTools, Tasks } from '#lib/runtime/facilities/services.js';
+import { AI, Connector, HostTools, SyncCommit, Tasks } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import {
 	aliased,
@@ -51,18 +53,7 @@ import {
 } from './turn.js';
 export { TurnPart, type TurnSurface } from './turn.js';
 
-/**
- * The agent one turn runs as: the web agent, or one envoy.
- *
- * There is no declaration behind either. The web agent is defined entirely by *who is using it* —
- * it runs as the signed-in person, so their policies decide its tools, its collections and its
- * limits — and an envoy adds exactly one thing a policy cannot state, which is what it is for.
- *
- * `src/+agent.ts` used to sit here, carrying `tools`, `mcpServers`, `denyTools`, `hostTools`,
- * `collections`, `access`, `model` and `maxTokens`. Every one of those either duplicated a policy or
- * was a host default, and while it existed two people in one workspace were offered the same tools
- * however differently they were authorised.
- */
+/** The web agent or declared envoy executing a turn. */
 type ResolvedAgent = Readonly<{
 	readonly name: string;
 	/** The envoy's standing instruction, absent for the web agent. */
@@ -73,14 +64,7 @@ type ResolvedAgent = Readonly<{
 	readonly delegation: 'enabled' | 'disabled';
 }>;
 
-/**
- * Which sandbox this turn works in — the tenant plane's counterpart to §10's personal plane.
- *
- * A person gets one tree, keyed by who they are. An envoy gets exactly one tree, keyed by the
- * principal its declaration mints. Documents are not stored in that tree: every document belongs to
- * a chat session through `chat_document`, so sharing delegated-agent state across an envoy cannot
- * share anything a sender uploaded.
- */
+/** Selects the subject-owned or envoy-owned sandbox tree for a turn. */
 const sandboxKeyFor = (
 	subject: Identity.Subject,
 	agent: ResolvedAgent,
@@ -224,14 +208,7 @@ const StoredConversationRow = Schema.Struct({
 const MessageRow = Schema.Struct({
 	role: Schema.String,
 	content: Schema.Json,
-	/**
-	 * The turn this row belongs to, or nothing for a row no turn produced.
-	 *
-	 * A delegated session's rows come back inside its parent's history, so the reader's projection
-	 * needs to know which call's transcript each row belongs to. Ordering cannot answer that: a
-	 * subagent writes while its parent is suspended, so its rows sit in the middle of the parent's
-	 * sequence and read as messages the person sent.
-	 */
+	/** The producing turn, when the row belongs to one. */
 	turn_id: Schema.optionalKey(NullableString)
 });
 
@@ -261,11 +238,41 @@ const ConversationLinkRow = Schema.Struct({
 const decodeConversationLinkRow = Schema.decodeUnknownOption(ConversationLinkRow);
 const TaskIdRow = Schema.Struct({ task_id: Schema.NonEmptyString });
 const decodeTaskIdRow = Schema.decodeUnknownOption(TaskIdRow);
-const RecoveryCountRow = Schema.Struct({
-	recovered: Schema.Union([Schema.Number, Schema.String])
+const QueuedInputRow = Schema.Struct({
+	id: Schema.NonEmptyString,
+	turn_id: Schema.NonEmptyString,
+	content: Schema.Json
 });
-const decodeRecoveryCountRow = Schema.decodeUnknownOption(RecoveryCountRow);
-
+const decodeQueuedInputRow = Schema.decodeUnknownOption(QueuedInputRow);
+const CommittedChatRow = Schema.Struct({
+	collection: Schema.Literals(['chat_session', 'chat_message']),
+	record_id: Schema.NonEmptyString
+});
+const decodeCommittedChatRow = Schema.decodeUnknownOption(CommittedChatRow);
+const CommittedIdRow = Schema.Struct({ id: Schema.NonEmptyString });
+const decodeCommittedIdRow = Schema.decodeUnknownOption(CommittedIdRow);
+const committedChatChanges = (
+	rows: ReadonlyArray<unknown>,
+	conversationId: string
+): ReadonlyArray<SyncChange> =>
+	rows.flatMap((row) => {
+		const coordinate = decodeCommittedChatRow(row).pipe(
+			Option.map(({ collection, record_id }) => ({ collection, recordId: record_id })),
+			Option.orElse(() =>
+				decodeCommittedIdRow(row).pipe(
+					Option.map(({ id }) => ({ collection: 'chat_message' as const, recordId: id }))
+				)
+			)
+		);
+		return coordinate._tag === 'Some'
+			? [
+					{
+						...coordinate.value,
+						routing: [{ field: 'conversation_id', value: conversationId }]
+					} satisfies SyncChange
+				]
+			: [];
+	});
 export type AgentExecutionError =
 	| Workspace.WorkspaceLookupError
 	| AccessControl.AccessDenied
@@ -281,6 +288,9 @@ export type AgentExecutionError =
 	| ChatDocuments.ChatDocumentError
 	| InvocationBudget.NestingLimitExceeded
 	| AgentModelUnavailable;
+
+/** Runtime-internal enqueue outcome; dispatch exposes only the lane receipt fields. */
+export type AgentEnqueueOutcome = AgentEnqueueResult & Readonly<{ readonly output?: Schema.Json }>;
 
 export type Interface = Readonly<{
 	/** Host startup hook. Conductor calls this once for each loaded environment after a restart. */
@@ -303,28 +313,17 @@ export type Interface = Readonly<{
 		conversationId: string,
 		turnId: string,
 		message: StoredChatInput,
-		model?: string
-	) => Effect.Effect<AgentEnqueueResult, AgentExecutionError>;
+		model?: string,
+		surface?: TurnSurface
+	) => Effect.Effect<AgentEnqueueOutcome, AgentExecutionError>;
 	/** Executes one already-persisted exact turn. */
 	readonly execute: (
 		effectId: EffectIdType,
 		conversationId: string,
 		turnId: string,
-		/**
-		 * The transport surface the turn reflects into, when a transport is watching one. Its
-		 * `observe` is called with the parts after each durable commit — presentation and pacing
-		 * belong to the surface, never to this service. Absent, the web agent's turns: the chat
-		 * itself is the surface.
-		 */
+		/** Optional transport notified after each durable part commit. */
 		surface?: TurnSurface
-	) => Effect.Effect<
-		TurnResultValue,
-		AgentExecutionError
-		// A turn runs authored code — its tools reach collections and remotes — so a business rule
-		// can refuse it, and a delegated turn can be stopped by the nesting bound. Both were
-		// reaching this boundary already; only the declaration did not say so, which is how a
-		// refusal here left as something a caller could not name.
-	>;
+	) => Effect.Effect<TurnResultValue, AgentExecutionError>;
 	readonly attachFile: (
 		effectId: EffectIdType,
 		subject: Identity.Subject,
@@ -357,6 +356,11 @@ export type Interface = Readonly<{
 		subject: Identity.Subject,
 		conversationId: string
 	) => Effect.Effect<void, AgentExecutionError>;
+	/** Whether this conversation currently has an invocation between admission and settlement. */
+	readonly running: (
+		effectId: EffectIdType,
+		conversationId: string
+	) => Effect.Effect<boolean, Database.FacilityError>;
 	readonly stop: (
 		effectId: EffectIdType,
 		subject: Identity.Subject,
@@ -372,12 +376,7 @@ export type Interface = Readonly<{
 		conversationId: string,
 		verifier: Schema.Json
 	) => Effect.Effect<void, Database.FacilityError>;
-	/**
-	 * The skills this subject may load — its policies', not an agent declaration's.
-	 *
-	 * It takes a subject rather than an agent name because a skill is capability: two people on the
-	 * same web agent are offered different skills, and asking by agent name could not express that.
-	 */
+	/** Skills are subject capabilities, so callers cannot resolve them by agent name. */
 	readonly listSkills: (subject: Identity.Subject) => ReadonlyArray<string>;
 	readonly readSkill: (
 		subject: Identity.Subject,
@@ -400,16 +399,11 @@ export const layer = Layer.effect(
 		const connector = yield* Connector.Service;
 		const documents = yield* ChatDocuments.Service;
 		const remotes = yield* RemoteRegistry;
+		const syncCommit = yield* SyncCommit.Service;
 
-		/**
-		 * Closes work left live by a previous host process.
-		 *
-		 * This is deliberately not called by ordinary service methods. The invocation layer is rebuilt
-		 * for every call, so invocation-local caching would let a later request interrupt a concurrently
-		 * running turn. Conductor owns the process-memory, once-per-environment startup gate.
-		 */
+		/** Closes turns left running by a previous host process. */
 		const recoverRunningTurns = Effect.fn('Agents.recover')(function* (effectId: EffectIdType) {
-			const recovered = yield* database.execute(effectId, {
+			yield* database.execute(effectId, {
 				_tag: 'Query',
 				sql: `with interrupted_turns as (
 						update "chat_message" message
@@ -444,11 +438,6 @@ export const layer = Layer.effect(
 					select count(*)::integer as "recovered" from interrupted_turns`,
 				parameters: []
 			});
-			const count = decodeRecoveryCountRow(recovered.rows[0]);
-			if (count._tag === 'Some' && Number(count.value.recovered) > 0) {
-				// Interrupted turns are durable rows the panel reads back itself; recovery only repairs
-				// them, so there is nothing further to deliver here.
-			}
 		});
 
 		/** The host catalog is read once per invocation; its context length is the prompt-window seam. */
@@ -481,38 +470,22 @@ export const layer = Layer.effect(
 			} satisfies AgentModelDescriptor;
 		});
 
-		/**
-		 * Commits a chat mutation.
-		 *
-		 * The rows are the durable record; readers (the conversation view, the transcript, the panel)
-		 * all read them back directly, so a committed write needs no second delivery step.
-		 */
 		const syncMutation = Effect.fn('Agents.syncMutation')(function* (
 			effectId: EffectIdType,
-			query: BuiltQuery,
-			collections: ReadonlyArray<'chat_session' | 'chat_message'>
+			query: BuiltQuery
 		) {
 			const response = yield* executeBuilt(effectId, database, query);
 			return response;
 		});
 		const syncTransaction = Effect.fn('Agents.syncTransaction')(function* (
 			effectId: EffectIdType,
-			queries: ReadonlyArray<BuiltQuery>,
-			collections: ReadonlyArray<'chat_session' | 'chat_message'>
+			queries: ReadonlyArray<BuiltQuery>
 		) {
 			if (queries.length === 0) return;
 			yield* transactionBuilt(effectId, database, queries);
 		});
 
-		/**
-		 * The conversations one signed-in caller may inspect, expressed once for every direct read.
-		 *
-		 * Ownership remains the ordinary rule. The only wider inbox is an administrator's view of a
-		 * currently declared public envoy. Its row must also carry every invariant `openConversation`
-		 * writes for that surface: an envoy visibility, matching agent/key, and that envoy's workbench
-		 * key. Requiring the key shape prevents a formerly authenticated/private envoy
-		 * row becoming readable merely because a later release changes that envoy's audience to public.
-		 */
+		/** Applies owner access plus the administrator view of declared public envoy inboxes. */
 		const publicEnvoys = workspace.definition.envoys
 			.filter(({ audience }) => audience === 'public')
 			.map(({ name }) => name);
@@ -563,7 +536,7 @@ export const layer = Layer.effect(
 		const requireControllableConversation = Effect.fn('Agents.requireControllableConversation')(
 			function* (effectId: EffectIdType, subject: Identity.Subject, conversationId: string) {
 				const conversation = yield* requireReadableConversation(effectId, subject, conversationId);
-				if (conversation.user_id !== subject.userId || conversation.visibility !== 'personal') {
+				if (conversation.user_id !== subject.userId) {
 					return yield* new AccessControl.AccessDenied({
 						action: 'agent',
 						resource: conversationId,
@@ -574,30 +547,7 @@ export const layer = Layer.effect(
 			}
 		);
 
-		/**
-		 * The tools one turn is offered, decided by the subject's policies and nothing else.
-		 *
-		 * This is the whole of §5 in one function: two people in one workspace get different tools on
-		 * the *same* web agent because they hold different policies, and an envoy gets what its
-		 * declared policies name. Adding a `capabilities/tools/+<name>.ts` file widens **nobody** until
-		 * a policy names it.
-		 *
-		 * It replaces four fields on a declaration none of which were enforced. The funnel returned the
-		 * platform set, the sandbox set and every workspace tool unconditionally, so a workspace that
-		 * declared `access: 'read'` shipped an agent holding `write_collection` and one that named
-		 * `denyTools` shipped an agent holding all of them.
-		 *
-		 * `write_collection` follows the grants, which is the honest reading of "may this subject
-		 * write": a policy that grants no `create`, `update` or `delete` on anything has said the
-		 * holder does not write, and offering the tool anyway only moves the refusal later. `access:
-		 * 'read' | 'write'` was a second, coarser way of saying the same thing, in a place a reviewer
-		 * comparing it against the grants would not look.
-		 *
-		 * Sandbox tools are normally offered unconditionally. A sandbox is per-principal and holds no
-		 * workspace data (§10), so reaching one grants nothing. A narrow ingress envoy can nevertheless
-		 * disable delegation as a behavioral boundary: in that case none of the coordination tools are
-		 * offered, and the execution funnel below enforces the same boundary on direct calls.
-		 */
+		/** Derives the exact tool offer from subject grants and the envoy delegation boundary. */
 		const allowedTools = (
 			subject: Identity.Subject,
 			agent: ResolvedAgent
@@ -611,10 +561,7 @@ export const layer = Layer.effect(
 				.filter((tool) => agent.delegation === 'enabled' || !isSandboxTool(tool.name));
 			const authoredNames = new Set(authored.map(({ name }) => name));
 			const platform = platformToolSpecs.filter(
-				(tool) =>
-					!authoredNames.has(tool.name) &&
-					(tool.name !== 'write_collection' || mayWrite) &&
-					(tool.name !== 'search_envoy_history' || agent.name !== WEB_AGENT_NAME)
+				(tool) => !authoredNames.has(tool.name) && (tool.name !== 'write_collection' || mayWrite)
 			);
 			return [
 				...platform,
@@ -629,13 +576,7 @@ export const layer = Layer.effect(
 				access.capabilities(subject).skills.has(name)
 			);
 
-		/**
-		 * Whether any policy this subject holds grants a write on anything at all.
-		 *
-		 * The gate on `write_collection`, read off the grants rather than off a separate `access`
-		 * field. A subject with no write grant anywhere cannot succeed at a write, so offering the tool
-		 * would only teach the model to try.
-		 */
+		/** Whether the subject has any create, update, or delete grant. */
 		const writesForSubject = (subject: Identity.Subject): boolean =>
 			workspace.definition.collections.some((collection) =>
 				(['create', 'update', 'delete'] as const).some(
@@ -658,15 +599,7 @@ export const layer = Layer.effect(
 				)
 				.map(({ name }) => name);
 
-		/**
-		 * The agent a turn is for: the web agent, or one declared envoy.
-		 *
-		 * `web` is reserved at authoring time (`envoy()` refuses it) so this cannot be shadowed, and it
-		 * needs no declaration to resolve because there is nothing in one. Anything else must be a
-		 * declared envoy — a name that is neither is a refusal, reported as an access denial rather
-		 * than a lookup failure because from the caller's side "no such agent" and "not yours" are the
-		 * same answer and the difference is worth not disclosing.
-		 */
+		/** Resolves the reserved web agent or an authored envoy without disclosing unknown names. */
 		const resolveAgent = Effect.fn('Agents.resolveAgent')(function* (agentName: string) {
 			if (agentName === WEB_AGENT_NAME)
 				return { name: WEB_AGENT_NAME, delegation: 'enabled' } satisfies ResolvedAgent;
@@ -686,18 +619,7 @@ export const layer = Layer.effect(
 			} satisfies ResolvedAgent;
 		});
 
-		/**
-		 * The conversation row a turn writes into, carrying what kind of thread it is.
-		 *
-		 * `visibility` and `envoy_key` were read by `conversation-selector.ts` and written by nothing:
-		 * neither column existed, so `visibility` was always `undefined`, the group bucket was
-		 * permanently empty, and a public envoy's threads never reached the admin inbox they were
-		 * routed to. Both are populated here, at the one place a conversation is opened.
-		 *
-		 * Ownership and workbench scope are separate fields. `user_id` owns the chat; `sandbox_key`
-		 * identifies the delegated-agent workbench. Every envoy session uses its envoy principal for the
-		 * latter, while its documents stay isolated by the session id.
-		 */
+		/** Opens the owned conversation and records its personal/envoy visibility and sandbox scope. */
 		const openConversation = Effect.fn('Agents.openConversation')(function* (
 			effectId: EffectIdType,
 			agent: ResolvedAgent,
@@ -718,8 +640,7 @@ export const layer = Layer.effect(
 							agent.name === WEB_AGENT_NAME ? 'personal' : group ? 'envoy_group' : 'envoy_dm',
 						envoy_key: agent.name === WEB_AGENT_NAME ? null : agent.name
 					})
-					.onConflictDoNothing(),
-				['chat_session']
+					.onConflictDoNothing()
 			);
 		});
 
@@ -774,10 +695,27 @@ export const layer = Layer.effect(
 					}
 				}
 			}
+			const active = yield* executeBuilt(
+				EffectId.make(`${effectId}:active-turn`),
+				database,
+				composer
+					.select({ id: chatMessage.id })
+					.from(chatMessage)
+					.where(
+						and(
+							eq(chatMessage.conversation_id, conversationId),
+							eq(chatMessage.role, 'assistant'),
+							sql`${chatMessage.content}->>'status' = 'running'`,
+							or(isNull(chatMessage.turn_id), sql`${chatMessage.turn_id} <> ${turnId}`)
+						)
+					)
+					.limit(1)
+			);
+			const initialStatus: TurnStatus = active.rows.length === 0 ? 'running' : 'queued';
 			const title =
 				message.kind === 'agent_message' ? undefined : chatInputText(message).slice(0, 48);
 			const group = conversationId.includes(':group:');
-			yield* transactionBuilt(effectId, database, [
+			const committed = yield* transactionBuilt(effectId, database, [
 				composer
 					.insert(chatSession)
 					.values({
@@ -800,8 +738,6 @@ export const layer = Layer.effect(
 							options.parentId !== undefined || agent.name === WEB_AGENT_NAME ? null : agent.name
 					})
 					.onConflictDoNothing(),
-				// The pre-read gives a typed refusal for ordinary conflicts; this in-transaction assertion
-				// closes the concurrent-insert race before any message or task is written.
 				transactionSql(
 					`select case when exists (
 						select 1 from "chat_session"
@@ -845,7 +781,7 @@ export const layer = Layer.effect(
 						role: 'assistant',
 						content: JSON.stringify({
 							id: turnId,
-							status: 'running',
+							status: initialStatus,
 							depth: options.depth ?? 0,
 							parts: [],
 							subject,
@@ -868,9 +804,6 @@ export const layer = Layer.effect(
 					) then 1 else 1 / ((random() * 0)::integer) end`,
 					[conversationId]
 				),
-				// A caller owns the turn id so an unknown transport outcome can be retried safely. The two
-				// immutable transcript rows must still describe this exact admission; reusing an id for
-				// different work rolls the entire transaction back instead of returning a false receipt.
 				transactionSql(
 					`select case when exists (
 						select 1 from "chat_message"
@@ -882,9 +815,44 @@ export const layer = Layer.effect(
 							and ("content"->>'model') is not distinct from $4::text
 					) then 1 else 1 / ((random() * 0)::integer) end`,
 					[conversationId, turnId, JSON.stringify(message), options.model ?? null]
+				),
+				transactionSql(
+					`select 'chat_session'::text as "collection", session."id"::text as "record_id"
+					from "chat_session" session where session."conversation_id" = $1
+					union all
+					select 'chat_message'::text as "collection", message."id"::text as "record_id"
+					from "chat_message" message
+					where message."conversation_id" = $1 and message."turn_id" = $2
+						and message."role" in ('user', 'assistant')`,
+					[conversationId, turnId]
 				)
 			]);
-			return { conversationId, taskId: turnId, turnId };
+			const changes = committedChatChanges(committed.rows, conversationId);
+			yield* syncCommit.publish(EffectId.make(`${effectId}:publish`), { changes });
+			const stored = yield* executeBuilt(
+				EffectId.make(`${effectId}:admitted-turn`),
+				database,
+				composer
+					.select({ id: chatMessage.id, content: chatMessage.content })
+					.from(chatMessage)
+					.where(
+						and(
+							eq(chatMessage.conversation_id, conversationId),
+							eq(chatMessage.turn_id, turnId),
+							eq(chatMessage.role, 'assistant')
+						)
+					)
+					.limit(1)
+			);
+			const admitted = decodeStoredTurnMessageRow(stored.rows[0]);
+			if (admitted._tag === 'None') {
+				return yield* new AccessControl.AccessDenied({
+					action: 'agent',
+					resource: conversationId,
+					reason: 'admitted turn was not readable'
+				});
+			}
+			return { conversationId, taskId: turnId, turnId, status: admitted.value.content.status };
 		});
 
 		const executeTool = Effect.fn('Agents.executeTool')(function* (
@@ -900,10 +868,6 @@ export const layer = Layer.effect(
 			const sandboxKey = sandboxKeyFor(subject, agent, conversationId);
 			const allowlist = allowedTools(subject, agent);
 			const declared = allowlist.find((tool) => tool.name === name);
-			// A platform or sandbox name was admitted on the strength of being one, which made `denyTools`
-			// and `access` advisory: an agent that was never offered `write_collection` could still call
-			// it by name. The allowlist is the answer for every kind now, and an MCP call is admitted only
-			// when a policy this subject holds named that server.
 			if (declared === undefined) {
 				return yield* new ToolNotAllowed({ agent: agent.name, tool: name });
 			}
@@ -914,8 +878,6 @@ export const layer = Layer.effect(
 				conversationId,
 				database,
 				envoyWideHistory: access.capabilities(subject).envoyHistory,
-				// The skills this subject's policies grant, not a list an agent declaration carried. A
-				// skill is capability, so it is granted where every other capability is.
 				skills: allowedSkills(subject),
 				toolNames: allowlist.map(({ name: tool }) => tool),
 				collectionNames: [
@@ -940,8 +902,6 @@ export const layer = Layer.effect(
 						.media(EffectId.make(`${effectId}:media`), conversationId, decoded.value.storageKey)
 						.pipe(Effect.catch((failure) => Effect.succeed({ error: failure.message })));
 					if ('error' in media) return media;
-					// A media part means an image the model can see: sources that are not images are
-					// refused by name, and one oversized object is refused rather than smuggled in.
 					if (!media.file.mime_type.startsWith('image/')) {
 						return yield* new ToolNotAllowed({ agent: agent.name, tool: `${name}: not an image` });
 					}
@@ -956,8 +916,6 @@ export const layer = Layer.effect(
 				return yield* executePlatformTool(name, input, context);
 			}
 			if (isSandboxTool(name)) {
-				// The sandbox action taxonomy is FacilityError | ToolNotAllowed | NestingLimitExceeded;
-				// an unavailable child model is reported as the tool it refused to run.
 				const sandboxError = (error: unknown) =>
 					error instanceof Database.FacilityError ||
 					error instanceof ToolNotAllowed ||
@@ -1084,10 +1042,6 @@ export const layer = Layer.effect(
 				)
 			);
 			if (authored._tag === 'hit') return authored.value;
-			// The host-tools funnel, reached by a name the allowlist offered and nothing else resolved.
-			// `hostTools` — an opt-in list on the agent declaration, declared by no workspace and read by
-			// nothing until it was wired up — is gone with the declaration; a host tool is admitted here
-			// because a policy named it, like everything else.
 			if (name.startsWith('sandbox_') || declared?.command.startsWith('host:') === true) {
 				return yield* executeHostTool(name, input, context);
 			}
@@ -1120,13 +1074,7 @@ export const layer = Layer.effect(
 			});
 		};
 
-		/**
-		 * Replays stored rows through the hard context window used by every ordinary invocation.
-		 *
-		 * Rows sharing a turn id are one removal unit. The stored assistant row may expand into several
-		 * provider messages, but that expansion happens inside the unit, so a tool call and its result
-		 * can never be separated by truncation.
-		 */
+		/** Replays complete turn units through the invocation's context window. */
 		const promptFor = (
 			agent: ResolvedAgent,
 			rows: ReadonlyArray<unknown>,
@@ -1209,6 +1157,58 @@ export const layer = Layer.effect(
 			return [...fixed, ...replay];
 		};
 
+		/** Claims queued follow-ups for the next model round without losing late arrivals. */
+		const claimQueuedInputs = Effect.fn('Agents.claimQueuedInputs')(function* (
+			effectId: EffectIdType,
+			conversationId: string
+		) {
+			const claimed = yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: `with candidates as (
+					select assistant."id", assistant."turn_id", input."content"
+					from "chat_message" assistant
+					join "chat_message" input
+						on input."conversation_id" = assistant."conversation_id"
+						and input."turn_id" = assistant."turn_id" and input."role" = 'user'
+					where assistant."conversation_id" = $1 and assistant."role" = 'assistant'
+						and assistant."content"->>'status' = 'queued'
+					order by assistant."sequence"
+					for update of assistant skip locked
+				), consumed as (
+					update "chat_message" assistant
+					set "content" = jsonb_set(assistant."content", '{status}', '"completed"'::jsonb, true),
+						"updated_at" = now(), "row_version" = assistant."row_version" + 1
+					from candidates
+					where assistant."id" = candidates."id"
+					returning assistant."id"::text as "id", candidates."turn_id", candidates."content"
+				)
+				select "id", "turn_id", "content" from consumed`,
+				parameters: [conversationId]
+			});
+			const rows = claimed.rows.flatMap((row) => {
+				const decoded = decodeQueuedInputRow(row);
+				if (decoded._tag === 'None') return [];
+				const input = parseStoredChatInput(decoded.value.content);
+				if (input !== null) {
+					return [{ id: decoded.value.id, text: chatInputForModel(input) }];
+				}
+				const relayed = parseAgentMessage(decoded.value.content);
+				return relayed === null
+					? []
+					: [{ id: decoded.value.id, text: agentMessageForModel(relayed) }];
+			});
+			if (rows.length > 0) {
+				yield* syncCommit.publish(EffectId.make(`${effectId}:publish`), {
+					changes: rows.map(({ id }) => ({
+						collection: 'chat_message' as const,
+						recordId: id,
+						routing: [{ field: 'conversation_id', value: conversationId }]
+					}))
+				});
+			}
+			return rows.map(({ text }) => ({ role: 'user', content: text }) satisfies Schema.Json);
+		});
+
 		/** Adds one usage delta to this session and every parent session above it. */
 		const recordUsage = Effect.fn('Agents.recordUsage')(function* (
 			effectId: EffectIdType,
@@ -1256,8 +1256,7 @@ export const layer = Layer.effect(
 							usage_turns_unreported: increment(chatSession.usage_turns_unreported, turnsUnreported)
 						})
 						.where(eq(chatSession.conversation_id, id))
-				),
-				['chat_session']
+				)
 			);
 		});
 
@@ -1286,12 +1285,82 @@ export const layer = Layer.effect(
 			);
 		});
 
-		/**
-		 * Joins one exact child turn without creating durable parent continuation state.
-		 *
-		 * The parent names the exact child row and waits for that one turn. No queue row, polling lease,
-		 * or parent continuation is created.
-		 */
+		/** Promotes the oldest follow-up left behind after a turn's final model round. */
+		const promoteQueuedTurn = Effect.fn('Agents.promoteQueuedTurn')(function* (
+			effectId: EffectIdType,
+			conversationId: string
+		) {
+			const promoted = yield* database.execute(effectId, {
+				_tag: 'Query',
+				sql: `with candidate as (
+					select message."id"
+					from "chat_message" message
+					where message."conversation_id" = $1 and message."role" = 'assistant'
+						and message."content"->>'status' = 'queued'
+						and exists (
+							select 1 from "agent_mailbox" mailbox
+							where mailbox."conversation_id" = $1 and mailbox."status" = 'active'
+						)
+						and not exists (
+							select 1 from "chat_message" running
+							where running."conversation_id" = $1 and running."role" = 'assistant'
+								and running."content"->>'status' = 'running'
+						)
+					order by message."sequence"
+					limit 1
+					for update skip locked
+				), advanced as (
+					update "chat_message" message
+					set "content" = jsonb_set(message."content", '{status}', '"running"'::jsonb, true),
+						"updated_at" = now(), "row_version" = message."row_version" + 1
+					where message."id" in (select "id" from candidate)
+					returning message."id"::text as "id", message."turn_id" as "task_id"
+				)
+				select "id", "task_id" from advanced`,
+				parameters: [conversationId]
+			});
+			const row = promoted.rows[0];
+			const decoded = decodeTaskIdRow(row);
+			if (decoded._tag === 'None') return undefined;
+			const id =
+				row !== null && typeof row === 'object' && typeof Reflect.get(row, 'id') === 'string'
+					? (Reflect.get(row, 'id') as string)
+					: undefined;
+			if (id !== undefined) {
+				yield* syncCommit.publish(EffectId.make(`${effectId}:publish`), {
+					changes: [
+						{
+							collection: 'chat_message',
+							recordId: id,
+							routing: [{ field: 'conversation_id', value: conversationId }]
+						}
+					]
+				});
+			}
+			return decoded.value.task_id;
+		});
+
+		const drainQueuedTurns = Effect.fn('Agents.drainQueuedTurns')(function* (
+			effectId: EffectIdType,
+			conversationId: string,
+			surface?: TurnSurface
+		) {
+			for (let index = 0; ; index += 1) {
+				const taskId = yield* promoteQueuedTurn(
+					EffectId.make(`${effectId}:promote:${index}`),
+					conversationId
+				);
+				if (taskId === undefined) return;
+				yield* runExactTurn(
+					EffectId.make(`${effectId}:run:${index}`),
+					conversationId,
+					taskId,
+					surface
+				).pipe(Effect.catch(() => Effect.void));
+			}
+		});
+
+		/** Waits for one exact delegated child turn. */
 		const awaitDelegatedTurn = Effect.fn('Agents.awaitDelegatedTurn')(function* (
 			effectId: EffectIdType,
 			agentId: string,
@@ -1351,7 +1420,7 @@ export const layer = Layer.effect(
 			status: TurnStatus,
 			usage: AIUsage | undefined,
 			usageUnreported: boolean
-		) => Effect.Effect<unknown, Database.FacilityError>;
+		) => Effect.Effect<DatabaseResponse, Database.FacilityError>;
 		type SettleUsage = (
 			usage: AIUsage | undefined,
 			newlyUnreported: boolean
@@ -1382,6 +1451,12 @@ export const layer = Layer.effect(
 				let output: Schema.Json = null;
 				let round = 0;
 				while (true) {
+					messages.push(
+						...(yield* claimQueuedInputs(
+							EffectId.make(`${namespace}:incoming:${round}`),
+							conversationId
+						))
+					);
 					const response = yield* ai.execute(EffectId.make(`${namespace}:ai:${round}`), {
 						_tag: 'Turn',
 						model: model.id,
@@ -1399,6 +1474,21 @@ export const layer = Layer.effect(
 					const decoded = Schema.decodeUnknownOption(TurnOutput)(response.output);
 					const toolCalls = decoded._tag === 'Some' ? (decoded.value.toolCalls ?? []) : [];
 					const text = decoded._tag === 'Some' ? decoded.value.text : undefined;
+					const reasoning = decoded._tag === 'Some' ? decoded.value.reasoning : undefined;
+					const reasoningDetails =
+						decoded._tag === 'Some' ? decoded.value.reasoningDetails : undefined;
+					if (
+						(reasoning !== undefined && reasoning.trim().length > 0) ||
+						(reasoningDetails !== undefined && reasoningDetails.length > 0)
+					) {
+						parts.push({
+							kind: 'reasoning',
+							text: reasoning ?? '',
+							...(reasoningDetails === undefined ? {} : { details: reasoningDetails })
+						});
+						const current = yield* Ref.get(usage);
+						yield* commit('running', current.cumulative, current.unreported);
+					}
 					if (toolCalls.length === 0) {
 						parts.push({ kind: 'text', text: text ?? '' });
 						const current = yield* Ref.get(usage);
@@ -1483,7 +1573,7 @@ export const layer = Layer.effect(
 		) {
 			if (taskIds.length === 0) return;
 			const closeCalls = status === 'interrupted' || status === 'stopped';
-			yield* database.execute(EffectId.make(`${effectId}:write`), {
+			const committed = yield* database.execute(EffectId.make(`${effectId}:write`), {
 				_tag: 'Query',
 				sql: `update "chat_message" message
 					set "content" = ${
@@ -1511,10 +1601,14 @@ export const layer = Layer.effect(
 					}, "updated_at" = now(), "row_version" = message."row_version" + 1
 					where message."conversation_id" = $1 and message."turn_id" = any($2::text[])
 						and message."role" = 'assistant'
-						and message."content"->>'status' = 'running'`,
+						and message."content"->>'status' = 'running'
+					returning message."id"::text as "id"`,
 				parameters: closeCalls
 					? [conversationId, [...taskIds], status, status]
 					: [conversationId, [...taskIds], status]
+			});
+			yield* syncCommit.publish(EffectId.make(`${effectId}:publish`), {
+				changes: committedChatChanges(committed.rows, conversationId)
 			});
 		});
 
@@ -1526,9 +1620,6 @@ export const layer = Layer.effect(
 				effectId,
 				database,
 				composer
-					// The rows are decoded from the driver response, not mapped by the query builder, so
-					// the projection has to carry the alias into the emitted SQL rather than only into
-					// the builder's own field map.
 					.select({ task_id: aliased(chatMessage.turn_id, 'task_id') })
 					.from(chatMessage)
 					.where(
@@ -1622,14 +1713,17 @@ export const layer = Layer.effect(
 					set "content" = jsonb_set(message."content", '{status}', '"running"'::jsonb, true),
 						"updated_at" = now(), "row_version" = message."row_version" + 1
 					where message."id" in (select "id" from candidate)
-					returning message."turn_id" as "task_id"
+					returning message."id"::text as "id", message."turn_id" as "task_id"
 				)
-				select "task_id" from replayed_turn`,
+				select "id", "task_id" from replayed_turn`,
 				parameters: [conversationId]
 			});
 			const taskIds = response.rows.flatMap((row) => {
 				const decoded = decodeTaskIdRow(row);
 				return decoded._tag === 'Some' ? [decoded.value.task_id] : [];
+			});
+			yield* syncCommit.publish(EffectId.make(`${effectId}:publish`), {
+				changes: committedChatChanges(response.rows, conversationId)
 			});
 			if (taskIds[0] !== undefined) {
 				yield* runExactTurn(EffectId.make(`${effectId}:run`), conversationId, taskIds[0]);
@@ -1675,7 +1769,7 @@ export const layer = Layer.effect(
 				}
 			),
 			enqueue: Effect.fn('Agents.enqueue')(
-				function* (effectId, subject, agentName, conversationId, turnId, message, model) {
+				function* (effectId, subject, agentName, conversationId, turnId, message, model, surface) {
 					const admitted = yield* admitTurn(
 						effectId,
 						subject,
@@ -1685,12 +1779,23 @@ export const layer = Layer.effect(
 						message,
 						model === undefined ? {} : { model }
 					);
+					if (admitted.status === 'queued') {
+						return { ...admitted, status: 'queued' as const };
+					}
+					if (admitted.status !== 'running') {
+						return {
+							...admitted,
+							status: admitted.status === 'completed' ? ('completed' as const) : ('failed' as const)
+						};
+					}
 					const result = yield* runExactTurn(
 						EffectId.make(`${effectId}:run`),
 						conversationId,
-						turnId
+						turnId,
+						surface
 					);
-					return { ...admitted, status: result.status };
+					yield* drainQueuedTurns(EffectId.make(`${effectId}:queued`), conversationId, surface);
+					return { ...admitted, status: result.status, output: result.output };
 				}
 			),
 			execute: Effect.fn('Agents.execute')(function* (
@@ -1742,11 +1847,10 @@ export const layer = Layer.effect(
 						status: stored.status === 'completed' ? 'completed' : 'failed'
 					};
 				}
-				// Stop/restart replay changes the row back to running before entering this fresh invocation.
-				// Terminal rows never become a retry ladder.
 				const subject = stored.subject;
 				const agent = yield* resolveAgent(stored.agent_name);
 				yield* access.authorize(subject, 'agent', stored.agent_name);
+				yield* claimQueuedInputs(EffectId.make(`${effectId}:incoming:initial`), conversationId);
 				const transcript = yield* executeBuilt(
 					EffectId.make(`${effectId}:transcript`),
 					database,
@@ -1762,44 +1866,51 @@ export const layer = Layer.effect(
 				);
 				const parts: Array<TurnPart> = [...stored.parts];
 				let committed = 0;
-				/**
-				 * The turn's durable record, kept beside the loop's steps: one commit after every step,
-				 * and each commit is the one beat the transport surface is told about.
-				 */
+				/** Each logical step becomes one durable record and one transport beat. */
 				const persistTurn = (
 					status: TurnStatus,
 					usage: AIUsage | undefined,
 					usageUnreported: boolean
 				) =>
-					syncMutation(
-						EffectId.make(`${effectId}:turn:${(committed += 1)}`),
-						composer
-							.update(chatMessage)
-							.set({
-								content: JSON.stringify({
-									...stored,
-									status,
-									parts,
-									...(usage === undefined ? {} : { usage }),
-									usage_unreported: usageUnreported
+					Effect.gen(function* () {
+						const sequence = (committed += 1);
+						const result = yield* syncMutation(
+							EffectId.make(`${effectId}:turn:${sequence}`),
+							composer
+								.update(chatMessage)
+								.set({
+									content: JSON.stringify({
+										...stored,
+										status,
+										parts,
+										...(usage === undefined ? {} : { usage }),
+										usage_unreported: usageUnreported
+									})
 								})
-							})
-							.where(
-								and(
-									eq(chatMessage.id, decoded.value.id),
-									sql`${chatMessage.content}->>'status' = 'running'`
+								.where(
+									and(
+										eq(chatMessage.id, decoded.value.id),
+										sql`${chatMessage.content}->>'status' = 'running'`
+									)
 								)
-							),
-						['chat_message']
-					);
+						);
+						yield* syncCommit.publish(EffectId.make(`${effectId}:publish:${sequence}`), {
+							changes: [
+								{
+									collection: 'chat_message',
+									recordId: decoded.value.id,
+									routing: [{ field: 'conversation_id', value: conversationId }]
+								}
+							]
+						});
+						return result;
+					});
 				const commit: CommitTurn =
 					surface === undefined
 						? persistTurn
 						: (status, usage, usageUnreported) =>
 								Effect.gen(function* () {
 									const result = yield* persistTurn(status, usage, usageUnreported);
-									// Best effort by contract: a surface that cannot post the beat must never
-									// fail the turn, and the surface itself owns throttling and the bubble key.
 									yield* Effect.catch(surface.observe(parts), () => Effect.void);
 									return result;
 								});
@@ -1834,9 +1945,18 @@ export const layer = Layer.effect(
 					commit,
 					settleUsage
 				);
-				yield* commit(settled.status, settled.cumulative, settled.unreported);
+				const finalCommit = yield* commit(settled.status, settled.cumulative, settled.unreported);
 				yield* Effect.ignore(settleUsage(settled.segment, settled.unreported));
-				return { conversationId, output: settled.output, status: settled.status };
+				// The guarded final update loses an interrupt race by affecting zero rows.
+				const completed = settled.status === 'completed' && finalCommit.affectedRows > 0;
+				if (completed && surface?.complete !== undefined) {
+					yield* Effect.catch(surface.complete(settled.output), () => Effect.void);
+				}
+				return {
+					conversationId,
+					output: settled.output,
+					status: completed ? ('completed' as const) : ('failed' as const)
+				};
 			}),
 			interrupt: Effect.fn('Agents.interrupt')(function* (effectId, subject, conversationId) {
 				yield* requireControllableConversation(
@@ -1862,6 +1982,9 @@ export const layer = Layer.effect(
 				);
 				yield* resumeConversation(effectId, conversationId);
 			}),
+			running: Effect.fn('Agents.running')(function* (effectId, conversationId) {
+				return (yield* runningTurnIds(effectId, conversationId)).length > 0;
+			}),
 			updateVerifier: Effect.fn('Agents.updateVerifier')(
 				function* (effectId, conversationId, verifier) {
 					yield* syncMutation(
@@ -1869,8 +1992,7 @@ export const layer = Layer.effect(
 						composer
 							.update(chatSession)
 							.set({ verifier: JSON.stringify(verifier) })
-							.where(eq(chatSession.conversation_id, conversationId)),
-						['chat_session']
+							.where(eq(chatSession.conversation_id, conversationId))
 					);
 				}
 			),

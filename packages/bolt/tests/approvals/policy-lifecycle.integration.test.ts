@@ -79,36 +79,38 @@ const lifecyclePolicy = describePolicy('writer', {
 	grants: {
 		records: {
 			read: {},
-			create: {
-				fields: ['title'],
-				authorize: (context: unknown) => {
-					decisionContexts.push(context);
-					events.push(`create.authorize:${String(objectAt(context, 'record')['status'])}`);
-					return true;
-				},
-				approval: {
-					flow: (context: unknown) => {
+			mutate: {
+				new: {
+					fields: ['title'],
+					authorize: (context: unknown) => {
 						decisionContexts.push(context);
-						events.push(`create.flow:${String(objectAt(context, 'record')['status'])}`);
-						return approveBy('Reviewers');
+						events.push(`create.authorize:${String(objectAt(context, 'record')['status'])}`);
+						return true;
 					},
-					superceded_by: []
-				}
-			},
-			update: {
-				fields: ['title'],
-				authorize: (context: unknown) => {
-					decisionContexts.push(context);
-					events.push(`update.authorize:${String(objectAt(context, 'record')['status'])}`);
-					return true;
+					approval: {
+						flow: (context: unknown) => {
+							decisionContexts.push(context);
+							events.push(`create.flow:${String(objectAt(context, 'record')['status'])}`);
+							return approveBy('Reviewers');
+						},
+						superceded_by: []
+					}
 				},
-				approval: {
-					flow: (context: unknown) => {
+				existing: {
+					fields: ['title'],
+					authorize: (context: unknown) => {
 						decisionContexts.push(context);
-						events.push(`update.flow:${String(objectAt(context, 'record')['status'])}`);
-						return approveBy('Reviewers');
+						events.push(`update.authorize:${String(objectAt(context, 'record')['status'])}`);
+						return true;
 					},
-					superceded_by: []
+					approval: {
+						flow: (context: unknown) => {
+							decisionContexts.push(context);
+							events.push(`update.flow:${String(objectAt(context, 'record')['status'])}`);
+							return approveBy('Reviewers');
+						},
+						superceded_by: []
+					}
 				}
 			},
 			delete: {
@@ -356,13 +358,15 @@ describe('policy and hook lifecycle', () => {
 			grants: {
 				versions: {
 					read: {},
-					create: {
-						fields: ['label', 'supersedes_id'],
-						approval: { flow: () => approveBy('Reviewers'), superceded_by: [] }
-					},
-					update: {
-						fields: ['closed_by'],
-						approval: { flow: () => approveBy('Reviewers'), superceded_by: [] }
+					mutate: {
+						new: {
+							fields: ['label', 'supersedes_id'],
+							approval: { flow: () => approveBy('Reviewers'), superceded_by: [] }
+						},
+						existing: {
+							fields: ['closed_by'],
+							approval: { flow: () => approveBy('Reviewers'), superceded_by: [] }
+						}
 					}
 				}
 			}

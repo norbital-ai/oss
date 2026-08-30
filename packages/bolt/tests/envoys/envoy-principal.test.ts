@@ -257,13 +257,31 @@ describe('The schema plan builds the canonical greenfield schema', () => {
 	});
 
 	it('creates envoy tables without compatibility steps', () => {
-		const ids = buildSchemaPlan(envoyWorkspace()).steps.map(({ id }) => id);
+		const steps = buildSchemaPlan(envoyWorkspace()).steps;
+		const ids = steps.map(({ id }) => id);
 		for (const created of [
-			'collection:bolt_envoy_registrations',
+			'collection:bolt_channel_links',
 			'collection:bolt_envoy_receipts',
 			'collection:bolt_envoy_inbound'
 		])
 			expect(ids).toContain(created);
+		expect(ids).not.toContain('collection:bolt_envoy_registrations');
+
+		const claims = steps.find(({ id }) => id === 'collection:bolt_channel_links')?.sql ?? '';
+		for (const field of [
+			'"link_id" text',
+			'"tenant_id" text',
+			'"envoy" text',
+			'"transport" text',
+			'"sender_id" text',
+			'"status" text',
+			'"claimed_by" text',
+			'"expires_at" timestamp with time zone'
+		])
+			expect(claims).toContain(field);
+
+		const receipts = steps.find(({ id }) => id === 'collection:bolt_envoy_receipts')?.sql ?? '';
+		expect(receipts).toContain('"receipt_key" text');
 	});
 
 	/**
@@ -274,10 +292,12 @@ describe('The schema plan builds the canonical greenfield schema', () => {
 	 * routed to. A default of `personal` *is* the backfill: every conversation that already exists is
 	 * a web-agent one.
 	 */
-	it('creates visibility and envoy_key on chat_session, defaulting to personal', () => {
+	it('creates visibility, envoy ownership, and transport progress on chat_session', () => {
 		const steps = buildSchemaPlan(envoyWorkspace()).steps;
 		const sql = steps.find(({ id }) => id === 'collection:chat_session')?.sql ?? '';
 		expect(sql).toContain('"visibility" text default \'personal\' not null');
 		expect(sql).toContain('"envoy_key" text');
+		expect(sql).toContain('"transport_message_key" text');
+		expect(sql).toContain('"transport_progress" text');
 	});
 });

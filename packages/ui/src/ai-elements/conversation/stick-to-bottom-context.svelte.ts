@@ -3,6 +3,29 @@ import { setContext, getContext } from 'svelte';
 
 const STICK_TO_BOTTOM_CONTEXT_KEY = Symbol('stick-to-bottom-context');
 
+type ScrollMetrics = Readonly<{
+	scrollHeight: number;
+	clientHeight: number;
+}>;
+
+/**
+ * A shrinking transcript or a growing viewport can clamp `scrollTop` upward without user intent.
+ * Preserve the bottom latch for that layout movement; wheel, key, touch, and pointer input still
+ * win through `directManipulation`.
+ */
+export function shouldPreserveBottomLatchAfterUpwardScroll(
+	previous: ScrollMetrics,
+	current: ScrollMetrics,
+	options: Readonly<{ stuck: boolean; directManipulation: boolean }>
+): boolean {
+	return (
+		options.stuck &&
+		!options.directManipulation &&
+		(current.scrollHeight < previous.scrollHeight - 0.5 ||
+			current.clientHeight > previous.clientHeight + 0.5)
+	);
+}
+
 /**
  * Stick-to-bottom for streaming chat.
  *
@@ -18,6 +41,9 @@ class StickToBottomContext {
 	#stuck = $state(true);
 	#LATCH_BOTTOM_PX = 40;
 	#lastScrollTop = 0;
+	#lastScrollHeight = 0;
+	#lastClientHeight = 0;
+	#directManipulation = false;
 	/** True only while we assign scrollTop — never a timed window. */
 	#isPinning = false;
 	#raf = 0;
@@ -120,7 +146,13 @@ class StickToBottomContext {
 
 	#handleScroll = () => {
 		if (!this.#element) return;
-		const scrollTop = this.#element.scrollTop;
+		const { scrollTop, scrollHeight, clientHeight } = this.#element;
+		const previousMetrics = {
+			scrollHeight: this.#lastScrollHeight,
+			clientHeight: this.#lastClientHeight
+		};
+		this.#lastScrollHeight = scrollHeight;
+		this.#lastClientHeight = clientHeight;
 
 		if (this.#isPinning) {
 			this.#lastScrollTop = scrollTop;
@@ -131,6 +163,16 @@ class StickToBottomContext {
 		this.#lastScrollTop = scrollTop;
 
 		if (scrolledUp) {
+			if (
+				shouldPreserveBottomLatchAfterUpwardScroll(
+					previousMetrics,
+					{ scrollHeight, clientHeight },
+					{ stuck: this.#stuck, directManipulation: this.#directManipulation }
+				)
+			) {
+				this.#schedulePin();
+				return;
+			}
 			this.#unlock();
 			return;
 		}
@@ -147,8 +189,25 @@ class StickToBottomContext {
 	};
 
 	#handleTouchStart = () => {
+		this.#directManipulation = true;
 		// Let subsequent scroll events decide; don't treat touch as pin.
 		this.#isPinning = false;
+	};
+
+	#handleTouchEnd = () => {
+		this.#directManipulation = false;
+	};
+
+	#handlePointerDown = () => {
+		this.#directManipulation = true;
+	};
+
+	#handlePointerUp = () => {
+		this.#directManipulation = false;
+	};
+
+	#handleKeyDown = (event: KeyboardEvent) => {
+		if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) this.#unlock();
 	};
 
 	#observeContent(content: HTMLElement) {
@@ -163,10 +222,17 @@ class StickToBottomContext {
 		if (!this.#element) return;
 
 		this.#lastScrollTop = this.#element.scrollTop;
+		this.#lastScrollHeight = this.#element.scrollHeight;
+		this.#lastClientHeight = this.#element.clientHeight;
 
 		this.#element.addEventListener('scroll', this.#handleScroll, { passive: true });
 		this.#element.addEventListener('wheel', this.#handleWheel, { passive: true });
 		this.#element.addEventListener('touchstart', this.#handleTouchStart, { passive: true });
+		this.#element.addEventListener('touchend', this.#handleTouchEnd, { passive: true });
+		this.#element.addEventListener('pointerdown', this.#handlePointerDown, { passive: true });
+		this.#element.addEventListener('pointerup', this.#handlePointerUp, { passive: true });
+		this.#element.addEventListener('pointercancel', this.#handlePointerUp, { passive: true });
+		this.#element.addEventListener('keydown', this.#handleKeyDown);
 
 		const content = this.#element.querySelector(
 			'[data-stick-to-bottom-content]'
@@ -196,8 +262,14 @@ class StickToBottomContext {
 			this.#element.removeEventListener('scroll', this.#handleScroll);
 			this.#element.removeEventListener('wheel', this.#handleWheel);
 			this.#element.removeEventListener('touchstart', this.#handleTouchStart);
+			this.#element.removeEventListener('touchend', this.#handleTouchEnd);
+			this.#element.removeEventListener('pointerdown', this.#handlePointerDown);
+			this.#element.removeEventListener('pointerup', this.#handlePointerUp);
+			this.#element.removeEventListener('pointercancel', this.#handlePointerUp);
+			this.#element.removeEventListener('keydown', this.#handleKeyDown);
 		}
 
+		this.#directManipulation = false;
 		this.#contentResizeObserver = null;
 		this.#rootResizeObserver = null;
 	}

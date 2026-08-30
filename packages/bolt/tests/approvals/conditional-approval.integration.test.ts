@@ -33,9 +33,11 @@ const declaration = (flow: PolicyRuntimeFunction, authorize?: PolicyRuntimeFunct
 	grants: {
 		entries: {
 			read: {},
-			create: {
-				...(authorize === undefined ? {} : { authorize }),
-				approval: { flow, superceded_by: ['Review Leads'] }
+			mutate: {
+				new: {
+					...(authorize === undefined ? {} : { authorize }),
+					approval: { flow, superceded_by: ['Review Leads'] }
+				}
 			}
 		}
 	}

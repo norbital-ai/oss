@@ -9,12 +9,12 @@ export const ChatDocumentRef = Schema.Struct({
 });
 export interface ChatDocumentRef extends Schema.Schema.Type<typeof ChatDocumentRef> {}
 
-/** The receipt returned when an agent turn is accepted for immediate execution. */
+/** The receipt returned when an agent turn is accepted into its conversation lane. */
 export const AgentEnqueueResult = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
 	taskId: Schema.NonEmptyString,
 	turnId: Schema.NonEmptyString,
-	status: Schema.Literals(['completed', 'failed'])
+	status: Schema.Literals(['queued', 'completed', 'failed'])
 });
 export interface AgentEnqueueResult extends Schema.Schema.Type<typeof AgentEnqueueResult> {}
 

@@ -45,6 +45,60 @@ const rows = (status: string, answered: boolean) => [
 ];
 
 describe('reactive chat message projection', () => {
+	it('leaves an admitted empty running turn to the visible working placeholder', () => {
+		const conversation = projectStoredChatMessages([
+			{
+				id: 'message-user-empty',
+				conversation_id: 'conversation-empty',
+				turn_id: 'turn-empty',
+				role: 'user',
+				content: 'Start the check'
+			},
+			{
+				id: 'message-assistant-empty',
+				conversation_id: 'conversation-empty',
+				turn_id: 'turn-empty',
+				role: 'assistant',
+				content: { id: 'turn-empty', status: 'running', parts: [] }
+			}
+		]);
+		const panel = toPanelMessages(conversation.messages, conversation.turns);
+		expect(panel).toEqual([
+			expect.objectContaining({ kind: 'text', role: 'user', content: 'Start the check' })
+		]);
+		expect(agentOrbState(conversation)).toBe('working');
+	});
+
+	it('projects provider reasoning before the tool part in the same running turn', () => {
+		const conversation = projectStoredChatMessages([
+			{
+				id: 'message-assistant-reasoning',
+				conversation_id: 'conversation-reasoning',
+				turn_id: 'turn-reasoning',
+				role: 'assistant',
+				content: {
+					id: 'turn-reasoning',
+					status: 'running',
+					parts: [
+						{ kind: 'reasoning', text: 'I should inspect the assignments first.' },
+						{
+							kind: 'tool',
+							id: 'call-reasoning',
+							name: 'read_collection',
+							input: { collection: 'job_assignments' }
+						}
+					]
+				}
+			}
+		]);
+		const panel = toPanelMessages(conversation.messages, conversation.turns);
+		expect(panel.map((message) => message.kind)).toEqual(['reasoning', 'tool']);
+		expect(panel[0]).toMatchObject({
+			kind: 'reasoning',
+			content: 'I should inspect the assignments first.'
+		});
+	});
+
 	it('projects a running stored turn without a history command or client-side session cache', () => {
 		const conversation = projectStoredChatMessages(rows('running', false));
 		const panel = toPanelMessages(conversation.messages, conversation.turns);

@@ -37,6 +37,20 @@ test('the narrow collection list keeps one records scrollport around every card'
 	);
 });
 
+test('CollectionTable chooses exactly one responsive body from its own inline size', () => {
+	const table = componentSource('collection-table/collection-table.svelte');
+
+	assert.match(
+		table,
+		/:global\(\.collection-table-responsive\)\s*\{\s*container-type: inline-size;/u
+	);
+	assert.match(table, /:global\(\.collection-table-narrow\)\s*\{\s*display: none;/u);
+	assert.match(
+		table,
+		/@container \(max-width: 47\.999rem\)[\s\S]*?:global\(\.collection-table-wide\)[\s\S]*?display: none;[\s\S]*?:global\(\.collection-table-narrow\)[\s\S]*?display: grid;/u
+	);
+});
+
 test('list and Kanban cards render the shared record-warning leading accent', () => {
 	const list = componentSource('collection-table/collection-table-list.svelte');
 	const board = componentSource('collection-kanban/collection-kanban.svelte');
@@ -73,4 +87,14 @@ test('an unbounded CollectionTable yields vertical scrolling to its record-detai
 	const boundedListChoice = between(list, '{#if bounded}', '{/if}');
 	const unboundedList = between(boundedListChoice, '{:else}', '{/if}');
 	assert.doesNotMatch(unboundedList, /<Scroll\b|overflow-y-(?:auto|scroll)/u);
+});
+
+test('CollectionTable paginates a growing live window instead of requiring a first-page cursor', () => {
+	const table = componentSource('collection-table/collection-table.svelte');
+
+	assert.match(table, /collectionTablePageWindow\(queryState\.pageIndex, queryState\.pageSize\)/u);
+	assert.match(table, /limit: pageWindow\.limit/u);
+	assert.match(table, /after: undefined/u);
+	assert.match(table, /collectionTablePageRows\(rowsQuery\?\.current, pageWindow\)/u);
+	assert.doesNotMatch(table, /rowsQuery\?\.nextCursor/u);
 });

@@ -1,5 +1,9 @@
 import { Cause, Context, Effect, Exit, Layer, Schema } from 'effect';
-import { EffectId, type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
+import {
+	EffectId,
+	type EffectId as EffectIdType,
+	type SyncChange
+} from '@norbital-ai/bolt-protocol';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import type { AutomationProgression } from '#lib/authoring/automations-schema.js';
 import * as Database from '#lib/runtime/facilities/database.js';
@@ -15,7 +19,8 @@ import * as TenantScope from '#lib/runtime/tenant.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
-import { and, eq } from 'drizzle-orm';
+import { SyncCommit } from '#lib/runtime/facilities/services.js';
+import { and, eq, inArray } from 'drizzle-orm';
 
 const { automation_run: automationRun, bolt_task: boltTask } = SYSTEM_MODEL_TABLES;
 const StoppedTaskStatus = Schema.Struct({ status: Schema.Literal('stopped') });
@@ -120,6 +125,11 @@ export type Interface = Readonly<{
 		effectId: EffectIdType,
 		taskId: string
 	) => Effect.Effect<Schema.Json | undefined, Database.FacilityError>;
+	/** Publishes rows projected by the cron queue's database triggers. */
+	readonly publishProjectedRuns: (
+		effectId: EffectIdType,
+		taskIds: ReadonlyArray<string>
+	) => Effect.Effect<void, Database.FacilityError>;
 	readonly progress: (
 		effectId: EffectIdType,
 		taskId: string,
@@ -168,6 +178,36 @@ export const layer = Layer.effect(
 		const workspace = yield* Workspace.Service;
 		const budget = yield* InvocationBudget.Service;
 		const tenant = yield* TenantScope.Service;
+		const syncCommit = yield* SyncCommit.Service;
+		const runChanges = (rows: ReadonlyArray<unknown>): ReadonlyArray<SyncChange> =>
+			rows.flatMap((row) => {
+				if (row === null || typeof row !== 'object' || Array.isArray(row)) return [];
+				const id = Reflect.get(row, 'id');
+				return typeof id === 'string' && id !== ''
+					? [{ collection: 'automation_run', recordId: id }]
+					: [];
+			});
+		const publishRuns = (
+			effectId: EffectIdType,
+			rows: ReadonlyArray<unknown>
+		): Effect.Effect<void> =>
+			syncCommit.publish(EffectId.make(`${effectId}:publish`), { changes: runChanges(rows) });
+		const publishProjectedRuns = Effect.fn('Automations.publishProjectedRuns')(function* (
+			effectId: EffectIdType,
+			taskIds: ReadonlyArray<string>
+		) {
+			const distinct = [...new Set(taskIds)];
+			if (distinct.length === 0) return;
+			const response = yield* executeBuilt(
+				EffectId.make(`${effectId}:rows`),
+				database,
+				composer
+					.select({ id: automationRun.id })
+					.from(automationRun)
+					.where(inArray(automationRun.task_id, distinct))
+			);
+			yield* publishRuns(effectId, response.rows);
+		});
 		/** Input for request-owned runs exists only as long as the invocation that admitted it. */
 		const directInputs = new Map<
 			string,
@@ -205,7 +245,7 @@ export const layer = Layer.effect(
 		) {
 			if (runs.length === 0) return [];
 			const prepared = yield* Effect.forEach(runs, prepareStart);
-			yield* transactionBuilt(
+			const inserted = yield* transactionBuilt(
 				EffectId.make(`${effectId}:runs`),
 				database,
 				prepared.map(({ name, taskId }) =>
@@ -213,8 +253,10 @@ export const layer = Layer.effect(
 						.insert(automationRun)
 						.values({ task_id: taskId, name, status: 'running' })
 						.onConflictDoNothing({ target: automationRun.task_id })
+						.returning({ id: automationRun.id })
 				)
 			);
+			yield* publishRuns(EffectId.make(`${effectId}:runs`), inserted.rows);
 			for (const item of prepared) directInputs.set(item.taskId, item);
 			return prepared.map(({ name, taskId }) => ({ name, taskId }));
 		});
@@ -262,7 +304,7 @@ export const layer = Layer.effect(
 			>
 		) {
 			if (settlements.length === 0) return;
-			yield* transactionBuilt(
+			const settled = yield* transactionBuilt(
 				effectId,
 				database,
 				settlements.map(({ taskId, outcome }) =>
@@ -270,12 +312,26 @@ export const layer = Layer.effect(
 						.update(automationRun)
 						.set(
 							outcome.status === 'done'
-								? { status: 'done', result: JSON.stringify(outcome.result), error: null }
-								: { status: 'failed', result: null, error: outcome.error }
+								? {
+										status: 'done',
+										result: JSON.stringify(outcome.result),
+										error: null,
+										updated_at: dbNow(),
+										row_version: increment(automationRun.row_version)
+									}
+								: {
+										status: 'failed',
+										result: null,
+										error: outcome.error,
+										updated_at: dbNow(),
+										row_version: increment(automationRun.row_version)
+									}
 						)
 						.where(and(eq(automationRun.task_id, taskId), eq(automationRun.status, 'running')))
+						.returning({ id: automationRun.id })
 				)
 			);
+			yield* publishRuns(effectId, settled.rows);
 			for (const { taskId } of settlements) directInputs.delete(taskId);
 		});
 
@@ -323,8 +379,7 @@ export const layer = Layer.effect(
 						settle(taskId, { status: 'failed', error: Cause.pretty(cause) }).pipe(
 							Effect.andThen(Effect.failCause(cause))
 						),
-					onSuccess: (result) =>
-						settle(taskId, { status: 'done', result }).pipe(Effect.as(result))
+					onSuccess: (result) => settle(taskId, { status: 'done', result }).pipe(Effect.as(result))
 				});
 			});
 
@@ -371,12 +426,20 @@ export const layer = Layer.effect(
 
 		return Service.of({
 			recover: Effect.fn('Automations.recover')(function* (effectId) {
-				yield* transactionBuilt(effectId, database, [
+				const recovered = yield* transactionBuilt(effectId, database, [
 					composer
 						.update(automationRun)
-						.set({ status: 'failed', error: 'host restarted during run', result: null })
+						.set({
+							status: 'failed',
+							error: 'host restarted during run',
+							result: null,
+							updated_at: dbNow(),
+							row_version: increment(automationRun.row_version)
+						})
 						.where(eq(automationRun.status, 'running'))
+						.returning({ id: automationRun.id })
 				]);
+				yield* publishRuns(effectId, recovered.rows);
 			}),
 			register: Effect.fn('Automations.register')(function* (name) {
 				yield* workspace.automation(name);
@@ -404,9 +467,10 @@ export const layer = Layer.effect(
 				);
 				return response.rows[0];
 			}),
+			publishProjectedRuns,
 			progress: Effect.fn('Automations.progress')(function* (effectId, taskId, value) {
 				if (directInputs.has(taskId)) {
-					yield* executeBuilt(
+					const progressed = yield* executeBuilt(
 						effectId,
 						database,
 						composer
@@ -414,23 +478,33 @@ export const layer = Layer.effect(
 							.set({
 								progress: JSON.stringify(value),
 								progress_sequence: increment(automationRun.progress_sequence),
-								progress_updated_at: dbNow()
+								progress_updated_at: dbNow(),
+								updated_at: dbNow(),
+								row_version: increment(automationRun.row_version)
 							})
 							.where(and(eq(automationRun.task_id, taskId), eq(automationRun.status, 'running')))
+							.returning({ id: automationRun.id })
 					);
+					yield* publishRuns(effectId, progressed.rows);
 					return;
 				}
 				yield* queue.progress(effectId, taskId, value);
+				yield* publishProjectedRuns(EffectId.make(`${effectId}:projected`), [taskId]);
 			}),
 			stop: Effect.fn('Automations.stop')(function* (effectId, name, taskId) {
 				yield* workspace.automation(name);
 				if (directInputs.has(taskId)) {
-					yield* executeBuilt(
+					const stopped = yield* executeBuilt(
 						effectId,
 						database,
 						composer
 							.update(automationRun)
-							.set({ status: 'stopped', error: 'stopped' })
+							.set({
+								status: 'stopped',
+								error: 'stopped',
+								updated_at: dbNow(),
+								row_version: increment(automationRun.row_version)
+							})
 							.where(
 								and(
 									eq(automationRun.task_id, taskId),
@@ -438,11 +512,14 @@ export const layer = Layer.effect(
 									eq(automationRun.status, 'running')
 								)
 							)
+							.returning({ id: automationRun.id })
 					);
+					yield* publishRuns(effectId, stopped.rows);
 					yield* queue.interruptActive(EffectId.make(`${effectId}:interrupt`), taskId);
 					return;
 				}
 				yield* queue.stop(effectId, taskId, `automations.${name}`);
+				yield* publishProjectedRuns(EffectId.make(`${effectId}:projected`), [taskId]);
 			})
 		});
 	})

@@ -2,7 +2,7 @@
  * Platform ownership: the model compiler, the generated client, and operator-facing identifiers.
  *
  * Ported from `ORM1`, `DDL1`, `SQL1`, `QRY2`, `QRY3`, `UI18`, `LEGACY1`, `COMPAT1`,
- * `TRANS1`, `TRANS2`, `E3`.
+ * `TRANS1`, `TRANS2`, `E3`, plus the canonical tenant-root contract `ROOT1`.
  *
  * `QRY1` and `MUT1` are deliberately absent: they are the two rows of the capability manifest in
  * `capability.ts`, which is where a co-occurrence rule belongs. That is the whole lesson of the
@@ -498,6 +498,25 @@ const legacyFieldFallback = defineRule({
 	}
 });
 
+const legacyTenantRootOverride = defineRule({
+	id: 'ROOT1',
+	severity: 'error',
+	summary: 'legacy tenant substrate root override bypasses the canonical one-root contract',
+	principles: ['simplicity', 'straightforwardness', 'modularity', 'testability', 'no-bloat'],
+	when: ['Identifier', 'StringLiteral', 'NoSubstitutionTemplateLiteral'],
+	check(node, context) {
+		// The root owner must name the variables it refuses, and tests must be able to prove that
+		// refusal. Everywhere else, either spelling recreates a second mutable-root vocabulary.
+		if (/(?:^|\/)scripts\/tenant-substrate-root\.mjs$/u.test(context.file)) return;
+		if (/(?:^|\/)[^/]+\.(?:test|spec)\.[cm]?[jt]s$/u.test(context.file)) return;
+		const legacy = /\b(?:COLONY_DATA_DIRECTORY|COLONY_PACKAGE_STORE)\b/u.exec(
+			context.text(node)
+		)?.[0];
+		if (legacy === undefined) return;
+		context.report(node, `override=${legacy} owner=TENANT_SUBSTRATE_ROOT`);
+	}
+});
+
 const envRevalidationWrapper = defineRule({
 	id: 'E3',
 	severity: 'error',
@@ -546,6 +565,7 @@ export const platformRules: ReadonlyArray<Rule> = [
 	compatibilityForwarder,
 	removalMarker,
 	legacyFieldFallback,
+	legacyTenantRootOverride,
 	envRevalidationWrapper,
 	featureFlag
 ];

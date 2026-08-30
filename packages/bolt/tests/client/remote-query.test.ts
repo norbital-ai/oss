@@ -116,6 +116,39 @@ describe('machine-backed query read semantics', () => {
 		expect(released).toBe(0);
 	});
 
+	it('does not reproject when an unrelated Machine query publishes', () => {
+		const machine = fakeMachine();
+		let projections = 0;
+		const query = createMachineQuery(
+			machine.client,
+			{ key: 'jobs', release: () => undefined },
+			(state) => {
+				projections += 1;
+				return projectIds(state);
+			}
+		);
+		const jobs = queryState({ phase: 'fresh', answer: [{ id: 'stable' }] });
+		const relevant: ClientState = {
+			...initialClientState(),
+			queries: new Map([['jobs', jobs]])
+		};
+		machine.publish(relevant);
+		const first = query.current;
+		expect(first).toEqual(['stable']);
+		expect(projections).toBe(2);
+
+		machine.publish({
+			...relevant,
+			queries: new Map([
+				['jobs', jobs],
+				['sites', queryState({ phase: 'pending' })]
+			])
+		});
+
+		expect(query.current).toBe(first);
+		expect(projections).toBe(2);
+	});
+
 	it('rejects a query that fails before holding a value', async () => {
 		const machine = fakeMachine();
 		const query = createMachineQuery(

@@ -11,6 +11,8 @@ import type {
 } from '@norbital-ai/bolt-protocol';
 import { envoy, policy, workspace } from '../../src/authoring/workspace-schema.js';
 import * as Envoys from '../../src/runtime/envoys/envoys.js';
+import * as Identity from '../../src/runtime/identity/identity.js';
+import { fixtureUserId } from '../support/fixture-identity.js';
 import { makeBoltTestRuntime } from '../support/bolt-test-layer.js';
 
 const definition = workspace({
@@ -46,7 +48,10 @@ const definition = workspace({
 	requiredFacilities: []
 });
 
-const delivery = (messageId: string, senderId = '6591234567@s.whatsapp.net') => ({
+const delivery = (
+	messageId: string,
+	senderId = '6591234567@s.whatsapp.net'
+): Envoys.EnvoyDelivery => ({
 	conversationId: senderId,
 	conversationKind: 'dm' as const,
 	messageId,
@@ -99,7 +104,10 @@ describe('envoy burst admission and chat documents', () => {
 		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
 			call: async (_metadata, request) => {
 				communicationRequests.push(request);
-				return { _tag: 'Success', value: {} };
+				return {
+					_tag: 'Success',
+					value: { receipt: { id: `provider-message-${communicationRequests.length}` } }
+				};
 			}
 		};
 		const harness = await makeBoltTestRuntime(definition, { ai, files, communication });
@@ -122,27 +130,6 @@ describe('envoy burst admission and chat documents', () => {
 						envoys.drain(harness.effectId(effectId), 'field_ops_whatsapp', conversationId)
 					)
 				);
-			/**
-			 * Delivers the answer of the turn `drain` has already taken.
-			 *
-			 * Inbound chat is direct execution now: `drain` admits the batch and runs the turn in the
-			 * same invocation, so there is no queued row to find and nothing left to execute. What
-			 * remains is the outbound half, which is a separate command because delivery is the
-			 * transport's beat rather than the model's.
-			 */
-			const finishQueuedTurn = (effectId: string) =>
-				harness.runtime.runPromise(
-					Effect.flatMap(Envoys.Service, (envoys) =>
-						envoys.complete(
-							harness.effectId(`${effectId}:complete`),
-							'field_ops_whatsapp',
-							conversationId,
-							null,
-							null
-						)
-					)
-				);
-
 			expect((await receive('receive:first', delivery('message-1'))).status).toBe('buffered');
 			const textOnly = {
 				...delivery('message-3'),
@@ -162,9 +149,12 @@ describe('envoy burst admission and chat documents', () => {
 			expect(write.key).toMatch(/^chat-sessions\/.+\/.+\.png$/);
 
 			expect((await drain('drain:burst')).status).toBe('queued');
-			expect((await finishQueuedTurn('drain:burst')).status).toBe('answered');
 			expect(aiRequests).toHaveLength(1);
-			expect(communicationRequests).toHaveLength(1);
+			expect(communicationRequests).toHaveLength(2);
+			expect(communicationRequests[1]).toMatchObject({
+				_tag: 'Send',
+				payload: { text: 'Recorded.', updateOf: 'provider-message-1' }
+			});
 			const request = aiRequests[0];
 			if (request?._tag !== 'Turn') throw new Error('expected an AI turn');
 			const context = request.messages
@@ -220,22 +210,217 @@ describe('envoy burst admission and chat documents', () => {
 			expect((await receive('receive:next', next)).status).toBe('buffered');
 			const competing = await Promise.all([drain('drain:race:a'), drain('drain:race:b')]);
 			expect(competing.map(({ status }) => status).toSorted()).toEqual(['queued', 'skipped']);
-			expect((await finishQueuedTurn('drain:race')).status).toBe('answered');
 			expect(aiRequests).toHaveLength(2);
-			expect(communicationRequests).toHaveLength(2);
+			expect(communicationRequests).toHaveLength(4);
 
+			const unknownSender = '6599999999@s.whatsapp.net';
+			const unknownGroupMessage = {
+				...delivery('message-2', unknownSender),
+				conversationId: '120363000000000000@g.us',
+				conversationKind: 'group' as const,
+				invocation: 'mention' as const,
+				text: '@field_ops_whatsapp can you help?',
+				attachments: []
+			};
+			expect((await receive('receive:unknown', unknownGroupMessage)).status).toBe(
+				'registration_required'
+			);
 			expect(
-				(await receive('receive:unknown', delivery('message-2', '6599999999@s.whatsapp.net')))
-					.status
+				(await receive('receive:unknown-again', delivery('message-4', unknownSender))).status
 			).toBe('registration_required');
+			// Each model turn creates then edits one bubble; one capped registration notice follows.
+			expect(communicationRequests).toHaveLength(5);
+			const registrationNotice = communicationRequests[4];
+			expect(registrationNotice).toMatchObject({
+				_tag: 'Send',
+				channel: 'whatsapp',
+				recipient: unknownSender,
+				payload: {
+					text: 'Register this whatsapp account with test-tenant to continue.',
+					registration: { expiresInMinutes: 15 }
+				}
+			});
+			if (registrationNotice?._tag !== 'Send') throw new Error('expected a registration send');
+			const registration = Reflect.get(registrationNotice.payload as object, 'registration');
+			if (registration === null || typeof registration !== 'object') {
+				throw new Error('expected a registration claim');
+			}
+			const claimId = Reflect.get(registration, 'claimId');
+			expect(claimId).toEqual(expect.any(String));
 			expect(
-				(await receive('receive:unknown-again', delivery('message-4', '6599999999@s.whatsapp.net')))
-					.status
-			).toBe('registration_required');
-			// Two model replies, then one capped registration notice for two unknown messages.
-			expect(communicationRequests).toHaveLength(3);
+				await harness.runtime.runPromise(
+					Effect.flatMap(Envoys.Service, (envoys) =>
+						envoys.inspectRegistration(harness.effectId('registration:inspect:first'), claimId)
+					)
+				)
+			).toEqual({ state: 'ready', envoy: 'field_ops_whatsapp', transport: 'whatsapp' });
+			expect(
+				await harness.runtime.runPromise(
+					Effect.flatMap(Envoys.Service, (envoys) =>
+						envoys.inspectRegistration(harness.effectId('registration:inspect:scanner'), claimId)
+					)
+				)
+			).toEqual({ state: 'ready', envoy: 'field_ops_whatsapp', transport: 'whatsapp' });
+			expect(
+				await harness.database.query(
+					`select sender_id, status,
+						(expires_at between now() + interval '14 minutes' and now() + interval '16 minutes') as expires_in_fifteen
+					 from bolt_channel_links where link_id = $1`,
+					[claimId]
+				)
+			).toEqual([{ sender_id: '6599999999', status: 'pending', expires_in_fifteen: true }]);
+			expect(
+				await harness.runtime.runPromise(
+					Effect.flatMap(Envoys.Service, (envoys) =>
+						envoys.status(harness.effectId('envoy:status'), 'field_ops_whatsapp')
+					)
+				)
+			).toMatchObject({ received: 5, replied: 3 });
 			expect(fileRequests).toHaveLength(1);
 			expect(aiRequests).toHaveLength(2);
+		} finally {
+			await harness.dispose();
+		}
+	});
+
+	it('binds a pending WhatsApp claim to the authenticated tenant identity exactly once', async () => {
+		const communicationRequests: Array<CommunicationRequest> = [];
+		const communication: FacilityBinding<CommunicationRequest, CommunicationResponse> = {
+			call: async (_metadata, request) => {
+				communicationRequests.push(request);
+				return { _tag: 'Success', value: {} };
+			}
+		};
+		const harness = await makeBoltTestRuntime(definition, { communication });
+		try {
+			await harness.database.query(
+				`insert into "user" ("id", "name", "email", "tenantId")
+				 values (md5('ada'::text)::uuid, 'Ada', 'ada@example.test', 'test-tenant')`
+			);
+			const unknownSender = '6598887777@s.whatsapp.net';
+			const received = await harness.runtime.runPromise(
+				Effect.flatMap(Envoys.Service, (envoys) =>
+					envoys.receive(harness.effectId('registration:receive'), 'field_ops_whatsapp', {
+						...delivery('claim-message', unknownSender),
+						attachments: [],
+						text: 'Hello'
+					})
+				)
+			);
+			expect(received.status).toBe('registration_required');
+			const notice = communicationRequests[0];
+			if (notice?._tag !== 'Send') throw new Error('expected a registration send');
+			const registration = Reflect.get(notice.payload as object, 'registration');
+			if (registration === null || typeof registration !== 'object') {
+				throw new Error('expected a registration claim');
+			}
+			const claimId = Reflect.get(registration, 'claimId');
+			if (typeof claimId !== 'string') throw new Error('expected a registration claim id');
+			const subject: Identity.Subject = {
+				userId: fixtureUserId('ada'),
+				tenantId: 'test-tenant',
+				teamPath: [],
+				policies: [],
+				admin: false,
+				email: 'ada@example.test'
+			};
+
+			const registered = await harness.runtime.runPromise(
+				Effect.flatMap(Envoys.Service, (envoys) =>
+					envoys.redeemRegistration(harness.effectId('registration:redeem'), claimId, subject)
+				)
+			);
+			expect(registered).toEqual({
+				state: 'registered',
+				envoy: 'field_ops_whatsapp',
+				transport: 'whatsapp'
+			});
+			expect(
+				await harness.database.query(
+					`select channels from "user" where "id" = md5('ada'::text)::uuid`
+				)
+			).toEqual([
+				{
+					channels: [{ type: 'whatsapp', address: '6598887777', verified: true }]
+				}
+			]);
+			expect(
+				await harness.runtime.runPromise(
+					Effect.flatMap(Identity.Service, (identity) =>
+						identity.accountByTransportIdentity(
+							harness.effectId('registration:identity'),
+							'whatsapp',
+							unknownSender
+						)
+					)
+				)
+			).toEqual({ userId: fixtureUserId('ada'), email: 'ada@example.test' });
+			expect(
+				await harness.runtime.runPromise(
+					Effect.flatMap(Envoys.Service, (envoys) =>
+						envoys.inspectRegistration(harness.effectId('registration:after'), claimId)
+					)
+				)
+			).toEqual({ state: 'registered' });
+			expect(
+				await harness.runtime.runPromise(
+					Effect.flatMap(Envoys.Service, (envoys) =>
+						envoys.redeemRegistration(harness.effectId('registration:replay'), claimId, subject)
+					)
+				)
+			).toEqual({ state: 'used' });
+		} finally {
+			await harness.dispose();
+		}
+	});
+
+	it('refuses expired or already-owned WhatsApp claims without changing either account', async () => {
+		const harness = await makeBoltTestRuntime(definition);
+		try {
+			await harness.database.query(
+				`insert into "user" ("id", "name", "email", "tenantId", "channels") values
+				 (md5('owner'::text)::uuid, 'Owner', 'owner@example.test', 'test-tenant',
+				  '[{"type":"whatsapp","address":"6591112222","verified":true}]'::jsonb),
+				 (md5('claimant'::text)::uuid, 'Claimant', 'claimant@example.test', 'test-tenant', '[]'::jsonb)`
+			);
+			await harness.database.query(
+				`insert into bolt_channel_links
+					(link_id, tenant_id, envoy, transport, sender_id, status, expires_at) values
+				 ('claim-expired', 'test-tenant', 'field_ops_whatsapp', 'whatsapp', '6593334444', 'pending', now() - interval '1 second'),
+				 ('claim-conflict', 'test-tenant', 'field_ops_whatsapp', 'whatsapp', '6591112222', 'pending', now() + interval '15 minutes')`
+			);
+			const claimant: Identity.Subject = {
+				userId: fixtureUserId('claimant'),
+				tenantId: 'test-tenant',
+				teamPath: [],
+				policies: [],
+				admin: false,
+				email: 'claimant@example.test'
+			};
+			const redeem = (effectId: string, claimId: string) =>
+				harness.runtime.runPromise(
+					Effect.flatMap(Envoys.Service, (envoys) =>
+						envoys.redeemRegistration(harness.effectId(effectId), claimId, claimant)
+					)
+				);
+
+			expect(await redeem('registration:expired', 'claim-expired')).toEqual({ state: 'expired' });
+			expect(await redeem('registration:conflict', 'claim-conflict')).toEqual({
+				state: 'conflict'
+			});
+			expect(
+				await harness.database.query(
+					`select channels from "user" where "id" = md5('claimant'::text)::uuid`
+				)
+			).toEqual([{ channels: [] }]);
+			expect(
+				await harness.database.query(
+					`select link_id, status, claimed_by from bolt_channel_links order by link_id`
+				)
+			).toEqual([
+				{ link_id: 'claim-conflict', status: 'pending', claimed_by: null },
+				{ link_id: 'claim-expired', status: 'pending', claimed_by: null }
+			]);
 		} finally {
 			await harness.dispose();
 		}

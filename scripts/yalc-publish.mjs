@@ -33,8 +33,8 @@ const yalcStoreDirectory = packagePaths.yalcStore;
 const commandEnvironment = {
 	...process.env,
 	[tenantSubstrateRootEnvironment]: tenantSubstrateRoot,
-	npm_config_store_dir: packagePaths.pnpmStore,
-	npm_config_cache: packagePaths.pnpmCache
+	npm_config_store_dir: packagePaths.hostPnpmStore,
+	npm_config_cache: packagePaths.hostPnpmCache
 };
 const allPackages = [
 	{ name: '@norbital-ai/bolt-protocol', directory: 'packages/bolt-protocol' },
@@ -195,8 +195,9 @@ if (!existsSync(path.join(repositoryRoot, 'node_modules/.bin/yalc'))) {
  *
  * turbo hashes each package's inputs and replays the cache for anything unchanged, so the common
  * case — one package edited — compiles one package instead of five, and a second linker invoked
- * straight after the first compiles nothing at all. `--concurrency=1` matches `pnpm build`: several
- * of these are svelte-package runs and they contend badly.
+ * straight after the first compiles nothing at all. Four workers preserve dependency ordering but
+ * overlap independent TypeScript/Svelte builds; a forced cold benchmark on the reset host was
+ * 22.1s versus 27.3s serially.
  */
 const buildable = packages.filter(
 	({ directory }) =>
@@ -208,7 +209,7 @@ if (buildable.length > 0) {
 		'turbo',
 		'run',
 		'build',
-		'--concurrency=1',
+		'--concurrency=4',
 		...buildable.map(({ name }) => `--filter=${name}`)
 	];
 	if (buildTargetOnly) buildArguments.push('--only');
@@ -217,7 +218,9 @@ if (buildable.length > 0) {
 
 /** Where yalc has pushed this package, so the rewrite can follow it. */
 const installationsOf = (name) => {
-	const installations = readJsonIfPresent(path.join(yalcStoreDirectory, 'installations.json'))?.[name];
+	const installations = readJsonIfPresent(path.join(yalcStoreDirectory, 'installations.json'))?.[
+		name
+	];
 	return Array.isArray(installations) ? installations : [];
 };
 
@@ -227,15 +230,7 @@ for (const { directory, name } of packages) {
 	const packageRoot = path.join(repositoryRoot, directory);
 	run(
 		'pnpm',
-		[
-			'exec',
-			'yalc',
-			'--store-folder',
-			yalcStoreDirectory,
-			'publish',
-			'--private',
-			'--no-scripts'
-		],
+		['exec', 'yalc', '--store-folder', yalcStoreDirectory, 'publish', '--private', '--no-scripts'],
 		packageRoot
 	);
 
@@ -265,15 +260,7 @@ for (const { directory, name } of packages) {
 		// changes silently never reached their installations. Only a later `yalc add` refreshed them.
 		run(
 			'pnpm',
-			[
-				'exec',
-				'yalc',
-				'--store-folder',
-				yalcStoreDirectory,
-				'push',
-				'--replace',
-				'--private'
-			],
+			['exec', 'yalc', '--store-folder', yalcStoreDirectory, 'push', '--replace', '--private'],
 			packageRoot
 		);
 		// The push republishes from source, overwriting the manifest rewritten above.

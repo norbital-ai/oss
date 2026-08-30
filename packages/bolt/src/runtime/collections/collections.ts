@@ -29,6 +29,7 @@ import {
 	EffectId,
 	type CollectionMutateRequest,
 	type CollectionMutationSettlement,
+	type SyncChange,
 	type SyncOutcome,
 	type SyncWriteStatus
 } from '@norbital-ai/bolt-protocol';
@@ -37,7 +38,7 @@ import * as Approvals from '#lib/runtime/approvals/approvals.js';
 import { ApprovalConflict } from '#lib/runtime/approvals/approvals.js';
 import { refusalOf } from '#lib/authoring/refusal.js';
 import * as Database from '#lib/runtime/facilities/database.js';
-import { AI, Files } from '#lib/runtime/facilities/services.js';
+import { AI, Files, SyncCommit } from '#lib/runtime/facilities/services.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as Automations from '#lib/runtime/automations/automations.js';
 import * as Identity from '#lib/runtime/identity/identity.js';
@@ -762,6 +763,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			const files = yield* Files.Service;
 			const queue = yield* TaskQueue.Service;
 			const automations = yield* Automations.Service;
+			const syncCommit = yield* SyncCommit.Service;
 			const authored = yield* AuthoredRuntimeService;
 			const authoringCollectionNames = new Set([
 				...workspace.definition.collections
@@ -1315,9 +1317,9 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			 * decision rather than nine, and the cache stays keyed by collection name because the
 			 * augmentation is a function of the declaration, not of the caller.
 			 *
-			 * Typed as a `string` scalar carrying its own `sqlType`, which is how every other vector
-			 * column in this codebase is described: the scalar kind is what queries and access masking
-			 * reason about, and `vector(n)` is what the database is told.
+			 * Typed as JSON carrying its own `sqlType`, like authored vectors: the public value is a
+			 * number array, while `vector(n)` is what the database is told. The query descriptor itself
+			 * remains query-only text; `decodeReferenceRow` restores pgvector's text wire value.
 			 */
 			const queryFieldsFor = (
 				name: string,
@@ -1330,7 +1332,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				return {
 					...fields,
 					[RECORD_EMBEDDING_COLUMN]: {
-						type: 'string',
+						type: 'json',
 						required: false,
 						indexed: true,
 						sqlType: `vector(${declared.dimensions ?? DEFAULT_RECORD_EMBEDDING_DIMENSIONS})`
@@ -1545,9 +1547,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 			const embeddingPorts = {
 				database,
 				ai,
-				collections: workspace.definition.collections,
-				readAsset: (effectId: EffectId, file: Record<string, unknown>) =>
-					readFileAsset(effectId, files, file)
+				collections: workspace.definition.collections
 			};
 			/**
 			 * Runs one authored hook handler with its context object, resolving Effect, promise, and plain
@@ -1591,7 +1591,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 				...authoringReadPorts,
 				mutate,
 				startAutomation,
-				infer: inferOp(effectId, ai, (file) => readFileAsset(effectId, files, file)),
+				infer: inferOp(effectId, ai),
 				readFileAsset: (file: Parameters<AuthoringOps['readFileAsset']>[0]) =>
 					readFileAsset(effectId, files, file)
 			});
@@ -3532,6 +3532,10 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 						seenChanges.add(key);
 						changes.push({ collection: operation.collection, recordId: operation.id });
 					}
+					// A long-running automation or agent keeps this invocation open while later writes
+					// commit. Publish this checkpoint now so mounted collection queries repaint per
+					// committed message part/record instead of receiving the whole turn at its end.
+					yield* syncCommit.publish(EffectId.make(`${effectId}:publish`), { changes });
 					return {
 						records: roots.map(
 							(root) =>
@@ -4078,9 +4082,7 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 								: Effect.fail(mutationPhaseFailure('commit', collection, [], cause))
 						)
 					),
-				// The implementation carries a `depth` argument for its own recursion guard; the service
-				// contract is the three-argument call, so the extra parameter stops here rather than
-				// widening the published signature.
+				// Keep the internal recursion depth out of the public delete contract.
 				delete: (effectId, subject, collection, id, options) =>
 					mutate(effectId, subject, collection, [{ id }], false, 0, {
 						root: { id, action: 'delete' },
@@ -4102,6 +4104,8 @@ export const layerWith = (randomId: () => string = () => globalThis.crypto.rando
 							(cause) => Effect.fail(cause.underlying as MutationError)
 						)
 					),
+				// SyncCommit owns the unavailable-host fallback queue and the app drains it after dispatch.
+				drainChanges: Effect.succeed([]),
 				mutateBrowser,
 				lookupBrowserMutations,
 				resume: (effectId, requestId) =>

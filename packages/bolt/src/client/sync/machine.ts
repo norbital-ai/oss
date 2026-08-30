@@ -7,6 +7,7 @@ import type {
 	SyncConnectRequest,
 	SyncConnectResponse,
 	SyncCursor,
+	SyncHeldCoordinate,
 	SyncPatch,
 	SyncQueryInput
 } from '@norbital-ai/bolt-protocol';
@@ -129,13 +130,43 @@ const heldIds = (query: QueryState): ReadonlyArray<string> | undefined => {
 	return Object.values(answer).flatMap((rows) => recordIds(rows));
 };
 
+const heldCoordinates = (query: QueryState): ReadonlyArray<SyncHeldCoordinate> | undefined => {
+	if (query.input.kind !== 'findMany' || !Array.isArray(query.answer)) return undefined;
+	const authoredOrder =
+		query.input.orderBy !== null &&
+		typeof query.input.orderBy === 'object' &&
+		!Array.isArray(query.input.orderBy)
+			? Object.entries(query.input.orderBy).flatMap(([column, direction]) =>
+					direction === 'asc' || direction === 'desc' ? [column] : []
+				)
+			: [];
+	const columns = authoredOrder.includes('id') ? authoredOrder : [...authoredOrder, 'id'];
+	const coordinates = query.answer.flatMap((row) => {
+		if (!isRecord(row)) return [];
+		const id = recordIdOf(row);
+		const order = columns.map((column) => row[column]);
+		if (id === undefined || order.some((value) => value === undefined)) return [];
+		const version = row['row_version'];
+		return [
+			{
+				id,
+				rowVersion: typeof version === 'number' || typeof version === 'string' ? version : null,
+				order: order as SyncHeldCoordinate['order']
+			}
+		];
+	});
+	return coordinates.length === query.answer.length ? coordinates : undefined;
+};
+
 const connectQuery = (key: QueryKey, query: QueryState): ConnectQuery => {
 	const ids = query.digestOnly === true ? undefined : heldIds(query);
+	const coordinates = query.digestOnly === true ? undefined : heldCoordinates(query);
 	return {
 		key,
 		input: query.input,
 		...(query.digest === undefined ? {} : { digest: query.digest }),
 		...(ids === undefined ? {} : { heldIds: [...ids] }),
+		...(coordinates === undefined ? {} : { heldCoordinates: [...coordinates] }),
 		...(query.digestOnly === true ? { digestOnly: true } : {})
 	};
 };
@@ -181,24 +212,28 @@ const patchRows = (
 		return next;
 	}
 	if (patch.op === 'replace') {
-		const index = next.findIndex((row) => recordIdOf(row) === patch.recordId);
-		if (index >= 0) {
-			if (recordIdOf(patch.row) !== patch.recordId) {
-				throw new Error('Sync replacement does not match the held record');
-			}
-			next[index] = patch.row;
+		const held = next.findIndex((row) => recordIdOf(row) === patch.recordId);
+		if (recordIdOf(patch.row) !== patch.recordId) {
+			throw new Error('Sync replacement does not match the held record');
+		}
+		if (patch.index === undefined && patch.displaces === undefined && held >= 0) {
+			next[held] = patch.row;
 			return next;
 		}
-		// A boundary seat change (§2.3): the entrant named by `recordId` is not held yet and takes
-		// the displaced row's seat. The row must still be held and the entrant must name itself.
-		const seat =
+		const displaced =
 			patch.displaces === undefined
 				? -1
 				: next.findIndex((row) => recordIdOf(row) === patch.displaces);
-		if (seat < 0 || recordIdOf(patch.row) !== patch.recordId) {
+		const removed = patch.displaces === undefined ? held : displaced;
+		if (removed < 0 || (patch.displaces !== undefined && held >= 0)) {
 			throw new Error('Sync replacement does not match the held record');
 		}
-		next[seat] = patch.row;
+		const target = patch.index ?? removed;
+		next.splice(removed, 1);
+		if (!Number.isInteger(target) || target < 0 || target > next.length) {
+			throw new Error('Sync replacement index is outside the authoritative answer');
+		}
+		next.splice(target, 0, patch.row);
 		return next;
 	}
 	if (patch.op === 'remove') {
@@ -337,6 +372,16 @@ const onConnected = (
 				sentAt: at
 			});
 			effects.push({ kind: 'push', writeId: id });
+		}
+		// The opening connect effect is a snapshot. UI queries can mount after that snapshot was
+		// queued but before its HTTP response arrives; while the link is reconnecting, mounts do not
+		// schedule their own revalidation. Once the opening response makes the link live, issue one
+		// revalidation for every subscribed query it did not answer so none remains pending forever.
+		const revalidationState = { ...state, queries, writes };
+		for (const [key, query] of queries) {
+			if (query.phase === 'pending' && query.subscribers > 0) {
+				effects.push(revalidateEffect(revalidationState, key, query));
+			}
 		}
 	}
 	const reconnectAttempt = malformed ? state.reconnectAttempt + 1 : 0;

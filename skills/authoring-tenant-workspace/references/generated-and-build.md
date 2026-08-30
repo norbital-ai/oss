@@ -109,9 +109,9 @@ Yalc never crosses an environment boundary.
 | Template website content | publish the public template projection, then rebuild/redeploy the prerendered website                                                               |
 
 Remote template refresh affects catalogue reads and new provisioning. Existing tenants retain their
-source snapshot and routed artifact until the host performs a tenant rebuild. The current Norbital
-host exposes no non-destructive `tenant:update` command; do not invent one and do not substitute a
-factory reset. Report that deployment gap when an existing staging/production tenant must advance.
+source snapshot and routed artifact until the host rebuilds them. There is no non-destructive
+`tenant:update`. Advance a tenant with `pnpm run env -- reset` (Colony down for a local target;
+signed operations for staging/production). Do not invent a second update command.
 
 ## Verification
 

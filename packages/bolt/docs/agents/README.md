@@ -39,13 +39,13 @@ One assembly path (`allowedTools`):
 1. **Platform** (always considered): `describe_workspace`, `list_skills`, `read_skill`,
    `read_collection`, `write_collection`. `search_envoy_history` is offered only to envoys,
    not the reserved `web` agent.
-2. `write_collection` only if the subject has any write grant (`create` / `update` / `delete`
-   on any collection).
+2. `write_collection` only if the subject has any `mutate.new`, `mutate.existing`, or `delete`
+   grant on any collection.
 3. **Authored** `defineAgentTool` — only when a policy names the tool.
 4. **MCP** — only when a policy names the server. Wire names fold `:` to `_`.
 5. **Sandbox** (unless `delegation: disabled`): `spawn_agent`, `list_agents`, `read_agent`,
-	`message_agent`, `await_agent`, `interrupt_agent`, `stop_agent`, `resume_agent`. Structural;
-	they do not grant workspace data authority.
+   `message_agent`, `await_agent`, `interrupt_agent`, `stop_agent`, `resume_agent`. Structural;
+   they do not grant workspace data authority.
 6. **Host tools** — only if a policy names them. The host implements the dangerous side.
 
 Denied tools return `{ error }` in the loop (`ToolNotAllowed`). There is no "missing means all"

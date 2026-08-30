@@ -134,6 +134,11 @@ const CASES: ReadonlyArray<Case> = [
 		good: 'export const n = row.name;'
 	},
 	{
+		rule: 'ROOT1',
+		bad: 'export const root = process.env.COLONY_DATA_DIRECTORY;',
+		good: 'export const root = process.env.TENANT_SUBSTRATE_ROOT;'
+	},
+	{
 		rule: 'E3',
 		bad: "export const url = process.env['SECRET_URL'] ?? '';",
 		good: 'export const url = config.secretUrl;'

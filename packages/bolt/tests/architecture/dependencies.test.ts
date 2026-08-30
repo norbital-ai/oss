@@ -19,6 +19,9 @@ const sourceFiles = async (root: string): Promise<ReadonlyArray<string>> => {
 	return nested.flat();
 };
 
+const lineCount = async (path: string): Promise<number> =>
+	((await readFile(path, 'utf8')).match(/\n/g) ?? []).length;
+
 describe('Bolt architecture boundaries', () => {
 	it('does not import Core, Pod, Colony, bolt-server, or provider SDKs', async () => {
 		const files = await sourceFiles(new URL('../../src', import.meta.url).pathname);
@@ -38,9 +41,7 @@ describe('Bolt architecture boundaries', () => {
 						new URL(`../../src/client/${entrypoint}`, import.meta.url),
 						'utf8'
 					);
-					return /from\s+['"](?:#lib\/runtime\/|\.\.\/runtime\/)/u.test(source)
-						? [entrypoint]
-						: [];
+					return /from\s+['"](?:#lib\/runtime\/|\.\.\/runtime\/)/u.test(source) ? [entrypoint] : [];
 				})
 			)
 		).flat();
@@ -70,6 +71,56 @@ describe('Bolt architecture boundaries', () => {
 			)
 		).flat();
 		expect(violations).toEqual([]);
+	});
+
+	it('enforces the amended collection lifecycle source budget', async () => {
+		const source = new URL('../../src', import.meta.url).pathname;
+		const collections = join(source, 'runtime/collections');
+		const access = join(source, 'runtime/access');
+		const authoring = join(source, 'authoring');
+		const lines = (relativePath: string): Promise<number> => lineCount(join(source, relativePath));
+		const sum = async (paths: ReadonlyArray<string>): Promise<number> =>
+			(await Promise.all(paths.map(lines))).reduce((total, count) => total + count, 0);
+
+		const collectionFiles = (await sourceFiles(collections)).filter((path) => path.endsWith('.ts'));
+		const collectionLines = (
+			await Promise.all(collectionFiles.map((path) => lineCount(path)))
+		).reduce((total, count) => total + count, 0);
+		const accessSuccessors = [
+			'runtime/access/access-control.ts',
+			'runtime/access/invocation.ts',
+			'runtime/access/policy-compiler.ts',
+			'runtime/access/policy-surface.ts',
+			'runtime/access/predicate.ts'
+		];
+		const accessLines = await sum(accessSuccessors);
+		const amendedAggregate =
+			collectionLines +
+			(await sum([
+				'runtime/dispatch.ts',
+				'compiler/schema-plan.ts',
+				'authoring/contracts-schema.ts',
+				'authoring/internals.ts',
+				'runtime/approvals/approvals.ts',
+				'authoring/model-introspection.ts'
+			])) +
+			accessLines;
+
+		expect(amendedAggregate).toBeLessThanOrEqual(17_900);
+		expect(await lines('runtime/collections/collections.ts')).toBeLessThanOrEqual(4_700);
+		expect(await lines('runtime/collections/write/engine.ts')).toBeLessThanOrEqual(800);
+		expect(await lines('runtime/collections/write/declarative-prepare.ts')).toBeLessThanOrEqual(
+			825
+		);
+		expect(await lines('runtime/collections/write/graph-read.ts')).toBeLessThanOrEqual(300);
+		expect(await lines('runtime/collections/write/settle.ts')).toBeLessThanOrEqual(180);
+		expect(await lines('runtime/collections/hooks/boundary.ts')).toBeLessThanOrEqual(275);
+		expect(accessLines).toBeLessThanOrEqual(1_705);
+
+		// Policy introspection is deliberately outside the historical aggregate basket. Give the
+		// authoring/runtime bridge its own explicit ceiling rather than letting it grow ungoverned.
+		expect(await lineCount(join(authoring, 'policy-introspection.ts'))).toBeLessThanOrEqual(425);
+		expect((await sourceFiles(access)).filter((path) => path.endsWith('.ts')).length).toBe(6);
 	});
 });
 

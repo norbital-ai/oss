@@ -1,6 +1,7 @@
 import { Effect, Fiber, Schema } from 'effect';
 import type { RemoteQuery } from '@norbital-ai/std/collection';
-import type { ClientState } from '#lib/client/sync/machine.js';
+import { createSubscriber } from 'svelte/reactivity';
+import type { ClientState, QueryState } from '#lib/client/sync/machine.js';
 import type { MountedLiveQuery, SyncClient } from '#lib/client/sync/client.js';
 
 const asError = (cause: unknown): Error =>
@@ -114,6 +115,17 @@ type LiveQueryMachine = Readonly<{
  */
 const liveQueryFinalizers = new FinalizationRegistry<() => void>((cleanup) => cleanup());
 
+/** A Machine transition may clone the write map while retaining every immutable write value. */
+const sameWrites = (
+	left: ClientState['writes'] | undefined,
+	right: ClientState['writes']
+): boolean => {
+	if (left === right) return true;
+	if (left === undefined || left.size !== right.size) return false;
+	for (const [id, write] of left) if (right.get(id) !== write) return false;
+	return true;
+};
+
 /**
  * A collection read answered by the Machine: `{ current, loading, error }` with the §1.7 semantics.
  *
@@ -130,15 +142,23 @@ const liveQueryFinalizers = new FinalizationRegistry<() => void>((cleanup) => cl
  * settles, the mount is released and the subscription dropped so the host stops computing for it.
  */
 class MachineRemoteQuery<Value> implements RemoteQuery<Value> {
-	current = $state.raw<Value | undefined>(undefined);
-	error = $state.raw<Error | undefined>(undefined);
-	loading = $state(true);
+	#current: Value | undefined = undefined;
+	#error: Error | undefined = undefined;
+	#loading = true;
+	readonly #track: () => void;
+	#notify: (() => void) | undefined;
+	#notifyQueued = false;
+	#observed = false;
+	#observedAnswer: unknown = undefined;
+	#observedPhase: QueryState['phase'] | undefined = undefined;
+	#observedError: string | undefined = undefined;
+	#observedWrites: ClientState['writes'] | undefined = undefined;
 	readonly #key: string;
 	readonly #project: (state: ClientState) => Value | undefined;
 	readonly #awaited: Promise<Value>;
 	readonly #resolve: (value: Value) => void;
 	readonly #reject: (cause: unknown) => void;
-	#release?: () => void;
+	#release: (() => void) | undefined = undefined;
 
 	constructor(
 		machine: LiveQueryMachine,
@@ -148,6 +168,12 @@ class MachineRemoteQuery<Value> implements RemoteQuery<Value> {
 	) {
 		this.#key = mounted.key;
 		this.#project = project;
+		this.#track = createSubscriber((update) => {
+			this.#notify = update;
+			return () => {
+				if (this.#notify === update) this.#notify = undefined;
+			};
+		});
 		let resolve!: (value: Value) => void;
 		let reject!: (cause: unknown) => void;
 		this.#awaited = new Promise<Value>((res, rej) => {
@@ -156,23 +182,61 @@ class MachineRemoteQuery<Value> implements RemoteQuery<Value> {
 		});
 		this.#resolve = resolve;
 		this.#reject = reject;
-		const weak = new WeakRef<MachineRemoteQuery<Value>>(this);
-		const unsubscribe = machine.subscribe((state) => {
-			const self = weak.deref();
-			if (self !== undefined) self.#observe(state);
-		});
+		let released = false;
+		let unsubscribe: () => void = () => undefined;
 		const cleanup = () => {
+			if (released) return;
+			released = true;
 			unsubscribe();
 			mounted.release();
 		};
 		if (oneshot) this.#release = cleanup;
+		const weak = new WeakRef<MachineRemoteQuery<Value>>(this);
+		unsubscribe = machine.subscribe((state) => {
+			const self = weak.deref();
+			if (self !== undefined) self.#observe(state);
+		});
+		// A synchronous first publication can settle a oneshot before `subscribe` returns.
+		if (released) unsubscribe();
 		liveQueryFinalizers.register(this, cleanup);
+	}
+
+	get current(): Value | undefined {
+		this.#track();
+		return this.#current;
+	}
+
+	get error(): Error | undefined {
+		this.#track();
+		return this.#error;
+	}
+
+	get loading(): boolean {
+		this.#track();
+		return this.#loading;
 	}
 
 	readonly #observe = (state: ClientState): void => {
 		const query = state.queries.get(this.#key);
-		this.loading = query === undefined || query.phase === 'pending' || query.answer === undefined;
-		this.error =
+		// Mounting or answering one live query publishes the whole Machine. Reprojecting every other
+		// query from that publication creates new array identities, rerenders their rows, remounts
+		// relation queries, and feeds the Machine again. Only the answer/status this view reads or an
+		// optimistic write can change its projection.
+		if (
+			this.#observed &&
+			query?.answer === this.#observedAnswer &&
+			query?.phase === this.#observedPhase &&
+			query?.error === this.#observedError &&
+			sameWrites(this.#observedWrites, state.writes)
+		)
+			return;
+		this.#observed = true;
+		this.#observedAnswer = query?.answer;
+		this.#observedPhase = query?.phase;
+		this.#observedError = query?.error;
+		this.#observedWrites = state.writes;
+		this.#loading = query === undefined || query.phase === 'pending' || query.answer === undefined;
+		this.#error =
 			query !== undefined && query.phase === 'failed' && query.error !== undefined
 				? new Error(query.error)
 				: undefined;
@@ -181,8 +245,8 @@ class MachineRemoteQuery<Value> implements RemoteQuery<Value> {
 		if (value !== undefined) {
 			this.#resolve(value);
 			settled = true;
-		} else if (this.error !== undefined) {
-			this.#reject(this.error);
+		} else if (this.#error !== undefined) {
+			this.#reject(this.#error);
 			settled = true;
 		} else if (query !== undefined && query.phase !== 'pending' && query.answer !== undefined) {
 			// The answer exists and the projection legitimately maps it to nothing — an empty
@@ -190,8 +254,18 @@ class MachineRemoteQuery<Value> implements RemoteQuery<Value> {
 			this.#resolve(undefined as Value);
 			settled = true;
 		}
-		this.current = value;
-		if (settled) this.#release?.();
+		this.#current = value;
+		if (settled) {
+			const release = this.#release;
+			this.#release = undefined;
+			release?.();
+		}
+		if (this.#notify === undefined || this.#notifyQueued) return;
+		this.#notifyQueued = true;
+		queueMicrotask(() => {
+			this.#notifyQueued = false;
+			this.#notify?.();
+		});
 	};
 
 	then: RemoteQuery<Value>['then'] = (onfulfilled, onrejected) =>

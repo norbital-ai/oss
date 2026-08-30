@@ -22,8 +22,9 @@ currently held by an open approval request.
 ## Temporal history
 
 Every record's versions are retained in `bolt_collection_history`
-(`sequence, collection_name, record_id, operation, subject_id, snapshot`). A create stores the
-initial values; each update stores only the fields that changed; the read path folds them oldest
+(`sequence, collection_name, record_id, operation, subject_id, snapshot`). A new-row mutation stores
+the initial values; each existing-row mutation stores only the fields that changed; the read path
+folds them oldest
 first into full revisions `{ values, validFrom, validTo, version }`. The manifest reports every
 collection as `history: true`.
 
@@ -52,7 +53,8 @@ never contains rows the user could not query directly. Mutations apply optimisti
 replica and reconcile with the server.
 
 Approval state propagates the same way. An optimistic client mutation can reconcile to an open
-approval: a held create has no server domain row, while an existing update/delete target remains at
+approval: a held new-row mutation has no server domain row, while an existing-row mutation/delete
+target remains at
 its committed values and may become locked when the request arrives through the sync channel.
 
 Two consequences worth stating to a confused user:

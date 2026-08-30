@@ -19,7 +19,7 @@ import {
 	emptyAuthoredRuntime
 } from '../../src/runtime/collections/authored.js';
 import * as Database from '../../src/runtime/facilities/database.js';
-import { AI, Files, Tasks } from '../../src/runtime/facilities/services.js';
+import { AI, Files, SyncCommit, Tasks } from '../../src/runtime/facilities/services.js';
 import * as TenantScope from '../../src/runtime/tenant.js';
 import * as InvocationBudget from '../../src/runtime/budget.js';
 import { Subject } from '../../src/runtime/identity/identity.js';
@@ -43,20 +43,17 @@ const dataPolicy = describePolicy('admin-data', {
 	description: 'Exercises one- and two-stage approval settlement.',
 	grants: {
 		orders: {
-			create: { approval: oneStep },
-			update: { approval: oneStep },
+			mutate: { new: { approval: oneStep }, existing: { approval: oneStep } },
 			delete: { approval: oneStep },
 			read: {}
 		},
 		employees: {
-			create: { approval: twoStep },
-			update: { approval: twoStep },
+			mutate: { new: { approval: twoStep }, existing: { approval: twoStep } },
 			delete: { approval: twoStep },
 			read: {}
 		},
 		notes: {
-			create: {},
-			update: { approval: oneStep },
+			mutate: { new: {}, existing: { approval: oneStep } },
 			delete: {},
 			read: {}
 		}
@@ -618,11 +615,19 @@ const workspaceLayer = Workspace.layer(definition);
 const testLayer = (recorded: Array<string> = []) => {
 	const tasks = recordingTasks();
 	const database = memoryDatabaseLayer(recorded);
+	const syncCommit = SyncCommit.layer(undefined, context);
 	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.mergeAll(database, tasks)));
 	const tenantScope = TenantScope.layer(context.tenantId);
 	const automations = Automations.layer.pipe(
 		Layer.provide(
-			Layer.mergeAll(workspaceLayer, database, taskQueue, InvocationBudget.layer(0), tenantScope)
+			Layer.mergeAll(
+				workspaceLayer,
+				database,
+				taskQueue,
+				syncCommit,
+				InvocationBudget.layer(0),
+				tenantScope
+			)
 		)
 	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
@@ -647,6 +652,7 @@ const testLayer = (recorded: Array<string> = []) => {
 				taskQueue,
 				automations,
 				authoredLayer,
+				syncCommit,
 				tasks
 				// No transport is bound, so the announcement is ignored — which is exactly the behaviour
 				// under test here: a write path must not depend on anywhere to publish.

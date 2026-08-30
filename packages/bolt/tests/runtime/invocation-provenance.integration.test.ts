@@ -165,8 +165,8 @@ const gatedWorkspace = workspace({
 			grants: {
 				people: {
 					read: {},
-					create: {
-						approval: { flow: () => approveBy('approvers'), superceded_by: [] }
+					mutate: {
+						new: { approval: { flow: () => approveBy('approvers'), superceded_by: [] } }
 					}
 				}
 			}

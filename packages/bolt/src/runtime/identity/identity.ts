@@ -1,6 +1,6 @@
 import { Clock, Context, Effect, Layer, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { and, asc, desc, eq, gt, isNotNull } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { Communication, IdentityHooks } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
 import { Subject } from './subject.js';
@@ -62,6 +62,12 @@ const InvitationAcceptedRow = Schema.Struct({
 	tenant_id: Schema.NonEmptyString,
 	email: NullableString
 });
+const InvitationClaimRow = Schema.Struct({
+	tenant_id: Schema.NonEmptyString,
+	email: Schema.NonEmptyString,
+	status: Schema.NonEmptyString,
+	expires_at: Schema.NullOr(Schema.String)
+});
 const IdRow = Schema.Struct({ id: Schema.NonEmptyString });
 const MemberRow = Schema.Struct({
 	id: Schema.NonEmptyString,
@@ -81,10 +87,11 @@ const ExternalMemberSourceRow = Schema.Struct({
 	team_id: NullableString
 });
 const InvitationRow = Schema.Struct({
-	invitation_id: Schema.NonEmptyString,
+	id: Schema.NonEmptyString,
 	email: Schema.String,
 	status: Schema.String,
-	invited_by: NullableString
+	invitedBy: NullableString,
+	expiresAt: Schema.NullOr(Schema.String)
 });
 const AuditSubject = Schema.Struct({
 	collection: Schema.optionalKey(Schema.String),
@@ -113,6 +120,19 @@ export type CodeDelivery = Schema.Schema.Type<typeof CodeDelivery>;
 
 /** The only queued identity command. Kept with its input contract so enqueue and dispatch agree. */
 export const DELIVER_CODE_COMMAND = 'identity.deliverCode';
+
+/** Workspace invitations last long enough to be acted on, while still bounding forwarded links. */
+export const INVITATION_EXPIRES_SECONDS = 7 * 24 * 60 * 60;
+
+export type InvitationClaimState =
+	| Readonly<{ readonly state: 'ready' }>
+	| Readonly<{ readonly state: 'expired' | 'accepted' | 'revoked' | 'invalid' }>;
+
+export type InvitationAcceptance =
+	| Readonly<{ readonly state: 'accepted' }>
+	| Readonly<{
+			readonly state: 'expired' | 'already_accepted' | 'revoked' | 'wrong_account' | 'invalid';
+	  }>;
 
 const malformedDatabaseRow = (operation: string) =>
 	new Database.FacilityError({
@@ -281,12 +301,18 @@ export type Interface = Readonly<{
 		tenantId: string,
 		email: string,
 		invitedBy: string
-	) => Effect.Effect<string, Database.FacilityError | Database.FacilityError>;
+	) => Effect.Effect<string, Database.FacilityError>;
+	/** Read-only invitation link probe. It never accepts or otherwise changes the claim. */
+	readonly inspectInvitation: (
+		effectId: EffectId,
+		tenantId: string,
+		invitationId: string
+	) => Effect.Effect<InvitationClaimState, Database.FacilityError>;
 	readonly acceptInvitation: (
 		effectId: EffectId,
 		invitationId: string,
-		userId: string
-	) => Effect.Effect<void, AuthenticationError | Database.FacilityError>;
+		subject: Subject
+	) => Effect.Effect<InvitationAcceptance, Database.FacilityError>;
 	/** Persists a sign-in code and queues its delivery. Bolt issues it; the host only carries it. */
 	readonly sendCode: (
 		effectId: EffectId,
@@ -733,6 +759,43 @@ export const layerWith = (
 				});
 				return credential;
 			});
+			const inspectInvitation = Effect.fn('Identity.inspectInvitation')(function* (
+				effectId: EffectId,
+				tenantId: string,
+				invitationId: string
+			) {
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({
+							tenant_id: invitationsTable.tenant_id,
+							email: invitationsTable.email,
+							status: invitationsTable.status,
+							expires_at: invitationsTable.expires_at
+						})
+						.from(invitationsTable)
+						.where(
+							and(
+								eq(invitationsTable.invitation_id, invitationId),
+								eq(invitationsTable.tenant_id, tenantId)
+							)
+						)
+						.limit(1)
+				);
+				const row = result.rows[0];
+				if (row === undefined) return { state: 'invalid' as const };
+				const invitation = yield* Schema.decodeUnknownEffect(InvitationClaimRow)(row).pipe(
+					Effect.mapError(() => malformedDatabaseRow('identity.inspectInvitation'))
+				);
+				if (invitation.status === 'accepted') return { state: 'accepted' as const };
+				if (invitation.status === 'revoked') return { state: 'revoked' as const };
+				if (invitation.status !== 'pending') return { state: 'invalid' as const };
+				const now = yield* Clock.currentTimeMillis;
+				return invitation.expires_at !== null && Date.parse(invitation.expires_at) <= now
+					? { state: 'expired' as const }
+					: { state: 'ready' as const };
+			});
 			return Service.of({
 				/**
 				 * Resolves the credential against Better Auth's session table, which is the only session
@@ -854,7 +917,8 @@ export const layerWith = (
 					}
 				),
 				invite: Effect.fn('Identity.invite')(function* (effectId, tenantId, email, invitedBy) {
-					const invitationId = `${tenantId}:${effectId}`;
+					const invitationId = randomId();
+					const normalizedEmail = email.trim().toLowerCase();
 					yield* executeBuilt(
 						effectId,
 						database,
@@ -863,38 +927,52 @@ export const layerWith = (
 							.values({
 								invitation_id: invitationId,
 								tenant_id: tenantId,
-								email,
+								email: normalizedEmail,
 								invited_by: invitedBy,
-								status: 'pending'
+								status: 'pending',
+								expires_at: dbNowPlusSeconds(INVITATION_EXPIRES_SECONDS)
 							})
 							.onConflictDoNothing({ target: invitationsTable.invitation_id })
 					);
 					yield* communication.execute(effectId, {
 						_tag: 'Notify',
-						recipient: email,
-						payload: { kind: 'workspace_invitation', invitationId, tenantId }
+						recipient: normalizedEmail,
+						payload: {
+							kind: 'workspace_invitation',
+							invitationId,
+							tenantId,
+							expiresInDays: INVITATION_EXPIRES_SECONDS / 86_400
+						}
 					});
 					yield* identityHooks.emit(effectId, {
 						_tag: 'UserInvited',
 						invitationId,
 						organizationId: tenantId,
-						email,
+						email: normalizedEmail,
 						invitedBy
 					});
 					return invitationId;
 				}),
+				inspectInvitation,
 				acceptInvitation: Effect.fn('Identity.acceptInvitation')(
-					function* (effectId, invitationId, userId) {
+					function* (effectId, invitationId, subject) {
+						if (subject.email === undefined) return { state: 'wrong_account' as const };
 						const result = yield* executeBuilt(
 							effectId,
 							database,
 							composer
 								.update(invitationsTable)
-								.set({ status: 'accepted', accepted_by: userId })
+								.set({ status: 'accepted', accepted_by: subject.userId })
 								.where(
 									and(
 										eq(invitationsTable.invitation_id, invitationId),
-										eq(invitationsTable.status, 'pending')
+										eq(invitationsTable.tenant_id, subject.tenantId),
+										eq(invitationsTable.status, 'pending'),
+										or(
+											isNull(invitationsTable.expires_at),
+											gt(invitationsTable.expires_at, dbNow())
+										),
+										eq(sql<string>`lower(${invitationsTable.email})`, subject.email.toLowerCase())
 									)
 								)
 								.returning({
@@ -903,24 +981,34 @@ export const layerWith = (
 								})
 						);
 						const row = result.rows[0];
-						if (row === undefined) return yield* new AuthenticationError({ reason: 'invalid' });
+						if (row === undefined) {
+							const inspected = yield* inspectInvitation(
+								EffectId.make(`${effectId}:inspect`),
+								subject.tenantId,
+								invitationId
+							);
+							if (inspected.state === 'accepted') return { state: 'already_accepted' as const };
+							if (inspected.state !== 'ready') return inspected;
+							return { state: 'wrong_account' as const };
+						}
 						const invitation = yield* Schema.decodeUnknownEffect(InvitationAcceptedRow)(row).pipe(
-							Effect.mapError(() => new AuthenticationError({ reason: 'malformed' }))
+							Effect.mapError(() => malformedDatabaseRow('identity.acceptInvitation'))
 						);
 						const { email, tenant_id: organizationId } = invitation;
 						yield* identityHooks.emit(effectId, {
 							_tag: 'MembershipChanged',
-							userId,
+							userId: subject.userId,
 							organizationId,
 							...(email === null ? {} : { email }),
 							action: 'joined'
 						});
 						yield* identityHooks.emit(effectId, {
 							_tag: 'UserChanged',
-							userId,
+							userId: subject.userId,
 							organizationId,
 							...(email === null ? {} : { email })
 						});
+						return { state: 'accepted' as const };
 					}
 				),
 				/**
@@ -1213,7 +1301,8 @@ export const layerWith = (
 								id: invitationsTable.invitation_id,
 								email: invitationsTable.email,
 								status: invitationsTable.status,
-								invitedBy: invitationsTable.invited_by
+								invitedBy: invitationsTable.invited_by,
+								expiresAt: invitationsTable.expires_at
 							})
 							.from(invitationsTable)
 							.where(eq(invitationsTable.tenant_id, tenantId))
@@ -1294,13 +1383,14 @@ export const layerWith = (
 					return {
 						members,
 						invitations: decodedInvitations.map((row) => {
-							const { email, invitation_id: id, invited_by: invitedBy, status } = row;
+							const { email, id, invitedBy, status, expiresAt } = row;
 							return {
 								id,
 								email,
 								role: 'basic',
 								status,
-								...(invitedBy === null ? {} : { invitedBy })
+								...(invitedBy === null ? {} : { invitedBy }),
+								...(expiresAt === null ? {} : { expiresAt })
 							};
 						}),
 						teams,

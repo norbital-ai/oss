@@ -1,6 +1,6 @@
 // repository-health:allow SEM_PARALLEL -- authored facade consumes the collections contract leaf; the pair is linked through collections.contract, not parallel.
 import { Context, Duration, Effect, Option, Result, Schema } from 'effect';
-import { type EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
+import type { AIImageAssetPart, EffectId as EffectIdType } from '@norbital-ai/bolt-protocol';
 import { AuthoredRefusal, refusalOf } from '#lib/authoring/refusal.js';
 import type { AutomationProgression } from '#lib/authoring/automations-schema.js';
 import type { FileRef } from '#lib/authoring/models-schema.js';
@@ -11,8 +11,9 @@ import type { Interface as CollectionsInterface } from './collections.contract.j
 import type * as Automations from '#lib/runtime/automations/automations.js';
 import type { AIInterface, FilesInterface } from '#lib/runtime/facilities/services.js';
 import * as Database from '#lib/runtime/facilities/database.js';
-import { encodeBase64, readFileAsset, type FileAsset } from './file-assets.js';
+import { readFileAsset, type FileAsset } from './file-assets.js';
 import { nearestQueryInput, queryInput } from './query-input.js';
+import { HookEffectIds } from './hooks/boundary.js';
 
 /**
  * The runtime carrier for a workspace's authored business logic.
@@ -330,9 +331,10 @@ const MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS = 8_192;
  * The user turn `api.infer` sends, with the authored images attached to it.
  *
  * A prompt on its own is a plain string, which is what every provider means by a text-only turn. An
- * `images` list makes it the OpenAI-compatible content-part array the AI facility's gateway speaks,
- * with each asset inlined as a `data:` URL — the object store's keys are not reachable from the
- * provider's network, so a URL naming one would be fetched by nobody.
+ * `images` list makes it a content-part array carrying small `image_asset` descriptors. The trusted
+ * host resolves those tenant-scoped keys into provider data URLs after the isolate crossing. Bytes
+ * must not be read or base64-expanded here: a 1 MiB JPEG becomes a request larger than the facility
+ * bridge's 1 MiB ceiling, and encoding a review batch consumes the isolate's whole CPU budget.
  *
  * The declaration sat in the authoring contract for a long time with nothing behind it: the turn was
  * built as `[{ role: 'user', content: prompt }]` and `images` was read nowhere, so a vision
@@ -341,8 +343,7 @@ const MAX_STRUCTURED_INFERENCE_OUTPUT_TOKENS = 8_192;
  */
 const inferenceTurnContent = (
 	prompt: string,
-	images: ReadonlyArray<AuthoredInferenceImage> | undefined,
-	readAsset: (file: FileRef) => Effect.Effect<FileAsset, Database.FacilityError>
+	images: ReadonlyArray<AuthoredInferenceImage> | undefined
 ): Effect.Effect<Schema.Json, Database.FacilityError> =>
 	Effect.gen(function* () {
 		if (images === undefined || images.length === 0) return prompt;
@@ -363,14 +364,26 @@ const inferenceTurnContent = (
 		const parts: Array<Schema.Json> = [{ type: 'text', text: prompt }];
 		let total = 0;
 		for (const image of images) {
-			const asset = yield* readAsset(image.file);
-			if (asset.mimeType === null || !asset.mimeType.startsWith('image/')) {
+			const file = image.file;
+			if (file.storage_key.trim() === '' || file.file_name.trim() === '') {
 				return yield* refuse(
-					'ai.not_an_image',
-					`${asset.name} is ${asset.mimeType ?? 'of unknown type'}, which is not an image.`
+					'ai.asset_missing',
+					'This image value names no stored object, so there is nothing to send.'
 				);
 			}
-			total += asset.size;
+			if (!file.mime_type.startsWith('image/')) {
+				return yield* refuse(
+					'ai.not_an_image',
+					`${file.file_name} is ${file.mime_type || 'of unknown type'}, which is not an image.`
+				);
+			}
+			if (!Number.isInteger(file.file_size) || file.file_size < 0) {
+				return yield* refuse(
+					'ai.invalid_image_size',
+					`${file.file_name} has an invalid declared size.`
+				);
+			}
+			total += file.file_size;
 			if (total > MAX_INFERENCE_IMAGE_BYTES) {
 				return yield* refuse(
 					'ai.images_too_large',
@@ -378,12 +391,15 @@ const inferenceTurnContent = (
 				);
 			}
 			parts.push({
-				type: 'image_url',
-				image_url: {
-					url: `data:${asset.mimeType};base64,${encodeBase64(asset.bytes)}`,
+				type: 'image_asset',
+				image_asset: {
+					key: file.storage_key,
+					name: file.file_name,
+					mimeType: file.mime_type,
+					size: file.file_size,
 					detail: image.detail ?? 'auto'
 				}
-			});
+			} satisfies AIImageAssetPart);
 		}
 		return parts;
 	});
@@ -415,19 +431,14 @@ const decodeResearchText = Schema.decodeUnknownSync(Schema.Struct({ text: Schema
  * The `infer` member of the authoring api, owned in one place.
  *
  * Structured inference is one behaviour — an optional grounding turn whose prose is fed back in as
- * evidence, then the schema-constrained turn that has to answer in the author's shape. The two
- * builders differ only in how they resolve a `file()` value, which is why that arrives as an
- * argument rather than as a second copy of this.
+ * evidence, then the schema-constrained turn that has to answer in the author's shape. Image bytes
+ * are resolved by the host from the asset descriptors this operation emits.
  */
 export const inferOp =
-	(
-		effectId: EffectIdType,
-		ai: AIInterface,
-		readAsset: (file: FileRef) => Effect.Effect<FileAsset, Database.FacilityError>
-	): AuthoringOps['infer'] =>
+	(effectId: EffectIdType, ai: AIInterface): AuthoringOps['infer'] =>
 	(input) =>
 		Effect.gen(function* () {
-			const content = yield* inferenceTurnContent(input.prompt, input.images, readAsset);
+			const content = yield* inferenceTurnContent(input.prompt, input.images);
 			const model = input.model ?? 'gpt-5';
 			const responseSchema = Schema.decodeUnknownSync(Schema.Json)(
 				Schema.toJsonSchemaDocument(input.schema).schema
@@ -552,6 +563,13 @@ export const makeBoundAuthoringOps = (
 	runAutomation?: AuthoringOps['runAutomation']
 ): AuthoringOps => {
 	const readAsset = (file: FileRef) => readFileAsset(effectId, files, file);
+	/**
+	 * A direct automation, integration, or remote may issue more than one write in one invocation.
+	 * The mutation engine derives a create's stable id from its effect id, so reusing the parent here
+	 * made every id-less create after the first collide with the first row. The same boundary issuer
+	 * used by collection hooks gives each authored write a replay-stable ordinal owned by the runtime.
+	 */
+	const writeEffectIds = new HookEffectIds(effectId);
 	return {
 		allowedCollections: collections.authoringCollectionNames,
 		findMany: (collection, input) =>
@@ -563,7 +581,16 @@ export const makeBoundAuthoringOps = (
 		findNearest: (collection, input) =>
 			collections.findNearest(effectId, subject, nearestQueryInput(collection, input)),
 		mutate: (collection, values) =>
-			collections.mutate(effectId, subject, collection, [values], false, 0).pipe(Effect.asVoid),
+			collections
+				.mutate(
+					writeEffectIds.next({ phase: 'mutate', collection }),
+					subject,
+					collection,
+					[values],
+					false,
+					0
+				)
+				.pipe(Effect.asVoid),
 		/**
 		 * Runs a declared automation under its own declared subject.
 		 *
@@ -580,7 +607,7 @@ export const makeBoundAuthoringOps = (
 		runAutomation:
 			runAutomation ??
 			((name, input, options) => collections.runAutomation(effectId, name, input, {}, options)),
-		infer: inferOp(effectId, ai, readAsset),
+		infer: inferOp(effectId, ai),
 		readFileAsset: readAsset
 	};
 };

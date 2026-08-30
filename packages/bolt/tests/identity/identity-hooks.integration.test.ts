@@ -56,7 +56,7 @@ describe('identity lifecycle hooks', () => {
 			})
 		);
 
-		expect(invitationId).toBe('test-tenant:invite-1');
+		expect(invitationId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
 		expect(hooks.events).toEqual([
 			{
 				_tag: 'UserInvited',
@@ -75,28 +75,118 @@ describe('identity lifecycle hooks', () => {
 			`insert into bolt_invitations (invitation_id, tenant_id, email, invited_by, status)
 			 values ('inv-1', 'test-tenant', 'ada@example.test', 'admin-1', 'pending')`
 		);
+		await harness.database.query(
+			`insert into "user" ("id", "name", "email", "tenantId")
+			 values (md5('u1'::text)::uuid, 'Ada', 'ada@example.test', 'test-tenant')`
+		);
 
-		await harness.runtime.runPromise(
+		const outcome = await harness.runtime.runPromise(
 			Effect.gen(function* () {
-				yield* (yield* Identity.Service).acceptInvitation(EffectId.make('accept-1'), 'inv-1', 'u1');
+				return yield* (yield* Identity.Service).acceptInvitation(
+					EffectId.make('accept-1'),
+					'inv-1',
+					{
+						userId: fixtureUserId('u1'),
+						tenantId: 'test-tenant',
+						teamPath: [],
+						policies: [],
+						admin: false,
+						email: 'ada@example.test'
+					}
+				);
 			})
 		);
 
+		expect(outcome).toEqual({ state: 'accepted' });
 		expect(hooks.events).toEqual([
 			{
 				_tag: 'MembershipChanged',
-				userId: 'u1',
+				userId: fixtureUserId('u1'),
 				organizationId: 'test-tenant',
 				email: 'ada@example.test',
 				action: 'joined'
 			},
 			{
 				_tag: 'UserChanged',
-				userId: 'u1',
+				userId: fixtureUserId('u1'),
 				organizationId: 'test-tenant',
 				email: 'ada@example.test'
 			}
 		]);
+	});
+
+	it('inspects invitation links without consuming them and accepts only the invited account', async () => {
+		harness = await makeBoltTestRuntime();
+		await harness.database.query(
+			`insert into bolt_invitations
+				(invitation_id, tenant_id, email, invited_by, status, expires_at)
+			 values ('inv-probe-safe', 'test-tenant', 'ada@example.test', 'admin-1', 'pending', now() + interval '1 hour')`
+		);
+
+		const inspect = (effectId: string) =>
+			harness!.runtime.runPromise(
+				Effect.flatMap(Identity.Service, (identity) =>
+					identity.inspectInvitation(EffectId.make(effectId), 'test-tenant', 'inv-probe-safe')
+				)
+			);
+		expect(await inspect('inspect:first')).toEqual({ state: 'ready' });
+		expect(await inspect('inspect:scanner')).toEqual({ state: 'ready' });
+		expect(
+			await harness.database.query(
+				`select status, accepted_by from bolt_invitations where invitation_id = 'inv-probe-safe'`
+			)
+		).toEqual([{ status: 'pending', accepted_by: null }]);
+
+		const wrongAccount = await harness.runtime.runPromise(
+			Effect.flatMap(Identity.Service, (identity) =>
+				identity.acceptInvitation(EffectId.make('accept:wrong'), 'inv-probe-safe', {
+					userId: fixtureUserId('grace'),
+					tenantId: 'test-tenant',
+					teamPath: [],
+					policies: [],
+					admin: false,
+					email: 'grace@example.test'
+				})
+			)
+		);
+		expect(wrongAccount).toEqual({ state: 'wrong_account' });
+		expect(await inspect('inspect:after-wrong-account')).toEqual({ state: 'ready' });
+
+		const accepted = await harness.runtime.runPromise(
+			Effect.flatMap(Identity.Service, (identity) =>
+				identity.acceptInvitation(EffectId.make('accept:ada'), 'inv-probe-safe', {
+					userId: fixtureUserId('ada'),
+					tenantId: 'test-tenant',
+					teamPath: [],
+					policies: [],
+					admin: false,
+					email: 'ADA@example.test'
+				})
+			)
+		);
+		expect(accepted).toEqual({ state: 'accepted' });
+		expect(await inspect('inspect:accepted')).toEqual({ state: 'accepted' });
+	});
+
+	it('expires invitation links without mutating them on inspection', async () => {
+		harness = await makeBoltTestRuntime();
+		await harness.database.query(
+			`insert into bolt_invitations
+				(invitation_id, tenant_id, email, invited_by, status, expires_at)
+			 values ('inv-expired', 'test-tenant', 'ada@example.test', 'admin-1', 'pending', now() - interval '1 second')`
+		);
+
+		const inspected = await harness.runtime.runPromise(
+			Effect.flatMap(Identity.Service, (identity) =>
+				identity.inspectInvitation(EffectId.make('inspect:expired'), 'test-tenant', 'inv-expired')
+			)
+		);
+		expect(inspected).toEqual({ state: 'expired' });
+		expect(
+			await harness.database.query(
+				`select status, accepted_by from bolt_invitations where invitation_id = 'inv-expired'`
+			)
+		).toEqual([{ status: 'pending', accepted_by: null }]);
 	});
 
 	it('startSession emits UserChanged', async () => {
@@ -155,7 +245,9 @@ describe('identity lifecycle hooks', () => {
 			})
 		);
 
-		expect(result.invitationId).toBe('test-tenant:invite-2');
+		expect(result.invitationId).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+		);
 		expect(result.credential.startsWith('bolt:test-tenant:')).toBe(true);
 	});
 });

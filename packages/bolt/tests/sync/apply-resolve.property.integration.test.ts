@@ -11,7 +11,7 @@ import { collection, field, policy } from '../../src/authoring/workspace-schema.
 import { applyPatch } from '../../src/client/sync/machine.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { advanceSubscription } from '../../src/runtime/sync/delta-engine.js';
-import { contentDigest, heldIdsOf } from '../../src/runtime/sync/digest.js';
+import { contentDigest, heldCoordinatesOf, heldIdsOf } from '../../src/runtime/sync/digest.js';
 import { describeSyncQuery, resolveSyncQuery } from '../../src/runtime/sync/resolver.js';
 import {
 	TEST_TENANT,
@@ -215,6 +215,7 @@ describe('delta engine: apply(patches) ≡ resolve(input, subject)', () => {
 		// Only rows the database still holds are write targets: re-targeting a deleted id would
 		// test the write path's refusals, which this property does not own.
 		const liveIds = new Set<string>(knownIds);
+		let pointPatches = 0;
 
 		/**
 		 * One round of the property: advance the subscription after a write, resolve the same
@@ -225,10 +226,11 @@ describe('delta engine: apply(patches) ≡ resolve(input, subject)', () => {
 			base: SyncAnswer,
 			subject: typeof adminSubject,
 			input: SyncQueryInput,
-			step: string
+			step: string,
+			changes: ReadonlyArray<SyncChange>
 		): Promise<[SyncAnswer, SyncAdvanceUpdate | undefined]> => {
 			const update = await h.runtime.runPromise(
-				advanceSubscription(h.effectId(`property:advance:${step}`), { state, subject })
+				advanceSubscription(h.effectId(`property:advance:${step}`), { state, subject }, changes)
 			);
 			const expected = await h.runtime.runPromise(
 				resolveSyncQuery(h.effectId(`property:resolve:${step}`), subject, input)
@@ -243,6 +245,7 @@ describe('delta engine: apply(patches) ≡ resolve(input, subject)', () => {
 			// The update rides the wire: it must decode exactly as the protocol defines it.
 			Schema.decodeUnknownSync(SyncAdvanceUpdate)(update);
 			const applied = applyPatch(base, update.patch);
+			if (update.patch.op !== 'answer' && update.patch.op !== 'scalar') pointPatches += 1;
 			expect(applied).toEqual(expected);
 			expect(update.from).toBe(state.digest);
 			expect(update.to).toBe(expectedDigest);
@@ -267,6 +270,7 @@ describe('delta engine: apply(patches) ≡ resolve(input, subject)', () => {
 			input: chainInput,
 			credential: 'engine-property-test',
 			heldIds: heldIdsOf(chainAnswer),
+			heldCoordinates: heldCoordinatesOf(chainAnswer, chainInput),
 			digestOnly: false,
 			digest: await contentDigest(chainAnswer),
 			policyHash: chainDescribed.policyHash
@@ -297,7 +301,8 @@ describe('delta engine: apply(patches) ≡ resolve(input, subject)', () => {
 				chainBase,
 				adminSubject,
 				chainInput,
-				`${round}c`
+				`${round}c`,
+				changes
 			);
 			chainBase = nextBase;
 			if (chainUpdate !== undefined) {
@@ -305,6 +310,9 @@ describe('delta engine: apply(patches) ≡ resolve(input, subject)', () => {
 					...chain,
 					digest: chainUpdate.to,
 					heldIds: [...chainUpdate.heldIds],
+					...(chainUpdate.heldCoordinates === undefined
+						? {}
+						: { heldCoordinates: chainUpdate.heldCoordinates }),
 					digestOnly: chainUpdate.digestOnly
 				};
 			}
@@ -322,12 +330,91 @@ describe('delta engine: apply(patches) ≡ resolve(input, subject)', () => {
 				input,
 				credential: 'engine-property-test',
 				heldIds: heldIdsOf(answer),
+				heldCoordinates: heldCoordinatesOf(answer, input),
 				digestOnly: false,
 				digest: await contentDigest(answer),
 				policyHash: described.policyHash
 			};
-			await assertRound(state, answer, subject, input, `${round}r`);
+			await assertRound(state, answer, subject, input, `${round}r`, changes);
 		}
+		expect(pointPatches).toBeGreaterThan(0);
+	});
+
+	it('fills a one-row window with an indexed boundary replacement', async () => {
+		const h = await makeBoltTestRuntime(workspace);
+		harness = h;
+		const seeded = await h.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				return yield* collections.mutate(
+					h.effectId('boundary:seed'),
+					adminSubject,
+					'people',
+					[
+						{ name: 'first', team: 'core', seq: 1 },
+						{ name: 'second', team: 'core', seq: 2 }
+					],
+					false,
+					0
+				);
+			})
+		);
+		const input: SyncQueryInput = {
+			kind: 'findMany',
+			collection: 'people',
+			where: { team: { eq: 'core' } },
+			orderBy: { seq: 'asc' },
+			limit: 1
+		};
+		const answer = await h.runtime.runPromise(
+			resolveSyncQuery(h.effectId('boundary:base'), adminSubject, input)
+		);
+		const described = await h.runtime.runPromise(describeSyncQuery(adminSubject, input));
+		const firstId = seeded.records[0]?.['id'];
+		if (typeof firstId !== 'string') throw new Error('seed did not return the first row id');
+		const commit = await h.runtime.runPromise(
+			Effect.gen(function* () {
+				const collections = yield* Collections.Service;
+				return yield* collections.mutate(
+					h.effectId('boundary:leave'),
+					adminSubject,
+					'people',
+					[{ id: firstId, team: 'edge' }],
+					false,
+					0
+				);
+			})
+		);
+		const update = await h.runtime.runPromise(
+			advanceSubscription(
+				h.effectId('boundary:advance'),
+				{
+					state: {
+						subId: 'boundary',
+						key: 'boundary',
+						input,
+						credential: 'engine-property-test',
+						heldIds: heldIdsOf(answer),
+						heldCoordinates: heldCoordinatesOf(answer, input),
+						digestOnly: false,
+						digest: await contentDigest(answer),
+						policyHash: described.policyHash
+					},
+					subject: adminSubject
+				},
+				commit.changes
+			)
+		);
+		expect(update?.patch).toMatchObject({
+			op: 'replace',
+			index: 0,
+			displaces: firstId
+		});
+		const expected = await h.runtime.runPromise(
+			resolveSyncQuery(h.effectId('boundary:expected'), adminSubject, input)
+		);
+		expect(applyPatch(answer, update?.patch ?? { op: 'answer', answer: null })).toEqual(expected);
+		expect(update?.to).toBe(await contentDigest(expected));
 	});
 
 	it('keeps the window honest for a policy-bound subject: denied rows never enter, revoked rows leave', async () => {
@@ -365,13 +452,14 @@ describe('delta engine: apply(patches) ≡ resolve(input, subject)', () => {
 			input,
 			credential: 'engine-property-test',
 			heldIds: heldIdsOf(answer),
+			heldCoordinates: heldCoordinatesOf(answer, input),
 			digestOnly: false,
 			digest: await contentDigest(answer),
 			policyHash: described.policyHash
 		};
 
 		// A row the subject's policy denies leaves the authoritative answer unchanged.
-		await h.runtime.runPromise(
+		const denied = await h.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
 				return yield* collections.mutate(
@@ -385,17 +473,21 @@ describe('delta engine: apply(patches) ≡ resolve(input, subject)', () => {
 			})
 		);
 		const quietUpdate = await h.runtime.runPromise(
-			advanceSubscription(h.effectId('policy:advance:denied'), {
-				state,
-				subject: readerSubject
-			})
+			advanceSubscription(
+				h.effectId('policy:advance:denied'),
+				{
+					state,
+					subject: readerSubject
+				},
+				denied.changes
+			)
 		);
 		expect(quietUpdate).toBeUndefined();
 
 		// A row the subject holds, rewritten until the policy refuses it: the next wake removes it.
 		const heldId = state.heldIds[0];
 		expect(typeof heldId).toBe('string');
-		await h.runtime.runPromise(
+		const revoked = await h.runtime.runPromise(
 			Effect.gen(function* () {
 				const collections = yield* Collections.Service;
 				return yield* collections.mutate(
@@ -409,10 +501,14 @@ describe('delta engine: apply(patches) ≡ resolve(input, subject)', () => {
 			})
 		);
 		const revokeUpdate = await h.runtime.runPromise(
-			advanceSubscription(h.effectId('policy:advance:revoke'), {
-				state,
-				subject: readerSubject
-			})
+			advanceSubscription(
+				h.effectId('policy:advance:revoke'),
+				{
+					state,
+					subject: readerSubject
+				},
+				revoked.changes
+			)
 		);
 		const expected = await h.runtime.runPromise(
 			resolveSyncQuery(h.effectId('policy:expected'), readerSubject, input)

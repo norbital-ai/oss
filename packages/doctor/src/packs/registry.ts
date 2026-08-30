@@ -18,7 +18,11 @@ import type { Pack } from '../rules.js';
 
 const PACKAGES: Readonly<Record<string, { specifier: string; member: string }>> = {
 	effect: { specifier: '@norbital-ai/doctor-effect', member: 'effectPack' },
-	norbital: { specifier: '@norbital-ai/doctor-norbital', member: 'norbitalPack' }
+	norbital: { specifier: '@norbital-ai/doctor-norbital', member: 'norbitalPack' },
+	'norbital/reactive': {
+		specifier: '@norbital-ai/doctor-norbital',
+		member: 'reactivePack'
+	}
 };
 
 /** Every selectable name, sorted — the error text below must not depend on insertion order. */

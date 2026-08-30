@@ -1,6 +1,6 @@
 import { Clock, Context, Effect, Layer, Option, Schema } from 'effect';
 import { EffectId } from '@norbital-ai/bolt-protocol';
-import { and, asc, count, eq, inArray, isNull, lt, or } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm';
 import type { EnvoyDefinition } from '#lib/authoring/contracts-schema.js';
 import { SYSTEM_MODEL_TABLES } from '#lib/authoring/system-models.js';
 import * as Agents from '#lib/runtime/agents/agents.js';
@@ -21,18 +21,26 @@ import * as Identity from '#lib/runtime/identity/identity.js';
 import * as RateLimits from '#lib/runtime/rate-limits.js';
 import * as TaskQueue from '#lib/runtime/tasks/tasks.js';
 import * as TenantScope from '#lib/runtime/tenant.js';
+import { canonicalTransportIdentity } from '#lib/runtime/envoys/transport-identity.js';
 import { envoyPrincipalId, envoySubject } from '#lib/runtime/identity/static-identity.js';
 import * as Workspace from '#lib/runtime/workspace.js';
 import { AuthoredRefusal } from '#lib/authoring/refusal.js';
 import * as InvocationBudget from '#lib/runtime/budget.js';
-import { composer, dbNow, dbNowPlusSeconds, executeBuilt } from '#lib/runtime/persistence.js';
+import {
+	composer,
+	dbNow,
+	dbNowPlusSeconds,
+	executeBuilt,
+	transactionBuilt,
+	transactionSql
+} from '#lib/runtime/persistence.js';
 
 const {
 	chat_session: chatSession,
 	bolt_task: boltTaskTable,
 	bolt_envoy_inbound: boltEnvoyInbound,
 	bolt_envoy_receipts: boltEnvoyReceipts,
-	bolt_envoy_registrations: boltEnvoyRegistrations
+	bolt_channel_links: boltChannelLinks
 } = SYSTEM_MODEL_TABLES;
 
 class EnvoyError extends Schema.TaggedError<EnvoyError>()('Bolt.Envoys.Error', {
@@ -45,7 +53,6 @@ class EnvoyError extends Schema.TaggedError<EnvoyError>()('Bolt.Envoys.Error', {
 
 const EnvoyStatus = Schema.Struct({
 	envoy: Schema.NonEmptyString,
-	registered: Schema.Boolean,
 	received: Schema.Number,
 	replied: Schema.Number
 });
@@ -104,6 +111,24 @@ const EnvoyOutcome = Schema.Struct({
 });
 interface EnvoyOutcome extends Schema.Schema.Type<typeof EnvoyOutcome> {}
 
+export type EnvoyRegistrationClaim =
+	| Readonly<{
+			readonly state: 'ready';
+			readonly envoy: string;
+			readonly transport: string;
+	  }>
+	| Readonly<{ readonly state: 'expired' | 'registered' | 'invalid' }>;
+
+export type EnvoyRegistrationRedemption =
+	| Readonly<{
+			readonly state: 'registered' | 'already_registered';
+			readonly envoy: string;
+			readonly transport: string;
+	  }>
+	| Readonly<{
+			readonly state: 'expired' | 'used' | 'conflict' | 'invalid';
+	  }>;
+
 const DrainReport = Schema.Struct({
 	envoy: Schema.NonEmptyString,
 	conversationId: Schema.NonEmptyString,
@@ -116,8 +141,9 @@ const DRAIN_DEBOUNCE_MS = 3_000;
 const DRAIN_LEASE_SECONDS = 120;
 const MAX_DRAIN_MESSAGES = 32;
 const REGISTRATION_NOTICE_LIMITS = {
-	'envoys.registration': [{ window: '1 hour', limit: 1, key: 'sender' as const }]
+	'envoys.registration': [{ window: '15 minutes', limit: 1, key: 'sender' as const }]
 };
+export const ENVOY_REGISTRATION_EXPIRES_SECONDS = 15 * 60;
 
 const InboundRow = Schema.Struct({
 	id: Schema.NonEmptyString,
@@ -148,11 +174,24 @@ type InboundRow = Schema.Schema.Type<typeof InboundRow>;
 const decodeInboundRow = Schema.decodeUnknownOption(InboundRow);
 const IdRow = Schema.Struct({ id: Schema.NonEmptyString });
 const decodeIdRow = Schema.decodeUnknownOption(IdRow);
+const ChannelLinkRow = Schema.Struct({
+	link_id: Schema.NonEmptyString,
+	envoy: Schema.NonEmptyString,
+	transport: Schema.NonEmptyString,
+	sender_id: Schema.NonEmptyString,
+	status: Schema.NonEmptyString,
+	claimed_by: Schema.NullOr(Schema.String),
+	expires_at: Schema.NonEmptyString
+});
 /** The transport address a turn in flight answers on, and the envoy that declared it. */
 const ProcessingRecipient = Schema.Struct({
 	id: Schema.NonEmptyString,
 	envoy_name: Schema.NonEmptyString,
 	transport_conversation_id: Schema.NonEmptyString
+});
+const TransportSurfaceRow = Schema.Struct({
+	transport_message_key: Schema.NullOr(Schema.String),
+	transport_progress: Schema.NullOr(Schema.String)
 });
 
 type EnvoyFailure =
@@ -172,15 +211,21 @@ type EnvoyFailure =
 	| InvocationBudget.NestingLimitExceeded;
 
 export type Interface = Readonly<{
-	readonly register: (
-		effectId: EffectId,
-		envoyName: string
-	) => Effect.Effect<void, EnvoyError | Database.FacilityError>;
 	readonly receive: (
 		effectId: EffectId,
 		envoyName: string,
 		delivery: EnvoyDelivery
 	) => Effect.Effect<EnvoyOutcome, EnvoyFailure>;
+	/** Read-only claim probe; safe for mail scanners, link previews, and ordinary GET requests. */
+	readonly inspectRegistration: (
+		effectId: EffectId,
+		claimId: string
+	) => Effect.Effect<EnvoyRegistrationClaim, Database.FacilityError>;
+	readonly redeemRegistration: (
+		effectId: EffectId,
+		claimId: string,
+		subject: Identity.Subject
+	) => Effect.Effect<EnvoyRegistrationRedemption, Database.FacilityError>;
 	readonly drain: (
 		effectId: EffectId,
 		envoyName: string,
@@ -226,563 +271,471 @@ export type Interface = Readonly<{
 
 export const Service = Context.Service<Interface>('@norbital-ai/bolt/Envoys');
 
-export const layer = Layer.effect(
-	Service,
-	Effect.gen(function* () {
-		const workspace = yield* Workspace.Service;
-		const agents = yield* Agents.Service;
-		const documents = yield* ChatDocuments.Service;
-		const identity = yield* Identity.Service;
-		const communication = yield* Communication.Service;
-		const database = yield* Database.Service;
-		const queue = yield* TaskQueue.Service;
-		const rateLimits = yield* RateLimits.Service;
-		const access = yield* AccessControl.Service;
-		const tenant = yield* TenantScope.Service;
+export const layerWith = (randomId: () => string = () => globalThis.crypto.randomUUID()) =>
+	Layer.effect(
+		Service,
+		Effect.gen(function* () {
+			const workspace = yield* Workspace.Service;
+			const agents = yield* Agents.Service;
+			const documents = yield* ChatDocuments.Service;
+			const identity = yield* Identity.Service;
+			const communication = yield* Communication.Service;
+			const database = yield* Database.Service;
+			const queue = yield* TaskQueue.Service;
+			const rateLimits = yield* RateLimits.Service;
+			const access = yield* AccessControl.Service;
+			const tenant = yield* TenantScope.Service;
 
-		const requireEnvoy = Effect.fn('Envoys.requireEnvoy')(function* (envoyName: string) {
-			const envoy = workspace.definition.envoys.find(({ name }) => name === envoyName);
-			if (envoy === undefined)
-				return yield* new EnvoyError({ envoy: envoyName, message: 'Unknown envoy' });
-			return envoy;
-		});
+			const requireEnvoy = Effect.fn('Envoys.requireEnvoy')(function* (envoyName: string) {
+				const envoy = workspace.definition.envoys.find(({ name }) => name === envoyName);
+				if (envoy === undefined)
+					return yield* new EnvoyError({ envoy: envoyName, message: 'Unknown envoy' });
+				return envoy;
+			});
 
-		const bytesOf = (base64: string): Uint8Array => {
-			const binary = atob(base64);
-			return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-		};
-
-		const releaseLease = (effectId: EffectId, conversationId: string) =>
-			executeBuilt(
-				effectId,
-				database,
-				composer
-					.update(chatSession)
-					.set({ drain_lease_until: null })
-					.where(eq(chatSession.conversation_id, conversationId))
-			);
-
-		/**
-		 * Schedules the conversation's next drain as a durable task row, written by the runtime
-		 * itself, and arms the host timer for its `run_at`.
-		 */
-		const enqueueDrain = Effect.fn('Envoys.enqueueDrain')(function* (
-			effectId: EffectId,
-			envoyName: string,
-			conversationId: string,
-			now: number
-		) {
-			const bucket = Math.floor(now / DRAIN_DEBOUNCE_MS);
-			const taskId = `envoys.drain:${conversationId}:${bucket}`;
-			const runAtEpochMs = now + DRAIN_DEBOUNCE_MS;
-			// The host timer is armed before the row commits: a crash in between costs a false alarm,
-			// never a dropped drain.
-			yield* queue.wake(EffectId.make(`${effectId}:wake`), runAtEpochMs);
-			yield* executeBuilt(
-				effectId,
-				database,
-				composer
-					.insert(boltTaskTable)
-					.values({
-						command: 'envoys.drain',
-						input: JSON.stringify({ envoy: envoyName, conversationId }),
-						effect_id: taskId,
-						run_at: new Date(runAtEpochMs).toISOString(),
-						status: 'running'
-					})
-					.onConflictDoNothing({ target: boltTaskTable.effect_id })
-			);
-		});
-
-		const recordReceipt = (
-			effectId: EffectId,
-			envoyName: string,
-			conversationId: string,
-			direction: 'inbound' | 'outbound',
-			senderId?: string
-		) =>
-			executeBuilt(
-				effectId,
-				database,
-				composer.insert(boltEnvoyReceipts).values({
-					envoy_name: envoyName,
-					conversation_id: conversationId,
-					direction,
-					sender_id: senderId ?? null
-				})
-			);
-
-		/**
-		 * The text half of a channel payload: a structured `{ text }` answer keeps its text, anything
-		 * else is stringified — the host reads the same field either way, because the payload is now
-		 * a declared shape, not a shape somebody guesses at.
-		 */
-		const textOf = (value: Schema.Json): string =>
-			value !== null && typeof value === 'object' && typeof Reflect.get(value, 'text') === 'string'
-				? (Reflect.get(value, 'text') as string)
-				: String(value ?? '');
-
-		/**
-		 * Delivers one outbound message and reports what it became on the wire.
-		 *
-		 * The provider key the receipt carries back is what turns a reply into a conversation that
-		 * can update itself: progress is one bubble edited in place, and the final answer edits that
-		 * same bubble. Never fails — a transport that refused names that in `delivered`, and a
-		 * provider that answers no key still delivered, with `key: null` as the honest answer.
-		 */
-		const deliver = Effect.fn('Envoys.deliver')(function* (
-			effectId: EffectId,
-			envoy: EnvoyDefinition & { readonly name: string },
-			recipient: string,
-			payload: Schema.Json,
-			updateOf?: string | null
-		) {
-			const response = yield* communication
-				.execute(EffectId.make(`${effectId}:reply`), {
-					_tag: 'Send',
-					channel: envoy.transport,
-					recipient,
-					payload:
-						updateOf === undefined || updateOf === null
-							? payload
-							: { text: textOf(payload), updateOf }
-				})
-				.pipe(Effect.option);
-			// A receipt counts a message, not a delivery attempt: an edit rewrites the same message.
-			if (updateOf === undefined || updateOf === null) {
-				yield* recordReceipt(
-					EffectId.make(`${effectId}:receipt`),
-					envoy.name,
-					recipient,
-					'outbound'
-				);
-			}
-			if (Option.isNone(response)) return { delivered: false as const, key: null };
-			const receipt: unknown = response.value.receipt;
-			const id =
-				receipt !== null && typeof receipt === 'object' ? Reflect.get(receipt, 'id') : undefined;
-			return {
-				delivered: true as const,
-				key: typeof id === 'string' && id !== '' ? id : null
+			const bytesOf = (base64: string): Uint8Array => {
+				const binary = atob(base64);
+				return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 			};
-		});
 
-		return Service.of({
-			register: Effect.fn('Envoys.register')(function* (effectId, envoyName) {
-				yield* requireEnvoy(envoyName);
+			const releaseLease = (effectId: EffectId, conversationId: string) =>
+				executeBuilt(
+					effectId,
+					database,
+					composer
+						.update(chatSession)
+						.set({ drain_lease_until: null })
+						.where(eq(chatSession.conversation_id, conversationId))
+				);
+
+			/**
+			 * Schedules the conversation's next drain as a durable task row, written by the runtime
+			 * itself, and arms the host timer for its `run_at`.
+			 */
+			const enqueueDrain = Effect.fn('Envoys.enqueueDrain')(function* (
+				effectId: EffectId,
+				envoyName: string,
+				conversationId: string,
+				now: number
+			) {
+				const bucket = Math.floor(now / DRAIN_DEBOUNCE_MS);
+				const taskId = `envoys.drain:${conversationId}:${bucket}`;
+				const runAtEpochMs = now + DRAIN_DEBOUNCE_MS;
+				// The host timer is armed before the row commits: a crash in between costs a false alarm,
+				// never a dropped drain.
+				yield* queue.wake(EffectId.make(`${effectId}:wake`), runAtEpochMs);
 				yield* executeBuilt(
 					effectId,
 					database,
 					composer
-						.insert(boltEnvoyRegistrations)
-						.values({ envoy_name: envoyName })
-						.onConflictDoNothing({ target: boltEnvoyRegistrations.envoy_name })
+						.insert(boltTaskTable)
+						.values({
+							command: 'envoys.drain',
+							input: JSON.stringify({ envoy: envoyName, conversationId }),
+							effect_id: taskId,
+							run_at: new Date(runAtEpochMs).toISOString(),
+							status: 'running'
+						})
+						.onConflictDoNothing({ target: boltTaskTable.effect_id })
 				);
-			}),
+			});
 
-			receive: Effect.fn('Envoys.receive')(function* (effectId, envoyName, delivery) {
-				const envoy = yield* requireEnvoy(envoyName);
-				const senderId = delivery.sender?.id;
-				const groupEnabled =
-					delivery.conversationKind !== 'group' || envoy.groupMessages !== 'disabled';
-				if (!groupEnabled) {
-					return {
-						status: 'silent' as const,
-						envoy: envoyName,
-						conversationId: delivery.conversationId
-					};
-				}
-				const addressed =
-					delivery.conversationKind !== 'group' ||
-					envoy.groupMessages === 'all' ||
-					delivery.invocation === 'mention' ||
-					delivery.invocation === 'reply';
-
-				const linked =
-					envoy.audience === 'authenticated' && senderId !== undefined
-						? yield* identity.accountByTransportIdentity(effectId, envoy.transport, senderId)
-						: undefined;
-				if (envoy.audience === 'authenticated' && linked === undefined) {
-					const principal = envoySubject(envoy, tenant.tenantId, undefined);
-					const declared = access.limits(principal);
-					const noticeLimits = {
-						...declared,
-						'envoys.registration':
-							declared['envoys.registration'] ?? REGISTRATION_NOTICE_LIMITS['envoys.registration']
-					};
-					const admitted = yield* rateLimits
-						.admit(
-							'envoys.registration',
-							{
-								tenantId: tenant.tenantId,
-								userId: envoyPrincipalId(envoyName),
-								sender: senderId
-							},
-							noticeLimits
-						)
-						.pipe(
-							Effect.as(true),
-							Effect.catch(() => Effect.succeed(false))
-						);
-					const text =
-						'This agent is available only to registered members. Ask an administrator to verify this ' +
-						'number on your workspace account, then send your message again.';
-					if (admitted) {
-						yield* deliver(effectId, envoy, delivery.conversationId, { text });
-					}
-					return {
-						status: 'registration_required' as const,
-						envoy: envoyName,
-						conversationId: delivery.conversationId,
-						...(admitted ? { text } : {})
-					};
-				}
-
-				const subject = envoySubject(envoy, tenant.tenantId, linked);
-				yield* rateLimits.admit(
-					'envoys.receive',
-					{
-						tenantId: subject.tenantId,
-						userId: envoyPrincipalId(envoyName),
-						sender: senderId
-					},
-					access.limits(subject)
-				);
-
-				const conversationId = `${envoyName}:${delivery.conversationKind}:${delivery.conversationId}`;
-				yield* agents.open(
-					EffectId.make(`${effectId}:conversation`),
-					subject,
-					envoyName,
-					conversationId
-				);
-
-				const claim = yield* executeBuilt(
-					EffectId.make(`${effectId}:claim`),
+			const recordReceipt = (
+				effectId: EffectId,
+				envoyName: string,
+				conversationId: string,
+				direction: 'inbound' | 'outbound',
+				senderId?: string,
+				receiptKey?: string
+			) =>
+				executeBuilt(
+					effectId,
 					database,
 					composer
-						.insert(boltEnvoyInbound)
+						.insert(boltEnvoyReceipts)
 						.values({
 							envoy_name: envoyName,
 							conversation_id: conversationId,
-							transport_conversation_id: delivery.conversationId,
-							external_message_id: delivery.messageId,
-							receipt_key: `${envoyName}:${delivery.conversationId}:${delivery.messageId}`,
-							sender_external_id: senderId ?? null,
-							sender_display_name: delivery.sender?.displayName ?? null,
-							sent_at: delivery.sentAt,
-							invocation: delivery.invocation,
-							text: delivery.text,
-							attachments: JSON.stringify([]),
-							subject: JSON.stringify(subject),
-							addressed,
-							status: 'receiving'
+							direction,
+							sender_id: senderId ?? null,
+							receipt_key: receiptKey ?? null
 						})
-						.onConflictDoNothing({ target: boltEnvoyInbound.receipt_key })
-						.returning({ id: boltEnvoyInbound.id })
+						.onConflictDoNothing({ target: boltEnvoyReceipts.receipt_key })
 				);
-				const claimed = decodeIdRow(claim.rows[0]);
-				if (claimed._tag === 'None') {
-					return {
-						status: 'duplicate' as const,
-						envoy: envoyName,
-						conversationId: delivery.conversationId
-					};
-				}
 
-				const stored: Array<ChatAttachment> = [];
-				const finishBuffer = Effect.gen(function* () {
-					for (const [index, attachment] of delivery.attachments.entries()) {
-						const bytes = bytesOf(attachment.bytesBase64);
-						if (bytes.byteLength !== attachment.byteLength) {
-							return yield* new EnvoyError({
-								envoy: envoyName,
-								message: `attachment ${attachment.attachmentId} did not match its declared byte length`
-							});
-						}
-						const storageKey = chatDocumentStorageKey(
-							conversationId,
-							`${delivery.messageId}:${index}`,
-							attachment.fileName
-						);
-						const file = {
-							storage_key: storageKey,
-							file_name: attachment.fileName,
-							file_size: bytes.byteLength,
-							mime_type: attachment.mimeType
-						};
-						yield* documents.write(
-							EffectId.make(`${effectId}:attachment:${index}`),
-							conversationId,
-							file,
-							bytes
-						);
-						stored.push({
-							provider: attachment.provider,
-							attachmentId: attachment.attachmentId,
-							file
-						});
-					}
-					yield* executeBuilt(
-						EffectId.make(`${effectId}:buffer`),
-						database,
-						composer
-							.update(boltEnvoyInbound)
-							.set({ attachments: JSON.stringify(stored), status: 'pending' })
-							.where(eq(boltEnvoyInbound.id, claimed.value.id))
-					);
-					yield* recordReceipt(
-						EffectId.make(`${effectId}:receipt`),
-						envoyName,
-						delivery.conversationId,
-						'inbound',
-						senderId
-					);
-					if (addressed) {
-						const now = yield* Clock.currentTimeMillis;
-						yield* enqueueDrain(
-							EffectId.make(`${effectId}:enqueue`),
-							envoyName,
-							conversationId,
-							now
-						);
-					}
-				});
-				yield* finishBuffer.pipe(
-					Effect.onError(() =>
-						Effect.all([
-							...stored.map(({ file }, index) =>
-								documents.remove(
-									EffectId.make(`${effectId}:abandon-document:${index}`),
-									conversationId,
-									file.storage_key
-								)
-							),
-							executeBuilt(
-								EffectId.make(`${effectId}:abandon`),
-								database,
-								composer.delete(boltEnvoyInbound).where(eq(boltEnvoyInbound.id, claimed.value.id))
-							)
-						]).pipe(Effect.ignore)
-					)
-				);
-				return {
-					status: addressed ? ('buffered' as const) : ('silent' as const),
-					envoy: envoyName,
-					conversationId: delivery.conversationId
-				};
-			}),
-
-			drain: Effect.fn('Envoys.drain')(function* (effectId, envoyName, conversationId) {
-				const envoy = yield* requireEnvoy(envoyName);
-				const lease = yield* executeBuilt(
-					EffectId.make(`${effectId}:lease`),
-					database,
-					composer
-						.update(chatSession)
-						.set({ drain_lease_until: dbNowPlusSeconds(DRAIN_LEASE_SECONDS) })
-						.where(
-							and(
-								eq(chatSession.conversation_id, conversationId),
-								or(
-									isNull(chatSession.drain_lease_until),
-									lt(chatSession.drain_lease_until, dbNow())
-								)
-							)
-						)
-						.returning({ id: chatSession.id })
-				);
-				if (lease.rows.length === 0) {
-					return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
-				}
-
-				const pendingIds = composer
-					.select({ id: boltEnvoyInbound.id })
-					.from(boltEnvoyInbound)
-					.where(
-						and(
-							eq(boltEnvoyInbound.conversation_id, conversationId),
-							eq(boltEnvoyInbound.status, 'pending')
-						)
-					)
-					.orderBy(asc(boltEnvoyInbound.sent_at), asc(boltEnvoyInbound.created_at))
-					.limit(MAX_DRAIN_MESSAGES);
-				const claimed = yield* executeBuilt(
-					EffectId.make(`${effectId}:take`),
-					database,
-					composer
-						.update(boltEnvoyInbound)
-						.set({ status: 'processing' })
-						.where(inArray(boltEnvoyInbound.id, pendingIds))
-						.returning({
-							id: boltEnvoyInbound.id,
-							conversation_id: boltEnvoyInbound.conversation_id,
-							transport_conversation_id: boltEnvoyInbound.transport_conversation_id,
-							external_message_id: boltEnvoyInbound.external_message_id,
-							sender_external_id: boltEnvoyInbound.sender_external_id,
-							sender_display_name: boltEnvoyInbound.sender_display_name,
-							sent_at: boltEnvoyInbound.sent_at,
-							invocation: boltEnvoyInbound.invocation,
-							text: boltEnvoyInbound.text,
-							attachments: boltEnvoyInbound.attachments,
-							subject: boltEnvoyInbound.subject,
-							addressed: boltEnvoyInbound.addressed
-						})
-				);
-				const rows = claimed.rows
-					.flatMap((row) => {
-						const decoded = decodeInboundRow(row);
-						return decoded._tag === 'Some' ? [decoded.value] : [];
-					})
-					.toSorted((left, right) => left.sent_at.localeCompare(right.sent_at));
-				if (rows.length === 0) {
-					yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
-					return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
-				}
-				const trigger = [...rows].reverse().find(({ addressed }) => addressed);
-				if (trigger === undefined) {
-					yield* executeBuilt(
-						EffectId.make(`${effectId}:restore`),
-						database,
-						composer
-							.update(boltEnvoyInbound)
-							.set({ status: 'pending' })
-							.where(
-								inArray(
-									boltEnvoyInbound.id,
-									rows.map(({ id }) => id)
-								)
-							)
-					);
-					yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
-					return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
-				}
-
-				const messages: Array<InboundBatchMessage> = rows.map((row) => ({
-					sender: {
-						...(row.sender_external_id === null ? {} : { id: row.sender_external_id }),
-						...(row.sender_display_name === null ? {} : { displayName: row.sender_display_name })
-					},
-					sentAt: row.sent_at,
-					messageId: row.external_message_id,
-					text: row.text,
-					attachments: row.attachments,
-					invocation: row.invocation
-				}));
-				const batch: StoredInboundBatch = { kind: 'inbound_batch', messages };
-				const turnId = String(effectId);
-				yield* agents.enqueue(effectId, trigger.subject, envoyName, conversationId, turnId, batch);
-				// Inbound chat is direct execution: admission is durable first, then this same I/O
-				// invocation drains the serial lane. No task row or scheduler wake sits between them.
-				yield* agents.execute(effectId, conversationId, turnId).pipe(
-					Effect.mapError(
-						(failure) =>
-							new EnvoyError({
-								envoy: envoyName,
-								message: `Direct agent execution failed: ${failure.message}`
-							})
-					)
-				);
-				yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
-
-				const remaining = yield* executeBuilt(
-					EffectId.make(`${effectId}:remaining`),
-					database,
-					composer
-						.select({ count: count() })
-						.from(boltEnvoyInbound)
-						.where(
-							and(
-								eq(boltEnvoyInbound.conversation_id, conversationId),
-								eq(boltEnvoyInbound.status, 'pending')
-							)
-						)
-				);
-				const left = Number(
-					Reflect.get((remaining.rows[0] as object | undefined) ?? {}, 'count') ?? 0
-				);
-				if (left > 0) {
-					const now = yield* Clock.currentTimeMillis;
-					yield* enqueueDrain(EffectId.make(`${effectId}:requeue`), envoyName, conversationId, now);
-				}
-				return {
-					envoy: envoyName,
-					conversationId,
-					drained: rows.length,
-					status: 'queued' as const
-				};
-			}),
-
-			complete: Effect.fn('Envoys.complete')(
-				function* (effectId, envoyName, conversationId, output, progressKey) {
-					const envoy = yield* requireEnvoy(envoyName);
-					const processing = yield* executeBuilt(
-						EffectId.make(`${effectId}:processing`),
-						database,
-						composer
-							.select({
-								id: boltEnvoyInbound.id,
-								envoy_name: boltEnvoyInbound.envoy_name,
-								transport_conversation_id: boltEnvoyInbound.transport_conversation_id
-							})
-							.from(boltEnvoyInbound)
-							.where(
-								and(
-									eq(boltEnvoyInbound.conversation_id, conversationId),
-									eq(boltEnvoyInbound.status, 'processing')
-								)
-							)
-							.orderBy(asc(boltEnvoyInbound.sent_at))
-					);
-					const rows = processing.rows.flatMap((row) => {
-						const decoded = Schema.decodeUnknownOption(ProcessingRecipient)(row);
-						return decoded._tag === 'Some' ? [decoded.value] : [];
-					});
-					if (rows.length === 0)
-						return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
-					const recipient = rows.at(-1)?.transport_conversation_id;
-					let answered = false;
-					if (recipient !== undefined) {
-						// The turn's progress bubble is edited into the answer when one is on the wire; when
-						// that edit cannot land — the bubble was never sent, or the transport lost it — the
-						// answer is sent fresh. One bubble per turn is the aim, never at the cost of the answer.
-						if (progressKey !== null) {
-							answered = (yield* deliver(effectId, envoy, recipient, output, progressKey))
-								.delivered;
-						}
-						if (!answered) {
-							answered = (yield* deliver(effectId, envoy, recipient, output)).delivered;
-						}
-					}
-					const status = answered ? ('answered' as const) : ('failed' as const);
-					yield* executeBuilt(
-						EffectId.make(`${effectId}:settle`),
-						database,
-						composer
-							.update(boltEnvoyInbound)
-							.set({ status, answered_at: dbNow() })
-							.where(
-								inArray(
-									boltEnvoyInbound.id,
-									rows.map(({ id }) => id)
-								)
-							)
-					);
-					return { envoy: envoyName, conversationId, drained: rows.length, status };
-				}
-			),
-
-			reply: Effect.fn('Envoys.reply')(function* (effectId, envoyName, recipient, payload) {
-				const envoy = yield* requireEnvoy(envoyName);
-				yield* deliver(effectId, envoy, recipient, payload);
-			}),
-
-			progress: Effect.fn('Envoys.progress')(function* (effectId, conversationId, body, updateOf) {
-				const processing = yield* executeBuilt(
+			const readChannelLink = Effect.fn('Envoys.readChannelLink')(function* (
+				effectId: EffectId,
+				claimId: string
+			) {
+				const result = yield* executeBuilt(
 					effectId,
 					database,
 					composer
 						.select({
+							link_id: boltChannelLinks.link_id,
+							envoy: boltChannelLinks.envoy,
+							transport: boltChannelLinks.transport,
+							sender_id: boltChannelLinks.sender_id,
+							status: boltChannelLinks.status,
+							claimed_by: boltChannelLinks.claimed_by,
+							expires_at: boltChannelLinks.expires_at
+						})
+						.from(boltChannelLinks)
+						.where(
+							and(
+								eq(boltChannelLinks.link_id, claimId),
+								eq(boltChannelLinks.tenant_id, tenant.tenantId)
+							)
+						)
+						.limit(1)
+				);
+				const row = result.rows[0];
+				return row === undefined
+					? undefined
+					: yield* Schema.decodeUnknownEffect(ChannelLinkRow)(row).pipe(
+							Effect.mapError(
+								() =>
+									new Database.FacilityError({
+										operation: 'envoys.registration.inspect',
+										code: 'malformed_response',
+										message: 'Registration claim row was malformed',
+										retryable: false,
+										outcome: 'known'
+									})
+							)
+						);
+			});
+
+			const inspectRegistration = Effect.fn('Envoys.inspectRegistration')(function* (
+				effectId: EffectId,
+				claimId: string
+			) {
+				const claim = yield* readChannelLink(effectId, claimId);
+				if (claim === undefined) return { state: 'invalid' as const };
+				if (claim.status === 'claimed') return { state: 'registered' as const };
+				if (claim.status !== 'pending') return { state: 'invalid' as const };
+				const now = yield* Clock.currentTimeMillis;
+				if (Date.parse(claim.expires_at) <= now) return { state: 'expired' as const };
+				return { state: 'ready' as const, envoy: claim.envoy, transport: claim.transport };
+			});
+
+			const issueRegistration = Effect.fn('Envoys.issueRegistration')(function* (
+				effectId: EffectId,
+				envoy: EnvoyDefinition & { readonly name: string },
+				senderId: string
+			) {
+				const canonical = canonicalTransportIdentity(envoy.transport, senderId);
+				if (canonical.length === 0) return undefined;
+				const active = yield* executeBuilt(
+					EffectId.make(`${effectId}:active`),
+					database,
+					composer
+						.select({ id: boltChannelLinks.link_id })
+						.from(boltChannelLinks)
+						.where(
+							and(
+								eq(boltChannelLinks.tenant_id, tenant.tenantId),
+								eq(boltChannelLinks.envoy, envoy.name),
+								eq(boltChannelLinks.transport, envoy.transport),
+								eq(boltChannelLinks.sender_id, canonical),
+								eq(boltChannelLinks.status, 'pending'),
+								gt(boltChannelLinks.expires_at, dbNow())
+							)
+						)
+						.limit(1)
+				);
+				const held = decodeIdRow(active.rows[0]);
+				if (held._tag === 'Some') return held.value.id;
+				const claimId = randomId();
+				yield* executeBuilt(
+					effectId,
+					database,
+					composer.insert(boltChannelLinks).values({
+						link_id: claimId,
+						tenant_id: tenant.tenantId,
+						envoy: envoy.name,
+						transport: envoy.transport,
+						sender_id: canonical,
+						status: 'pending',
+						expires_at: dbNowPlusSeconds(ENVOY_REGISTRATION_EXPIRES_SECONDS)
+					})
+				);
+				return claimId;
+			});
+
+			const RegistrationResultRow = Schema.Struct({
+				envoy: Schema.NonEmptyString,
+				transport: Schema.NonEmptyString
+			});
+			const unavailableRegistration = Effect.fn('Envoys.unavailableRegistration')(function* (
+				effectId: EffectId,
+				claimId: string,
+				subject: Identity.Subject
+			) {
+				const inspected = yield* inspectRegistration(effectId, claimId);
+				if (inspected.state === 'expired') return { state: 'expired' as const };
+				if (inspected.state === 'registered') return { state: 'used' as const };
+				if (inspected.state === 'invalid') return { state: 'invalid' as const };
+				const claim = yield* readChannelLink(EffectId.make(`${effectId}:claim`), claimId);
+				if (claim === undefined) return { state: 'invalid' as const };
+				const linked = yield* identity.accountByTransportIdentity(
+					EffectId.make(`${effectId}:identity`),
+					claim.transport,
+					claim.sender_id
+				);
+				return linked !== undefined && linked.userId !== subject.userId
+					? { state: 'conflict' as const }
+					: { state: 'invalid' as const };
+			});
+
+			const redeemRegistration = Effect.fn('Envoys.redeemRegistration')(function* (
+				effectId: EffectId,
+				claimId: string,
+				subject: Identity.Subject
+			) {
+				if (subject.tenantId !== tenant.tenantId) return { state: 'invalid' as const };
+				const claim = yield* readChannelLink(EffectId.make(`${effectId}:claim`), claimId);
+				if (claim === undefined) return { state: 'invalid' as const };
+				const inspected = yield* inspectRegistration(EffectId.make(`${effectId}:inspect`), claimId);
+				if (inspected.state !== 'ready') {
+					return inspected.state === 'registered'
+						? { state: 'used' as const }
+						: { state: inspected.state };
+				}
+				const linked = yield* identity.accountByTransportIdentity(
+					EffectId.make(`${effectId}:identity`),
+					claim.transport,
+					claim.sender_id
+				);
+				if (linked !== undefined && linked.userId !== subject.userId) {
+					return { state: 'conflict' as const };
+				}
+				if (linked?.userId === subject.userId) {
+					const claimed = yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.update(boltChannelLinks)
+							.set({ status: 'claimed', claimed_by: subject.userId })
+							.where(
+								and(
+									eq(boltChannelLinks.link_id, claimId),
+									eq(boltChannelLinks.tenant_id, tenant.tenantId),
+									eq(boltChannelLinks.status, 'pending'),
+									gt(boltChannelLinks.expires_at, dbNow())
+								)
+							)
+							.returning({ envoy: boltChannelLinks.envoy, transport: boltChannelLinks.transport })
+					);
+					const row = Schema.decodeUnknownOption(RegistrationResultRow)(claimed.rows[0]);
+					return row._tag === 'Some'
+						? {
+								state: 'already_registered' as const,
+								envoy: row.value.envoy,
+								transport: row.value.transport
+							}
+						: yield* unavailableRegistration(
+								EffectId.make(`${effectId}:unavailable`),
+								claimId,
+								subject
+							);
+				}
+
+				const committed = yield* transactionBuilt(effectId, database, [
+					transactionSql(
+						`with claim as (
+						select "sender_id", "transport" from "bolt_channel_links"
+						where "link_id" = $1 and "tenant_id" = $2 and "status" = 'pending'
+							and "expires_at" > now()
+						for update
+					), updated_user as (
+						update "user" as target
+						set "channels" = coalesce((
+							select jsonb_agg(identity)
+							from jsonb_array_elements(coalesce(target."channels", '[]'::jsonb)) identity
+							where not (
+								identity->>'type' = claim."transport"
+								and identity->>'address' = claim."sender_id"
+							)
+						), '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+							'type', claim."transport",
+							'address', claim."sender_id",
+							'verified', true
+						)), "updated_at" = now()
+						from claim
+						where target."id" = $3::uuid and target."tenantId" = $2
+							and not exists (
+								select 1 from "user" other,
+									jsonb_array_elements(coalesce(other."channels", '[]'::jsonb)) identity
+								where other."id" <> target."id" and other."tenantId" = $2
+									and identity->>'type' = claim."transport"
+									and identity->>'address' = claim."sender_id"
+									and identity->>'verified' = 'true'
+							)
+						returning target."id"
+					), claimed as (
+						update "bolt_channel_links" link
+						set "status" = 'claimed', "claimed_by" = $3
+						from updated_user
+						where link."link_id" = $1 and link."tenant_id" = $2 and link."status" = 'pending'
+						returning link."envoy", link."transport"
+					)
+					select "envoy", "transport" from claimed`,
+						[claimId, tenant.tenantId, subject.userId]
+					)
+				]);
+				const registered = Schema.decodeUnknownOption(RegistrationResultRow)(committed.rows[0]);
+				return registered._tag === 'Some'
+					? {
+							state: 'registered' as const,
+							envoy: registered.value.envoy,
+							transport: registered.value.transport
+						}
+					: yield* unavailableRegistration(
+							EffectId.make(`${effectId}:unavailable`),
+							claimId,
+							subject
+						);
+			});
+
+			/**
+			 * The text half of a channel payload: a structured `{ text }` answer keeps its text, anything
+			 * else is stringified — the host reads the same field either way, because the payload is now
+			 * a declared shape, not a shape somebody guesses at.
+			 */
+			const textOf = (value: Schema.Json): string =>
+				value !== null &&
+				typeof value === 'object' &&
+				typeof Reflect.get(value, 'text') === 'string'
+					? (Reflect.get(value, 'text') as string)
+					: String(value ?? '');
+
+			/**
+			 * Delivers one outbound message and reports what it became on the wire.
+			 *
+			 * The provider key the receipt carries back is what turns a reply into a conversation that
+			 * can update itself: progress is one bubble edited in place, and the final answer edits that
+			 * same bubble. Never fails — a transport that refused names that in `delivered`, and a
+			 * provider that answers no key still delivered, with `key: null` as the honest answer.
+			 */
+			const deliver = Effect.fn('Envoys.deliver')(function* (
+				effectId: EffectId,
+				envoy: EnvoyDefinition & { readonly name: string },
+				recipient: string,
+				payload: Schema.Json,
+				updateOf?: string | null
+			) {
+				const response = yield* communication
+					.execute(EffectId.make(`${effectId}:reply`), {
+						_tag: 'Send',
+						channel: envoy.transport,
+						recipient,
+						payload:
+							updateOf === undefined || updateOf === null
+								? payload
+								: { text: textOf(payload), updateOf }
+					})
+					.pipe(Effect.option);
+				if (Option.isNone(response)) return { delivered: false as const, key: null };
+				// A receipt counts a delivered message, not an attempt: an edit rewrites the same message.
+				if (updateOf === undefined || updateOf === null) {
+					yield* recordReceipt(
+						EffectId.make(`${effectId}:receipt`),
+						envoy.name,
+						recipient,
+						'outbound',
+						undefined,
+						`${envoy.name}:${recipient}:${effectId}:outbound`
+					);
+				}
+				const receipt: unknown = response.value.receipt;
+				const id =
+					receipt !== null && typeof receipt === 'object' ? Reflect.get(receipt, 'id') : undefined;
+				return {
+					delivered: true as const,
+					key:
+						updateOf !== undefined && updateOf !== null
+							? updateOf
+							: typeof id === 'string' && id !== ''
+								? id
+								: null
+				};
+			});
+
+			const truncatePreview = (value: string, limit = 96): string => {
+				const compact = value.replace(/\s+/g, ' ').trim();
+				return compact.length <= limit ? compact : `${compact.slice(0, limit - 1)}…`;
+			};
+
+			const progressBody = (parts: ReadonlyArray<Agents.TurnPart>): string => {
+				const completed = new Set(
+					parts.flatMap((part) => (part.kind === 'tool-result' ? [part.id] : []))
+				);
+				const activeTool = [...parts]
+					.toReversed()
+					.find((part) => part.kind === 'tool' && !completed.has(part.id));
+				if (activeTool?.kind === 'tool') {
+					return `Working · ${activeTool.name.replaceAll('_', ' ')}`;
+				}
+				const last = parts.at(-1);
+				if (last?.kind === 'tool-result')
+					return `Working · finished ${last.name.replaceAll('_', ' ')}`;
+				if (last?.kind === 'reasoning' && last.text.trim().length > 0) {
+					return `Working · ${truncatePreview(last.text, 72)}`;
+				}
+				return 'Working…';
+			};
+
+			const readSurface = Effect.fn('Envoys.readSurface')(function* (
+				effectId: EffectId,
+				conversationId: string
+			) {
+				const result = yield* executeBuilt(
+					effectId,
+					database,
+					composer
+						.select({
+							transport_message_key: chatSession.transport_message_key,
+							transport_progress: chatSession.transport_progress
+						})
+						.from(chatSession)
+						.where(eq(chatSession.conversation_id, conversationId))
+						.limit(1)
+				);
+				const decoded = Schema.decodeUnknownOption(TransportSurfaceRow)(result.rows[0]);
+				return decoded._tag === 'Some'
+					? decoded.value
+					: { transport_message_key: null, transport_progress: null };
+			});
+
+			const writeSurface = (
+				effectId: EffectId,
+				conversationId: string,
+				messageKey: string | null,
+				progress: string | null
+			) =>
+				executeBuilt(
+					effectId,
+					database,
+					composer
+						.update(chatSession)
+						.set({ transport_message_key: messageKey, transport_progress: progress })
+						.where(eq(chatSession.conversation_id, conversationId))
+				);
+
+			const settleDelivery = Effect.fn('Envoys.settleDelivery')(function* (
+				effectId: EffectId,
+				envoy: EnvoyDefinition & { readonly name: string },
+				conversationId: string,
+				output: Schema.Json,
+				progressKey: string | null
+			) {
+				const processing = yield* executeBuilt(
+					EffectId.make(`${effectId}:processing`),
+					database,
+					composer
+						.select({
+							id: boltEnvoyInbound.id,
 							envoy_name: boltEnvoyInbound.envoy_name,
 							transport_conversation_id: boltEnvoyInbound.transport_conversation_id
 						})
@@ -794,70 +747,644 @@ export const layer = Layer.effect(
 							)
 						)
 						.orderBy(asc(boltEnvoyInbound.sent_at))
-						.limit(1)
 				);
-				const decoded = Schema.decodeUnknownOption(ProcessingRecipient)(processing.rows[0]);
-				// A conversation with nothing in flight is not a transport one: the web agent's turns
-				// land here, and progress has nowhere to be posted. Silence is the correct answer.
-				if (decoded._tag === 'None') return null;
-				const envoy = yield* requireEnvoy(decoded.value.envoy_name);
-				const outcome = yield* deliver(
-					effectId,
-					envoy,
-					decoded.value.transport_conversation_id,
-					{ text: body },
-					updateOf
-				);
-				if (!outcome.delivered) return null;
-				// An edit that landed rewrites the very message `updateOf` names, so the key to edit
-				// next is the key that was handed in; only a fresh send mints a new one.
-				return outcome.key ?? updateOf;
-			}),
-
-			status: Effect.fn('Envoys.status')(function* (effectId, envoyName) {
-				yield* requireEnvoy(envoyName);
-				const registration = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({ envoy_name: boltEnvoyRegistrations.envoy_name })
-						.from(boltEnvoyRegistrations)
-						.where(eq(boltEnvoyRegistrations.envoy_name, envoyName))
-						.limit(1)
-				);
-				// One pass per call, not two: the counters the status answers with are the
-				// directions of the same row set, so one grouped query reads both.
-				const counts = yield* executeBuilt(
-					effectId,
-					database,
-					composer
-						.select({
-							direction: boltEnvoyReceipts.direction,
-							count: count()
-						})
-						.from(boltEnvoyReceipts)
-						.where(eq(boltEnvoyReceipts.envoy_name, envoyName))
-						.groupBy(boltEnvoyReceipts.direction)
-				);
-				const DirectionCount = Schema.Struct({
-					direction: Schema.NonEmptyString,
-					count: Schema.Number
+				const rows = processing.rows.flatMap((row) => {
+					const decoded = Schema.decodeUnknownOption(ProcessingRecipient)(row);
+					return decoded._tag === 'Some' ? [decoded.value] : [];
 				});
-				const countOf = (direction: string): number => {
-					const row = Schema.decodeUnknownOption(DirectionCount)(
-						counts.rows.find(
-							(candidate) => (candidate as { direction?: string }).direction === direction
+				if (rows.length === 0) {
+					return { envoy: envoy.name, conversationId, drained: 0, status: 'skipped' as const };
+				}
+				const recipient = rows.at(-1)?.transport_conversation_id;
+				let answered = false;
+				if (recipient !== undefined) {
+					if (progressKey !== null) {
+						answered = (yield* deliver(effectId, envoy, recipient, output, progressKey)).delivered;
+					}
+					if (!answered) answered = (yield* deliver(effectId, envoy, recipient, output)).delivered;
+				}
+				const status = answered ? ('answered' as const) : ('failed' as const);
+				yield* executeBuilt(
+					EffectId.make(`${effectId}:settle`),
+					database,
+					composer
+						.update(boltEnvoyInbound)
+						.set({ status, answered_at: dbNow() })
+						.where(
+							inArray(
+								boltEnvoyInbound.id,
+								rows.map(({ id }) => id)
+							)
+						)
+				);
+				yield* writeSurface(EffectId.make(`${effectId}:surface-clear`), conversationId, null, null);
+				return { envoy: envoy.name, conversationId, drained: rows.length, status };
+			});
+
+			const makeTurnSurface = Effect.fn('Envoys.makeTurnSurface')(function* (
+				effectId: EffectId,
+				envoy: EnvoyDefinition & { readonly name: string },
+				conversationId: string,
+				recipient: string
+			) {
+				const stored = yield* readSurface(EffectId.make(`${effectId}:read`), conversationId);
+				let currentKey = stored.transport_message_key;
+				let currentBody = stored.transport_progress;
+				return {
+					observe: (parts: ReadonlyArray<Agents.TurnPart>) =>
+						Effect.gen(function* () {
+							const body = progressBody(parts);
+							if (body === currentBody) return;
+							const sent = yield* deliver(effectId, envoy, recipient, { text: body }, currentKey);
+							if (!sent.delivered) return;
+							currentKey = sent.key ?? currentKey;
+							currentBody = body;
+							yield* writeSurface(
+								EffectId.make(`${effectId}:write`),
+								conversationId,
+								currentKey,
+								body
+							);
+						}),
+					currentKey: () => currentKey,
+					complete: (output: Schema.Json) =>
+						settleDelivery(effectId, envoy, conversationId, output, currentKey).pipe(Effect.asVoid)
+				} satisfies Agents.TurnSurface;
+			});
+
+			const showQueuedPreview = Effect.fn('Envoys.showQueuedPreview')(function* (
+				effectId: EffectId,
+				envoy: EnvoyDefinition & { readonly name: string },
+				conversationId: string,
+				recipient: string,
+				message: string,
+				mode: 'queued' | 'interrupt' = 'queued'
+			) {
+				const state = yield* readSurface(EffectId.make(`${effectId}:read`), conversationId);
+				const label = mode === 'interrupt' ? 'Interrupting' : 'Queued';
+				const body = `${state.transport_progress ?? 'Working…'}\n\n${label} · ${truncatePreview(message)}`;
+				const sent = yield* deliver(
+					EffectId.make(`${effectId}:send`),
+					envoy,
+					recipient,
+					{ text: body },
+					state.transport_message_key
+				);
+				if (!sent.delivered) return;
+				yield* writeSurface(
+					EffectId.make(`${effectId}:write`),
+					conversationId,
+					sent.key ?? state.transport_message_key,
+					state.transport_progress ?? 'Working…'
+				);
+			});
+
+			return Service.of({
+				inspectRegistration,
+				redeemRegistration,
+
+				receive: Effect.fn('Envoys.receive')(function* (effectId, envoyName, delivery) {
+					const envoy = yield* requireEnvoy(envoyName);
+					const senderId = delivery.sender?.id;
+					yield* recordReceipt(
+						EffectId.make(`${effectId}:receipt`),
+						envoyName,
+						delivery.conversationId,
+						'inbound',
+						senderId,
+						`${envoyName}:${delivery.conversationId}:${delivery.messageId}:inbound`
+					);
+					const groupEnabled =
+						delivery.conversationKind !== 'group' || envoy.groupMessages !== 'disabled';
+					if (!groupEnabled) {
+						return {
+							status: 'silent' as const,
+							envoy: envoyName,
+							conversationId: delivery.conversationId
+						};
+					}
+					const addressed =
+						delivery.conversationKind !== 'group' ||
+						envoy.groupMessages === 'all' ||
+						delivery.invocation === 'mention' ||
+						delivery.invocation === 'reply';
+					const interruptRequested = addressed && /^\s*\/interrupt(?:\s|$)/i.test(delivery.text);
+					const inboundText = interruptRequested
+						? delivery.text.replace(/^\s*\/interrupt(?:\s+|$)/i, '').trimStart()
+						: delivery.text;
+
+					const linked =
+						envoy.audience === 'authenticated' && senderId !== undefined
+							? yield* identity.accountByTransportIdentity(effectId, envoy.transport, senderId)
+							: undefined;
+					if (envoy.audience === 'authenticated' && linked === undefined) {
+						if (!addressed || senderId === undefined) {
+							return {
+								status: 'silent' as const,
+								envoy: envoyName,
+								conversationId: delivery.conversationId
+							};
+						}
+						const principal = envoySubject(envoy, tenant.tenantId, undefined);
+						const declared = access.limits(principal);
+						const noticeLimits = {
+							...declared,
+							'envoys.registration':
+								declared['envoys.registration'] ?? REGISTRATION_NOTICE_LIMITS['envoys.registration']
+						};
+						const admitted = yield* rateLimits
+							.admit(
+								'envoys.registration',
+								{
+									tenantId: tenant.tenantId,
+									userId: envoyPrincipalId(envoyName),
+									sender: senderId
+								},
+								noticeLimits
+							)
+							.pipe(
+								Effect.as(true),
+								Effect.catch(() => Effect.succeed(false))
+							);
+						const claimId = admitted
+							? yield* issueRegistration(EffectId.make(`${effectId}:registration`), envoy, senderId)
+							: undefined;
+						const text = `Register this ${envoy.transport} account with ${tenant.tenantId} to continue.`;
+						let delivered = false;
+						if (claimId !== undefined) {
+							const outcome = yield* deliver(effectId, envoy, senderId, {
+								text,
+								registration: {
+									claimId,
+									expiresInMinutes: ENVOY_REGISTRATION_EXPIRES_SECONDS / 60
+								}
+							});
+							delivered = outcome.delivered;
+						}
+						return {
+							status: 'registration_required' as const,
+							envoy: envoyName,
+							conversationId: delivery.conversationId,
+							...(delivered ? { text } : {})
+						};
+					}
+
+					const subject = envoySubject(envoy, tenant.tenantId, linked);
+					yield* rateLimits.admit(
+						'envoys.receive',
+						{
+							tenantId: subject.tenantId,
+							userId: envoyPrincipalId(envoyName),
+							sender: senderId
+						},
+						access.limits(subject)
+					);
+
+					const conversationId = `${envoyName}:${delivery.conversationKind}:${delivery.conversationId}`;
+					yield* agents.open(
+						EffectId.make(`${effectId}:conversation`),
+						subject,
+						envoyName,
+						conversationId
+					);
+
+					const claim = yield* executeBuilt(
+						EffectId.make(`${effectId}:claim`),
+						database,
+						composer
+							.insert(boltEnvoyInbound)
+							.values({
+								envoy_name: envoyName,
+								conversation_id: conversationId,
+								transport_conversation_id: delivery.conversationId,
+								external_message_id: delivery.messageId,
+								receipt_key: `${envoyName}:${delivery.conversationId}:${delivery.messageId}`,
+								sender_external_id: senderId ?? null,
+								sender_display_name: delivery.sender?.displayName ?? null,
+								sent_at: delivery.sentAt,
+								invocation: delivery.invocation,
+								text: inboundText,
+								attachments: JSON.stringify([]),
+								subject: JSON.stringify(subject),
+								addressed,
+								status: 'receiving'
+							})
+							.onConflictDoNothing({ target: boltEnvoyInbound.receipt_key })
+							.returning({ id: boltEnvoyInbound.id })
+					);
+					const claimed = decodeIdRow(claim.rows[0]);
+					if (claimed._tag === 'None') {
+						return {
+							status: 'duplicate' as const,
+							envoy: envoyName,
+							conversationId: delivery.conversationId
+						};
+					}
+
+					const stored: Array<ChatAttachment> = [];
+					const finishBuffer = Effect.gen(function* () {
+						for (const [index, attachment] of delivery.attachments.entries()) {
+							const bytes = bytesOf(attachment.bytesBase64);
+							if (bytes.byteLength !== attachment.byteLength) {
+								return yield* new EnvoyError({
+									envoy: envoyName,
+									message: `attachment ${attachment.attachmentId} did not match its declared byte length`
+								});
+							}
+							const storageKey = chatDocumentStorageKey(
+								conversationId,
+								`${delivery.messageId}:${index}`,
+								attachment.fileName
+							);
+							const file = {
+								storage_key: storageKey,
+								file_name: attachment.fileName,
+								file_size: bytes.byteLength,
+								mime_type: attachment.mimeType
+							};
+							yield* documents.write(
+								EffectId.make(`${effectId}:attachment:${index}`),
+								conversationId,
+								file,
+								bytes
+							);
+							stored.push({
+								provider: attachment.provider,
+								attachmentId: attachment.attachmentId,
+								file
+							});
+						}
+						yield* executeBuilt(
+							EffectId.make(`${effectId}:buffer`),
+							database,
+							composer
+								.update(boltEnvoyInbound)
+								.set({ attachments: JSON.stringify(stored), status: 'pending' })
+								.where(eq(boltEnvoyInbound.id, claimed.value.id))
+						);
+					});
+					yield* finishBuffer.pipe(
+						Effect.onError(() =>
+							Effect.all([
+								...stored.map(({ file }, index) =>
+									documents.remove(
+										EffectId.make(`${effectId}:abandon-document:${index}`),
+										conversationId,
+										file.storage_key
+									)
+								),
+								executeBuilt(
+									EffectId.make(`${effectId}:abandon`),
+									database,
+									composer.delete(boltEnvoyInbound).where(eq(boltEnvoyInbound.id, claimed.value.id))
+								)
+							]).pipe(Effect.ignore)
 						)
 					);
-					return row._tag === 'Some' ? Math.max(0, Math.floor(row.value.count)) : 0;
-				};
-				return {
-					envoy: envoyName,
-					registered: registration.rows.length === 1,
-					received: countOf('inbound'),
-					replied: countOf('outbound')
-				};
-			})
-		});
-	})
-);
+					if (addressed) {
+						const running = yield* agents.running(
+							EffectId.make(`${effectId}:running`),
+							conversationId
+						);
+						if (running) {
+							if (interruptRequested) {
+								yield* showQueuedPreview(
+									EffectId.make(`${effectId}:interrupt-preview`),
+									envoy,
+									conversationId,
+									delivery.conversationId,
+									inboundText,
+									'interrupt'
+								);
+								yield* agents.interrupt(
+									EffectId.make(`${effectId}:interrupt`),
+									subject,
+									conversationId
+								);
+							}
+							yield* executeBuilt(
+								EffectId.make(`${effectId}:processing`),
+								database,
+								composer
+									.update(boltEnvoyInbound)
+									.set({ status: 'processing' })
+									.where(eq(boltEnvoyInbound.id, claimed.value.id))
+							);
+							const batch: StoredInboundBatch = {
+								kind: 'inbound_batch',
+								messages: [
+									{
+										sender: {
+											...(senderId === undefined ? {} : { id: senderId }),
+											...(delivery.sender?.displayName === undefined
+												? {}
+												: { displayName: delivery.sender.displayName })
+										},
+										sentAt: delivery.sentAt,
+										messageId: delivery.messageId,
+										text: inboundText,
+										attachments: stored,
+										invocation: delivery.invocation
+									}
+								]
+							};
+							const surface = interruptRequested
+								? yield* makeTurnSurface(
+										EffectId.make(`${effectId}:surface`),
+										envoy,
+										conversationId,
+										delivery.conversationId
+									)
+								: undefined;
+							const admitted = yield* agents.enqueue(
+								EffectId.make(`${effectId}:turn`),
+								subject,
+								envoyName,
+								conversationId,
+								`${envoyName}:${delivery.conversationId}:${delivery.messageId}`,
+								batch,
+								undefined,
+								surface
+							);
+							if (admitted.status === 'queued') {
+								yield* showQueuedPreview(
+									EffectId.make(`${effectId}:queue-preview`),
+									envoy,
+									conversationId,
+									delivery.conversationId,
+									inboundText
+								);
+							}
+							return {
+								status: 'buffered' as const,
+								envoy: envoyName,
+								conversationId: delivery.conversationId
+							};
+						}
+						const now = yield* Clock.currentTimeMillis;
+						yield* enqueueDrain(
+							EffectId.make(`${effectId}:enqueue`),
+							envoyName,
+							conversationId,
+							now
+						);
+					}
+					return {
+						status: addressed ? ('buffered' as const) : ('silent' as const),
+						envoy: envoyName,
+						conversationId: delivery.conversationId
+					};
+				}),
+
+				drain: Effect.fn('Envoys.drain')(function* (effectId, envoyName, conversationId) {
+					const envoy = yield* requireEnvoy(envoyName);
+					const lease = yield* executeBuilt(
+						EffectId.make(`${effectId}:lease`),
+						database,
+						composer
+							.update(chatSession)
+							.set({ drain_lease_until: dbNowPlusSeconds(DRAIN_LEASE_SECONDS) })
+							.where(
+								and(
+									eq(chatSession.conversation_id, conversationId),
+									or(
+										isNull(chatSession.drain_lease_until),
+										lt(chatSession.drain_lease_until, dbNow())
+									)
+								)
+							)
+							.returning({ id: chatSession.id })
+					);
+					if (lease.rows.length === 0) {
+						return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
+					}
+
+					const pendingIds = composer
+						.select({ id: boltEnvoyInbound.id })
+						.from(boltEnvoyInbound)
+						.where(
+							and(
+								eq(boltEnvoyInbound.conversation_id, conversationId),
+								eq(boltEnvoyInbound.status, 'pending')
+							)
+						)
+						.orderBy(asc(boltEnvoyInbound.sent_at), asc(boltEnvoyInbound.created_at))
+						.limit(MAX_DRAIN_MESSAGES);
+					const claimed = yield* executeBuilt(
+						EffectId.make(`${effectId}:take`),
+						database,
+						composer
+							.update(boltEnvoyInbound)
+							.set({ status: 'processing' })
+							.where(inArray(boltEnvoyInbound.id, pendingIds))
+							.returning({
+								id: boltEnvoyInbound.id,
+								conversation_id: boltEnvoyInbound.conversation_id,
+								transport_conversation_id: boltEnvoyInbound.transport_conversation_id,
+								external_message_id: boltEnvoyInbound.external_message_id,
+								sender_external_id: boltEnvoyInbound.sender_external_id,
+								sender_display_name: boltEnvoyInbound.sender_display_name,
+								sent_at: boltEnvoyInbound.sent_at,
+								invocation: boltEnvoyInbound.invocation,
+								text: boltEnvoyInbound.text,
+								attachments: boltEnvoyInbound.attachments,
+								subject: boltEnvoyInbound.subject,
+								addressed: boltEnvoyInbound.addressed
+							})
+					);
+					const rows = claimed.rows
+						.flatMap((row) => {
+							const decoded = decodeInboundRow(row);
+							return decoded._tag === 'Some' ? [decoded.value] : [];
+						})
+						.toSorted((left, right) => left.sent_at.localeCompare(right.sent_at));
+					if (rows.length === 0) {
+						yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
+						return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
+					}
+					const trigger = [...rows].reverse().find(({ addressed }) => addressed);
+					if (trigger === undefined) {
+						yield* executeBuilt(
+							EffectId.make(`${effectId}:restore`),
+							database,
+							composer
+								.update(boltEnvoyInbound)
+								.set({ status: 'pending' })
+								.where(
+									inArray(
+										boltEnvoyInbound.id,
+										rows.map(({ id }) => id)
+									)
+								)
+						);
+						yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
+						return { envoy: envoyName, conversationId, drained: 0, status: 'skipped' as const };
+					}
+
+					const messages: Array<InboundBatchMessage> = rows.map((row) => ({
+						sender: {
+							...(row.sender_external_id === null ? {} : { id: row.sender_external_id }),
+							...(row.sender_display_name === null ? {} : { displayName: row.sender_display_name })
+						},
+						sentAt: row.sent_at,
+						messageId: row.external_message_id,
+						text: row.text,
+						attachments: row.attachments,
+						invocation: row.invocation
+					}));
+					const batch: StoredInboundBatch = { kind: 'inbound_batch', messages };
+					const turnId = String(effectId);
+					const surface = yield* makeTurnSurface(
+						EffectId.make(`${effectId}:surface`),
+						envoy,
+						conversationId,
+						trigger.transport_conversation_id
+					);
+					// Inbound chat is direct execution: admission is durable first, then this same I/O
+					// invocation drains the serial lane. The surface edits one transport bubble after every
+					// durable step and replaces it with the final answer.
+					yield* agents
+						.enqueue(
+							effectId,
+							trigger.subject,
+							envoyName,
+							conversationId,
+							turnId,
+							batch,
+							undefined,
+							surface
+						)
+						.pipe(
+							Effect.mapError(
+								(failure) =>
+									new EnvoyError({
+										envoy: envoyName,
+										message: `Direct agent execution failed: ${failure.message}`
+									})
+							)
+						);
+					yield* releaseLease(EffectId.make(`${effectId}:release`), conversationId);
+
+					const remaining = yield* executeBuilt(
+						EffectId.make(`${effectId}:remaining`),
+						database,
+						composer
+							.select({ count: count() })
+							.from(boltEnvoyInbound)
+							.where(
+								and(
+									eq(boltEnvoyInbound.conversation_id, conversationId),
+									eq(boltEnvoyInbound.status, 'pending')
+								)
+							)
+					);
+					const left = Number(
+						Reflect.get((remaining.rows[0] as object | undefined) ?? {}, 'count') ?? 0
+					);
+					if (left > 0) {
+						const now = yield* Clock.currentTimeMillis;
+						yield* enqueueDrain(
+							EffectId.make(`${effectId}:requeue`),
+							envoyName,
+							conversationId,
+							now
+						);
+					}
+					return {
+						envoy: envoyName,
+						conversationId,
+						drained: rows.length,
+						status: 'queued' as const
+					};
+				}),
+
+				complete: Effect.fn('Envoys.complete')(
+					function* (effectId, envoyName, conversationId, output, progressKey) {
+						const envoy = yield* requireEnvoy(envoyName);
+						return yield* settleDelivery(effectId, envoy, conversationId, output, progressKey);
+					}
+				),
+
+				reply: Effect.fn('Envoys.reply')(function* (effectId, envoyName, recipient, payload) {
+					const envoy = yield* requireEnvoy(envoyName);
+					yield* deliver(effectId, envoy, recipient, payload);
+				}),
+
+				progress: Effect.fn('Envoys.progress')(
+					function* (effectId, conversationId, body, updateOf) {
+						const processing = yield* executeBuilt(
+							effectId,
+							database,
+							composer
+								.select({
+									envoy_name: boltEnvoyInbound.envoy_name,
+									transport_conversation_id: boltEnvoyInbound.transport_conversation_id
+								})
+								.from(boltEnvoyInbound)
+								.where(
+									and(
+										eq(boltEnvoyInbound.conversation_id, conversationId),
+										eq(boltEnvoyInbound.status, 'processing')
+									)
+								)
+								.orderBy(asc(boltEnvoyInbound.sent_at))
+								.limit(1)
+						);
+						const decoded = Schema.decodeUnknownOption(ProcessingRecipient)(processing.rows[0]);
+						// A conversation with nothing in flight is not a transport one: the web agent's turns
+						// land here, and progress has nowhere to be posted. Silence is the correct answer.
+						if (decoded._tag === 'None') return null;
+						const envoy = yield* requireEnvoy(decoded.value.envoy_name);
+						const outcome = yield* deliver(
+							effectId,
+							envoy,
+							decoded.value.transport_conversation_id,
+							{ text: body },
+							updateOf
+						);
+						if (!outcome.delivered) return null;
+						// An edit that landed rewrites the very message `updateOf` names, so the key to edit
+						// next is the key that was handed in; only a fresh send mints a new one.
+						return outcome.key ?? updateOf;
+					}
+				),
+
+				status: Effect.fn('Envoys.status')(function* (effectId, envoyName) {
+					yield* requireEnvoy(envoyName);
+					// One pass per call, not two: the counters the status answers with are the
+					// directions of the same row set, so one grouped query reads both.
+					const counts = yield* executeBuilt(
+						effectId,
+						database,
+						composer
+							.select({
+								direction: boltEnvoyReceipts.direction,
+								count: count()
+							})
+							.from(boltEnvoyReceipts)
+							.where(eq(boltEnvoyReceipts.envoy_name, envoyName))
+							.groupBy(boltEnvoyReceipts.direction)
+					);
+					const DirectionCount = Schema.Struct({
+						direction: Schema.NonEmptyString,
+						count: Schema.Number
+					});
+					const countOf = (direction: string): number => {
+						const row = Schema.decodeUnknownOption(DirectionCount)(
+							counts.rows.find(
+								(candidate) => (candidate as { direction?: string }).direction === direction
+							)
+						);
+						return row._tag === 'Some' ? Math.max(0, Math.floor(row.value.count)) : 0;
+					};
+					return {
+						envoy: envoyName,
+						received: countOf('inbound'),
+						replied: countOf('outbound')
+					};
+				})
+			});
+		})
+	);
+
+export const layer = layerWith();

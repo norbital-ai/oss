@@ -5,6 +5,7 @@ import { collection } from '../../src/authoring/workspace-schema.js';
 import { compileModel, describeModel } from '../../src/authoring/model-introspection.js';
 import { extractCollectionCatalog } from '../../src/compiler/model-fields.js';
 import { Effect } from 'effect';
+import { sql } from 'drizzle-orm';
 import { planWorkspaceMigration } from '../../src/compiler/schema-migrations.js';
 
 /**
@@ -154,5 +155,25 @@ describe('searchable field opt-in', () => {
 		expect(ddl).toContain('gin_trgm_ops');
 		for (const field of searchable)
 			expect(ddl).not.toContain(`"products_${field}_search_trgm_idx"`);
+	});
+
+	it('inlines a generated searchable field into the generated document', async () => {
+		const migration = await Effect.runPromise(
+			planWorkspaceMigration({
+				models: {
+					products: defineModel({
+						code: text().notNull(),
+						summary: text({ search: true }).generatedAlwaysAs(sql`upper("code")`)
+					})
+				},
+				relations: [],
+				previous: undefined
+			})
+		);
+		const ddl = migration?.statements.join('\n') ?? '';
+		expect(ddl).toContain(
+			`"search_document" tsvector GENERATED ALWAYS AS (to_tsvector('simple'::regconfig, coalesce((upper("code")), ''))) STORED`
+		);
+		expect(ddl).toContain(`coalesce("summary", '')`);
 	});
 });

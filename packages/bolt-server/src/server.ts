@@ -10,9 +10,11 @@ import {
 	PROTOCOL_VERSION,
 	SYNC_CONNECTION_HEADER,
 	SyncAdvanceResponse,
+	SyncCommitResponse,
 	SyncConnectEvaluation,
 	SyncConnectRequest,
 	TransportRequest,
+	success,
 	type FacilityBindings,
 	type RealtimeOutput,
 	type SyncApplyFrame,
@@ -890,6 +892,7 @@ const startServerEffect = <E>(
 		const websocketServer = new WebSocketServer({ noServer: true });
 		const shutdown = new AbortController();
 		const cancelConnections = new Set<Effect.Effect<void, unknown, RuntimeServices>>();
+		let liveFacilities: FacilityBindings;
 
 		/**
 		 * The guest half of the wire: the two sync commands, dispatched through the one invocation
@@ -915,7 +918,7 @@ const startServerEffect = <E>(
 				});
 				const result = yield* dispatch(
 					invocation,
-					facilities,
+					liveFacilities,
 					configuration.invocationTimeoutMillis
 				);
 				if (result._tag === 'Failure') {
@@ -958,6 +961,17 @@ const startServerEffect = <E>(
 			}
 		};
 		const sync = makeSyncHost(syncBridge);
+		liveFacilities = {
+			...facilities,
+			syncCommit: {
+				call: (_metadata, { changes }) => {
+					void sync.committed({ changes, pending: [] }).catch((cause) =>
+						console.error('bolt-server: mid-invocation sync delivery failed', cause)
+					);
+					return Promise.resolve(success(SyncCommitResponse.make({ accepted: true })));
+				}
+			}
+		};
 
 		const server = createServer((request, response) => {
 			const requestAbort = new AbortController();
@@ -969,7 +983,7 @@ const startServerEffect = <E>(
 			});
 
 			runtime.runFork(
-				handleHttp(request, response, configuration, facilities, sync, taskInvocations).pipe(
+				handleHttp(request, response, configuration, liveFacilities, sync, taskInvocations).pipe(
 					Effect.catchCause((cause) =>
 						Effect.gen(function* () {
 							// The response body stays opaque, but an unexplained 500 with no
@@ -994,7 +1008,7 @@ const startServerEffect = <E>(
 					let sequence = 0;
 					const enqueue = (event: RealtimeEvent) =>
 						Semaphore.withPermit(semaphore)(
-							processRealtimeEvent(connectionId, event, configuration, facilities, socket)
+							processRealtimeEvent(connectionId, event, configuration, liveFacilities, socket)
 						).pipe(
 							Effect.catchCause((cause) =>
 								Effect.sync(() => {

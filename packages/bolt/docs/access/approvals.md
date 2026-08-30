@@ -13,19 +13,22 @@ Source: `src/runtime/approvals/approvals.ts`, `src/runtime/collections/collectio
 
 ## Declaration
 
-Attach `approval` to `create` / `update` / `delete` (gating a `read` is a compile error):
+Attach `approval` to `mutate.new`, `mutate.existing`, or `delete` (gating a `read` is a compile
+error):
 
 ```ts
 grants: {
   variation_requests: {
-    create: {
-      authorize: (context) => context.record.amount_total >= 1_000,
-      approval: {
-        flow: (context, api) =>
-          api.requestor.team === 'Construction Sales' || context.record.amount_total < 5_000
-            ? noApproval
-            : approveBy('Field Operations Controllers').thenBy('Construction Leadership'),
-        superceded_by: ['Construction Leadership']
+    mutate: {
+      new: {
+        authorize: (context) => context.record.amount_total >= 1_000,
+        approval: {
+          flow: (context, api) =>
+            api.requestor.team === 'Construction Sales' || context.record.amount_total < 5_000
+              ? noApproval
+              : approveBy('Field Operations Controllers').thenBy('Construction Leadership'),
+          superceded_by: ['Construction Leadership']
+        }
       }
     }
   }
@@ -45,8 +48,9 @@ There is no UI for editing a flow. Changing who approves is a source edit and a 
 
 ## Prepare, gate, commit, settle
 
-Every `create` / `update` / `delete` path, including an agent's `write_collection` and a browser's
-`collections.mutate` graph, uses the same lifecycle:
+Every `mutate` / `delete` path, including an agent's `write_collection` and a browser's
+`collections.mutate` graph, uses the same lifecycle. `mutate.new` governs new rows and
+`mutate.existing` governs existing rows:
 
 1. **PREPARE** runs the applicable hooks and reconciles the proposed mutation graph without
    publishing its domain values.
@@ -55,16 +59,16 @@ Every `create` / `update` / `delete` path, including an agent's `write_collectio
 4. **SETTLE** runs after commit. Approving a held request calls `collections.resume`, which commits
    the prepared mutation and settles it; rejecting or withdrawing discards it.
 
-A held create has **no domain row**. A held update or delete may stamp the existing row with
-`approval_id` to prevent conflicting edits, but the proposed update values or deletion have not
-been applied.
+A held new-row mutation has **no domain row**. A held existing-row mutation or delete may stamp the
+existing row with `approval_id` to prevent conflicting edits, but the proposed values or deletion
+have not been applied.
 
 On hold:
 
 1. `bolt_approvals` row: `_tag: Pending`, embedded operation + configuration.
 2. `approval_request` projection (`status: ONGOING`) and a `requestor` link.
-3. For an existing update/delete target, `approval_id = requestId` may hold the committed row. A
-   create has no target row to stamp.
+3. For an existing-row mutation or delete target, `approval_id = requestId` may hold the committed
+   row. A new-row mutation has no target row to stamp.
 4. Caller gets **202** `{ pending: true, requestId, collection, id, action }` — success, not a
    refusal.
 
@@ -78,14 +82,14 @@ the open request holding its committed state.
 
 ## Statuses
 
-| Internal           | `approval_request.status` | Outcome                                                                               |
-| ------------------ | ------------------------- | ------------------------------------------------------------------------------------- |
-| `Pending`          | `ONGOING`                 | Prepared values are held; existing targets are locked against conflicting writes      |
-| `Approved`         | `APPROVED`                | `collections.resume` commits the prepared create/update/delete and settles it          |
-| `Rejected`         | `REJECTED`                | The prepared mutation is discarded; any existing-row lock is released                 |
-| `ChangesRequested` | `CHANGES_REQUESTED`       | Same as reject; requestor may resubmit                                                |
-| `Conflicted`       | `CONFLICTED`              | Reviewed graph could not apply                                                        |
-| `Withdrawn`        | `WITHDRAWN`               | Requestor closed it while pending                                                     |
+| Internal           | `approval_request.status` | Outcome                                                                          |
+| ------------------ | ------------------------- | -------------------------------------------------------------------------------- |
+| `Pending`          | `ONGOING`                 | Prepared values are held; existing targets are locked against conflicting writes |
+| `Approved`         | `APPROVED`                | `collections.resume` commits the prepared mutation/delete and settles it         |
+| `Rejected`         | `REJECTED`                | The prepared mutation is discarded; any existing-row lock is released            |
+| `ChangesRequested` | `CHANGES_REQUESTED`       | Same as reject; requestor may resubmit                                           |
+| `Conflicted`       | `CONFLICTED`              | Reviewed graph could not apply                                                   |
+| `Withdrawn`        | `WITHDRAWN`               | Requestor closed it while pending                                                |
 
 Client `approvals.process` accepts `APPROVED` | `REJECTED` | `REQUEST_FOR_CHANGE` | `SUPERSEDED`.
 `approvals.withdraw` is the requestor's own action.

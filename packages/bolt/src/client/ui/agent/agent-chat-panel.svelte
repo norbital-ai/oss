@@ -4,6 +4,7 @@
 	import { onMount, tick } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { Button } from '@norbital-ai/ui/button';
+	import * as Conversation from '@norbital-ai/ui/ai-elements/conversation';
 	import { IconWrapper } from '@norbital-ai/ui/icon-wrapper';
 	import ConversationSelector from './conversation-selector.svelte';
 	import ConversationScopePicker from './conversation-scope-picker.svelte';
@@ -18,7 +19,8 @@
 		toPanelMessages,
 		toPanelUsage,
 		toSessionTotals,
-		withPendingEcho
+		withPendingEcho,
+		type PanelMessage
 	} from '#lib/client/ui/agent/transcript.js';
 	import AgentModelPicker from './agent-model-picker.svelte';
 	import AgentMentionMenu from './agent-mention-menu.svelte';
@@ -565,13 +567,19 @@
 	const stored = $derived(toPanelMessages(activeMessages, activeTurns));
 	const messages = $derived(withPendingEcho(stored, session.echo));
 	const rootTurn = $derived(
+		[...activeTurns].toReversed().find((turn) => turn.conversation_id === activeChatId)
+	);
+	const runningTurn = $derived(
 		[...activeTurns]
 			.toReversed()
-			.find((turn) => turn.conversation_id === activeChatId)
+			.find((turn) => turn.conversation_id === activeChatId && turn.status === 'running')
 	);
-	const agentWorking = $derived(rootTurn?.status === 'running');
-	/** One conversation admits no overlapping turn while its current invocation is alive. */
-	const composerLocked = $derived(session.pending || agentWorking);
+	const queuedTurns = $derived(
+		activeTurns.filter((turn) => turn.conversation_id === activeChatId && turn.status === 'queued')
+	);
+	const agentWorking = $derived(runningTurn !== undefined);
+	/** Admission itself locks the composer; a running turn accepts durable follow-ups into its lane. */
+	const composerLocked = $derived(session.pending);
 	const terminalMessage = $derived(messages.at(-1));
 	const syncedFailure = $derived.by(() => {
 		const root = rootTurn;
@@ -589,7 +597,9 @@
 	const failure = $derived(session.sendFailure ?? syncedFailure);
 	const activityState = $derived(
 		agentOrbState({
-			pending: agentWorking,
+			// Submission is already work. Waiting for the admitted assistant row to make one round
+			// trip through sync left the shared orb looking idle while the command was in flight.
+			pending: session.pending || agentWorking,
 			failed: failure != null,
 			messages: activeMessages,
 			turns: activeTurns
@@ -671,9 +681,41 @@
 				message.kind === 'verifier' ||
 				// A message it sent is the agent doing something; one it received is not.
 				(message.kind === 'agent-message' && message.direction === 'out') ||
-				(message.kind === 'text' && message.role === 'assistant')
+				(message.kind === 'text' &&
+					message.role === 'assistant' &&
+					message.content.trim().length > 0)
 		);
 	});
+
+	/** Human/agent boundaries frame a turn once, before reasoning, tools, or final prose. */
+	function isAgentOutput(message: PanelMessage): boolean {
+		return (
+			(message.kind === 'text' && message.role === 'assistant') ||
+			message.kind === 'reasoning' ||
+			message.kind === 'tool' ||
+			message.kind === 'checkpoint' ||
+			message.kind === 'goal' ||
+			message.kind === 'verifier' ||
+			(message.kind === 'agent-message' && message.direction === 'out')
+		);
+	}
+
+	/** The first produced part owns the Agent label even when it is a tool call rather than prose. */
+	function startsAgentTurn(index: number): boolean {
+		const current = messages[index];
+		if (current === undefined || !isAgentOutput(current)) return false;
+		for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+			const previous = messages[cursor];
+			if (previous === undefined) continue;
+			if (isAgentOutput(previous)) return false;
+			if (
+				(previous.kind === 'text' && previous.role === 'user') ||
+				(previous.kind === 'agent-message' && previous.direction === 'in')
+			)
+				return true;
+		}
+		return true;
+	}
 
 	// A command response can be lost after the atomic admission committed. The synced transcript is
 	// the authority for that unknown outcome: only the exact assistant turn proves admission committed.
@@ -751,7 +793,7 @@
 		return () => window.removeEventListener(AGENT_COMPOSER_FOCUS_EVENT, onFocusRequest);
 	});
 
-	/** Starts an agent turn with the current draft, mentions, and model selection. */
+	/** Starts a turn, or durably queues the draft behind the turn already in this conversation lane. */
 	function send(): Effect.Effect<void> {
 		let admission: UnsettledAgentAdmission | null = null;
 		return Effect.suspend(() => {
@@ -787,8 +829,10 @@
 			}
 			session.pending = true;
 			session.sendFailure = null;
-			// The transcript starts only after a commit receipt or the same rows arrive through sync.
-			session.echo = null;
+			// Paint the caller's own words before transport admission. The durable row replaces this
+			// echo by identity/content as soon as sync observes it; a refusal removes it and restores
+			// the draft below. Waiting for the whole command response made a healthy turn look frozen.
+			session.echo = message;
 			draft = '';
 			mention.lastDraft = '';
 			mention.mentions = [];
@@ -1146,46 +1190,53 @@
 		</Bound>
 	{:else}
 		<Bound size="full" grow>
-			<Scroll
-				as="ol"
-				axis="y"
-				name="agent-transcript"
-				layout="stack"
-				gap="sm"
-				class="list-none px-4 py-5 sm:px-5"
-				aria-live="polite"
-				{@attach (node) => {
-					void messages.length;
-					queueMicrotask(() => {
-						node.scrollTop = node.scrollHeight;
-					});
-				}}
-			>
-				{#each messages as message (message.key)}
-					<AgentTranscriptItem
-						{message}
-						onVerifierPrompt={(prompt) => {
-							const id = activeRunId;
-							if (!id) return;
-							void Effect.runPromise(agentClient.updateVerifier({ runId: id, prompt }));
-						}}
-					/>
-				{/each}
-				{#if agentWorking && !agentHasSpoken}
-					<Stack as="li" gap="sm" aria-label={t('bolt.agent.agentIsWorking')}>
-						<span class="px-1 text-tiny font-medium text-muted-foreground"
-							>{t('bolt.agent.agent')}</span
-						>
-						<Inline class="w-fit rounded-xl bg-muted px-3.5 py-2.5 text-sm">
-							<Spinner
-								class="size-4 text-foreground"
-								label={t(agentOrbBusyStatusKey(activityState))}
-							/>
-							<span class="text-muted-foreground">{t(agentOrbBusyStatusKey(activityState))}</span>
-						</Inline>
-					</Stack>
-				{/if}
-			</Scroll>
+			<Conversation.Root aria-label={t('bolt.agent.conversationAria')}>
+				<Conversation.Content
+					as="ol"
+					name={t('bolt.agent.conversationAria')}
+					gap="sm"
+					class="m-0 list-none px-4 py-5 sm:px-5"
+					aria-live="polite"
+				>
+					{#each messages as message, index (message.key)}
+						{#if startsAgentTurn(index)}
+							<li
+								class="message px-1 text-tiny font-medium text-muted-foreground"
+								data-role="assistant-turn-label"
+							>
+								{t('bolt.agent.agent')}
+							</li>
+						{/if}
+						<AgentTranscriptItem
+							{message}
+							showSpeakerLabel={message.kind !== 'text' || message.role !== 'assistant'}
+							onVerifierPrompt={(prompt) => {
+								const id = activeRunId;
+								if (!id) return;
+								void Effect.runPromise(agentClient.updateVerifier({ runId: id, prompt }));
+							}}
+						/>
+					{/each}
+					{#if (session.pending || agentWorking) && !agentHasSpoken}
+						<Stack as="li" gap="sm" aria-label={t('bolt.agent.agentIsWorking')}>
+							<span class="px-1 text-tiny font-medium text-muted-foreground"
+								>{t('bolt.agent.agent')}</span
+							>
+							<Inline class="w-fit rounded-xl bg-muted px-3.5 py-2.5 text-sm">
+								<Spinner
+									class="size-4 text-foreground"
+									label={t(agentOrbBusyStatusKey(activityState))}
+								/>
+								<span class="text-muted-foreground">{t(agentOrbBusyStatusKey(activityState))}</span>
+							</Inline>
+						</Stack>
+					{/if}
+				</Conversation.Content>
+				<Conversation.ScrollButton
+					hint={t('bolt.agent.jumpToLatest')}
+					aria-label={t('bolt.agent.jumpToLatest')}
+				/>
+			</Conversation.Root>
 		</Bound>
 	{/if}
 
@@ -1214,6 +1265,22 @@
 				</Inline>
 			</Inline>
 		</Stack>
+	{/if}
+
+	{#if queuedTurns.length > 0}
+		<Inline
+			as="section"
+			align="center"
+			gap="xs"
+			class="border-t bg-muted/35 px-3 py-2 text-xs text-muted-foreground sm:px-4"
+			aria-live="polite"
+		>
+			<Icon icon="lucide:list-end" class="size-3.5 shrink-0" />
+			<span>
+				{t('bolt.agent.queuedMessages', { count: queuedTurns.length })}
+				{t('bolt.agent.queuedBeforeNextStep')}
+			</span>
+		</Inline>
 	{/if}
 
 	<Stack shrink={false} gap="sm" class="bg-background px-3 pb-3 sm:px-4 sm:pb-4">
@@ -1443,7 +1510,7 @@
 									disabled={composerLocked || modelState.status !== 'ready'}
 								/>
 							</div>
-							{#if rootTurn?.status === 'running'}
+							{#if agentWorking}
 								<Button
 									variant="ghost"
 									size="icon"
@@ -1462,10 +1529,16 @@
 								size="icon"
 								class="size-8 shrink-0 rounded-full"
 								data-testid="agent-send"
-								aria-label={composerLocked ? t('common.loading') : t('bolt.agent.send')}
+								aria-label={composerLocked
+									? t('common.loading')
+									: agentWorking
+										? t('bolt.agent.queueMessage')
+										: t('bolt.agent.send')}
 							>
 								{#if composerLocked}
 									<Spinner class="size-4" label={t('common.loading')} />
+								{:else if agentWorking}
+									<Icon icon="lucide:list-plus" class="size-4" />
 								{:else}
 									<Icon icon="lucide:arrow-up" class="size-4" />
 								{/if}

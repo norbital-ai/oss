@@ -9,10 +9,7 @@ import {
 } from '../../src/runtime/collections/services/change-events.js';
 import { recordEmbeddingParts } from '../../src/runtime/collections/services/embeddings.js';
 
-const COLLECTIONS = join(
-	import.meta.dirname,
-	'../../src/runtime/collections/collections.ts'
-);
+const COLLECTIONS = join(import.meta.dirname, '../../src/runtime/collections/collections.ts');
 
 /**
  * P2's failure mode is writing the new module beside the old function and leaving both.
@@ -84,10 +81,8 @@ describe('collection-lifecycle P2 carve-out', () => {
 				{
 					database: { execute: () => Effect.die('database') },
 					ai: { execute: () => Effect.die('ai') },
-					collections: [],
-					readAsset: () => Effect.die('asset')
+					collections: []
 				},
-				EffectId.make('e1'),
 				{
 					name: 'photos',
 					fields: { caption: { type: 'string' }, photo: { type: 'json' } },
@@ -97,5 +92,41 @@ describe('collection-lifecycle P2 carve-out', () => {
 			)
 		);
 		expect(parts).toEqual([]);
+	});
+
+	it('carries image asset references across the isolate instead of base64 bytes', async () => {
+		const parts = await Effect.runPromise(
+			recordEmbeddingParts(
+				{
+					database: { execute: () => Effect.die('database') },
+					ai: { execute: () => Effect.die('ai') },
+					collections: []
+				},
+				{
+					name: 'photos',
+					fields: { photo: { type: 'json' } },
+					embedding: { fields: ['photo'] }
+				},
+				{
+					photo: {
+						storage_key: 'tenant/photos/evidence.jpg',
+						file_name: 'evidence.jpg',
+						file_size: 1_042_884,
+						mime_type: 'image/jpeg'
+					}
+				}
+			)
+		);
+		expect(parts).toEqual([
+			{
+				type: 'image_asset',
+				image_asset: {
+					key: 'tenant/photos/evidence.jpg',
+					name: 'evidence.jpg',
+					mimeType: 'image/jpeg',
+					size: 1_042_884
+				}
+			}
+		]);
 	});
 });

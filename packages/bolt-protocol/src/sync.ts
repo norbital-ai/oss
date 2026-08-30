@@ -6,10 +6,7 @@ import {
 	StoredRecord
 } from './collections.js';
 
-const NonNegativeInteger = Schema.Number.check(
-	Schema.isInt(),
-	Schema.isGreaterThanOrEqualTo(0)
-);
+const NonNegativeInteger = Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
 
 /** Header joining a control/write request to the SSE connection allocated by its host. */
 export const SYNC_CONNECTION_HEADER = 'x-bolt-sync-connection';
@@ -37,13 +34,38 @@ export const SyncQueryInput = Schema.Union([
 ]).annotate({ identifier: 'BoltSyncQueryInput' });
 export type SyncQueryInput = typeof SyncQueryInput.Type;
 
+/** Opaque equality partition filed by the host to avoid waking unrelated query holders. */
+export const SyncRoutingConstraint = Schema.Struct({
+	field: Schema.NonEmptyString,
+	values: Schema.Array(Schema.Json)
+}).annotate({ identifier: 'BoltSyncRoutingConstraint' });
+export interface SyncRoutingConstraint extends Schema.Schema.Type<typeof SyncRoutingConstraint> {}
+
+/** One committed value for an equality partition. The host compares it but never interprets it. */
+export const SyncRoutingValue = Schema.Struct({
+	field: Schema.NonEmptyString,
+	value: Schema.Json
+}).annotate({ identifier: 'BoltSyncRoutingValue' });
+export interface SyncRoutingValue extends Schema.Schema.Type<typeof SyncRoutingValue> {}
+
 /** One committed coordinate returned by the invocation that performed the write. */
 export const SyncChange = Schema.Struct({
 	collection: Schema.NonEmptyString,
 	recordId: Schema.NonEmptyString,
+	/** Trusted post-commit equality values used only to narrow host-side invalidation. */
+	routing: Schema.optionalKey(Schema.Array(SyncRoutingValue)),
 	mutationId: Schema.optionalKey(CollectionMutationIdempotencyKey)
 }).annotate({ identifier: 'BoltSyncChange' });
 export interface SyncChange extends Schema.Schema.Type<typeof SyncChange> {}
+
+/** Minimal host-held row state needed to derive the next content digest without re-running a query. */
+export const SyncHeldCoordinate = Schema.Struct({
+	id: Schema.NonEmptyString,
+	rowVersion: Schema.NullOr(Schema.Union([Schema.Number, Schema.String])),
+	/** Values of the authoritative order terms, including the primary-key tiebreaker. */
+	order: Schema.Array(Schema.Json)
+}).annotate({ identifier: 'BoltSyncHeldCoordinate' });
+export interface SyncHeldCoordinate extends Schema.Schema.Type<typeof SyncHeldCoordinate> {}
 
 /** One cursored page: the authoritative rows and the keyset continuation for the next one. */
 export const SyncPageAnswer = Schema.Struct({
@@ -80,10 +102,11 @@ export const SyncPatch = Schema.Union([
 	Schema.Struct({
 		op: Schema.Literal('replace'),
 		recordId: Schema.NonEmptyString,
+		/** New seat when the row moved, or when an entrant replaces a window boundary row. */
+		index: Schema.optionalKey(NonNegativeInteger),
 		/**
-		 * The row that loses its seat when this patch is a boundary seat change (§2.3): the entrant
-		 * named by `recordId` takes the displaced row's position instead of replacing its own.
-		 * Absent for the ordinary in-place edit, where `row.id === recordId`.
+		 * The row that loses its seat when this patch is a boundary seat change (§2.3). `index`
+		 * names the entrant's actual rank; it need not be the displaced row's former seat.
 		 */
 		displaces: Schema.optionalKey(Schema.NonEmptyString),
 		row: StoredRecord
@@ -104,6 +127,8 @@ export const SyncConnectRequest = Schema.Struct({
 			digest: Schema.optionalKey(Schema.NonEmptyString),
 			/** Reconnect base retained by the client answer; lets changelog skipping avoid a resolve. */
 			heldIds: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
+			/** Reconnect base for point/rank advances; omitted by older clients forces one fresh resolve. */
+			heldCoordinates: Schema.optionalKey(Schema.Array(SyncHeldCoordinate)),
 			/** Echo of a guest-issued ceiling; forces full answers and needs no positional base. */
 			digestOnly: Schema.optionalKey(Schema.Boolean)
 		})
@@ -163,7 +188,10 @@ export const SyncSubEntry = Schema.Struct({
 	dependencies: Schema.Array(Schema.NonEmptyString),
 	/** Subset whose commits require re-authenticating every attached credential. */
 	policyDependencies: Schema.Array(Schema.NonEmptyString),
+	/** Necessary root-query equality constraints; absent means collection-wide routing. */
+	routing: Schema.optionalKey(Schema.Array(SyncRoutingConstraint)),
 	heldIds: Schema.Array(Schema.NonEmptyString),
+	heldCoordinates: Schema.optionalKey(Schema.Array(SyncHeldCoordinate)),
 	digestOnly: Schema.Boolean,
 	digest: Schema.NonEmptyString
 }).annotate({ identifier: 'BoltSyncSubEntry' });
@@ -205,9 +233,7 @@ export const SyncConnectEvaluation = Schema.Struct({
 	results: Schema.Array(SyncConnectEvaluationResult),
 	outcomes: Schema.Array(SyncOutcome)
 }).annotate({ identifier: 'BoltSyncConnectEvaluation' });
-export interface SyncConnectEvaluation extends Schema.Schema.Type<
-	typeof SyncConnectEvaluation
-> {}
+export interface SyncConnectEvaluation extends Schema.Schema.Type<typeof SyncConnectEvaluation> {}
 
 /**
  * Host-held state sent back to the stateless guest for one advance.
@@ -222,6 +248,7 @@ export const SyncAdvanceSubscription = Schema.Struct({
 	credential: Schema.NonEmptyString,
 	impersonatedTeam: Schema.optionalKey(Schema.NonEmptyString),
 	heldIds: Schema.Array(Schema.NonEmptyString),
+	heldCoordinates: Schema.optionalKey(Schema.Array(SyncHeldCoordinate)),
 	digestOnly: Schema.Boolean,
 	digest: Schema.NonEmptyString,
 	policyHash: Schema.NonEmptyString
@@ -252,6 +279,7 @@ export const SyncAdvanceUpdate = Schema.Struct({
 	to: Schema.NonEmptyString,
 	patch: SyncPatch,
 	heldIds: Schema.Array(Schema.NonEmptyString),
+	heldCoordinates: Schema.optionalKey(Schema.Array(SyncHeldCoordinate)),
 	digestOnly: Schema.Boolean,
 	policyHash: Schema.NonEmptyString,
 	dependencies: Schema.Array(Schema.NonEmptyString),

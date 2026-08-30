@@ -8,8 +8,8 @@ sign-off first?" are answered in the same place, from the same declaration.
 
 A policy is a named set of **grants** in `src/access/policies/+<name>.ts`. The filename supplies the
 name; the module default-exports `{ description, grants, capabilities?, limits? }`. `grants` is an
-object keyed by collection, one key per collection/action coordinate — presence is the rule, absence
-is denial, and there is no merge order to misunderstand:
+object keyed by collection, with `read`, `history`, `mutate`, and `delete` coordinates — presence is
+the rule, absence is denial, and there is no merge order to misunderstand:
 
 ```ts
 import type { Policy } from './$types.js';
@@ -19,7 +19,7 @@ export default {
 	grants: {
 		quotes: {
 			read: { where: { owner_id: { eq: '${requestor.id}' } } },
-			create: {}
+			mutate: { new: {} }
 		}
 	},
 	capabilities: { apps: ['crm'], tools: ['quote_followup'], skills: ['quote_basics'] },
@@ -30,17 +30,20 @@ export default {
 } satisfies Policy;
 ```
 
-- Read-shaped actions are `read` and `history`; write actions are `create`, `update`, `delete`.
-  `read`/`history` take `{ where?, fields? }` (a read grant has no approval to carry — nobody signs
-  off on somebody having looked). Write grants take `{ fields?, authorize?, approval? }`; `delete`
-  takes `{ authorize?, approval? }`.
+- Read-shaped grants are `read` and `history`; writes use `mutate: { new?, existing? }` plus the
+  separate `delete` grant. `read`/`history` take `{ where?, fields? }` (a read grant has no approval
+  to carry — nobody signs off on somebody having looked). Each present mutation branch takes
+  `{ fields?, authorize?, approval? }`; `delete` takes `{ authorize?, approval? }`.
+- `mutate.new` and `mutate.existing` are independent opt-ins. A policy may omit `new` to block new
+  rows while granting `existing`, or omit `existing` to allow only new rows. The removed collection
+  keys `create` and `update` are unknown and refused; there is no compatibility spelling.
 - `where` narrows a read/history grant to rows that match, so "read only your own quotes" is a grant
   rather than something the application has to remember to enforce. `fields` masks which columns the
   grant exposes.
 - `authorize` is a server-only decision function — `(context, api) => boolean` running in the write
   path, with reads and nothing else (`api.db.<collection>` without `mutate`), over the prepared
-  candidate. The action key itself is the opt-in: an empty object means every prepared candidate,
-  and an absent key means no authority for it.
+  candidate. The grant or mutation branch itself is the opt-in: an empty object means every
+  prepared candidate, and an absent key means no authority for it.
 - `capabilities` grants apps, authored tools, MCP servers, and workspace skills. `limits` holds the
   rate rules for this policy's holders, keyed by command pattern (exact command or `prefix.*`
   wildcard; the most specific match wins). Each rule is `{ window, limit }` — the `key` defaults to
@@ -92,22 +95,24 @@ arrays directly in their declarations and are never rows.
 
 ## Declaring an approval flow
 
-Attach `approval` to a write grant. Only `create`, `update` and `delete` can be gated — gating a
-`read` is a compile error, because a silently dropped gate would leave an unconditional read grant
-behind. An `approval` is **one function that chooses one concrete flow**, plus the teams allowed to
-supersede every remaining step:
+Attach `approval` to a write grant. Only `mutate.new`, `mutate.existing`, and `delete` can be gated —
+gating a `read` is a compile error, because a silently dropped gate would leave an unconditional
+read grant behind. An `approval` is **one function that chooses one concrete flow**, plus the teams
+allowed to supersede every remaining step:
 
 ```ts
 grants: {
   variation_requests: {
-    create: {
-      authorize: (context) => context.record.amount_total >= 1_000,
-      approval: {
-        flow: (context, api) =>
-          api.requestor.team === 'Construction Sales' || context.record.amount_total < 5_000
-            ? noApproval
-            : approveBy('Field Operations Controllers').thenBy('Construction Leadership'),
-        superceded_by: ['Construction Leadership']
+    mutate: {
+      new: {
+        authorize: (context) => context.record.amount_total >= 1_000,
+        approval: {
+          flow: (context, api) =>
+            api.requestor.team === 'Construction Sales' || context.record.amount_total < 5_000
+              ? noApproval
+              : approveBy('Field Operations Controllers').thenBy('Construction Leadership'),
+          superceded_by: ['Construction Leadership']
+        }
       }
     }
   }
@@ -151,14 +156,14 @@ Imperative writes (including an agent's `write_collection`) and declarative
 2. The approval **gate** chooses `noApproval` or one concrete review flow.
 3. `noApproval` proceeds to **COMMIT**. A gated mutation creates a request and goes on **hold**.
 4. **SETTLE** follows a commit. Approval calls `collections.resume`, which commits the prepared
-   create/update/delete and settles it. Rejection or withdrawal discards the prepared mutation.
+   mutation or deletion and settles it. Rejection or withdrawal discards the prepared mutation.
 
 While a request is held:
 
 1. An `approval_request` row is created with status `ONGOING` (the durable state lives in
    `bolt_approvals`; the row is its synced projection).
-2. A create has **no domain row**. For an update or delete, the existing committed row may carry
-   `approval_id`; the proposed values or deletion have not been applied.
+2. A new-row mutation has **no domain row**. For an existing-row mutation or delete, the existing
+   committed row may carry `approval_id`; the proposed values or deletion have not been applied.
 3. A further write to a held existing row is refused as an approval conflict naming the request,
    until the request closes.
 4. The caller is answered **202** with `{ pending: true, requestId, collection, id, action }` — not
@@ -166,7 +171,8 @@ While a request is held:
 
 The convention across workspaces is that `approval_id IS NULL` means an existing row is not held;
 a non-null value identifies the open approval holding its current committed state. This convention
-does not imply that a pending create exists: it does not have a domain row until approval commits it.
+does not imply that a pending new-row mutation has published a row: it has no domain row until
+approval commits it.
 
 There is no separate "submit for approval" action. A gated write creates the request by itself. An
 approval-gated collection is also never batched: `mutate` sends it down the one-row path so each
@@ -177,12 +183,12 @@ prepared mutation has its own request, which a reviewer decides separately.
 `approval_request.status` is one of `ONGOING`, `APPROVED`, `REJECTED`, `CHANGES_REQUESTED`,
 `CONFLICTED`, `WITHDRAWN`.
 
-| Outcome                | What happens                                                                                                                                                                                                                                                                                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Approved               | `collections.resume` commits the prepared mutation and settles it: a create inserts its row, an update applies its proposed values, and a delete removes its target. (An admin or `superceded_by` decision is the same, flagged `superseded`.)                                                                                |
-| Rejected, or withdrawn | `collections.discard` drops the prepared mutation. A create has no domain row to clean up; an update or delete never applied its proposed change, so only any hold on the existing row is released.                                                                                                                            |
-| Changes requested      | Same as rejected: the request closes, the prepared mutation is discarded, and the requestor can resubmit.                                                                                                                                                                                                                     |
-| Conflicted             | The reviewed graph could not be settled after approval (the mutation threw, or the artifact no longer matches) — a terminal refusal that failed the turnaround.                                                                                                                                                                            |
+| Outcome                | What happens                                                                                                                                                                                                                                                |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Approved               | `collections.resume` commits the prepared operation and settles it: `mutate.new` inserts its row, `mutate.existing` applies its proposed values, and `delete` removes its target. (An admin or `superceded_by` decision is the same, flagged `superseded`.) |
+| Rejected, or withdrawn | `collections.discard` drops the prepared operation. A new-row mutation has no domain row to clean up; an existing-row mutation or delete never applied its proposed change, so only any hold on the existing row is released.                               |
+| Changes requested      | Same as rejected: the request closes, the prepared mutation is discarded, and the requestor can resubmit.                                                                                                                                                   |
+| Conflicted             | The reviewed graph could not be settled after approval (the mutation threw, or the artifact no longer matches) — a terminal refusal that failed the turnaround.                                                                                             |
 
 The client's `approvals.process` accepts `APPROVED`, `REJECTED`, `REQUEST_FOR_CHANGE` and
 `SUPERSEDED`; `approvals.withdraw` is the requestor's own action (only the requestor may withdraw,
@@ -205,7 +211,7 @@ at once (an empty `superceded_by` means only the flow's own approvers).
 | `bolt_approvals` (internal)            | The durable state per request: `_tag` (`Pending`/`Approved`/`Rejected`/`ChangesRequested`/`Conflicted`/`Withdrawn`), current `step` cursor, and the **operation** under review — values, the chosen configuration (its stages and `superceded_by`), everything |
 | `approval_request` (system collection) | The synced projection: `collection_name`, `record_id`, `action`, `status`, `steps` (a cursor — `[{ step: n }]` while pending, `[]` once closed), `locked_record_refs`, `proposed_values`, `closed_at`, `closed_by`                                             |
 | `requestor` (system collection)        | The join table linking an `approval_request` to the user who raised it (`approval_request_id`, `user_id`)                                                                                                                                                      |
-| `approval_id` on an existing row       | The stamp identifying the open request holding its current committed state; a held create has no row yet                                                                                                                                                       |
+| `approval_id` on an existing row       | The stamp identifying the open request holding its current committed state; a held new-row mutation has no row yet                                                                                                                                             |
 | `team`                                 | The teams themselves; `approvers` entries are matched against `name`                                                                                                                                                                                           |
 | `user.team_id`                         | Which single team a person belongs to                                                                                                                                                                                                                          |
 

@@ -90,23 +90,24 @@ export {
 	SyncConnectResponse,
 	SyncConnectResult,
 	SyncCursor,
+	SyncHeldCoordinate,
 	SyncOutcome,
 	SyncPatch,
 	SyncQueryInput,
 	SyncReadyFrame,
+	SyncRoutingConstraint,
+	SyncRoutingValue,
 	SyncSubEntry,
 	SyncWriteStatus,
 	SYNC_CONNECTION_HEADER,
 	MAX_SYNC_HELD_IDS
 } from './sync.js';
-export {
-	SyncConnectionLane,
-	SyncRegistry,
-	type SyncRegistryConnection
-} from './sync-registry.js';
+export { SyncConnectionLane, SyncRegistry, type SyncRegistryConnection } from './sync-registry.js';
 
 export {
 	addAIUsage,
+	AIImageAsset,
+	AIImageAssetPart,
 	AIRequest,
 	AIResponse,
 	AIUsage,
@@ -128,6 +129,8 @@ export {
 	readAIUsage,
 	TaskRequest,
 	TaskResponse,
+	SyncCommitRequest,
+	SyncCommitResponse,
 	TransportFrame,
 	TransportFrameKind,
 	TransportRequest,

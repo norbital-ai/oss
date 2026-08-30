@@ -1,4 +1,9 @@
-import type { StoredRecord, SyncAnswer } from '@norbital-ai/bolt-protocol';
+import type {
+	StoredRecord,
+	SyncAnswer,
+	SyncHeldCoordinate,
+	SyncQueryInput
+} from '@norbital-ai/bolt-protocol';
 import { canonicalJson } from '#lib/canonical-json.js';
 
 export { canonicalJson } from '#lib/canonical-json.js';
@@ -94,6 +99,39 @@ export const heldIdsOf = (answer: SyncAnswer): ReadonlyArray<string> => {
 	}
 };
 
+const orderColumnsOf = (input: SyncQueryInput): ReadonlyArray<string> => {
+	const columns =
+		input.orderBy !== null && typeof input.orderBy === 'object' && !Array.isArray(input.orderBy)
+			? Object.entries(input.orderBy).flatMap(([column, direction]) =>
+					direction === 'asc' || direction === 'desc' ? [column] : []
+				)
+			: [];
+	return columns.includes('id') ? columns : [...columns, 'id'];
+};
+
+/** Point/rank base retained by the host. Empty means this answer must use full-resolution fallback. */
+export const heldCoordinatesOf = (
+	answer: SyncAnswer,
+	input: SyncQueryInput
+): ReadonlyArray<SyncHeldCoordinate> => {
+	if (input.kind !== 'findMany' || !Array.isArray(answer)) return [];
+	const orderColumns = orderColumnsOf(input);
+	return answer.flatMap((row) => {
+		const id = row['id'];
+		if (typeof id !== 'string' || id.length === 0) return [];
+		const order = orderColumns.map((column) => row[column]);
+		if (order.some((value) => value === undefined)) return [];
+		const version = row['row_version'];
+		return [
+			{
+				id,
+				rowVersion: typeof version === 'number' || typeof version === 'string' ? version : null,
+				order: order as SyncHeldCoordinate['order']
+			}
+		];
+	});
+};
+
 const sha256 = async (value: unknown): Promise<string> => {
 	const bytes = new TextEncoder().encode(canonicalJson(value));
 	const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
@@ -101,6 +139,11 @@ const sha256 = async (value: unknown): Promise<string> => {
 		.map((byte) => byte.toString(16).padStart(2, '0'))
 		.join('')}`;
 };
+
+/** List digest derived from minimal coordinates after an exact positional patch. */
+export const contentDigestFromHeldCoordinates = (
+	coordinates: ReadonlyArray<SyncHeldCoordinate>
+): Promise<string> => sha256(['rows', coordinates.map(({ id, rowVersion }) => [id, rowVersion])]);
 
 /** A history-independent SHA-256 over the answer's content coordinate. */
 export const contentDigest = (answer: SyncAnswer): Promise<string> =>

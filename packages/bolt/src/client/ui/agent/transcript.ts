@@ -203,11 +203,7 @@ const delegatedSessionIds = (
 	const sessions = new Set<string>();
 	for (const record of records) {
 		for (const part of partsOf(record)) {
-			if (
-				part.kind !== 'tool-result' ||
-				typeof part.id !== 'string' ||
-				!spawnCalls.has(part.id)
-			)
+			if (part.kind !== 'tool-result' || typeof part.id !== 'string' || !spawnCalls.has(part.id))
 				continue;
 			const output = Option.getOrElse(decodeJsonObject(part.output), emptyJsonObject);
 			if (typeof output.agentId === 'string') sessions.add(output.agentId);
@@ -282,9 +278,7 @@ export function projectStoredChatMessages(rows: readonly StoredChatMessageRow[])
 	return {
 		messages: projected.map((record) => ({
 			...record,
-			...(delegatedAgentIds.has(record.conversation_id)
-				? { delegated: true }
-				: {})
+			...(delegatedAgentIds.has(record.conversation_id) ? { delegated: true } : {})
 		})),
 		turns
 	};
@@ -388,8 +382,7 @@ export function toPanelMessages(
 	// A child agent's rows belong beneath its spawn call, not in the root conversation flow.
 	const roots = records.filter(
 		(record) =>
-			typeof record.conversation_id !== 'string' ||
-			!delegatedAgentIds.has(record.conversation_id)
+			typeof record.conversation_id !== 'string' || !delegatedAgentIds.has(record.conversation_id)
 	);
 
 	// A checkpoint absorbs everything before it. Later checkpoints therefore contain earlier ones,
@@ -506,6 +499,11 @@ function toPanelRow(
 	const rows: PanelMessage[] = [];
 	for (const [index, part] of partsOf(record).entries()) {
 		const key = `${id}:${index}`;
+		if (part.kind === 'reasoning') {
+			const content = typeof part.text === 'string' ? part.text : '';
+			if (content.trim().length > 0) rows.push({ kind: 'reasoning', key, content });
+			continue;
+		}
 		if (part.kind === 'tool') {
 			const call = toToolCall(part, key, context, depth);
 			rows.push(toOutboundAgentMessage(part, call, context) ?? call);
@@ -520,8 +518,12 @@ function toPanelRow(
 		if (text.trim().length === 0) continue;
 		rows.push({ kind: 'text', key, role, content: text });
 	}
-	// A record that produced nothing still happened. Rendering it empty beats dropping a turn out of
-	// the conversation, which is what silently losing a failed turn would look like.
+	// Admission creates the running assistant row before it has a part. The panel's working row owns
+	// that interval; projecting a blank assistant message here suppresses the spinner and leaves only
+	// a stranded "Agent" label until the first real part lands.
+	if (rows.length === 0 && context.turnStatus.get(id) === 'running') return [];
+	// A settled record that produced nothing still happened. Rendering it empty beats dropping a turn
+	// out of the conversation, which is what silently losing a failed turn would look like.
 	return rows.length > 0 ? rows : [{ kind: 'text', key: id, role, content: '' }];
 }
 

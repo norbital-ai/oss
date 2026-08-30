@@ -63,8 +63,8 @@ const gatedWorkspace = workspace({
 					// The requester can read its own proposal back without masking; the inbox
 					// projection masks with the requesting subject's own read grant.
 					read: { fields: ['name'] },
-					create: {
-						approval: { flow: () => approveBy('approvers'), superceded_by: [] }
+					mutate: {
+						new: { approval: { flow: () => approveBy('approvers'), superceded_by: [] } }
 					}
 				}
 			}

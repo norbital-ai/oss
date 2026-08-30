@@ -1,5 +1,10 @@
 import { Effect, Schema } from 'effect';
-import { EffectId, type SyncAnswer, type SyncQueryInput } from '@norbital-ai/bolt-protocol';
+import {
+	EffectId,
+	type SyncAnswer,
+	type SyncQueryInput,
+	type SyncRoutingConstraint
+} from '@norbital-ai/bolt-protocol';
 import * as AccessControl from '#lib/runtime/access/access-control.js';
 import * as Collections from '#lib/runtime/collections/collections.js';
 import { encodeCollectionCursor } from '#lib/runtime/collections/read/cursor.js';
@@ -10,6 +15,23 @@ import * as Workspace from '#lib/runtime/workspace.js';
 import { stableDigest } from './digest.js';
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
+
+const isRoutingScalar = (value: unknown): value is string | number | boolean | null =>
+	value === null || ['string', 'number', 'boolean'].includes(typeof value);
+
+/** Necessary top-level equality predicates a blind host may use to rule a subscription out. */
+export const syncQueryRouting = (input: SyncQueryInput): ReadonlyArray<SyncRoutingConstraint> => {
+	if (!Schema.is(JsonObject)(input.where)) return [];
+	return Object.entries(input.where).flatMap(([field, condition]) => {
+		if (!Schema.is(JsonObject)(condition)) return [];
+		const equal = condition['eq'];
+		if (isRoutingScalar(equal)) return [{ field, values: [equal] }];
+		const oneOf = condition['in'];
+		return Array.isArray(oneOf) && oneOf.length > 0 && oneOf.every(isRoutingScalar)
+			? [{ field, values: oneOf }]
+			: [];
+	});
+};
 
 /** The page size findMany answers when the caller sends no limit; kept identical to the read path. */
 const DEFAULT_PAGE_LIMIT = 100;
@@ -164,6 +186,7 @@ export const describeSyncQuery = Effect.fn('Sync.describeQuery')(function* (
 			? []
 			: [...dependencies].toSorted((left, right) => left.localeCompare(right)),
 		policyDependencies: cursored ? [] : [...POLICY_DEPENDENCIES],
+		routing: cursored ? [] : syncQueryRouting(input),
 		policyHash: yield* Effect.promise(() => stableDigest(policySource))
 	};
 });

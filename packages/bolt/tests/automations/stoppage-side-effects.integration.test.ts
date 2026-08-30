@@ -12,7 +12,12 @@ import {
 import * as Automations from '../../src/runtime/automations/automations.js';
 import * as Collections from '../../src/runtime/collections/collections.js';
 import { AI, Files } from '../../src/runtime/facilities/services.js';
-import { makeBoltTestRuntime, recordId, testWorkspace } from '../support/bolt-test-layer.js';
+import {
+	adminSubject,
+	makeBoltTestRuntime,
+	recordId,
+	testWorkspace
+} from '../support/bolt-test-layer.js';
 
 const guardedOperations = (calls: Array<string>, guards: Array<string>): AuthoringOps => {
 	const record = <A>(operation: string, result: A) =>
@@ -45,6 +50,47 @@ const guardedOperations = (calls: Array<string>, guards: Array<string>): Authori
 };
 
 describe('automation stoppage facility guard', () => {
+	it('gives sequential direct authored creates distinct replay-stable identities', async () => {
+		const harness = await makeBoltTestRuntime();
+		try {
+			await harness.runtime.runPromise(
+				Effect.gen(function* () {
+					const collections = yield* Collections.Service;
+					const ai = yield* AI.Service;
+					const files = yield* Files.Service;
+					const automations = yield* Automations.Service;
+					const ops = makeBoundAuthoringOps(
+						EffectId.make('direct-authored-writes'),
+						adminSubject,
+						collections,
+						ai,
+						files,
+						automations
+					);
+					yield* ops.mutate('people', { name: 'First' });
+					yield* ops.mutate('people', { name: 'Second' });
+				})
+			);
+			expect(await harness.database.query('select name from people order by name')).toEqual([
+				{ name: 'First' },
+				{ name: 'Second' }
+			]);
+			const writes = harness.database.calls
+				.map(({ effectId }) => String(effectId))
+				.filter((effectId) =>
+					/^direct-authored-writes:hook:mutate:people:root:\d+$/u.test(effectId)
+				);
+			expect(new Set(writes)).toEqual(
+				new Set([
+					'direct-authored-writes:hook:mutate:people:root:1',
+					'direct-authored-writes:hook:mutate:people:root:2'
+				])
+			);
+		} finally {
+			await harness.dispose();
+		}
+	}, 60_000);
+
 	it('refuses every authored side-effect surface before its underlying operation runs', async () => {
 		const calls: Array<string> = [];
 		const guards: Array<string> = [];

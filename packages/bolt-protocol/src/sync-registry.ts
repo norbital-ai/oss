@@ -10,6 +10,7 @@ import {
 	type SyncConnectRequest,
 	type SyncConnectResponse,
 	type SyncCursor,
+	type SyncHeldCoordinate,
 	type SyncQueryInput,
 	type SyncSubEntry
 } from './sync.js';
@@ -77,7 +78,9 @@ type SubState<Connection> = {
 	policyHash: string;
 	dependencies: ReadonlyArray<string>;
 	policyDependencies: ReadonlyArray<string>;
+	routing: NonNullable<SyncSubEntry['routing']>;
 	heldIds: ReadonlyArray<string>;
+	heldCoordinates?: ReadonlyArray<SyncHeldCoordinate> | undefined;
 	digestOnly: boolean;
 	digest: string;
 	readonly attached: Map<Connection, Map<string, string | undefined>>;
@@ -112,6 +115,29 @@ const canonical = (value: unknown, preserveObjectOrder = false): string => {
 
 const sameStrings = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
 	left.length === right.length && left.every((value, index) => value === right[index]);
+const sameCoordinates = (
+	left: ReadonlyArray<SyncHeldCoordinate> | undefined,
+	right: ReadonlyArray<SyncHeldCoordinate> | undefined
+): boolean =>
+	left === undefined || right === undefined ? left === right : canonical(left) === canonical(right);
+
+const routingKey = (field: string, value: unknown): string => `${field}\0${canonical(value)}`;
+const normalizedRouting = (
+	routing: SyncSubEntry['routing']
+): NonNullable<SyncSubEntry['routing']> =>
+	(routing ?? [])
+		.map(({ field, values }) => ({
+			field,
+			values: [...new Map(values.map((value) => [canonical(value), value])).values()].sort((a, b) =>
+				canonical(a).localeCompare(canonical(b))
+			)
+		}))
+		.filter(({ values }) => values.length > 0)
+		.sort((left, right) => left.field.localeCompare(right.field));
+const sameRouting = (
+	left: NonNullable<SyncSubEntry['routing']>,
+	right: NonNullable<SyncSubEntry['routing']>
+): boolean => canonical(left) === canonical(right);
 
 const sortedUnique = (values: ReadonlyArray<string>): ReadonlyArray<string> =>
 	[...new Set(values)].sort();
@@ -123,11 +149,26 @@ const sortedUnique = (values: ReadonlyArray<string>): ReadonlyArray<string> =>
  */
 const ceiling = (state: {
 	readonly heldIds: ReadonlyArray<string>;
+	readonly heldCoordinates?: ReadonlyArray<SyncHeldCoordinate> | undefined;
 	readonly digestOnly: boolean;
-}): { heldIds: ReadonlyArray<string>; digestOnly: boolean } =>
-	state.digestOnly || state.heldIds.length > MAX_SYNC_HELD_IDS
-		? { heldIds: [], digestOnly: true }
-		: { heldIds: [...state.heldIds], digestOnly: false };
+}): {
+	heldIds: ReadonlyArray<string>;
+	heldCoordinates?: ReadonlyArray<SyncHeldCoordinate> | undefined;
+	digestOnly: boolean;
+} => {
+	if (state.digestOnly || state.heldIds.length > MAX_SYNC_HELD_IDS)
+		return { heldIds: [], heldCoordinates: [], digestOnly: true };
+	const coordinates = state.heldCoordinates;
+	const aligned =
+		coordinates !== undefined &&
+		coordinates.length === state.heldIds.length &&
+		coordinates.every(({ id }, index) => id === state.heldIds[index]);
+	return {
+		heldIds: [...state.heldIds],
+		...(aligned ? { heldCoordinates: [...coordinates] } : {}),
+		digestOnly: false
+	};
+};
 
 type SyncRegistryOptions<Connection> = Readonly<{
 	/**
@@ -180,13 +221,16 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 			let state = this.#subscriptions.get(subId);
 			const dependencies = sortedUnique(query.dependencies);
 			const policyDependencies = sortedUnique(query.policyDependencies);
+			const routing = normalizedRouting(query.routing);
 			if (
 				state !== undefined &&
 				(state.digest !== query.digest ||
 					state.digestOnly !== limited.digestOnly ||
 					!sameStrings(state.heldIds, limited.heldIds) ||
+					!sameCoordinates(state.heldCoordinates, limited.heldCoordinates) ||
 					!sameStrings(state.dependencies, dependencies) ||
-					!sameStrings(state.policyDependencies, policyDependencies))
+					!sameStrings(state.policyDependencies, policyDependencies) ||
+					!sameRouting(state.routing, routing))
 			) {
 				// Soft state: a registration that disagrees with what is held retires the shared state
 				// and sends everyone attached a full answer on their next drain.
@@ -200,6 +244,7 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 					policyHash: query.policyHash,
 					dependencies,
 					policyDependencies,
+					routing,
 					...limited,
 					digest: query.digest,
 					attached: new Map()
@@ -245,10 +290,42 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 		this.detach(connection);
 	}
 
-	affectedStates(collections: ReadonlySet<string>): ReadonlyArray<SyncAffectedState<Connection>> {
+	affectedStates(
+		changes: SyncAdvanceRequest['changes']
+	): ReadonlyArray<SyncAffectedState<Connection>> {
 		const ids = new Set<string>();
-		for (const collection of collections) {
-			for (const subId of this.#byCollection.get(collection) ?? []) ids.add(subId);
+		for (const change of changes) {
+			for (const subId of this.#byCollection.get(change.collection) ?? []) {
+				const state = this.#subscriptions.get(subId);
+				if (state === undefined) continue;
+				if (
+					state.policyDependencies.includes(change.collection) ||
+					state.input.collection !== change.collection ||
+					state.heldIds.includes(change.recordId) ||
+					state.routing.length === 0 ||
+					(change.routing?.length ?? 0) === 0
+				) {
+					ids.add(subId);
+					continue;
+				}
+				const changed = new Set(
+					(change.routing ?? []).map(({ field, value }) => routingKey(field, value))
+				);
+				let contradicted = false;
+				for (const constraint of state.routing) {
+					const carriesField = (change.routing ?? []).some(
+						(candidate) => candidate.field === constraint.field
+					);
+					if (
+						carriesField &&
+						!constraint.values.some((value) => changed.has(routingKey(constraint.field, value)))
+					) {
+						contradicted = true;
+						break;
+					}
+				}
+				if (!contradicted) ids.add(subId);
+			}
 		}
 		return [...ids].sort().flatMap((subId): ReadonlyArray<SyncAffectedState<Connection>> => {
 			const state = this.#subscriptions.get(subId);
@@ -274,6 +351,7 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 		next: Readonly<{
 			digest: string;
 			heldIds: ReadonlyArray<string>;
+			heldCoordinates?: ReadonlyArray<SyncHeldCoordinate> | undefined;
 			digestOnly: boolean;
 			policyHash: string;
 			dependencies: ReadonlyArray<string>;
@@ -290,6 +368,7 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 		this.#unindex(state);
 		state.digest = next.digest;
 		state.heldIds = limited.heldIds;
+		state.heldCoordinates = limited.heldCoordinates;
 		state.digestOnly = limited.digestOnly;
 		state.dependencies = sortedUnique(next.dependencies);
 		state.policyDependencies = sortedUnique(next.policyDependencies);
@@ -341,6 +420,9 @@ export class SyncRegistry<Connection extends SyncRegistryConnection> {
 				? {}
 				: { impersonatedTeam: representative.authority }),
 			heldIds: [...state.heldIds],
+			...(state.heldCoordinates === undefined
+				? {}
+				: { heldCoordinates: [...state.heldCoordinates] }),
 			digestOnly: state.digestOnly,
 			digest: state.digest,
 			policyHash: state.policyHash
@@ -481,27 +563,25 @@ type SyncConnectionLaneOptions<
 	readonly refreshable?: () => boolean;
 }>;
 
-type SyncLaneConnectOptions<
-	Connection extends SyncRegistryConnection & Readonly<{ id: string }>
-> = Readonly<{
-	readonly request: SyncConnectRequest;
-	/** Runs inside the lane, so close/authenticate races cannot file a stale registration. */
-	readonly resolve: () => Connection | undefined;
-	readonly unavailable: () => Error;
-	/** Lets a host ask every connection it owns to drain after a successful registration. */
-	readonly refresh: () => void;
-}>;
+type SyncLaneConnectOptions<Connection extends SyncRegistryConnection & Readonly<{ id: string }>> =
+	Readonly<{
+		readonly request: SyncConnectRequest;
+		/** Runs inside the lane, so close/authenticate races cannot file a stale registration. */
+		readonly resolve: () => Connection | undefined;
+		readonly unavailable: () => Error;
+		/** Lets a host ask every connection it owns to drain after a successful registration. */
+		readonly refresh: () => void;
+	}>;
 
-type SyncLaneCommitOptions<
-	Connection extends SyncRegistryConnection & Readonly<{ id: string }>
-> = Readonly<{
-	readonly changes: SyncAdvanceRequest['changes'];
-	readonly pending: SyncAdvanceRequest['pending'];
-	/** Runs inside the lane; a just-detached writer never receives a stale outcome. */
-	readonly resolveWriter: () => Connection | undefined;
-	readonly writerProof: (connection: Connection) => NonNullable<SyncAdvanceRequest['writer']>;
-	readonly advance: (request: SyncAdvanceRequest) => Promise<SyncAdvanceResponse>;
-}>;
+type SyncLaneCommitOptions<Connection extends SyncRegistryConnection & Readonly<{ id: string }>> =
+	Readonly<{
+		readonly changes: SyncAdvanceRequest['changes'];
+		readonly pending: SyncAdvanceRequest['pending'];
+		/** Runs inside the lane; a just-detached writer never receives a stale outcome. */
+		readonly resolveWriter: () => Connection | undefined;
+		readonly writerProof: (connection: Connection) => NonNullable<SyncAdvanceRequest['writer']>;
+		readonly advance: (request: SyncAdvanceRequest) => Promise<SyncAdvanceResponse>;
+	}>;
 
 export class SyncConnectionLane<
 	Connection extends SyncRegistryConnection & Readonly<{ id: string }>,
@@ -659,7 +739,7 @@ const pumpCommit = async <Connection extends SyncRegistryConnection>(
 	const collections: ReadonlySet<string> = new Set(
 		changes.map((change): string => change.collection)
 	);
-	const affected = registry.affectedStates(collections);
+	const affected = registry.affectedStates(changes);
 	// A write to a policy or identity collection re-authenticates every attached credential
 	// (§2.2.3): the affected connections drop their chain and refresh under the new subject.
 	const policyAffected = affected.filter(({ policyDependencies }) =>
@@ -727,6 +807,7 @@ const pumpCommit = async <Connection extends SyncRegistryConnection>(
 		registry.commit(update.subId, {
 			digest: update.to,
 			heldIds: update.heldIds,
+			heldCoordinates: update.heldCoordinates,
 			digestOnly: update.digestOnly,
 			policyHash: update.policyHash,
 			dependencies: update.dependencies,

@@ -4,7 +4,10 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { afterEach, describe, expect, it } from 'vitest';
-import { renderAuthoringTypes, renderWorkspaceAuthoring } from '../../src/compiler/workspace-build.js';
+import {
+	renderAuthoringTypes,
+	renderWorkspaceAuthoring
+} from '../../src/compiler/workspace-build.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -97,40 +100,42 @@ export default {
 	capabilities: { apps: [appGroup] },
 	grants: {
 		records: {
-			create: {
-				fields: ['id', 'visible'],
-				authorize: ({ record }, api) => {
-					const id: string = record.id;
-					const visible: string = record.visible;
-					// @ts-expect-error -- database-generated columns do not exist on a prepared create.
-					void record.row_version;
-					void api.db.records.findMany;
-					void api.requestor.id;
-					void id;
-					return visible.length > 0;
-				},
-				approval: {
-					flow: ({ record }, api) => {
+			mutate: {
+				new: {
+					fields: ['id', 'visible'],
+					authorize: ({ record }, api) => {
+						const id: string = record.id;
 						const visible: string = record.visible;
+						// @ts-expect-error -- database-generated columns are absent from a prepared new-row mutation.
+						void record.row_version;
 						void api.db.records.findMany;
-						// @ts-expect-error -- the condition row is this grant's generated collection row.
-						void record.missing;
-						// @ts-expect-error -- policy decisions receive reads only, never mutation methods.
-						void api.db.records.mutate;
-						return visible === 'review' ? approveBy(valid) : noApproval;
+						void api.requestor.id;
+						void id;
+						return visible.length > 0;
 					},
-					superceded_by: [valid]
-				}
-			},
-			update: {
-				authorize: ({ previous, changes, record }) => {
-					const priorVersion: number = previous.row_version;
-					const nextVersion: number = record.row_version;
-					const changedVisible: string | undefined = changes.visible;
-					void priorVersion;
-					void nextVersion;
-					void changedVisible;
-					return true;
+					approval: {
+						flow: ({ record }, api) => {
+							const visible: string = record.visible;
+							void api.db.records.findMany;
+							// @ts-expect-error -- the condition row is this grant's generated collection row.
+							void record.missing;
+							// @ts-expect-error -- policy decisions receive reads only, never mutation methods.
+							void api.db.records.mutate;
+							return visible === 'review' ? approveBy(valid) : noApproval;
+						},
+						superceded_by: [valid]
+					}
+				},
+				existing: {
+					authorize: ({ previous, changes, record }) => {
+						const priorVersion: number = previous.row_version;
+						const nextVersion: number = record.row_version;
+						const changedVisible: string | undefined = changes.visible;
+						void priorVersion;
+						void nextVersion;
+						void changedVisible;
+						return true;
+					}
 				}
 			}
 		}
@@ -147,10 +152,26 @@ const invalidFieldPolicy = {
 			'missing'
 		] } } }
 } satisfies PolicyDefinition;
+const removedCreateGrant = {
+	description: 'Removed create spelling.',
+	grants: { records: {
+		// @ts-expect-error -- collection grants expose mutate.new, never create.
+		create: {}
+	} }
+} satisfies PolicyDefinition;
+const removedUpdateGrant = {
+	description: 'Removed update spelling.',
+	grants: { records: {
+		// @ts-expect-error -- collection grants expose mutate.existing, never update.
+		update: {}
+	} }
+} satisfies PolicyDefinition;
 void typo;
 void appLeaf;
 void appGroupTypo;
 void invalidFieldPolicy;
+void removedCreateGrant;
+void removedUpdateGrant;
 `
 			);
 

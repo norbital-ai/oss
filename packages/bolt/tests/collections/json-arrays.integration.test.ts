@@ -10,7 +10,7 @@ import {
 	emptyAuthoredRuntime
 } from '../../src/runtime/collections/authored.js';
 import * as Database from '../../src/runtime/facilities/database.js';
-import { AI, Files, Tasks } from '../../src/runtime/facilities/services.js';
+import { AI, Files, SyncCommit, Tasks } from '../../src/runtime/facilities/services.js';
 import type * as Identity from '../../src/runtime/identity/identity.js';
 import * as Workspace from '../../src/runtime/workspace.js';
 import * as TaskQueue from '../../src/runtime/tasks/tasks.js';
@@ -133,9 +133,17 @@ const testLayer = (
 	const workspaceLayer = Workspace.layer(definition);
 	const taskQueue = TaskQueue.layer(context).pipe(Layer.provide(Layer.mergeAll(database, tasks)));
 	const tenantScope = TenantScope.layer('tenant-json');
+	const syncCommit = SyncCommit.layer(undefined, context);
 	const automations = Automations.layer.pipe(
 		Layer.provide(
-			Layer.mergeAll(workspaceLayer, database, taskQueue, InvocationBudget.layer(0), tenantScope)
+			Layer.mergeAll(
+				workspaceLayer,
+				database,
+				taskQueue,
+				syncCommit,
+				InvocationBudget.layer(0),
+				tenantScope
+			)
 		)
 	);
 	const access = AccessControl.layer.pipe(Layer.provide(Layer.mergeAll(workspaceLayer, database)));
@@ -154,6 +162,7 @@ const testLayer = (
 				Files.layer(undefined, context),
 				taskQueue,
 				automations,
+				syncCommit,
 				Layer.succeed(AuthoredRuntimeService, emptyAuthoredRuntime)
 			)
 		)

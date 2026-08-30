@@ -3,6 +3,11 @@ import { Schema } from 'effect';
 /**
  * The wire both hosts and every bundle agree on, as a single literal a mismatch is refused against.
  *
+ * Bumped to 6 when AI content gained the provider-neutral `image_asset` part. A version-5 host
+ * would forward that part without resolving its tenant-scoped object key, so a vision turn would
+ * either fail at the provider or answer without the photograph. Version 6 requires the host to
+ * replace every asset part with the corresponding data URL after the bounded isolate crossing.
+ *
  * Bumped to 5 when browser collection mutations became server-authoritative exactly-once commands:
  * every request now carries an explicit action, durable idempotency key, issue time, and a base row
  * version for update/delete. A version-4 client can send an unversioned write the version-5 runtime
@@ -27,7 +32,7 @@ import { Schema } from 'effect';
  * means a version mismatch is a refusal at the door rather than a capability discovered halfway
  * through an invocation.
  */
-export const PROTOCOL_VERSION = 5 as const;
+export const PROTOCOL_VERSION = 6 as const;
 
 export const ProtocolVersion = Schema.Literal(PROTOCOL_VERSION);
 export type ProtocolVersion = typeof ProtocolVersion.Type;

@@ -1367,33 +1367,34 @@ export type CollectionIntegrations<S extends AnySchema, N extends TableName<S>> 
 /**
  * The exact prepared JavaScript value a write rule decides against.
  *
- * A create has not acquired database defaults yet, so its record is the prepared insert plus the
- * runtime-assigned id. An update has a complete stored row on both sides and exposes only the
- * prepared patch as `changes`. A delete sees the complete stored row it is about to remove.
+ * A new-row mutation has not acquired database defaults yet, so its record is the prepared insert
+ * plus the runtime-assigned id. An existing-row mutation has a complete stored row on both sides
+ * and exposes only the prepared patch as `changes`. A delete sees the complete stored row it is
+ * about to remove.
  */
 type PolicyWriteContext<
 	StoredRecord,
-	Action extends 'create' | 'update' | 'delete',
-	CreateRecord = StoredRecord,
+	Action extends 'new' | 'existing' | 'delete',
+	NewRecord = StoredRecord,
 	Changes = Partial<StoredRecord>
-> = Action extends 'update'
+> = Action extends 'existing'
 	? Readonly<{
 			readonly previous: Readonly<StoredRecord>;
 			readonly changes: Readonly<Changes>;
 			readonly record: Readonly<StoredRecord>;
 		}>
-	: Action extends 'create'
-		? Readonly<{ readonly record: Readonly<CreateRecord> }>
+	: Action extends 'new'
+		? Readonly<{ readonly record: Readonly<NewRecord> }>
 		: Readonly<{ readonly record: Readonly<StoredRecord> }>;
 
 type PolicyWriteDecision<
 	S extends AnySchema,
 	StoredRecord,
-	Action extends 'create' | 'update' | 'delete',
-	CreateRecord = StoredRecord,
+	Action extends 'new' | 'existing' | 'delete',
+	NewRecord = StoredRecord,
 	Changes = Partial<StoredRecord>
 > = (
-	context: PolicyWriteContext<StoredRecord, Action, CreateRecord, Changes>,
+	context: PolicyWriteContext<StoredRecord, Action, NewRecord, Changes>,
 	api: PolicyDecisionApi<S>
 ) => boolean | Effect.Effect<boolean>;
 
@@ -1407,12 +1408,12 @@ type PolicyWriteDecision<
 type PolicyApproval<
 	S extends AnySchema,
 	StoredRecord,
-	Action extends 'create' | 'update' | 'delete',
-	CreateRecord = StoredRecord,
+	Action extends 'new' | 'existing' | 'delete',
+	NewRecord = StoredRecord,
 	Changes = Partial<StoredRecord>
 > = {
 	readonly flow: (
-		context: PolicyWriteContext<StoredRecord, Action, CreateRecord, Changes>,
+		context: PolicyWriteContext<StoredRecord, Action, NewRecord, Changes>,
 		api: PolicyDecisionApi<S>
 	) => ApprovalFlow | Effect.Effect<ApprovalFlow>;
 	readonly superceded_by: ReadonlyArray<TeamName>;
@@ -1511,41 +1512,42 @@ type PolicyReadGrant<S extends AnySchema, N extends TableName<S>> = {
 };
 
 /**
- * A create is authorized against its prepared candidate.
+ * A new-row mutation is authorized against its prepared candidate.
  *
  * The action key itself is the opt-in; an empty object means every prepared candidate, while an
- * absent `create` key means no create authority. `authorize` is server-only Effect code and
+ * absent `mutate.new` key means no new-row authority. `authorize` is server-only Effect code and
  * `approval` resolves one concrete review path after authorization succeeds.
  */
-type PolicyCreateGrant<S extends AnySchema, N extends TableName<S>> = {
+type PolicyNewMutationGrant<S extends AnySchema, N extends TableName<S>> = {
 	readonly fields?: PolicyGrantFields<S, N>;
 	readonly authorize?: PolicyWriteDecision<
 		S,
 		SchemaRow<S, N>,
-		'create',
+		'new',
 		{ readonly id: string } & MutationInsertFor<S, N>
 	>;
 	readonly approval?: PolicyApproval<
 		S,
 		SchemaRow<S, N>,
-		'create',
+		'new',
 		{ readonly id: string } & MutationInsertFor<S, N>
 	>;
 };
 
-type PolicyUpdateGrant<S extends AnySchema, N extends TableName<S>> = {
+/** An existing-row mutation is authorized against its stored row, submitted changes and result. */
+type PolicyExistingMutationGrant<S extends AnySchema, N extends TableName<S>> = {
 	readonly fields?: PolicyGrantFields<S, N>;
 	readonly authorize?: PolicyWriteDecision<
 		S,
 		SchemaRow<S, N>,
-		'update',
+		'existing',
 		SchemaRow<S, N>,
 		MutationUpdateFor<S, N>
 	>;
 	readonly approval?: PolicyApproval<
 		S,
 		SchemaRow<S, N>,
-		'update',
+		'existing',
 		SchemaRow<S, N>,
 		MutationUpdateFor<S, N>
 	>;
@@ -1559,16 +1561,19 @@ type PolicyDeleteGrant<S extends AnySchema, N extends TableName<S>> = {
 type PolicyCollectionGrants<S extends AnySchema, N extends TableName<S>> = Readonly<{
 	readonly read?: PolicyReadGrant<S, N>;
 	readonly history?: PolicyReadGrant<S, N>;
-	readonly create?: PolicyCreateGrant<S, N>;
-	readonly update?: PolicyUpdateGrant<S, N>;
+	readonly mutate?: Readonly<{
+		readonly new?: PolicyNewMutationGrant<S, N>;
+		readonly existing?: PolicyExistingMutationGrant<S, N>;
+	}>;
 	readonly delete?: PolicyDeleteGrant<S, N>;
 }>;
 
 /**
- * One slot per collection/action coordinate.
+ * One slot per collection grant coordinate, with new and existing mutations nested under
+ * `mutate`.
  *
  * The old array could state the same coordinate twice and `rowPredicate` would union it, so an
- * unrestricted sibling silently erased a narrowed one. An object has one key for that coordinate;
+ * unrestricted sibling silently erased a narrowed one. An object has one key for each coordinate;
  * absence is denial, presence is the whole rule, and there is no merge order to misunderstand.
  */
 type PolicyGrants<S extends AnySchema> = Readonly<

@@ -61,6 +61,13 @@ describe('identity as collections', () => {
 		}
 	});
 
+	it('puts invitation expiry directly in the greenfield identity schema', () => {
+		const invitations = new Set(
+			getTableConfig(SYSTEM_MODEL_TABLES.bolt_invitations).columns.map((column) => column.name)
+		);
+		expect(invitations).toContain('expires_at');
+	});
+
 	it('derives system indexes from defineModel metadata', () => {
 		for (const [name, model] of Object.entries(SYSTEM_MODELS)) {
 			const collection = IDENTITY_COLLECTIONS.find((entry) => entry.name === name);
@@ -86,5 +93,4 @@ describe('identity as collections', () => {
 		expect(searchable(AUTH_MODELS.user)).toEqual(['email', 'name']);
 		expect(searchable('team')).toEqual(['name']);
 	});
-
 });

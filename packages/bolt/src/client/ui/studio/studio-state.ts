@@ -347,9 +347,7 @@ export const ManifestSchema = Schema.Struct({
 			name: Schema.String,
 			transport: Schema.String,
 			audience: Schema.String,
-			groupMessages: Schema.optionalKey(
-				Schema.Literals(['disabled', 'mention_or_reply', 'all'])
-			),
+			groupMessages: Schema.optionalKey(Schema.Literals(['disabled', 'mention_or_reply', 'all'])),
 			delegation: Schema.Literals(['enabled', 'disabled'])
 		})
 	),
@@ -508,15 +506,13 @@ export const manifestSections = (
 /**
  * What `envoys.status` answers, and the whole of what it answers.
  *
- * `registered` is not connectivity. It is `exists(select 1 from bolt_envoy_registrations …)` —
- * whether anything ever called `envoys.register` for this name — and it stays true after the
- * transport behind it dies. `received` and `replied` are cumulative receipt counts with no time
- * dimension. Decoding the shape here is what stops the surface from inventing a field the runtime
- * never sends.
+ * `received` and `replied` are cumulative receipt counts with no time dimension. Connectivity is
+ * host transport state and sender registration is an address-to-identity claim, so neither can be
+ * inferred from these counters. Decoding the shape here stops the surface inventing a field the
+ * runtime never sends.
  */
 export const EnvoyStatusSchema = Schema.Struct({
 	envoy: Schema.String,
-	registered: Schema.Boolean,
 	received: Schema.Number,
 	replied: Schema.Number
 });
@@ -527,12 +523,11 @@ export const EnvoyStatusSchema = Schema.Struct({
  * Across the whole runtime there is no command, facility tag or type that reports a transport's
  * state: `Communication` is `VerifyInbound`/`Send`/`Notify`/`Wake` with no probe, and
  * `envoys.status` never touches it. A reachable and an unreachable envoy therefore read identically
- * here, and the surface says that rather than dressing `registered` up as a connection. The host
- * *does* know — it holds the socket — and the Envoys settings page asks it; that answer is host
- * state and deliberately does not come back into the tenant.
+ * here. The host *does* know — it holds the socket — and the Envoys settings page asks it; that
+ * answer is host state and deliberately does not come back into the tenant.
  */
 export const ENVOY_CONNECTION_UNREPORTABLE =
-	'No runtime command reports whether an envoy’s transport is connected. `envoys.status` answers with `registered` — whether the envoy was ever registered with this runtime — and its receipt counts. Nothing here probes the provider, so a live and a dead transport read the same; the host holds the socket and answers that question on the Envoys settings page.';
+	'Runtime status reports traffic receipts, not transport connectivity. Nothing here probes the provider, so a live and a dead transport read the same; the host holds the socket and answers that question on the Envoys settings page.';
 
 /** One tool a policy may grant, and the file whose name declared it. */
 export type StudioTool = Readonly<{ readonly name: string; readonly sourcePath: string }>;
@@ -559,9 +554,9 @@ const ENVOY_FILE = /(?:^|\/)envoys\/\+([^/]+)\.ts$/;
  * tool hung beneath it — and the synthesis meant the tree always had exactly one node above the
  * things anybody wanted to read.
  *
-	 * The manifest now carries `transport`, `audience` and the required delegation boundary, so the
-	 * note that used to explain what the Studio could not know is gone with the projection that made
-	 * it true.
+ * The manifest now carries `transport`, `audience` and the required delegation boundary, so the
+ * note that used to explain what the Studio could not know is gone with the projection that made
+ * it true.
  */
 export const workspaceEnvoys = (
 	manifest: WorkspaceManifest | undefined,

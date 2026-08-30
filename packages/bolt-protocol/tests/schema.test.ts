@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Schema } from 'effect';
 import {
 	AIRequest,
+	AIImageAssetPart,
 	FacilityName,
 	Invocation,
 	PROTOCOL_VERSION,
@@ -11,6 +12,21 @@ import {
 } from '../src/index.js';
 
 describe('Bolt protocol schemas', () => {
+	it('carries a provider-neutral image asset without carrying its bytes', () => {
+		const part = Schema.decodeUnknownSync(AIImageAssetPart)({
+			type: 'image_asset',
+			image_asset: {
+				key: 'evidence/large.jpg',
+				name: 'large.jpg',
+				mimeType: 'image/jpeg',
+				size: 1_042_884,
+				detail: 'low'
+			}
+		});
+		expect(part.image_asset.key).toBe('evidence/large.jpg');
+		expect(JSON.stringify(part)).not.toContain('base64');
+	});
+
 	it('carries bounded provider-neutral web search and a response schema on AI turns', () => {
 		const decoded = Schema.decodeUnknownSync(AIRequest)({
 			_tag: 'Turn',
@@ -81,10 +97,10 @@ describe('Bolt protocol schemas', () => {
 				taskId: 'agent-turn-1'
 			});
 		}
-		// 5 is the version that made browser writes idempotent and version-guarded. The literal is
+		// 6 is the version that moves AI image-byte expansion to the trusted host. The literal is
 		// asserted rather than the constant compared to itself: a bump is a deliberate act, and a
 		// release that changes shape without one is the failure this pins.
-		expect(PROTOCOL_VERSION).toBe(5);
+		expect(PROTOCOL_VERSION).toBe(6);
 	});
 
 	it('decodes transport requests without selecting a wire protocol', () => {

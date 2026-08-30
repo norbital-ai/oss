@@ -171,6 +171,7 @@ import {
 	Files,
 	HostTools,
 	IdentityHooks,
+	SyncCommit,
 	Tasks,
 	Transport
 } from '../../src/runtime/facilities/services.js';
@@ -500,7 +501,9 @@ export const makeBoltTestRuntime = async (
 	 */
 	const baseline = { tag: '00000000000000_baseline', statements: migration?.statements ?? [] };
 	const testSchemaFingerprint = `sha256:${createHash('sha256')
-		.update(JSON.stringify({ collections: definition.collections, relations: definition.relations }))
+		.update(
+			JSON.stringify({ collections: definition.collections, relations: definition.relations })
+		)
 		.digest('hex')}`;
 	const provisioned: WorkspaceDefinition = {
 		...definition,
@@ -524,6 +527,7 @@ export const makeBoltTestRuntime = async (
 		Files.layer(bindings.files, context),
 		HostTools.layer(undefined, context),
 		IdentityHooks.layer(bindings.identityHooks, context),
+		SyncCommit.layer(undefined, context),
 		Tasks.layer(tasks.binding, context),
 		Transport.layer(bindings.transport, context)
 	);
@@ -577,7 +581,10 @@ export const makeBoltTestRuntime = async (
 	);
 	// the write path to resolve at all. The harness binds no transport, which is the point: the
 	// announcement is `Effect.ignore`d, so a runtime with nowhere to publish still writes normally.
-	const data = Layer.provideMerge(Approvals.layer, Layer.mergeAll(foundation, taskQueue, facilities));
+	const data = Layer.provideMerge(
+		Approvals.layer,
+		Layer.mergeAll(foundation, taskQueue, facilities)
+	);
 	const collections = Layer.provideMerge(
 		Collections.layer,
 		Layer.mergeAll(data, authoredLayer, taskQueue, facilities, automations, tenantScope)

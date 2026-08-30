@@ -1,4 +1,6 @@
 import type { CollectionMutationIdempotencyKey } from '@norbital-ai/bolt-protocol';
+import { createSyncStatusView } from '../../src/client/sync-status.svelte.js';
+import type { SyncClient } from '../../src/client/sync/index.js';
 import type { ClientState } from '../../src/client/sync/machine.js';
 import {
 	workspaceSyncIndicator,
@@ -16,6 +18,29 @@ const state = (overrides: Partial<ClientState> = {}): ClientState => ({
 });
 
 describe('live sync presentation', () => {
+	it('projects the Machine current state instead of retaining a mutable Svelte copy', () => {
+		let current = state({ link: 'reconnecting', reconnectAttempt: 1 });
+		const sync = {
+			start: () => undefined,
+			current: () => current,
+			subscribe: (listener) => {
+				listener(current);
+				return () => undefined;
+			},
+			mount: () => {
+				throw new Error('not used');
+			},
+			enqueue: () => undefined
+		} satisfies SyncClient;
+		const view = createSyncStatusView(sync);
+		expect(view.link).toBe('reconnecting');
+		expect(view.reconnectAttempt).toBe(1);
+
+		current = state({ link: 'live', reconnectAttempt: 2 });
+		expect(view.link).toBe('live');
+		expect(view.reconnectAttempt).toBe(2);
+	});
+
 	it('renders only the Machine link states', () => {
 		expect(workspaceSyncIndicator(state())).toMatchObject({ state: 'live', label: 'Connected' });
 		expect(workspaceSyncIndicator(state({ link: 'reconnecting' }))).toMatchObject({

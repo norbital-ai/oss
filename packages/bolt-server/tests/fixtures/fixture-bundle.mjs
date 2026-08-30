@@ -1,7 +1,7 @@
-export const protocolVersion = 5;
+export const protocolVersion = 6;
 
 export const manifest = {
-	protocolVersion: 5,
+	protocolVersion: 6,
 	artifactId: 'bolt-server-fixture',
 	artifactVersion: 'fixture-1',
 	schemaFingerprint: 'fixture-schema',

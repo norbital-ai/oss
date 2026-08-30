@@ -16,8 +16,11 @@ const ToolCall = Schema.Struct({
 	input: Schema.optionalKey(Schema.Json)
 });
 
-/** The one shape a model answers a turn round with: text, tool calls, either half optional. */
+/** The one shape a model answers a turn round with: reasoning, text, and tool calls are optional. */
 export const TurnOutput = Schema.Struct({
+	reasoning: Schema.optionalKey(Schema.String),
+	/** Opaque provider blocks are replayed verbatim across tool rounds. */
+	reasoningDetails: Schema.optionalKey(Schema.Array(Schema.Json)),
 	text: Schema.optionalKey(Schema.String),
 	toolCalls: Schema.optionalKey(Schema.Array(ToolCall))
 });
@@ -45,8 +48,10 @@ export const maxDelegationDepth = 8;
  * decides what it looks like and when it changes. Absent for the web agent.
  */
 export type TurnSurface = Readonly<{
-	readonly observe: (parts: ReadonlyArray<TurnPart>) => Effect.Effect<void>;
+	readonly observe: (parts: ReadonlyArray<TurnPart>) => Effect.Effect<void, unknown>;
 	readonly currentKey: () => string | null;
+	/** Replaces the progress bubble with the settled answer. Best effort, like observation. */
+	readonly complete?: (output: Schema.Json) => Effect.Effect<void, unknown>;
 }>;
 
 /** One step of an agent turn. "Step" and "part" name the same thing: what the turn produced next.
@@ -55,6 +60,12 @@ export type TurnSurface = Readonly<{
  * own.
  */
 export const TurnPart = Schema.Union([
+	Schema.Struct({
+		kind: Schema.Literal('reasoning'),
+		text: Schema.String,
+		/** Provider signatures/encrypted blocks are prompt state, not presentation text. */
+		details: Schema.optionalKey(Schema.Array(Schema.Json))
+	}),
 	Schema.Struct({ kind: Schema.Literal('text'), text: Schema.String }),
 	Schema.Struct({
 		kind: Schema.Literal('tool'),
@@ -102,6 +113,7 @@ export const closeUnpairedToolCalls = (
 };
 
 export const TurnStatus = Schema.Literals([
+	'queued',
 	'running',
 	'stopped',
 	'completed',
@@ -144,6 +156,8 @@ export const SettledTarget = Schema.Struct({
  * they happened, with either half optional — the one shape a provider actually builds a prompt from.
  */
 const ReplayContent = Schema.Struct({
+	reasoning: Schema.optionalKey(Schema.String),
+	reasoningDetails: Schema.optionalKey(Schema.Array(Schema.Json)),
 	text: Schema.optionalKey(Schema.String),
 	toolCalls: Schema.optionalKey(Schema.Array(Schema.Json))
 });
@@ -157,23 +171,39 @@ const ReplayContent = Schema.Struct({
  */
 export const replayTurn = (parts: ReadonlyArray<TurnPart>): ReadonlyArray<Schema.Json> => {
 	const replayed: Array<Schema.Json> = [];
+	let reasoning: string | undefined;
+	let reasoningDetails: ReadonlyArray<Schema.Json> | undefined;
 	let text: string | undefined;
 	let calls: Array<Schema.Json> = [];
 	const flush = () => {
-		if (text === undefined && calls.length === 0) return;
-		const content: Schema.Schema.Type<typeof ReplayContent> =
-			text === undefined
-				? { toolCalls: calls }
-				: calls.length === 0
-					? { text }
-					: { text, toolCalls: calls };
+		if (
+			reasoning === undefined &&
+			reasoningDetails === undefined &&
+			text === undefined &&
+			calls.length === 0
+		)
+			return;
+		const content: Schema.Schema.Type<typeof ReplayContent> = {
+			...(reasoning === undefined ? {} : { reasoning }),
+			...(reasoningDetails === undefined ? {} : { reasoningDetails: [...reasoningDetails] }),
+			...(text === undefined ? {} : { text }),
+			...(calls.length === 0 ? {} : { toolCalls: calls })
+		};
 		replayed.push({ role: 'assistant', content });
+		reasoning = undefined;
+		reasoningDetails = undefined;
 		text = undefined;
 		calls = [];
 	};
 	for (const part of parts) {
-		if (part.kind === 'text') {
+		if (part.kind === 'reasoning') {
 			flush();
+			reasoning = part.text;
+			reasoningDetails = part.details;
+		} else if (part.kind === 'text') {
+			// Reasoning and its answer belong to the same provider assistant message. A second text
+			// part or a text part after calls starts a new assistant message.
+			if (text !== undefined || calls.length > 0) flush();
 			text = part.text;
 		} else if (part.kind === 'tool') {
 			calls.push({ name: part.name, input: part.input });

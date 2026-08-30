@@ -169,7 +169,7 @@ const authUserModel = defineModel(
 		 *
 		 * `verified` is stored rather than implied by the row existing, because the two are genuinely
 		 * different states: an administrator recording a contractor's number is a claim, and only a
-		 * completed proof of possession makes it an identity. `Channels.receive` matches on
+		 * completed proof of possession makes it an identity. `Envoys.receive` matches on
 		 * `verified === true` alone, so an unproven claim is inert rather than trusted.
 		 *
 		 * Json rather than its own collection: it is read only when a message arrives, always for one
@@ -366,18 +366,15 @@ const auditModel = defineModel(
 	{ history: false, sync: false, indexes: [systemIndex('sequence'), systemIndex('request_id')] }
 );
 
-const envoyRegistrationModel = defineModel(
-	{ envoy_name: text().notNull().unique() },
-	{ history: false, sync: false }
-);
-
 const envoyReceiptModel = defineModel(
 	{
 		sequence: bigserial({ mode: 'number' }).unique(),
 		envoy_name: text().notNull(),
 		conversation_id: text().notNull(),
 		direction: text().notNull(),
-		sender_id: text()
+		sender_id: text(),
+		/** Provider-stable message identity. Null only on receipts written before this field existed. */
+		receipt_key: text().unique()
 	},
 	{
 		history: false,
@@ -504,6 +501,10 @@ const conversationModel = defineModel(
 		visibility: text().notNull().default('personal'),
 		envoy_key: text(),
 		drain_lease_until: instant(),
+		/** Provider message edited in place for envoy progress and queued-message previews. */
+		transport_message_key: text(),
+		/** Last base progress line, kept so an incoming queue preview can extend rather than replace it. */
+		transport_progress: text(),
 		usage_cost_usd: doublePrecision().notNull().default(0),
 		usage_cost_micro_units: bigint({ mode: 'number' }).notNull().default(0),
 		usage_cost_currency: text(),
@@ -590,7 +591,9 @@ const invitationModel = defineModel(
 		email: text().notNull(),
 		invited_by: text().notNull(),
 		accepted_by: text(),
-		status: text().notNull()
+		status: text().notNull(),
+		/** Nullable only for invitations created before expiring links existed. */
+		expires_at: instant()
 	},
 	{ history: false, sync: false }
 );
@@ -766,7 +769,6 @@ export const SYSTEM_COLLECTION_MODELS = Object.freeze({
 export const INTERNAL_SYSTEM_MODELS = Object.freeze({
 	bolt_approvals: approvalStateModel,
 	bolt_audit: auditModel,
-	bolt_envoy_registrations: envoyRegistrationModel,
 	bolt_envoy_receipts: envoyReceiptModel,
 	bolt_envoy_inbound: envoyInboundModel,
 	bolt_integrations: integrationModel,

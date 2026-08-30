@@ -220,6 +220,61 @@ test('ensurePureInstallation --force deletes leftover .yalc trees before re-addi
 	}
 });
 
+test('ensurePureInstallation refreshes only packages whose rebuilt store signature changed', () => {
+	const root = fixture();
+	try {
+		const yalcStoreDirectory = path.join(root, 'tenant-substrate/packages/local/yalc');
+		writeJson(path.join(root, 'package.json'), {
+			dependencies: {
+				'@norbital-ai/bolt': 'file:.yalc/@norbital-ai/bolt',
+				'@norbital-ai/ui': 'file:.yalc/@norbital-ai/ui'
+			}
+		});
+		writeJson(path.join(root, 'yalc.lock'), {
+			packages: {
+				'@norbital-ai/bolt': { replaced: '0.0.12', pure: true },
+				'@norbital-ai/ui': { replaced: '0.0.12', pure: true }
+			}
+		});
+		for (const [name, linked, stored] of [
+			['bolt', 'old-bolt', 'new-bolt'],
+			['ui', 'same-ui', 'same-ui']
+		]) {
+			writeJson(path.join(root, `.yalc/@norbital-ai/${name}/package.json`), {
+				version: '0.0.12',
+				yalcSignature: linked
+			});
+			writeJson(
+				path.join(yalcStoreDirectory, `packages/@norbital-ai/${name}/0.0.12/package.json`),
+				{ version: '0.0.12', yalcSignature: stored }
+			);
+		}
+
+		const calls = [];
+		const prepared = ensurePureInstallation({
+			consumerDirectory: root,
+			names: ['@norbital-ai/bolt', '@norbital-ai/ui'],
+			yalcBin: '/fake/yalc',
+			yalcStoreDirectory,
+			run: (_command, args) => {
+				calls.push(args);
+				assert.equal(existsSync(path.join(root, '.yalc/@norbital-ai/bolt')), false);
+				writeJson(path.join(root, '.yalc/@norbital-ai/bolt/package.json'), {
+					version: '0.0.12',
+					yalcSignature: 'new-bolt'
+				});
+			}
+		});
+
+		assert.deepEqual(prepared, ['@norbital-ai/bolt']);
+		assert.deepEqual(calls, [
+			['--store-folder', yalcStoreDirectory, 'add', '--pure', '@norbital-ai/bolt']
+		]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test('ensurePureInstallation refuses a partial --only store on a clean consumer', () => {
 	const root = fixture();
 	try {

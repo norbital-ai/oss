@@ -215,6 +215,11 @@ const pageQueryOf = (
 		},
 		then: query.then,
 		get nextCursor() {
+			// `nextCursor` is filled by the same Machine projection as `current`, but this wrapper's
+			// local variable is deliberately not a second Svelte state store. Reading `current` here
+			// subscribes callers to that publication, so a pagination bar first painted while the
+			// query was pending is invalidated when the answered page supplies its continuation.
+			void query.current;
 			return nextCursor;
 		}
 	};

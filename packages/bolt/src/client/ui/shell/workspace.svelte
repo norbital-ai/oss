@@ -23,6 +23,7 @@
 	} from '#lib/client/ui/shell/workspace-navigation.js';
 	import WorkspaceMembers from '../settings/workspace.svelte';
 	import { EMPTY_WORKSPACE_ACCESS } from '#lib/client/ui/settings/rows.js';
+	import { SYSTEM_COLLECTION_SURFACES } from '#lib/client/ui/system/system-collection-surfaces.js';
 	import EnvoysSettings from '../org/envoys-settings.svelte';
 	import OrganizationSettings from '../org/organization-settings.svelte';
 	import SecretsSettings from '../org/secrets-settings.svelte';
@@ -67,16 +68,12 @@
 	const session = workspaceSession();
 	let accessScope = $state(session.accessScope);
 	let interactiveQueriesRequestedScope = $state<string | undefined>(undefined);
-	const syncStatusSignal = untrack(() => workspace.syncStatus);
-	let syncStatus = $state.raw<ClientState | undefined>(syncStatusSignal?.current());
-
 	/**
-	 * Mirrors the Machine's one sync state into this bundle's Svelte graph.
-	 *
-	 * No signal means no proof: leave the value absent so the shell says the connection state is
-	 * unverified. It must never synthesize “live” from browser connectivity alone.
+	 * The Machine already exposes a `$state` proxy created inside this compiled bundle's Svelte graph.
+	 * Keep that object intact so ordinary field reads observe transitions; treating it as the old
+	 * sampled signal contract crashes the workspace during authenticated bootstrap.
 	 */
-	$effect(() => syncStatusSignal?.subscribe((next) => (syncStatus = next)));
+	const syncStatus: ClientState | undefined = untrack(() => workspace.syncStatus);
 
 	/**
 	 * The authored record surfaces, keyed by collection.
@@ -89,7 +86,9 @@
 	 * one record surface, but none decides which application the person may enter, so an unopened
 	 * collection must never put its representation into the initial dependency graph.
 	 */
-	const loadedCollectionSurfaces = $state<Record<string, CollectionSurface>>({});
+	const loadedCollectionSurfaces = $state<Record<string, CollectionSurface>>({
+		...SYSTEM_COLLECTION_SURFACES
+	});
 	const requestedCollectionSurfaces = new Set<string>();
 	const collectionSurfaces = new Proxy(loadedCollectionSurfaces, {
 		get: (surfaces, property, receiver) => {
@@ -360,9 +359,7 @@
 	 * `accessibleApps` never reaches it and this gate must carry the real administrator status.
 	 */
 	const hostPluginsVisible = $derived(
-		view.user.admin &&
-			!accessScope.startsWith('team:') &&
-			!(impersonation?.isActive ?? false)
+		view.user.admin && !accessScope.startsWith('team:') && !(impersonation?.isActive ?? false)
 	);
 
 	const resolveAppName = (href: string): string | undefined => {

@@ -147,17 +147,6 @@ const RateLimitAddressInput = Schema.Struct({
 	email: Schema.optionalKey(Schema.String)
 });
 const decodeJsonObject = Schema.decodeUnknownResult(JsonObject);
-/**
- * What a host may still assert once it has proved who it is, which is only ever *less* authority.
- *
- * This used to carry `subject`, `roles`, `teams` and `impersonatedUser` as well, and the branch below
- * minted a subject straight out of them whenever `subject` was absent — so
- * `POST /_bolt/plugin/data-browser/query` with `{"trustedContext":{"roles":["admin"]}}` read any
- * collection in the tenant, unauthenticated. Those four fields are gone rather than checked: a
- * credential names a session row, and that row's roles are the answer, so there was nothing for the
- * payload's copy to do except be believed. `impersonatedSubject` survives because it narrows rather
- * than widens — `AccessControl.impersonate` still has to authorize the authenticated actor for it.
- */
 /** The protocol mutation body plus the subject minted from the authenticated credential. */
 const AuthenticatedCollectionMutation = Schema.Struct({
 	subject: Subject,
@@ -173,14 +162,7 @@ const CollectionImportInput = Schema.Struct({
 	subject: Subject,
 	records: Schema.Array(CollectionMutation)
 });
-/**
- * What a caller may say when starting an automation: which one, and what to hand it.
- *
- * No `subject`, and its absence is the point. It used to carry one — so the automation ran with
- * whatever authority the caller held, and an administrator tripping a nightly close ran it as an
- * administrator. An automation's authority is the policies its own declaration names, minted at the
- * enqueue point by `Automations.start`.
- */
+/** Automation authority comes from its declaration, never from caller-supplied identity. */
 const AutomationStartInput = Schema.Struct({
 	name: Schema.NonEmptyString,
 	input: Schema.Json
@@ -190,16 +172,7 @@ const AutomationLifecycleInput = Schema.Struct({
 	name: Schema.NonEmptyString,
 	taskId: Schema.NonEmptyString
 });
-/**
- * What a host may say about a message it took off a transport.
- *
- * `subject` is gone from this input and its absence is the point. It was a `Subject` the caller
- * supplied, which made the identity of an envoy turn something outside the runtime decided — and on
- * a `Command` the boundary overwrites `subject` from the credential anyway, so a host relaying a
- * WhatsApp message could only ever have run the turn as *itself*, an administrator. `Envoys.receive`
- * mints the subject from the release's own declarations now; the host supplies the wire's facts and
- * nothing about authority.
- */
+/** The runtime derives envoy identity; transports provide only delivery facts. */
 const EnvoyReceiveInput = Schema.Struct({
 	envoy: Schema.NonEmptyString,
 	delivery: EnvoyDelivery
@@ -213,6 +186,11 @@ const EnvoyCompleteInput = Schema.Struct({
 	conversationId: Schema.NonEmptyString,
 	output: Schema.Json,
 	progressKey: Schema.optionalKey(Schema.NullOr(Schema.NonEmptyString))
+});
+const EnvoyRegistrationInspectInput = Schema.Struct({ claimId: Schema.NonEmptyString });
+const EnvoyRegistrationRedeemInput = Schema.Struct({
+	claimId: Schema.NonEmptyString,
+	subject: Subject
 });
 /**
  * `binding` is what a scheduled pull carries and an enqueued one does not.
@@ -318,6 +296,19 @@ const IdentityVerifyCodeInput = Schema.Struct({
 const SIGN_IN_COMMANDS: ReadonlySet<string> = new Set(['identity.sendCode', 'identity.verifyCode']);
 const IdentitySettingsInput = Schema.Struct({ tenantId: Schema.NonEmptyString });
 const IdentityAuthenticateInput = Schema.Struct({ credential: Schema.NonEmptyString });
+const IdentityInvitationInspectInput = Schema.Struct({
+	invitationId: Schema.NonEmptyString,
+	tenantId: Schema.NonEmptyString
+});
+const IdentityInvitationAcceptInput = Schema.Struct({
+	invitationId: Schema.NonEmptyString,
+	subject: Subject
+});
+const IdentityInviteInput = Schema.Struct({
+	email: Schema.NonEmptyString,
+	tenantId: Schema.NonEmptyString,
+	subject: Subject
+});
 const CollectionRecordInput = Schema.Struct({
 	subject: Subject,
 	collection: Schema.NonEmptyString,
@@ -408,26 +399,7 @@ const decode = DispatchValues.decode;
 
 const json = DispatchValues.json;
 
-/**
- * The authority a `schema.*` command requires, and the proof the caller holds it.
- *
- * These commands used to run for any authenticated subject in the tenant — and, on a `Task` or a
- * non-data-browser `Plugin` invocation, for no verified subject at all, because those tags carry
- * their input through untouched. `schema.migrate` opens a DDL transaction, so a tenant-wide
- * `create table` sat behind an ordinary employee's session token and behind an unauthenticated task
- * payload.
- *
- * `schema` is a named resource in the vocabulary `secrets` already uses, so an authored policy
- * grants it the way it grants everything else — `{ actions: ['read'], apps: ['schema'] }` — and the
- * admin policy the compiler always appends (`actions: ['*'], apps: ['*']`) covers it with no
- * template changing.
- *
- * Reading the plan is separated from applying it because they are different powers. `plan`,
- * `fingerprint`, `validate` and `verify` disclose the whole schema *unfiltered* — unlike
- * `workspace.manifest`, which drops the collections the subject may not read — while `migrate`
- * rewrites the database. `manage` is the default so that a sixth `schema.*` command added later is
- * gated as a mutation until somebody decides otherwise.
- */
+/** Schema inspection requires `read`; every other schema command defaults to `manage`. */
 const SCHEMA_RESOURCE = 'schema';
 const SCHEMA_READ_COMMANDS: ReadonlySet<string> = new Set([
 	'schema.plan',
@@ -435,8 +407,7 @@ const SCHEMA_READ_COMMANDS: ReadonlySet<string> = new Set([
 	'schema.validate',
 	'schema.verify'
 ]);
-// Only a `Command` reaches here at all: `authorizeInvocationProvenance` has already refused the two
-// credential-free tags, on which the `subject` this decodes would be whatever the payload claimed.
+// The provenance gate has already refused credential-free invocation tags.
 const authorizeSchemaCommand = Effect.fn('Bolt.authorizeSchemaCommand')(function* (
 	command: string,
 	commandInput: unknown
@@ -475,6 +446,10 @@ const authorizeFounderAdmission = Effect.fn('Bolt.authorizeFounderAdmission')(fu
 const SYSTEM_ONLY_COMMANDS: ReadonlySet<string> = new Set([
 	'identity.bootstrapFounder',
 	'identity.continueSession',
+	// Link landing pages may inspect state without consuming it. Only Colony can make that unsigned
+	// probe; redemption is a separate credential-backed command.
+	'identity.invitation.inspect',
+	'envoys.registration.inspect',
 	/**
 	 * The inbound envoy port, which would otherwise be the widest hole in this runtime.
 	 *
@@ -537,23 +512,7 @@ const authorizeSystemCommand = Effect.fn('Bolt.authorizeSystemCommand')(function
 	});
 });
 
-/**
- * The commands the runtime enqueues for itself, which is the whole of what a `Task` may run.
- *
- * A durable task is a message the runtime posted to itself and the host handed back; nothing about
- * the message proves that, because a `Task` carries no credential and never did. What can be checked
- * is the other end: whether this command is one the runtime ever enqueues. Everything here is
- * addressed by a name the workspace declared or by a record the runtime already wrote, and none of
- * it takes an identity — `integrations.pull`/`flush` and `automations.<name>` are the runtime's own
- * machinery, while `collections.resume` takes `{ requestId }` and derives its authority from the
- * stored approval:
- * `Collections.resume` refuses a request that is not `Approved` and replays the write under the
- * subject recorded when the original create was authenticated.
- *
- * `automations.<name>` is resolved against the declared automations rather than matched on the
- * prefix, because `automations.start`, `.register` and `.stop`
- * share it and are host commands rather than enqueued ones.
- */
+/** Closed set of commands the credential-free durable task transport may run. */
 const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set([
 	'integrations.pull',
 	'integrations.flush',
@@ -561,33 +520,11 @@ const ENQUEUED_COMMANDS: ReadonlySet<string> = new Set([
 	'envoys.complete',
 	'collections.resume',
 	'collections.discard',
-	// Better Auth persists a sign-in challenge, then posts this private courier task. It carries no
-	// caller identity and can only deliver the exact code/address pair the runtime stored in the row.
+	// Private courier task for the exact persisted sign-in challenge.
 	Identity.DELIVER_CODE_COMMAND
 ]);
 
-/**
- * Which invocation tags may reach the command switch, and on what authority.
- *
- * `POST /_bolt/plugin/<anything>/<command>` builds a `Plugin` invocation out of a URL and a request
- * body with no authentication anywhere, and a `Task` carries no credential by construction. Both
- * handed their input to the switch untouched, so the switch was a second, unauthenticated command
- * port. The provenance gate now defaults both tags to deny and admits only commands the runtime
- * itself enqueues.
- *
- * So the gate is default-deny and it is one gate, at the point where a credential is turned into a
- * subject rather than in the thirty-eight cases that lacked one: a `Plugin` gets the plugin surface
- * (`data-browser`, resolved above from its host-supplied context) and nothing else, and a `Task`
- * gets exactly what the runtime enqueues. A case added tomorrow is refused on both tags until
- * somebody enqueues it — the opposite polarity to the per-command list that let five `schema.*`
- * commands each ship without a check.
- */
-/**
- * Whether a command belongs to a set the runtime enqueues, resolving authored automations by name.
- *
- * `automations.<name>` is checked against the declared automations rather than matched on the
- * prefix, because lifecycle commands share it and are not enqueued turns.
- */
+/** Resolves both built-in task commands and authored automation names. */
 const isRunnable = Effect.fn('Bolt.isRunnable')(function* (
 	command: string,
 	allowed: ReadonlySet<string>
@@ -612,50 +549,17 @@ const authorizeInvocationProvenance = Effect.fn('Bolt.authorizeInvocationProvena
 	}
 });
 
-/**
- * The identity fields this boundary mints, and why a payload may never supply one.
- *
- * On a `Command` the fields below are overwritten with values derived from an authenticated
- * credential, so whatever the input claimed about who it is has already been discarded before any
- * case reads it. A `Task` carries no credential, and a non-data-browser `Plugin` is an
- * unauthenticated `POST /_bolt/plugin/<anything>/<command>` — both hand their input to the switch
- * untouched, so on those tags these keys are claims rather than facts. Every case that decodes
- * `subject: Subject` then authorises that claim. The boundary therefore refuses minted identity
- * fields on credential-free invocations before any command-specific decoder runs.
- *
- * So the refusal lives where identity is minted, once, rather than in the cases that consume it: a
- * per-case check is exactly what let five `schema.*` commands each ship without one, and the next
- * case to decode a `Subject` would have shipped without one too.
- *
- * It still earns its place behind `authorizeInvocationProvenance`, which now refuses every command a
- * credential-free tag has no business running: what survives that gate is the enqueued set, and
- * `automations.<name>` forwards its whole input to an authored automation. Without this, a task
- * payload could smuggle a subject in through that input.
- */
+/** Identity fields are minted at this boundary and refused in credential-free payloads. */
 const MINTED_IDENTITY = [
 	'subject',
 	'actor',
 	'tenantId',
 	'impersonatedTeam',
-	/**
-	 * The policies a subject holds directly, which only a *declaration* may name.
-	 *
-	 * It is here for the same reason `system` is refused on `Subject` itself: a static identity's
-	 * authority is the policies its declaration named, and if a payload could carry the field then the
-	 * answer to "what can a stranger do to my database?" would stop being "read the envoy declaration"
-	 * and start being "whatever they typed". There is no row that produces one either, so a subject
-	 * holding policies directly is one this runtime minted and nothing else.
-	 */
+	// Static policy authority comes only from declarations.
 	'policies'
 ] as const;
 
-/**
- * Exported for the boundary test.
- *
- * This function has silently dropped a query field twice — `where`/`orderBy` once, then `with` —
- * because it rebuilds the query field by field, so anything not explicitly listed disappears
- * without an error anywhere. The test asserts every field survives the crossing.
- */
+/** Exported so the boundary test can assert every query field survives. */
 export const collectionQuery = DispatchValues.collectionQuery;
 const credentialFromHeaders = DispatchValues.credentialFromHeaders;
 const impersonatedTeamFromHeaders = DispatchValues.impersonatedTeamFromHeaders;
@@ -1012,20 +916,7 @@ export const dispatchInvocation: (
 	}
 );
 
-/**
- * The address a payload names, for a limit keyed on one.
- *
- * Read off the raw payload rather than a decoded one because it is needed before the command's own
- * schema has run — the point of an `address` limit is to bound anonymous traffic, and anonymous
- * traffic is exactly what has no subject to key on. Read defensively for the same reason: this is
- * untrusted input, and a payload that carries something other than a string simply keys on nothing
- * and shares the fallback bucket.
- *
- * It is a *key*, never an authorisation. Naming an address here says nothing about who the caller
- * is; it only decides which counter they spend from, and a caller who varies it is spending from a
- * fresh counter each time — which is why an address limit exists to protect what sending to that
- * address costs, and never to establish identity.
- */
+/** Extracts an untrusted address solely as a rate-limit key. */
 const rateLimitAddress = (payload: unknown): string | undefined => {
 	const decoded = Schema.decodeUnknownResult(RateLimitAddressInput)(payload);
 	if (Result.isFailure(decoded)) return undefined;
@@ -1411,6 +1302,38 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const input = yield* decode(IdentitySettingsInput, commandInput);
 			return json(yield* (yield* Identity.Service).workspaceAccess(effectId, input.tenantId));
 		}
+		case 'identity.invite': {
+			const input = yield* decode(IdentityInviteInput, commandInput);
+			yield* (yield* AccessControl.Service).authorize(input.subject, 'manage', IDENTITY_RESOURCE);
+			return json({
+				invitationId: yield* (yield* Identity.Service).invite(
+					effectId,
+					input.tenantId,
+					input.email,
+					input.subject.userId
+				)
+			});
+		}
+		case 'identity.invitation.inspect': {
+			const input = yield* decode(IdentityInvitationInspectInput, commandInput);
+			return json(
+				yield* (yield* Identity.Service).inspectInvitation(
+					effectId,
+					input.tenantId,
+					input.invitationId
+				)
+			);
+		}
+		case 'identity.invitation.accept': {
+			const input = yield* decode(IdentityInvitationAcceptInput, commandInput);
+			return json(
+				yield* (yield* Identity.Service).acceptInvitation(
+					effectId,
+					input.invitationId,
+					input.subject
+				)
+			);
+		}
 		case 'approvals.decide': {
 			const input = yield* decode(ApprovalDecideInput, commandInput);
 			const approvals = yield* Approvals.Service;
@@ -1459,6 +1382,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		case HOST_SCHEDULE_DISCOVER_COMMAND: {
 			const input = yield* decode(AuthenticatedHostScheduleDiscover, commandInput);
 			const discovered = yield* (yield* TaskQueue.Service).discover(effectId, input.nowEpochMs);
+			yield* (yield* Automations.Service).publishProjectedRuns(
+				EffectId.make(`${effectId}:publish`),
+				discovered.occurrences.map(({ taskId }) => taskId)
+			);
 			return json({
 				occurrences: discovered.occurrences,
 				rejections: discovered.rejections,
@@ -1471,6 +1398,10 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 				effectId,
 				input.occurrence.taskId,
 				input.outcome
+			);
+			yield* (yield* Automations.Service).publishProjectedRuns(
+				EffectId.make(`${effectId}:publish`),
+				[input.occurrence.taskId]
 			);
 			return json({ settled: true, nextDueAtEpochMs: nextDueAtEpochMs ?? null });
 		}
@@ -1509,20 +1440,24 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 		case 'agents.enqueue': {
 			const input = yield* decode(AgentEnqueueInput, commandInput);
 			const agents = yield* Agents.Service;
-			return json(
-				yield* agents.enqueue(
-					effectId,
-					input.subject,
-					input.agent,
-					input.conversationId,
-					input.turnId,
-					{
-						kind: 'user_message',
-						text: input.message
-					},
-					input.model
-				)
+			const admitted = yield* agents.enqueue(
+				effectId,
+				input.subject,
+				input.agent,
+				input.conversationId,
+				input.turnId,
+				{
+					kind: 'user_message',
+					text: input.message
+				},
+				input.model
 			);
+			return json({
+				conversationId: admitted.conversationId,
+				taskId: admitted.taskId,
+				turnId: admitted.turnId,
+				status: admitted.status
+			});
 		}
 		case 'agents.documents.attach': {
 			const input = yield* decode(AgentDocumentBindInput, commandInput);
@@ -1797,6 +1732,16 @@ const runCommand = Effect.fn('Bolt.runCommand')(function* (
 			const input = yield* decode(EnvoyReceiveInput, commandInput);
 			const envoys = yield* Envoys.Service;
 			return json(yield* envoys.receive(effectId, input.envoy, input.delivery));
+		}
+		case 'envoys.registration.inspect': {
+			const input = yield* decode(EnvoyRegistrationInspectInput, commandInput);
+			return json(yield* (yield* Envoys.Service).inspectRegistration(effectId, input.claimId));
+		}
+		case 'envoys.registration.redeem': {
+			const input = yield* decode(EnvoyRegistrationRedeemInput, commandInput);
+			return json(
+				yield* (yield* Envoys.Service).redeemRegistration(effectId, input.claimId, input.subject)
+			);
 		}
 		case 'envoys.drain': {
 			const input = yield* decode(EnvoyDrainInput, commandInput);

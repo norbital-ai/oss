@@ -34,25 +34,28 @@ settled through the stream.
 | `sync.advance`  | Guest evaluation of one wake: changed collections, held subscriptions, pending ledger ids.    |
 
 `sync.connect` carries `head` (optional cursor), `queries` (`key`, `input`, `digest`, `heldIds`,
-`digestOnly`), `released` keys, and `pending` write ids. `sync.advance` carries the commit's
+minimal `heldCoordinates`, `digestOnly`), `released` keys, and `pending` write ids. `sync.advance` carries the commit's
 `changes`, the host-held `subscriptions` (opaque credentials the guest re-authenticates afresh, so
 revocation and policy drift are visible on a wake), `pending`, and an optional `writer` scope.
 
 ---
 
-## Host: SyncHost
+## Host: shared registry core and adapters
 
-`SyncHost` (`bolt-protocol/src/sync.ts`) is the shared registry contract, implemented by Colony
-and bolt-server. The registry is guest-opinion made durable:
+`SyncRegistry` and `SyncConnectionLane` (`bolt-protocol/src/sync-registry.ts`) are the shared
+mechanism used directly by Colony and bolt-server. There is no separate `SyncHost` protocol
+contract for each host to reimplement. Each host supplies only its connection object, guest-call
+bridge, scope/lane choice, and disconnect mapping; filing, invalidation, ordering, collapse, and
+full-answer refresh live in the shared core:
 
 - **One `SubState` per `(policyHash, queryHash)`**, plus a `byCollection` index from collection name
   to subscriptions. Subscription ids are `sha256(policyHash ‖ queryHash)`.
 - **Per-connection pump** with backlog collapse: a backpressured connection's lane collapses to
-  full answers (`emit` returning false is the collapse signal). One commit produces one apply
-  frame.
+  full answers (`emit` returning false is the collapse signal). The shared lane schedules the
+  collapsed connection's full-answer refresh; one commit produces one apply frame.
 - **`MAX_SYNC_HELD_IDS` (20 000) is a host promise, not a guest guess**: above the ceiling a
-  SubState runs **digest-only** — no id list is held or shipped, so no positional patch is ever
-  issued and every wake is answered by a full re-resolve.
+  SubState runs **digest-only** — no id/coordinate list is held or shipped, so no positional patch
+  is ever issued and every wake is answered by a full re-resolve.
 - **`releaseId` is part of the scope key.** A release mismatch disconnects the stream, and the
   client Machine turns that disconnect into `needsReload`.
 
@@ -69,6 +72,9 @@ a predicate, masks a row, or constructs a patch — evaluation belongs to the gu
   cursor, patches (`from` → `to` digest fence), and write outcomes in **one** reducer event.
 - **Cursored reads (`after`) are one-shot.** `after` and `columns` are request concerns, never
   window identity; a cursored query derives empty dependencies and is never registered live.
+- **Ordinary ordered windows use point/rank advancement.** One policy-filtered point probe decides
+  membership and row content; one count places it in the total order. Search, grouping, relations,
+  multi-change commits, digest-only windows, and incomplete legacy bases use full-answer fallback.
 - **`count` gets a fresh re-count.** A count answer holds no ids; every wake re-counts and pushes a
   scalar.
 - **Search** is an explicit lexical (`{ mode: 'lexical', term }`) or semantic

@@ -11,7 +11,7 @@ import {
 	type TaskRequest
 } from '@norbital-ai/bolt-protocol';
 import * as Automations from '../../src/runtime/automations/automations.js';
-import { Tasks } from '../../src/runtime/facilities/services.js';
+import { SyncCommit, Tasks } from '../../src/runtime/facilities/services.js';
 import * as Database from '../../src/runtime/facilities/database.js';
 import * as TaskQueue from '../../src/runtime/tasks/tasks.js';
 import * as Workspace from '../../src/runtime/workspace.js';
@@ -77,8 +77,12 @@ describe('Automations owner', () => {
 
 	it('admits an immediate command without waking the scheduler and rejects deferred work', async () => {
 		const wakes: Array<TaskRequest> = [];
+		const commits: Array<
+			ReadonlyArray<{ readonly collection: string; readonly recordId: string }>
+		> = [];
 		const statements: Array<{ readonly sql: string; readonly parameters: ReadonlyArray<unknown> }> =
 			[];
+		const callContext = testCallContext('i1');
 		const tasks = Tasks.layer(
 			{
 				call: (_metadata, input) => {
@@ -86,18 +90,41 @@ describe('Automations owner', () => {
 					return Promise.resolve({ _tag: 'Success', value: {} });
 				}
 			},
-			testCallContext('i1')
+			callContext
 		);
 		const database = Database.layer(
 			{
 				call: (_metadata, request) => {
-					for (const statement of request._tag === 'Query' ? [request] : request.statements) {
+					const requests = request._tag === 'Query' ? [request] : request.statements;
+					for (const statement of requests) {
 						statements.push({ sql: statement.sql, parameters: statement.parameters });
 					}
-					return Promise.resolve({ _tag: 'Success', value: { rows: [], affectedRows: 0 } });
+					const projectedRun = requests.some(
+						({ sql }) => sql.includes('from "automation_run"') && sql.includes('select "id"')
+					);
+					return Promise.resolve({
+						_tag: 'Success',
+						value: {
+							rows: projectedRun
+								? [{ id: '019f6f10-3000-7000-8000-000000000098' }]
+								: requests.some(({ sql }) => sql.includes('returning "id"'))
+									? [{ id: '019f6f10-3000-7000-8000-000000000099' }]
+									: [],
+							affectedRows: 0
+						}
+					});
 				}
 			},
-			testCallContext('i1')
+			callContext
+		);
+		const syncCommit = SyncCommit.layer(
+			{
+				call: (_metadata, request) => {
+					commits.push(request.changes);
+					return Promise.resolve({ _tag: 'Success', value: { accepted: true } });
+				}
+			},
+			callContext
 		);
 		const registry = Workspace.layer(
 			workspace({
@@ -126,7 +153,7 @@ describe('Automations owner', () => {
 		// Provided explicitly rather than defaulted, because the depth is the thing that decides
 		// whether an enqueue is admitted at all — a service that silently read a stand-in would let
 		// the case below pass against a limiter that was never consulted.
-		const taskQueue = TaskQueue.layer(testCallContext('i1')).pipe(
+		const taskQueue = TaskQueue.layer(callContext).pipe(
 			Layer.provide(Layer.mergeAll(database, tasks))
 		);
 		const layer = Automations.layer.pipe(
@@ -135,6 +162,7 @@ describe('Automations owner', () => {
 					taskQueue,
 					database,
 					registry,
+					syncCommit,
 					InvocationBudget.layer(0),
 					TenantScope.layer('test-tenant')
 				)
@@ -163,6 +191,12 @@ describe('Automations owner', () => {
 					progress: 0.5,
 					text: 'Halfway'
 				});
+				// Cron progress is projected from bolt_task by a trigger. It still publishes the exact
+				// automation_run id so a mounted history query advances before the invocation settles.
+				yield* automations.progress(EffectId.make('cron:progress'), 'scheduled-task', {
+					progress: 0.25,
+					text: 'Scheduled progress'
+				});
 				return taskId;
 			}).pipe(Effect.provide(layer))
 		);
@@ -170,6 +204,11 @@ describe('Automations owner', () => {
 		// replayed start names the row the first one wrote rather than minting a second identity.
 		expect(taskId).toBe('e1:start');
 		expect(wakes).toEqual([]);
+		expect(commits).toEqual([
+			[{ collection: 'automation_run', recordId: '019f6f10-3000-7000-8000-000000000099' }],
+			[{ collection: 'automation_run', recordId: '019f6f10-3000-7000-8000-000000000099' }],
+			[{ collection: 'automation_run', recordId: '019f6f10-3000-7000-8000-000000000098' }]
+		]);
 		const insert = statements.find(
 			(statement) =>
 				statement.sql.includes('insert into "automation_run"') ||
@@ -184,11 +223,14 @@ describe('Automations owner', () => {
 				statement.sql.includes('"progress_sequence"')
 		);
 		expect(progress?.parameters).toEqual([
+			1,
 			JSON.stringify({ progress: 0.5, text: 'Halfway' }),
 			1,
 			'e1:start',
 			'running'
 		]);
+		expect(progress?.sql).toContain('"updated_at" = now()');
+		expect(progress?.sql).toContain('"row_version" = "automation_run"."row_version" +');
 	});
 
 	it('refuses to enqueue past the nesting limit, before it writes a run row', async () => {
@@ -245,6 +287,7 @@ describe('Automations owner', () => {
 					taskQueue,
 					database,
 					registry,
+					SyncCommit.layer(undefined, testCallContext('i1')),
 					InvocationBudget.layer(InvocationBudget.DEFAULT_NESTING_LIMIT),
 					TenantScope.layer('test-tenant')
 				)
@@ -319,7 +362,7 @@ describe('Automations owner', () => {
 			expect(harness.tasks.requests.some((request) => request._tag === 'Wake')).toBe(false);
 
 			const runs = await harness.database.query(
-				`select name, status, result, error
+				`select name, status, result, error, row_version
 				 from automation_run where name in ('parent', 'child')
 				 order by name`
 			);
@@ -328,11 +371,12 @@ describe('Automations owner', () => {
 				runs.map((run) => ({
 					name: run['name'],
 					status: run['status'],
-					error: run['error']
+					error: run['error'],
+					rowVersion: run['row_version']
 				}))
 			).toEqual([
-				{ name: 'child', status: 'done', error: null },
-				{ name: 'parent', status: 'done', error: null }
+				{ name: 'child', status: 'done', error: null, rowVersion: 2 },
+				{ name: 'parent', status: 'done', error: null, rowVersion: 2 }
 			]);
 		} finally {
 			await harness.dispose();

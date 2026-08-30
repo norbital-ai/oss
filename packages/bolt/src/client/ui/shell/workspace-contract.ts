@@ -53,18 +53,6 @@ export type WorkspaceView = {
 };
 
 /**
- * Read-only synchronization status: the Machine's one state, subscribed or sampled.
- *
- * `link` is the whole connection story — `live`, `reconnecting`, `needsReload` — and `writes` holds
- * the tab's unsettled mutations. There is no richer status surface to expose: these three fields are
- * everything the Machine keeps.
- */
-type WorkspaceSyncSignal = Readonly<{
-	readonly current: () => ClientState;
-	readonly subscribe: (listener: (state: ClientState) => void) => () => void;
-}>;
-
-/**
  * What the workspace asks the host to do, because only the host can do it.
  *
  * Routing, sign-out and the organization cookie belong to whatever is hosting this bundle. The
@@ -134,8 +122,8 @@ export type CompiledWorkspace = Readonly<{
 	readonly client: WorkspaceClient;
 	/** Full collection/system capability held only by Bolt's own shell and Studio wiring. */
 	readonly frameworkClient: WorkspaceClient;
-	/** Read-only synchronization status without exposing the command/runtime capability. */
-	readonly syncStatus?: WorkspaceSyncSignal;
+	/** Read-only synchronization state created inside the compiled bundle's own Svelte graph. */
+	readonly syncStatus?: ClientState;
 }>;
 
 /**

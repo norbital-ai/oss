@@ -30,8 +30,8 @@ was asked; do not invent the answer.
 One assembly path serves the web agent and declared envoys:
 
 1. Platform read builtins are always offered.
-2. `write_collection` is offered only when the subject has at least one effective create, update, or
-   delete grant.
+2. `write_collection` is offered only when the subject has at least one effective `mutate.new`,
+   `mutate.existing`, or `delete` grant.
 3. Authored tools are offered only when effective policies name them.
 4. MCP servers and skills are available only when effective policies name them.
 5. Sandbox tools are structural when a sandbox is bound. They do not grant workspace data authority

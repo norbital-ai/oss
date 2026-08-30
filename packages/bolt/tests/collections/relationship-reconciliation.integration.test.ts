@@ -53,21 +53,23 @@ const relationshipWorkspace = (reviewBudgets = false, reviewCostEstimates = fals
 			'The one owner of every graph coordinate, with review attached to the selected writes.',
 		grants: {
 			budgets: {
-				create: write(reviewBudgets),
 				read: {},
-				update: {
-					...write(reviewBudgets),
-					authorize: (context: unknown, api: unknown) => {
-						if (!isWriter(api)) return true;
-						const previous =
-							typeof context === 'object' && context !== null
-								? Reflect.get(context, 'previous')
-								: undefined;
-						return (
-							typeof previous === 'object' &&
-							previous !== null &&
-							Reflect.get(previous, 'name') === 'Writer-owned'
-						);
+				mutate: {
+					new: write(reviewBudgets),
+					existing: {
+						...write(reviewBudgets),
+						authorize: (context: unknown, api: unknown) => {
+							if (!isWriter(api)) return true;
+							const previous =
+								typeof context === 'object' && context !== null
+									? Reflect.get(context, 'previous')
+									: undefined;
+							return (
+								typeof previous === 'object' &&
+								previous !== null &&
+								Reflect.get(previous, 'name') === 'Writer-owned'
+							);
+						}
 					}
 				},
 				delete: {
@@ -76,16 +78,18 @@ const relationshipWorkspace = (reviewBudgets = false, reviewCostEstimates = fals
 				}
 			},
 			cost_estimates: {
-				create: {
-					...write(reviewCostEstimates),
-					authorize: (_context: unknown, api: unknown) => !isWriter(api)
+				mutate: {
+					new: {
+						...write(reviewCostEstimates),
+						authorize: (_context: unknown, api: unknown) => !isWriter(api)
+					},
+					existing: write(reviewCostEstimates)
 				},
 				read: {},
-				update: write(reviewCostEstimates),
 				delete: write(reviewCostEstimates)
 			},
-			cost_estimate_lines: { create: {}, read: {}, update: {}, delete: {} },
-			mutation_audit: { create: {}, read: {} }
+			cost_estimate_lines: { mutate: { new: {}, existing: {} }, read: {}, delete: {} },
+			mutation_audit: { mutate: { new: {} }, read: {} }
 		}
 	});
 	return workspace({

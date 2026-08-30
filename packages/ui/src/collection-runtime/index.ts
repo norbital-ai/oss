@@ -12,8 +12,11 @@ const COLLECTION_RECORD_SCOPE_CONTEXT = Symbol.for('@norbital-ai/ui/collection-r
 
 export type CollectionClientGetter = () => CollectionClient<ErasedCollectionRegistry>;
 
+/** The registry erases each representation's generated row type at its shared UI boundary. */
+export type CollectionRepresentationComponent = Component;
+
 export interface CollectionSurface {
-	readonly representation?: Component;
+	readonly representation?: CollectionRepresentationComponent;
 	/** Static `bolt:banner` URL declared on the collection's `+representation.svelte`, if any. */
 	readonly banner?: string | null;
 }

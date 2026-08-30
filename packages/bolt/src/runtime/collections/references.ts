@@ -1,9 +1,38 @@
 import { Result, Schema } from 'effect';
 import type { FieldDefinition } from '#lib/authoring/workspace-schema.js';
+import { RECORD_EMBEDDING_COLUMN } from '#lib/authoring/model-introspection.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LogicalReference = Schema.Struct({ kind: Schema.String, id: Schema.String });
 const decodeLogicalReference = Schema.decodeUnknownResult(LogicalReference);
+
+/** PostgreSQL's wire representation for pgvector is its JSON-shaped text literal. */
+const isVectorField = (field: FieldDefinition | undefined): boolean =>
+	field?.sqlType?.toLowerCase().startsWith('vector(') === true;
+
+/** Restores the public `readonly number[]` contract from pgvector's text wire value. */
+const decodeVectorValue = (field: string, value: unknown): unknown => {
+	if (value == null) return value;
+	const decoded =
+		typeof value === 'string'
+			? (() => {
+					try {
+						return JSON.parse(value) as unknown;
+					} catch {
+						return undefined;
+					}
+				})()
+			: value;
+	if (
+		Array.isArray(decoded) &&
+		decoded.length > 0 &&
+		decoded.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
+	)
+		return decoded;
+	throw new Error(
+		`Vector integrity violation: "${field}" is not a non-empty array of finite numbers.`
+	);
+};
 
 const referenceFields = (fields: Readonly<Record<string, FieldDefinition>>) =>
 	Object.entries(fields).filter(
@@ -58,7 +87,7 @@ export const encodeReferenceValues = (
 	return encoded;
 };
 
-/** Collapses hidden exclusive-arc UUID columns back to the single public handle. */
+/** Collapses reference arms and restores database vector text to the public row value. */
 export function decodeReferenceRow(
 	row: Readonly<Record<string, Schema.Json>>,
 	fields: Readonly<Record<string, FieldDefinition>>
@@ -72,6 +101,17 @@ export function decodeReferenceRow(
 	fields: Readonly<Record<string, FieldDefinition>>
 ): Readonly<Record<string, unknown>> {
 	const decoded: Record<string, unknown> = { ...row };
+	for (const [fieldName, field] of Object.entries(fields)) {
+		if (isVectorField(field) && Object.hasOwn(row, fieldName))
+			decoded[fieldName] = decodeVectorValue(fieldName, row[fieldName]);
+	}
+	// The platform-owned embedding is not an authored field, but it shares the same public vector
+	// contract whenever a collection declares record embedding and the query selected the column.
+	if (Object.hasOwn(row, RECORD_EMBEDDING_COLUMN))
+		decoded[RECORD_EMBEDDING_COLUMN] = decodeVectorValue(
+			RECORD_EMBEDDING_COLUMN,
+			row[RECORD_EMBEDDING_COLUMN]
+		);
 	for (const [fieldName, field] of referenceFields(fields)) {
 		const alreadyLogical = Object.hasOwn(row, fieldName);
 		const selected = field.reference.targets.filter((target) => {

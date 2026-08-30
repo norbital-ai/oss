@@ -59,6 +59,25 @@ describe('live query identity and projection', () => {
 });
 
 describe('live query Machine', () => {
+	it('revalidates a query mounted after the opening connect snapshot', () => {
+		const input = query();
+		const key = stableKey(input);
+		let state = initialClientState(0);
+		const [, openingEffects] = step(state, { kind: 'tick', now: 0 });
+		expect(openingEffects).toMatchObject([{ kind: 'connect', queries: [] }]);
+
+		[state] = step(state, { kind: 'mounted', key, input });
+		const [connected, effects] = step(state, {
+			kind: 'connected',
+			at: 1,
+			response: { head: { sequence: 1 }, results: [], outcomes: [] }
+		});
+
+		expect(connected.link).toBe('live');
+		expect(connected.queries.get(key)).toMatchObject({ phase: 'pending', subscribers: 1 });
+		expect(effects).toMatchObject([{ kind: 'revalidate', query: { key } }]);
+	});
+
 	it('distinguishes an authoritative null answer from an unchanged handshake', () => {
 		const input = {
 			kind: 'findFirst',
@@ -195,7 +214,7 @@ describe('live query Machine', () => {
 		expect(effects).toMatchObject([{ kind: 'revalidate', query: { key, digest: 'd1' } }]);
 	});
 
-	it('applies a boundary seat change: the entrant takes the displaced row’s seat', () => {
+	it('applies a boundary seat change at the entrant’s actual rank', () => {
 		const input = query();
 		const key = stableKey(input);
 		let state = initialClientState(0);
@@ -222,6 +241,7 @@ describe('live query Machine', () => {
 						patch: {
 							op: 'replace',
 							recordId: 'd',
+							index: 0,
 							displaces: 'c',
 							row: { id: 'd', title: 'entrant' }
 						}
@@ -231,7 +251,7 @@ describe('live query Machine', () => {
 			}
 		});
 		expect(next.queries.get(key)).toMatchObject({
-			answer: [{ id: 'a' }, { id: 'b' }, { id: 'd', title: 'entrant' }],
+			answer: [{ id: 'd', title: 'entrant' }, { id: 'a' }, { id: 'b' }],
 			digest: 'd2',
 			phase: 'fresh'
 		});

@@ -53,7 +53,7 @@ export const platformToolSpecs: ReadonlyArray<ToolDeclaration> = [
 	{
 		name: 'search_envoy_history',
 		description:
-			'Search chat history by date. Defaults to this conversation; this_envoy is available only when policy grants it. Takes a scope, never a conversation or principal id.',
+			'Search the complete stored chat transcript by text or date, including messages queued while this task is running. Defaults to this conversation; this_envoy is available only when policy grants it. Takes a scope, never a conversation or principal id.',
 		command: 'platform:search_envoy_history',
 		inputSchema: {
 			type: 'object',
@@ -366,9 +366,6 @@ export const executePlatformTool = Effect.fn('Agents.executePlatformTool')(funct
 		case 'search_envoy_history': {
 			const parsed = yield* decode(EnvoyHistoryInput, input);
 			const scope = parsed.scope ?? 'this_conversation';
-			if (context.agentName === 'web') {
-				return yield* new ToolNotAllowed({ agent: context.agentName, tool: name });
-			}
 			if (scope === 'this_envoy' && !context.envoyWideHistory) {
 				return yield* new ToolNotAllowed({ agent: context.agentName, tool: `${name}:this_envoy` });
 			}

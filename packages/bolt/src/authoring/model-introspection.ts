@@ -306,13 +306,30 @@ export const SEARCH_DOCUMENT_COLUMN = 'search_document';
 
 /** The PostgreSQL text expression shared by generated DDL, trigram matching, and ranking. */
 export const searchTextExpression = (columns: ReadonlyArray<string>): string =>
-	columns
-		.map((column) => `coalesce("${column.replaceAll('"', '""')}", '')`)
-		.join(" || ' ' || ");
+	columns.map((column) => `coalesce("${column.replaceAll('"', '""')}", '')`).join(" || ' ' || ");
 
-/** The stored document expression. The explicit regconfig selects PostgreSQL's immutable overload. */
-export const searchDocumentExpression = (columns: ReadonlyArray<string>): string =>
-	`to_tsvector('simple'::regconfig, ${searchTextExpression(columns)})`;
+/**
+ * The stored document expression. The explicit regconfig selects PostgreSQL's immutable overload.
+ *
+ * PostgreSQL does not allow one generated column to reference another. A searchable authored field
+ * may itself be generated, so the document has to inline that field's owning expression rather than
+ * name the generated column. Ordinary fields keep the exact expression used by runtime ranking and
+ * the trigram index.
+ */
+export const searchDocumentExpression = (
+	columns: ReadonlyArray<string>,
+	fields: Readonly<Record<string, FieldDefinition>>
+): string => {
+	const text = columns
+		.map((column) => {
+			const generated = fields[column]?.generated;
+			return generated === undefined
+				? `coalesce("${column.replaceAll('"', '""')}", '')`
+				: `coalesce((${generated}), '')`;
+		})
+		.join(" || ' ' || ");
+	return `to_tsvector('simple'::regconfig, ${text})`;
+};
 
 /** Describes a whole `defineModel` declaration, tolerating a module that failed to export one. */
 export const describeModel = (
@@ -498,11 +515,12 @@ const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
 const searchDocumentColumn = (
 	declaration: ModelDeclaration | undefined
 ): Readonly<Record<string, AnyPgColumnBuilder>> => {
-	const columns = searchableColumns(describeModel(declaration));
+	const fields = describeModel(declaration);
+	const columns = searchableColumns(fields);
 	if (columns.length === 0) return {};
 	return {
 		[SEARCH_DOCUMENT_COLUMN]: tsvector().generatedAlwaysAs(
-			sql.raw(searchDocumentExpression(columns))
+			sql.raw(searchDocumentExpression(columns, fields))
 		)
 	};
 };

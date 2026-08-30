@@ -1,5 +1,6 @@
 import { Schema } from 'effect';
 import { InvocationScope } from './invocation.js';
+import { SyncChange } from './sync.js';
 import { EffectId, FacilityCall, FacilityResult, ReleaseId } from './wire.js';
 
 export const DatabaseRequest = Schema.TaggedUnion({
@@ -46,6 +47,31 @@ export const AIWebSearch = Schema.Struct({
 	allowedDomains: Schema.optionalKey(Schema.Array(Schema.NonEmptyString))
 });
 export interface AIWebSearch extends Schema.Schema.Type<typeof AIWebSearch> {}
+
+/**
+ * One workspace-owned image that the trusted host resolves immediately before an AI provider call.
+ *
+ * The object-store key is deliberately carried instead of the bytes. Tenant code runs behind a
+ * bounded facility bridge; base64-expanding a photograph inside that bridge both spends isolate CPU
+ * and turns an ordinary 1 MiB JPEG into a request larger than the bridge's 1 MiB ceiling. The host
+ * already owns the tenant scope and the file facility, so it is the only correct place to resolve
+ * the key and construct the provider's data URL.
+ */
+export const AIImageAsset = Schema.Struct({
+	key: Schema.NonEmptyString,
+	name: Schema.NonEmptyString,
+	mimeType: Schema.NonEmptyString,
+	size: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+	detail: Schema.optionalKey(Schema.Literals(['auto', 'low', 'high']))
+});
+export interface AIImageAsset extends Schema.Schema.Type<typeof AIImageAsset> {}
+
+/** Provider-neutral content part expanded by the host before the request reaches an AI adapter. */
+export const AIImageAssetPart = Schema.Struct({
+	type: Schema.Literal('image_asset'),
+	image_asset: AIImageAsset
+});
+export interface AIImageAssetPart extends Schema.Schema.Type<typeof AIImageAssetPart> {}
 
 export const AIRequest = Schema.TaggedUnion({
 	Models: {},
@@ -281,7 +307,20 @@ export type CommunicationRequest = typeof CommunicationRequest.Type;
  */
 export const ChannelSendPayload = Schema.Struct({
 	text: Schema.NonEmptyString,
-	updateOf: Schema.optionalKey(Schema.NonEmptyString)
+	updateOf: Schema.optionalKey(Schema.NonEmptyString),
+	/**
+	 * An action link the host renders against its public origin.
+	 *
+	 * Bolt owns the claim and its lifetime; Colony owns the address at which its browser surface is
+	 * served. Keeping those two facts separate prevents a tenant bundle from guessing a deployment
+	 * hostname while still preventing the host from minting or extending a claim.
+	 */
+	registration: Schema.optionalKey(
+		Schema.Struct({
+			claimId: Schema.NonEmptyString,
+			expiresInMinutes: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))
+		})
+	)
 });
 export type ChannelSendPayload = Schema.Schema.Type<typeof ChannelSendPayload>;
 export const CommunicationResponse = Schema.Struct({ receipt: Schema.optionalKey(Schema.Json) });
@@ -459,6 +498,16 @@ export const TransportResponse = Schema.Struct({
 export interface TransportResponse extends Schema.Schema.Type<typeof TransportResponse> {}
 
 /**
+ * A durable internal mutation crossing back to the host while its originating invocation is still
+ * alive. Browser mutations return their change list with the command response; long-running agent,
+ * automation, and hook invocations need this commit hook so each committed step can fan out now.
+ */
+export const SyncCommitRequest = Schema.Struct({ changes: Schema.Array(SyncChange) });
+export interface SyncCommitRequest extends Schema.Schema.Type<typeof SyncCommitRequest> {}
+export const SyncCommitResponse = Schema.Struct({ accepted: Schema.Boolean });
+export interface SyncCommitResponse extends Schema.Schema.Type<typeof SyncCommitResponse> {}
+
+/**
  * Every host facility uses this call shape. Colony and bolt-server bind physical
  * effects here; Bolt capabilities (channels, sync, automations) only invoke it.
  */
@@ -499,6 +548,8 @@ export type FacilityBindings = Readonly<{
 	readonly hostTools?: FacilityBinding<HostToolRequest, HostToolResponse>;
 	readonly identityHooks?: FacilityBinding<IdentityHookRequest, IdentityHookResponse>;
 	readonly transport?: FacilityBinding<TransportRequest, TransportResponse>;
+	/** Host-internal live-query commit hook; never an authored capability or manifest requirement. */
+	readonly syncCommit?: FacilityBinding<SyncCommitRequest, SyncCommitResponse>;
 	readonly config?: FacilityBinding<ConfigRequest, ConfigResponse>;
 }>;
 

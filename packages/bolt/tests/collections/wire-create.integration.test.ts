@@ -317,7 +317,7 @@ describe('collections.mutate over the wire', () => {
 		const response = await syncConnect(harness);
 		const value = response.value as Readonly<Record<string, unknown>>;
 
-		// The handshake resolves no query, so a subject holding only a create grant is not excluded
+		// The handshake resolves no query, so a subject holding only a `mutate.new` grant is not excluded
 		// from it: the head is answered and nothing is resolved that the subject could not read.
 		//
 		// The head is read back rather than written as a literal zero. `user` and `team` are synced
@@ -696,13 +696,15 @@ describe('collections.mutate over the wire', () => {
 			grants: {
 				orders: {
 					read: {},
-					create: {
-						approval: {
-							flow: () => {
-								approvalRuns += 1;
-								return approveBy('Reviewers');
-							},
-							superceded_by: []
+					mutate: {
+						new: {
+							approval: {
+								flow: () => {
+									approvalRuns += 1;
+									return approveBy('Reviewers');
+								},
+								superceded_by: []
+							}
 						}
 					}
 				}
